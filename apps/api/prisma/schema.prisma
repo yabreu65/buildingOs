@@ -3,14 +3,27 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum TenantType {
+  ADMINISTRADORA
+  EDIFICIO_AUTOGESTION
+}
+
+enum Role {
+  SUPER_ADMIN
+  TENANT_OWNER
+  TENANT_ADMIN
+  OPERATOR
+  RESIDENT
 }
 
 model Tenant {
   id          String       @id @default(cuid())
-  name        String
-  type        String       // antes: TenantType (enum)
+  name        String       @unique
+  type        TenantType
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
@@ -31,18 +44,23 @@ model Membership {
   tenantId  String
   userId    String
   createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
   tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   roles     MembershipRole[]
 
   @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([userId])
 }
 
 model MembershipRole {
   id           String     @id @default(cuid())
   membershipId String
-  role         String     // antes: Role (enum)
+  role         Role
   membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
 
   @@unique([membershipId, role])
+  @@index([role])
 }

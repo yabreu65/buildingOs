@@ -7,9 +7,16 @@
   ],
   "scripts": {
     "dev": "npm run dev -ws",
+    "dev:infra": "docker-compose -f infra/docker/docker-compose.yml up -d",
     "build": "npm run build -ws",
     "lint": "npm run lint -ws",
     "typecheck": "npm run typecheck -ws",
-    "test": "npm run test -ws"
-  }
+    "test": "npm run test -ws",
+    "db:migrate": "npm run migrate -w apps/api",
+    "db:seed": "npm run seed -w apps/api",
+    "db:studio": "npm run studio -w apps/api"
+  },
+  "prisma": {
+  "seed": "ts-node prisma/seed.ts"
+}
 }

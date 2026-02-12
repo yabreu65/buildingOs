@@ -1,28 +1,65 @@
-# BuildingOS (Monorepo)
+# BuildingOS
 
-SaaS multi-tenant para administración de edificios/condominios.
+SaaS multi-tenant para administración de edificios.
 
-## Requisitos
-- Node.js 20+ (recomendado)
-- Docker (para Postgres/Redis/MinIO)
+## Infraestructura
 
-## Arranque rápido (scaffold)
-1. Levantar infraestructura:
+### Requisitos previos
+- Docker & Docker Compose
+- Node.js 20+
+- NPM
+
+### Levantar entorno local
+
+1. **Infraestructura (DB, Redis, MinIO)**
    ```bash
-   cd infra/docker
-   docker compose up -d
+   npm run dev:infra
+   ```
+   Esto levantará Postgres, Redis y MinIO con healthchecks.
+   - Postgres: localhost:5432
+   - Redis: localhost:6379
+   - MinIO Console: http://localhost:9001 (User: buildingos / Pass: buildingos123)
+
+2. **Configuración de entorno**
+   Copia los archivos de ejemplo:
+   ```bash
+   cp .env.example .env
+   cp apps/api/.env.example apps/api/.env
+   cp apps/web/.env.example apps/web/.env
    ```
 
-2. Instalar dependencias (cuando agregues las deps con npm):
+3. **Base de Datos**
+   Aplicar migraciones y seed:
    ```bash
-   npm install
+   npm run db:migrate
+   npm run db:seed
+   ```
+   
+   Ver datos en Prisma Studio:
+   ```bash
+   npm run db:studio
    ```
 
-3. Correr apps (cuando estén instaladas):
+4. **Aplicaciones (Web + API)**
    ```bash
    npm run dev
    ```
+   - Web: http://localhost:3000
+   - API: http://localhost:4000
+   - Swagger: http://localhost:4000/api
+   - Health: http://localhost:4000/health
 
-> Nota: Este scaffold incluye la estructura y archivos base. Para generar el proyecto con `create-next-app` y `nest new`, seguí el archivo `SETUP.md`.
+## Estructura del Proyecto
 
-# buildingOs
+- `apps/api`: NestJS + Prisma + PostgreSQL
+- `apps/web`: Next.js + React + Tailwind
+- `packages/*`: Librerías compartidas
+- `infra/docker`: Configuración de Docker Compose
+
+## Testing y Calidad
+
+```bash
+npm run lint
+npm run typecheck
+npm run test
+```
