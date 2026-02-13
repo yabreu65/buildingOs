@@ -6,16 +6,18 @@ import {
   BadRequestException,
   Inject,
 } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
-import { TENANT_PARAM_KEY } from './tenant-param.decorator';
 
 export interface RequestWithUser extends Request {
   user: {
     id: string;
     email: string;
     name: string;
+    memberships: Array<{
+      tenantId: string;
+      roles: string[];
+    }>;
   };
 }
 
@@ -25,12 +27,10 @@ export interface RequestWithUser extends Request {
  * Uso:
  * @UseGuards(JwtAuthGuard, TenantAccessGuard)
  * @Get('/tenants/:tenantId/...')
- *
- * Parámetro configurable:
- * @TenantParam('tenantId') o usa default 'tenantId'
+ * async findAll(@TenantParam() tenantId: string) { ... }
  *
  * Comportamiento:
- * 1. Lee tenantId desde params (configurable)
+ * 1. Lee tenantId desde URL params
  * 2. Lee userId desde req.user (poblado por JwtAuthGuard)
  * 3. Busca Membership en Prisma
  * 4. Si existe => permite
@@ -41,7 +41,6 @@ export class TenantAccessGuard implements CanActivate {
   constructor(
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
-    private readonly reflector: Reflector,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -53,11 +52,10 @@ export class TenantAccessGuard implements CanActivate {
       throw new ForbiddenException('Usuario no autenticado');
     }
 
-    // 2. Obtener tenantId desde params (configurable via @TenantParam decorador)
-    const tenantParamName = this.reflector.get<string>(TENANT_PARAM_KEY, context.getHandler()) || 'tenantId';
-    const tenantId = request.params[tenantParamName] as string | undefined;
+    // 2. Obtener tenantId desde params (default: 'tenantId')
+    const tenantId = request.params.tenantId as string | undefined;
     if (!tenantId) {
-      throw new BadRequestException(`${tenantParamName} es requerido en los parámetros`);
+      throw new BadRequestException(`tenantId es requerido en los parámetros`);
     }
 
     // 3. Validar membership en Prisma

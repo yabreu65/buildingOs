@@ -1,19 +1,16 @@
-import { SetMetadata } from '@nestjs/common';
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
 /**
- * Decorador opcional para especificar el nombre del parámetro que contiene el tenantId.
+ * Custom parameter decorator to extract tenantId from request params
+ * and inject it into controller methods.
  *
- * Uso:
- * @TenantParam('organizationId')
- * async getOrgData(@Param('organizationId') orgId: string) { ... }
- *
- * Default si no se usa: 'tenantId'
- *
- * Implementación futura:
- * - Leer metadata en TenantAccessGuard
- * - Usar dinámicamente: request.params[paramName]
+ * Usage:
+ * @Get()
+ * findAll(@TenantParam() tenantId: string) { ... }
  */
-export const TENANT_PARAM_KEY = 'tenant_param';
-
-export const TenantParam = (paramName: string = 'tenantId') =>
-  SetMetadata(TENANT_PARAM_KEY, paramName);
+export const TenantParam = createParamDecorator(
+  (data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.params.tenantId;
+  },
+);

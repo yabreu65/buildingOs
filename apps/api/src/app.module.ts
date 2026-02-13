@@ -5,6 +5,9 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { BuildingsModule } from './buildings/buildings.module';
+import { UnitsModule } from './units/units.module';
+import { OccupantsModule } from './occupants/occupants.module';
 
 @Module({
   imports: [
@@ -16,6 +19,9 @@ import { TenancyModule } from './tenancy/tenancy.module';
     HealthModule,
     TenantsModule,
     TenancyModule,
+    BuildingsModule,
+    UnitsModule,
+    OccupantsModule,
   ],
   controllers: [],
   providers: [],
