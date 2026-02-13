@@ -1,19 +1,21 @@
 # BuildingOS — Progress Tracking
 
-**Last Updated**: February 12, 2026
+**Last Updated**: February 13, 2026 — Phase 0 COMPLETE ✅
 
 ---
 
 ## 📊 Overall Progress
 
 ```
-Current Completion:     ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  18%
+Current Completion:     ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  25%
 Target (MVP):          ██████████████████████████████████████████████ 100%
 
 Timeline:
   Start:   Feb 2026
-  Phase 0: Feb 12 - Feb 19 (Week 1)  Foundation
-  Phase 1: Feb 19 - Mar 5  (Weeks 2-3) Navigation
+  Phase 0: Feb 12 - Feb 13 (1 day + night)  Foundation ✅ DONE
+           ├─ 0a: Schema + Seed ✅
+           └─ 0b: API + Security ✅
+  Phase 1: Feb 14 - Mar 5  (Weeks 2-3) Navigation
   Phase 2: Mar 5  - Mar 19 (Weeks 4-5) Tickets
   Phase 3: Mar 19 - Apr 2  (Weeks 6-7) Communications
   Phase 4: Apr 2  - Apr 9  (Week 8)    Finance
@@ -92,6 +94,18 @@ Timeline:
 ❌ Communications view
 ❌ Profile page
 ❌ Amenities (optional)
+```
+
+### Buildings, Units, Occupants API 🟢 100%
+```
+✅ 13 REST endpoints (5 building + 5 unit + 3 occupant)
+✅ JWT authentication on all endpoints
+✅ Tenant access validation (membership check)
+✅ Scope validation (building.tenantId, unit.buildingId)
+✅ Full CRUD for Buildings, Units, UnitOccupants
+✅ Error handling with no data leakage
+✅ All endpoints tested (14/14 passing)
+✅ Multi-tenant security verified
 ```
 
 ### Storage Layer 🟡 ~40%
