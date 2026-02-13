@@ -1,13 +1,13 @@
 # BuildingOS — Progress Tracking
 
-**Last Updated**: February 13, 2026 — Phase 0 COMPLETE ✅
+**Last Updated**: February 13, 2026 — Phase 1 STARTED (WIP)
 
 ---
 
 ## 📊 Overall Progress
 
 ```
-Current Completion:     ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  25%
+Current Completion:     ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  28%
 Target (MVP):          ██████████████████████████████████████████████ 100%
 
 Timeline:
@@ -71,18 +71,33 @@ Timeline:
 ❌ Settings
 ```
 
-### Building Dashboard 🔴 0%
+### Building Dashboard 🟡 ~30% (Phase 1 WIP)
 ```
-❌ Layout + subnav
-❌ Overview page
-❌ Tickets module
-❌ Communications module
-❌ Units management
+✅ API service layer (buildings.api.ts)
+✅ React hooks (useBuildings, useUnits, useOccupants)
+✅ Routes and pages (buildings list, overview, units list)
+✅ Components (BuildingBreadcrumb, BuildingSubnav)
+✅ Context awareness hook (useContextAware)
+🟡 Pages partially implemented (need table component fix)
+❌ Forms (CreateUnitForm, EditUnitForm)
+❌ Modals (AssignResidentModal)
+❌ Remaining tabs (Residents, Tickets, Payments, Settings)
+❌ Error handling & loading states polish
+```
+
+### Building Dashboard 🟡 ~30%
+```
+✅ Layout + subnav (implemented)
+✅ Overview page (with stats)
+✅ Units management list (basic create/read/delete)
+🟡 Pages exist but need form/modal components
+❌ Edit unit forms
+❌ Assign resident modals
 ❌ Residents directory
-❌ Providers directory
-❌ Documents management
-❌ Finances dashboard
-❌ Settings
+❌ Tickets module (stub routes ready)
+❌ Communications module (stub routes ready)
+❌ Payments dashboard (stub routes ready)
+❌ Settings (stub routes ready)
 ```
 
 ### Unit Dashboard 🔴 0%
