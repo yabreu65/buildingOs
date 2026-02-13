@@ -92,7 +92,82 @@ async function main() {
     role: Role.RESIDENT,
   });
 
+  // 4) Buildings (minimal: 1 tenant → 1 building)
+  const building = await prisma.building.upsert({
+    where: { tenantId_name: { tenantId: tenantBuilding.id, name: "Demo Building" } },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      name: "Demo Building",
+      address: "123 Main St, Apartment Complex",
+    },
+  });
+
+  // 5) Units (minimal: 1 building → 2 units)
+  const unit1 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "101" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "101",
+      label: "Apt 101",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unit2 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "102" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "102",
+      label: "Apt 102",
+      unitType: "APARTMENT",
+      occupancyStatus: "VACANT",
+    },
+  });
+
+  // 6) Unit Occupants (1 resident → unit 101 as OWNER + resident user → unit 102 as RESIDENT)
+  await prisma.unitOccupant.upsert({
+    where: {
+      unitId_userId_role: {
+        unitId: unit1.id,
+        userId: adminUser.id,
+        role: "OWNER",
+      },
+    },
+    update: {},
+    create: {
+      unitId: unit1.id,
+      userId: adminUser.id,
+      role: "OWNER",
+    },
+  });
+
+  await prisma.unitOccupant.upsert({
+    where: {
+      unitId_userId_role: {
+        unitId: unit2.id,
+        userId: residentUser.id,
+        role: "RESIDENT",
+      },
+    },
+    update: {},
+    create: {
+      unitId: unit2.id,
+      userId: residentUser.id,
+      role: "RESIDENT",
+    },
+  });
+
   console.log("Seed finished.");
+  console.log(`\n📊 Seeded data:
+  - Tenants: ${tenantAdmin.name}, ${tenantBuilding.name}
+  - Building: ${building.name} (${building.address})
+  - Units: ${unit1.label} (${unit1.code}), ${unit2.label} (${unit2.code})
+  - Occupants: ${adminUser.name} as OWNER in ${unit1.label}, ${residentUser.name} as RESIDENT in ${unit2.label}
+  `);
 }
 
 main()

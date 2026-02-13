@@ -20,6 +20,11 @@ enum Role {
   RESIDENT
 }
 
+enum UnitOccupantRole {
+  OWNER
+  RESIDENT
+}
+
 model Tenant {
   id          String       @id @default(cuid())
   name        String       @unique
@@ -27,16 +32,18 @@ model Tenant {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
+  buildings   Building[]
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  name         String
-  passwordHash String
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  memberships  Membership[]
+  id             String           @id @default(cuid())
+  email          String           @unique
+  name           String
+  passwordHash   String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  memberships    Membership[]
+  unitOccupants  UnitOccupant[]
 }
 
 model Membership {
@@ -63,4 +70,52 @@ model MembershipRole {
 
   @@unique([membershipId, role])
   @@index([role])
+}
+
+model Building {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units     Unit[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Unit {
+  id               String         @id @default(cuid())
+  buildingId       String
+  code             String
+  label            String?
+  unitType         String         @default("APARTMENT") // APARTMENT, HOUSE, OFFICE, STORAGE, PARKING
+  occupancyStatus  String         @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  building         Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitOccupants    UnitOccupant[]
+
+  @@unique([buildingId, code])
+  @@index([buildingId])
+}
+
+model UnitOccupant {
+  id        String                @id @default(cuid())
+  unitId    String
+  userId    String
+  role      UnitOccupantRole
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  unit      Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, userId, role])
+  @@index([unitId])
+  @@index([userId])
 }
