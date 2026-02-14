@@ -118,6 +118,17 @@ async function main() {
     },
   });
 
+  const operatorPassword = await bcrypt.hash("Operator123!", 10);
+  const operatorUser = await prisma.user.upsert({
+    where: { email: "operator@demo.com" },
+    update: { name: "Operator Demo" },
+    create: {
+      email: "operator@demo.com",
+      name: "Operator Demo",
+      passwordHash: operatorPassword,
+    },
+  });
+
   const residentPassword = await bcrypt.hash("Resident123!", 10);
   const residentUser = await prisma.user.upsert({
     where: { email: "resident@demo.com" },
@@ -176,6 +187,12 @@ async function main() {
     tenantId: tenantBuilding.id,
     userId: adminUser.id,
     role: Role.TENANT_ADMIN,
+  });
+
+  await upsertMembershipWithRole({
+    tenantId: tenantBuilding.id,
+    userId: operatorUser.id,
+    role: Role.OPERATOR,
   });
 
   await upsertMembershipWithRole({
@@ -316,6 +333,7 @@ async function main() {
 
   REGULAR USERS:
   - Email: admin@demo.com (TENANT_ADMIN)
+  - Email: operator@demo.com (OPERATOR)
   - Email: resident@demo.com (RESIDENT)
 
   TENANTS:
