@@ -1,0 +1,358 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║              BuildingOS FRONTEND — QUICK URLs FOR TESTING                  ║
+║                                                                            ║
+║  🟢 RUNNING NOW:                                                           ║
+║     API: http://localhost:4000                                             ║
+║     Web: http://localhost:3000                                             ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🔐 LOGIN FIRST
+═══════════════════════════════════════════════════════════════════════════════
+
+URL: http://localhost:3000/login
+
+Credenciales (pick one):
+
+1️⃣  SUPER ADMIN (Full access)
+    Email:    superadmin@demo.com
+    Password: SuperAdmin123!
+    Access:   /super-admin/* (all pages)
+
+2️⃣  TENANT ADMIN (Manage buildings/units)
+    Email:    admin@demo.com
+    Password: Admin123!
+    Access:   /[tenantId]/* (buildings, units, dashboard)
+
+3️⃣  OPERATOR (Read-only access)
+    Email:    operator@demo.com
+    Password: Operator123!
+    Access:   /[tenantId]/* (view only, no create)
+
+4️⃣  RESIDENT (Limited access)
+    Email:    resident@demo.com
+    Password: Resident123!
+    Access:   /[tenantId]/dashboard (view only)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+✅ FULLY WORKING PAGES
+═══════════════════════════════════════════════════════════════════════════════
+
+After login, click these links or type URLs:
+
+📊 DASHBOARD
+  URL: http://localhost:3000/[tenantId]/dashboard
+  What to do:
+    ✅ See stats (total buildings, units, occupied, vacant)
+    ✅ See subscription info
+    ✅ Click "Buildings" button → goes to buildings list
+    ✅ Click "Units" button → goes to units list
+
+🏢 BUILDINGS (Full CRUD)
+  URL: http://localhost:3000/[tenantId]/buildings
+  What to do:
+    ✅ Click "Create Building" → modal form
+       - Enter name: "Demo Building"
+       - Enter address: "123 Main St"
+       - Click "Create" → toast "Building created"
+    ✅ Click building card → see detail page
+       - Click "Edit" → change info → save
+       - See stats (total units, occupied, vacant)
+    ✅ Click delete icon → confirm → building removed
+    ✅ Click "View Units" → see units in this building
+
+🏠 UNITS (Full CRUD within Building)
+  URL: http://localhost:3000/[tenantId]/buildings/[buildingId]/units
+  What to do:
+    ✅ Click "Create Unit" → modal form
+       - Label: "Apt 101"
+       - Code: "101"
+       - Type: dropdown (Apartment, Studio, etc.)
+       - Status: dropdown (Occupied, Vacant, Unknown)
+       - Click "Create"
+    ✅ Click table row → edit inline
+       - Change any field → save
+    ✅ Click delete icon → confirm → unit removed
+    ✅ See loading skeleton while data loads
+    ✅ See empty state if no units yet
+
+👑 SUPER ADMIN (Only with superadmin@demo.com)
+  URL: http://localhost:3000/super-admin/overview
+  What to do:
+    ✅ See KPI cards (total tenants, users, subscriptions)
+    ✅ See breakdown by tenant type
+    ✅ See recent tenants list
+
+👥 TENANTS MANAGEMENT (Super Admin only)
+  URL: http://localhost:3000/super-admin/tenants
+  What to do:
+    ✅ Click "Create Tenant" → 3-step wizard
+       Step 1: Name "Test Corp" + Type "ADMINISTRADORA"
+       Step 2: Select Plan "PRO"
+       Step 3: Confirm
+    ✅ See new tenant in table
+    ✅ Click row → edit details
+       - Change name
+       - Change plan
+       - Click "Save"
+    ✅ Click delete → confirm → tenant removed
+    ✅ Search by name in search box
+    ✅ Sort by clicking column headers
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🧪 TESTING SCENARIOS
+═══════════════════════════════════════════════════════════════════════════════
+
+Scenario 1: Full CRUD Workflow
+  ────────────────────────────
+  1. Login with admin@demo.com
+  2. Click Buildings → Create Building → "Test Building" + "123 Main"
+  3. Click building card → Click "View Units"
+  4. Click Create Unit → "Apt 101" + "101" + "Apartment" + "Occupied"
+  5. Edit unit → change occupancy to "Vacant"
+  6. Delete unit → confirm
+  7. Back → Delete building → confirm
+  8. Expected: Empty state message "No buildings yet"
+
+Scenario 2: Session Restore
+  ────────────────────────────
+  1. Login with admin@demo.com
+  2. Click Buildings → you should see the list
+  3. Close browser tab completely
+  4. Open http://localhost:3000 in new tab
+  5. Expected: Auto-redirect to /[tenantId]/dashboard (session restored!)
+  6. Click logout → try refresh
+  7. Expected: Redirect to /login (session cleared)
+
+Scenario 3: Multi-Tenant Isolation
+  ───────────────────────────────────
+  1. Login with admin@demo.com (TENANT A)
+  2. Note the tenant ID in URL: /[TENANT_A_ID]/buildings
+  3. Try to manually change URL to /[TENANT_B_ID]/buildings
+  4. Expected: 403 Forbidden error (can't access other tenant)
+
+Scenario 4: Role-Based Access
+  ──────────────────────────────
+  1. Login with operator@demo.com (OPERATOR role)
+  2. Go to /[tenantId]/buildings
+  3. Click "Create Building" button
+  4. Expected: Form submits, but API returns 403 (no permission)
+  5. Toast shows: "Not authorized to create buildings"
+
+Scenario 5: Admin-Only Pages
+  ────────────────────────────
+  1. Login with admin@demo.com
+  2. Try to access /super-admin/tenants
+  3. Expected: Either 403 or redirect to /login (not authorized)
+  4. Logout
+  5. Login with superadmin@demo.com
+  6. Now /super-admin/tenants works
+  7. Click "Create Tenant" → works!
+
+
+═══════════════════════════════════════════════════════════════════════════════
+❌ PAGES NOT YET IMPLEMENTED (React routes exist but no UI)
+═══════════════════════════════════════════════════════════════════════════════
+
+These URLs exist but are blank/empty:
+
+  ❌ /[tenantId]/properties         → Property management (Phase 2)
+  ❌ /[tenantId]/payments           → Payments (Phase 3)
+  ❌ /[tenantId]/payments/review    → Payment review (Phase 3)
+  ❌ /[tenantId]/units              → Global units list (Phase 2)
+  ❌ /[tenantId]/settings/banking   → Bank settings (Phase 2)
+  ❌ /super-admin/users             → User management (TASK-06 pending)
+  ❌ /super-admin/billing           → Billing dashboard (TASK-07 pending)
+  ❌ /super-admin/audit-logs        → Audit logs table (TASK-13 pending)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🔌 API ENDPOINTS (What Frontend Calls)
+═══════════════════════════════════════════════════════════════════════════════
+
+Authentication:
+  POST   /auth/login                                    → JWT token
+  POST   /auth/signup                                   → Create user + tenant
+
+Tenancy Stats (per tenant):
+  GET    /tenants/:tenantId/stats                       → Buildings/units/residents counts
+  GET    /tenants/:tenantId/billing                     → Subscription + plan + usage
+  GET    /tenants/:tenantId/audit-logs                  → Audit log entries
+
+Buildings CRUD:
+  POST   /tenants/:tenantId/buildings                   → Create building
+  GET    /tenants/:tenantId/buildings                   → List buildings
+  GET    /tenants/:tenantId/buildings/:id               → Get building details
+  PATCH  /tenants/:tenantId/buildings/:id               → Update building
+  DELETE /tenants/:tenantId/buildings/:id               → Delete building
+
+Units CRUD:
+  POST   /tenants/:tenantId/buildings/:buildingId/units → Create unit
+  GET    /tenants/:tenantId/buildings/:buildingId/units → List units
+  PATCH  /tenants/:tenantId/buildings/:buildingId/units/:id → Update unit
+  DELETE /tenants/:tenantId/buildings/:buildingId/units/:id → Delete unit
+
+Super Admin:
+  GET    /api/super-admin/tenants                       → List all tenants
+  POST   /api/super-admin/tenants                       → Create tenant
+  GET    /api/super-admin/tenants/:id                   → Get tenant
+  PATCH  /api/super-admin/tenants/:id                   → Update tenant
+  DELETE /api/super-admin/tenants/:id                   → Delete tenant
+  GET    /api/super-admin/stats                         → Global stats
+  GET    /api/super-admin/audit-logs                    → Global audit logs
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🎨 UI FEATURES YOU'LL SEE
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ Sidebar Navigation
+   - Collapsible menu
+   - Links to all pages
+   - Logout button
+   - Tenant selector (if multi-tenant)
+
+✅ Toast Notifications
+   - Green: "Building created successfully"
+   - Red: "Error: Building already exists"
+   - Blue: "Loading..."
+   - Auto-dismiss in 3 seconds
+
+✅ Loading Skeletons
+   - Animated gray boxes while data loads
+   - Matches layout of actual content
+   - Better UX than spinners
+
+✅ Empty States
+   - "No buildings yet" + "Create Building" button
+   - "No units yet" + "Create Unit" button
+   - Centered, friendly icons
+
+✅ Error States
+   - Red error card with message
+   - "Try Again" button
+   - Back button
+
+✅ Modal Dialogs
+   - Create forms
+   - Edit forms
+   - Delete confirmations
+   - 3-step wizard (tenant creation)
+
+✅ Tables
+   - Sortable columns (click header)
+   - Inline editing (double-click cell)
+   - Row actions (Edit, Delete icons)
+   - Pagination (if > 20 rows)
+
+✅ Forms
+   - Real-time validation
+   - Error messages below fields
+   - Submit disabled while loading
+   - Loading indicator on button
+
+
+═══════════════════════════════════════════════════════════════════════════════
+📱 RESPONSIVE DESIGN
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ Desktop (1200px+)
+   - Full sidebar
+   - Grid layout (cards)
+   - Full tables
+   - Modals centered
+
+✅ Tablet (768px - 1200px)
+   - Collapsible sidebar
+   - Reduced columns in table
+   - Touch-friendly buttons
+
+✅ Mobile (< 768px)
+   - Hamburger menu
+   - Single column layout
+   - Stacked cards
+   - Bottom sheet modals
+   - Touch targets >= 44px
+
+
+═══════════════════════════════════════════════════════════════════════════════
+💡 TIPS FOR TESTING
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Open DevTools (F12) → Console tab
+   - See fetch requests
+   - Check for errors
+   - Inspect local storage (auth token)
+
+2. Check Network tab
+   - See API calls
+   - Verify Authorization header sent
+   - Check response bodies
+
+3. Test with multiple roles
+   - operator@demo.com: Try to create (should fail)
+   - resident@demo.com: Try to see buildings (might be empty)
+   - superadmin@demo.com: Try super-admin pages
+
+4. Test edge cases
+   - Empty names (validation)
+   - Duplicate names (409 Conflict)
+   - Very long text (layout breaks?)
+   - Special characters (@, #, etc.)
+
+5. Test performance
+   - Create many buildings (10+)
+   - Create many units (50+)
+   - Check if sorting/filtering is smooth
+   - Monitor Network tab for slow requests
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🎯 WHAT TO DEMO TO PRODUCT/STAKEHOLDERS
+═══════════════════════════════════════════════════════════════════════════════
+
+Show these in this order:
+
+1. LOGIN FLOW (30 sec)
+   - Open /login
+   - Show credentials
+   - Login → redirect to dashboard
+   - Show session restore (close/reopen)
+
+2. DASHBOARD (1 min)
+   - Show stats cards
+   - Show subscription info
+   - Show quick action buttons
+
+3. BUILDINGS CRUD (2 min)
+   - Create building → show toast
+   - Edit building → show inline/modal edit
+   - Delete building → show confirmation
+   - Create another one → show loading skeleton
+
+4. UNITS CRUD (2 min)
+   - Open building → Units tab
+   - Create unit → show form validation
+   - Edit unit → inline edit
+   - Delete unit → confirmation
+
+5. SUPER ADMIN (1 min)
+   - Switch to superadmin@demo.com
+   - Show /super-admin/overview (KPIs)
+   - Show /super-admin/tenants (list + create wizard)
+   - Create tenant → 3 steps → add to table
+
+Total demo: ~6 minutes
+
+Most impressive: Session restore + creation wizard
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Any questions? Check FRONTEND_DEMO.md for detailed docs.
+Last updated: Feb 14, 2026
