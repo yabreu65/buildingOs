@@ -26,13 +26,15 @@ enum UnitOccupantRole {
 }
 
 model Tenant {
-  id          String       @id @default(cuid())
-  name        String       @unique
-  type        TenantType
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  memberships Membership[]
-  buildings   Building[]
+  id            String          @id @default(cuid())
+  name          String          @unique
+  type          TenantType
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  memberships   Membership[]
+  buildings     Building[]
+  auditLogs     AuditLog[]
+  subscription  Subscription?
 }
 
 model User {
@@ -44,6 +46,7 @@ model User {
   updatedAt      DateTime         @updatedAt
   memberships    Membership[]
   unitOccupants  UnitOccupant[]
+  auditLogs      AuditLog[]
 }
 
 model Membership {
@@ -118,4 +121,123 @@ model UnitOccupant {
   @@unique([unitId, userId, role])
   @@index([unitId])
   @@index([userId])
+}
+
+// ============================================================================
+// AUDIT LOGGING (OPCIÓN A — SUPER_ADMIN Backend)
+// ============================================================================
+
+enum AuditAction {
+  TENANT_CREATE
+  TENANT_UPDATE
+  TENANT_DELETE
+  SUBSCRIPTION_CREATE
+  SUBSCRIPTION_UPDATE
+  SUBSCRIPTION_CANCEL
+  USER_CREATE
+  USER_DELETE
+  OTHER
+}
+
+model AuditLog {
+  id            String        @id @default(cuid())
+  tenantId      String?       // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
+  actorUserId   String?       // Nullable: system actions may have no actor
+  action        AuditAction
+  entity        String        // "Tenant", "Subscription", "User", etc.
+  entityId      String        // ID of the resource affected
+  metadata      Json?         // before/after values, details, request ID
+  createdAt     DateTime      @default(now())
+
+  tenant        Tenant?       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actor         User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// BILLING (OPCIÓN A2 — Foundation for SaaS)
+// ============================================================================
+
+enum BillingPlanId {
+  FREE
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIAL       // Free trial period
+  ACTIVE      // Currently active
+  PAST_DUE    // Payment failed, but not canceled
+  CANCELED    // Canceled by user or admin
+  EXPIRED     // Trial ended without conversion
+}
+
+model BillingPlan {
+  id                String            @id @default(cuid())
+  planId            BillingPlanId     @unique  // Enum: FREE, BASIC, PRO, ENTERPRISE
+  name              String            // "Free", "Basic Plan", etc.
+  description       String?
+  monthlyPrice      Int               @default(0) // in cents (0 = free)
+
+  // Entitlements (A2)
+  maxBuildings      Int               @default(1)
+  maxUnits          Int               @default(10)
+  maxUsers          Int               @default(3)
+  maxOccupants      Int               @default(50)
+
+  // Features flags
+  canExportReports  Boolean           @default(false)
+  canBulkOperations Boolean           @default(false)
+  supportLevel      String            @default("COMMUNITY") // COMMUNITY, EMAIL, PRIORITY
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  subscriptions     Subscription[]
+
+  @@index([planId])
+}
+
+model Subscription {
+  id                  String              @id @default(cuid())
+  tenantId            String              @unique  // One active subscription per tenant
+  planId              String              // Foreign key to BillingPlan.id
+  status              SubscriptionStatus  @default(TRIAL)
+
+  // Period tracking (for billing cycles)
+  currentPeriodStart  DateTime            @default(now())
+  currentPeriodEnd    DateTime?           // Null for active, set on cancel
+  trialEndDate        DateTime?           // Null if not in trial
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan                BillingPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events              SubscriptionEvent[]
+
+  @@index([tenantId])
+  @@index([planId])
+  @@index([status])
+}
+
+model SubscriptionEvent {
+  id            String                @id @default(cuid())
+  subscriptionId String
+  eventType     String                // "CREATED", "UPGRADED", "DOWNGRADED", "CANCELED", "RENEWED"
+  prevPlanId    String?               // For upgrades/downgrades
+  newPlanId     String?               // For upgrades/downgrades
+  metadata      Json?                 // Extra data (reason, etc.)
+  createdAt     DateTime              @default(now())
+
+  subscription  Subscription          @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([eventType])
+  @@index([createdAt])
 }

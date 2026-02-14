@@ -8,6 +8,7 @@ import { TenancyModule } from './tenancy/tenancy.module';
 import { BuildingsModule } from './buildings/buildings.module';
 import { UnitsModule } from './units/units.module';
 import { OccupantsModule } from './occupants/occupants.module';
+import { SuperAdminModule } from './super-admin/super-admin.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { OccupantsModule } from './occupants/occupants.module';
     BuildingsModule,
     UnitsModule,
     OccupantsModule,
+    SuperAdminModule,
   ],
   controllers: [],
   providers: [],

@@ -1,10 +1,85 @@
-import { PrismaClient, Role, TenantType } from "@prisma/client";
+import { PrismaClient, Role, TenantType, BillingPlanId } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log("Seeding database...");
+
+  // ============================================================================
+  // BILLING PLANS (A2 scope)
+  // ============================================================================
+  const plans = await Promise.all([
+    prisma.billingPlan.upsert({
+      where: { planId: BillingPlanId.FREE },
+      update: {},
+      create: {
+        planId: BillingPlanId.FREE,
+        name: "Free",
+        description: "Free tier for testing",
+        monthlyPrice: 0,
+        maxBuildings: 1,
+        maxUnits: 10,
+        maxUsers: 2,
+        maxOccupants: 20,
+        canExportReports: false,
+        canBulkOperations: false,
+        supportLevel: "COMMUNITY",
+      },
+    }),
+    prisma.billingPlan.upsert({
+      where: { planId: BillingPlanId.BASIC },
+      update: {},
+      create: {
+        planId: BillingPlanId.BASIC,
+        name: "Basic",
+        description: "Small buildings",
+        monthlyPrice: 9900, // $99.00
+        maxBuildings: 3,
+        maxUnits: 100,
+        maxUsers: 10,
+        maxOccupants: 200,
+        canExportReports: true,
+        canBulkOperations: false,
+        supportLevel: "EMAIL",
+      },
+    }),
+    prisma.billingPlan.upsert({
+      where: { planId: BillingPlanId.PRO },
+      update: {},
+      create: {
+        planId: BillingPlanId.PRO,
+        name: "Pro",
+        description: "Growing businesses",
+        monthlyPrice: 29900, // $299.00
+        maxBuildings: 10,
+        maxUnits: 500,
+        maxUsers: 50,
+        maxOccupants: 1000,
+        canExportReports: true,
+        canBulkOperations: true,
+        supportLevel: "PRIORITY",
+      },
+    }),
+    prisma.billingPlan.upsert({
+      where: { planId: BillingPlanId.ENTERPRISE },
+      update: {},
+      create: {
+        planId: BillingPlanId.ENTERPRISE,
+        name: "Enterprise",
+        description: "Large scale deployments",
+        monthlyPrice: 0, // Custom pricing
+        maxBuildings: 999,
+        maxUnits: 9999,
+        maxUsers: 999,
+        maxOccupants: 99999,
+        canExportReports: true,
+        canBulkOperations: true,
+        supportLevel: "PRIORITY",
+      },
+    }),
+  ]);
+  console.log(`✅ Created ${plans.length} billing plans`);
 
   // 1) Tenants (idempotente por name)
   const tenantAdmin = await prisma.tenant.upsert({
@@ -20,6 +95,18 @@ async function main() {
   });
 
   // 2) Users (idempotente por email)
+  // SUPER_ADMIN user (for testing super-admin endpoints)
+  const superAdminPassword = await bcrypt.hash("SuperAdmin123!", 10);
+  const superAdminUser = await prisma.user.upsert({
+    where: { email: "superadmin@demo.com" },
+    update: { name: "Super Admin" },
+    create: {
+      email: "superadmin@demo.com",
+      name: "Super Admin",
+      passwordHash: superAdminPassword,
+    },
+  });
+
   const adminPassword = await bcrypt.hash("Admin123!", 10);
   const adminUser = await prisma.user.upsert({
     where: { email: "admin@demo.com" },
@@ -74,6 +161,11 @@ async function main() {
   }
 
   // 3) Memberships & Roles
+  // SUPER_ADMIN has a "virtual" membership (no tenant scoping)
+  // In JWT payload, isSuperAdmin flag is set via auth service
+  // For data integrity, create a membership in a dummy tenant if needed
+  // For MVP, we just rely on JWT flag + audit logs
+
   await upsertMembershipWithRole({
     tenantId: tenantAdmin.id,
     userId: adminUser.id,
@@ -90,6 +182,60 @@ async function main() {
     tenantId: tenantBuilding.id,
     userId: residentUser.id,
     role: Role.RESIDENT,
+  });
+
+  // 3.5) Create SUPER_ADMIN role for super admin user (in a virtual tenant or directly)
+  // For MVP: JWT payload has isSuperAdmin flag, but we need at least one membership
+  // Create a membership in admin tenant with SUPER_ADMIN role
+  const superAdminMembership = await prisma.membership.upsert({
+    where: {
+      userId_tenantId: {
+        userId: superAdminUser.id,
+        tenantId: tenantAdmin.id,
+      },
+    },
+    update: {},
+    create: { tenantId: tenantAdmin.id, userId: superAdminUser.id },
+  });
+  await prisma.membershipRole.upsert({
+    where: {
+      membershipId_role: {
+        membershipId: superAdminMembership.id,
+        role: Role.SUPER_ADMIN,
+      },
+    },
+    update: {},
+    create: { membershipId: superAdminMembership.id, role: Role.SUPER_ADMIN },
+  });
+
+  // ============================================================================
+  // SUBSCRIPTIONS (A2 scope)
+  // ============================================================================
+  const freePlan = plans.find((p) => p.planId === BillingPlanId.FREE)!;
+  const proPlan = plans.find((p) => p.planId === BillingPlanId.PRO)!;
+
+  await prisma.subscription.upsert({
+    where: { tenantId: tenantAdmin.id },
+    update: {},
+    create: {
+      tenantId: tenantAdmin.id,
+      planId: proPlan.id,
+      status: "ACTIVE",
+      currentPeriodStart: new Date(),
+      currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+    },
+  });
+
+  await prisma.subscription.upsert({
+    where: { tenantId: tenantBuilding.id },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      planId: freePlan.id,
+      status: "TRIAL",
+      currentPeriodStart: new Date(),
+      trialEndDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
+    },
   });
 
   // 4) Buildings (minimal: 1 tenant → 1 building)
@@ -163,10 +309,24 @@ async function main() {
 
   console.log("Seed finished.");
   console.log(`\n📊 Seeded data:
-  - Tenants: ${tenantAdmin.name}, ${tenantBuilding.name}
+  ============================================================================
+  SUPER_ADMIN (for testing /api/super-admin endpoints):
+  - Email: superadmin@demo.com
+  - Password: SuperAdmin123!
+
+  REGULAR USERS:
+  - Email: admin@demo.com (TENANT_ADMIN)
+  - Email: resident@demo.com (RESIDENT)
+
+  TENANTS:
+  - ${tenantAdmin.name} (type: ADMINISTRADORA, plan: PRO, status: ACTIVE)
+  - ${tenantBuilding.name} (type: EDIFICIO_AUTOGESTION, plan: FREE, status: TRIAL)
+
+  BUILDINGS & UNITS:
   - Building: ${building.name} (${building.address})
-  - Units: ${unit1.label} (${unit1.code}), ${unit2.label} (${unit2.code})
+  - Units: ${unit1.label} (${unit1.code}, OCCUPIED), ${unit2.label} (${unit2.code}, VACANT)
   - Occupants: ${adminUser.name} as OWNER in ${unit1.label}, ${residentUser.name} as RESIDENT in ${unit2.label}
+  ============================================================================
   `);
 }
 

@@ -15,6 +15,7 @@ interface ValidatedUser {
   id: string;
   email: string;
   name: string;
+  isSuperAdmin?: boolean;
   memberships: Array<{
     tenantId: string;
     roles: string[];
@@ -46,10 +47,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const memberships = await this.tenancyService.getMembershipsForUser(user.id);
 
+    // Derive isSuperAdmin from memberships (can also trust JWT payload as hint)
+    const isSuperAdmin =
+      payload.isSuperAdmin ||
+      memberships.some((m) => m.roles.includes('SUPER_ADMIN'));
+
     return {
       id: user.id,
       email: user.email,
       name: user.name,
+      isSuperAdmin,
       memberships,
     };
   }
