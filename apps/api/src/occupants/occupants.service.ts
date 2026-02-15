@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
 
@@ -31,6 +31,29 @@ export class OccupantsService {
     if (!userInTenant) {
       throw new BadRequestException(
         `User not found in this tenant`,
+      );
+    }
+
+    // Check plan limit: maxOccupants
+    const [currentCount, subscription] = await Promise.all([
+      this.prisma.unitOccupant.count({
+        where: { unit: { building: { tenantId } } },
+      }),
+      this.prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      }),
+    ]);
+
+    if (!subscription) {
+      throw new BadRequestException(
+        'Tenant has no active subscription',
+      );
+    }
+
+    if (currentCount >= subscription.plan.maxOccupants) {
+      throw new ConflictException(
+        `Occupant limit reached: ${currentCount}/${subscription.plan.maxOccupants}. Upgrade your plan to add more occupants.`,
       );
     }
 

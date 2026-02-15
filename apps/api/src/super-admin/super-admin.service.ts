@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { ChangePlanDto } from './dto/change-plan.dto';
 import { AuditAction, BillingPlanId } from '@prisma/client';
 
 export interface TenantResponse {
@@ -233,6 +234,138 @@ export class SuperAdminService {
         where: { id: tenantId },
       });
     });
+  }
+
+  /**
+   * Change tenant's subscription plan
+   * SECURITY: Validates tenant exists, plan exists, usage vs new limits
+   */
+  async changePlan(
+    tenantId: string,
+    dto: ChangePlanDto,
+    actorUserId: string,
+  ) {
+    // 1. Get current subscription
+    const subscription = await this.prisma.subscription.findUnique({
+      where: { tenantId },
+      include: { plan: true },
+    });
+
+    if (!subscription) {
+      throw new NotFoundException(`No subscription found for tenant "${tenantId}"`);
+    }
+
+    // 2. Validate new plan exists
+    const newPlan = await this.prisma.billingPlan.findUnique({
+      where: { planId: dto.newPlanId },
+    });
+
+    if (!newPlan) {
+      throw new NotFoundException(`Plan "${dto.newPlanId}" not found`);
+    }
+
+    // 3. If downgrade: check usage vs new limits
+    const oldPlanLimits = subscription.plan;
+    if (
+      newPlan.maxBuildings < oldPlanLimits.maxBuildings ||
+      newPlan.maxUnits < oldPlanLimits.maxUnits ||
+      newPlan.maxUsers < oldPlanLimits.maxUsers ||
+      newPlan.maxOccupants < oldPlanLimits.maxOccupants
+    ) {
+      // Downgrade: validate usage doesn't exceed new limits
+      const [buildingCount, unitCount, userCount, occupantCount] = await Promise.all([
+        this.prisma.building.count({ where: { tenantId } }),
+        this.prisma.unit.count({ where: { building: { tenantId } } }),
+        this.prisma.membership.count({ where: { tenantId } }),
+        this.prisma.unitOccupant.count({
+          where: { unit: { building: { tenantId } } },
+        }),
+      ]);
+
+      if (buildingCount > newPlan.maxBuildings) {
+        throw new ConflictException(
+          `Cannot downgrade: tenant has ${buildingCount} buildings, new plan allows max ${newPlan.maxBuildings}`,
+        );
+      }
+      if (unitCount > newPlan.maxUnits) {
+        throw new ConflictException(
+          `Cannot downgrade: tenant has ${unitCount} units, new plan allows max ${newPlan.maxUnits}`,
+        );
+      }
+      if (userCount > newPlan.maxUsers) {
+        throw new ConflictException(
+          `Cannot downgrade: tenant has ${userCount} users, new plan allows max ${newPlan.maxUsers}`,
+        );
+      }
+      if (occupantCount > newPlan.maxOccupants) {
+        throw new ConflictException(
+          `Cannot downgrade: tenant has ${occupantCount} occupants, new plan allows max ${newPlan.maxOccupants}`,
+        );
+      }
+    }
+
+    // 4. Update subscription in transaction
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Update subscription
+      const updated = await tx.subscription.update({
+        where: { tenantId },
+        data: {
+          planId: newPlan.id,
+          status: 'ACTIVE',
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: null,
+        },
+        include: { plan: true },
+      });
+
+      // Log event
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: updated.id,
+          eventType:
+            newPlan.id === subscription.planId
+              ? 'RENEWED'
+              : newPlan.id > subscription.planId
+                ? 'UPGRADED'
+                : 'DOWNGRADED',
+          prevPlanId: subscription.planId,
+          newPlanId: newPlan.id,
+          metadata: {
+            prevPlanName: subscription.plan.name,
+            newPlanName: newPlan.name,
+          },
+        },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          actorUserId,
+          action: AuditAction.SUBSCRIPTION_UPDATE,
+          entity: 'Subscription',
+          entityId: updated.id,
+          metadata: {
+            prevPlanId: subscription.planId,
+            newPlanId: newPlan.id,
+            prevPlanName: subscription.plan.name,
+            newPlanName: newPlan.name,
+          },
+        },
+      });
+
+      return updated;
+    });
+
+    return {
+      id: result.id,
+      tenantId: result.tenantId,
+      planId: result.planId,
+      status: result.status,
+      planName: result.plan.name,
+      currentPeriodStart: result.currentPeriodStart.toISOString(),
+      currentPeriodEnd: result.currentPeriodEnd?.toISOString() ?? null,
+    };
   }
 
   /**

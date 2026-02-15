@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TenancyController } from './tenancy.controller';
 import { TenancyService } from './tenancy.service';
+import { TenancyStatsService } from './tenancy-stats.service';
 import { TenantAccessGuard } from './tenant-access.guard';
 
 /**
@@ -16,11 +17,12 @@ import { TenantAccessGuard } from './tenant-access.guard';
  *
  * Services:
  * - TenancyService: lógica de tenancy (getMembershipsForUser)
+ * - TenancyStatsService: estadísticas y métricas del tenant
  */
 @Module({
   imports: [PrismaModule],
   controllers: [TenancyController],
-  providers: [TenancyService, TenantAccessGuard],
-  exports: [TenantAccessGuard, TenancyService],
+  providers: [TenancyService, TenancyStatsService, TenantAccessGuard],
+  exports: [TenantAccessGuard, TenancyService, TenancyStatsService],
 })
 export class TenancyModule {}

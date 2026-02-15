@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
@@ -8,6 +13,28 @@ export class BuildingsService {
   constructor(private prisma: PrismaService) {}
 
   async create(tenantId: string, dto: CreateBuildingDto) {
+    // 1. Check plan limit: maxBuildings
+    const [currentCount, subscription] = await Promise.all([
+      this.prisma.building.count({ where: { tenantId } }),
+      this.prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      }),
+    ]);
+
+    if (!subscription) {
+      throw new BadRequestException(
+        'Tenant has no active subscription',
+      );
+    }
+
+    if (currentCount >= subscription.plan.maxBuildings) {
+      throw new ConflictException(
+        `Building limit reached: ${currentCount}/${subscription.plan.maxBuildings}. Upgrade your plan to create more buildings.`,
+      );
+    }
+
+    // 2. Create building
     try {
       return await this.prisma.building.create({
         data: {

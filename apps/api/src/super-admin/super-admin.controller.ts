@@ -17,6 +17,7 @@ import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { ChangePlanDto } from './dto/change-plan.dto';
 
 export interface RequestWithUser extends Request {
   user?: {
@@ -101,6 +102,19 @@ export class SuperAdminController {
     @Request() req: RequestWithUser,
   ): Promise<void> {
     return this.service.deleteTenant(tenantId, req.user.id);
+  }
+
+  /**
+   * PATCH /api/super-admin/tenants/:tenantId/subscription
+   * Change tenant plan
+   */
+  @Patch('tenants/:tenantId/subscription')
+  async changePlan(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: ChangePlanDto,
+    @Request() req: RequestWithUser,
+  ) {
+    return this.service.changePlan(tenantId, dto, req.user.id);
   }
 
   /**

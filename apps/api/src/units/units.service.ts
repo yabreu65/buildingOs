@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
@@ -16,6 +21,27 @@ export class UnitsService {
     if (!building) {
       throw new NotFoundException(
         `Building not found or does not belong to this tenant`,
+      );
+    }
+
+    // Check plan limit: maxUnits
+    const [currentCount, subscription] = await Promise.all([
+      this.prisma.unit.count({ where: { building: { tenantId } } }),
+      this.prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      }),
+    ]);
+
+    if (!subscription) {
+      throw new BadRequestException(
+        'Tenant has no active subscription',
+      );
+    }
+
+    if (currentCount >= subscription.plan.maxUnits) {
+      throw new ConflictException(
+        `Unit limit reached: ${currentCount}/${subscription.plan.maxUnits}. Upgrade your plan to create more units.`,
       );
     }
 
