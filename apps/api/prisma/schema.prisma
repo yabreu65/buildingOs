@@ -26,11 +26,11 @@ enum UnitOccupantRole {
 }
 
 model Tenant {
-  id                    String                @id @default(cuid())
-  name                  String                @unique
+  id                    String                 @id @default(cuid())
+  name                  String                 @unique
   type                  TenantType
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
   memberships           Membership[]
   buildings             Building[]
   auditLogs             AuditLog[]
@@ -40,35 +40,39 @@ model Tenant {
   communications        Communication[]
   communicationTargets  CommunicationTarget[]
   communicationReceipts CommunicationReceipt[]
+  files                 File[]
+  documents             Document[]
 }
 
 model User {
-  id                      String                @id @default(cuid())
-  email                   String                @unique
-  name                    String
-  passwordHash            String
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
-  memberships             Membership[]
-  unitOccupants           UnitOccupant[]
-  auditLogs               AuditLog[]
-  ticketsCreated          Ticket[]              @relation("TicketCreatedBy")
-  ticketComments          TicketComment[]       @relation("TicketCommentAuthor")
-  communicationReceipts   CommunicationReceipt[]
+  id                    String                 @id @default(cuid())
+  email                 String                 @unique
+  name                  String
+  passwordHash          String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  memberships           Membership[]
+  unitOccupants         UnitOccupant[]
+  auditLogs             AuditLog[]
+  ticketsCreated        Ticket[]               @relation("TicketCreatedBy")
+  ticketComments        TicketComment[]        @relation("TicketCommentAuthor")
+  communicationReceipts CommunicationReceipt[]
 }
 
 model Membership {
-  id                      String                @id @default(cuid())
-  tenantId                String
-  userId                  String
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant                  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                    User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  roles                   MembershipRole[]
-  assignedTickets         Ticket[]
-  communicationsCreated   Communication[]
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roles                 MembershipRole[]
+  assignedTickets       Ticket[]
+  communicationsCreated Communication[]
+  filesCreated          File[]
+  documentsCreated      Document[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -86,50 +90,52 @@ model MembershipRole {
 }
 
 model Building {
-  id              String           @id @default(cuid())
-  tenantId        String
-  name            String
-  address         String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  units           Unit[]
-  tickets         Ticket[]
-  communications  Communication[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units          Unit[]
+  tickets        Ticket[]
+  communications Communication[]
+  documents      Document[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
 }
 
 model Unit {
-  id               String         @id @default(cuid())
-  buildingId       String
-  code             String
-  label            String?
-  unitType         String         @default("APARTMENT") // APARTMENT, HOUSE, OFFICE, STORAGE, PARKING
-  occupancyStatus  String         @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id              String   @id @default(cuid())
+  buildingId      String
+  code            String
+  label           String?
+  unitType        String   @default("APARTMENT") // APARTMENT, HOUSE, OFFICE, STORAGE, PARKING
+  occupancyStatus String   @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  building         Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitOccupants    UnitOccupant[]
-  tickets          Ticket[]
+  building      Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitOccupants UnitOccupant[]
+  tickets       Ticket[]
+  documents     Document[]
 
   @@unique([buildingId, code])
   @@index([buildingId])
 }
 
 model UnitOccupant {
-  id        String                @id @default(cuid())
+  id        String           @id @default(cuid())
   unitId    String
   userId    String
   role      UnitOccupantRole
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
-  unit      Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([unitId, userId, role])
   @@index([unitId])
@@ -153,17 +159,17 @@ enum AuditAction {
 }
 
 model AuditLog {
-  id            String        @id @default(cuid())
-  tenantId      String?       // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
-  actorUserId   String?       // Nullable: system actions may have no actor
-  action        AuditAction
-  entity        String        // "Tenant", "Subscription", "User", etc.
-  entityId      String        // ID of the resource affected
-  metadata      Json?         // before/after values, details, request ID
-  createdAt     DateTime      @default(now())
+  id          String      @id @default(cuid())
+  tenantId    String? // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
+  actorUserId String? // Nullable: system actions may have no actor
+  action      AuditAction
+  entity      String // "Tenant", "Subscription", "User", etc.
+  entityId    String // ID of the resource affected
+  metadata    Json? // before/after values, details, request ID
+  createdAt   DateTime    @default(now())
 
-  tenant        Tenant?       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  actor         User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([actorUserId])
@@ -183,56 +189,56 @@ enum BillingPlanId {
 }
 
 enum SubscriptionStatus {
-  TRIAL       // Free trial period
-  ACTIVE      // Currently active
-  PAST_DUE    // Payment failed, but not canceled
-  CANCELED    // Canceled by user or admin
-  EXPIRED     // Trial ended without conversion
+  TRIAL // Free trial period
+  ACTIVE // Currently active
+  PAST_DUE // Payment failed, but not canceled
+  CANCELED // Canceled by user or admin
+  EXPIRED // Trial ended without conversion
 }
 
 model BillingPlan {
-  id                String            @id @default(cuid())
-  planId            BillingPlanId     @unique  // Enum: FREE, BASIC, PRO, ENTERPRISE
-  name              String            // "Free", "Basic Plan", etc.
-  description       String?
-  monthlyPrice      Int               @default(0) // in cents (0 = free)
+  id           String        @id @default(cuid())
+  planId       BillingPlanId @unique // Enum: FREE, BASIC, PRO, ENTERPRISE
+  name         String // "Free", "Basic Plan", etc.
+  description  String?
+  monthlyPrice Int           @default(0) // in cents (0 = free)
 
   // Entitlements (A2)
-  maxBuildings      Int               @default(1)
-  maxUnits          Int               @default(10)
-  maxUsers          Int               @default(3)
-  maxOccupants      Int               @default(50)
+  maxBuildings Int @default(1)
+  maxUnits     Int @default(10)
+  maxUsers     Int @default(3)
+  maxOccupants Int @default(50)
 
   // Features flags
-  canExportReports  Boolean           @default(false)
-  canBulkOperations Boolean           @default(false)
-  supportLevel      String            @default("COMMUNITY") // COMMUNITY, EMAIL, PRIORITY
+  canExportReports  Boolean @default(false)
+  canBulkOperations Boolean @default(false)
+  supportLevel      String  @default("COMMUNITY") // COMMUNITY, EMAIL, PRIORITY
 
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  subscriptions     Subscription[]
+  subscriptions Subscription[]
 
   @@index([planId])
 }
 
 model Subscription {
-  id                  String              @id @default(cuid())
-  tenantId            String              @unique  // One active subscription per tenant
-  planId              String              // Foreign key to BillingPlan.id
-  status              SubscriptionStatus  @default(TRIAL)
+  id       String             @id @default(cuid())
+  tenantId String             @unique // One active subscription per tenant
+  planId   String // Foreign key to BillingPlan.id
+  status   SubscriptionStatus @default(TRIAL)
 
   // Period tracking (for billing cycles)
-  currentPeriodStart  DateTime            @default(now())
-  currentPeriodEnd    DateTime?           // Null for active, set on cancel
-  trialEndDate        DateTime?           // Null if not in trial
+  currentPeriodStart DateTime  @default(now())
+  currentPeriodEnd   DateTime? // Null for active, set on cancel
+  trialEndDate       DateTime? // Null if not in trial
 
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan                BillingPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
-  events              SubscriptionEvent[]
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   BillingPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events SubscriptionEvent[]
 
   @@index([tenantId])
   @@index([planId])
@@ -240,15 +246,15 @@ model Subscription {
 }
 
 model SubscriptionEvent {
-  id            String                @id @default(cuid())
+  id             String   @id @default(cuid())
   subscriptionId String
-  eventType     String                // "CREATED", "UPGRADED", "DOWNGRADED", "CANCELED", "RENEWED"
-  prevPlanId    String?               // For upgrades/downgrades
-  newPlanId     String?               // For upgrades/downgrades
-  metadata      Json?                 // Extra data (reason, etc.)
-  createdAt     DateTime              @default(now())
+  eventType      String // "CREATED", "UPGRADED", "DOWNGRADED", "CANCELED", "RENEWED"
+  prevPlanId     String? // For upgrades/downgrades
+  newPlanId      String? // For upgrades/downgrades
+  metadata       Json? // Extra data (reason, etc.)
+  createdAt      DateTime @default(now())
 
-  subscription  Subscription          @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId])
   @@index([eventType])
@@ -274,30 +280,30 @@ enum TicketStatus {
 }
 
 model Ticket {
-  id                      String        @id @default(cuid())
-  tenantId                String
-  buildingId              String
-  unitId                  String?       // Optional: ticket may be building-wide
-  createdByUserId         String
-  assignedToMembershipId  String?       // Optional: ticket may not be assigned
+  id                     String  @id @default(cuid())
+  tenantId               String
+  buildingId             String
+  unitId                 String? // Optional: ticket may be building-wide
+  createdByUserId        String
+  assignedToMembershipId String? // Optional: ticket may not be assigned
 
-  title                   String
-  description             String
-  category                String        // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
-  priority                TicketPriority @default(MEDIUM)
-  status                  TicketStatus  @default(OPEN)
+  title       String
+  description String
+  category    String // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
 
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
-  closedAt                DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  closedAt  DateTime?
 
   // Relations
-  tenant                  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building                Building      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unit                    Unit?         @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  createdBy               User          @relation("TicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
-  assignedTo              Membership?   @relation(fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
-  comments                TicketComment[]
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building   Building        @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit       Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  createdBy  User            @relation("TicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  assignedTo Membership?     @relation(fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
+  comments   TicketComment[]
 
   @@index([tenantId, buildingId, status])
   @@index([assignedToMembershipId, status])
@@ -305,18 +311,18 @@ model Ticket {
 }
 
 model TicketComment {
-  id              String    @id @default(cuid())
-  tenantId        String
-  ticketId        String
-  authorUserId    String
+  id           String @id @default(cuid())
+  tenantId     String
+  ticketId     String
+  authorUserId String
 
-  body            String
-  createdAt       DateTime  @default(now())
+  body      String
+  createdAt DateTime @default(now())
 
   // Relations
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticket          Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author          User      @relation("TicketCommentAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User   @relation("TicketCommentAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
 
   @@index([ticketId])
   @@index([tenantId])
@@ -347,28 +353,28 @@ enum CommunicationTargetType {
 }
 
 model Communication {
-  id                          String    @id @default(cuid())
-  tenantId                    String
-  buildingId                  String?   // Nullable: comunicado puede ser cross-building o de un edificio específico
+  id         String  @id @default(cuid())
+  tenantId   String
+  buildingId String? // Nullable: comunicado puede ser cross-building o de un edificio específico
 
-  title                       String
-  body                        String
-  channel                     CommunicationChannel
-  status                      CommunicationStatus @default(DRAFT)
+  title   String
+  body    String
+  channel CommunicationChannel
+  status  CommunicationStatus  @default(DRAFT)
 
-  createdByMembershipId       String
-  scheduledAt                 DateTime?
-  sentAt                      DateTime?
+  createdByMembershipId String
+  scheduledAt           DateTime?
+  sentAt                DateTime?
 
-  createdAt                   DateTime  @default(now())
-  updatedAt                   DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building                    Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  createdByMembership         Membership @relation(fields: [createdByMembershipId], references: [id], onDelete: Cascade)
-  targets                     CommunicationTarget[]
-  receipts                    CommunicationReceipt[]
+  tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building            Building?              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  createdByMembership Membership             @relation(fields: [createdByMembershipId], references: [id], onDelete: Cascade)
+  targets             CommunicationTarget[]
+  receipts            CommunicationReceipt[]
 
   @@index([tenantId, status])
   @@index([tenantId, buildingId, status])
@@ -376,40 +382,133 @@ model Communication {
 }
 
 model CommunicationTarget {
-  id                          String    @id @default(cuid())
-  tenantId                    String
-  communicationId             String
+  id              String @id @default(cuid())
+  tenantId        String
+  communicationId String
 
-  targetType                  CommunicationTargetType
-  targetId                    String?   // buildingId/unitId/roleCode según targetType
+  targetType CommunicationTargetType
+  targetId   String? // buildingId/unitId/roleCode según targetType
 
-  createdAt                   DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   // Relations
-  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  communication               Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  communication Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
 
   @@index([communicationId])
   @@index([tenantId, targetType])
 }
 
 model CommunicationReceipt {
-  id                          String    @id @default(cuid())
-  tenantId                    String
-  communicationId             String
-  userId                      String
+  id              String @id @default(cuid())
+  tenantId        String
+  communicationId String
+  userId          String
 
-  deliveredAt                 DateTime?
-  readAt                      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
 
-  createdAt                   DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   // Relations
-  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  communication               Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
-  user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  communication Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([communicationId, userId])
   @@index([tenantId, userId, readAt])
   @@index([communicationId, readAt])
+}
+
+// ============================================================================
+// DOCUMENTS & FILES (MVP — Documentos, Reglas, Actas, Contratos, etc.)
+// ============================================================================
+
+enum DocumentCategory {
+  RULES // Reglamento/Normas
+  MINUTES // Actas de asambleas
+  CONTRACT // Contratos
+  BUDGET // Presupuestos
+  INVOICE // Facturas
+  RECEIPT // Recibos/Comprobantes
+  OTHER // Otro
+}
+
+enum DocumentVisibility {
+  TENANT_ADMINS // Solo admins del tenant
+  RESIDENTS // Visibles a residents (y admins)
+  PRIVATE // Solo quien lo creó (y admins)
+}
+
+// ============================================================================
+// File: Metadata de archivos almacenados en MinIO
+// Relación 1:1 con Document (cada documento tiene exactamente 1 archivo)
+// ON DELETE: CUANDO se borra Document, se borra File (y se debe limpiar MinIO)
+// ============================================================================
+model File {
+  id       String @id @default(cuid())
+  tenantId String
+
+  // MinIO metadata
+  bucket       String // Bucket name in MinIO
+  objectKey    String // Full path/key in MinIO (e.g., "tenant-a/documents/rules.pdf")
+  originalName String // Original filename (for download)
+  mimeType     String // MIME type (e.g., "application/pdf")
+  size         Int // File size in bytes
+  checksum     String? // SHA-256 or other hash for integrity check (optional)
+
+  // Audit trail
+  createdByMembershipId String? // Who uploaded the file (nullable for system uploads)
+  createdAt             DateTime @default(now())
+
+  // Relations
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByMembership Membership? @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  document            Document? // 1:1 relation (back-reference, defined in Document)
+
+  @@unique([tenantId, bucket, objectKey])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, objectKey])
+}
+
+// ============================================================================
+// Document: Metadata y permisos de documentos (reglas, actas, contratos, etc.)
+// Relación 1:1 con File (cada documento tiene exactamente 1 archivo)
+//
+// REGLA: Document debe estar asociado a EXACTAMENTE uno de:
+//   A) buildingId (documento de edificio específico)
+//   B) unitId (documento de unidad específica)
+//   C) Ninguno (documento de tenant-wide, aplica a todo el tenant)
+//
+// Validación debe hacerse en la aplicación/servicio (Prisma no lo garantiza solo)
+// ============================================================================
+model Document {
+  id       String @id @default(cuid())
+  tenantId String
+  fileId   String @unique // 1:1 relation with File
+
+  title      String // Display name
+  category   DocumentCategory
+  visibility DocumentVisibility @default(TENANT_ADMINS)
+
+  // Scope: debe ser exactamente uno de buildingId, unitId, o ninguno
+  buildingId String? // If building-scoped
+  unitId     String? // If unit-scoped (implies building-scoped as well)
+
+  // Audit trail
+  createdByMembershipId String? // Who uploaded/created (nullable for system docs)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  file                File        @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  building            Building?   @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                Unit?       @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdByMembership Membership? @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, category])
+  @@index([tenantId, buildingId])
+  @@index([tenantId, unitId])
+  @@index([tenantId, visibility])
 }

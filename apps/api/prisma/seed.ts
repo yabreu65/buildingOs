@@ -1,4 +1,4 @@
-import { PrismaClient, Role, TenantType, BillingPlanId } from "@prisma/client";
+import { PrismaClient, Role, TenantType, BillingPlanId, DocumentCategory, DocumentVisibility } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
@@ -367,6 +367,83 @@ async function main() {
     },
   });
 
+  // ============================================================================
+  // DOCUMENTS & FILES (MVP - Building rules, unit-specific docs, etc.)
+  // ============================================================================
+  // Get the admin membership for document creation audit trail
+  const adminMembership = await prisma.membership.findFirst({
+    where: {
+      userId: adminUser.id,
+      tenantId: tenantBuilding.id,
+    },
+  });
+
+  // Building-scoped document (e.g., building rules)
+  const buildingRulesFile = await prisma.file.upsert({
+    where: { id: "file-building-rules-demo" },
+    update: {},
+    create: {
+      id: "file-building-rules-demo",
+      tenantId: tenantBuilding.id,
+      bucket: "documents",
+      objectKey: `tenant-${tenantBuilding.id}/building-${building.id}/rules.pdf`,
+      originalName: "Reglamento_Edificio_Demo.pdf",
+      mimeType: "application/pdf",
+      size: 245632, // ~240KB
+      checksum: "sha256:abc123def456...",
+      createdByMembershipId: adminMembership?.id || undefined,
+    },
+  });
+
+  const buildingRulesDoc = await prisma.document.upsert({
+    where: { id: "doc-building-rules-demo" },
+    update: {},
+    create: {
+      id: "doc-building-rules-demo",
+      tenantId: tenantBuilding.id,
+      fileId: buildingRulesFile.id,
+      title: "Reglamento de Convivencia - Edificio Demo",
+      category: DocumentCategory.RULES,
+      visibility: DocumentVisibility.RESIDENTS, // Visible to all residents
+      buildingId: building.id,
+      unitId: undefined, // Building-scoped, not unit-scoped
+      createdByMembershipId: adminMembership?.id || undefined,
+    },
+  });
+
+  // Unit-scoped document (e.g., unit-specific instruction)
+  const unitDocFile = await prisma.file.upsert({
+    where: { id: "file-unit-doc-demo" },
+    update: {},
+    create: {
+      id: "file-unit-doc-demo",
+      tenantId: tenantBuilding.id,
+      bucket: "documents",
+      objectKey: `tenant-${tenantBuilding.id}/unit-${unit1.id}/maintenance-guide.pdf`,
+      originalName: "Guia_Mantenimiento_Unidad.pdf",
+      mimeType: "application/pdf",
+      size: 102400, // ~100KB
+      checksum: "sha256:xyz789uvw012...",
+      createdByMembershipId: adminMembership?.id || undefined,
+    },
+  });
+
+  const unitDoc = await prisma.document.upsert({
+    where: { id: "doc-unit-demo" },
+    update: {},
+    create: {
+      id: "doc-unit-demo",
+      tenantId: tenantBuilding.id,
+      fileId: unitDocFile.id,
+      title: `Guía de Mantenimiento - ${unit1.label}`,
+      category: DocumentCategory.OTHER,
+      visibility: DocumentVisibility.TENANT_ADMINS, // Only admins
+      buildingId: building.id,
+      unitId: unit1.id, // Unit-scoped
+      createdByMembershipId: adminMembership?.id || undefined,
+    },
+  });
+
   console.log("Seed finished.");
   console.log(`\n📊 Seeded data:
   ============================================================================
@@ -395,6 +472,21 @@ async function main() {
     • Assigned to: ${operatorUser.name}
     • Unit: ${unit1.label}
     • Comment: Operator acknowledged the issue
+
+  DOCUMENTS & FILES:
+  - Building Document: "${buildingRulesDoc.title}"
+    • Category: ${buildingRulesDoc.category}
+    • Visibility: ${buildingRulesDoc.visibility} (visible to residents)
+    • Scope: Building-wide (${building.name})
+    • File: ${buildingRulesFile.originalName} (${buildingRulesFile.size} bytes)
+    • MinIO path: ${buildingRulesFile.objectKey}
+
+  - Unit Document: "${unitDoc.title}"
+    • Category: ${unitDoc.category}
+    • Visibility: ${unitDoc.visibility} (admin only)
+    • Scope: Unit ${unit1.label}
+    • File: ${unitDocFile.originalName} (${unitDocFile.size} bytes)
+    • MinIO path: ${unitDocFile.objectKey}
   ============================================================================
   `);
 }
