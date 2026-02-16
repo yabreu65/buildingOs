@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { VendorsValidators } from './vendors.validators';
 import { CreateVendorDto } from './dto/create-vendor.dto';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
+import { QuoteStatus, WorkOrderStatus } from '@prisma/client';
 
 /**
  * VendorsService: Business logic for vendor management
@@ -369,6 +370,226 @@ export class VendorsService {
       include: {
         vendor: true,
         building: true,
+        ticket: true,
+        assignedTo: true,
+      },
+    });
+  }
+
+  // ============================================================================
+  // QUOTES CREATE/UPDATE
+  // ============================================================================
+
+  /**
+   * Create a new quote
+   * Validates: vendor and building belong to tenant, ticket (if present) belongs to building
+   */
+  async createQuote(
+    tenantId: string,
+    buildingId: string,
+    dto: {
+      vendorId: string;
+      ticketId?: string;
+      amount: number;
+      currency?: string;
+      status?: string;
+      fileId?: string;
+      notes?: string;
+    },
+  ) {
+    // Validate vendor and building
+    await this.validators.validateVendorAndBuildingBelongToTenant(
+      tenantId,
+      dto.vendorId,
+      buildingId,
+    );
+
+    // Validate ticket if provided
+    if (dto.ticketId) {
+      await this.validators.validateTicketBelongsToBuildingAndTenant(
+        tenantId,
+        buildingId,
+        dto.ticketId,
+      );
+    }
+
+    return await this.prisma.quote.create({
+      data: {
+        tenantId,
+        buildingId,
+        vendorId: dto.vendorId,
+        ticketId: dto.ticketId,
+        amount: dto.amount,
+        currency: dto.currency || 'ARS',
+        status: (dto.status as QuoteStatus) || QuoteStatus.REQUESTED,
+        fileId: dto.fileId,
+        notes: dto.notes,
+      },
+      include: {
+        vendor: true,
+        ticket: true,
+        file: true,
+      },
+    });
+  }
+
+  /**
+   * Update a quote
+   * Validates: quote belongs to tenant/building (404 if not)
+   */
+  async updateQuote(
+    tenantId: string,
+    buildingId: string,
+    quoteId: string,
+    dto: {
+      vendorId?: string;
+      amount?: number;
+      currency?: string;
+      status?: string;
+      fileId?: string | null;
+      notes?: string | null;
+    },
+  ) {
+    // Validate quote scope
+    await this.validators.validateQuoteScope(tenantId, buildingId, quoteId);
+
+    // If changing vendor, validate new vendor belongs to tenant
+    if (dto.vendorId) {
+      await this.validators.validateVendorBelongsToTenant(
+        tenantId,
+        dto.vendorId,
+      );
+    }
+
+    return await this.prisma.quote.update({
+      where: { id: quoteId },
+      data: {
+        ...(dto.vendorId && { vendorId: dto.vendorId }),
+        ...(dto.amount !== undefined && { amount: dto.amount }),
+        ...(dto.currency && { currency: dto.currency }),
+        ...(dto.status && { status: dto.status as QuoteStatus }),
+        ...(dto.fileId !== undefined && { fileId: dto.fileId }),
+        ...(dto.notes !== undefined && { notes: dto.notes }),
+      },
+      include: {
+        vendor: true,
+        ticket: true,
+        file: true,
+      },
+    });
+  }
+
+  // ============================================================================
+  // WORK ORDERS CREATE/UPDATE
+  // ============================================================================
+
+  /**
+   * Create a new work order
+   * Validates: building belongs to tenant, vendor/ticket (if present) belong to building
+   */
+  async createWorkOrder(
+    tenantId: string,
+    buildingId: string,
+    dto: {
+      ticketId?: string;
+      vendorId?: string;
+      assignedToMembershipId?: string;
+      description?: string;
+      scheduledFor?: Date;
+    },
+  ) {
+    // Validate building
+    await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
+
+    // Validate vendor if provided
+    if (dto.vendorId) {
+      await this.validators.validateVendorBelongsToTenant(
+        tenantId,
+        dto.vendorId,
+      );
+    }
+
+    // Validate ticket if provided
+    if (dto.ticketId) {
+      await this.validators.validateTicketBelongsToBuildingAndTenant(
+        tenantId,
+        buildingId,
+        dto.ticketId,
+      );
+    }
+
+    return await this.prisma.workOrder.create({
+      data: {
+        tenantId,
+        buildingId,
+        ticketId: dto.ticketId,
+        vendorId: dto.vendorId,
+        assignedToMembershipId: dto.assignedToMembershipId,
+        status: WorkOrderStatus.OPEN,
+        description: dto.description,
+        scheduledFor: dto.scheduledFor,
+      },
+      include: {
+        vendor: true,
+        ticket: true,
+        assignedTo: true,
+      },
+    });
+  }
+
+  /**
+   * Update a work order
+   * Validates: work order belongs to tenant/building (404 if not)
+   */
+  async updateWorkOrder(
+    tenantId: string,
+    buildingId: string,
+    workOrderId: string,
+    dto: {
+      status?: string;
+      vendorId?: string | null;
+      assignedToMembershipId?: string | null;
+      description?: string;
+      scheduledFor?: Date | null;
+    },
+  ) {
+    // Validate work order scope
+    await this.validators.validateWorkOrderScope(tenantId, buildingId, workOrderId);
+
+    // If changing vendor, validate new vendor belongs to tenant
+    if (dto.vendorId) {
+      await this.validators.validateVendorBelongsToTenant(
+        tenantId,
+        dto.vendorId,
+      );
+    }
+
+    // Handle status transitions
+    const updateData: any = {};
+    if (dto.status) {
+      updateData.status = dto.status as WorkOrderStatus;
+      // If transitioning to DONE, set closedAt
+      if (dto.status === WorkOrderStatus.DONE) {
+        updateData.closedAt = new Date();
+      }
+      // If transitioning from DONE to something else, clear closedAt
+      else {
+        updateData.closedAt = null;
+      }
+    }
+
+    // Add other fields
+    if (dto.vendorId !== undefined) updateData.vendorId = dto.vendorId;
+    if (dto.assignedToMembershipId !== undefined)
+      updateData.assignedToMembershipId = dto.assignedToMembershipId;
+    if (dto.description !== undefined) updateData.description = dto.description;
+    if (dto.scheduledFor !== undefined) updateData.scheduledFor = dto.scheduledFor;
+
+    return await this.prisma.workOrder.update({
+      where: { id: workOrderId },
+      data: updateData,
+      include: {
+        vendor: true,
         ticket: true,
         assignedTo: true,
       },
