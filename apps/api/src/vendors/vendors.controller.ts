@@ -309,16 +309,103 @@ export class VendorsController {
     return await this.vendorsService.getQuote(tenantId, buildingId, quoteId);
   }
 
+  /**
+   * POST /buildings/:buildingId/quotes
+   * Create a new quote
+   * Permission: quotes.write
+   *
+   * Body: { vendorId, ticketId?, amount, currency?, status?, fileId?, notes? }
+   */
+  @Post('buildings/:buildingId/quotes')
+  @UseGuards(BuildingAccessGuard)
+  async createQuote(
+    @Param('buildingId') buildingId: string,
+    @Body() dto: { vendorId: string; ticketId?: string; amount: number; currency?: string; status?: string; fileId?: string; notes?: string },
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    const userRoles = req.user.roles || [];
+
+    // Check permission
+    if (!this.validators.canManageQuotes(userRoles, 'write')) {
+      this.validators.throwForbidden('quotes', 'create');
+    }
+
+    return await this.vendorsService.createQuote(tenantId, buildingId, dto);
+  }
+
+  /**
+   * PATCH /buildings/:buildingId/quotes/:quoteId
+   * Update a quote
+   * Permission: quotes.write (for status/amount changes)
+   * Permission: quotes.approve (for approval status)
+   *
+   * Body: { vendorId?, amount?, currency?, status?, fileId?, notes? }
+   */
+  @Patch('buildings/:buildingId/quotes/:quoteId')
+  @UseGuards(BuildingAccessGuard)
+  async updateQuote(
+    @Param('buildingId') buildingId: string,
+    @Param('quoteId') quoteId: string,
+    @Body() dto: { vendorId?: string; amount?: number; currency?: string; status?: string; fileId?: string | null; notes?: string | null },
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    const userRoles = req.user.roles || [];
+
+    // For approval status, check quotes.approve permission
+    if (dto.status && ['APPROVED', 'REJECTED'].includes(dto.status)) {
+      if (!this.validators.canManageQuotes(userRoles, 'approve')) {
+        this.validators.throwForbidden('quotes', 'approve');
+      }
+    } else {
+      // For other updates, check quotes.write
+      if (!this.validators.canManageQuotes(userRoles, 'write')) {
+        this.validators.throwForbidden('quotes', 'update');
+      }
+    }
+
+    return await this.vendorsService.updateQuote(tenantId, buildingId, quoteId, dto);
+  }
+
   // ============================================================================
   // WORK ORDERS
   // ============================================================================
 
   /**
-   * GET /buildings/:buildingId/workorders
+   * POST /buildings/:buildingId/work-orders
+   * Create a new work order
+   * Permission: workorders.write
+   *
+   * Body: { ticketId?, vendorId?, assignedToMembershipId?, description?, scheduledFor? }
+   */
+  @Post('buildings/:buildingId/work-orders')
+  @UseGuards(BuildingAccessGuard)
+  async createWorkOrder(
+    @Param('buildingId') buildingId: string,
+    @Body() dto: { ticketId?: string; vendorId?: string; assignedToMembershipId?: string; description?: string; scheduledFor?: string },
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    const userRoles = req.user.roles || [];
+
+    // Check permission
+    if (!this.validators.canManageWorkOrders(userRoles, 'write')) {
+      this.validators.throwForbidden('work orders', 'create');
+    }
+
+    return await this.vendorsService.createWorkOrder(tenantId, buildingId, {
+      ...dto,
+      scheduledFor: dto.scheduledFor ? new Date(dto.scheduledFor) : undefined,
+    });
+  }
+
+  /**
+   * GET /buildings/:buildingId/work-orders
    * List all work orders for a building
    * Permission: workorders.read
    */
-  @Get('buildings/:buildingId/workorders')
+  @Get('buildings/:buildingId/work-orders')
   @UseGuards(BuildingAccessGuard)
   async listWorkOrders(
     @Param('buildingId') buildingId: string,
@@ -336,11 +423,11 @@ export class VendorsController {
   }
 
   /**
-   * GET /buildings/:buildingId/workorders/:workOrderId
+   * GET /buildings/:buildingId/work-orders/:workOrderId
    * Get a single work order
    * Permission: workorders.read
    */
-  @Get('buildings/:buildingId/workorders/:workOrderId')
+  @Get('buildings/:buildingId/work-orders/:workOrderId')
   @UseGuards(BuildingAccessGuard)
   async getWorkOrder(
     @Param('buildingId') buildingId: string,
@@ -356,5 +443,42 @@ export class VendorsController {
     }
 
     return await this.vendorsService.getWorkOrder(tenantId, buildingId, workOrderId);
+  }
+
+  /**
+   * PATCH /buildings/:buildingId/work-orders/:workOrderId
+   * Update a work order
+   * Permission: workorders.write (for regular updates)
+   * Permission: workorders.execute (for status changes)
+   *
+   * Body: { status?, vendorId?, assignedToMembershipId?, description?, scheduledFor? }
+   */
+  @Patch('buildings/:buildingId/work-orders/:workOrderId')
+  @UseGuards(BuildingAccessGuard)
+  async updateWorkOrder(
+    @Param('buildingId') buildingId: string,
+    @Param('workOrderId') workOrderId: string,
+    @Body() dto: { status?: string; vendorId?: string | null; assignedToMembershipId?: string | null; description?: string; scheduledFor?: string | null },
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    const userRoles = req.user.roles || [];
+
+    // For status changes, check execute permission
+    if (dto.status) {
+      if (!this.validators.canManageWorkOrders(userRoles, 'execute')) {
+        this.validators.throwForbidden('work orders', 'change status');
+      }
+    } else {
+      // For other updates, check write
+      if (!this.validators.canManageWorkOrders(userRoles, 'write')) {
+        this.validators.throwForbidden('work orders', 'update');
+      }
+    }
+
+    return await this.vendorsService.updateWorkOrder(tenantId, buildingId, workOrderId, {
+      ...dto,
+      scheduledFor: dto.scheduledFor ? new Date(dto.scheduledFor) : undefined,
+    });
   }
 }
