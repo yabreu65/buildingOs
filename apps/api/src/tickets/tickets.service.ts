@@ -25,6 +25,51 @@ export class TicketsService {
   ) {}
 
   /**
+   * Get all unit IDs where a user has active UnitOccupant role (RESIDENT or OWNER)
+   * Used for RESIDENT scope validation
+   *
+   * @param tenantId - Tenant context
+   * @param userId - User to check
+   * @returns Array of unit IDs where user is an occupant
+   */
+  async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
+    const occupancies = await this.prisma.unitOccupant.findMany({
+      where: {
+        userId,
+        unit: {
+          building: { tenantId }, // Ensure unit belongs to tenant
+        },
+      },
+      select: { unitId: true },
+      distinct: ['unitId'], // Get unique unit IDs
+    });
+
+    return occupancies.map((o) => o.unitId);
+  }
+
+  /**
+   * Validate that a RESIDENT user has access to a specific unit
+   * Returns 404 if unit not found in user's accessible units
+   *
+   * @param tenantId - Tenant context
+   * @param userId - User to validate
+   * @param unitId - Unit to access
+   * @throws NotFoundException if user doesn't have access
+   */
+  async validateResidentUnitAccess(
+    tenantId: string,
+    userId: string,
+    unitId: string,
+  ): Promise<void> {
+    const userUnitIds = await this.getUserUnitIds(tenantId, userId);
+    if (!userUnitIds.includes(unitId)) {
+      throw new NotFoundException(
+        `Unit not found or does not belong to you`,
+      );
+    }
+  }
+
+  /**
    * Create a ticket in a building
    *
    * Validates:
