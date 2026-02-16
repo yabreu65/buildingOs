@@ -42,6 +42,10 @@ model Tenant {
   communicationReceipts CommunicationReceipt[]
   files                 File[]
   documents             Document[]
+  vendors               Vendor[]
+  vendorAssignments     VendorAssignment[]
+  quotes                Quote[]
+  workOrders            WorkOrder[]
 }
 
 model User {
@@ -73,6 +77,7 @@ model Membership {
   communicationsCreated Communication[]
   filesCreated          File[]
   documentsCreated      Document[]
+  assignedWorkOrders    WorkOrder[] @relation("WorkOrderAssignedTo")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -102,6 +107,9 @@ model Building {
   tickets        Ticket[]
   communications Communication[]
   documents      Document[]
+  vendorAssignments VendorAssignment[]
+  quotes         Quote[]
+  workOrders     WorkOrder[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -304,6 +312,8 @@ model Ticket {
   createdBy  User            @relation("TicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
   assignedTo Membership?     @relation(fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
   comments   TicketComment[]
+  quotes     Quote[]
+  workOrders WorkOrder[]
 
   @@index([tenantId, buildingId, status])
   @@index([assignedToMembershipId, status])
@@ -441,6 +451,24 @@ enum DocumentVisibility {
 }
 
 // ============================================================================
+// VENDORS & OPERATIONS (MVP — Proveedores, Presupuestos, Órdenes de Trabajo)
+// ============================================================================
+
+enum QuoteStatus {
+  REQUESTED // Presupuesto solicitado
+  RECEIVED // Presupuesto recibido del proveedor
+  APPROVED // Presupuesto aprobado
+  REJECTED // Presupuesto rechazado
+}
+
+enum WorkOrderStatus {
+  OPEN // Orden abierta / creada
+  IN_PROGRESS // Orden en proceso
+  DONE // Orden completada
+  CANCELLED // Orden cancelada
+}
+
+// ============================================================================
 // File: Metadata de archivos almacenados en MinIO
 // Relación 1:1 con Document (cada documento tiene exactamente 1 archivo)
 // ON DELETE: CUANDO se borra Document, se borra File (y se debe limpiar MinIO)
@@ -465,6 +493,7 @@ model File {
   tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdByMembership Membership? @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   document            Document? // 1:1 relation (back-reference, defined in Document)
+  quotes              Quote[] // 0..N relation (a file can be associated with multiple quotes, or none)
 
   @@unique([tenantId, bucket, objectKey])
   @@index([tenantId, createdAt])
@@ -511,4 +540,113 @@ model Document {
   @@index([tenantId, buildingId])
   @@index([tenantId, unitId])
   @@index([tenantId, visibility])
+}
+
+// ============================================================================
+// Vendor: Proveedores (plomeros, electricistas, ascensoristas, etc.)
+// ============================================================================
+model Vendor {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  taxId     String? // RUT/CUIT/VAT número (nullable)
+  email     String?
+  phone     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments   VendorAssignment[]
+  quotes        Quote[]
+  workOrders    WorkOrder[]
+
+  // Unique constraint to prevent duplicate vendors in same tenant
+  @@unique([tenantId, name])
+  @@index([tenantId, name])
+}
+
+// ============================================================================
+// VendorAssignment: Asignación de proveedor a un building para servicio específico
+// e.g., "Plomería Express" para edificio "Avenida 9 de Julio 100"
+// ============================================================================
+model VendorAssignment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  vendorId    String
+  buildingId  String
+  serviceType String // "PLUMBING", "ELECTRICITY", "ELEVATOR", "GENERAL", etc.
+  createdAt   DateTime @default(now())
+
+  // Relations
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if assigned
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  // Unique: one vendor per building per service type
+  @@unique([vendorId, buildingId, serviceType])
+  @@index([tenantId, buildingId])
+  @@index([tenantId, vendorId])
+}
+
+// ============================================================================
+// Quote: Presupuestos/cotizaciones de proveedores
+// Puede estar asociado opcionalmente a un ticket (reclamo)
+// ============================================================================
+model Quote {
+  id        String      @id @default(cuid())
+  tenantId  String
+  buildingId String
+  vendorId  String
+  ticketId  String? // Optional: quote may not be tied to a specific ticket
+  fileId    String? // Optional: PDF del presupuesto
+  amount    Int // Amount in cents (e.g., 10000 = $100.00)
+  currency  String      @default("ARS") // ARS, USD, etc.
+  status    QuoteStatus @default(REQUESTED)
+  notes     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  // Relations
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  vendor  Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if has quotes
+  ticket  Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep quote if ticket deleted
+  file    File?    @relation(fields: [fileId], references: [id], onDelete: SetNull) // Keep quote if file deleted
+
+  @@index([tenantId, buildingId, status])
+  @@index([tenantId, ticketId])
+  @@index([tenantId, vendorId])
+}
+
+// ============================================================================
+// WorkOrder: Órdenes de trabajo (asignaciones de tareas a proveedores/operadores)
+// Puede estar asociada opcionalmente a un ticket (reclamo)
+// Puede estar asignada a un operador interno (Membership) o a un proveedor externo (Vendor)
+// ============================================================================
+model WorkOrder {
+  id                     String           @id @default(cuid())
+  tenantId               String
+  buildingId             String
+  ticketId               String? // Optional: work order may not be tied to a specific ticket
+  vendorId               String? // Optional: external vendor (if null, assigned to operator)
+  assignedToMembershipId String? // Optional: internal operator
+  status                 WorkOrderStatus @default(OPEN)
+  description           String?
+  scheduledFor          DateTime? // When the work is scheduled to happen
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  closedAt              DateTime? // When the work was completed
+
+  // Relations
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building       Building    @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  ticket         Ticket?     @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep work order if ticket deleted
+  vendor         Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull) // Keep work order if vendor deleted
+  assignedTo     Membership? @relation("WorkOrderAssignedTo", fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, buildingId, status])
+  @@index([tenantId, ticketId])
+  @@index([assignedToMembershipId, status])
 }

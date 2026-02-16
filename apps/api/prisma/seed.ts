@@ -1,4 +1,4 @@
-import { PrismaClient, Role, TenantType, BillingPlanId, DocumentCategory, DocumentVisibility } from "@prisma/client";
+import { PrismaClient, Role, TenantType, BillingPlanId, DocumentCategory, DocumentVisibility, QuoteStatus, WorkOrderStatus } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
@@ -444,6 +444,77 @@ async function main() {
     },
   });
 
+  // ============================================================================
+  // VENDORS & OPERATIONS (Proveedores, Presupuestos, Órdenes de Trabajo)
+  // ============================================================================
+
+  // Create a vendor (plomero)
+  const vendor = await prisma.vendor.upsert({
+    where: { id: "vendor-plomeria-express" },
+    update: {},
+    create: {
+      id: "vendor-plomeria-express",
+      tenantId: tenantBuilding.id,
+      name: "Plomería Express",
+      taxId: "20-12345678-9", // Argentina CUIT format
+      email: "contacto@plomeria-express.com.ar",
+      phone: "+54 9 11 2345-6789",
+      notes: "Proveedor de servicios de plomería con 10 años de experiencia",
+    },
+  });
+
+  // Create a vendor assignment (Plomería Express assigned to Demo Building)
+  const vendorAssignment = await prisma.vendorAssignment.upsert({
+    where: {
+      vendorId_buildingId_serviceType: {
+        vendorId: vendor.id,
+        buildingId: building.id,
+        serviceType: "PLUMBING",
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      vendorId: vendor.id,
+      buildingId: building.id,
+      serviceType: "PLUMBING",
+    },
+  });
+
+  // Create a quote associated with ticket1
+  const quote = await prisma.quote.upsert({
+    where: { id: "quote-ticket-demo" },
+    update: {},
+    create: {
+      id: "quote-ticket-demo",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      vendorId: vendor.id,
+      ticketId: ticket1.id,
+      amount: 50000, // $500.00 ARS
+      currency: "ARS",
+      status: "RECEIVED",
+      notes: "Presupuesto para reparación de cañería en baño principal. Incluye mano de obra y materiales.",
+    },
+  });
+
+  // Create a work order associated with ticket1
+  const workOrder = await prisma.workOrder.upsert({
+    where: { id: "workorder-ticket-demo" },
+    update: {},
+    create: {
+      id: "workorder-ticket-demo",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      ticketId: ticket1.id,
+      vendorId: vendor.id,
+      assignedToMembershipId: operatorMembership?.id || undefined,
+      status: "OPEN",
+      description: "Reparación de cañería rota en baño. Requiere retiro de piso.",
+      scheduledFor: new Date(new Date().getTime() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+    },
+  });
+
   console.log("Seed finished.");
   console.log(`\n📊 Seeded data:
   ============================================================================
@@ -487,6 +558,32 @@ async function main() {
     • Scope: Unit ${unit1.label}
     • File: ${unitDocFile.originalName} (${unitDocFile.size} bytes)
     • MinIO path: ${unitDocFile.objectKey}
+
+  VENDORS & OPERATIONS:
+  - Vendor: "${vendor.name}"
+    • Tax ID: ${vendor.taxId}
+    • Email: ${vendor.email}
+    • Phone: ${vendor.phone}
+    • Notes: ${vendor.notes}
+
+  - Vendor Assignment: ${vendor.name} → ${building.name}
+    • Service Type: PLUMBING
+    • Assignment ID: ${vendorAssignment.id}
+
+  - Quote: Associated with Ticket "${ticket1.title}"
+    • Vendor: ${vendor.name}
+    • Amount: $${(quote.amount / 100).toFixed(2)} ${quote.currency}
+    • Status: ${quote.status}
+    • Notes: ${quote.notes}
+    • Quote ID: ${quote.id}
+
+  - Work Order: Associated with Ticket "${ticket1.title}"
+    • Vendor: ${vendor.name}
+    • Assigned to: Operator Demo
+    • Status: ${workOrder.status}
+    • Scheduled for: ${workOrder.scheduledFor?.toLocaleDateString()}
+    • Description: ${workOrder.description}
+    • Work Order ID: ${workOrder.id}
   ============================================================================
   `);
 }
