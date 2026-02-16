@@ -26,44 +26,49 @@ enum UnitOccupantRole {
 }
 
 model Tenant {
-  id            String          @id @default(cuid())
-  name          String          @unique
-  type          TenantType
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  memberships   Membership[]
-  buildings     Building[]
-  auditLogs     AuditLog[]
-  subscription  Subscription?
-  tickets       Ticket[]
-  ticketComments TicketComment[]
+  id                    String                @id @default(cuid())
+  name                  String                @unique
+  type                  TenantType
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  memberships           Membership[]
+  buildings             Building[]
+  auditLogs             AuditLog[]
+  subscription          Subscription?
+  tickets               Ticket[]
+  ticketComments        TicketComment[]
+  communications        Communication[]
+  communicationTargets  CommunicationTarget[]
+  communicationReceipts CommunicationReceipt[]
 }
 
 model User {
-  id             String           @id @default(cuid())
-  email          String           @unique
-  name           String
-  passwordHash   String
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  memberships    Membership[]
-  unitOccupants  UnitOccupant[]
-  auditLogs      AuditLog[]
-  ticketsCreated Ticket[]         @relation("TicketCreatedBy")
-  ticketComments TicketComment[]  @relation("TicketCommentAuthor")
+  id                      String                @id @default(cuid())
+  email                   String                @unique
+  name                    String
+  passwordHash            String
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  memberships             Membership[]
+  unitOccupants           UnitOccupant[]
+  auditLogs               AuditLog[]
+  ticketsCreated          Ticket[]              @relation("TicketCreatedBy")
+  ticketComments          TicketComment[]       @relation("TicketCommentAuthor")
+  communicationReceipts   CommunicationReceipt[]
 }
 
 model Membership {
-  id        String           @id @default(cuid())
-  tenantId  String
-  userId    String
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id                      String                @id @default(cuid())
+  tenantId                String
+  userId                  String
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
-  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  roles     MembershipRole[]
-  assignedTickets Ticket[]
+  tenant                  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                    User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roles                   MembershipRole[]
+  assignedTickets         Ticket[]
+  communicationsCreated   Communication[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -81,16 +86,17 @@ model MembershipRole {
 }
 
 model Building {
-  id        String   @id @default(cuid())
-  tenantId  String
-  name      String
-  address   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String           @id @default(cuid())
+  tenantId        String
+  name            String
+  address         String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  units     Unit[]
-  tickets   Ticket[]
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units           Unit[]
+  tickets         Ticket[]
+  communications  Communication[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -314,4 +320,96 @@ model TicketComment {
 
   @@index([ticketId])
   @@index([tenantId])
+}
+
+// ============================================================================
+// COMMUNICATIONS (MVP — Comunicados / Announcements)
+// ============================================================================
+
+enum CommunicationChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+  PUSH
+}
+
+enum CommunicationStatus {
+  DRAFT
+  SCHEDULED
+  SENT
+}
+
+enum CommunicationTargetType {
+  ALL_TENANT
+  BUILDING
+  UNIT
+  ROLE
+}
+
+model Communication {
+  id                          String    @id @default(cuid())
+  tenantId                    String
+  buildingId                  String?   // Nullable: comunicado puede ser cross-building o de un edificio específico
+
+  title                       String
+  body                        String
+  channel                     CommunicationChannel
+  status                      CommunicationStatus @default(DRAFT)
+
+  createdByMembershipId       String
+  scheduledAt                 DateTime?
+  sentAt                      DateTime?
+
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  // Relations
+  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building                    Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  createdByMembership         Membership @relation(fields: [createdByMembershipId], references: [id], onDelete: Cascade)
+  targets                     CommunicationTarget[]
+  receipts                    CommunicationReceipt[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, buildingId, status])
+  @@index([createdByMembershipId])
+}
+
+model CommunicationTarget {
+  id                          String    @id @default(cuid())
+  tenantId                    String
+  communicationId             String
+
+  targetType                  CommunicationTargetType
+  targetId                    String?   // buildingId/unitId/roleCode según targetType
+
+  createdAt                   DateTime  @default(now())
+
+  // Relations
+  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  communication               Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  @@index([communicationId])
+  @@index([tenantId, targetType])
+}
+
+model CommunicationReceipt {
+  id                          String    @id @default(cuid())
+  tenantId                    String
+  communicationId             String
+  userId                      String
+
+  deliveredAt                 DateTime?
+  readAt                      DateTime?
+
+  createdAt                   DateTime  @default(now())
+
+  // Relations
+  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  communication               Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communicationId, userId])
+  @@index([tenantId, userId, readAt])
+  @@index([communicationId, readAt])
 }
