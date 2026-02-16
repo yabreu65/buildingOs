@@ -13,6 +13,7 @@ import { TicketsModule } from './tickets/tickets.module';
 import { CommunicationsModule } from './communications/communications.module';
 import { DocumentsModule } from './documents/documents.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { FinanzasModule } from './finanzas/finanzas.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { VendorsModule } from './vendors/vendors.module';
     CommunicationsModule,
     DocumentsModule,
     VendorsModule,
+    FinanzasModule,
   ],
   controllers: [],
   providers: [],
