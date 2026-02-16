@@ -1,4 +1,4 @@
-import { PrismaClient, Role, TenantType, BillingPlanId, DocumentCategory, DocumentVisibility, QuoteStatus, WorkOrderStatus } from "@prisma/client";
+import { PrismaClient, Role, TenantType, BillingPlanId, DocumentCategory, DocumentVisibility, QuoteStatus, WorkOrderStatus, ChargeStatus, PaymentStatus, PaymentMethod, ChargeType } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
@@ -515,6 +515,86 @@ async function main() {
     },
   });
 
+  // ============================================================================
+  // FINANZAS: Charges, Payments, and Allocations
+  // ============================================================================
+  const currentPeriod = "2026-02"; // February 2026
+  const previousPeriod = "2026-01"; // January 2026
+
+  // Charge 1: Common expense for unit1 in February
+  const charge1 = await prisma.charge.upsert({
+    where: { id: "charge-unit1-feb-2026" },
+    update: {},
+    create: {
+      id: "charge-unit1-feb-2026",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      unitId: unit1.id,
+      period: currentPeriod,
+      type: "COMMON_EXPENSE",
+      concept: "Expensas Comunes Febrero 2026",
+      amount: 50000, // $500.00 ARS
+      currency: "ARS",
+      dueDate: new Date(2026, 2, 15), // March 15, 2026
+      status: "PARTIAL",
+      createdByMembershipId: operatorMembership?.id || undefined,
+    },
+  });
+
+  // Charge 2: Common expense for unit1 in January (previous month, should be PAID)
+  const charge2 = await prisma.charge.upsert({
+    where: { id: "charge-unit1-jan-2026" },
+    update: {},
+    create: {
+      id: "charge-unit1-jan-2026",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      unitId: unit1.id,
+      period: previousPeriod,
+      type: "COMMON_EXPENSE",
+      concept: "Expensas Comunes Enero 2026",
+      amount: 45000, // $450.00 ARS
+      currency: "ARS",
+      dueDate: new Date(2026, 1, 15), // February 15, 2026
+      status: "PAID",
+      createdByMembershipId: operatorMembership?.id || undefined,
+    },
+  });
+
+  // Payment: Resident submitted partial payment for February expense
+  const payment = await prisma.payment.upsert({
+    where: { id: "payment-unit1-submitted" },
+    update: {},
+    create: {
+      id: "payment-unit1-submitted",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      unitId: unit1.id,
+      amount: 30000, // $300.00 ARS (partial payment)
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "SUBMITTED",
+      paidAt: new Date(), // Today
+      reference: "CBU-1234567890", // Payment reference
+      proofFileId: undefined, // Optional proof file
+      createdByUserId: residentUser.id,
+      reviewedByMembershipId: undefined, // Not yet reviewed
+    },
+  });
+
+  // PaymentAllocation: Allocate the payment to the February charge
+  const allocation = await prisma.paymentAllocation.upsert({
+    where: { id: "allocation-payment-to-charge-feb" },
+    update: {},
+    create: {
+      id: "allocation-payment-to-charge-feb",
+      tenantId: tenantBuilding.id,
+      paymentId: payment.id,
+      chargeId: charge1.id,
+      amount: 30000, // Full payment allocated to February charge
+    },
+  });
+
   console.log("Seed finished.");
   console.log(`\n📊 Seeded data:
   ============================================================================
@@ -584,6 +664,35 @@ async function main() {
     • Scheduled for: ${workOrder.scheduledFor?.toLocaleDateString()}
     • Description: ${workOrder.description}
     • Work Order ID: ${workOrder.id}
+
+  FINANZAS (Charges, Payments, Allocations):
+  - Charge 1 (Current): "${charge1.concept}"
+    • Unit: ${unit1.label}
+    • Period: ${charge1.period}
+    • Amount: $${(charge1.amount / 100).toFixed(2)} ${charge1.currency}
+    • Due Date: ${charge1.dueDate.toLocaleDateString()}
+    • Status: ${charge1.status} (partial payment received)
+    • Charge ID: ${charge1.id}
+
+  - Charge 2 (Previous): "${charge2.concept}"
+    • Unit: ${unit1.label}
+    • Period: ${charge2.period}
+    • Amount: $${(charge2.amount / 100).toFixed(2)} ${charge2.currency}
+    • Due Date: ${charge2.dueDate.toLocaleDateString()}
+    • Status: ${charge2.status} (fully paid)
+    • Charge ID: ${charge2.id}
+
+  - Payment: SUBMITTED by ${residentUser.name}
+    • Amount: $${(payment.amount / 100).toFixed(2)} ${payment.currency}
+    • Method: ${payment.method}
+    • Status: ${payment.status} (awaiting admin review)
+    • Reference: ${payment.reference}
+    • Payment ID: ${payment.id}
+
+  - PaymentAllocation: Links payment to charge
+    • Payment: $${(allocation.amount / 100).toFixed(2)} → Charge "${charge1.concept}"
+    • Status: Partial (charge balance: $${((charge1.amount - allocation.amount) / 100).toFixed(2)} ARS remaining)
+    • Allocation ID: ${allocation.id}
   ============================================================================
   `);
 }

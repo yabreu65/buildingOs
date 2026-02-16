@@ -25,6 +25,39 @@ enum UnitOccupantRole {
   RESIDENT
 }
 
+// ============================================================================
+// FINANZAS (Charges, Payments, Allocations)
+// ============================================================================
+
+enum ChargeStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELED
+}
+
+enum PaymentStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  RECONCILED
+}
+
+enum PaymentMethod {
+  TRANSFER
+  CASH
+  CARD
+  ONLINE
+}
+
+enum ChargeType {
+  COMMON_EXPENSE
+  EXTRAORDINARY
+  FINE
+  CREDIT
+  OTHER
+}
+
 model Tenant {
   id                    String                 @id @default(cuid())
   name                  String                 @unique
@@ -46,6 +79,9 @@ model Tenant {
   vendorAssignments     VendorAssignment[]
   quotes                Quote[]
   workOrders            WorkOrder[]
+  charges               Charge[]
+  payments              Payment[]
+  paymentAllocations    PaymentAllocation[]
 }
 
 model User {
@@ -61,6 +97,7 @@ model User {
   ticketsCreated        Ticket[]               @relation("TicketCreatedBy")
   ticketComments        TicketComment[]        @relation("TicketCommentAuthor")
   communicationReceipts CommunicationReceipt[]
+  paymentsCreated       Payment[]              @relation("PaymentCreatedBy")
 }
 
 model Membership {
@@ -77,7 +114,9 @@ model Membership {
   communicationsCreated Communication[]
   filesCreated          File[]
   documentsCreated      Document[]
-  assignedWorkOrders    WorkOrder[] @relation("WorkOrderAssignedTo")
+  assignedWorkOrders    WorkOrder[]           @relation("WorkOrderAssignedTo")
+  chargesCreatedBy      Charge[]
+  paymentsReviewedBy    Payment[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -102,14 +141,16 @@ model Building {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  units          Unit[]
-  tickets        Ticket[]
-  communications Communication[]
-  documents      Document[]
-  vendorAssignments VendorAssignment[]
-  quotes         Quote[]
-  workOrders     WorkOrder[]
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units                 Unit[]
+  tickets               Ticket[]
+  communications        Communication[]
+  documents             Document[]
+  vendorAssignments     VendorAssignment[]
+  quotes                Quote[]
+  workOrders            WorkOrder[]
+  charges               Charge[]
+  payments              Payment[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -129,6 +170,8 @@ model Unit {
   unitOccupants UnitOccupant[]
   tickets       Ticket[]
   documents     Document[]
+  charges       Charge[]
+  payments      Payment[]
 
   @@unique([buildingId, code])
   @@index([buildingId])
@@ -494,6 +537,7 @@ model File {
   createdByMembership Membership? @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   document            Document? // 1:1 relation (back-reference, defined in Document)
   quotes              Quote[] // 0..N relation (a file can be associated with multiple quotes, or none)
+  paymentProofs       Payment[] // 0..N relation (payment proof files)
 
   @@unique([tenantId, bucket, objectKey])
   @@index([tenantId, createdAt])
@@ -649,4 +693,94 @@ model WorkOrder {
   @@index([tenantId, buildingId, status])
   @@index([tenantId, ticketId])
   @@index([assignedToMembershipId, status])
+}
+
+// ============================================================================
+// FINANZAS: Charge (Cargo/Expensa por unidad)
+// ============================================================================
+model Charge {
+  id                     String      @id @default(cuid())
+  tenantId               String
+  buildingId             String
+  unitId                 String
+  period                 String      // YYYY-MM format (e.g., "2026-02")
+  type                   ChargeType  @default(COMMON_EXPENSE)
+  concept                String      // e.g., "Expensas Comunes Febrero 2026"
+  amount                 Int         // Amount in cents (e.g., 10000 = $100.00)
+  currency               String      @default("ARS")
+  dueDate                DateTime
+  status                 ChargeStatus @default(PENDING)
+  createdByMembershipId  String?     // Who created this charge (admin)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  canceledAt             DateTime?
+
+  // Relations
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building              Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                  Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdByMembership   Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  paymentAllocations    PaymentAllocation[]
+
+  @@unique([unitId, period, concept]) // One charge per unit/period/concept
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, unitId, status])
+  @@index([tenantId, buildingId, status])
+  @@index([dueDate])
+}
+
+// ============================================================================
+// FINANZAS: Payment (Pago de residente)
+// ============================================================================
+model Payment {
+  id                       String         @id @default(cuid())
+  tenantId                 String
+  buildingId               String
+  unitId                   String?        // Optional: payment may be for building (not unit-specific)
+  amount                   Int            // Amount in cents
+  currency                 String         @default("ARS")
+  method                   PaymentMethod
+  status                   PaymentStatus  @default(SUBMITTED)
+  paidAt                   DateTime?      // When the payment was actually received
+  reference                String?        // Payment reference (operation number, receipt)
+  proofFileId              String?        // Link to proof document
+  createdByUserId          String         // Who submitted the payment (resident)
+  reviewedByMembershipId   String?        // Who approved the payment (admin)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  // Relations
+  tenant                  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building                Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                    Unit?               @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  createdByUser           User                @relation("PaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reviewedByMembership    Membership?         @relation(fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  proofFile               File?               @relation(fields: [proofFileId], references: [id], onDelete: SetNull)
+  paymentAllocations      PaymentAllocation[]
+
+  @@index([tenantId, buildingId, status])
+  @@index([tenantId, unitId, status])
+  @@index([tenantId, createdByUserId])
+  @@index([status])
+}
+
+// ============================================================================
+// FINANZAS: PaymentAllocation (Imputación de pago a cargo)
+// ============================================================================
+model PaymentAllocation {
+  id        String   @id @default(cuid())
+  tenantId  String
+  paymentId String
+  chargeId  String
+  amount    Int      // Amount allocated (in cents, must be <= Payment.amount)
+  createdAt DateTime @default(now())
+
+  // Relations
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  charge    Charge  @relation(fields: [chargeId], references: [id], onDelete: Restrict) // Protect charge history
+
+  @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
+  @@index([tenantId, paymentId])
+  @@index([tenantId, chargeId])
 }
