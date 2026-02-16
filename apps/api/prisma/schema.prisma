@@ -35,6 +35,8 @@ model Tenant {
   buildings     Building[]
   auditLogs     AuditLog[]
   subscription  Subscription?
+  tickets       Ticket[]
+  ticketComments TicketComment[]
 }
 
 model User {
@@ -47,6 +49,8 @@ model User {
   memberships    Membership[]
   unitOccupants  UnitOccupant[]
   auditLogs      AuditLog[]
+  ticketsCreated Ticket[]         @relation("TicketCreatedBy")
+  ticketComments TicketComment[]  @relation("TicketCommentAuthor")
 }
 
 model Membership {
@@ -59,6 +63,7 @@ model Membership {
   tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   roles     MembershipRole[]
+  assignedTickets Ticket[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -85,6 +90,7 @@ model Building {
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   units     Unit[]
+  tickets   Ticket[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -102,6 +108,7 @@ model Unit {
 
   building         Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitOccupants    UnitOccupant[]
+  tickets          Ticket[]
 
   @@unique([buildingId, code])
   @@index([buildingId])
@@ -240,4 +247,71 @@ model SubscriptionEvent {
   @@index([subscriptionId])
   @@index([eventType])
   @@index([createdAt])
+}
+
+// ============================================================================
+// TICKETS (MVP — Maintenance requests / Reclamos)
+// ============================================================================
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Ticket {
+  id                      String        @id @default(cuid())
+  tenantId                String
+  buildingId              String
+  unitId                  String?       // Optional: ticket may be building-wide
+  createdByUserId         String
+  assignedToMembershipId  String?       // Optional: ticket may not be assigned
+
+  title                   String
+  description             String
+  category                String        // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
+  priority                TicketPriority @default(MEDIUM)
+  status                  TicketStatus  @default(OPEN)
+
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  closedAt                DateTime?
+
+  // Relations
+  tenant                  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building                Building      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                    Unit?         @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  createdBy               User          @relation("TicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  assignedTo              Membership?   @relation(fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
+  comments                TicketComment[]
+
+  @@index([tenantId, buildingId, status])
+  @@index([assignedToMembershipId, status])
+  @@index([unitId, status])
+}
+
+model TicketComment {
+  id              String    @id @default(cuid())
+  tenantId        String
+  ticketId        String
+  authorUserId    String
+
+  body            String
+  createdAt       DateTime  @default(now())
+
+  // Relations
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket          Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author          User      @relation("TicketCommentAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([tenantId])
 }

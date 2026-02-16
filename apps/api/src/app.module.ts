@@ -9,6 +9,7 @@ import { BuildingsModule } from './buildings/buildings.module';
 import { UnitsModule } from './units/units.module';
 import { OccupantsModule } from './occupants/occupants.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
+import { TicketsModule } from './tickets/tickets.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { SuperAdminModule } from './super-admin/super-admin.module';
     UnitsModule,
     OccupantsModule,
     SuperAdminModule,
+    TicketsModule,
   ],
   controllers: [],
   providers: [],

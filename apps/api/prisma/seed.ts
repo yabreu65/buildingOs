@@ -324,6 +324,49 @@ async function main() {
     },
   });
 
+  // ============================================================================
+  // TICKETS (MVP - Maintenance requests)
+  // ============================================================================
+  // Get the operator membership for assignment
+  const operatorMembership = await prisma.membership.findFirst({
+    where: {
+      userId: operatorUser.id,
+      tenantId: tenantBuilding.id,
+    },
+  });
+
+  // Create 1 ticket per building
+  const ticket1 = await prisma.ticket.upsert({
+    where: { id: "ticket-demo-001" },
+    update: {},
+    create: {
+      id: "ticket-demo-001",
+      tenantId: tenantBuilding.id,
+      buildingId: building.id,
+      unitId: unit1.id,
+      createdByUserId: residentUser.id,
+      assignedToMembershipId: operatorMembership?.id || undefined,
+      title: "Leaky faucet in bathroom",
+      description: "The hot water tap is dripping constantly. Please fix at earliest convenience.",
+      category: "MAINTENANCE",
+      priority: "MEDIUM",
+      status: "OPEN",
+    },
+  });
+
+  // Create 1 comment on the ticket
+  await prisma.ticketComment.upsert({
+    where: { id: "ticket-comment-demo-001" },
+    update: {},
+    create: {
+      id: "ticket-comment-demo-001",
+      tenantId: tenantBuilding.id,
+      ticketId: ticket1.id,
+      authorUserId: operatorUser.id,
+      body: "Acknowledged. Will schedule a visit next week. Please ensure someone is home between 9 AM - 5 PM.",
+    },
+  });
+
   console.log("Seed finished.");
   console.log(`\n📊 Seeded data:
   ============================================================================
@@ -344,6 +387,14 @@ async function main() {
   - Building: ${building.name} (${building.address})
   - Units: ${unit1.label} (${unit1.code}, OCCUPIED), ${unit2.label} (${unit2.code}, VACANT)
   - Occupants: ${adminUser.name} as OWNER in ${unit1.label}, ${residentUser.name} as RESIDENT in ${unit2.label}
+
+  TICKETS:
+  - Ticket: "${ticket1.title}" (ID: ${ticket1.id})
+    • Status: ${ticket1.status}, Priority: ${ticket1.priority}
+    • Created by: ${residentUser.name}
+    • Assigned to: ${operatorUser.name}
+    • Unit: ${unit1.label}
+    • Comment: Operator acknowledged the issue
   ============================================================================
   `);
 }
