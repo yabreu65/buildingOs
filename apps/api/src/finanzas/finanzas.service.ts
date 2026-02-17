@@ -736,4 +736,293 @@ export class FinanzasService {
       });
     }
   }
+
+  // ============================================================================
+  // SUMMARY & DELINQUENCY OPERATIONS
+  // ============================================================================
+
+  /**
+   * Get financial summary for a building
+   *
+   * Returns:
+   * - totalCharges: Sum of all active charges (not canceled)
+   * - totalPaid: Sum of approved payments allocated
+   * - totalOutstanding: totalCharges - totalPaid
+   * - delinquentUnitsCount: Units with PENDING/PARTIAL charges past due date
+   * - topDelinquentUnits: List of most delinquent units
+   */
+  async getBuildingFinancialSummary(
+    tenantId: string,
+    buildingId: string,
+    period?: string,
+  ) {
+    // 1. Validate building
+    await this.validators.validateBuildingBelongsToTenant(
+      tenantId,
+      buildingId,
+    );
+
+    // Build filters
+    const where: any = {
+      tenantId,
+      buildingId,
+      canceledAt: null, // Exclude canceled charges
+    };
+
+    if (period) {
+      where.period = period;
+    }
+
+    // 2. Get all charges and allocations
+    const charges = await this.prisma.charge.findMany({
+      where,
+      include: {
+        paymentAllocations: {
+          include: {
+            payment: true,
+          },
+        },
+      },
+    });
+
+    // 3. Calculate totals (only from APPROVED payments)
+    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
+
+    const totalPaid = charges.reduce((sum, c) => {
+      const allocated = c.paymentAllocations.reduce((asum, a) => {
+        // Only count allocations from APPROVED payments
+        return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
+      }, 0);
+      return sum + allocated;
+    }, 0);
+
+    const totalOutstanding = totalCharges - totalPaid;
+
+    // 4. Find delinquent units (past due with outstanding)
+    const now = new Date();
+    const delinquentCharges = charges.filter(
+      (c) =>
+        (c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL) &&
+        c.dueDate < now,
+    );
+
+    const delinquentByUnit = new Map<string, number>();
+    for (const charge of delinquentCharges) {
+      const allocated = charge.paymentAllocations.reduce((sum, a) => {
+        return sum + (a.payment ? a.amount : 0);
+      }, 0);
+      const outstanding = charge.amount - allocated;
+      delinquentByUnit.set(
+        charge.unitId,
+        (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
+      );
+    }
+
+    const delinquentUnitsCount = delinquentByUnit.size;
+    const topDelinquentUnits = Array.from(delinquentByUnit.entries())
+      .map(([unitId, outstanding]) => ({ unitId, outstanding }))
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 10); // Top 10
+
+    return {
+      totalCharges,
+      totalPaid,
+      totalOutstanding,
+      delinquentUnitsCount,
+      topDelinquentUnits,
+      currency: 'ARS', // Default, could be per-charge
+    };
+  }
+
+  /**
+   * Get unit ledger (charges + payments + balance)
+   *
+   * Shows transaction history for a unit
+   */
+  async getUnitLedger(
+    tenantId: string,
+    unitId: string,
+    periodFrom?: string,
+    periodTo?: string,
+    userRoles?: string[],
+    userId?: string,
+  ) {
+    // 1. Validate unit belongs to tenant
+    const unit = await this.prisma.unit.findFirst({
+      where: {
+        id: unitId,
+        building: { tenantId },
+      },
+      include: {
+        building: true,
+      },
+    });
+
+    if (!unit) {
+      throw new NotFoundException(
+        `Unit not found or does not belong to this tenant`,
+      );
+    }
+
+    // 2. For RESIDENT: validate unit access
+    if (userRoles && userId && this.validators.isResidentOrOwner(userRoles)) {
+      await this.validators.validateResidentUnitAccess(tenantId, userId, unitId);
+    }
+
+    // 3. Build charge filters
+    const chargeWhere: any = {
+      tenantId,
+      unitId,
+      canceledAt: null,
+    };
+
+    if (periodFrom || periodTo) {
+      chargeWhere.period = {};
+      if (periodFrom) chargeWhere.period.gte = periodFrom;
+      if (periodTo) chargeWhere.period.lte = periodTo;
+    }
+
+    // 4. Get charges with allocations
+    const charges = await this.prisma.charge.findMany({
+      where: chargeWhere,
+      include: {
+        paymentAllocations: {
+          include: {
+            payment: true,
+          },
+        },
+      },
+      orderBy: { dueDate: 'desc' },
+    });
+
+    // 5. Get payments for this unit
+    const payments = await this.prisma.payment.findMany({
+      where: {
+        tenantId,
+        unitId,
+      },
+      include: {
+        paymentAllocations: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // 6. Calculate balance
+    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
+    const totalAllocated = charges.reduce((sum, c) => {
+      return sum + c.paymentAllocations.reduce((asum, a) => asum + a.amount, 0);
+    }, 0);
+    const balance = totalCharges - totalAllocated;
+
+    return {
+      unitId,
+      unitLabel: unit.label,
+      buildingId: unit.buildingId,
+      buildingName: unit.building.name,
+      charges: charges.map((c) => ({
+        id: c.id,
+        period: c.period,
+        concept: c.concept,
+        amount: c.amount,
+        type: c.type,
+        status: c.status,
+        dueDate: c.dueDate,
+        allocated: c.paymentAllocations.reduce((sum, a) => sum + a.amount, 0),
+      })),
+      payments: payments.map((p) => ({
+        id: p.id,
+        amount: p.amount,
+        method: p.method,
+        status: p.status,
+        createdAt: p.createdAt,
+        allocated: p.paymentAllocations.reduce((sum, a) => sum + a.amount, 0),
+      })),
+      totals: {
+        totalCharges,
+        totalAllocated,
+        balance,
+        currency: 'ARS',
+      },
+    };
+  }
+
+  /**
+   * Get allocations for a payment
+   */
+  async getPaymentAllocations(
+    tenantId: string,
+    buildingId: string,
+    paymentId: string,
+  ) {
+    // 1. Validate payment
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        id: paymentId,
+        tenantId,
+        buildingId,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(
+        `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // 2. Get allocations
+    return this.prisma.paymentAllocation.findMany({
+      where: {
+        tenantId,
+        paymentId,
+      },
+      include: {
+        charge: {
+          select: {
+            id: true,
+            concept: true,
+            amount: true,
+            status: true,
+            period: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Update payment status based on allocation state
+   * If all charges for a payment are PAID, mark payment as RECONCILED
+   */
+  private async tryReconcilePayment(paymentId: string): Promise<void> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: {
+        paymentAllocations: {
+          include: {
+            charge: true,
+          },
+        },
+      },
+    });
+
+    if (!payment || payment.status !== PaymentStatus.APPROVED) {
+      return;
+    }
+
+    // Check if all allocated charges are fully paid
+    const allPaid = payment.paymentAllocations.every(
+      (alloc) => alloc.charge.status === ChargeStatus.PAID,
+    );
+
+    if (allPaid && payment.paymentAllocations.length > 0) {
+      await this.prisma.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.RECONCILED,
+          updatedAt: new Date(),
+        },
+      });
+    }
+  }
 }

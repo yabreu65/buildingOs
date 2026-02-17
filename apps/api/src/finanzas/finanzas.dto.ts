@@ -174,3 +174,82 @@ export class ListPaymentsQueryDto {
   @IsInt()
   offset?: number;
 }
+
+// ============================================================================
+// RESPONSE DTOs (informational)
+// ============================================================================
+
+export class ChargeDetailDto {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  unitId: string;
+  period: string;
+  type: ChargeType;
+  concept: string;
+  amount: number;
+  currency: string;
+  dueDate: Date;
+  status: ChargeStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  canceledAt?: Date;
+}
+
+export class PaymentDetailDto {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  unitId?: string;
+  amount: number;
+  currency: string;
+  method: PaymentMethod;
+  status: PaymentStatus;
+  paidAt?: Date;
+  reference?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export class FinancialSummaryDto {
+  totalCharges: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  delinquentUnitsCount: number;
+  topDelinquentUnits: Array<{
+    unitId: string;
+    outstanding: number;
+  }>;
+  currency: string;
+}
+
+export class UnitLedgerDto {
+  unitId: string;
+  unitLabel: string;
+  buildingId: string;
+  buildingName: string;
+  charges: Array<{
+    id: string;
+    period: string;
+    concept: string;
+    amount: number;
+    type: ChargeType;
+    status: ChargeStatus;
+    dueDate: Date;
+    allocated: number;
+  }>;
+  payments: Array<{
+    id: string;
+    amount: number;
+    method: PaymentMethod;
+    status: PaymentStatus;
+    createdAt: Date;
+    allocated: number;
+  }>;
+  totals: {
+    totalCharges: number;
+    totalAllocated: number;
+    balance: number;
+    currency: string;
+  };
+}

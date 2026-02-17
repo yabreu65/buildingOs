@@ -328,4 +328,49 @@ export class FinanzasController {
       userRoles,
     );
   }
+
+  /**
+   * GET /buildings/:buildingId/payments/:paymentId/allocations
+   * List allocations for a payment
+   */
+  @Get('payments/:paymentId/allocations')
+  async getPaymentAllocations(
+    @Param('buildingId') buildingId: string,
+    @Param('paymentId') paymentId: string,
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    return this.finanzasService.getPaymentAllocations(
+      tenantId,
+      buildingId,
+      paymentId,
+    );
+  }
+
+  // ============================================================================
+  // SUMMARY & REPORTING ENDPOINTS
+  // ============================================================================
+
+  /**
+   * GET /buildings/:buildingId/finance/summary?period=
+   * Get financial summary for building
+   *
+   * Returns:
+   * - totalCharges, totalPaid, totalOutstanding
+   * - delinquentUnitsCount
+   * - topDelinquentUnits
+   */
+  @Get('finance/summary')
+  async getBuildingFinancialSummary(
+    @Param('buildingId') buildingId: string,
+    @Query('period') period: string = '',
+    @Request() req: any,
+  ) {
+    const tenantId = req.tenantId;
+    return this.finanzasService.getBuildingFinancialSummary(
+      tenantId,
+      buildingId,
+      period || undefined,
+    );
+  }
 }
