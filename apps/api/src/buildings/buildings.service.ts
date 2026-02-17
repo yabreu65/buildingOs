@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 import { AuditAction } from '@prisma/client';
@@ -15,29 +16,12 @@ export class BuildingsService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private planEntitlements: PlanEntitlementsService,
   ) {}
 
   async create(tenantId: string, dto: CreateBuildingDto, userId?: string) {
     // 1. Check plan limit: maxBuildings
-    const [currentCount, subscription] = await Promise.all([
-      this.prisma.building.count({ where: { tenantId } }),
-      this.prisma.subscription.findUnique({
-        where: { tenantId },
-        include: { plan: true },
-      }),
-    ]);
-
-    if (!subscription) {
-      throw new BadRequestException(
-        'Tenant has no active subscription',
-      );
-    }
-
-    if (currentCount >= subscription.plan.maxBuildings) {
-      throw new ConflictException(
-        `Building limit reached: ${currentCount}/${subscription.plan.maxBuildings}. Upgrade your plan to create more buildings.`,
-      );
-    }
+    await this.planEntitlements.assertLimit(tenantId, 'buildings');
 
     // 2. Create building
     try {

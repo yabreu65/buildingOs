@@ -5,12 +5,16 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 
 @Injectable()
 export class UnitsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private planEntitlements: PlanEntitlementsService,
+  ) {}
 
   async create(tenantId: string, buildingId: string, dto: CreateUnitDto) {
     // Verify building belongs to tenant
@@ -25,25 +29,7 @@ export class UnitsService {
     }
 
     // Check plan limit: maxUnits
-    const [currentCount, subscription] = await Promise.all([
-      this.prisma.unit.count({ where: { building: { tenantId } } }),
-      this.prisma.subscription.findUnique({
-        where: { tenantId },
-        include: { plan: true },
-      }),
-    ]);
-
-    if (!subscription) {
-      throw new BadRequestException(
-        'Tenant has no active subscription',
-      );
-    }
-
-    if (currentCount >= subscription.plan.maxUnits) {
-      throw new ConflictException(
-        `Unit limit reached: ${currentCount}/${subscription.plan.maxUnits}. Upgrade your plan to create more units.`,
-      );
-    }
+    await this.planEntitlements.assertLimit(tenantId, 'units');
 
     try {
       return await this.prisma.unit.create({

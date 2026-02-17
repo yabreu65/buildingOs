@@ -15,6 +15,8 @@ import { DocumentsModule } from './documents/documents.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { FinanzasModule } from './finanzas/finanzas.module';
 import { AuditModule } from './audit/audit.module';
+import { ReportsModule } from './reports/reports.module';
+import { BillingModule } from './billing/billing.module';
 
 @Module({
   imports: [
@@ -36,6 +38,8 @@ import { AuditModule } from './audit/audit.module';
     DocumentsModule,
     VendorsModule,
     FinanzasModule,
+    ReportsModule,
+    BillingModule,
   ],
   controllers: [],
   providers: [],

@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
 import { AuditAction } from '@prisma/client';
 
@@ -9,6 +10,7 @@ export class OccupantsService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private planEntitlements: PlanEntitlementsService,
   ) {}
 
   async assignOccupant(
@@ -41,27 +43,7 @@ export class OccupantsService {
     }
 
     // Check plan limit: maxOccupants
-    const [currentCount, subscription] = await Promise.all([
-      this.prisma.unitOccupant.count({
-        where: { unit: { building: { tenantId } } },
-      }),
-      this.prisma.subscription.findUnique({
-        where: { tenantId },
-        include: { plan: true },
-      }),
-    ]);
-
-    if (!subscription) {
-      throw new BadRequestException(
-        'Tenant has no active subscription',
-      );
-    }
-
-    if (currentCount >= subscription.plan.maxOccupants) {
-      throw new ConflictException(
-        `Occupant limit reached: ${currentCount}/${subscription.plan.maxOccupants}. Upgrade your plan to add more occupants.`,
-      );
-    }
+    await this.planEntitlements.assertLimit(tenantId, 'occupants');
 
     try {
       const occupant = await this.prisma.unitOccupant.create({
