@@ -73,7 +73,7 @@ export function TicketsReportComponent({
         <SimpleTable
           headers={['Estado', 'Cantidad']}
           rows={data.byStatus.map((item) => [
-            <Badge key={item.status} variant="outline">{item.status}</Badge>,
+            <Badge key={item.status} className="border border-gray-300 bg-gray-50 text-gray-800">{item.status}</Badge>,
             item.count,
           ])}
         />
@@ -85,7 +85,7 @@ export function TicketsReportComponent({
         <SimpleTable
           headers={['Prioridad', 'Cantidad']}
           rows={data.byPriority.map((item) => [
-            <Badge key={item.priority} variant="outline">{item.priority}</Badge>,
+            <Badge key={item.priority} className="border border-gray-300 bg-gray-50 text-gray-800">{item.priority}</Badge>,
             item.count,
           ])}
         />

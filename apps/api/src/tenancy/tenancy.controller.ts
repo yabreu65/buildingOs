@@ -1,4 +1,13 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from './tenant-access.guard';
 import {
@@ -8,6 +17,20 @@ import {
   AuditLogsResultResponse,
   AuditLogFilter,
 } from './tenancy-stats.service';
+import { BrandingService } from './branding.service';
+import {
+  GetBrandingResponseDto,
+  UpdateBrandingDto,
+} from './dto/branding.dto';
+
+interface RequestWithUser extends Request {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    memberships: Array<{ tenantId: string; roles: string[] }>;
+  };
+}
 
 interface HealthResponse {
   ok: boolean;
@@ -23,7 +46,10 @@ interface HealthResponse {
  */
 @Controller('tenants')
 export class TenancyController {
-  constructor(private readonly tenancyStatsService: TenancyStatsService) {}
+  constructor(
+    private readonly tenancyStatsService: TenancyStatsService,
+    private readonly brandingService: BrandingService,
+  ) {}
 
   /**
    * GET /tenants/:tenantId/health
@@ -117,5 +143,42 @@ export class TenancyController {
     };
 
     return this.tenancyStatsService.getTenantAuditLogs(tenantId, filters);
+  }
+
+  /**
+   * GET /tenants/:tenantId/branding
+   *
+   * Get tenant's branding configuration (logo, colors, name)
+   *
+   * @param tenantId ID del tenant
+   * @returns GetBrandingResponseDto
+   */
+  @UseGuards(JwtAuthGuard, TenantAccessGuard)
+  @Get(':tenantId/branding')
+  async getBranding(
+    @Param('tenantId') tenantId: string,
+  ): Promise<GetBrandingResponseDto> {
+    return this.brandingService.getTenantBranding(tenantId);
+  }
+
+  /**
+   * PATCH /tenants/:tenantId/branding
+   *
+   * Update tenant's branding configuration
+   * Only TENANT_ADMIN or TENANT_OWNER can update
+   *
+   * @param tenantId ID del tenant
+   * @param dto Update branding data
+   * @param req Request with user info
+   * @returns GetBrandingResponseDto
+   */
+  @UseGuards(JwtAuthGuard, TenantAccessGuard)
+  @Patch(':tenantId/branding')
+  async updateBranding(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: UpdateBrandingDto,
+    @Request() req: RequestWithUser,
+  ): Promise<GetBrandingResponseDto> {
+    return this.brandingService.updateBranding(tenantId, dto, req.user.id);
   }
 }

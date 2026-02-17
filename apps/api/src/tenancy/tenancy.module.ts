@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AuditModule } from '../audit/audit.module';
 import { TenancyController } from './tenancy.controller';
 import { TenancyService } from './tenancy.service';
 import { TenancyStatsService } from './tenancy-stats.service';
+import { BrandingService } from './branding.service';
 import { TenantAccessGuard } from './tenant-access.guard';
 
 /**
@@ -10,7 +12,7 @@ import { TenantAccessGuard } from './tenant-access.guard';
  *
  * Exporta:
  * - TenantAccessGuard: guard reutilizable para validar membership
- * - TenantParam: decorador para especificar nombre de parámetro
+ * - BrandingService: servicio para gestionar branding del tenant
  *
  * Controllers:
  * - TenancyController: endpoints de ejemplo con validación de tenant
@@ -18,11 +20,12 @@ import { TenantAccessGuard } from './tenant-access.guard';
  * Services:
  * - TenancyService: lógica de tenancy (getMembershipsForUser)
  * - TenancyStatsService: estadísticas y métricas del tenant
+ * - BrandingService: gestión de logo, colores, nombre comercial
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AuditModule],
   controllers: [TenancyController],
-  providers: [TenancyService, TenancyStatsService, TenantAccessGuard],
-  exports: [TenantAccessGuard, TenancyService, TenancyStatsService],
+  providers: [TenancyService, TenancyStatsService, BrandingService, TenantAccessGuard],
+  exports: [TenantAccessGuard, TenancyService, TenancyStatsService, BrandingService],
 })
 export class TenancyModule {}

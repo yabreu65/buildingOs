@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { AuthService, AuthResponse } from './auth.service';
+import { PlanFeaturesService } from '../billing/plan-features.service';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -26,7 +27,10 @@ interface RequestWithUser extends Request {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly planFeatures: PlanFeaturesService,
+  ) {}
 
   @Post('signup')
   async signup(@Body() signupDto: SignupDto): Promise<AuthResponse> {
@@ -59,6 +63,36 @@ export class AuthController {
         name: req.user.name,
       },
       memberships: req.user.memberships,
+    };
+  }
+
+  /**
+   * GET /auth/me/subscription
+   * Get current user's subscription features for active tenant
+   * Frontend uses this to gate UI features
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('me/subscription')
+  async getSubscription(@Request() req: RequestWithUser) {
+    // Get first membership's tenant (active tenant)
+    const activeMembership = req.user.memberships?.[0];
+
+    if (!activeMembership) {
+      return {
+        subscription: null,
+        features: null,
+      };
+    }
+
+    const features = await this.planFeatures.getTenantFeatures(
+      activeMembership.tenantId,
+    );
+
+    return {
+      subscription: {
+        tenantId: activeMembership.tenantId,
+      },
+      features,
     };
   }
 }

@@ -189,11 +189,14 @@ async function main() {
     role: Role.TENANT_ADMIN,
   });
 
-  await upsertMembershipWithRole({
-    tenantId: tenantBuilding.id,
-    userId: operatorUser.id,
-    role: Role.OPERATOR,
-  });
+  // NOTE: Tenant B (tenantBuilding) has FREE plan with maxUsers=2
+  // Keep only admin + resident to stay within limit
+  // operatorUser removed to respect FREE plan limits
+  // await upsertMembershipWithRole({
+  //   tenantId: tenantBuilding.id,
+  //   userId: operatorUser.id,
+  //   role: Role.OPERATOR,
+  // });
 
   await upsertMembershipWithRole({
     tenantId: tenantBuilding.id,

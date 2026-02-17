@@ -1,19 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '@/shared/components/ui/button';
-import { Card } from '@/shared/components/ui/card';
-import { Badge } from '@/shared/components/ui/badge';
-import { Skeleton } from '@/shared/components/ui/skeleton';
-import { EmptyState } from '@/shared/components/ui/empty-state';
-import { ErrorState } from '@/shared/components/ui/error-state';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/shared/components/ui/table';
-import { DeleteConfirmDialog } from '@/shared/components/ui/delete-confirm-dialog';
-import { useToast } from '@/shared/components/ui/toast';
+import Button from '@/shared/components/ui/Button';
+import Card from '@/shared/components/ui/Card';
+import Badge from '@/shared/components/ui/Badge';
+import Skeleton from '@/shared/components/ui/Skeleton';
+import EmptyState from '@/shared/components/ui/EmptyState';
+import ErrorState from '@/shared/components/ui/ErrorState';
+import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
+import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
+import { useToast } from '@/shared/components/ui/Toast';
 import { Charge, ChargeStatus } from '../../services/finance.api';
-import { formatDate, formatCurrency } from '@/shared/lib/format';
 import { Plus, Trash2 } from 'lucide-react';
-import { ChargeCreateModal } from './ChargeCreateModal';
 
 interface ChargesTableProps {
   charges: Charge[];
@@ -39,7 +37,6 @@ export function ChargesTable({
   onRefresh,
   buildingId,
 }: ChargesTableProps) {
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
   const { toast } = useToast();
@@ -54,7 +51,6 @@ export function ChargesTable({
         icon={<Plus className="w-12 h-12 text-muted-foreground" />}
         title="No hay cargos"
         description="Crea el primer cargo para esta unidad"
-        cta={{ text: 'Crear cargo', onClick: () => setShowCreateModal(true) }}
       />
     );
   }
@@ -64,11 +60,11 @@ export function ChargesTable({
     try {
       setIsCanceling(true);
       // TODO: Call cancel function when available
-      toast({ type: 'success', message: 'Cargo cancelado' });
+      toast('Cargo cancelado', 'success');
       await onRefresh?.();
       setSelectedChargeId(null);
     } catch (err) {
-      toast({ type: 'error', message: 'Error al cancelar cargo' });
+      toast('Error al cancelar cargo', 'error');
     } finally {
       setIsCanceling(false);
     }
@@ -79,7 +75,7 @@ export function ChargesTable({
       <div className="space-y-4">
         <div className="flex justify-between items-center">
           <h3 className="text-lg font-semibold">Cargos</h3>
-          <Button onClick={() => setShowCreateModal(true)} className="gap-2">
+          <Button disabled className="gap-2">
             <Plus className="w-4 h-4" />
             Crear cargo
           </Button>
@@ -94,29 +90,29 @@ export function ChargesTable({
             </div>
           ) : (
             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Unidad</TableHead>
-                  <TableHead>Concepto</TableHead>
-                  <TableHead>Monto</TableHead>
-                  <TableHead>Vencimiento</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead className="text-right">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+              <THead>
+                <TR>
+                  <TH>Unidad</TH>
+                  <TH>Concepto</TH>
+                  <TH>Monto</TH>
+                  <TH>Vencimiento</TH>
+                  <TH>Estado</TH>
+                  <TH className="text-right">Acciones</TH>
+                </TR>
+              </THead>
+              <TBody>
                 {charges.map((charge) => (
-                  <TableRow key={charge.id}>
-                    <TableCell className="font-medium">{charge.unitId}</TableCell>
-                    <TableCell>{charge.concept}</TableCell>
-                    <TableCell>{formatCurrency(charge.amount, charge.currency)}</TableCell>
-                    <TableCell>{formatDate(new Date(charge.dueDate))}</TableCell>
-                    <TableCell>
+                  <TR key={charge.id}>
+                    <TD className="font-medium">{charge.unitId}</TD>
+                    <TD>{charge.concept}</TD>
+                    <TD>{charge.currency} {charge.amount.toFixed(2)}</TD>
+                    <TD>{new Date(charge.dueDate).toLocaleDateString()}</TD>
+                    <TD>
                       <Badge className={statusColors[charge.status]}>
                         {charge.status}
                       </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
+                    </TD>
+                    <TD className="text-right">
                       {charge.status !== ChargeStatus.PAID && charge.status !== ChargeStatus.CANCELED && (
                         <Button
                           variant="ghost"
@@ -127,24 +123,14 @@ export function ChargesTable({
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       )}
-                    </TableCell>
-                  </TableRow>
+                    </TD>
+                  </TR>
                 ))}
-              </TableBody>
+              </TBody>
             </Table>
           )}
         </Card>
       </div>
-
-      <ChargeCreateModal
-        buildingId={buildingId}
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onSuccess={() => {
-          setShowCreateModal(false);
-          onRefresh?.();
-        }}
-      />
 
       <DeleteConfirmDialog
         isOpen={!!selectedChargeId}

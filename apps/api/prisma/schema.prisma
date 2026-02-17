@@ -64,6 +64,16 @@ model Tenant {
   type                  TenantType
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+
+  // Branding
+  brandName             String?                // Commercial name (different from tenant name)
+  logoFileId            String?                // FK to File, if uploaded
+  primaryColor          String?                // Hex color: #123456
+  secondaryColor        String?                // Optional secondary color
+  theme                 String?                // "light" | "dark" | "system"
+  emailFooter           String?                // For future email communications
+
+  // Relations
   memberships           Membership[]
   buildings             Building[]
   auditLogs             AuditLog[]
@@ -202,6 +212,7 @@ enum AuditAction {
   TENANT_CREATE
   TENANT_UPDATE
   TENANT_DELETE
+  TENANT_BRANDING_UPDATED
   SUBSCRIPTION_CREATE
   SUBSCRIPTION_UPDATE
   SUBSCRIPTION_CANCEL

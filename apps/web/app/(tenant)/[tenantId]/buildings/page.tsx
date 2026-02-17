@@ -9,6 +9,7 @@ import ErrorState from '@/shared/components/ui/ErrorState';
 import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { useBuildings } from '@/features/buildings/hooks';
 import { useToast } from '@/shared/components/ui/Toast';
+import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
 import { routes } from '@/shared/lib/routes';
 import { Loader2, Plus, Edit, Trash2, Building2 } from 'lucide-react';
 import Link from 'next/link';
@@ -53,9 +54,15 @@ export default function BuildingsPage() {
       setShowCreateForm(false);
       toast('Building created successfully', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create building';
-      setCreateError(message);
-      toast(message, 'error');
+      // Check if it's a plan limit error first
+      if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
+        toast(msg, type, duration);
+      })) {
+        // If not a plan limit error, handle as normal error
+        const message = err instanceof Error ? err.message : 'Failed to create building';
+        setCreateError(message);
+        toast(message, 'error');
+      }
     } finally {
       setSubmitting(false);
     }

@@ -9,6 +9,7 @@ import EmptyState from '@/shared/components/ui/EmptyState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { useToast } from '@/shared/components/ui/Toast';
+import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
 import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { useOccupants } from '@/features/buildings/hooks/useOccupants';
@@ -133,8 +134,14 @@ export default function UnitDashboardPage() {
       setShowDeleteDialog({ isOpen: false, occupantId: null });
       await refetchOccupants();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to remove occupant';
-      toast(message, 'error');
+      // Check if it's a plan limit error first
+      if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
+        toast(msg, type, duration);
+      })) {
+        // If not a plan limit error, handle as normal error
+        const message = err instanceof Error ? err.message : 'Failed to remove occupant';
+        toast(message, 'error');
+      }
     } finally {
       setIsDeleting(false);
     }

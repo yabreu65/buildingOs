@@ -36,11 +36,14 @@ export function useImpersonation(): UseImpersonationReturn {
   const startImpersonation = async (tenantId: string): Promise<void> => {
     try {
       // 1. POST /api/super-admin/impersonation/start
-      const response = await apiClient<{
-        impersonationToken: string;
-        expiresAt: string;
-        tenant: { id: string; name: string };
-      }>({
+      const response = await apiClient<
+        {
+          impersonationToken: string;
+          expiresAt: string;
+          tenant: { id: string; name: string };
+        },
+        { tenantId: string }
+      >({
         path: '/api/super-admin/impersonation/start',
         method: 'POST',
         body: { tenantId },

@@ -13,6 +13,7 @@ import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/compone
 import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { useToast } from '@/shared/components/ui/Toast';
+import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
 import { Loader2, Plus, Edit, Trash2, LayoutGrid, X } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 
@@ -85,9 +86,15 @@ export default function UnitsPage() {
       setShowCreateForm(false);
       toast('Unit created successfully', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create unit';
-      setCreateError(message);
-      toast(message, 'error');
+      // Check if it's a plan limit error first
+      if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
+        toast(msg, type, duration);
+      })) {
+        // If not a plan limit error, handle as normal error
+        const message = err instanceof Error ? err.message : 'Failed to create unit';
+        setCreateError(message);
+        toast(message, 'error');
+      }
     } finally {
       setSubmitting(false);
     }

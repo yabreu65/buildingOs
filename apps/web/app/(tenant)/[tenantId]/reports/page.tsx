@@ -7,12 +7,15 @@ import { useTicketsReport } from '@/features/reports/hooks/useTicketsReport';
 import { useFinanceReport } from '@/features/reports/hooks/useFinanceReport';
 import { useCommunicationsReport } from '@/features/reports/hooks/useCommunicationsReport';
 import { useActivityReport } from '@/features/reports/hooks/useActivityReport';
+import { useSubscription } from '@/features/billing/hooks/useSubscription';
 import { ReportFilters } from '@/features/reports/components/ReportFilters';
 import { TicketsReportComponent } from '@/features/reports/components/TicketsReport';
 import { FinanceReportComponent } from '@/features/reports/components/FinanceReport';
 import { CommunicationsReportComponent } from '@/features/reports/components/CommunicationsReport';
 import { ActivityReportComponent } from '@/features/reports/components/ActivityReport';
+import FeatureGatedButton from '@/features/billing/components/FeatureGatedButton';
 import { ErrorState } from '@/shared/components/ui';
+import { Download } from 'lucide-react';
 
 type TabType = 'tickets' | 'finance' | 'communications' | 'activity';
 
@@ -28,6 +31,9 @@ export default function ReportsPage() {
     to?: string;
     period?: string;
   }>({});
+
+  // Load subscription for feature gating
+  const { features } = useSubscription();
 
   // Load buildings for selector
   const { buildings, loading: buildingsLoading, error: buildingsError } = useBuildings(tenantId);
@@ -66,10 +72,24 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div>
-        <h1 className="text-3xl font-bold">Reportes</h1>
-        <p className="text-gray-600">Vista general de operaciones del edificio</p>
+      {/* Page Header with Export Button */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Reportes</h1>
+          <p className="text-gray-600">Vista general de operaciones del edificio</p>
+        </div>
+        <FeatureGatedButton
+          features={features}
+          featureKey="canExportReports"
+          requiredPlan="BASIC"
+          onClick={() => {
+            // TODO: Implement export functionality
+            alert('Export feature coming soon');
+          }}
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Exportar CSV
+        </FeatureGatedButton>
       </div>
 
       {/* Filters */}

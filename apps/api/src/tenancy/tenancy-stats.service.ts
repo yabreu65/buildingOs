@@ -32,6 +32,7 @@ export interface TenantBillingResponse {
   usage: {
     buildings: number;
     units: number;
+    users: number;
     residents: number;
   };
 }
@@ -174,6 +175,7 @@ export class TenancyStatsService {
           units: await this.prisma.unit.count({
             where: { building: { tenantId } },
           }),
+          users: await this.prisma.membership.count({ where: { tenantId } }),
           residents: await this.prisma.unitOccupant.count({
             where: {
               unit: { building: { tenantId } },
@@ -189,6 +191,7 @@ export class TenancyStatsService {
     const units = await this.prisma.unit.count({
       where: { building: { tenantId } },
     });
+    const users = await this.prisma.membership.count({ where: { tenantId } });
     const residents = await this.prisma.unitOccupant.count({
       where: {
         unit: { building: { tenantId } },
@@ -218,6 +221,7 @@ export class TenancyStatsService {
       usage: {
         buildings,
         units,
+        users,
         residents,
       },
     };

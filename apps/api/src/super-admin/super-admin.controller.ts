@@ -15,6 +15,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
+import { TenancyStatsService } from '../tenancy/tenancy-stats.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
@@ -43,7 +44,10 @@ export interface RequestWithUser extends Request {
 @Controller('api/super-admin')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 export class SuperAdminController {
-  constructor(private readonly service: SuperAdminService) {}
+  constructor(
+    private readonly service: SuperAdminService,
+    private readonly tenancyStatsService: TenancyStatsService,
+  ) {}
 
   /**
    * POST /api/super-admin/tenants
@@ -119,6 +123,15 @@ export class SuperAdminController {
     @Request() req: RequestWithUser,
   ) {
     return this.service.changePlan(tenantId, dto, req.user.id);
+  }
+
+  /**
+   * GET /api/super-admin/tenants/:tenantId/billing
+   * Get tenant billing information (subscription, plan, usage)
+   */
+  @Get('tenants/:tenantId/billing')
+  async getTenantBilling(@Param('tenantId') tenantId: string) {
+    return this.tenancyStatsService.getTenantBilling(tenantId);
   }
 
   /**

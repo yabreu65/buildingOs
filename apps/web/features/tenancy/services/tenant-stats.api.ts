@@ -82,6 +82,7 @@ export interface BillingPlan {
 export interface BillingUsage {
   buildings: number;
   units: number;
+  users: number;
   residents: number;
 }
 

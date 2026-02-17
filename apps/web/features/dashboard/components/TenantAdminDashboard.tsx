@@ -4,11 +4,11 @@ import { useTenantStats } from '@/features/tenancy/hooks/useTenantStats';
 import { useTenantBilling } from '@/features/tenancy/hooks/useTenantBilling';
 import { useBuildings } from '@/features/buildings/hooks/useBuildings';
 import Card from '@/shared/components/ui/Card';
-import Badge from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import EmptyState from '@/shared/components/ui/EmptyState';
+import PlanUsageCard from '@/features/billing/components/PlanUsageCard';
 import { Link } from 'lucide-react';
 
 interface TenantAdminDashboardProps {
@@ -97,50 +97,7 @@ export default function TenantAdminDashboard({
       ) : billingError ? (
         <ErrorState message={billingError} onRetry={refetchBilling} />
       ) : billing ? (
-        <Card>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-foreground">
-                  {billing.plan.name}
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Status: {billing.subscription.status}
-                </p>
-              </div>
-              <Badge className={billing.subscription.status === 'ACTIVE' ? 'bg-green-100 text-green-800 border-green-300' : 'bg-muted text-muted-foreground border-border'}>
-                {billing.subscription.status}
-              </Badge>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4 pt-4 border-t">
-              <div>
-                <div className="text-xs text-muted-foreground">Max Buildings</div>
-                <div className="text-sm font-semibold">
-                  {billing.usage.buildings} / {billing.plan.maxBuildings}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Max Units</div>
-                <div className="text-sm font-semibold">
-                  {billing.usage.units} / {billing.plan.maxUnits}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Max Residents</div>
-                <div className="text-sm font-semibold">
-                  {billing.usage.residents} / {billing.plan.maxOccupants}
-                </div>
-              </div>
-            </div>
-
-            {billing.subscription.trialEndDate && (
-              <p className="text-xs text-amber-600 pt-2">
-                Trial ends: {new Date(billing.subscription.trialEndDate).toLocaleDateString()}
-              </p>
-            )}
-          </div>
-        </Card>
+        <PlanUsageCard billing={billing} />
       ) : null}
 
       {/* Recent Buildings */}

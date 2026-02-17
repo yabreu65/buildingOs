@@ -1,10 +1,9 @@
 'use client';
 
-import { Card } from '@/shared/components/ui/card';
-import { Skeleton } from '@/shared/components/ui/skeleton';
-import { ErrorState } from '@/shared/components/ui/error-state';
+import Card from '@/shared/components/ui/Card';
+import Skeleton from '@/shared/components/ui/Skeleton';
+import ErrorState from '@/shared/components/ui/ErrorState';
 import { FinancialSummary } from '../../services/finance.api';
-import { formatCurrency } from '@/shared/lib/format';
 
 interface FinanceSummaryCardsProps {
   summary: FinancialSummary | null;
@@ -41,17 +40,17 @@ export function FinanceSummaryCards({
   const cards = [
     {
       label: 'Total Cargos',
-      value: formatCurrency(summary.totalCharges, summary.currency),
+      value: `${summary.currency} ${summary.totalCharges.toFixed(2)}`,
       color: 'text-blue-600',
     },
     {
       label: 'Total Pagado',
-      value: formatCurrency(summary.totalPaid, summary.currency),
+      value: `${summary.currency} ${summary.totalPaid.toFixed(2)}`,
       color: 'text-green-600',
     },
     {
       label: 'Saldo Pendiente',
-      value: formatCurrency(summary.totalOutstanding, summary.currency),
+      value: `${summary.currency} ${summary.totalOutstanding.toFixed(2)}`,
       color: 'text-orange-600',
     },
     {
