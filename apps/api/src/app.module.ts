@@ -14,6 +14,7 @@ import { CommunicationsModule } from './communications/communications.module';
 import { DocumentsModule } from './documents/documents.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { FinanzasModule } from './finanzas/finanzas.module';
+import { AuditModule } from './audit/audit.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { FinanzasModule } from './finanzas/finanzas.module';
     }),
     AuthModule,
     PrismaModule,
+    AuditModule,
     HealthModule,
     TenantsModule,
     TenancyModule,

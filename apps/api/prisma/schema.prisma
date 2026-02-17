@@ -198,6 +198,7 @@ model UnitOccupant {
 // ============================================================================
 
 enum AuditAction {
+  // SUPER_ADMIN
   TENANT_CREATE
   TENANT_UPDATE
   TENANT_DELETE
@@ -207,17 +208,69 @@ enum AuditAction {
   USER_CREATE
   USER_DELETE
   OTHER
+  // AUTH
+  AUTH_LOGIN
+  AUTH_LOGOUT
+  AUTH_FAILED_LOGIN
+  MEMBERSHIP_INVITE_SENT
+  MEMBERSHIP_ROLE_CHANGED
+  // BUILDING/UNIT
+  BUILDING_CREATE
+  BUILDING_UPDATE
+  BUILDING_DELETE
+  UNIT_CREATE
+  UNIT_UPDATE
+  UNIT_DELETE
+  OCCUPANT_ASSIGN
+  OCCUPANT_REMOVE
+  // TICKETS
+  TICKET_CREATE
+  TICKET_UPDATE
+  TICKET_STATUS_CHANGE
+  TICKET_ASSIGN
+  TICKET_COMMENT_ADD
+  TICKET_DELETE
+  // COMMUNICATIONS
+  COMMUNICATION_CREATE_DRAFT
+  COMMUNICATION_EDIT_DRAFT
+  COMMUNICATION_SEND
+  COMMUNICATION_READ
+  // DOCUMENTS
+  FILE_UPLOADED
+  DOCUMENT_CREATE
+  DOCUMENT_VISIBILITY_CHANGED
+  DOCUMENT_DOWNLOADED
+  DOCUMENT_DELETE
+  // FINANCE
+  CHARGE_CREATE
+  CHARGE_CANCEL
+  PAYMENT_SUBMIT
+  PAYMENT_APPROVE
+  PAYMENT_REJECT
+  PAYMENT_ALLOCATE
+  ALLOCATION_DELETE
+  // VENDORS/OPS
+  VENDOR_CREATE
+  VENDOR_UPDATE
+  VENDOR_DELETE
+  VENDOR_ASSIGN
+  VENDOR_UNASSIGN
+  QUOTE_CREATE
+  QUOTE_STATUS_CHANGE
+  WORK_ORDER_CREATE
+  WORK_ORDER_STATUS_CHANGE
 }
 
 model AuditLog {
-  id          String      @id @default(cuid())
-  tenantId    String? // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
-  actorUserId String? // Nullable: system actions may have no actor
-  action      AuditAction
-  entity      String // "Tenant", "Subscription", "User", etc.
-  entityId    String // ID of the resource affected
-  metadata    Json? // before/after values, details, request ID
-  createdAt   DateTime    @default(now())
+  id                  String      @id @default(cuid())
+  tenantId            String? // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
+  actorUserId         String? // Nullable: system actions may have no actor
+  actorMembershipId   String? // NEW: Link to Membership for tenant-scoped actions
+  action              AuditAction
+  entity              String // "Tenant", "Subscription", "User", "Ticket", "Building", etc.
+  entityId            String // ID of the resource affected
+  metadata            Json? // before/after values, details, request ID
+  createdAt           DateTime    @default(now())
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
@@ -226,6 +279,7 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
   @@index([createdAt])
+  @@index([entity])
 }
 
 // ============================================================================

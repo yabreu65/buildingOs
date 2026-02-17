@@ -6,7 +6,9 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
+import { AuditService } from '../audit/audit.service';
 import { SignupDto, TenantTypeEnum } from './dto/signup.dto';
+import { AuditAction } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 interface UserWithMemberships {
@@ -38,6 +40,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private tenancyService: TenancyService,
+    private auditService: AuditService,
   ) {}
 
   async signup(dto: SignupDto): Promise<AuthResponse> {
@@ -153,6 +156,18 @@ export class AuthService {
 
     const memberships = await this.tenancyService.getMembershipsForUser(user.id);
 
+    // Audit: AUTH_LOGIN
+    void this.auditService.createLog({
+      actorUserId: user.id,
+      action: AuditAction.AUTH_LOGIN,
+      entityType: 'User',
+      entityId: user.id,
+      metadata: {
+        email: user.email,
+        isSuperAdmin,
+      },
+    });
+
     return {
       accessToken: this.jwtService.sign(payload),
       user: {
@@ -162,5 +177,20 @@ export class AuthService {
       },
       memberships,
     };
+  }
+
+  /**
+   * Log failed login attempt
+   * Called from controller when validateUser returns null
+   */
+  async logFailedLogin(email: string): Promise<void> {
+    void this.auditService.createLog({
+      action: AuditAction.AUTH_FAILED_LOGIN,
+      entityType: 'User',
+      entityId: email, // Use email as entityId for failed logins
+      metadata: {
+        email,
+      },
+    });
   }
 }

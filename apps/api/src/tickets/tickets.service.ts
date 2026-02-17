@@ -5,11 +5,13 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { TicketsValidators } from './tickets.validators';
 import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
+import { AuditAction } from '@prisma/client';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -22,6 +24,7 @@ export class TicketsService {
   constructor(
     private prisma: PrismaService,
     private validators: TicketsValidators,
+    private auditService: AuditService,
   ) {}
 
   /**
@@ -116,7 +119,7 @@ export class TicketsService {
     }
 
     // 4. Create ticket
-    return await this.prisma.ticket.create({
+    const ticket = await this.prisma.ticket.create({
       data: {
         tenantId,
         buildingId,
@@ -139,6 +142,22 @@ export class TicketsService {
         comments: { include: { author: { select: { id: true, name: true } } } },
       },
     });
+
+    // Audit: TICKET_CREATE
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: userId,
+      action: AuditAction.TICKET_CREATE,
+      entityType: 'Ticket',
+      entityId: ticket.id,
+      metadata: {
+        title: ticket.title,
+        buildingId,
+        unitId: ticket.unitId,
+      },
+    });
+
+    return ticket;
   }
 
   /**
@@ -313,7 +332,7 @@ export class TicketsService {
     if (dto.assignedToMembershipId !== undefined)
       data.assignedToMembershipId = dto.assignedToMembershipId;
 
-    return await this.prisma.ticket.update({
+    const ticket = await this.prisma.ticket.update({
       where: { id: ticketId },
       data,
       include: {
@@ -330,6 +349,23 @@ export class TicketsService {
         },
       },
     });
+
+    // Audit: TICKET_STATUS_CHANGE (only log if status changed)
+    if (dto.status && dto.status !== currentTicket.status) {
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId: currentTicket.createdByUserId, // The creator of the ticket
+        action: AuditAction.TICKET_STATUS_CHANGE,
+        entityType: 'Ticket',
+        entityId: ticketId,
+        metadata: {
+          oldStatus: currentTicket.status,
+          newStatus: dto.status,
+        },
+      });
+    }
+
+    return ticket;
   }
 
   /**
@@ -374,7 +410,7 @@ export class TicketsService {
     );
 
     // 2. Add comment
-    return await this.prisma.ticketComment.create({
+    const comment = await this.prisma.ticketComment.create({
       data: {
         tenantId,
         ticketId,
@@ -385,6 +421,20 @@ export class TicketsService {
         author: { select: { id: true, name: true, email: true } },
       },
     });
+
+    // Audit: TICKET_COMMENT_ADD
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: userId,
+      action: AuditAction.TICKET_COMMENT_ADD,
+      entityType: 'TicketComment',
+      entityId: comment.id,
+      metadata: {
+        ticketId,
+      },
+    });
+
+    return comment;
   }
 
   /**

@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
@@ -38,7 +39,10 @@ export interface AuditLogResponse {
 
 @Injectable()
 export class SuperAdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private auditService: AuditService,
+  ) {}
 
   /**
    * Create new tenant with default subscription (TRIAL)
@@ -58,7 +62,7 @@ export class SuperAdminService {
       );
     }
 
-    // Transaction: create tenant + subscription + audit log
+    // Transaction: create tenant + subscription
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Create tenant
       const tenant = await tx.tenant.create({
@@ -86,19 +90,17 @@ export class SuperAdminService {
         },
       });
 
-      // 3. Log action
-      await tx.auditLog.create({
-        data: {
-          tenantId: tenant.id,
-          actorUserId,
-          action: AuditAction.TENANT_CREATE,
-          entity: 'Tenant',
-          entityId: tenant.id,
-          metadata: { name: tenant.name, type: tenant.type },
-        },
-      });
-
       return tenant;
+    });
+
+    // Audit: TENANT_CREATE (fire-and-forget, after transaction)
+    void this.auditService.createLog({
+      tenantId: result.id,
+      actorUserId,
+      action: AuditAction.TENANT_CREATE,
+      entityType: 'Tenant',
+      entityId: result.id,
+      metadata: { name: result.name, type: result.type },
     });
 
     return this.formatTenant(result);
@@ -169,31 +171,25 @@ export class SuperAdminService {
       }
     }
 
-    // Update with audit log
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const tenant = await tx.tenant.update({
-        where: { id: tenantId },
-        data: {
-          ...(dto.name && { name: dto.name }),
-        },
-      });
+    // Update tenant
+    const updated = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        ...(dto.name && { name: dto.name }),
+      },
+    });
 
-      // Log action
-      await tx.auditLog.create({
-        data: {
-          tenantId: tenant.id,
-          actorUserId,
-          action: AuditAction.TENANT_UPDATE,
-          entity: 'Tenant',
-          entityId: tenant.id,
-          metadata: {
-            before: { name: existing.name },
-            after: { name: tenant.name },
-          },
-        },
-      });
-
-      return tenant;
+    // Audit: TENANT_UPDATE (fire-and-forget, after transaction)
+    void this.auditService.createLog({
+      tenantId: updated.id,
+      actorUserId,
+      action: AuditAction.TENANT_UPDATE,
+      entityType: 'Tenant',
+      entityId: updated.id,
+      metadata: {
+        before: { name: existing.name },
+        after: { name: updated.name },
+      },
     });
 
     return this.formatTenant(updated);
@@ -215,24 +211,19 @@ export class SuperAdminService {
       throw new NotFoundException(`Tenant with ID "${tenantId}" not found`);
     }
 
-    // Delete with audit log (before cascade)
-    await this.prisma.$transaction(async (tx) => {
-      // Log action BEFORE deleting (record state)
-      await tx.auditLog.create({
-        data: {
-          tenantId: tenant.id,
-          actorUserId,
-          action: AuditAction.TENANT_DELETE,
-          entity: 'Tenant',
-          entityId: tenant.id,
-          metadata: { name: tenant.name, type: tenant.type },
-        },
-      });
+    // Audit: TENANT_DELETE (fire-and-forget, before deletion)
+    void this.auditService.createLog({
+      tenantId: tenant.id,
+      actorUserId,
+      action: AuditAction.TENANT_DELETE,
+      entityType: 'Tenant',
+      entityId: tenant.id,
+      metadata: { name: tenant.name, type: tenant.type },
+    });
 
-      // Cascade delete all tenant data
-      await tx.tenant.delete({
-        where: { id: tenantId },
-      });
+    // Cascade delete all tenant data
+    await this.prisma.tenant.delete({
+      where: { id: tenantId },
     });
   }
 
@@ -337,24 +328,22 @@ export class SuperAdminService {
         },
       });
 
-      // Audit log
-      await tx.auditLog.create({
-        data: {
-          tenantId,
-          actorUserId,
-          action: AuditAction.SUBSCRIPTION_UPDATE,
-          entity: 'Subscription',
-          entityId: updated.id,
-          metadata: {
-            prevPlanId: subscription.planId,
-            newPlanId: newPlan.id,
-            prevPlanName: subscription.plan.name,
-            newPlanName: newPlan.name,
-          },
-        },
-      });
-
       return updated;
+    });
+
+    // Audit: SUBSCRIPTION_UPDATE (fire-and-forget, after transaction)
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId,
+      action: AuditAction.SUBSCRIPTION_UPDATE,
+      entityType: 'Subscription',
+      entityId: result.id,
+      metadata: {
+        prevPlanId: subscription.planId,
+        newPlanId: newPlan.id,
+        prevPlanName: subscription.plan.name,
+        newPlanName: newPlan.name,
+      },
     });
 
     return {

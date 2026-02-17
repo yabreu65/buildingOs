@@ -1,16 +1,22 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
+import { AuditAction } from '@prisma/client';
 
 @Injectable()
 export class OccupantsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private auditService: AuditService,
+  ) {}
 
   async assignOccupant(
     tenantId: string,
     buildingId: string,
     unitId: string,
     dto: CreateOccupantDto,
+    actorUserId?: string,
   ) {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
@@ -58,7 +64,7 @@ export class OccupantsService {
     }
 
     try {
-      return await this.prisma.unitOccupant.create({
+      const occupant = await this.prisma.unitOccupant.create({
         data: {
           unitId,
           userId: dto.userId,
@@ -66,6 +72,24 @@ export class OccupantsService {
         },
         include: { user: true, unit: true },
       });
+
+      // Audit: OCCUPANT_ASSIGN
+      if (actorUserId) {
+        void this.auditService.createLog({
+          tenantId,
+          actorUserId,
+          action: AuditAction.OCCUPANT_ASSIGN,
+          entityType: 'UnitOccupant',
+          entityId: occupant.id,
+          metadata: {
+            unitId,
+            userId: dto.userId,
+            role: dto.role,
+          },
+        });
+      }
+
+      return occupant;
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new BadRequestException(
@@ -100,6 +124,7 @@ export class OccupantsService {
     buildingId: string,
     unitId: string,
     occupantId: string,
+    actorUserId?: string,
   ) {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
@@ -123,8 +148,26 @@ export class OccupantsService {
       );
     }
 
-    return await this.prisma.unitOccupant.delete({
+    const deleted = await this.prisma.unitOccupant.delete({
       where: { id: occupantId },
     });
+
+    // Audit: OCCUPANT_REMOVE
+    if (actorUserId) {
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId,
+        action: AuditAction.OCCUPANT_REMOVE,
+        entityType: 'UnitOccupant',
+        entityId: occupantId,
+        metadata: {
+          unitId,
+          userId: occupant.userId,
+          role: occupant.role,
+        },
+      });
+    }
+
+    return deleted;
   }
 }

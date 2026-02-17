@@ -5,14 +5,19 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
+import { AuditAction } from '@prisma/client';
 
 @Injectable()
 export class BuildingsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private auditService: AuditService,
+  ) {}
 
-  async create(tenantId: string, dto: CreateBuildingDto) {
+  async create(tenantId: string, dto: CreateBuildingDto, userId?: string) {
     // 1. Check plan limit: maxBuildings
     const [currentCount, subscription] = await Promise.all([
       this.prisma.building.count({ where: { tenantId } }),
@@ -36,13 +41,30 @@ export class BuildingsService {
 
     // 2. Create building
     try {
-      return await this.prisma.building.create({
+      const building = await this.prisma.building.create({
         data: {
           tenantId,
           name: dto.name,
           address: dto.address,
         },
       });
+
+      // Audit: BUILDING_CREATE
+      if (userId) {
+        void this.auditService.createLog({
+          tenantId,
+          actorUserId: userId,
+          action: AuditAction.BUILDING_CREATE,
+          entityType: 'Building',
+          entityId: building.id,
+          metadata: {
+            name: building.name,
+            address: building.address,
+          },
+        });
+      }
+
+      return building;
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new BadRequestException(
@@ -76,7 +98,7 @@ export class BuildingsService {
     return building;
   }
 
-  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto) {
+  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string) {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -89,7 +111,7 @@ export class BuildingsService {
     }
 
     try {
-      return await this.prisma.building.update({
+      const updated = await this.prisma.building.update({
         where: { id: buildingId },
         data: {
           name: dto.name,
@@ -97,6 +119,23 @@ export class BuildingsService {
         },
         include: { units: true },
       });
+
+      // Audit: BUILDING_UPDATE
+      if (userId) {
+        void this.auditService.createLog({
+          tenantId,
+          actorUserId: userId,
+          action: AuditAction.BUILDING_UPDATE,
+          entityType: 'Building',
+          entityId: buildingId,
+          metadata: {
+            name: updated.name,
+            address: updated.address,
+          },
+        });
+      }
+
+      return updated;
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new BadRequestException(
@@ -107,7 +146,7 @@ export class BuildingsService {
     }
   }
 
-  async remove(tenantId: string, buildingId: string) {
+  async remove(tenantId: string, buildingId: string, userId?: string) {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -119,8 +158,24 @@ export class BuildingsService {
       );
     }
 
-    return await this.prisma.building.delete({
+    const deleted = await this.prisma.building.delete({
       where: { id: buildingId },
     });
+
+    // Audit: BUILDING_DELETE
+    if (userId) {
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId: userId,
+        action: AuditAction.BUILDING_DELETE,
+        entityType: 'Building',
+        entityId: buildingId,
+        metadata: {
+          name: building.name,
+        },
+      });
+    }
+
+    return deleted;
   }
 }

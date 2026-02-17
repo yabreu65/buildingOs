@@ -40,6 +40,8 @@ export class AuthController {
       loginDto.password,
     );
     if (!user) {
+      // Audit: AUTH_FAILED_LOGIN
+      await this.authService.logFailedLogin(loginDto.email);
       throw new UnauthorizedException('Credenciales inválidas');
     }
     return this.authService.login(user);
