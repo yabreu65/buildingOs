@@ -18,6 +18,7 @@ import { SuperAdminService } from './super-admin.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
+import { StartImpersonationDto } from './dto/start-impersonation.dto';
 
 export interface RequestWithUser extends Request {
   user?: {
@@ -25,6 +26,9 @@ export interface RequestWithUser extends Request {
     email: string;
     name: string;
     isSuperAdmin?: boolean;
+    isImpersonating?: boolean;
+    impersonatedTenantId?: string;
+    actorSuperAdminUserId?: string;
   };
 }
 
@@ -145,5 +149,44 @@ export class SuperAdminController {
         action,
       },
     );
+  }
+
+  /**
+   * POST /api/super-admin/impersonation/start
+   * Start impersonation of a tenant (mint short-lived token)
+   * SECURITY: Requires SUPER_ADMIN role
+   */
+  @Post('impersonation/start')
+  @HttpCode(HttpStatus.OK)
+  async startImpersonation(
+    @Body() dto: StartImpersonationDto,
+    @Request() req: RequestWithUser,
+  ) {
+    return this.service.startImpersonation(dto.tenantId, req.user.id);
+  }
+
+  /**
+   * POST /api/super-admin/impersonation/end
+   * End impersonation (audit the end event)
+   * SECURITY: Can be called with either SA token or impersonation token
+   */
+  @Post('impersonation/end')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard) // Only JwtAuthGuard, not SuperAdminGuard (impersonation token should work too)
+  async endImpersonation(@Request() req: RequestWithUser) {
+    const tenantId = req.user.impersonatedTenantId || 'unknown';
+    const actorUserId = req.user.actorSuperAdminUserId || req.user.id;
+    return this.service.endImpersonation(tenantId, actorUserId);
+  }
+
+  /**
+   * GET /api/super-admin/impersonation/status
+   * Get current impersonation status
+   * SECURITY: Requires JwtAuth (works with both SA and impersonation tokens)
+   */
+  @Get('impersonation/status')
+  @UseGuards(JwtAuthGuard)
+  async getImpersonationStatus(@Request() req: RequestWithUser) {
+    return this.service.getImpersonationStatus(req);
   }
 }

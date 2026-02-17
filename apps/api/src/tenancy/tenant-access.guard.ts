@@ -14,6 +14,8 @@ export interface RequestWithUser extends Request {
     id: string;
     email: string;
     name: string;
+    isImpersonating?: boolean;
+    impersonatedTenantId?: string;
     memberships: Array<{
       tenantId: string;
       roles: string[];
@@ -58,7 +60,16 @@ export class TenantAccessGuard implements CanActivate {
       throw new BadRequestException(`tenantId es requerido en los parámetros`);
     }
 
-    // 3. Validar membership en Prisma
+    // 3. IMPERSONATION BYPASS: if user is impersonating the exact tenantId in the URL
+    if (
+      request.user.isImpersonating &&
+      request.user.impersonatedTenantId === tenantId
+    ) {
+      // JWT already validated the synthetic membership via JwtStrategy
+      return true;
+    }
+
+    // 4. NORMAL FLOW: DB membership check
     const membership = await this.prisma.membership.findUnique({
       where: {
         userId_tenantId: {
@@ -68,14 +79,14 @@ export class TenantAccessGuard implements CanActivate {
       },
     });
 
-    // 4. Si no existe membership => Forbidden
+    // 5. Si no existe membership => Forbidden
     if (!membership) {
       throw new ForbiddenException(
         `No tiene acceso al tenant ${tenantId}`,
       );
     }
 
-    // 5. Permite ejecución
+    // 6. Permite ejecución
     return true;
   }
 }

@@ -4,6 +4,7 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
@@ -42,6 +43,7 @@ export class SuperAdminService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private jwtService: JwtService,
   ) {}
 
   /**
@@ -430,6 +432,109 @@ export class SuperAdminService {
     return {
       data: logs.map((log) => this.formatAuditLog(log)),
       total,
+    };
+  }
+
+  /**
+   * Start impersonation: mint a short-lived token with isImpersonating flag
+   * SECURITY: Only called by SuperAdminGuard-protected endpoints
+   */
+  async startImpersonation(
+    tenantId: string,
+    actorUserId: string,
+  ): Promise<{
+    impersonationToken: string;
+    expiresAt: string;
+    tenant: { id: string; name: string };
+  }> {
+    // 1. Validate tenant exists
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+    });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant "${tenantId}" not found`);
+    }
+
+    // 2. Fetch actor's email (needed for token payload)
+    const actor = await this.prisma.user.findUnique({
+      where: { id: actorUserId },
+      select: { email: true },
+    });
+    if (!actor) {
+      throw new NotFoundException('Actor user not found');
+    }
+
+    // 3. Sign impersonation token (60 min expiry)
+    const expiresIn = 60 * 60; // 60 minutes in seconds
+    const impersonationToken = this.jwtService.sign(
+      {
+        sub: actorUserId,
+        email: actor.email,
+        isSuperAdmin: false, // NOT super admin in tenant context
+        isImpersonating: true,
+        impersonatedTenantId: tenantId,
+        actorSuperAdminUserId: actorUserId,
+      },
+      { expiresIn: `${expiresIn}s` },
+    );
+
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+    // 4. Audit: IMPERSONATION_START
+    void this.auditService.createLog({
+      actorUserId,
+      action: AuditAction.IMPERSONATION_START,
+      entityType: 'Tenant',
+      entityId: tenantId,
+      metadata: {
+        targetTenantId: tenantId,
+        targetTenantName: tenant.name,
+        expiresAt,
+      },
+    });
+
+    return {
+      impersonationToken,
+      expiresAt,
+      tenant: { id: tenant.id, name: tenant.name },
+    };
+  }
+
+  /**
+   * End impersonation: audit the end event
+   * Token invalidation is client-side (clear storage) + natural JWT expiry
+   */
+  async endImpersonation(
+    tenantId: string,
+    actorUserId: string,
+  ): Promise<{ ok: boolean }> {
+    // Just audit the end event
+    void this.auditService.createLog({
+      actorUserId,
+      action: AuditAction.IMPERSONATION_END,
+      entityType: 'Tenant',
+      entityId: tenantId,
+      metadata: { targetTenantId: tenantId },
+    });
+
+    return { ok: true };
+  }
+
+  /**
+   * Get impersonation status from JWT claims
+   */
+  async getImpersonationStatus(req: any): Promise<{
+    isImpersonating: boolean;
+    tenantId?: string;
+    expiresAt?: string;
+  }> {
+    const user = req.user;
+    if (!user?.isImpersonating) {
+      return { isImpersonating: false };
+    }
+    return {
+      isImpersonating: true,
+      tenantId: user.impersonatedTenantId,
     };
   }
 
