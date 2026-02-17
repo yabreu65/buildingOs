@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+:root {
+  /* LIGHT (balanceado) */
+  --background: #f6f8fb;         /* menos lavado que slate-50 */
+  --foreground: #0f172a;         /* slate-900 */
+
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+
+  --border: #d7dee8;             /* más visible que slate-200 sin ensuciar */
+  --muted: #eef2f7;              /* más contraste vs background */
+  --muted-foreground: #55657a;   /* más legible que slate-500 */
+
+  /* Brand */
+  --primary: #1e3a8a;            /* blue-800 */
+  --primary-foreground: #ffffff;
+
+  --accent: #14b8a6;             /* teal-500 */
+  --accent-foreground: #ffffff;
+
+  /* Estados */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  /* Tipografía */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@theme inline {
+  /* Aliases Tailwind v4 */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  /* Fonts */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+/* DARK (balanceado) — FIX: era 'dark', no 'light' */
+@media (prefers-color-scheme:dark) {
+  :root {
+    --background: #192031;        /* menos oscuro que #0b1220 */
+    --foreground: #e5e7eb;
+
+    --card: #111c33;              /* separa card del background */
+    --card-foreground: #e5e7eb;
+
+    --border: #2a3856;            /* borde coherente y no agresivo */
+    --muted: #16213a;             /* superficies menos “cueva” */
+    --muted-foreground: #a6b3c6;  /* mejor legibilidad secundaria */
+
+    /* Brand (ok) */
+    --primary: #1d4ed8;
+    --primary-foreground: #ffffff;
+
+    --accent: #14b8a6;
+    --accent-foreground: #ffffff;
+
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --info: #3b82f6;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
