@@ -157,16 +157,19 @@ async function main() {
       create: { tenantId: params.tenantId, userId: params.userId },
     });
 
-    await prisma.membershipRole.upsert({
-      where: {
-        membershipId_role: {
+    // Create membership role (scoped roles don't have unique constraint anymore)
+    // So we try to create, and ignore if it already exists
+    try {
+      await prisma.membershipRole.create({
+        data: {
           membershipId: membership.id,
           role: params.role,
+          scopeType: 'TENANT',
         },
-      },
-      update: {},
-      create: { membershipId: membership.id, role: params.role },
-    });
+      });
+    } catch (e) {
+      // Ignore if it already exists
+    }
 
     return membership;
   }
@@ -217,16 +220,18 @@ async function main() {
     update: {},
     create: { tenantId: tenantAdmin.id, userId: superAdminUser.id },
   });
-  await prisma.membershipRole.upsert({
-    where: {
-      membershipId_role: {
+  // Create SUPER_ADMIN role
+  try {
+    await prisma.membershipRole.create({
+      data: {
         membershipId: superAdminMembership.id,
         role: Role.SUPER_ADMIN,
+        scopeType: 'TENANT',
       },
-    },
-    update: {},
-    create: { membershipId: superAdminMembership.id, role: Role.SUPER_ADMIN },
-  });
+    });
+  } catch (e) {
+    // Ignore if it already exists
+  }
 
   // ============================================================================
   // SUBSCRIPTIONS (A2 scope)

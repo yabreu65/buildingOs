@@ -14,6 +14,14 @@ interface JwtPayload {
   actorSuperAdminUserId?: string;
 }
 
+interface ScopedRole {
+  id: string;
+  role: string;
+  scopeType: string;
+  scopeBuildingId: string | null;
+  scopeUnitId: string | null;
+}
+
 interface ValidatedUser {
   id: string;
   email: string;
@@ -25,6 +33,7 @@ interface ValidatedUser {
   memberships: Array<{
     tenantId: string;
     roles: string[];
+    scopedRoles?: ScopedRole[];
   }>;
 }
 

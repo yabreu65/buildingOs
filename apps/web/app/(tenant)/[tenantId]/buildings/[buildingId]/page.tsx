@@ -14,6 +14,8 @@ import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Home, Grid3x3, Plus, Settings, Users, Ticket, CreditCard } from 'lucide-react';
 
+import BuildingOnboardingCard from '@/features/onboarding/BuildingOnboardingCard';
+
 type BuildingParams = {
   tenantId: string;
   buildingId: string;
@@ -101,6 +103,9 @@ export default function BuildingHubPage() {
         buildingName={building.name}
         buildingId={buildingId}
       />
+
+      {/* Onboarding Card */}
+      <BuildingOnboardingCard tenantId={tenantId} buildingId={buildingId} />
 
       {/* Header with quick actions */}
       <div className="flex justify-between items-start">

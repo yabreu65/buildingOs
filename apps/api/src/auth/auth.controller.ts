@@ -13,6 +13,14 @@ import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
+interface ScopedRole {
+  id: string;
+  role: string;
+  scopeType: string;
+  scopeBuildingId: string | null;
+  scopeUnitId: string | null;
+}
+
 interface RequestWithUser extends Request {
   user: {
     id: string;
@@ -21,6 +29,7 @@ interface RequestWithUser extends Request {
     memberships: Array<{
       tenantId: string;
       roles: string[];
+      scopedRoles?: ScopedRole[];
     }>;
   };
 }

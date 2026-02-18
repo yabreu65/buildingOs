@@ -17,6 +17,12 @@ import { FinanzasModule } from './finanzas/finanzas.module';
 import { AuditModule } from './audit/audit.module';
 import { ReportsModule } from './reports/reports.module';
 import { BillingModule } from './billing/billing.module';
+import { InvitationsModule } from './invitations/invitations.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
+import { RbacModule } from './rbac/rbac.module';
+import { MembershipsModule } from './memberships/memberships.module';
+import { ContextModule } from './context/context.module';
+import { InboxModule } from './inbox/inbox.module';
 
 @Module({
   imports: [
@@ -26,6 +32,7 @@ import { BillingModule } from './billing/billing.module';
     AuthModule,
     PrismaModule,
     AuditModule,
+    RbacModule,
     HealthModule,
     TenantsModule,
     TenancyModule,
@@ -40,6 +47,11 @@ import { BillingModule } from './billing/billing.module';
     FinanzasModule,
     ReportsModule,
     BillingModule,
+    InvitationsModule,
+    OnboardingModule,
+    MembershipsModule,
+    ContextModule,
+    InboxModule,
   ],
   controllers: [],
   providers: [],

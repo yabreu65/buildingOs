@@ -5,9 +5,20 @@ export type Role =
   | "OPERATOR"
   | "RESIDENT";
 
+export type ScopeType = "TENANT" | "BUILDING" | "UNIT";
+
+export type ScopedRole = {
+  id: string;
+  role: Role;
+  scopeType: ScopeType;
+  scopeBuildingId: string | null;
+  scopeUnitId: string | null;
+};
+
 export type Membership = {
   tenantId: string;
   roles: Role[];
+  scopedRoles?: ScopedRole[];
 };
 
 export type AuthUser = {

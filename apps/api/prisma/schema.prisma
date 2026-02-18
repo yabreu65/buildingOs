@@ -20,6 +20,12 @@ enum Role {
   RESIDENT
 }
 
+enum ScopeType {
+  TENANT
+  BUILDING
+  UNIT
+}
+
 enum UnitOccupantRole {
   OWNER
   RESIDENT
@@ -92,6 +98,8 @@ model Tenant {
   charges               Charge[]
   payments              Payment[]
   paymentAllocations    PaymentAllocation[]
+  invitations           Invitation[]
+  onboardingState       OnboardingState?
 }
 
 model User {
@@ -127,20 +135,73 @@ model Membership {
   assignedWorkOrders    WorkOrder[]           @relation("WorkOrderAssignedTo")
   chargesCreatedBy      Charge[]
   paymentsReviewedBy    Payment[]
+  invitationsSent       Invitation[]          @relation("InvitationsSent")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
   @@index([userId])
+  userContext      UserContext?
+}
+
+model UserContext {
+  id                String   @id @default(cuid())
+  membershipId      String   @unique
+  activeBuildingId  String?
+  activeUnitId      String?
+  updatedAt         DateTime @updatedAt
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  building   Building?  @relation("UserContextBuilding", fields: [activeBuildingId], references: [id], onDelete: SetNull)
+  unit       Unit?      @relation("UserContextUnit", fields: [activeUnitId], references: [id], onDelete: SetNull)
+
+  @@index([membershipId])
+  @@index([activeBuildingId])
+  @@index([activeUnitId])
 }
 
 model MembershipRole {
-  id           String     @id @default(cuid())
-  membershipId String
-  role         Role
-  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  id              String     @id @default(cuid())
+  membershipId    String
+  role            Role
+  scopeType       ScopeType  @default(TENANT)
+  scopeBuildingId String?
+  scopeUnitId     String?
 
-  @@unique([membershipId, role])
-  @@index([role])
+  membership    Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  scopeBuilding Building?  @relation("BuildingMembershipRoles", fields: [scopeBuildingId], references: [id], onDelete: SetNull)
+  scopeUnit     Unit?      @relation("UnitMembershipRoles", fields: [scopeUnitId], references: [id], onDelete: SetNull)
+
+  @@index([membershipId, role])
+  @@index([scopeType, scopeBuildingId])
+  @@index([scopeType, scopeUnitId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model Invitation {
+  id                    String           @id @default(cuid())
+  tenantId              String
+  email                 String
+  tokenHash             String           @unique
+  roles                 Json // string[] of Role enum, e.g. ["OPERATOR"]
+  invitedByMembershipId String
+  status                InvitationStatus @default(PENDING)
+  expiresAt             DateTime
+  createdAt             DateTime         @default(now())
+  acceptedAt            DateTime?
+
+  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedByMembership Membership @relation("InvitationsSent", fields: [invitedByMembershipId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email, status])
+  @@index([tenantId])
+  @@index([tokenHash])
+  @@index([status])
 }
 
 model Building {
@@ -161,6 +222,8 @@ model Building {
   workOrders            WorkOrder[]
   charges               Charge[]
   payments              Payment[]
+  membershipRoles       MembershipRole[]      @relation("BuildingMembershipRoles")
+  userContexts          UserContext[]         @relation("UserContextBuilding")
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -176,12 +239,14 @@ model Unit {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  building      Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitOccupants UnitOccupant[]
-  tickets       Ticket[]
-  documents     Document[]
-  charges       Charge[]
-  payments      Payment[]
+  building        Building         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitOccupants   UnitOccupant[]
+  tickets         Ticket[]
+  documents       Document[]
+  charges         Charge[]
+  payments        Payment[]
+  membershipRoles MembershipRole[] @relation("UnitMembershipRoles")
+  userContexts    UserContext[]    @relation("UserContextUnit")
 
   @@unique([buildingId, code])
   @@index([buildingId])
@@ -224,7 +289,11 @@ enum AuditAction {
   AUTH_LOGOUT
   AUTH_FAILED_LOGIN
   MEMBERSHIP_INVITE_SENT
+  MEMBERSHIP_INVITE_ACCEPTED
+  MEMBERSHIP_INVITE_REVOKED
   MEMBERSHIP_ROLE_CHANGED
+  ROLE_ASSIGNED
+  ROLE_REMOVED
   // IMPERSONATION
   IMPERSONATION_START
   IMPERSONATION_END
@@ -851,4 +920,20 @@ model PaymentAllocation {
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
   @@index([tenantId, chargeId])
+}
+
+// ============================================================================
+// PHASE 10: ONBOARDING CHECKLIST
+// ============================================================================
+model OnboardingState {
+  id          String    @id @default(cuid())
+  tenantId    String    @unique
+  dismissedAt DateTime? // Null = visible, timestamp = dismissed
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthorizeService } from '../rbac/authorize.service';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -44,6 +45,8 @@ export class BuildingAccessGuard implements CanActivate {
   constructor(
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(AuthorizeService)
+    private readonly authorize: AuthorizeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -82,7 +85,38 @@ export class BuildingAccessGuard implements CanActivate {
       );
     }
 
-    // 6. Guardar tenantId en el request para uso en el controller
+    // 6. Check scoped access: user must have TENANT-scoped access OR BUILDING-scoped access to this building
+    const membership = await this.prisma.membership.findUnique({
+      where: {
+        userId_tenantId: { userId, tenantId: building.tenantId },
+      },
+      include: {
+        roles: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        `No tiene membresía activa en este tenant`,
+      );
+    }
+
+    // Check if user has TENANT-scoped roles (can access all buildings)
+    const hasTenantScopedRole = membership.roles.some(r => r.scopeType === 'TENANT');
+
+    // Check if user has BUILDING-scoped role for this specific building
+    const hasBuildingScopedRole = membership.roles.some(
+      r => r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId,
+    );
+
+    if (!hasTenantScopedRole && !hasBuildingScopedRole) {
+      // User neither has tenant-scoped access nor building-specific access
+      throw new ForbiddenException(
+        `No tiene acceso a este building`,
+      );
+    }
+
+    // 7. Guardar tenantId y buildingId en el request para uso en el controller
     request.tenantId = building.tenantId;
 
     return true;

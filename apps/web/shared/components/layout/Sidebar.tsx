@@ -69,6 +69,11 @@ export default function Sidebar() {
             <NavItem href={`/${tenantId}/payments/review`} label="Review Payments" />
           </>
         )}
+
+        <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Settings
+        </div>
+        <NavItem href={`/${tenantId}/settings/members`} label="Team" />
       </nav>
     </aside>
   );

@@ -15,7 +15,16 @@ export class TenancyService {
 
     return memberships.map((m) => ({
       tenantId: m.tenantId,
-      roles: m.roles.map((r) => r.role),
+      roles: m.roles
+        .filter((r) => r.scopeType === 'TENANT')
+        .map((r) => r.role),
+      scopedRoles: m.roles.map((r) => ({
+        id: r.id,
+        role: r.role,
+        scopeType: r.scopeType,
+        scopeBuildingId: r.scopeBuildingId,
+        scopeUnitId: r.scopeUnitId,
+      })),
     }));
   }
 }
