@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import SubscriptionPanel from '@/features/billing/components/SubscriptionPanel';
+import { DemoSeedWizard } from '@/features/demo-seed/DemoSeedWizard';
 import { getTenantById } from '@/features/super-admin/tenants.storage';
 import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
 import { ChevronLeft } from 'lucide-react';
@@ -133,6 +134,18 @@ export default function TenantDetailPage({
 
       {/* Subscription Management */}
       <SubscriptionPanel tenantId={params.tenantId} />
+
+      {/* Demo Seed Wizard (only for TRIAL tenants) */}
+      {tenant.status === 'TRIAL' && (
+        <DemoSeedWizard
+          tenantId={params.tenantId}
+          onSuccess={() => {
+            // Refresh tenant data after demo seed created
+            const loaded = getTenantById(params.tenantId);
+            setTenant(loaded || null);
+          }}
+        />
+      )}
     </div>
   );
 }
