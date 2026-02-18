@@ -84,6 +84,7 @@ model Tenant {
   buildings             Building[]
   auditLogs             AuditLog[]
   subscription          Subscription?
+  paymentVerifications  PaymentVerification[]
   tickets               Ticket[]
   ticketComments        TicketComment[]
   communications        Communication[]
@@ -288,6 +289,7 @@ enum AuditAction {
   SUBSCRIPTION_CREATE
   SUBSCRIPTION_UPDATE
   SUBSCRIPTION_CANCEL
+  SUBSCRIPTION_PAST_DUE
   USER_CREATE
   USER_DELETE
   OTHER
@@ -406,6 +408,12 @@ enum SubscriptionStatus {
   EXPIRED // Trial ended without conversion
 }
 
+enum PaymentVerificationStatus {
+  PENDING // Waiting for admin approval
+  APPROVED // Admin approved the payment
+  REJECTED // Admin rejected the payment
+}
+
 model BillingPlan {
   id           String        @id @default(cuid())
   planId       BillingPlanId @unique // Enum: FREE, BASIC, PRO, ENTERPRISE
@@ -446,9 +454,10 @@ model Subscription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan   BillingPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
-  events SubscriptionEvent[]
+  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan      BillingPlan             @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events    SubscriptionEvent[]
+  payments  PaymentVerification[]
 
   @@index([tenantId])
   @@index([planId])
@@ -468,6 +477,38 @@ model SubscriptionEvent {
 
   @@index([subscriptionId])
   @@index([eventType])
+  @@index([createdAt])
+}
+
+model PaymentVerification {
+  id               String                      @id @default(cuid())
+  tenantId         String
+  subscriptionId   String
+  amount           Decimal                     @db.Decimal(10, 2) // Amount to pay
+  currency         String                      @default("USD") // USD, ARS, COP, etc.
+  status           PaymentVerificationStatus   @default(PENDING)
+
+  // Payment reference (for manual verification)
+  reference        String? // User provides this in transfer: "BUILDINGOS-[TENANT_ID]"
+  bankDetails      String? // Which account they should send to
+
+  // Admin approval
+  approvedByUserId String? // SUPER_ADMIN who approved
+  approvedAt       DateTime?
+  rejectionReason  String? // If rejected
+  rejectedAt       DateTime?
+
+  // Metadata
+  metadata         Json? // Extra data (receipt link, notes, etc.)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([subscriptionId])
+  @@index([status])
   @@index([createdAt])
 }
 
