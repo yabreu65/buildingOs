@@ -107,4 +107,17 @@ export const invitationsApi = {
       method: 'DELETE',
     });
   },
+
+  /**
+   * Resend invitation with new token (admin)
+   */
+  async resendInvitation(
+    tenantId: string,
+    invitationId: string,
+  ): Promise<CreateInvitationResponse> {
+    return apiClient<CreateInvitationResponse>({
+      path: `/tenants/${tenantId}/memberships/invitations/${invitationId}/resend`,
+      method: 'POST',
+    });
+  },
 };

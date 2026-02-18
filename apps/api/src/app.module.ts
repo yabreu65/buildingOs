@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppConfigModule } from './config/config.module';
 import { SecurityModule } from './security/security.module';
 import { EmailModule } from './email/email.module';
@@ -32,6 +33,7 @@ import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     AppConfigModule,
     ObservabilityModule,
     SecurityModule,

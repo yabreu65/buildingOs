@@ -141,4 +141,30 @@ export class InvitationsAdminController {
 
     return { success: true };
   }
+
+  /**
+   * POST /tenants/:tenantId/memberships/invitations/:id/resend
+   * Resend pending invitation with new token
+   */
+  @Post('invitations/:id/resend')
+  async resendInvitation(
+    @TenantParam() tenantId: string,
+    @Param('id') invitationId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    // Get actor membership
+    const membership = await this.prisma.membership.findUnique({
+      where: { userId_tenantId: { userId: req.user.id, tenantId } },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('Você não é membro deste tenant');
+    }
+
+    return this.invitationsService.resendInvitation(
+      tenantId,
+      invitationId,
+      membership.id,
+    );
+  }
 }

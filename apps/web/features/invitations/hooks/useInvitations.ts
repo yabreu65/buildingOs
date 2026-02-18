@@ -19,6 +19,7 @@ export interface UseInvitationsActions {
   refetch: (tenantId: string) => Promise<void>;
   createInvitation: (tenantId: string, dto: CreateInvitationRequest) => Promise<void>;
   revokeInvitation: (tenantId: string, invitationId: string) => Promise<void>;
+  resendInvitation: (tenantId: string, invitationId: string) => Promise<void>;
 }
 
 export function useInvitations(): UseInvitationsState & UseInvitationsActions {
@@ -95,6 +96,23 @@ export function useInvitations(): UseInvitationsState & UseInvitationsActions {
     [fetchInvitations],
   );
 
+  const resendInvitation = useCallback(
+    async (tenantId: string, invitationId: string) => {
+      try {
+        setState((prev) => ({ ...prev, loading: true, error: null }));
+        await invitationsApi.resendInvitation(tenantId, invitationId);
+        // Refetch invitations after resending
+        await fetchInvitations(tenantId);
+        setState((prev) => ({ ...prev, loading: false }));
+      } catch (err: any) {
+        const message = err?.message || 'Erro ao reenviar convite';
+        setState((prev) => ({ ...prev, error: message, loading: false }));
+        throw err;
+      }
+    },
+    [fetchInvitations],
+  );
+
   return {
     ...state,
     fetchMembers,
@@ -102,5 +120,6 @@ export function useInvitations(): UseInvitationsState & UseInvitationsActions {
     refetch,
     createInvitation,
     revokeInvitation,
+    resendInvitation,
   };
 }

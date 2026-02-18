@@ -12,14 +12,17 @@ interface PendingInvitationsListProps {
   invitations: PendingInvitation[];
   loading: boolean;
   onRevoke: (invitationId: string) => Promise<void>;
+  onResend?: (invitationId: string) => Promise<void>;
 }
 
 export default function PendingInvitationsList({
   invitations,
   loading,
   onRevoke,
+  onResend,
 }: PendingInvitationsListProps) {
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [resending, setResending] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -50,12 +53,37 @@ export default function PendingInvitationsList({
     );
   }
 
+  const formatTimeUntilExpiry = (expiresAt: string): string => {
+    const now = new Date();
+    const expiryDate = new Date(expiresAt);
+    const hoursUntil = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60));
+
+    if (hoursUntil <= 0) {
+      return 'Expirado';
+    }
+    if (hoursUntil < 24) {
+      return `${hoursUntil}h restantes`;
+    }
+    const daysUntil = Math.floor(hoursUntil / 24);
+    return `${daysUntil}d restantes`;
+  };
+
   const handleRevoke = async (invitationId: string) => {
     try {
       setRevoking(invitationId);
       await onRevoke(invitationId);
     } finally {
       setRevoking(null);
+    }
+  };
+
+  const handleResend = async (invitationId: string) => {
+    if (!onResend) return;
+    try {
+      setResending(invitationId);
+      await onResend(invitationId);
+    } finally {
+      setResending(null);
     }
   };
 
@@ -81,19 +109,31 @@ export default function PendingInvitationsList({
                   </Badge>
                 ))}
               </div>
-              <p className="text-sm text-gray-400 mt-2">
-                Expira em{' '}
-                {new Date(invitation.expiresAt).toLocaleDateString()}
+              <p className="text-sm text-gray-500 mt-2">
+                {formatTimeUntilExpiry(invitation.expiresAt)} (
+                {new Date(invitation.expiresAt).toLocaleDateString()})
               </p>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => handleRevoke(invitation.id)}
-              disabled={revoking === invitation.id}
-            >
-              {revoking === invitation.id ? 'Revogando...' : 'Revogar'}
-            </Button>
+            <div className="flex gap-2">
+              {onResend && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleResend(invitation.id)}
+                  disabled={resending === invitation.id || revoking === invitation.id}
+                >
+                  {resending === invitation.id ? 'Reenviando...' : 'Reenviar'}
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleRevoke(invitation.id)}
+                disabled={revoking === invitation.id || resending === invitation.id}
+              >
+                {revoking === invitation.id ? 'Revogando...' : 'Revogar'}
+              </Button>
+            </div>
           </div>
         ))}
       </div>

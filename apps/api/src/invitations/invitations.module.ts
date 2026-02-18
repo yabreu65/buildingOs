@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { AuditModule } from '../audit/audit.module';
@@ -9,7 +10,7 @@ import { InvitationsPublicController } from './invitations.controller';
 import { InvitationsAdminController } from './invitations.controller';
 
 @Module({
-  imports: [PrismaModule, TenancyModule, AuditModule, BillingModule, AuthModule],
+  imports: [ScheduleModule, PrismaModule, TenancyModule, AuditModule, BillingModule, AuthModule],
   controllers: [InvitationsPublicController, InvitationsAdminController],
   providers: [InvitationsService],
 })

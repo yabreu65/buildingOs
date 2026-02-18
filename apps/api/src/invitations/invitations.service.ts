@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
@@ -384,5 +385,127 @@ export class InvitationsService {
       expiresAt: inv.expiresAt,
       createdAt: inv.createdAt,
     }));
+  }
+
+  /**
+   * Resend invitation: revoke old token and generate new one
+   * Only works if invitation is still PENDING
+   * Creates new token, invalidates old, audits as MEMBERSHIP_INVITE_RESENT
+   */
+  async resendInvitation(
+    tenantId: string,
+    invitationId: string,
+    actorMembershipId: string,
+  ): Promise<{ id: string; email: string; expiresAt: Date }> {
+    // Fetch existing invitation
+    const invitation = await this.prisma.invitation.findFirst({
+      where: {
+        id: invitationId,
+        tenantId,
+        status: InvitationStatus.PENDING,
+      },
+    });
+
+    if (!invitation) {
+      throw new NotFoundException(
+        'Invitación no encontrada o ya fue procesada',
+      );
+    }
+
+    // Generate new token
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // New expiry: 7 days from now
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    // Update invitation with new token and expiry
+    const updated = await this.prisma.invitation.update({
+      where: { id: invitationId },
+      data: {
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    // Log: MEMBERSHIP_INVITE_RESENT
+    void this.auditService.createLog({
+      tenantId,
+      actorMembershipId,
+      action: AuditAction.MEMBERSHIP_INVITE_RESENT,
+      entityType: 'Invitation',
+      entityId: invitationId,
+      metadata: {
+        email: updated.email,
+        oldExpiresAt: invitation.expiresAt,
+        newExpiresAt: expiresAt,
+      },
+    });
+
+    // STUB: Email would be sent here with new token
+    console.log(
+      `[EMAIL STUB] Resent invitation link: http://localhost:3000/invite?token=${token}`,
+    );
+
+    return {
+      id: updated.id,
+      email: updated.email,
+      expiresAt: updated.expiresAt,
+    };
+  }
+
+  /**
+   * Background job: mark all expired invitations as EXPIRED
+   * Called periodically (every 5 minutes) to clean up stale invitations
+   * Logs MEMBERSHIP_INVITE_EXPIRED for each expired invitation
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async markExpiredInvitations(): Promise<number> {
+    const now = new Date();
+
+    // Find all PENDING invitations that have expired
+    const expiredInvitations = await this.prisma.invitation.findMany({
+      where: {
+        status: InvitationStatus.PENDING,
+        expiresAt: {
+          lt: now, // less than now = expired
+        },
+      },
+    });
+
+    if (expiredInvitations.length === 0) {
+      return 0;
+    }
+
+    // Update all to EXPIRED status
+    await this.prisma.invitation.updateMany({
+      where: {
+        status: InvitationStatus.PENDING,
+        expiresAt: {
+          lt: now,
+        },
+      },
+      data: {
+        status: InvitationStatus.EXPIRED,
+      },
+    });
+
+    // Log each expiration (fire-and-forget)
+    for (const inv of expiredInvitations) {
+      void this.auditService.createLog({
+        tenantId: inv.tenantId,
+        action: AuditAction.MEMBERSHIP_INVITE_EXPIRED,
+        entityType: 'Invitation',
+        entityId: inv.id,
+        metadata: {
+          email: inv.email,
+          expiredAt: now,
+          originalExpiresAt: inv.expiresAt,
+        },
+      });
+    }
+
+    console.log(`[Invitations] Marked ${expiredInvitations.length} as EXPIRED`);
+    return expiredInvitations.length;
   }
 }

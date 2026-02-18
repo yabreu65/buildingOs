@@ -32,6 +32,7 @@ export default function MembersPage({ params }: MembersPageProps) {
     fetchInvitations,
     createInvitation,
     revokeInvitation,
+    resendInvitation,
   } = useInvitations();
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
 
@@ -98,6 +99,21 @@ export default function MembersPage({ params }: MembersPageProps) {
     }
   };
 
+  const handleResendInvitation = async (invitationId: string) => {
+    try {
+      await resendInvitation(tenantId, invitationId);
+      setToast({
+        type: 'success',
+        message: 'Convite reenviado com sucesso!',
+      });
+    } catch (err: any) {
+      setToast({
+        type: 'error',
+        message: 'Erro ao reenviar convite',
+      });
+    }
+  };
+
   const handleRolesClick = (membershipId: string, memberName: string) => {
     setRolesModal({
       open: true,
@@ -139,6 +155,7 @@ export default function MembersPage({ params }: MembersPageProps) {
           invitations={pendingInvitations}
           loading={loading}
           onRevoke={handleRevokeInvitation}
+          onResend={handleResendInvitation}
         />
       </div>
 
