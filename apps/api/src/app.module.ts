@@ -25,10 +25,12 @@ import { RbacModule } from './rbac/rbac.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { ContextModule } from './context/context.module';
 import { InboxModule } from './inbox/inbox.module';
+import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
   imports: [
     AppConfigModule,
+    ObservabilityModule,
     SecurityModule,
     EmailModule,
     AuthModule,

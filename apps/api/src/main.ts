@@ -4,6 +4,7 @@ import { ValidationPipe, Logger } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { ConfigService } from "./config/config.service";
 import { RateLimitMiddleware } from "./security/rate-limit.middleware";
+import { SentryService } from "./observability/sentry.service";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -95,12 +96,29 @@ async function bootstrap() {
   const port = config.port;
   await app.listen(port);
 
+  // Graceful shutdown: flush Sentry events before exit
+  const sentryService = app.get(SentryService);
+  process.on('SIGTERM', async () => {
+    logger.log('SIGTERM received, flushing Sentry and shutting down...');
+    await sentryService.flush(5000);
+    await app.close();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.log('SIGINT received, flushing Sentry and shutting down...');
+    await sentryService.flush(5000);
+    await app.close();
+    process.exit(0);
+  });
+
   logger.log(`========================================`);
   logger.log(`🚀 BuildingOS API Started`);
   logger.log(`📍 Environment: ${config.nodeEnv}`);
   logger.log(`🔌 Port: ${port}`);
   logger.log(`🌐 CORS Origins: ${corsOrigins.join(', ')}`);
   logger.log(`🔒 Security: Rate limiting enabled`);
+  logger.log(`📊 Observability: Request tracing + Sentry error tracking enabled`);
   logger.log(`========================================`);
 }
 
