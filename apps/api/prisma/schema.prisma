@@ -102,6 +102,7 @@ model Tenant {
   onboardingState       OnboardingState?
   emailLogs             EmailLog[]
   supportTickets        SupportTicket[]
+  notifications         Notification[]
 }
 
 model User {
@@ -121,6 +122,7 @@ model User {
   supportTicketsCreated SupportTicket[]        @relation("SupportTicketCreatedBy")
   supportTicketsAssigned SupportTicket[]       @relation("SupportTicketAssignedTo")
   supportTicketComments SupportTicketComment[] @relation("SupportTicketCommentAuthor")
+  notifications         Notification[]         @relation("UserNotifications")
 }
 
 model Membership {
@@ -354,6 +356,10 @@ enum AuditAction {
   SUPPORT_TICKET_ASSIGN
   SUPPORT_TICKET_COMMENT_ADD
   SUPPORT_TICKET_CLOSE
+  // NOTIFICATIONS
+  NOTIFICATION_CREATED
+  NOTIFICATION_READ
+  NOTIFICATION_DELETED
 }
 
 model AuditLog {
@@ -1050,4 +1056,50 @@ model EmailLog {
   @@index([tenantId, type])
   @@index([tenantId, createdAt])
   @@index([to, createdAt])
+}
+
+// ============================================================================
+// PHASE 11: NOTIFICATIONS (IN_APP + EMAIL)
+// ============================================================================
+enum NotificationType {
+  TICKET_STATUS_CHANGED
+  TICKET_COMMENT_ADDED
+  SUPPORT_TICKET_CREATED
+  SUPPORT_TICKET_STATUS_CHANGED
+  USER_INVITED
+  INVITATION_ACCEPTED
+  PAYMENT_RECEIVED
+  PAYMENT_OVERDUE
+  DOCUMENT_SHARED
+  BUILDING_ALERT
+  OCCUPANT_ASSIGNED
+  SYSTEM_ALERT
+}
+
+enum DeliveryMethod {
+  IN_APP
+  EMAIL
+}
+
+model Notification {
+  id              String            @id @default(cuid())
+  tenantId        String
+  userId          String
+  type            NotificationType
+  title           String
+  body            String
+  data            Json?             // Additional context (ticketId, etc)
+  deliveryMethods DeliveryMethod[]  // Default: [IN_APP]
+  isRead          Boolean           @default(false)
+  readAt          DateTime?
+  createdAt       DateTime          @default(now())
+  deletedAt       DateTime?         // Soft delete
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, isRead])
+  @@index([userId, createdAt])
+  @@index([tenantId, createdAt])
 }

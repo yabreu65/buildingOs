@@ -26,6 +26,7 @@ import { MembershipsModule } from './memberships/memberships.module';
 import { ContextModule } from './context/context.module';
 import { InboxModule } from './inbox/inbox.module';
 import { SupportTicketsModule } from './support-tickets/support-tickets.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
@@ -58,6 +59,7 @@ import { ObservabilityModule } from './observability/observability.module';
     ContextModule,
     InboxModule,
     SupportTicketsModule,
+    NotificationsModule,
   ],
   controllers: [],
   providers: [],

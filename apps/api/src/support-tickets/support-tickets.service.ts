@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, NotFoundException, BadRequestException 
 import { SupportTicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateSupportTicketDto } from './dto/create-support-ticket.dto';
 import { UpdateSupportTicketDto, AddSupportTicketCommentDto, AssignSupportTicketDto } from './dto/update-support-ticket.dto';
 
@@ -10,6 +11,7 @@ export class SupportTicketsService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -242,6 +244,17 @@ export class SupportTicketsService {
         from: ticket.status,
         to: newStatus,
       },
+    });
+
+    // Create notification for ticket creator
+    await this.notificationsService.createNotification({
+      tenantId: ticket.tenantId,
+      userId: ticket.createdByUserId,
+      type: 'SUPPORT_TICKET_STATUS_CHANGED',
+      title: 'Support Request Status Updated',
+      body: `Your support request "${updated.title}" status changed to ${newStatus}`,
+      data: { ticketId: updated.id, status: newStatus },
+      deliveryMethods: ['IN_APP', 'EMAIL'],
     });
 
     return updated;
