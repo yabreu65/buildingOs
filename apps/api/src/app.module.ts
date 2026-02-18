@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AppConfigModule } from './config/config.module';
+import { SecurityModule } from './security/security.module';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
@@ -27,6 +28,7 @@ import { InboxModule } from './inbox/inbox.module';
 @Module({
   imports: [
     AppConfigModule,
+    SecurityModule,
     AuthModule,
     PrismaModule,
     AuditModule,
