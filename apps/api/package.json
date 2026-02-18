@@ -15,7 +15,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
     "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
     "seed": "ts-node prisma/seed.ts",
+    "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
     "studio": "prisma studio"
   },
   "dependencies": {
