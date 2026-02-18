@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useMemberRoles } from '../useMemberRoles';
 import { AddRoleInput } from '../memberships.api';
 import { ScopedRole } from '../../auth/auth.types';
+import { useUnits } from '@/features/buildings/hooks/useUnits';
 
 interface Building {
   id: string;
@@ -13,7 +14,7 @@ interface Building {
 interface Unit {
   id: string;
   label: string;
-  code?: string;
+  unitCode?: string;
 }
 
 interface RolesModalProps {
@@ -44,27 +45,25 @@ export function RolesModal({
   buildings,
   onClose,
 }: RolesModalProps) {
-  const { roles, loading, error, isAdding, addError, addRole, removeRole } =
-    useMemberRoles(tenantId, membershipId);
-
   // Form state
   const [role, setRole] = useState<string>('OPERATOR');
   const [scopeType, setScopeType] = useState<ScopeType>('TENANT');
   const [selectedBuildingId, setSelectedBuildingId] = useState<string>('');
   const [selectedUnitId, setSelectedUnitId] = useState<string>('');
-  const [units, setUnits] = useState<Unit[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Reset unit selection when building changes
+  const { roles, loading, error, isAdding, addError, addRole, removeRole } =
+    useMemberRoles(tenantId, membershipId);
+
+  // Use hook to fetch units for selected building
+  const { units: fetchedUnits, loading: unitsLoading } = useUnits(
+    tenantId || undefined,
+    selectedBuildingId || undefined,
+  );
+
+  // Reset unit selection when building changes, update units list
   useEffect(() => {
     setSelectedUnitId('');
-    if (selectedBuildingId) {
-      // TODO: Fetch units for selected building
-      // For now, mock empty array
-      setUnits([]);
-    } else {
-      setUnits([]);
-    }
   }, [selectedBuildingId]);
 
   const handleAddRole = async () => {
@@ -90,10 +89,7 @@ export function RolesModal({
       }
       if (scopeType === 'UNIT') {
         input.scopeUnitId = selectedUnitId;
-        const unit = units.find((u) => u.id === selectedUnitId);
-        if (unit && !input.scopeBuildingId) {
-          // For UNIT scope, we don't set scopeBuildingId (it's implicit)
-        }
+        // For UNIT scope, scopeBuildingId is not set (it's implicit from the unit)
       }
 
       await addRole(input);
@@ -145,7 +141,7 @@ export function RolesModal({
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{r.role}</span>
                       <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">
-                        {formatScope(r)}
+                        {formatScope(r, buildings, fetchedUnits)}
                       </span>
                     </div>
                     <button
@@ -237,13 +233,15 @@ export function RolesModal({
                   <select
                     value={selectedUnitId}
                     onChange={(e) => setSelectedUnitId(e.target.value)}
-                    disabled={!selectedBuildingId}
+                    disabled={!selectedBuildingId || unitsLoading}
                     className="w-full px-3 py-2 border rounded text-sm disabled:bg-gray-100"
                   >
-                    <option value="">Select a unit...</option>
-                    {units.map((u) => (
+                    <option value="">
+                      {unitsLoading ? 'Loading units...' : 'Select a unit...'}
+                    </option>
+                    {fetchedUnits.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.label || u.code}
+                        {u.label || u.unitCode}
                       </option>
                     ))}
                   </select>
@@ -276,11 +274,18 @@ export function RolesModal({
   );
 }
 
-function formatScope(role: ScopedRole): string {
+function formatScope(role: ScopedRole, buildings: Building[] = [], units: Unit[] = []): string {
   if (role.scopeType === 'TENANT') return 'Tenant-wide';
-  if (role.scopeType === 'BUILDING' && role.scopeBuildingId)
-    return `Building: ${role.scopeBuildingId}`;
-  if (role.scopeType === 'UNIT' && role.scopeUnitId)
-    return `Unit: ${role.scopeUnitId}`;
+
+  if (role.scopeType === 'BUILDING' && role.scopeBuildingId) {
+    const building = buildings.find((b) => b.id === role.scopeBuildingId);
+    return `Building: ${building?.name || role.scopeBuildingId}`;
+  }
+
+  if (role.scopeType === 'UNIT' && role.scopeUnitId) {
+    const unit = units.find((u) => u.id === role.scopeUnitId);
+    return `Unit: ${unit?.label || unit?.unitCode || role.scopeUnitId}`;
+  }
+
   return role.scopeType;
 }
