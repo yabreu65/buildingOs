@@ -5,9 +5,14 @@ import {
   Query,
   UseGuards,
   Request,
+  Response,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { RequireFeatureGuard, RequireFeature } from '../billing/require-feature.guard';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '@prisma/client';
 import { ReportsService } from './reports.service';
 import { ReportsValidators } from './reports.validators';
 
@@ -30,7 +35,8 @@ import { ReportsValidators } from './reports.validators';
 export class ReportsController {
   constructor(
     private readonly reportsService: ReportsService,
-    private readonly validators: ReportsValidators
+    private readonly validators: ReportsValidators,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -168,5 +174,180 @@ export class ReportsController {
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
     });
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/tickets/export.csv
+   * Export tickets to CSV format
+   *
+   * Query parameters:
+   * - buildingId: Optional, filter by building
+   * - from: Optional, ISO date start (YYYY-MM-DD)
+   * - to: Optional, ISO date end (YYYY-MM-DD)
+   *
+   * Returns CSV attachment with headers and data rows
+   *
+   * Errors:
+   * - 403: Feature not available (FREE plan)
+   * - 413: Export exceeds 10k rows (EXPORT_TOO_LARGE)
+   */
+  @Get(':tenantId/reports/tickets/export.csv')
+  @UseGuards(RequireFeatureGuard)
+  @RequireFeature('canExportReports')
+  async exportTickets(
+    @Param('tenantId') tenantId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Response() res?: any,
+    @Request() req?: any,
+  ) {
+    const userRoles = this.getUserRoles(req, tenantId);
+    if (!this.validators.canReadReports(userRoles)) {
+      this.validators.throwForbidden();
+    }
+
+    await this.validators.validateBuildingScope(tenantId, buildingId);
+
+    const result = await this.reportsService.exportTickets(tenantId, {
+      buildingId,
+      from: this.validators.parseDate(from),
+      to: this.validators.parseDate(to),
+    });
+
+    // Audit log
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: req.user.id,
+      action: AuditAction.REPORT_EXPORTED,
+      entityType: 'Report',
+      entityId: 'tickets',
+      metadata: {
+        reportType: 'tickets',
+        buildingId,
+        from,
+        to,
+        rows: result.rows,
+        format: 'csv',
+      },
+    });
+
+    // Set CSV response headers
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(result.content);
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/finance/export.csv
+   * Export finance report to CSV format (includes delinquent units)
+   *
+   * Query parameters:
+   * - buildingId: Optional, filter by building
+   * - period: Optional, time period (monthly, quarterly, yearly)
+   *
+   * Returns CSV attachment with summary + delinquent units
+   */
+  @Get(':tenantId/reports/finance/export.csv')
+  @UseGuards(RequireFeatureGuard)
+  @RequireFeature('canExportReports')
+  async exportFinance(
+    @Param('tenantId') tenantId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('period') period?: string,
+    @Response() res?: any,
+    @Request() req?: any,
+  ) {
+    const userRoles = this.getUserRoles(req, tenantId);
+    if (!this.validators.canReadReports(userRoles)) {
+      this.validators.throwForbidden();
+    }
+
+    await this.validators.validateBuildingScope(tenantId, buildingId);
+
+    const result = await this.reportsService.exportFinance(tenantId, {
+      buildingId,
+      period,
+    });
+
+    // Audit log
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: req.user.id,
+      action: AuditAction.REPORT_EXPORTED,
+      entityType: 'Report',
+      entityId: 'finance',
+      metadata: {
+        reportType: 'finance',
+        buildingId,
+        period,
+        rows: result.rows,
+        format: 'csv',
+      },
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(result.content);
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/payments/export.csv
+   * Export payments to CSV format
+   * Note: This exports tenant payments (Phase 6), not SaaS subscription payments
+   *
+   * Query parameters:
+   * - buildingId: Optional, filter by building
+   * - from: Optional, ISO date start (YYYY-MM-DD)
+   * - to: Optional, ISO date end (YYYY-MM-DD)
+   * - status: Optional, filter by payment status (PENDING, APPROVED, REJECTED)
+   */
+  @Get(':tenantId/reports/payments/export.csv')
+  @UseGuards(RequireFeatureGuard)
+  @RequireFeature('canExportReports')
+  async exportPayments(
+    @Param('tenantId') tenantId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('status') status?: string,
+    @Response() res?: any,
+    @Request() req?: any,
+  ) {
+    const userRoles = this.getUserRoles(req, tenantId);
+    if (!this.validators.canReadReports(userRoles)) {
+      this.validators.throwForbidden();
+    }
+
+    await this.validators.validateBuildingScope(tenantId, buildingId);
+
+    const result = await this.reportsService.exportPayments(tenantId, {
+      buildingId,
+      from: this.validators.parseDate(from),
+      to: this.validators.parseDate(to),
+      status,
+    });
+
+    // Audit log
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: req.user.id,
+      action: AuditAction.REPORT_EXPORTED,
+      entityType: 'Report',
+      entityId: 'payments',
+      metadata: {
+        reportType: 'payments',
+        buildingId,
+        from,
+        to,
+        status,
+        rows: result.rows,
+        format: 'csv',
+      },
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(result.content);
   }
 }

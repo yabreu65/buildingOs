@@ -366,6 +366,7 @@ enum AuditAction {
   NOTIFICATION_DELETED
   // DEMO SEED
   DEMO_SEED_CREATED
+  REPORT_EXPORTED
 }
 
 model AuditLog {

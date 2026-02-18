@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
+import { BillingModule } from '../billing/billing.module';
+import { AuditModule } from '../audit/audit.module';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
 import { ReportsValidators } from './reports.validators';
@@ -20,7 +22,7 @@ import { ReportsValidators } from './reports.validators';
  * - TenancyModule: TenantAccessGuard for multi-tenant isolation
  */
 @Module({
-  imports: [PrismaModule, TenancyModule],
+  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
   controllers: [ReportsController],
   providers: [ReportsService, ReportsValidators],
 })

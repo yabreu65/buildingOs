@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChargeStatus, PaymentStatus } from '@prisma/client';
+import { CsvUtility, CsvExportResult } from './csv.utility';
 
 export interface ReportFilters {
   buildingId?: string;
@@ -387,5 +388,137 @@ export class ReportsService {
       documentsUploaded: documentCount,
       communicationsSent: commCount,
     };
+  }
+
+  /**
+   * Export tickets to CSV format
+   * Includes: id, title, status, priority, building, unit, createdAt, assignedTo
+   */
+  async exportTickets(
+    tenantId: string,
+    filters: ReportFilters,
+  ): Promise<CsvExportResult> {
+    const whereBase: any = { tenantId };
+    if (filters.buildingId) whereBase.buildingId = filters.buildingId;
+    if (filters.from || filters.to) {
+      whereBase.createdAt = {};
+      if (filters.from) whereBase.createdAt.gte = filters.from;
+      if (filters.to) whereBase.createdAt.lte = filters.to;
+    }
+
+    const tickets = await this.prisma.ticket.findMany({
+      where: whereBase,
+      include: {
+        building: { select: { name: true } },
+        unit: { select: { label: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const rows = tickets.map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      building: t.building.name,
+      unit: t.unit?.label || 'N/A',
+      createdAt: CsvUtility.formatDate(t.createdAt),
+      category: t.category,
+    }));
+
+    return CsvUtility.formatCsv(
+      ['id', 'title', 'status', 'priority', 'building', 'unit', 'createdAt', 'category'],
+      rows,
+      CsvUtility.generateFilename('tickets'),
+    );
+  }
+
+  /**
+   * Export finance report to CSV
+   * Includes: building, totalCharges, totalPaid, outstanding, collectionRate, delinquent units list
+   */
+  async exportFinance(
+    tenantId: string,
+    filters: ReportFilters,
+  ): Promise<CsvExportResult> {
+    // Get finance report data
+    const report = await this.getFinanceReport(tenantId, filters);
+
+    // Build rows with building + delinquent units
+    const rows: any[] = [];
+
+    // Row 1: Summary
+    rows.push({
+      type: 'SUMMARY',
+      building: filters.buildingId ? 'Filtered' : 'All Buildings',
+      totalCharges: CsvUtility.formatAmount(report.totalCharges),
+      totalPaid: CsvUtility.formatAmount(report.totalPaid),
+      outstanding: CsvUtility.formatAmount(report.totalOutstanding),
+      collectionRate: `${report.collectionRate.toFixed(2)}%`,
+      currency: report.currency,
+    });
+
+    // Rows 2+: Delinquent units
+    for (const unit of report.delinquentUnits) {
+      rows.push({
+        type: 'DELINQUENT',
+        building: '',
+        totalCharges: '',
+        totalPaid: '',
+        outstanding: CsvUtility.formatAmount(unit.outstanding),
+        collectionRate: '',
+        currency: unit.unitId,
+      });
+    }
+
+    return CsvUtility.formatCsv(
+      ['type', 'building', 'totalCharges', 'totalPaid', 'outstanding', 'collectionRate', 'currency'],
+      rows,
+      CsvUtility.generateFilename('finance'),
+    );
+  }
+
+  /**
+   * Export payments to CSV
+   * Includes: id, date, building, amount, status, reference
+   * Note: This is for tenant payments (Phase 6), not SaaS payments
+   */
+  async exportPayments(
+    tenantId: string,
+    filters: ReportFilters & { status?: string },
+  ): Promise<CsvExportResult> {
+    const whereBase: any = { tenantId };
+    if (filters.buildingId) whereBase.buildingId = filters.buildingId;
+    if (filters.from || filters.to) {
+      whereBase.createdAt = {};
+      if (filters.from) whereBase.createdAt.gte = filters.from;
+      if (filters.to) whereBase.createdAt.lte = filters.to;
+    }
+    if (filters.status) {
+      whereBase.status = filters.status;
+    }
+
+    const payments = await this.prisma.payment.findMany({
+      where: whereBase,
+      include: {
+        building: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const rows = payments.map((p) => ({
+      id: p.id,
+      date: CsvUtility.formatDate(p.createdAt),
+      building: p.building.name,
+      amount: CsvUtility.formatAmount(p.amount),
+      status: p.status,
+      reference: p.reference || '',
+    }));
+
+    return CsvUtility.formatCsv(
+      ['id', 'date', 'building', 'amount', 'status', 'reference'],
+      rows,
+      CsvUtility.generateFilename('payments'),
+    );
   }
 }
