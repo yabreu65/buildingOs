@@ -100,6 +100,7 @@ model Tenant {
   paymentAllocations    PaymentAllocation[]
   invitations           Invitation[]
   onboardingState       OnboardingState?
+  emailLogs             EmailLog[]
 }
 
 model User {
@@ -936,4 +937,34 @@ model OnboardingState {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+}
+
+// ============================================================================
+// PHASE 11: EMAIL LOGGING & DELIVERY TRACKING
+// ============================================================================
+enum EmailType {
+  INVITATION
+  PASSWORD_RESET
+  PAYMENT_SUBMITTED
+}
+
+model EmailLog {
+  id           String    @id @default(cuid())
+  tenantId     String?   // Optional if email not tenant-scoped
+  type         EmailType
+  to           String    // Recipient email
+  subject      String
+  status       String    // SENT | FAILED | BOUNCED
+  error        String?   // Error message if failed
+  provider     String    // SMTP, SENDGRID, MAILGUN
+  externalId   String?   // Provider's message ID
+  createdAt    DateTime  @default(now())
+  sentAt       DateTime? // When email was actually sent
+
+  // Relations
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, type])
+  @@index([tenantId, createdAt])
+  @@index([to, createdAt])
 }
