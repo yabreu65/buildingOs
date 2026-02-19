@@ -10,6 +10,8 @@ import { AiBudgetController } from './ai-budget.controller';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
 import { AiContextSummaryService } from './context-summary.service';
+import { AiTemplateService } from './template.service';
+import { AiTemplateController } from './template.controller';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -63,8 +65,8 @@ import { AiContextSummaryService } from './context-summary.service';
  */
 @Module({
   imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
-  controllers: [AssistantController, AiBudgetController],
-  providers: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService],
-  exports: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService],
+  controllers: [AssistantController, AiBudgetController, AiTemplateController],
+  providers: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService, AiTemplateService],
+  exports: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService, AiTemplateService],
 })
 export class AssistantModule {}

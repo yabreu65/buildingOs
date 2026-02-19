@@ -108,6 +108,7 @@ model Tenant {
   dailyAiUsage          TenantDailyAiUsage[]
   aiBudget              TenantAiBudget?
   monthlyAiUsage        TenantMonthlyAiUsage[]
+  aiTemplates           AiTemplate[]
 }
 
 model User {
@@ -375,6 +376,7 @@ enum AuditAction {
   REPORT_EXPORTED
   // AI ASSISTANT
   AI_INTERACTION
+  AI_TEMPLATE_RUN
   AI_BUDGET_WARNED
   AI_BUDGET_BLOCKED
   AI_BUDGET_UPDATED
@@ -1189,6 +1191,31 @@ model AiInteractionLog {
 
   @@index([tenantId, createdAt])
   @@index([tenantId, userId, createdAt])
+}
+
+model AiTemplate {
+  id                     String   @id @default(cuid())
+  tenantId               String?  // null = global template
+  key                    String   @unique
+  name                   String
+  description            String?
+  scopeType              ScopeType @default(TENANT) // TENANT, BUILDING, UNIT
+  requiredPermissions    Json     // ["tickets.write", "communications.publish"]
+  enabledByDefault       Boolean  @default(true)
+  promptSystem           String?  // System prompt (or use global default)
+  promptUser             String   // User prompt template with variables
+  maxOutputTokens        Int      @default(350)
+  category               String   @default("general") // "tickets", "communications", "finance", "inbox"
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  // Relations (if tenant-specific)
+  tenant                 Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive])
+  @@index([category, isActive])
 }
 
 model TenantDailyAiUsage {
