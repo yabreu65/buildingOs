@@ -21,11 +21,17 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { AiBudgetService, UsageData } from './budget.service';
+import { AiRouterService } from './router.service';
+import { AiCacheService } from './cache.service';
 
 @Controller('tenants')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class AiBudgetController {
-  constructor(private readonly budgetService: AiBudgetService) {}
+  constructor(
+    private readonly budgetService: AiBudgetService,
+    private readonly routerService: AiRouterService,
+    private readonly cacheService: AiCacheService,
+  ) {}
 
   /**
    * GET /tenants/:tenantId/ai/usage
@@ -120,5 +126,75 @@ export class AiBudgetController {
     );
 
     return { success: true };
+  }
+
+  /**
+   * GET /tenants/:tenantId/ai/stats
+   *
+   * Observability endpoint: View AI router and cache statistics
+   * Accessible by: Any user in the tenant
+   *
+   * Returns:
+   * - cache: Cache statistics (size, hit rate, estimated savings)
+   * - router: Router savings estimate (estimated small/big model distribution)
+   *
+   * Used for: Observability dashboards, cost monitoring, optimization tracking
+   */
+  @Get(':tenantId/ai/stats')
+  async getAiStats(
+    @Param('tenantId') tenantId: string,
+  ): Promise<{
+    cache: ReturnType<typeof AiCacheService.prototype.getStats>;
+    router: ReturnType<typeof AiRouterService.prototype.estimateSavings>;
+  }> {
+    if (!tenantId || tenantId.trim().length === 0) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    return {
+      cache: this.cacheService.getStats(),
+      router: this.routerService.estimateSavings(),
+    };
+  }
+
+  /**
+   * GET /super-admin/ai/stats
+   *
+   * Super-admin observability endpoint: View global AI statistics
+   * Accessible by: SUPER_ADMIN only
+   *
+   * Returns: Same as tenant stats (global view across all tenants)
+   */
+  @UseGuards(SuperAdminGuard)
+  @Get('super-admin/ai/stats')
+  async getSuperAdminAiStats(): Promise<{
+    cache: ReturnType<typeof AiCacheService.prototype.getStats>;
+    router: ReturnType<typeof AiRouterService.prototype.estimateSavings>;
+  }> {
+    return {
+      cache: this.cacheService.getStats(),
+      router: this.routerService.estimateSavings(),
+    };
+  }
+
+  /**
+   * GET /super-admin/ai/cache/info
+   *
+   * Super-admin debugging endpoint: View detailed cache information
+   * Accessible by: SUPER_ADMIN only
+   *
+   * Returns:
+   * - size: Current number of cached entries
+   * - maxSize: Maximum cache size before LRU eviction
+   * - hits: Total cache hits since startup
+   * - misses: Total cache misses since startup
+   * - hitRate: Hit rate percentage (hits / (hits + misses))
+   * - ttlSeconds: Cache TTL in seconds
+   * - estimatedSavingsCents: Estimated cost savings from cache
+   */
+  @UseGuards(SuperAdminGuard)
+  @Get('super-admin/ai/cache/info')
+  async getCacheInfo(): Promise<ReturnType<typeof AiCacheService.prototype.getInfo>> {
+    return this.cacheService.getInfo();
   }
 }

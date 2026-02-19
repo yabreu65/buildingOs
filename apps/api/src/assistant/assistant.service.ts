@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
+import { AiRouterService } from './router.service';
+import { AiCacheService } from './cache.service';
 
 // Types
 export type SuggestedActionType =
@@ -44,14 +46,19 @@ interface ContextValidation {
 
 // Provider interface
 interface AiProvider {
-  chat(message: string, context: any): Promise<ChatResponse>;
+  chat(message: string, context: any, options?: { model?: string; maxTokens?: number }): Promise<ChatResponse>;
 }
 
 // MOCK Provider - always works, good for development
 class MockProvider implements AiProvider {
-  async chat(message: string, context: any): Promise<ChatResponse> {
-    // Simulate thinking
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  async chat(
+    message: string,
+    context: any,
+    options?: { model?: string; maxTokens?: number }
+  ): Promise<ChatResponse> {
+    // Simulate thinking (less time for small model)
+    const delayMs = options?.model === 'gpt-4.1-nano' ? 50 : 100;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
 
     const mockAnswers: Record<string, string> = {
       tickets: 'You have 3 open tickets. View them to manage maintenance requests.',
@@ -97,6 +104,8 @@ export class AssistantService {
     private prisma: PrismaService,
     private audit: AuditService,
     private budget: AiBudgetService,
+    private router: AiRouterService,
+    private cache: AiCacheService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
@@ -148,7 +157,52 @@ export class AssistantService {
     // Check rate limit
     await this.checkRateLimit(tenantId);
 
-    // Check budget (and enforce hard stop or soft degrade)
+    // ROUTER + CACHE OPTIMIZATION
+    // Step 1: Check cache first (avoid provider call if hit)
+    const cacheKey = this.cache.generateKey(
+      tenantId,
+      request.message,
+      request.page,
+      request.buildingId,
+      request.unitId,
+    );
+
+    const cachedResponse = this.cache.get(cacheKey);
+    if (cachedResponse) {
+      // Cache hit! Log interaction and return cached response
+      void this.logInteraction(tenantId, userId, membershipId, request, cachedResponse);
+      void this.audit.createLog({
+        tenantId,
+        actorUserId: userId,
+        actorMembershipId: membershipId,
+        action: AuditAction.AI_INTERACTION,
+        entityType: 'AiInteraction',
+        entityId: tenantId,
+        metadata: {
+          page: request.page,
+          buildingId: request.buildingId,
+          unitId: request.unitId,
+          provider: 'CACHE',
+          cacheHit: true,
+          actionCount: cachedResponse.suggestedActions.length,
+        },
+      });
+
+      return cachedResponse;
+    }
+
+    // Step 2: Classify request to determine model size
+    const routerDecision = this.router.classifyRequest({
+      message: request.message,
+      page: request.page,
+      buildingId: request.buildingId,
+      unitId: request.unitId,
+    });
+
+    const modelName = this.router.getModelName(routerDecision.model);
+    const maxTokens = this.router.getMaxTokens(routerDecision.model);
+
+    // Step 3: Check budget (and enforce hard stop or soft degrade)
     const budgetCheck = await this.budget.checkBudget(tenantId);
     let response: ChatResponse;
 
@@ -161,32 +215,42 @@ export class AssistantService {
 
     if (budgetCheck.blockedAt || (budgetCheck.percentUsed >= 100)) {
       // Budget exceeded but soft degrade enabled - use mock response
-      response = await this.provider.chat(request.message, {
-        buildingId: request.buildingId,
-        unitId: request.unitId,
-        page: request.page,
-        tenantId,
-      });
+      response = await this.provider.chat(
+        request.message,
+        {
+          buildingId: request.buildingId,
+          unitId: request.unitId,
+          page: request.page,
+          tenantId,
+        },
+        { model: 'gpt-4.1-nano', maxTokens: 150 } // Use small model for degraded
+      );
 
       // Log degraded response
       void this.budget.logDegradedResponse(tenantId, 'Monthly budget exceeded');
     } else {
-      // Budget OK - get response from provider
-      response = await this.provider.chat(request.message, {
-        buildingId: request.buildingId,
-        unitId: request.unitId,
-        page: request.page,
-        tenantId,
-      });
+      // Budget OK - get response from provider with routed model
+      response = await this.provider.chat(
+        request.message,
+        {
+          buildingId: request.buildingId,
+          unitId: request.unitId,
+          page: request.page,
+          tenantId,
+        },
+        { model: modelName, maxTokens }
+      );
 
       // Track usage (fire-and-forget)
-      const model = process.env.AI_MODEL_DEFAULT || 'gpt-4o-mini';
       void this.budget.trackUsage(tenantId, {
-        model,
+        model: modelName,
         inputTokens: 0, // MOCK provider doesn't return tokens yet
         outputTokens: 0,
       });
     }
+
+    // Step 4: Cache the response for future similar requests
+    this.cache.set(cacheKey, response, modelName);
 
     // Filter suggested actions based on RBAC
     response.suggestedActions = this.filterSuggestedActions(
