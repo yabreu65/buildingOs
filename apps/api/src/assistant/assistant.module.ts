@@ -9,9 +9,10 @@ import { AiBudgetService } from './budget.service';
 import { AiBudgetController } from './ai-budget.controller';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
+import { AiContextSummaryService } from './context-summary.service';
 
 /**
- * AssistantModule: AI Assistant with intelligent routing & caching for cost optimization
+ * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
  *
  * Features:
  * - MOCK provider (always works)
@@ -25,6 +26,7 @@ import { AiCacheService } from './cache.service';
  * - Audit trail for budget changes
  * - INTELLIGENT ROUTER: Uses cheap model (nano) by default, scales to better model for complex queries
  * - RESPONSE CACHING: Caches repeated queries by tenant+context+message hash (1h TTL)
+ * - CONTEXT ENRICHMENT (Lite): Injects minimal real data (top 5 tickets, payments, delinquents, 3 docs)
  * - Cost optimization: 3x-10x savings through model routing + caching
  *
  * Configuration (ENV):
@@ -47,10 +49,11 @@ import { AiCacheService } from './cache.service';
  * - TenantMonthlyAiUsage: Monthly usage tracking (calls, tokens, cost)
  *
  * Services:
- * - AssistantService: Main chat endpoint with router + cache integration
+ * - AssistantService: Main chat endpoint with router + cache + context enrichment
  * - AiBudgetService: Budget tracking and enforcement
  * - AiRouterService: Request classification for model selection
  * - AiCacheService: In-memory LRU response caching
+ * - AiContextSummaryService: Real-world context enrichment (minimal snapshots)
  *
  * Dependencies:
  * - PrismaModule: Database access
@@ -61,7 +64,7 @@ import { AiCacheService } from './cache.service';
 @Module({
   imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
   controllers: [AssistantController, AiBudgetController],
-  providers: [AssistantService, AiBudgetService, AiRouterService, AiCacheService],
-  exports: [AssistantService, AiBudgetService, AiRouterService, AiCacheService],
+  providers: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService],
+  exports: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService],
 })
 export class AssistantModule {}

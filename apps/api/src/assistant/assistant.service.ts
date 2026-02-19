@@ -5,6 +5,7 @@ import { AuditAction } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
+import { AiContextSummaryService } from './context-summary.service';
 
 // Types
 export type SuggestedActionType =
@@ -106,6 +107,7 @@ export class AssistantService {
     private budget: AiBudgetService,
     private router: AiRouterService,
     private cache: AiCacheService,
+    private contextSummary: AiContextSummaryService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
@@ -202,6 +204,23 @@ export class AssistantService {
     const modelName = this.router.getModelName(routerDecision.model);
     const maxTokens = this.router.getMaxTokens(routerDecision.model);
 
+    // Step 2.5: Enrich context with real data (minimal snapshot)
+    let contextSummary: any = null;
+    try {
+      const summaryResult = await this.contextSummary.getSummary({
+        tenantId,
+        membershipId,
+        buildingId: request.buildingId,
+        unitId: request.unitId,
+        page: request.page,
+        userRoles,
+      });
+      contextSummary = summaryResult;
+    } catch (error) {
+      // Context enrichment never blocks main request
+      console.error('Failed to enrich context:', error);
+    }
+
     // Step 3: Check budget (and enforce hard stop or soft degrade)
     const budgetCheck = await this.budget.checkBudget(tenantId);
     let response: ChatResponse;
@@ -222,6 +241,7 @@ export class AssistantService {
           unitId: request.unitId,
           page: request.page,
           tenantId,
+          contextSnapshot: contextSummary?.snapshot,
         },
         { model: 'gpt-4.1-nano', maxTokens: 150 } // Use small model for degraded
       );
@@ -237,6 +257,7 @@ export class AssistantService {
           unitId: request.unitId,
           page: request.page,
           tenantId,
+          contextSnapshot: contextSummary?.snapshot,
         },
         { model: modelName, maxTokens }
       );
@@ -277,6 +298,8 @@ export class AssistantService {
         provider: process.env.AI_PROVIDER || 'MOCK',
         actionCount: response.suggestedActions.length,
         limited: false,
+        summaryVersion: contextSummary?.summaryVersion || null,
+        contextScoped: contextSummary ? 'yes' : 'no',
       },
     });
 
