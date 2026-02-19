@@ -104,6 +104,8 @@ model Tenant {
   emailLogs             EmailLog[]
   supportTickets        SupportTicket[]
   notifications         Notification[]
+  aiInteractionLogs     AiInteractionLog[]
+  dailyAiUsage          TenantDailyAiUsage[]
 }
 
 model User {
@@ -124,6 +126,7 @@ model User {
   supportTicketsAssigned SupportTicket[]       @relation("SupportTicketAssignedTo")
   supportTicketComments SupportTicketComment[] @relation("SupportTicketCommentAuthor")
   notifications         Notification[]         @relation("UserNotifications")
+  aiInteractionLogs     AiInteractionLog[]
 }
 
 model Membership {
@@ -144,6 +147,7 @@ model Membership {
   chargesCreatedBy      Charge[]
   paymentsReviewedBy    Payment[]
   invitationsSent       Invitation[]          @relation("InvitationsSent")
+  aiInteractionLogs     AiInteractionLog[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -367,6 +371,8 @@ enum AuditAction {
   // DEMO SEED
   DEMO_SEED_CREATED
   REPORT_EXPORTED
+  // AI ASSISTANT
+  AI_INTERACTION
 }
 
 model AuditLog {
@@ -431,6 +437,7 @@ model BillingPlan {
   // Features flags
   canExportReports  Boolean @default(false)
   canBulkOperations Boolean @default(false)
+  canUseAI          Boolean @default(false)
   supportLevel      String  @default("COMMUNITY") // COMMUNITY, EMAIL, PRIORITY
 
   createdAt DateTime @default(now())
@@ -1148,4 +1155,46 @@ model Notification {
   @@index([tenantId, userId, isRead])
   @@index([userId, createdAt])
   @@index([tenantId, createdAt])
+}
+
+// ============================================================================
+// PHASE 11: AI ASSISTANT (Premium Feature)
+// ============================================================================
+
+model AiInteractionLog {
+  id           String   @id @default(cuid())
+  tenantId     String
+  userId       String
+  membershipId String
+
+  context      Json     // { buildingId?, unitId?, page }
+  prompt       String
+  response     Json     // { answer, suggestedActions }
+  provider     String   // "MOCK", "OPENAI"
+  tokensIn     Int?
+  tokensOut    Int?
+
+  createdAt    DateTime @default(now())
+
+  // Relations
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId, createdAt])
+}
+
+model TenantDailyAiUsage {
+  id        String   @id @default(cuid())
+  tenantId  String
+  day       String   // "YYYY-MM-DD"
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, day])
+  @@index([tenantId])
 }

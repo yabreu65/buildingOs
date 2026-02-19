@@ -1,0 +1,292 @@
+'use client';
+
+/**
+ * AssistantWidget Component
+ *
+ * Global AI Assistant widget for tenant routes.
+ * - Pulls context from ContextSelector (activeBuilding, activeUnit, currentPage)
+ * - Displays chat interface with answer and suggested actions
+ * - Handles errors (feature not available, rate limit, provider errors)
+ * - Never auto-executes actions, just provides navigation buttons
+ */
+
+import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAssistant } from '../hooks/useAssistant';
+import { SuggestedAction } from '../services/assistant.api';
+
+interface AssistantWidgetProps {
+  tenantId: string;
+  currentPage: string;
+  buildingId?: string;
+  unitId?: string;
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+/**
+ * Suggested action button with navigation/prefill logic
+ */
+function SuggestedActionButton({
+  action,
+  tenantId,
+  buildingId,
+  unitId,
+}: {
+  action: SuggestedAction;
+  tenantId: string;
+  buildingId?: string;
+  unitId?: string;
+}) {
+  const router = useRouter();
+
+  const handleClick = () => {
+    switch (action.type) {
+      case 'VIEW_TICKETS':
+        if (buildingId) {
+          router.push(`/${tenantId}/buildings/${buildingId}/tickets`);
+        }
+        break;
+
+      case 'VIEW_PAYMENTS':
+        if (buildingId) {
+          router.push(`/${tenantId}/buildings/${buildingId}/payments`);
+        }
+        break;
+
+      case 'VIEW_REPORTS':
+        if (buildingId) {
+          router.push(`/${tenantId}/buildings/${buildingId}/reports`);
+        } else {
+          router.push(`/${tenantId}/reports`);
+        }
+        break;
+
+      case 'SEARCH_DOCS':
+        router.push(`/${tenantId}/documents?q=${encodeURIComponent(action.payload.query)}`);
+        break;
+
+      case 'DRAFT_COMMUNICATION':
+        // Open communication form with prefilled data
+        router.push(
+          `/${tenantId}/communications/new?title=${encodeURIComponent(action.payload.title || '')}&body=${encodeURIComponent(action.payload.body || '')}`,
+        );
+        break;
+
+      case 'CREATE_TICKET':
+        if (unitId) {
+          router.push(
+            `/${tenantId}/buildings/${buildingId}/units/${unitId}?action=create-ticket`,
+          );
+        } else if (buildingId) {
+          router.push(
+            `/${tenantId}/buildings/${buildingId}/tickets?action=create`,
+          );
+        }
+        break;
+
+      default:
+        // Unknown action, do nothing
+        break;
+    }
+  };
+
+  const labels: Record<SuggestedAction['type'], string> = {
+    VIEW_TICKETS: 'View Tickets',
+    VIEW_PAYMENTS: 'View Payments',
+    VIEW_REPORTS: 'View Reports',
+    SEARCH_DOCS: `Search "${action.payload.query || 'Documents'}"`,
+    DRAFT_COMMUNICATION: 'Draft Message',
+    CREATE_TICKET: 'Create Ticket',
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className="inline-block px-3 py-2 text-sm rounded border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 transition mr-2 mb-2"
+    >
+      {labels[action.type]}
+    </button>
+  );
+}
+
+/**
+ * Error message component
+ */
+function ErrorMessage({ error, onDismiss }: { error: string; onDismiss: () => void }) {
+  return (
+    <div className="p-3 bg-red-50 border border-red-200 rounded mb-4 text-sm text-red-700">
+      <div className="flex justify-between items-start">
+        <p>{error}</p>
+        <button
+          onClick={onDismiss}
+          className="text-red-700 hover:text-red-900 font-bold"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Loading skeleton for response
+ */
+function ResponseSkeleton() {
+  return (
+    <div className="space-y-3 mb-4">
+      <div className="h-4 bg-gray-200 rounded w-3/4 animate-pulse"></div>
+      <div className="h-4 bg-gray-200 rounded w-full animate-pulse"></div>
+      <div className="h-4 bg-gray-200 rounded w-2/3 animate-pulse"></div>
+    </div>
+  );
+}
+
+/**
+ * Main widget component
+ */
+export function AssistantWidget({
+  tenantId,
+  currentPage,
+  buildingId,
+  unitId,
+  isOpen = true,
+  onClose,
+}: AssistantWidgetProps) {
+  const [message, setMessage] = useState('');
+  const [expanded, setExpanded] = useState(isOpen);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { loading, error, answer, suggestedActions, sendMessage, clearError, reset } =
+    useAssistant(tenantId);
+
+  // Focus input when expanded
+  useEffect(() => {
+    if (expanded && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [expanded]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim()) return;
+
+    const msg = message;
+    setMessage('');
+
+    await sendMessage(msg, {
+      page: currentPage,
+      buildingId,
+      unitId,
+    });
+  };
+
+  const handleClose = () => {
+    setExpanded(false);
+    reset();
+    if (onClose) onClose();
+  };
+
+  return (
+    <div className="fixed bottom-4 right-4 max-w-sm">
+      {/* Toggle Button */}
+      {!expanded && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
+          title="Open AI Assistant"
+        >
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+            />
+          </svg>
+        </button>
+      )}
+
+      {/* Widget Panel */}
+      {expanded && (
+        <div className="bg-white rounded-lg shadow-xl border border-gray-200 w-full max-w-sm">
+          {/* Header */}
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="font-semibold text-gray-800">AI Assistant</h3>
+            <button
+              onClick={handleClose}
+              className="text-gray-400 hover:text-gray-600 text-xl"
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
+            {/* Error Message */}
+            {error && <ErrorMessage error={error} onDismiss={clearError} />}
+
+            {/* Loading State */}
+            {loading && <ResponseSkeleton />}
+
+            {/* Answer */}
+            {answer && !loading && (
+              <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded">
+                <p>{answer}</p>
+              </div>
+            )}
+
+            {/* Suggested Actions */}
+            {suggestedActions.length > 0 && !loading && (
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-2">
+                  Suggested actions:
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedActions.map((action, i) => (
+                    <SuggestedActionButton
+                      key={i}
+                      action={action}
+                      tenantId={tenantId}
+                      buildingId={buildingId}
+                      unitId={unitId}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          <div className="p-4 border-t">
+            <form onSubmit={handleSubmit} className="flex gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Ask me anything..."
+                disabled={loading}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={loading || !message.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition disabled:opacity-50"
+              >
+                {loading ? '...' : 'Send'}
+              </button>
+            </form>
+            <p className="text-xs text-gray-500 mt-2">
+              Powered by AI. Always verify information before acting.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

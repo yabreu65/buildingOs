@@ -30,6 +30,7 @@ import { SupportTicketsModule } from './support-tickets/support-tickets.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DemoSeedModule } from './demo-seed/demo-seed.module';
 import { ObservabilityModule } from './observability/observability.module';
+import { AssistantModule } from './assistant/assistant.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { ObservabilityModule } from './observability/observability.module';
     SupportTicketsModule,
     NotificationsModule,
     DemoSeedModule,
+    AssistantModule,
   ],
   controllers: [],
   providers: [],
