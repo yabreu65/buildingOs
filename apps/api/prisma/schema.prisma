@@ -106,6 +106,8 @@ model Tenant {
   notifications         Notification[]
   aiInteractionLogs     AiInteractionLog[]
   dailyAiUsage          TenantDailyAiUsage[]
+  aiBudget              TenantAiBudget?
+  monthlyAiUsage        TenantMonthlyAiUsage[]
 }
 
 model User {
@@ -373,6 +375,10 @@ enum AuditAction {
   REPORT_EXPORTED
   // AI ASSISTANT
   AI_INTERACTION
+  AI_BUDGET_WARNED
+  AI_BUDGET_BLOCKED
+  AI_BUDGET_UPDATED
+  AI_DEGRADED_BUDGET
 }
 
 model AuditLog {
@@ -1196,5 +1202,41 @@ model TenantDailyAiUsage {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, day])
+  @@index([tenantId])
+}
+
+model TenantAiBudget {
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  monthlyBudgetCents    Int      @default(500) // $5/month default
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  monthlyUsage          TenantMonthlyAiUsage[]
+
+  @@index([tenantId])
+}
+
+model TenantMonthlyAiUsage {
+  id                    String    @id @default(cuid())
+  tenantId              String
+  budgetId              String
+  month                 String    // "YYYY-MM"
+  calls                 Int       @default(0)
+  inputTokens           Int       @default(0)
+  outputTokens          Int       @default(0)
+  estimatedCostCents    Int       @default(0)
+  warnedAt              DateTime?
+  blockedAt             DateTime?
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  budget                TenantAiBudget      @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, month])
+  @@index([tenantId, month])
   @@index([tenantId])
 }

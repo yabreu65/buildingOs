@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, ConflictException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
+import { AiBudgetService } from './budget.service';
 
 // Types
 export type SuggestedActionType =
@@ -92,7 +93,11 @@ export class AssistantService {
   private provider: AiProvider;
   private readonly dailyLimit: number;
 
-  constructor(private prisma: PrismaService, private audit: AuditService) {
+  constructor(
+    private prisma: PrismaService,
+    private audit: AuditService,
+    private budget: AiBudgetService,
+  ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'MOCK';
@@ -143,13 +148,45 @@ export class AssistantService {
     // Check rate limit
     await this.checkRateLimit(tenantId);
 
-    // Get response from provider
-    const response = await this.provider.chat(request.message, {
-      buildingId: request.buildingId,
-      unitId: request.unitId,
-      page: request.page,
-      tenantId,
-    });
+    // Check budget (and enforce hard stop or soft degrade)
+    const budgetCheck = await this.budget.checkBudget(tenantId);
+    let response: ChatResponse;
+
+    if (!budgetCheck.allowed) {
+      // Budget exceeded and soft degrade disabled
+      throw new ConflictException(
+        `AI budget exceeded. Used: $${(budgetCheck.usedCents / 100).toFixed(2)} of $${(budgetCheck.budgetCents / 100).toFixed(2)} monthly budget`,
+      );
+    }
+
+    if (budgetCheck.blockedAt || (budgetCheck.percentUsed >= 100)) {
+      // Budget exceeded but soft degrade enabled - use mock response
+      response = await this.provider.chat(request.message, {
+        buildingId: request.buildingId,
+        unitId: request.unitId,
+        page: request.page,
+        tenantId,
+      });
+
+      // Log degraded response
+      void this.budget.logDegradedResponse(tenantId, 'Monthly budget exceeded');
+    } else {
+      // Budget OK - get response from provider
+      response = await this.provider.chat(request.message, {
+        buildingId: request.buildingId,
+        unitId: request.unitId,
+        page: request.page,
+        tenantId,
+      });
+
+      // Track usage (fire-and-forget)
+      const model = process.env.AI_MODEL_DEFAULT || 'gpt-4o-mini';
+      void this.budget.trackUsage(tenantId, {
+        model,
+        inputTokens: 0, // MOCK provider doesn't return tokens yet
+        outputTokens: 0,
+      });
+    }
 
     // Filter suggested actions based on RBAC
     response.suggestedActions = this.filterSuggestedActions(
