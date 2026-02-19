@@ -74,6 +74,12 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
               Tenants
             </Link>
             <Link
+              href="/super-admin/ai-analytics"
+              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+            >
+              AI Analytics
+            </Link>
+            <Link
               href="/super-admin/users"
               className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium text-muted-foreground"
             >

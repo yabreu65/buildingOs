@@ -24,6 +24,7 @@ export interface SuggestedAction {
 export interface ChatResponse {
   answer: string;
   suggestedActions: SuggestedAction[];
+  interactionId?: string; // PHASE 12: For frontend action event tracking
 }
 
 export interface ChatRequest {
@@ -172,7 +173,7 @@ export class AssistantService {
     const cachedResponse = this.cache.get(cacheKey);
     if (cachedResponse) {
       // Cache hit! Log interaction and return cached response
-      void this.logInteraction(tenantId, userId, membershipId, request, cachedResponse);
+      const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, cachedResponse, true, 'CACHE');
       void this.audit.createLog({
         tenantId,
         actorUserId: userId,
@@ -190,7 +191,10 @@ export class AssistantService {
         },
       });
 
-      return cachedResponse;
+      return {
+        ...cachedResponse,
+        interactionId: interactionId ?? undefined,
+      };
     }
 
     // Step 2: Classify request to determine model size
@@ -281,7 +285,9 @@ export class AssistantService {
     );
 
     // Store interaction log (fire-and-forget)
-    void this.logInteraction(tenantId, userId, membershipId, request, response);
+    // Determine modelSize from router decision
+    const modelSizeStr = routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK');
+    const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, response, false, modelSizeStr);
 
     // Audit the interaction (fire-and-forget)
     void this.audit.createLog({
@@ -303,7 +309,10 @@ export class AssistantService {
       },
     });
 
-    return response;
+    return {
+      ...response,
+      interactionId: interactionId ?? undefined,
+    };
   }
 
   /**
@@ -445,6 +454,8 @@ export class AssistantService {
   /**
    * Log interaction to AiInteractionLog (fire-and-forget)
    * Never fails the main operation
+   * PHASE 12: Now captures cacheHit, modelSize, and page for analytics
+   * Returns the created interaction ID for frontend tracking
    */
   private async logInteraction(
     tenantId: string,
@@ -452,9 +463,11 @@ export class AssistantService {
     membershipId: string,
     request: ChatRequest,
     response: ChatResponse,
-  ): Promise<void> {
+    cacheHit: boolean = false,
+    modelSize: string = 'MOCK',
+  ): Promise<string | null> {
     try {
-      await this.prisma.aiInteractionLog.create({
+      const log = await this.prisma.aiInteractionLog.create({
         data: {
           tenantId,
           userId,
@@ -472,8 +485,13 @@ export class AssistantService {
           provider: process.env.AI_PROVIDER || 'MOCK',
           tokensIn: null,
           tokensOut: null,
+          // PHASE 12: Analytics
+          cacheHit,
+          modelSize,
+          page: request.page,
         },
       });
+      return log.id;
     } catch (error) {
       // Fire-and-forget: log but don't fail
       console.error('Failed to log AI interaction:', error);

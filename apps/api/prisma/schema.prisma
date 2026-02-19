@@ -109,6 +109,7 @@ model Tenant {
   aiBudget              TenantAiBudget?
   monthlyAiUsage        TenantMonthlyAiUsage[]
   aiTemplates           AiTemplate[]
+  aiActionEvents        AiActionEvent[]
 }
 
 model User {
@@ -151,6 +152,7 @@ model Membership {
   paymentsReviewedBy    Payment[]
   invitationsSent       Invitation[]          @relation("InvitationsSent")
   aiInteractionLogs     AiInteractionLog[]
+  aiActionEvents        AiActionEvent[]
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -381,6 +383,7 @@ enum AuditAction {
   AI_BUDGET_BLOCKED
   AI_BUDGET_UPDATED
   AI_DEGRADED_BUDGET
+  AI_ACTION_CLICKED
 }
 
 model AuditLog {
@@ -1182,15 +1185,45 @@ model AiInteractionLog {
   tokensIn     Int?
   tokensOut    Int?
 
+  // PHASE 12: Analytics
+  cacheHit     Boolean  @default(false)  // true if response came from cache
+  modelSize    String?                    // "SMALL" | "BIG" | "MOCK" | "CACHE"
+  page         String?                    // extracted from context.page at save time
+
   createdAt    DateTime @default(now())
 
   // Relations
   tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  actionEvents AiActionEvent[]
 
   @@index([tenantId, createdAt])
   @@index([tenantId, userId, createdAt])
+  @@index([tenantId, page, createdAt])
+}
+
+model AiActionEvent {
+  id            String    @id @default(cuid())
+  tenantId      String
+  membershipId  String
+  interactionId String?   // FK nullable → AiInteractionLog
+
+  actionType    String    // VIEW_TICKETS | CREATE_TICKET | VIEW_PAYMENTS | etc.
+  source        String    // "CHAT" | "TEMPLATE" | "TEMPLATE_INSERT"
+  page          String
+  buildingId    String?
+  unitId        String?
+  clickedAt     DateTime  @default(now())
+
+  // Relations
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership    Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  interaction   AiInteractionLog? @relation(fields: [interactionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, clickedAt])
+  @@index([tenantId, actionType])
+  @@index([interactionId])
 }
 
 model AiTemplate {

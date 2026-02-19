@@ -4,7 +4,7 @@ import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { AssistantService } from './assistant.service';
-import { AssistantController } from './assistant.controller';
+import { AssistantController, SuperAdminAiController } from './assistant.controller';
 import { AiBudgetService } from './budget.service';
 import { AiBudgetController } from './ai-budget.controller';
 import { AiRouterService } from './router.service';
@@ -12,6 +12,8 @@ import { AiCacheService } from './cache.service';
 import { AiContextSummaryService } from './context-summary.service';
 import { AiTemplateService } from './template.service';
 import { AiTemplateController } from './template.controller';
+import { AiAnalyticsService } from './analytics.service';
+import { AiActionEventsService } from './action-events.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -65,8 +67,26 @@ import { AiTemplateController } from './template.controller';
  */
 @Module({
   imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
-  controllers: [AssistantController, AiBudgetController, AiTemplateController],
-  providers: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService, AiTemplateService],
-  exports: [AssistantService, AiBudgetService, AiRouterService, AiCacheService, AiContextSummaryService, AiTemplateService],
+  controllers: [AssistantController, AiBudgetController, AiTemplateController, SuperAdminAiController],
+  providers: [
+    AssistantService,
+    AiBudgetService,
+    AiRouterService,
+    AiCacheService,
+    AiContextSummaryService,
+    AiTemplateService,
+    AiAnalyticsService,
+    AiActionEventsService,
+  ],
+  exports: [
+    AssistantService,
+    AiBudgetService,
+    AiRouterService,
+    AiCacheService,
+    AiContextSummaryService,
+    AiTemplateService,
+    AiAnalyticsService,
+    AiActionEventsService,
+  ],
 })
 export class AssistantModule {}

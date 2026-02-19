@@ -7,10 +7,12 @@
  * - Sanitizes and limits payload sizes
  * - Routes to correct page with prefill params/state
  * - Never executes mutations automatically
+ * - Tracks action clicks for analytics
  */
 
 import { AppRouterInstance } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import type { SuggestedAction } from '../services/assistant.api';
+import { analyticsApi } from '../services/analytics.api';
 
 export interface ActionContext {
   tenantId: string;
@@ -18,6 +20,8 @@ export interface ActionContext {
   unitId?: string;
   permissions: string[];
   router: AppRouterInstance;
+  page?: string; // PHASE 12: Current page for analytics
+  interactionId?: string; // PHASE 12: Interaction ID for action tracking
 }
 
 export interface ActionResult {
@@ -316,6 +320,7 @@ async function handleCreateTicket(
 
 /**
  * Main handler: Routes to appropriate action handler
+ * PHASE 12: Now tracks action clicks for analytics
  */
 export async function handleSuggestedAction(
   action: SuggestedAction,
@@ -330,24 +335,32 @@ export async function handleSuggestedAction(
   }
 
   try {
+    let result: ActionResult;
+
     switch (action.type) {
       case 'VIEW_TICKETS':
-        return await handleViewTickets(action, context);
+        result = await handleViewTickets(action, context);
+        break;
 
       case 'VIEW_PAYMENTS':
-        return await handleViewPayments(action, context);
+        result = await handleViewPayments(action, context);
+        break;
 
       case 'VIEW_REPORTS':
-        return await handleViewReports(action, context);
+        result = await handleViewReports(action, context);
+        break;
 
       case 'SEARCH_DOCS':
-        return await handleSearchDocs(action, context);
+        result = await handleSearchDocs(action, context);
+        break;
 
       case 'DRAFT_COMMUNICATION':
-        return await handleDraftCommunication(action, context);
+        result = await handleDraftCommunication(action, context);
+        break;
 
       case 'CREATE_TICKET':
-        return await handleCreateTicket(action, context);
+        result = await handleCreateTicket(action, context);
+        break;
 
       default:
         return {
@@ -355,6 +368,20 @@ export async function handleSuggestedAction(
           error: `Unknown action type: ${action.type}`,
         };
     }
+
+    // PHASE 12: Track action click on success (fire-and-forget)
+    if (result.success && context.page) {
+      void analyticsApi.trackActionEvent(context.tenantId, {
+        actionType: action.type,
+        source: 'CHAT',
+        page: context.page,
+        buildingId: context.buildingId,
+        unitId: context.unitId,
+        interactionId: context.interactionId,
+      });
+    }
+
+    return result;
   } catch (error) {
     return {
       success: false,
