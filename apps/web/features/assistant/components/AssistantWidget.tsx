@@ -6,109 +6,28 @@
  * Global AI Assistant widget for tenant routes.
  * - Pulls context from ContextSelector (activeBuilding, activeUnit, currentPage)
  * - Displays chat interface with answer and suggested actions
+ * - Actions routed through AI Actions Bridge for validation and navigation
  * - Handles errors (feature not available, rate limit, provider errors)
- * - Never auto-executes actions, just provides navigation buttons
+ * - Never auto-executes mutations, only opens UI with prefills
  */
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAssistant } from '../hooks/useAssistant';
-import { SuggestedAction } from '../services/assistant.api';
+import { SuggestedActionsList } from './SuggestedActionsList';
 
 interface AssistantWidgetProps {
   tenantId: string;
   currentPage: string;
   buildingId?: string;
   unitId?: string;
+  permissions?: string[]; // User permissions for action validation
   isOpen?: boolean;
   onClose?: () => void;
 }
 
-/**
- * Suggested action button with navigation/prefill logic
- */
-function SuggestedActionButton({
-  action,
-  tenantId,
-  buildingId,
-  unitId,
-}: {
-  action: SuggestedAction;
-  tenantId: string;
-  buildingId?: string;
-  unitId?: string;
-}) {
-  const router = useRouter();
-
-  const handleClick = () => {
-    switch (action.type) {
-      case 'VIEW_TICKETS':
-        if (buildingId) {
-          router.push(`/${tenantId}/buildings/${buildingId}/tickets`);
-        }
-        break;
-
-      case 'VIEW_PAYMENTS':
-        if (buildingId) {
-          router.push(`/${tenantId}/buildings/${buildingId}/payments`);
-        }
-        break;
-
-      case 'VIEW_REPORTS':
-        if (buildingId) {
-          router.push(`/${tenantId}/buildings/${buildingId}/reports`);
-        } else {
-          router.push(`/${tenantId}/reports`);
-        }
-        break;
-
-      case 'SEARCH_DOCS':
-        router.push(`/${tenantId}/documents?q=${encodeURIComponent(action.payload.query)}`);
-        break;
-
-      case 'DRAFT_COMMUNICATION':
-        // Open communication form with prefilled data
-        router.push(
-          `/${tenantId}/communications/new?title=${encodeURIComponent(action.payload.title || '')}&body=${encodeURIComponent(action.payload.body || '')}`,
-        );
-        break;
-
-      case 'CREATE_TICKET':
-        if (unitId) {
-          router.push(
-            `/${tenantId}/buildings/${buildingId}/units/${unitId}?action=create-ticket`,
-          );
-        } else if (buildingId) {
-          router.push(
-            `/${tenantId}/buildings/${buildingId}/tickets?action=create`,
-          );
-        }
-        break;
-
-      default:
-        // Unknown action, do nothing
-        break;
-    }
-  };
-
-  const labels: Record<SuggestedAction['type'], string> = {
-    VIEW_TICKETS: 'View Tickets',
-    VIEW_PAYMENTS: 'View Payments',
-    VIEW_REPORTS: 'View Reports',
-    SEARCH_DOCS: `Search "${action.payload.query || 'Documents'}"`,
-    DRAFT_COMMUNICATION: 'Draft Message',
-    CREATE_TICKET: 'Create Ticket',
-  };
-
-  return (
-    <button
-      onClick={handleClick}
-      className="inline-block px-3 py-2 text-sm rounded border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 transition mr-2 mb-2"
-    >
-      {labels[action.type]}
-    </button>
-  );
-}
+// Actions rendering moved to SuggestedActionsList component
+// which handles validation, permissions, navigation, and error states
 
 /**
  * Error message component
@@ -150,6 +69,7 @@ export function AssistantWidget({
   currentPage,
   buildingId,
   unitId,
+  permissions = [],
   isOpen = true,
   onClose,
 }: AssistantWidgetProps) {
@@ -240,23 +160,19 @@ export function AssistantWidget({
               </div>
             )}
 
-            {/* Suggested Actions */}
+            {/* Suggested Actions - Routed through AI Actions Bridge */}
             {suggestedActions.length > 0 && !loading && (
               <div>
                 <p className="text-xs font-semibold text-gray-600 mb-2">
                   Suggested actions:
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  {suggestedActions.map((action, i) => (
-                    <SuggestedActionButton
-                      key={i}
-                      action={action}
-                      tenantId={tenantId}
-                      buildingId={buildingId}
-                      unitId={unitId}
-                    />
-                  ))}
-                </div>
+                <SuggestedActionsList
+                  actions={suggestedActions}
+                  tenantId={tenantId}
+                  buildingId={buildingId}
+                  unitId={unitId}
+                  permissions={permissions}
+                />
               </div>
             )}
           </div>
