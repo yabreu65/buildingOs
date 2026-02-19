@@ -12,7 +12,12 @@ async function main() {
   const plans = await Promise.all([
     prisma.billingPlan.upsert({
       where: { planId: BillingPlanId.FREE },
-      update: {},
+      update: {
+        aiBudgetCents: 0,
+        aiCallsMonthlyLimit: 0,
+        aiAllowBigModel: false,
+        canUseAI: false,
+      },
       create: {
         planId: BillingPlanId.FREE,
         name: "Free",
@@ -24,12 +29,21 @@ async function main() {
         maxOccupants: 20,
         canExportReports: false,
         canBulkOperations: false,
+        canUseAI: false,
+        aiBudgetCents: 0,
+        aiCallsMonthlyLimit: 0,
+        aiAllowBigModel: false,
         supportLevel: "COMMUNITY",
       },
     }),
     prisma.billingPlan.upsert({
       where: { planId: BillingPlanId.BASIC },
-      update: {},
+      update: {
+        canUseAI: true,
+        aiBudgetCents: 200,
+        aiCallsMonthlyLimit: 100,
+        aiAllowBigModel: false,
+      },
       create: {
         planId: BillingPlanId.BASIC,
         name: "Basic",
@@ -41,12 +55,20 @@ async function main() {
         maxOccupants: 200,
         canExportReports: true,
         canBulkOperations: false,
+        canUseAI: true,
+        aiBudgetCents: 200,
+        aiCallsMonthlyLimit: 100,
+        aiAllowBigModel: false,
         supportLevel: "EMAIL",
       },
     }),
     prisma.billingPlan.upsert({
       where: { planId: BillingPlanId.PRO },
-      update: {},
+      update: {
+        aiBudgetCents: 800,
+        aiCallsMonthlyLimit: 600,
+        aiAllowBigModel: true,
+      },
       create: {
         planId: BillingPlanId.PRO,
         name: "Pro",
@@ -59,12 +81,19 @@ async function main() {
         canExportReports: true,
         canBulkOperations: true,
         canUseAI: true,
+        aiBudgetCents: 800,
+        aiCallsMonthlyLimit: 600,
+        aiAllowBigModel: true,
         supportLevel: "PRIORITY",
       },
     }),
     prisma.billingPlan.upsert({
       where: { planId: BillingPlanId.ENTERPRISE },
-      update: {},
+      update: {
+        aiBudgetCents: 10000,
+        aiCallsMonthlyLimit: 9999,
+        aiAllowBigModel: true,
+      },
       create: {
         planId: BillingPlanId.ENTERPRISE,
         name: "Enterprise",
@@ -77,6 +106,9 @@ async function main() {
         canExportReports: true,
         canBulkOperations: true,
         canUseAI: true,
+        aiBudgetCents: 10000,
+        aiCallsMonthlyLimit: 9999,
+        aiAllowBigModel: true,
         supportLevel: "PRIORITY",
       },
     }),

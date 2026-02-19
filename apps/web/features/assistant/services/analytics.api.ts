@@ -113,4 +113,27 @@ export const analyticsApi = {
       method: 'GET',
     });
   },
+
+  /**
+   * Phase 13: Get AI overrides for a tenant (super-admin)
+   */
+  async getAiOverrides(tenantId: string) {
+    if (!tenantId) throw new Error('tenantId required');
+    return apiClient({
+      path: `/super-admin/tenants/${tenantId}/ai-overrides`,
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Phase 13: Update AI overrides for a tenant (super-admin)
+   */
+  async updateAiOverrides(tenantId: string, dto: any) {
+    if (!tenantId) throw new Error('tenantId required');
+    return apiClient({
+      path: `/super-admin/tenants/${tenantId}/ai-overrides`,
+      method: 'PATCH',
+      body: dto,
+    });
+  },
 };

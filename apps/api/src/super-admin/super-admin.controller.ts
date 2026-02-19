@@ -19,6 +19,7 @@ import { TenancyStatsService } from '../tenancy/tenancy-stats.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
+import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
 import { StartImpersonationDto } from './dto/start-impersonation.dto';
 
 export interface RequestWithUser extends Request {
@@ -201,5 +202,30 @@ export class SuperAdminController {
   @UseGuards(JwtAuthGuard)
   async getImpersonationStatus(@Request() req: RequestWithUser) {
     return this.service.getImpersonationStatus(req);
+  }
+
+  /**
+   * Phase 13: GET /api/super-admin/tenants/:tenantId/ai-overrides
+   * Get AI overrides for a tenant
+   * SECURITY: SuperAdminGuard
+   */
+  @Get('tenants/:tenantId/ai-overrides')
+  async getAiOverrides(@Param('tenantId') tenantId: string) {
+    return this.service.getAiOverrides(tenantId);
+  }
+
+  /**
+   * Phase 13: PATCH /api/super-admin/tenants/:tenantId/ai-overrides
+   * Update AI overrides for a tenant
+   * SECURITY: SuperAdminGuard
+   */
+  @Patch('tenants/:tenantId/ai-overrides')
+  async updateAiOverrides(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: UpdateAiOverrideDto,
+    @Request() req: RequestWithUser,
+  ) {
+    await this.service.updateAiOverrides(tenantId, dto, req.user.id);
+    return { message: 'AI overrides updated successfully' };
   }
 }

@@ -160,6 +160,14 @@ export class AssistantService {
     // Check rate limit
     await this.checkRateLimit(tenantId);
 
+    // Phase 13: Check calls limit (monthly)
+    const callsLimitCheck = await this.budget.checkCallsLimit(tenantId);
+    if (!callsLimitCheck.allowed) {
+      throw new ConflictException(
+        `AI calls limit exceeded. Used: ${callsLimitCheck.callsUsed} of ${callsLimitCheck.callsLimit} calls this month`,
+      );
+    }
+
     // ROUTER + CACHE OPTIMIZATION
     // Step 1: Check cache first (avoid provider call if hit)
     const cacheKey = this.cache.generateKey(
@@ -198,12 +206,19 @@ export class AssistantService {
     }
 
     // Step 2: Classify request to determine model size
-    const routerDecision = this.router.classifyRequest({
+    let routerDecision = this.router.classifyRequest({
       message: request.message,
       page: request.page,
       buildingId: request.buildingId,
       unitId: request.unitId,
     });
+
+    // Phase 13: Respect plan's allowBigModel flag
+    const limits = await this.budget.getEffectiveLimits(tenantId);
+    if (!limits.allowBigModel && routerDecision.model === 'BIG') {
+      // Silent override: downgrade BIG to SMALL if plan doesn't allow it
+      routerDecision = { ...routerDecision, model: 'SMALL' };
+    }
 
     const modelName = this.router.getModelName(routerDecision.model);
     const maxTokens = this.router.getMaxTokens(routerDecision.model);

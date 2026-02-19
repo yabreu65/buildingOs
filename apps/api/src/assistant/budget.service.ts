@@ -6,6 +6,7 @@
  * - Enforces hard stop when budget exceeded
  * - Supports soft degrade (mock response fallback)
  * - Warns at 80% threshold
+ * - Supports plan-based limits with tenant overrides (Phase 13)
  */
 
 import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
@@ -32,6 +33,21 @@ export interface BudgetCheckResult {
   blockedAt?: Date | null;
 }
 
+export interface CallsLimitResult {
+  allowed: boolean;
+  callsUsed: number;
+  callsLimit: number;
+  percentUsed: number;
+  warnedNow?: boolean;
+  blockedNow?: boolean;
+}
+
+export interface EffectiveLimits {
+  budgetCents: number;
+  callsLimit: number;
+  allowBigModel: boolean;
+}
+
 export interface UsageUpdate {
   model: string;
   inputTokens: number;
@@ -47,7 +63,13 @@ export interface UsageData {
   estimatedCostCents: number;
   warnedAt?: Date;
   blockedAt?: Date;
+  callsWarnedAt?: Date;
   percentUsed: number;
+  callsPercent: number;
+}
+
+export interface UsageWithLimits extends UsageData {
+  limits: EffectiveLimits;
 }
 
 @Injectable()
@@ -70,19 +92,56 @@ export class AiBudgetService {
   }
 
   /**
+   * Phase 13: Get effective limits for tenant (plan caps + overrides)
+   */
+  async getEffectiveLimits(tenantId: string): Promise<EffectiveLimits> {
+    try {
+      // Fetch subscription with plan
+      const subscription = await this.prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      });
+
+      const plan = subscription?.plan;
+
+      // Fetch tenant-specific overrides
+      const budget = await this.getOrCreateBudget(tenantId);
+
+      // Resolve: override ?? plan ?? env_default
+      return {
+        budgetCents: budget.monthlyBudgetCents ?? plan?.aiBudgetCents ?? this.defaultBudgetCents,
+        callsLimit: budget.monthlyCallsLimit ?? plan?.aiCallsMonthlyLimit ?? 100,
+        allowBigModel: budget.allowBigModelOverride ?? plan?.aiAllowBigModel ?? false,
+      };
+    } catch (error) {
+      // Fallback on error (fire-and-forget pattern)
+      console.error('Failed to get effective limits:', error);
+      return {
+        budgetCents: this.defaultBudgetCents,
+        callsLimit: 100,
+        allowBigModel: false,
+      };
+    }
+  }
+
+  /**
    * Check if tenant can make an AI request
    * Enforces hard stop or soft degrade based on config
+   * Now uses plan-based budget caps
    */
   async checkBudget(tenantId: string): Promise<BudgetCheckResult> {
     // Get or create budget for tenant
     const budget = await this.getOrCreateBudget(tenantId);
+
+    // Get effective budget from plan + overrides
+    const limits = await this.getEffectiveLimits(tenantId);
 
     // Get or create usage for current month
     const month = getCurrentMonth();
     const usage = await this.getOrCreateMonthlyUsage(tenantId, budget.id, month);
 
     const { estimatedCostCents } = usage;
-    const { monthlyBudgetCents } = budget;
+    const { budgetCents: monthlyBudgetCents } = limits;
 
     // Check if blocked
     if (usage.blockedAt !== null) {
@@ -168,7 +227,109 @@ export class AiBudgetService {
   }
 
   /**
+   * Phase 13: Check if tenant has reached calls limit
+   */
+  async checkCallsLimit(tenantId: string): Promise<CallsLimitResult> {
+    const limits = await this.getEffectiveLimits(tenantId);
+
+    // If callsLimit is 0 or >= 9999, treat as unlimited
+    if (limits.callsLimit === 0 || limits.callsLimit >= 9999) {
+      return {
+        allowed: true,
+        callsUsed: 0,
+        callsLimit: limits.callsLimit,
+        percentUsed: 0,
+      };
+    }
+
+    // Get budget and current month usage
+    const budget = await this.getOrCreateBudget(tenantId);
+    const month = getCurrentMonth();
+    const usage = await this.getOrCreateMonthlyUsage(tenantId, budget.id, month);
+
+    const { calls } = usage;
+    const callsLimit = limits.callsLimit;
+    const percentUsed = (calls / callsLimit) * 100;
+
+    // If already blocked, return immediately
+    if (usage.blockedAt !== null) {
+      return {
+        allowed: this.softDegradeOnExceeded,
+        callsUsed: calls,
+        callsLimit,
+        percentUsed: 100,
+        blockedNow: false,
+      };
+    }
+
+    // If exceeded now, block
+    if (calls >= callsLimit) {
+      await this.prisma.tenantMonthlyAiUsage.update({
+        where: { id: usage.id },
+        data: { blockedAt: new Date() },
+      });
+
+      // Audit
+      void this.audit.createLog({
+        tenantId,
+        action: AuditAction.AI_LIMIT_BLOCKED,
+        entityType: 'TenantAiBudget',
+        entityId: budget.id,
+        metadata: {
+          month,
+          callsUsed: calls,
+          callsLimit,
+          limitType: 'CALLS',
+        },
+      });
+
+      return {
+        allowed: this.softDegradeOnExceeded,
+        callsUsed: calls,
+        callsLimit,
+        percentUsed: 100,
+        blockedNow: true,
+      };
+    }
+
+    // Check warning threshold (80%)
+    let warnedNow = false;
+    if (percentUsed >= 80 && usage.callsWarnedAt === null) {
+      await this.prisma.tenantMonthlyAiUsage.update({
+        where: { id: usage.id },
+        data: { callsWarnedAt: new Date() },
+      });
+
+      // Audit
+      void this.audit.createLog({
+        tenantId,
+        action: AuditAction.AI_LIMIT_WARNED,
+        entityType: 'TenantAiBudget',
+        entityId: budget.id,
+        metadata: {
+          month,
+          callsUsed: calls,
+          callsLimit,
+          threshold: this.warnThreshold,
+          limitType: 'CALLS',
+        },
+      });
+
+      warnedNow = true;
+    }
+
+    return {
+      allowed: true,
+      callsUsed: calls,
+      callsLimit,
+      percentUsed,
+      warnedNow,
+    };
+  }
+
+  /**
    * Track usage after AI response is received
+   * Increments calls counter and cost
    */
   async trackUsage(tenantId: string, update: UsageUpdate): Promise<void> {
     const budget = await this.getOrCreateBudget(tenantId);
@@ -182,12 +343,12 @@ export class AiBudgetService {
       update.outputTokens,
     );
 
-    // Update usage
+    // Update usage (always increment calls counter)
     await this.prisma.tenantMonthlyAiUsage.update({
       where: { id: usage.id },
       data: {
         calls: {
-          increment: 1,
+          increment: 1, // Increment calls counter for Phase 13
         },
         inputTokens: {
           increment: update.inputTokens,
@@ -204,22 +365,44 @@ export class AiBudgetService {
 
   /**
    * Get usage data for display/UI
+   * Now includes calls counter with percentage
    */
   async getUsageData(tenantId: string, month?: string): Promise<UsageData> {
     const budget = await this.getOrCreateBudget(tenantId);
+    const limits = await this.getEffectiveLimits(tenantId);
     const targetMonth = month || getCurrentMonth();
     const usage = await this.getOrCreateMonthlyUsage(tenantId, budget.id, targetMonth);
 
+    const callsPercent =
+      limits.callsLimit === 0 || limits.callsLimit >= 9999
+        ? 0
+        : (usage.calls / limits.callsLimit) * 100;
+
     return {
       month: targetMonth,
-      budgetCents: budget.monthlyBudgetCents,
+      budgetCents: limits.budgetCents,
       calls: usage.calls,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       estimatedCostCents: usage.estimatedCostCents,
       warnedAt: usage.warnedAt || undefined,
       blockedAt: usage.blockedAt || undefined,
-      percentUsed: getPercentUsed(usage.estimatedCostCents, budget.monthlyBudgetCents),
+      callsWarnedAt: usage.callsWarnedAt || undefined,
+      percentUsed: getPercentUsed(usage.estimatedCostCents, limits.budgetCents),
+      callsPercent,
+    };
+  }
+
+  /**
+   * Get usage data with effective limits (for frontend dashboard)
+   */
+  async getUsageWithLimits(tenantId: string, month?: string): Promise<UsageWithLimits> {
+    const usageData = await this.getUsageData(tenantId, month);
+    const limits = await this.getEffectiveLimits(tenantId);
+
+    return {
+      ...usageData,
+      limits,
     };
   }
 

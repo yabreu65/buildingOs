@@ -5,6 +5,7 @@ import { SubscriptionStatus } from '@prisma/client';
 export interface PlanFeatures {
   canExportReports: boolean;
   canBulkOperations: boolean;
+  canUseAI: boolean; // Phase 13: AI feature gate
   supportLevel: 'COMMUNITY' | 'EMAIL' | 'PRIORITY';
 }
 
@@ -35,6 +36,7 @@ export class PlanFeaturesService {
     return {
       canExportReports: subscription.plan.canExportReports ?? false,
       canBulkOperations: subscription.plan.canBulkOperations ?? false,
+      canUseAI: subscription.plan.canUseAI ?? false, // Phase 13
       supportLevel: (subscription.plan.supportLevel as any) ?? 'COMMUNITY',
     };
   }
