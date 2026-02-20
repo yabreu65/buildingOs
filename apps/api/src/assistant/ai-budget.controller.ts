@@ -20,7 +20,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
-import { AiBudgetService, UsageData } from './budget.service';
+import { AiBudgetService, UsageData, UsageWithLimits } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
 
@@ -60,6 +60,23 @@ export class AiBudgetController {
     }
 
     return this.budgetService.getUsageData(tenantId, month);
+  }
+
+  /**
+   * GET /tenants/:tenantId/assistant/usage-with-limits
+   *
+   * Tenant endpoint: usage + effective limits in one payload
+   */
+  @Get(':tenantId/assistant/usage-with-limits')
+  async getUsageWithLimits(
+    @Param('tenantId') tenantId: string,
+    @Query('month') month?: string,
+  ): Promise<UsageWithLimits> {
+    if (!tenantId || tenantId.trim().length === 0) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    return this.budgetService.getUsageWithLimits(tenantId, month);
   }
 
   /**

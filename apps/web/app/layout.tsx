@@ -1,19 +1,8 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import QueryProvider from '../shared/lib/query/QueryProvider';
 import AuthBootstrap from '../features/auth/AuthBootstrap';
 import { ToastProvider } from '../shared/components/ui/Toast';
-
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
 
 export const metadata: Metadata = {
   title: 'BuildingOS',
@@ -35,8 +24,6 @@ export default function RootLayout({
       </head>
       <body
         className={[
-          geistSans.variable,
-          geistMono.variable,
           'antialiased',
           'min-h-screen',
           'bg-background',

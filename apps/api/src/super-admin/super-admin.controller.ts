@@ -16,11 +16,14 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
 import { TenancyStatsService } from '../tenancy/tenancy-stats.service';
+import { BillingService } from '../billing/billing.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
 import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
 import { StartImpersonationDto } from './dto/start-impersonation.dto';
+import { ListSuperAdminPlanChangeRequestsDto } from './dto/list-super-admin-plan-change-requests.dto';
+import { RejectPlanChangeRequestDto } from './dto/reject-plan-change-request.dto';
 
 export interface RequestWithUser extends Request {
   user?: {
@@ -48,6 +51,7 @@ export class SuperAdminController {
   constructor(
     private readonly service: SuperAdminService,
     private readonly tenancyStatsService: TenancyStatsService,
+    private readonly billingService: BillingService,
   ) {}
 
   /**
@@ -215,6 +219,14 @@ export class SuperAdminController {
   }
 
   /**
+   * Alias: GET /api/super-admin/tenants/:tenantId/ai/caps
+   */
+  @Get('tenants/:tenantId/ai/caps')
+  async getAiCaps(@Param('tenantId') tenantId: string) {
+    return this.service.getAiOverrides(tenantId);
+  }
+
+  /**
    * Phase 13: PATCH /api/super-admin/tenants/:tenantId/ai-overrides
    * Update AI overrides for a tenant
    * SECURITY: SuperAdminGuard
@@ -227,5 +239,52 @@ export class SuperAdminController {
   ) {
     await this.service.updateAiOverrides(tenantId, dto, req.user.id);
     return { message: 'AI overrides updated successfully' };
+  }
+
+  /**
+   * Alias: PATCH /api/super-admin/tenants/:tenantId/ai/caps
+   */
+  @Patch('tenants/:tenantId/ai/caps')
+  async updateAiCaps(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: UpdateAiOverrideDto,
+    @Request() req: RequestWithUser,
+  ) {
+    await this.service.updateAiOverrides(tenantId, dto, req.user.id);
+    return { message: 'AI caps updated successfully' };
+  }
+
+  /**
+   * GET /api/super-admin/plan-change-requests
+   */
+  @Get('plan-change-requests')
+  listPlanChangeRequests(
+    @Request() req: RequestWithUser,
+    @Query() query: ListSuperAdminPlanChangeRequestsDto,
+  ) {
+    return this.billingService.listSuperAdminPlanChangeRequests(
+      req.user,
+      query.status,
+    );
+  }
+
+  /**
+   * POST /api/super-admin/plan-change-requests/:id/approve
+   */
+  @Post('plan-change-requests/:id/approve')
+  approvePlanChangeRequest(@Request() req: RequestWithUser, @Param('id') id: string) {
+    return this.billingService.approvePlanChangeRequest(req.user, id);
+  }
+
+  /**
+   * POST /api/super-admin/plan-change-requests/:id/reject
+   */
+  @Post('plan-change-requests/:id/reject')
+  rejectPlanChangeRequest(
+    @Request() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: RejectPlanChangeRequestDto,
+  ) {
+    return this.billingService.rejectPlanChangeRequest(req.user, id, body.reason);
   }
 }

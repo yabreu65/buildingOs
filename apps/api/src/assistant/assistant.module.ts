@@ -14,6 +14,8 @@ import { AiTemplateService } from './template.service';
 import { AiTemplateController } from './template.controller';
 import { AiAnalyticsService } from './analytics.service';
 import { AiActionEventsService } from './action-events.service';
+import { AiNudgesService } from './ai-nudges.service';
+import { AiNudgesController } from './ai-nudges.controller';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -67,7 +69,13 @@ import { AiActionEventsService } from './action-events.service';
  */
 @Module({
   imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
-  controllers: [AssistantController, AiBudgetController, AiTemplateController, SuperAdminAiController],
+  controllers: [
+    AssistantController,
+    AiBudgetController,
+    AiTemplateController,
+    SuperAdminAiController,
+    AiNudgesController,
+  ],
   providers: [
     AssistantService,
     AiBudgetService,
@@ -77,6 +85,7 @@ import { AiActionEventsService } from './action-events.service';
     AiTemplateService,
     AiAnalyticsService,
     AiActionEventsService,
+    AiNudgesService,
   ],
   exports: [
     AssistantService,
@@ -87,6 +96,7 @@ import { AiActionEventsService } from './action-events.service';
     AiTemplateService,
     AiAnalyticsService,
     AiActionEventsService,
+    AiNudgesService,
   ],
 })
 export class AssistantModule {}

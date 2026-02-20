@@ -3,9 +3,11 @@
 import { useParams } from 'next/navigation';
 import { useAiAnalytics } from '@/features/assistant/hooks/useAiAnalytics';
 import { useAiLimits } from '@/features/assistant/hooks/useAiLimits';
+import { useAiNudges } from '@/features/assistant/hooks/useAiNudges';
 import { AiAnalyticsPanel } from '@/features/assistant/components/analytics/AiAnalyticsPanel';
 import { AiPlanLimitsCard } from '@/features/assistant/components/limits/AiPlanLimitsCard';
 import { AiLimitBanner } from '@/features/assistant/components/limits/AiLimitBanner';
+import { AiNudgesPanel } from '@/features/assistant/components/limits/AiNudgesPanel';
 
 /**
  * Phase 13: Tenant AI Settings Page
@@ -20,6 +22,13 @@ export default function TenantAiAnalyticsPage() {
 
   const { limits, usage, loading: limitsLoading, error: limitsError } =
     useAiLimits(tenantId);
+  const {
+    nudges,
+    loading: nudgesLoading,
+    submitting: nudgesSubmitting,
+    dismiss,
+    requestUpgrade,
+  } = useAiNudges(tenantId);
 
   // Determine if we should show warning/blocked banners
   const budgetPercent = limits.budgetCents === 0 ? 0 : (usage.estimatedCostCents / limits.budgetCents) * 100;
@@ -52,6 +61,17 @@ export default function TenantAiAnalyticsPage() {
           />
         </div>
       )}
+
+      {/* Upgrade Nudges */}
+      <div className="mb-8">
+        <AiNudgesPanel
+          nudges={nudges}
+          loading={nudgesLoading}
+          submitting={nudgesSubmitting}
+          onDismiss={dismiss}
+          onRequestUpgrade={requestUpgrade}
+        />
+      </div>
 
       {/* Warning Banners */}
       <div className="space-y-4 mb-8">

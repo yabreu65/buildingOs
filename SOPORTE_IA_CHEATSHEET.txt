@@ -1,0 +1,65 @@
+SOPORTE IA - CHEATSHEET OPERATIVO (1 PAGINA)
+Actualizado: 2026-02-19
+
+1) SI TENANT DICE "ME BLOQUEO LA IA"
+- Verificar caps/consumo:
+  GET /super-admin/ai/tenants/:tenantId?month=YYYY-MM
+  GET /super-admin/tenants/:tenantId/ai/caps
+- Si percentUsed < 100%: NO es límite -> revisar permisos/bug
+- Si percentUsed >= 100%:
+  - PRO+: override temporal (+20% budget o +200 calls)
+  - BASIC: ofrecer upgrade (override solo excepción)
+  - FREE: IA no incluida -> upgrade
+
+2) OVERRIDE RAPIDO (TEMPORAL)
+PATCH /super-admin/tenants/:tenantId/ai/caps
+Body mínimo:
+{
+  "monthlyBudgetCents": <nuevo>,
+  "monthlyCallsLimit": <nuevo>,
+  "overrideReason": "Support overage exception",
+  "overrideExpiresAt": "<fin de mes>"
+}
+Esperar auditoría: AI_TENANT_OVERRIDE_UPDATED
+
+3) CUANDO EMPUJAR UPGRADE
+- Segundo mes consecutivo con exceso
+- Consumo estructuralmente por encima del plan
+- BASIC/FREE con uso IA recurrente
+Auditoría esperada:
+- PLAN_CHANGE_REQUESTED
+- PLAN_CHANGE_APPROVED
+- SubscriptionEvent PLAN_CHANGED_MANUAL
+
+4) CONSUMO ANORMAL / ABUSO
+Señales:
+- bigCallRate muy alto
+- demasiadas calls de un usuario
+- queries repetitivas sin cache
+Acciones:
+- allowBigModelOverride=false
+- bajar maxTokens
+- recomendar templates y prompts más específicos
+- si persiste: suspensión temporal IA (policy)
+
+5) ERRORES CLAVE
+- AI_BUDGET_EXCEEDED: revisar budget efectivo + override
+- AI_CALLS_LIMIT_EXCEEDED: revisar calls efectivas
+- AI_RATE_LIMITED: retry/backoff + límites provider
+- FEATURE_NOT_AVAILABLE: plan/rol/scope/feature flag
+- Provider timeout/error: fallback + incidente si persiste
+
+Checklist técnico mínimo:
+- requestId
+- AiInteractionLog
+- caps efectivos
+- permisos/scope
+- estado provider
+
+6) KPI A MIRAR CADA SEMANA
+- costo total IA mes
+- top 10 tenants por costo
+- cache hit rate promedio
+- % small vs % big
+- templates más usados
+- warning -> upgrade requests

@@ -13,8 +13,10 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAssistant } from '../hooks/useAssistant';
 import { SuggestedActionsList } from './SuggestedActionsList';
+import { useAiNudges } from '../hooks/useAiNudges';
 
 interface AssistantWidgetProps {
   tenantId: string;
@@ -78,6 +80,8 @@ export function AssistantWidget({
   const inputRef = useRef<HTMLInputElement>(null);
   const { loading, error, answer, suggestedActions, sendMessage, clearError, reset } =
     useAssistant(tenantId);
+  const { nudges, submitting, requestUpgrade } = useAiNudges(tenantId);
+  const blockNudge = nudges.find((nudge) => nudge.severity === 'BLOCK');
 
   // Focus input when expanded
   useEffect(() => {
@@ -88,7 +92,7 @@ export function AssistantWidget({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim()) return;
+    if (!message.trim() || blockNudge) return;
 
     const msg = message;
     setMessage('');
@@ -147,6 +151,31 @@ export function AssistantWidget({
 
           {/* Content */}
           <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
+            {blockNudge && (
+              <div className="p-3 rounded border border-red-200 bg-red-50">
+                <p className="text-sm font-semibold text-red-900">{blockNudge.title}</p>
+                <p className="text-sm text-red-800 mt-1">{blockNudge.message}</p>
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <button
+                    type="button"
+                    className="px-3 py-1.5 rounded text-sm bg-white border border-red-300 text-red-700 disabled:opacity-60"
+                    disabled={submitting}
+                    onClick={() => {
+                      void requestUpgrade();
+                    }}
+                  >
+                    Solicitar upgrade
+                  </button>
+                  <Link
+                    href={`/${tenantId}/support?topic=ai-limit`}
+                    className="px-3 py-1.5 rounded text-sm bg-white border border-red-300 text-red-700"
+                  >
+                    Contactar soporte
+                  </Link>
+                </div>
+              </div>
+            )}
+
             {/* Error Message */}
             {error && <ErrorMessage error={error} onDismiss={clearError} />}
 
@@ -185,13 +214,13 @@ export function AssistantWidget({
                 type="text"
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Ask me anything..."
-                disabled={loading}
+                placeholder={blockNudge ? 'IA pausada por limite mensual' : 'Ask me anything...'}
+                disabled={loading || Boolean(blockNudge)}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={loading || !message.trim()}
+                disabled={loading || !message.trim() || Boolean(blockNudge)}
                 className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition disabled:opacity-50"
               >
                 {loading ? '...' : 'Send'}

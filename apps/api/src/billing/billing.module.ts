@@ -7,6 +7,8 @@ import { RequireFeatureGuard } from './require-feature.guard';
 import { SubscriptionService } from './subscription.service';
 import { PaymentService } from './payment.service';
 import { AdminPaymentController } from './admin.payment.controller';
+import { BillingController } from './billing.controller';
+import { BillingService } from './billing.service';
 
 /**
  * BillingModule: Plan entitlements and feature flags management
@@ -37,13 +39,14 @@ import { AdminPaymentController } from './admin.payment.controller';
  */
 @Module({
   imports: [PrismaModule, AuditModule],
-  controllers: [AdminPaymentController],
+  controllers: [AdminPaymentController, BillingController],
   providers: [
     PlanEntitlementsService,
     PlanFeaturesService,
     RequireFeatureGuard,
     SubscriptionService,
     PaymentService,
+    BillingService,
   ],
   exports: [
     PlanEntitlementsService,
@@ -51,6 +54,7 @@ import { AdminPaymentController } from './admin.payment.controller';
     RequireFeatureGuard,
     SubscriptionService,
     PaymentService,
+    BillingService,
   ],
 })
 export class BillingModule {}

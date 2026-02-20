@@ -110,6 +110,7 @@ model Tenant {
   monthlyAiUsage        TenantMonthlyAiUsage[]
   aiTemplates           AiTemplate[]
   aiActionEvents        AiActionEvent[]
+  planChangeRequests    PlanChangeRequest[]
 }
 
 model User {
@@ -131,6 +132,7 @@ model User {
   supportTicketComments SupportTicketComment[] @relation("SupportTicketCommentAuthor")
   notifications         Notification[]         @relation("UserNotifications")
   aiInteractionLogs     AiInteractionLog[]
+  reviewedPlanRequests  PlanChangeRequest[]    @relation("PlanRequestReviewedBy")
 }
 
 model Membership {
@@ -153,6 +155,7 @@ model Membership {
   invitationsSent       Invitation[]          @relation("InvitationsSent")
   aiInteractionLogs     AiInteractionLog[]
   aiActionEvents        AiActionEvent[]
+  planChangeRequests    PlanChangeRequest[]   @relation("PlanRequestRequestedBy")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -389,6 +392,10 @@ enum AuditAction {
   AI_LIMIT_BLOCKED      // 100% exceeded (budget or calls)
   AI_TENANT_OVERRIDE_UPDATED // super-admin changed a tenant override
   AI_PLAN_CAPS_CHANGED  // plan was changed (AI caps part of plan change)
+  PLAN_CHANGE_REQUESTED
+  PLAN_CHANGE_REQUEST_CANCELED
+  PLAN_CHANGE_APPROVED
+  PLAN_CHANGE_REJECTED
 }
 
 model AuditLog {
@@ -465,6 +472,7 @@ model BillingPlan {
   updatedAt DateTime @updatedAt
 
   subscriptions Subscription[]
+  planChangeRequests PlanChangeRequest[] @relation("PlanChangeRequestedPlan")
 
   @@index([planId])
 }
@@ -491,6 +499,26 @@ model Subscription {
   @@index([tenantId])
   @@index([planId])
   @@index([status])
+}
+
+model PlanChangeRequest {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  requestedPlanId       String
+  status                String   @default("PENDING")
+  requestedByMembershipId String
+  reviewedByUserId      String?
+  note                  String?
+  reviewReason          String?
+  createdAt             DateTime @default(now())
+  reviewedAt            DateTime?
+
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedPlan       BillingPlan @relation("PlanChangeRequestedPlan", fields: [requestedPlanId], references: [id], onDelete: Restrict)
+  requestedByMembership Membership @relation("PlanRequestRequestedBy", fields: [requestedByMembershipId], references: [id], onDelete: Restrict)
+  reviewedByUser      User?       @relation("PlanRequestReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
 }
 
 model SubscriptionEvent {

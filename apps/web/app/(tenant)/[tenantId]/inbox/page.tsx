@@ -11,6 +11,8 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import Badge from '@/shared/components/ui/Badge';
+import { useAiNudges } from '@/features/assistant/hooks/useAiNudges';
+import { AiNudgesPanel } from '@/features/assistant/components/limits/AiNudgesPanel';
 
 interface InboxPageProps {
   params: {
@@ -31,6 +33,13 @@ export default function InboxPage({ params }: InboxPageProps) {
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(
     context?.activeBuildingId || null,
   );
+  const {
+    nudges,
+    loading: nudgesLoading,
+    submitting: nudgesSubmitting,
+    dismiss,
+    requestUpgrade,
+  } = useAiNudges(tenantId);
 
   if (status === 'loading') {
     return <div className="p-6">Carregando...</div>;
@@ -86,6 +95,14 @@ export default function InboxPage({ params }: InboxPageProps) {
           onRetry={refetch}
         />
       )}
+
+      <AiNudgesPanel
+        nudges={nudges}
+        loading={nudgesLoading}
+        submitting={nudgesSubmitting}
+        onDismiss={dismiss}
+        onRequestUpgrade={requestUpgrade}
+      />
 
       {/* Loading state */}
       {loading && !summary ? (
