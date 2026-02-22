@@ -1,6 +1,8 @@
 # BuildingOS – Status
 
-Fecha: 2026-02-10 (America/Argentina/Buenos_Aires)
+Fecha: 2026-02-22
+
+---
 
 ## Contexto
 - Países objetivo: VE / AR / CO
@@ -11,42 +13,60 @@ Fecha: 2026-02-10 (America/Argentina/Buenos_Aires)
 ---
 
 ## Slice actual
-- NOW: Slice 0 — Core Platform (Tenancy + RBAC + Contracts)
+NOW: Slice 0 — Core Platform (Tenancy + RBAC + Auth)  
+Estado: 🟨 Parcialmente implementado
 
-### Definition of Done del Slice 0
+**Estado Engram:**
+- Arquitectura multi-tenant definida
+- RBAC backend definido
+- Dominio jerárquico definido
+- Backend NestJS + Prisma parcialmente implementado
+- Frontend aún usa mocks/localStorage en partes
+
+---
+
+## Definition of Done del Slice 0
 - Auth end-to-end
-- Tenant context en cada request (tenantId)
+- Tenant context en cada request
 - Membership + roles aplicados
-- Scoping por `tenant_id` en cada query de dominio
+- Scoping por tenant_id en queries
 - Seed tenant demo + owner demo
 
 ---
 
-## Estado por área (marcar ✅/⬜/🟨)
+## Estado por área
 
 ### Plataforma / Infra
-- Docker Compose (Postgres): ⬜
-- Docker Compose (Redis): ⬜
-- MinIO local (S3 compatible): ⬜
-- Prisma conectado a Postgres: ⬜
-- Migraciones base corriendo: ⬜
+- Docker Compose (Postgres): 🟨 Definido
+- Docker Compose (Redis): 🟨 Definido
+- MinIO local (S3): 🟨 Definido
+- Prisma conectado a Postgres: 🟨 Parcial
+- Migraciones base corriendo: 🟨 Parcial
+
+---
 
 ### Auth / Tenancy / RBAC
-- Auth (login + obtener user): ⬜
-- TenantMembership (user↔tenant + roles): ⬜
-- Resolución tenant activo (ruta/header): ⬜
-- Guard de tenancy (bloquea sin tenantId): ⬜
-- Enforce scoping por tenant (repo/service): ⬜
-- Política cross-tenant (404 vs 403) definida e implementada: ⬜
-- Packages/contracts (DTOs/enums compartidos): ⬜
-- Packages/permissions (matriz + helpers): ⬜
+- Auth backend (login básico): 🟨 Parcial
+- TenantMembership model: 🟨 Parcial
+- Resolución tenant activo: ⬜
+- Guard de tenancy: ⬜
+- Enforce scoping por tenant: ⬜
+- RBAC backend enforced: 🟨 Definido
+- Packages/contracts: 🟨 Definido
+- Packages/permissions: 🟨 Definido
 
-### Dominio (aún no)
-- Property + PropertySettings: ⬜
-- Units: ⬜
+---
+
+### Dominio
+- Domain hierarchy definida: ✅
+- Models implementados: ⬜
+- Property: ⬜
+- Unit: ⬜
 - UnitMembership: ⬜
 
-### Pagos MVP (aún no)
+---
+
+### Pagos MVP
 - Config cuentas bancarias: ⬜
 - PaymentSubmission + upload: ⬜
 - Review approve/reject: ⬜
@@ -55,13 +75,18 @@ Fecha: 2026-02-10 (America/Argentina/Buenos_Aires)
 ---
 
 ## Bloqueos
-- (ninguno)
+- Ninguno activo
 
-## Decisiones pendientes (si aplica)
-- Política cross-tenant: ¿404 recomendado o 403?
-- Forma final de roles: array vs tabla join (si no está definido aún)
+---
 
-## Próximos pasos (1–3)
-1) Levantar infra local (Postgres/Redis/MinIO) + Prisma conectado
-2) Implementar modelos core (Tenant, User, TenantMembership)
-3) Implementar guards: auth + tenant context + roles
+## Decisiones pendientes
+- Política cross-tenant: 404 vs 403
+- Forma final de roles: array vs join table
+
+---
+
+## Próximos pasos (Engram-aligned)
+1. Conectar frontend CRUD al backend real
+2. Implementar Unit + UnitMembership
+3. Guards: tenant context + RBAC
+4. Scoping por tenant en repos/services

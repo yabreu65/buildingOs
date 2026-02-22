@@ -22,11 +22,18 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
   return value.toLowerCase() === 'true';
 }
 
+function emptyStringToUndefined(value: unknown): unknown {
+  if (typeof value === 'string' && value.trim() === '') {
+    return undefined;
+  }
+  return value;
+}
+
 /**
  * Zod schema for environment validation
  * Split by env to enforce different requirements
  */
-const createConfigSchema = (nodeEnv: string) => {
+export const createConfigSchema = (nodeEnv: string) => {
   const isProduction = nodeEnv === 'production';
   const isStaging = nodeEnv === 'staging';
 
@@ -113,25 +120,35 @@ const createConfigSchema = (nodeEnv: string) => {
       .default('BuildingOS <no-reply@buildingos.local>'),
 
     // SMTP (conditional on MAIL_PROVIDER=smtp)
-    SMTP_HOST: z.string().optional(),
-    SMTP_PORT: z.coerce.number().int().positive().optional(),
-    SMTP_USER: z.string().optional(),
-    SMTP_PASS: z.string().optional(),
+    SMTP_HOST: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    SMTP_PORT: z.preprocess(
+      emptyStringToUndefined,
+      z.coerce.number().int().positive().optional(),
+    ),
+    SMTP_USER: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    SMTP_PASS: z.preprocess(emptyStringToUndefined, z.string().optional()),
 
     // Resend (conditional on MAIL_PROVIDER=resend)
     RESEND_API_KEY: z.string().optional(),
 
     // Redis (optional, for queue)
-    REDIS_URL: z
-      .string()
-      .url('REDIS_URL must be a valid URL')
-      .optional(),
+    REDIS_URL: z.preprocess(
+      emptyStringToUndefined,
+      z
+        .string()
+        .url('REDIS_URL must be a valid URL')
+        .startsWith('redis://', 'REDIS_URL must start with redis://')
+        .optional(),
+    ),
 
     // Sentry (optional)
-    SENTRY_DSN: z
-      .string()
-      .url('SENTRY_DSN must be a valid URL')
-      .optional(),
+    SENTRY_DSN: z.preprocess(
+      emptyStringToUndefined,
+      z
+        .string()
+        .url('SENTRY_DSN must be a valid URL')
+        .optional(),
+    ),
 
     // Feature flags
     FEATURE_PORTAL_RESIDENT: z
@@ -140,6 +157,23 @@ const createConfigSchema = (nodeEnv: string) => {
     FEATURE_PAYMENTS_MVP: z
       .string()
       .transform((v) => parseBoolean(v, true)),
+  }).superRefine((data, ctx) => {
+    if (data.MAIL_PROVIDER === 'smtp') {
+      if (!data.SMTP_HOST) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SMTP_HOST'],
+          message: 'SMTP_HOST is required when MAIL_PROVIDER=smtp',
+        });
+      }
+      if (!data.SMTP_PORT) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SMTP_PORT'],
+          message: 'SMTP_PORT is required when MAIL_PROVIDER=smtp',
+        });
+      }
+    }
   });
 };
 
@@ -257,15 +291,6 @@ function validateConditionalConfig(config: any, nodeEnv: NodeEnv): void {
   if (nodeEnv === 'staging') {
     if (config.JWT_SECRET.length < 48) {
       errors.push('JWT_SECRET in staging must be at least 48 characters');
-    }
-  }
-
-  // Email validation: if provider is smtp, require SMTP settings
-  if (config.MAIL_PROVIDER === 'smtp') {
-    if (!config.SMTP_HOST || !config.SMTP_PORT || !config.SMTP_USER || !config.SMTP_PASS) {
-      errors.push(
-        'MAIL_PROVIDER=smtp requires: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS',
-      );
     }
   }
 
