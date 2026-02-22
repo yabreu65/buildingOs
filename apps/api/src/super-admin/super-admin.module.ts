@@ -6,6 +6,7 @@ import { TenancyModule } from '../tenancy/tenancy.module';
 import { BillingModule } from '../billing/billing.module';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
+import { AiCapsService } from './ai-caps.service';
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { SuperAdminService } from './super-admin.service';
     }),
   ],
   controllers: [SuperAdminController],
-  providers: [SuperAdminService],
+  providers: [SuperAdminService, AiCapsService],
 })
 export class SuperAdminModule {}

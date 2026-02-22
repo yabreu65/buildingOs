@@ -15,14 +15,14 @@ import {
   UseGuards,
   Request,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { RequireFeature, RequireFeatureGuard } from '../billing/require-feature.guard';
 import { AiTemplateService, TemplateRunRequest, TemplateRunResponse } from './template.service';
 
 @Controller('assistant')
-@UseGuards(JwtAuthGuard, TenantAccessGuard, RequireFeatureGuard)
+@UseGuards(JwtAuthGuard, RequireFeatureGuard)
 export class AiTemplateController {
   constructor(private readonly templateService: AiTemplateService) {}
 
@@ -46,10 +46,14 @@ export class AiTemplateController {
     @Request() req?: any,
   ) {
     const tenantId = req.user?.activeTenantId || req.headers['x-tenant-id'];
-    const userRoles = req.user?.memberships?.find((m: any) => m.tenantId === tenantId)?.roles || [];
+    const membership = req.user?.memberships?.find((m: any) => m.tenantId === tenantId);
+    const userRoles = membership?.roles || [];
 
     if (!tenantId) {
       throw new BadRequestException('tenantId is required (via X-Tenant-Id or session)');
+    }
+    if (!membership) {
+      throw new ForbiddenException('No access to tenant');
     }
 
     const scopeType = scope || undefined;
@@ -120,6 +124,9 @@ export class AiTemplateController {
     // Get user roles for this tenant
     const membership = memberships.find((m: any) => m.tenantId === tenantId);
     const userRoles = membership?.roles || [];
+    if (!membership) {
+      throw new ForbiddenException('No access to tenant');
+    }
 
     return this.templateService.runTemplate(
       tenantId,

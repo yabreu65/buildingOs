@@ -115,6 +115,108 @@ async function main() {
   ]);
   console.log(`✅ Created ${plans.length} billing plans`);
 
+  // ============================================================================
+  // AI TEMPLATES (MVP)
+  // Idempotent upsert by unique key. Never deletes existing templates.
+  // ============================================================================
+  const templateSeeds = [
+    {
+      key: "INBOX_PRIORITIZE",
+      name: "Priorizar bandeja",
+      description: "Resume y prioriza pendientes de inbox con foco operativo.",
+      category: "inbox",
+      promptSystem:
+        "Eres un asistente operativo para administracion de edificios. Prioriza por urgencia, impacto y vencimientos.",
+      promptUser:
+        "Analiza los items de inbox y devuelve top prioridades con acciones sugeridas. Contexto: {{context}}",
+      maxOutputTokens: 280,
+      requiredPermissions: ["tickets.read", "payments.read", "communications.read"],
+    },
+    {
+      key: "TICKET_REPLY_DRAFT",
+      name: "Borrador respuesta ticket",
+      description: "Genera respuesta profesional para tickets de mantenimiento.",
+      category: "tickets",
+      promptSystem:
+        "Redacta respuestas claras, empaticas y accionables para tickets de soporte y mantenimiento.",
+      promptUser:
+        "Escribe un borrador de respuesta para el ticket. Titulo: {{ticket_title}}. Descripcion: {{ticket_description}}. Ultimo comentario: {{last_comment}}.",
+      maxOutputTokens: 260,
+      requiredPermissions: ["tickets.read", "tickets.write"],
+    },
+    {
+      key: "COMMUNICATION_DRAFT_GENERAL",
+      name: "Comunicado general",
+      description: "Crea borrador de comunicado general para residentes.",
+      category: "communications",
+      promptSystem:
+        "Redacta comunicados claros, breves y orientados a accion para residentes.",
+      promptUser:
+        "Genera un comunicado general sobre: {{topic}}. Audiencia: {{audience}}. Tono: {{tone}}.",
+      maxOutputTokens: 300,
+      requiredPermissions: ["communications.write"],
+    },
+    {
+      key: "COMMUNICATION_PAYMENT_REMINDER",
+      name: "Recordatorio de pago",
+      description: "Genera recordatorio de pago con tono cordial y fecha limite.",
+      category: "finance",
+      promptSystem:
+        "Redacta recordatorios de pago claros y respetuosos, incluyendo fecha limite y canales de pago.",
+      promptUser:
+        "Crea un recordatorio de pago para la unidad {{unit_code}}. Monto: {{amount}}. Vencimiento: {{due_date}}. Contexto adicional: {{context}}.",
+      maxOutputTokens: 240,
+      requiredPermissions: ["payments.read", "communications.write"],
+    },
+    {
+      key: "FINANCE_EXPLAIN_BALANCE",
+      name: "Explicar balance",
+      description: "Explica estado de cuenta y variaciones para facilitar cobranza.",
+      category: "finance",
+      promptSystem:
+        "Explica balances financieros en lenguaje simple, destacando deudas, pagos y proximos vencimientos.",
+      promptUser:
+        "Explica el balance de la unidad {{unit_code}} con estos datos: {{balance_data}}. Incluye recomendaciones practicas.",
+      maxOutputTokens: 320,
+      requiredPermissions: ["payments.read", "reports.read"],
+    },
+  ];
+
+  await Promise.all(
+    templateSeeds.map((template) =>
+      prisma.aiTemplate.upsert({
+        where: { key: template.key },
+        update: {
+          name: template.name,
+          description: template.description,
+          scopeType: "TENANT",
+          requiredPermissions: template.requiredPermissions,
+          enabledByDefault: true,
+          promptSystem: template.promptSystem,
+          promptUser: template.promptUser,
+          maxOutputTokens: template.maxOutputTokens,
+          category: template.category,
+          isActive: true,
+        },
+        create: {
+          tenantId: null, // global template
+          key: template.key,
+          name: template.name,
+          description: template.description,
+          scopeType: "TENANT",
+          requiredPermissions: template.requiredPermissions,
+          enabledByDefault: true,
+          promptSystem: template.promptSystem,
+          promptUser: template.promptUser,
+          maxOutputTokens: template.maxOutputTokens,
+          category: template.category,
+          isActive: true,
+        },
+      }),
+    ),
+  );
+  console.log(`✅ Upserted ${templateSeeds.length} AI templates`);
+
   // 1) Tenants (idempotente por name)
   const tenantAdmin = await prisma.tenant.upsert({
     where: { name: "Admin Demo" },

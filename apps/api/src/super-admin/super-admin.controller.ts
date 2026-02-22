@@ -11,12 +11,14 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
 import { TenancyStatsService } from '../tenancy/tenancy-stats.service';
 import { BillingService } from '../billing/billing.service';
+import { AiCapsService } from './ai-caps.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
@@ -24,6 +26,7 @@ import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
 import { StartImpersonationDto } from './dto/start-impersonation.dto';
 import { ListSuperAdminPlanChangeRequestsDto } from './dto/list-super-admin-plan-change-requests.dto';
 import { RejectPlanChangeRequestDto } from './dto/reject-plan-change-request.dto';
+import { Response } from 'express';
 
 export interface RequestWithUser extends Request {
   user?: {
@@ -48,10 +51,15 @@ export interface RequestWithUser extends Request {
 @Controller('api/super-admin')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 export class SuperAdminController {
+  private readonly aiCapsCanonicalPath = '/super-admin/tenants/:tenantId/ai/caps';
+  // 30 days de compatibilidad desde 2026-02-22
+  private readonly aiCapsAliasSunset = '2026-03-24';
+
   constructor(
     private readonly service: SuperAdminService,
     private readonly tenancyStatsService: TenancyStatsService,
     private readonly billingService: BillingService,
+    private readonly aiCapsService: AiCapsService,
   ) {}
 
   /**
@@ -214,8 +222,12 @@ export class SuperAdminController {
    * SECURITY: SuperAdminGuard
    */
   @Get('tenants/:tenantId/ai-overrides')
-  async getAiOverrides(@Param('tenantId') tenantId: string) {
-    return this.service.getAiOverrides(tenantId);
+  async getAiOverrides(
+    @Param('tenantId') tenantId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    this.setLegacyAiCapsDeprecationHeaders(res);
+    return this.aiCapsService.getAiCaps(tenantId);
   }
 
   /**
@@ -223,7 +235,7 @@ export class SuperAdminController {
    */
   @Get('tenants/:tenantId/ai/caps')
   async getAiCaps(@Param('tenantId') tenantId: string) {
-    return this.service.getAiOverrides(tenantId);
+    return this.aiCapsService.getAiCaps(tenantId);
   }
 
   /**
@@ -236,8 +248,10 @@ export class SuperAdminController {
     @Param('tenantId') tenantId: string,
     @Body() dto: UpdateAiOverrideDto,
     @Request() req: RequestWithUser,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    await this.service.updateAiOverrides(tenantId, dto, req.user.id);
+    this.setLegacyAiCapsDeprecationHeaders(res);
+    await this.aiCapsService.updateAiCaps(tenantId, dto, req.user.id);
     return { message: 'AI overrides updated successfully' };
   }
 
@@ -250,7 +264,7 @@ export class SuperAdminController {
     @Body() dto: UpdateAiOverrideDto,
     @Request() req: RequestWithUser,
   ) {
-    await this.service.updateAiOverrides(tenantId, dto, req.user.id);
+    await this.aiCapsService.updateAiCaps(tenantId, dto, req.user.id);
     return { message: 'AI caps updated successfully' };
   }
 
@@ -286,5 +300,11 @@ export class SuperAdminController {
     @Body() body: RejectPlanChangeRequestDto,
   ) {
     return this.billingService.rejectPlanChangeRequest(req.user, id, body.reason);
+  }
+
+  private setLegacyAiCapsDeprecationHeaders(res: Response): void {
+    res.setHeader('Deprecation', 'true');
+    res.setHeader('Sunset', this.aiCapsAliasSunset);
+    res.setHeader('Link', `<${this.aiCapsCanonicalPath}>; rel=\"successor-version\"`);
   }
 }

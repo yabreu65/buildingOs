@@ -120,7 +120,7 @@ export const analyticsApi = {
   async getAiOverrides(tenantId: string) {
     if (!tenantId) throw new Error('tenantId required');
     return apiClient({
-      path: `/super-admin/tenants/${tenantId}/ai-overrides`,
+      path: `/super-admin/tenants/${tenantId}/ai/caps`,
       method: 'GET',
     });
   },
@@ -131,7 +131,7 @@ export const analyticsApi = {
   async updateAiOverrides(tenantId: string, dto: any) {
     if (!tenantId) throw new Error('tenantId required');
     return apiClient({
-      path: `/super-admin/tenants/${tenantId}/ai-overrides`,
+      path: `/super-admin/tenants/${tenantId}/ai/caps`,
       method: 'PATCH',
       body: dto,
     });

@@ -10,7 +10,6 @@ import { AuditService } from '../audit/audit.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
-import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
 import { AuditAction, BillingPlanId } from '@prisma/client';
 
 export interface TenantResponse {
@@ -37,25 +36,6 @@ export interface AuditLogResponse {
   entityId: string;
   metadata: any;
   createdAt: string;
-}
-
-// Phase 13: AI override response
-export interface AiOverrideResponse {
-  planCaps: {
-    budgetCents: number;
-    callsLimit: number;
-    allowBigModel: boolean;
-  };
-  overrides: {
-    monthlyBudgetCents: number | null;
-    monthlyCallsLimit: number | null;
-    allowBigModelOverride: boolean | null;
-  };
-  effectiveLimits: {
-    budgetCents: number;
-    callsLimit: number;
-    allowBigModel: boolean;
-  };
 }
 
 @Injectable()
@@ -585,116 +565,4 @@ export class SuperAdminService {
     };
   }
 
-  /**
-   * Phase 13: Get AI overrides for a tenant
-   * Returns: plan caps + current overrides + effective limits
-   */
-  async getAiOverrides(tenantId: string): Promise<AiOverrideResponse> {
-    // Get subscription with plan
-    const subscription = await this.prisma.subscription.findUnique({
-      where: { tenantId },
-      include: { plan: true },
-    });
-
-    if (!subscription) {
-      throw new NotFoundException(`No subscription found for tenant "${tenantId}"`);
-    }
-
-    const plan = subscription.plan;
-
-    // Get current budget (which may have overrides)
-    const budget = await this.prisma.tenantAiBudget.findUnique({
-      where: { tenantId },
-    });
-
-    // Resolve effective limits
-    const effectiveBudget = budget?.monthlyBudgetCents ?? plan.aiBudgetCents;
-    const effectiveCallsLimit = budget?.monthlyCallsLimit ?? plan.aiCallsMonthlyLimit;
-    const effectiveBigModel = budget?.allowBigModelOverride ?? plan.aiAllowBigModel;
-
-    return {
-      planCaps: {
-        budgetCents: plan.aiBudgetCents,
-        callsLimit: plan.aiCallsMonthlyLimit,
-        allowBigModel: plan.aiAllowBigModel,
-      },
-      overrides: {
-        monthlyBudgetCents: budget?.monthlyBudgetCents ?? null,
-        monthlyCallsLimit: budget?.monthlyCallsLimit ?? null,
-        allowBigModelOverride: budget?.allowBigModelOverride ?? null,
-      },
-      effectiveLimits: {
-        budgetCents: effectiveBudget,
-        callsLimit: effectiveCallsLimit,
-        allowBigModel: effectiveBigModel,
-      },
-    };
-  }
-
-  /**
-   * Phase 13: Update AI overrides for a tenant
-   * null values reset the override to plan defaults
-   */
-  async updateAiOverrides(
-    tenantId: string,
-    dto: UpdateAiOverrideDto,
-    actorUserId: string,
-  ): Promise<void> {
-    // Verify tenant exists
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-    });
-
-    if (!tenant) {
-      throw new NotFoundException(`Tenant with ID "${tenantId}" not found`);
-    }
-
-    // Get current budget or create new one
-    const before = await this.prisma.tenantAiBudget.findUnique({
-      where: { tenantId },
-    });
-
-    // Prepare update data
-    const updateData: any = {};
-    if (dto.monthlyBudgetCents !== undefined) {
-      updateData.monthlyBudgetCents = dto.monthlyBudgetCents;
-    }
-    if (dto.monthlyCallsLimit !== undefined) {
-      updateData.monthlyCallsLimit = dto.monthlyCallsLimit;
-    }
-    if (dto.allowBigModelOverride !== undefined) {
-      updateData.allowBigModelOverride = dto.allowBigModelOverride;
-    }
-
-    // Update or create budget
-    const after = await this.prisma.tenantAiBudget.upsert({
-      where: { tenantId },
-      update: updateData,
-      create: {
-        tenantId,
-        ...updateData,
-      },
-    });
-
-    // Audit the change
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId,
-      action: AuditAction.AI_TENANT_OVERRIDE_UPDATED,
-      entityType: 'TenantAiBudget',
-      entityId: after.id,
-      metadata: {
-        before: {
-          monthlyBudgetCents: before?.monthlyBudgetCents,
-          monthlyCallsLimit: before?.monthlyCallsLimit,
-          allowBigModelOverride: before?.allowBigModelOverride,
-        },
-        after: {
-          monthlyBudgetCents: after.monthlyBudgetCents,
-          monthlyCallsLimit: after.monthlyCallsLimit,
-          allowBigModelOverride: after.allowBigModelOverride,
-        },
-      },
-    });
-  }
 }
