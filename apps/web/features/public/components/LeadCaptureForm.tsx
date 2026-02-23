@@ -59,7 +59,7 @@ export function LeadCaptureForm() {
   const {
     register,
     handleSubmit,
-    formState: { errors, isValid },
+    formState: { errors, isValid, isValidating },
     reset,
     watch,
     setValue,
@@ -67,6 +67,13 @@ export function LeadCaptureForm() {
     resolver: zodResolver(leadFormSchema),
     mode: 'onChange',
   });
+
+  // Debug: log validation errors
+  React.useEffect(() => {
+    if (Object.keys(errors).length > 0) {
+      console.log('🔴 Validation errors:', errors);
+    }
+  }, [errors]);
 
   // Check rate limiting (client-side)
   const checkRateLimit = useCallback((): boolean => {
@@ -112,19 +119,34 @@ export function LeadCaptureForm() {
 
     try {
       // Parse number fields
+      const buildingsCountValue = data.buildingsCount
+        ? parseInt(String(data.buildingsCount), 10)
+        : undefined;
+      const unitsEstimateValue = parseInt(String(data.unitsEstimate), 10);
+
+      // Validate numbers
+      if (isNaN(unitsEstimateValue) || unitsEstimateValue < 1) {
+        throw new Error('Units estimate must be a number greater than 0');
+      }
+      if (buildingsCountValue !== undefined && (isNaN(buildingsCountValue) || buildingsCountValue < 1)) {
+        throw new Error('Buildings count must be a number greater than 0');
+      }
+
       const submitData = {
         fullName: data.fullName,
         email: data.email,
         phoneWhatsapp: data.phoneWhatsapp || undefined,
         tenantType: data.tenantType,
-        buildingsCount: data.buildingsCount ? parseInt(String(data.buildingsCount), 10) : undefined,
-        unitsEstimate: parseInt(String(data.unitsEstimate), 10),
+        buildingsCount: buildingsCountValue,
+        unitsEstimate: unitsEstimateValue,
         countryCity: data.countryCity || undefined,
         message: data.message || undefined,
         source: 'lead-form-web',
       };
 
-      await submitLead(submitData);
+      console.log('📤 Submitting lead:', submitData);
+      const response = await submitLead(submitData);
+      console.log('✅ Lead submitted successfully:', response);
 
       // Track analytics event
       if (typeof window !== 'undefined' && window.gtag) {
@@ -145,7 +167,16 @@ export function LeadCaptureForm() {
         error instanceof Error ? error.message : 'Failed to submit lead. Please try again.';
       setSubmitError(message);
       setSubmitStatus('error');
-      console.error('Lead submission error:', error);
+      console.error('❌ Lead submission error:', error);
+
+      // Log detailed error info for debugging
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -342,15 +373,23 @@ export function LeadCaptureForm() {
           {/* Submit Button */}
           <Button
             type="submit"
-            disabled={isSubmitting || !isValid}
+            disabled={isSubmitting || !isValid || isValidating}
             className="w-full"
             size="md"
+            title={!isValid ? 'Please fill all required fields correctly' : ''}
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Submitting...
               </>
+            ) : isValidating ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Validating...
+              </>
+            ) : !isValid ? (
+              'Complete the form to submit'
             ) : (
               'Submit Lead'
             )}

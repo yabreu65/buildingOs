@@ -71,6 +71,11 @@ enum LeadStatus {
   DISQUALIFIED
 }
 
+enum LeadIntent {
+  DEMO      // "Solicitar demo" from landing page
+  CONTACT   // "Get started" from contact/signup flow
+}
+
 model Tenant {
   id                    String                 @id @default(cuid())
   name                  String                 @unique
@@ -1372,7 +1377,8 @@ model Lead {
   unitsEstimate         Int
   location              String?   // "Country, City"
   message               String?
-  source                String?   // "pricing-page", "contact-form", etc.
+  source                String?   // "landing", "contact-form", etc.
+  intent                LeadIntent @default(CONTACT) // DEMO or CONTACT
   status                LeadStatus @default(NEW)
   contactedAt           DateTime?
   notes                 String?   // Internal notes from sales
@@ -1384,6 +1390,7 @@ model Lead {
 
   @@index([email])
   @@index([status])
+  @@index([intent])
   @@index([createdAt])
   @@index([convertedTenantId])
 }

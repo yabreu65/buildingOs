@@ -1,5 +1,14 @@
--- AlterEnum
-ALTER TYPE "AuditAction" ADD VALUE 'AI_ACTION_CLICKED';
+-- AlterEnum - only add if not already exists
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum
+    WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = 'AuditAction')
+    AND enumlabel = 'AI_ACTION_CLICKED'
+  ) THEN
+    ALTER TYPE "AuditAction" ADD VALUE 'AI_ACTION_CLICKED';
+  END IF;
+END $$;
 
 -- AlterTable
 ALTER TABLE "AiInteractionLog" ADD COLUMN "cacheHit" BOOLEAN NOT NULL DEFAULT false,

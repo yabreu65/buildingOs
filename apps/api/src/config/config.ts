@@ -131,6 +131,10 @@ export const createConfigSchema = (nodeEnv: string) => {
     // Resend (conditional on MAIL_PROVIDER=resend)
     RESEND_API_KEY: z.string().optional(),
 
+    // Marketing emails
+    SALES_TEAM_EMAIL: z.preprocess(emptyStringToUndefined, z.string().email().optional()),
+    INFO_EMAIL: z.preprocess(emptyStringToUndefined, z.string().email().optional()),
+
     // Redis (optional, for queue)
     REDIS_URL: z.preprocess(
       emptyStringToUndefined,
@@ -238,6 +242,8 @@ export function loadConfig(): AppConfig {
       smtpUser: parsed.SMTP_USER,
       smtpPass: parsed.SMTP_PASS,
       resendApiKey: parsed.RESEND_API_KEY,
+      salesTeamEmail: parsed.SALES_TEAM_EMAIL,
+      infoEmail: parsed.INFO_EMAIL,
 
       // Redis
       redisUrl: parsed.REDIS_URL,

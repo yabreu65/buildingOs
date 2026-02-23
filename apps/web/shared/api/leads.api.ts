@@ -10,6 +10,7 @@ export interface CreateLeadRequest {
   countryCity?: string;
   message?: string;
   source?: string;
+  intent?: 'DEMO' | 'CONTACT';
 }
 
 export interface LeadResponse {

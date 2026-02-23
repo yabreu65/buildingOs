@@ -1,5 +1,5 @@
 import React from 'react';
-import { LeadCaptureForm } from '@/features/public/components/LeadCaptureForm';
+import { UnifiedLeadForm } from '@/features/public/components/UnifiedLeadForm';
 
 export const metadata = {
   title: 'Contact Us | BuildingOS',
@@ -22,7 +22,13 @@ export default function ContactPage() {
         </div>
 
         {/* Form */}
-        <LeadCaptureForm />
+        <UnifiedLeadForm
+          intent="CONTACT"
+          title="Get Started"
+          subtitle="Tell us about your property and our team will get back to you within 24 hours."
+          successTitle="Thank You!"
+          successMessage="We've received your information and will contact you within 24 hours to discuss how BuildingOS can help your property."
+        />
 
         {/* Footer */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8 text-center">

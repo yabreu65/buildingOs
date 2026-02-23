@@ -49,7 +49,8 @@ export interface AppConfig {
   smtpUser?: string;
   smtpPass?: string;
   resendApiKey?: string;
-  salesTeamEmail?: string; // Email to notify when lead is submitted
+  salesTeamEmail?: string; // Email to notify on DEMO leads
+  infoEmail?: string; // Email to notify on CONTACT leads
 
   // Redis (optional, for queue/cache)
   redisUrl?: string;

@@ -22,7 +22,7 @@ export class LeadsService {
   /**
    * Create a new lead from marketing form submission
    * - Checks for email uniqueness
-   * - Sends notification email to sales team
+   * - Sends notification email based on intent (DEMO → sales@, CONTACT → info@)
    * - Logs audit event
    * - NO TENANT CREATION
    */
@@ -47,14 +47,15 @@ export class LeadsService {
         unitsEstimate: dto.unitsEstimate,
         location: dto.countryCity,
         message: dto.message,
-        source: dto.source,
+        source: dto.source || (dto.intent === 'DEMO' ? 'landing' : 'contact-form'),
+        intent: (dto.intent as any) || 'CONTACT',
         status: 'NEW',
       },
     });
 
-    // Send notification email to sales team (fire-and-forget)
-    void this.notifySalesTeam(lead).catch((error) => {
-      this.logger.error(`Failed to notify sales team about lead ${lead.id}: ${error.message}`);
+    // Send notification email to appropriate team (fire-and-forget)
+    void this.notifyTeam(lead).catch((error) => {
+      this.logger.error(`Failed to notify team about lead ${lead.id}: ${error.message}`);
     });
 
     // Log audit event (fire-and-forget)
@@ -69,6 +70,7 @@ export class LeadsService {
           email: lead.email,
           fullName: lead.fullName,
           tenantType: lead.tenantType,
+          intent: lead.intent,
           source: lead.source,
         },
       })
@@ -219,24 +221,42 @@ export class LeadsService {
   }
 
   /**
-   * Send notification email to sales team about new lead
+   * Send notification email to appropriate team based on lead intent
+   * DEMO → sales@, CONTACT → info@ (or sales@ if info@ not configured)
    */
-  private async notifySalesTeam(lead: any): Promise<void> {
-    const salesEmail = this.configService.getValue('salesTeamEmail');
-    if (!salesEmail || typeof salesEmail !== 'string') {
-      this.logger.warn('SALES_TEAM_EMAIL not configured, skipping sales notification');
+  private async notifyTeam(lead: any): Promise<void> {
+    // Get config values (may be undefined)
+    const salesTeamEmail = this.configService.getValue('salesTeamEmail') as string | undefined;
+    const infoEmail = this.configService.getValue('infoEmail') as string | undefined;
+
+    // Determine recipient email based on intent
+    let recipientEmail: string | undefined;
+
+    if (lead.intent === 'DEMO') {
+      recipientEmail = salesTeamEmail;
+    } else {
+      // CONTACT intent → try info@ first, fallback to sales@
+      recipientEmail = infoEmail || salesTeamEmail;
+    }
+
+    if (!recipientEmail) {
+      this.logger.warn(
+        `No email configured for lead intent ${lead.intent}, skipping notification`
+      );
       return;
     }
 
-    const subject = `New Lead: ${lead.fullName} (${lead.tenantType})`;
+    const intentLabel = lead.intent === 'DEMO' ? 'DEMO REQUEST' : 'CONTACT FORM';
+    const subject = `${intentLabel}: ${lead.fullName} (${lead.tenantType})`;
 
     const htmlBody = `
-      <h2>New Lead Submission</h2>
+      <h2>New ${intentLabel}</h2>
       <p><strong>Name:</strong> ${this.escapeHtml(lead.fullName)}</p>
       <p><strong>Email:</strong> <a href="mailto:${this.escapeHtml(lead.email)}">${this.escapeHtml(lead.email)}</a></p>
       ${lead.phone ? `<p><strong>Phone:</strong> ${this.escapeHtml(lead.phone)}</p>` : ''}
-      <p><strong>Tenant Type:</strong> ${lead.tenantType}</p>
-      ${lead.buildingsCount ? `<p><strong>Buildings Count:</strong> ${lead.buildingsCount}</p>` : ''}
+      <p><strong>Type:</strong> ${lead.tenantType}</p>
+      <p><strong>Intent:</strong> <strong style="color: ${lead.intent === 'DEMO' ? '#2563eb' : '#059669'}">${lead.intent}</strong></p>
+      ${lead.buildingsCount ? `<p><strong>Buildings:</strong> ${lead.buildingsCount}</p>` : ''}
       <p><strong>Units Estimate:</strong> ${lead.unitsEstimate}</p>
       ${lead.location ? `<p><strong>Location:</strong> ${this.escapeHtml(lead.location)}</p>` : ''}
       ${lead.source ? `<p><strong>Source:</strong> ${this.escapeHtml(lead.source)}</p>` : ''}
@@ -245,13 +265,17 @@ export class LeadsService {
           ? `<p><strong>Message:</strong></p><p>${this.escapeHtml(lead.message).replace(/\n/g, '<br>')}</p>`
           : ''
       }
-      <p><strong>Lead ID:</strong> ${lead.id}</p>
-      <p style="color: #999; font-size: 12px;">Submitted at: ${lead.createdAt.toISOString()}</p>
+      <p><strong>Lead ID:</strong> <code>${lead.id}</code></p>
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      <p style="color: #666; font-size: 12px;">
+        <a href="http://localhost:3000/super-admin/leads/${lead.id}">View in dashboard</a> |
+        Submitted: ${lead.createdAt.toISOString()}
+      </p>
     `;
 
     await this.emailService.sendEmail(
       {
-        to: salesEmail,
+        to: recipientEmail,
         subject,
         htmlBody,
         replyTo: lead.email,

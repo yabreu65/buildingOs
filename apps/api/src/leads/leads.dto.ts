@@ -38,7 +38,11 @@ export class CreateLeadDto {
 
   @IsOptional()
   @IsString()
-  source?: string; // "pricing-page", "contact-form", etc.
+  source?: string; // "landing", "contact-form", etc.
+
+  @IsOptional()
+  @IsEnum(['DEMO', 'CONTACT'])
+  intent?: 'DEMO' | 'CONTACT'; // Defaults to CONTACT
 }
 
 export class UpdateLeadDto {
