@@ -68,6 +68,12 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
               Overview
             </Link>
             <Link
+              href="/super-admin/leads"
+              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+            >
+              Leads
+            </Link>
+            <Link
               href="/super-admin/tenants"
               className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
             >
