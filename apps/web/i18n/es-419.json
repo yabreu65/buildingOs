@@ -222,13 +222,28 @@
     "edit": "Editar unidad",
     "delete": "Eliminar unidad",
     "view": "Ver unidad",
+    "createButton": "Crear unidad",
+    "updateButton": "Actualizar unidad",
+    "created": "Unidad creada exitosamente",
+    "updated": "Unidad actualizada exitosamente",
+    "deleted": "Unidad eliminada exitosamente",
     "label": "Número de unidad",
+    "labelPlaceholder": "Por ejemplo: Apartamento 101",
     "code": "Código",
+    "codePlaceholder": "Por ejemplo: 101",
     "type": "Tipo",
+    "types": {
+      "apartment": "Apartamento",
+      "office": "Oficina"
+    },
     "floor": "Piso",
     "occupancyStatus": "Estado de ocupación",
-    "occupancyOccupied": "Ocupada",
-    "occupancyVacant": "Vacía",
+    "statuses": {
+      "unknown": "Desconocido",
+      "occupied": "Ocupada",
+      "vacant": "Vacía"
+    },
+    "resident": "Residente",
     "residents": "Residentes",
     "owner": "Propietario",
     "tenant": "Inquilino",
@@ -237,12 +252,19 @@
     "email": "Correo electrónico",
     "createdAt": "Creado",
     "noUnits": "No hay unidades",
+    "emptyTitle": "Sin unidades",
+    "emptyDescription": "Agrega tu primera unidad para comenzar",
     "assignResident": "Asignar residente",
     "removeResident": "Remover residente",
     "addResident": "Agregar residente",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar esta unidad?",
     "accessDenied": "No tienes acceso a esta unidad",
-    "myTickets": "Mis solicitudes"
+    "myTickets": "Mis solicitudes",
+    "errors": {
+      "createFailed": "Error al crear unidad",
+      "updateFailed": "Error al actualizar unidad",
+      "deleteFailed": "Error al eliminar unidad"
+    }
   },
 
   "residents": {
@@ -347,7 +369,9 @@
     "cc": "Cc",
     "bcc": "Bcc",
     "subject": "Asunto",
+    "subjectPlaceholder": "Asunto del mensaje",
     "body": "Mensaje",
+    "bodyPlaceholder": "Escribe tu mensaje aquí...",
     "recipient": "Destinatario",
     "recipients": "Destinatarios",
     "selectRecipients": "Selecciona destinatarios",
@@ -358,14 +382,19 @@
     "unit": "Unidad",
     "sentAt": "Enviado",
     "noMessages": "No hay mensajes",
+    "emptyTitle": "Sin mensajes",
+    "emptyDescription": "No hay mensajes en tu bandeja de entrada",
     "success": "Mensaje enviado exitosamente",
-    "error": "Error al enviar mensaje"
+    "error": "Error al enviar mensaje",
+    "failed": "Error al enviar comunicación",
+    "sending": "Enviando..."
   },
 
   "documents": {
     "title": "Documentos",
     "list": "Lista de documentos",
     "upload": "Subir documento",
+    "uploadButton": "Subir",
     "download": "Descargar",
     "delete": "Eliminar",
     "preview": "Vista previa",
@@ -376,12 +405,17 @@
     "uploadedAt": "Fecha de subida",
     "category": "Categoría",
     "selectFile": "Selecciona archivo",
+    "selectCategory": "Selecciona categoría",
     "noDocuments": "No hay documentos",
+    "emptyTitle": "Sin documentos",
+    "emptyDescription": "Sube tu primer documento para comenzar",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar este documento?",
     "success": "Documento subido exitosamente",
     "error": "Error al subir documento",
+    "deleteFailed": "Error al eliminar documento",
     "fileTooLarge": "El archivo es demasiado grande",
-    "invalidFormat": "Formato de archivo inválido"
+    "invalidFormat": "Formato de archivo inválido",
+    "uploading": "Subiendo..."
   },
 
   "payments": {
@@ -390,7 +424,9 @@
     "pendingPayments": "Pagos pendientes",
     "paidPayments": "Pagos realizados",
     "record": "Registrar pago",
+    "recordButton": "Registrar pago",
     "amount": "Monto",
+    "amountPlaceholder": "0.00",
     "dueDate": "Fecha de vencimiento",
     "paidDate": "Fecha de pago",
     "status": "Estado",
@@ -406,8 +442,11 @@
     "notes": "Notas",
     "unit": "Unidad",
     "noCharges": "No hay cuotas",
+    "emptyTitle": "Sin pagos",
+    "emptyDescription": "No hay pagos registrados",
     "success": "Pago registrado exitosamente",
-    "error": "Error al registrar pago"
+    "error": "Error al registrar pago",
+    "recording": "Registrando..."
   },
 
   "finanzas": {
@@ -430,25 +469,53 @@
     "title": "Proveedores",
     "list": "Lista de proveedores",
     "create": "Nuevo proveedor",
+    "createButton": "Nuevo proveedor",
     "edit": "Editar proveedor",
+    "editButton": "Editar",
     "delete": "Eliminar proveedor",
+    "deleteButton": "Eliminar",
     "name": "Nombre",
+    "namePlaceholder": "Nombre del proveedor",
     "category": "Categoría",
+    "categoryPlaceholder": "Selecciona categoría",
     "phone": "Teléfono",
+    "phonePlaceholder": "+1 (555) 000-0000",
     "email": "Correo electrónico",
+    "emailPlaceholder": "email@proveedor.com",
     "website": "Sitio web",
+    "websitePlaceholder": "https://...",
     "address": "Dirección",
     "rating": "Calificación",
     "createdAt": "Creado",
     "noVendors": "No hay proveedores",
+    "emptyTitle": "Sin proveedores",
+    "emptyDescription": "Agrega tu primer proveedor",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar este proveedor?",
+    "success": "Proveedor creado exitosamente",
+    "error": "Error al crear proveedor",
     "quotes": {
       "title": "Cotizaciones",
+      "list": "Lista de cotizaciones",
+      "create": "Nueva cotización",
+      "createButton": "Nueva cotización",
+      "amount": "Monto",
+      "currency": "Moneda",
+      "status": "Estado",
+      "statusPending": "Pendiente",
+      "statusApproved": "Aprobada",
+      "statusRejected": "Rechazada",
       "created": "Cotización creada exitosamente",
       "empty": "Sin cotizaciones aún"
     },
     "workOrders": {
       "title": "Órdenes de trabajo",
+      "list": "Lista de órdenes de trabajo",
+      "create": "Nueva orden de trabajo",
+      "createButton": "Nueva orden",
+      "status": "Estado",
+      "statusPending": "Pendiente",
+      "statusInProgress": "En progreso",
+      "statusCompleted": "Completada",
       "created": "Orden de trabajo creada exitosamente",
       "empty": "Sin órdenes de trabajo aún"
     }
@@ -496,6 +563,7 @@
     "validate": "Validar",
     "validating": "Validando...",
     "submitting": "Enviando...",
+    "loading": "Cargando...",
     "nextStep": "Siguiente",
     "previousStep": "Anterior",
     "finish": "Finalizar"

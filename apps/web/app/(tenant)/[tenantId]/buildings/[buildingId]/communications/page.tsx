@@ -1,6 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
+import { t } from '@/i18n';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { CommunicationsList } from '@/features/buildings/components/communications';
 

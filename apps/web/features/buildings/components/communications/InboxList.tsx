@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { t } from '@/i18n';
 import Card from '@/shared/components/ui/Card';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import EmptyState from '@/shared/components/ui/EmptyState';

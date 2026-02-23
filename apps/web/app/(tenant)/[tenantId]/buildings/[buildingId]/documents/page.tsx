@@ -1,6 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
+import { t } from '@/i18n';
 import { useState } from 'react';
 import { BuildingBreadcrumb } from '@/features/buildings/components/BuildingBreadcrumb';
 import { BuildingSubnav } from '@/features/buildings/components/BuildingSubnav';

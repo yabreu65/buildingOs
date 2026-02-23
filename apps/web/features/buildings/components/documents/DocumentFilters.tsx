@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { t } from '@/i18n';
 import Button from '@/shared/components/ui/Button';
 import { DocumentCategory, DocumentVisibility } from '../../services/documents.api';
 

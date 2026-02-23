@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { routes } from '@/shared/lib/routes';
+import { t } from '@/i18n';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
@@ -84,14 +85,14 @@ export default function UnitsPage() {
       await createUnit(formData);
       setFormData({ code: '', label: '', unitType: 'APARTMENT', occupancyStatus: 'UNKNOWN' });
       setShowCreateForm(false);
-      toast('Unit created successfully', 'success');
+      toast(t('units.created'), 'success');
     } catch (err) {
       // Check if it's a plan limit error first
       if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
         toast(msg, type, duration);
       })) {
         // If not a plan limit error, handle as normal error
-        const message = err instanceof Error ? err.message : 'Failed to create unit';
+        const message = err instanceof Error ? err.message : t('units.errors.createFailed');
         setCreateError(message);
         toast(message, 'error');
       }
@@ -124,10 +125,10 @@ export default function UnitsPage() {
         unitType: editFormData.unitType,
         occupancyStatus: editFormData.occupancyStatus,
       });
-      toast('Unit updated successfully', 'success');
+      toast(t('units.updated'), 'success');
       setEditingUnit(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update unit';
+      const message = err instanceof Error ? err.message : t('units.errors.updateFailed');
       setEditError(message);
       toast(message, 'error');
     } finally {
@@ -141,10 +142,10 @@ export default function UnitsPage() {
     setIsDeleting(true);
     try {
       await deleteUnit(deleteConfirm.unitId);
-      toast('Unit deleted successfully', 'success');
+      toast(t('units.deleted'), 'success');
       setDeleteConfirm({ isOpen: false, unitId: null });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete unit';
+      const message = err instanceof Error ? err.message : t('units.errors.deleteFailed');
       toast(message, 'error');
     } finally {
       setIsDeleting(false);
@@ -243,7 +244,7 @@ export default function UnitsPage() {
                     setFormData({ ...formData, code: e.target.value })
                   }
                   className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., 101"
+                  placeholder={t('units.codePlaceholder')}
                 />
               </div>
               <div>
@@ -273,9 +274,9 @@ export default function UnitsPage() {
                   }
                   className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="APARTMENT">Apartment</option>
+                  <option value="APARTMENT">{t('units.types.apartment')}</option>
                   <option value="HOUSE">House</option>
-                  <option value="OFFICE">Office</option>
+                  <option value="OFFICE">{t('units.types.office')}</option>
                   <option value="STORAGE">Storage</option>
                   <option value="PARKING">Parking</option>
                   <option value="OTHER">Other</option>
@@ -292,9 +293,9 @@ export default function UnitsPage() {
                   }
                   className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="UNKNOWN">Unknown</option>
-                  <option value="VACANT">Vacant</option>
-                  <option value="OCCUPIED">Occupied</option>
+                  <option value="UNKNOWN">{t('units.statuses.unknown')}</option>
+                  <option value="VACANT">{t('units.statuses.vacant')}</option>
+                  <option value="OCCUPIED">{t('units.statuses.occupied')}</option>
                 </select>
               </div>
             </div>

@@ -308,6 +308,9 @@ export class LeadsService {
     superAdminUserId: string,
   ): Promise<ConvertLeadResponseDto> {
     // 1. Fetch lead and validate
+    this.logger.log(`[CONVERT] Starting conversion for leadId: ${leadId}`);
+    this.logger.log(`[CONVERT] Payload: tenantName="${dto.tenantName}", tenantType="${dto.tenantType}"`);
+
     const lead = await this.prisma.lead.findUnique({ where: { id: leadId } });
 
     if (!lead) {
@@ -330,6 +333,8 @@ export class LeadsService {
     // Start atomic transaction
     return await this.prisma.$transaction(async (tx) => {
       // 3. Create tenant
+      this.logger.log(`[CONVERT] Creating tenant with name="${dto.tenantName}", type="${tenantType}"`);
+
       const tenant = await tx.tenant.create({
         data: {
           name: dto.tenantName,
@@ -337,9 +342,10 @@ export class LeadsService {
         },
       });
 
-      this.logger.log(`Created tenant ${tenant.id} for lead ${leadId}`);
+      this.logger.log(`[CONVERT] ✓ Tenant created: ${tenant.id}`);
 
       // 4. Create subscription with plan
+      this.logger.log(`[CONVERT] Creating subscription...`);
       const planId = dto.planId || (await this.getDefaultPlanId());
       await tx.subscription.create({
         data: {
@@ -348,12 +354,15 @@ export class LeadsService {
           status: 'TRIAL',
         },
       });
+      this.logger.log(`[CONVERT] ✓ Subscription created`);
 
       // 5. Check if owner user exists
+      this.logger.log(`[CONVERT] Checking if user exists: ${ownerEmail}`);
       let ownerUser = await tx.user.findUnique({ where: { email: ownerEmail } });
 
       if (!ownerUser) {
         // Create new user with temporary password
+        this.logger.log(`[CONVERT] Creating new user ${ownerEmail}`);
         const tempPassword = this.generateTemporaryPassword();
         const passwordHash = await this.hashPassword(tempPassword);
 
@@ -365,10 +374,13 @@ export class LeadsService {
           },
         });
 
-        this.logger.log(`Created user ${ownerUser.id} (${ownerEmail})`);
+        this.logger.log(`[CONVERT] ✓ User created: ${ownerUser.id}`);
+      } else {
+        this.logger.log(`[CONVERT] ✓ User already exists: ${ownerUser.id}`);
       }
 
       // 6. Create membership with TENANT_OWNER role
+      this.logger.log(`[CONVERT] Creating membership for user ${ownerUser.id} in tenant ${tenant.id}`);
       const membership = await tx.membership.create({
         data: {
           userId: ownerUser.id,
@@ -383,8 +395,10 @@ export class LeadsService {
           { membershipId: membership.id, role: Role.TENANT_ADMIN },
         ],
       });
+      this.logger.log(`[CONVERT] ✓ Membership created with roles`);
 
       // 7. Generate invitation token
+      this.logger.log(`[CONVERT] Generating invitation token...`);
       const inviteToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(inviteToken).digest('hex');
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
@@ -400,13 +414,16 @@ export class LeadsService {
           status: 'PENDING',
         },
       });
+      this.logger.log(`[CONVERT] ✓ Invitation created`);
 
       // 8. Send invitation email (fire-and-forget)
+      this.logger.log(`[CONVERT] Sending invitation email...`);
       void this.sendInvitationEmail(ownerEmail, inviteToken, dto.tenantName).catch((error) => {
         this.logger.error(`Failed to send invitation email: ${error.message}`);
       });
 
       // 9. Update lead status and mark as converted
+      this.logger.log(`[CONVERT] Updating lead status and marking as converted...`);
       await tx.lead.update({
         where: { id: leadId },
         data: {
@@ -415,6 +432,7 @@ export class LeadsService {
           convertedAt: new Date(),
         },
       });
+      this.logger.log(`[CONVERT] ✓ Lead updated`);
 
       // 10. Audit events (fire-and-forget)
       void this.auditService
@@ -449,6 +467,8 @@ export class LeadsService {
         .catch((error) => {
           this.logger.error(`Failed to audit lead converted: ${error.message}`);
         });
+
+      this.logger.log(`[CONVERT] ✓✓✓ CONVERSION COMPLETE: tenantId=${tenant.id}, leadId=${leadId}`);
 
       return {
         tenantId: tenant.id,

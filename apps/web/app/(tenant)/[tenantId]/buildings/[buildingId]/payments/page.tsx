@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useParams } from 'next/navigation';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';

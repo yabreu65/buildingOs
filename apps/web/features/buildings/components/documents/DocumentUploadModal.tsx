@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import { t } from '@/i18n';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';

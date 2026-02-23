@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { t } from '@/i18n';
 import { Document } from '../../services/documents.api';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
