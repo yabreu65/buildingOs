@@ -5,7 +5,7 @@ import { SecurityModule } from './security/security.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { HealthModule } from './health/health.module';
+// HealthModule removed - consolidated into ObservabilityModule
 import { TenantsModule } from './tenants/tenants.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { BuildingsModule } from './buildings/buildings.module';
@@ -43,7 +43,6 @@ import { AssistantModule } from './assistant/assistant.module';
     PrismaModule,
     AuditModule,
     RbacModule,
-    HealthModule,
     TenantsModule,
     TenancyModule,
     BuildingsModule,

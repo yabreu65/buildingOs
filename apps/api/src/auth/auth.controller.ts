@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { AuthService, AuthResponse } from './auth.service';
 import { PlanFeaturesService } from '../billing/plan-features.service';
+import { SentryService } from '../observability/sentry.service';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -39,11 +40,17 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly planFeatures: PlanFeaturesService,
+    private readonly sentryService: SentryService,
   ) {}
 
   @Post('signup')
   async signup(@Body() signupDto: SignupDto): Promise<AuthResponse> {
-    return this.authService.signup(signupDto);
+    const response = await this.authService.signup(signupDto);
+
+    // Set user context in Sentry for error tracking
+    this.sentryService.setUser(response.user.id, response.user.email, response.user.name);
+
+    return response;
   }
 
   @Post('login')
@@ -57,7 +64,12 @@ export class AuthController {
       await this.authService.logFailedLogin(loginDto.email);
       throw new UnauthorizedException('Credenciales inválidas');
     }
-    return this.authService.login(user);
+    const response = await this.authService.login(user);
+
+    // Set user context in Sentry for error tracking
+    this.sentryService.setUser(user.id, user.email, user.name);
+
+    return response;
   }
 
   @UseGuards(JwtAuthGuard)
