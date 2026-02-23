@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { PrismaModule } from '../prisma/prisma.module';
 import { BillingModule } from '../billing/billing.module';
+import { ObservabilityModule } from '../observability/observability.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
@@ -14,6 +15,7 @@ import { TenancyService } from '../tenancy/tenancy.service';
     ConfigModule,
     PrismaModule,
     BillingModule,
+    ObservabilityModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

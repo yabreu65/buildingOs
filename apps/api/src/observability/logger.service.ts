@@ -50,26 +50,21 @@ export class LoggerService {
       } : undefined,
 
       // Redact sensitive fields
+      // Note: Pino redact paths cannot contain hyphens directly
+      // Header-based redaction is handled by serializers below
       redact: {
         paths: [
           'password',
           'passwordHash',
           'password_confirmation',
           'authorization',
-          'cookie',
-          'set-cookie',
-          'x-api-key',
-          'x-auth-token',
           'jwt',
           'token',
           'secret',
           'aws_secret_access_key',
           'sendgrid_api_key',
-          'sendgrid.api_key',
           'smtp_pass',
-          'smtp.pass',
           'minio_secret_key',
-          'minio.secret_key',
         ],
         censor: '[REDACTED]',
       },
