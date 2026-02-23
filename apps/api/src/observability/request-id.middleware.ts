@@ -41,6 +41,7 @@ export class RequestIdMiddleware implements NestMiddleware {
 
     // Log response when it finishes
     const originalSend = res.send;
+    const logger = this.logger;
     res.send = function (data: any) {
       const durationMs = Date.now() - req.startTime!;
       const context: LogContext = {
@@ -56,11 +57,11 @@ export class RequestIdMiddleware implements NestMiddleware {
       };
 
       // Log the request
-      this.logger.logRequest(context);
+      logger.logRequest(context);
 
-      // Call original send
-      return originalSend.call(this, data);
-    }.bind(this);
+      // Call original send - 'this' must be res (the response object)
+      return originalSend.call(res, data);
+    };
 
     next();
   }
