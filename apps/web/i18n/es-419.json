@@ -34,7 +34,8 @@
     "createdAt": "Fecha de creación",
     "updatedAt": "Última actualización",
     "status": "Estado",
-    "actions": "Acciones"
+    "actions": "Acciones",
+    "comments": "comentarios"
   },
 
   "auth": {
@@ -268,16 +269,28 @@
     "edit": "Editar solicitud",
     "delete": "Eliminar solicitud",
     "myTickets": "Mis solicitudes",
+    "myRequests": "Mis solicitudes de mantenimiento",
     "view": "Ver solicitud",
     "id": "ID",
     "title": "Título",
+    "titlePlaceholder": "Por ejemplo: Cerradura de puerta rota",
     "description": "Descripción",
+    "descriptionPlaceholder": "Describe el problema en detalle...",
     "category": "Categoría",
+    "categories": {
+      "maintenance": "Mantenimiento",
+      "repair": "Reparación",
+      "cleaning": "Limpieza",
+      "complaint": "Reclamo",
+      "other": "Otro"
+    },
     "priority": "Prioridad",
-    "priorityLow": "Baja",
-    "priorityMedium": "Media",
-    "priorityHigh": "Alta",
-    "priorityUrgent": "Urgente",
+    "priorities": {
+      "low": "Baja",
+      "medium": "Media",
+      "high": "Alta",
+      "urgent": "Urgente"
+    },
     "status": "Estado",
     "statusOpen": "Abierta",
     "statusInProgress": "En progreso",
@@ -285,17 +298,42 @@
     "statusClosed": "Cerrada",
     "assignedTo": "Asignada a",
     "unit": "Unidad",
+    "unitOptional": "Unidad (Opcional)",
+    "unitPlaceholder": "ID de unidad (por ejemplo: unit-123)",
     "createdAt": "Creado",
     "updatedAt": "Actualizado",
     "closedAt": "Cerrado",
     "comments": "Comentarios",
     "addComment": "Agregar comentario",
+    "commentPlaceholder": "Agregar un comentario para hacer seguimiento de tu solicitud...",
     "noTickets": "No hay solicitudes",
+    "noComments": "No hay comentarios",
+    "noCommentsFirst": "Sin comentarios aún. ¡Sé el primero en comentar!",
+    "created": "Solicitud creada exitosamente",
+    "commentAdded": "Comentario agregado",
+    "createRequest": "Crear solicitud",
+    "createNew": "Crear nueva solicitud de mantenimiento",
+    "creating": "Creando...",
+    "createTicket": "Crear solicitud",
+    "emptyTitle": "Sin solicitudes de mantenimiento",
+    "emptyDescription": "Crea tu primera solicitud para reportar problemas en esta unidad.",
+    "timeline": "Cronograma",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar esta solicitud?",
-    "closeConfirm": "¿Deseas cerrar esta solicitud?",
-    "statusManagedByStaff": "Estado gestionado por el personal",
+    "closeConfirmTitle": "¿Cerrar solicitud?",
+    "closeConfirmMessage": "¿Estás seguro de que deseas cerrar esta solicitud? Puedes reabrirla más tarde si es necesario.",
+    "closeButton": "Cerrar solicitud",
+    "statusManagedByStaff": "(Estado gestionado por el personal)",
     "submitComment": "Enviar comentario",
-    "commentRequired": "El comentario es requerido"
+    "commentRequired": "El comentario es requerido",
+    "errors": {
+      "titleRequired": "El título es obligatorio",
+      "descriptionRequired": "La descripción es obligatoria",
+      "titleMinLength": "El título debe tener al menos 3 caracteres",
+      "descriptionMinLength": "La descripción debe tener al menos 5 caracteres",
+      "createFailed": "Error al crear solicitud",
+      "commentEmpty": "El comentario no puede estar vacío",
+      "commentFailed": "Error al agregar comentario"
+    }
   },
 
   "communications": {
@@ -403,7 +441,17 @@
     "rating": "Calificación",
     "createdAt": "Creado",
     "noVendors": "No hay proveedores",
-    "deleteConfirm": "¿Estás seguro de que deseas eliminar este proveedor?"
+    "deleteConfirm": "¿Estás seguro de que deseas eliminar este proveedor?",
+    "quotes": {
+      "title": "Cotizaciones",
+      "created": "Cotización creada exitosamente",
+      "empty": "Sin cotizaciones aún"
+    },
+    "workOrders": {
+      "title": "Órdenes de trabajo",
+      "created": "Orden de trabajo creada exitosamente",
+      "empty": "Sin órdenes de trabajo aún"
+    }
   },
 
   "settings": {

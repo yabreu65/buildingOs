@@ -31,6 +31,7 @@ export default function LeadDetailPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [successTenantId, setSuccessTenantId] = useState<string | null>(null);
 
   // Form state
   const [status, setStatus] = useState<string>('');
@@ -96,17 +97,27 @@ export default function LeadDetailPage() {
         tenantName: tenantName.trim(),
         tenantType: lead?.tenantType,
       });
-      if (result) {
-        setSuccessMessage(`Lead converted! Tenant ID: ${result.tenantId}`);
+      if (result && result.tenantId) {
+        setSuccessMessage('Lead converted successfully!');
+        setSuccessTenantId(result.tenantId);
         setShowConvertForm(false);
         setTenantName('');
+        // Refresh lead data
         const updated = await fetchLead(leadId);
         if (updated) {
           setLead(updated);
         }
+        // Auto-hide success after 10 seconds
+        setTimeout(() => {
+          setSuccessMessage(null);
+          setSuccessTenantId(null);
+        }, 10000);
+      } else {
+        setError('Failed to convert lead: No tenant ID returned');
       }
     } catch (err) {
-      setError('Failed to convert lead');
+      const message = err instanceof Error ? err.message : 'Failed to convert lead';
+      setError(message);
     } finally {
       setIsConverting(false);
     }
@@ -155,6 +166,27 @@ export default function LeadDetailPage() {
         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
           <h3 className="font-medium text-green-900">{t('common.success')}</h3>
           <p className="text-sm text-green-700">{successMessage}</p>
+          {successTenantId && (
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => router.push(`/super-admin/tenants/${successTenantId}`)}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                View Tenant →
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setSuccessMessage(null);
+                  setSuccessTenantId(null);
+                }}
+              >
+                Dismiss
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

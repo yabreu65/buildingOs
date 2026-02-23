@@ -10,7 +10,7 @@ import { useAuth } from '@/features/auth';
 import { useQuotes } from '../../hooks/useQuotes';
 import { useWorkOrders } from '../../hooks/useWorkOrders';
 import { QuoteCreateModal, WorkOrderCreateModal } from '../../components/vendors';
-
+import { t } from '@/i18n';
 interface TicketDetailProps {
   buildingId: string;
   ticket: Ticket;
@@ -58,7 +58,7 @@ export default function TicketDetail({
 
   const handleAddComment = async () => {
     if (!commentBody.trim()) {
-      toast('Comment cannot be empty', 'error');
+      toast(t('tickets.errors.commentEmpty'), 'error');
       return;
     }
 
@@ -95,13 +95,13 @@ export default function TicketDetail({
 
   const handleQuoteCreated = async () => {
     setShowCreateQuote(false);
-    toast('Quote created', 'success');
+    toast(t('vendors.quotes.created'), 'success');
     await refetchQuotes();
   };
 
   const handleWorkOrderCreated = async () => {
     setShowCreateWorkOrder(false);
-    toast('Work order created', 'success');
+    toast(t('vendors.workOrders.created'), 'success');
     await refetchWorkOrders();
   };
 
@@ -125,7 +125,7 @@ export default function TicketDetail({
           <div className="flex gap-4">
             <div>
               <label className="block text-sm font-medium text-muted-foreground mb-1">
-                Status
+                {t('tickets.status')}
               </label>
               <div className="space-y-2">
                 <div className="inline-block px-3 py-1 rounded bg-blue-100 text-blue-700 text-sm font-medium">
@@ -153,7 +153,7 @@ export default function TicketDetail({
 
             <div>
               <label className="block text-sm font-medium text-muted-foreground mb-1">
-                Priority
+                {t('tickets.priority')}
               </label>
               <span className="text-sm font-medium px-2 py-1 rounded bg-orange-50 text-orange-700">
                 {ticket.priority}
@@ -164,7 +164,7 @@ export default function TicketDetail({
           {/* Timestamps */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Timeline
+              {t('tickets.timeline')}
             </label>
             <div className="text-sm space-y-1 text-muted-foreground">
               <div>Created: {new Date(ticket.createdAt).toLocaleString()}</div>
@@ -178,7 +178,7 @@ export default function TicketDetail({
           {/* Description */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Description
+              {t('tickets.description')}
             </label>
             <p className="text-sm text-foreground">{ticket.description}</p>
           </div>
@@ -188,7 +188,7 @@ export default function TicketDetail({
             {ticket.unit && (
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Unit
+                  {t('tickets.unit')}
                 </label>
                 <p className="text-sm">{ticket.unit.label} ({ticket.unit.code})</p>
               </div>
@@ -196,7 +196,7 @@ export default function TicketDetail({
             {ticket.assignedTo && (
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Assigned To
+                  {t('tickets.assignedTo')}
                 </label>
                 <p className="text-sm">{ticket.assignedTo.user.name}</p>
               </div>
@@ -209,7 +209,7 @@ export default function TicketDetail({
               <div className="flex justify-between items-center mb-3">
                 <label className="block text-sm font-medium text-muted-foreground flex items-center gap-2">
                   <FileText className="w-4 h-4" />
-                  Quotes ({quotes.length})
+                  {t('vendors.quotes.title')} ({quotes.length})
                 </label>
                 <Button
                   size="sm"
@@ -218,11 +218,11 @@ export default function TicketDetail({
                   className="flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" />
-                  Nueva
+                  {t('common.add')}
                 </Button>
               </div>
               {quotes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No quotes yet</p>
+                <p className="text-sm text-muted-foreground">{t('vendors.quotes.empty')}</p>
               ) : (
                 <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
                   {quotes.map((quote) => (
@@ -244,7 +244,7 @@ export default function TicketDetail({
               <div className="flex justify-between items-center mb-3">
                 <label className="block text-sm font-medium text-muted-foreground flex items-center gap-2">
                   <Wrench className="w-4 h-4" />
-                  Work Orders ({workOrders.length})
+                  {t('vendors.workOrders.title')} ({workOrders.length})
                 </label>
                 <Button
                   size="sm"
@@ -253,11 +253,11 @@ export default function TicketDetail({
                   className="flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" />
-                  Nueva
+                  {t('common.add')}
                 </Button>
               </div>
               {workOrders.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No work orders yet</p>
+                <p className="text-sm text-muted-foreground">{t('vendors.workOrders.empty')}</p>
               ) : (
                 <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
                   {workOrders.map((wo) => (
@@ -274,11 +274,11 @@ export default function TicketDetail({
           {/* Comments */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-3">
-              Comments ({ticket.comments?.length || 0})
+              {t('common.comments')} ({ticket.comments?.length || 0})
             </label>
             <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
               {(!ticket.comments || ticket.comments.length === 0) && (
-                <p className="text-sm text-muted-foreground">No comments yet</p>
+                <p className="text-sm text-muted-foreground">{t('tickets.noComments')}</p>
               )}
               {ticket.comments?.map((comment) => (
                 <div
@@ -301,7 +301,7 @@ export default function TicketDetail({
               <textarea
                 value={commentBody}
                 onChange={(e) => setCommentBody(e.target.value)}
-                placeholder="Add a comment..."
+                placeholder={t('tickets.commentPlaceholder')}
                 className="flex-1 px-3 py-2 border rounded-md text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                 rows={2}
               />
@@ -343,22 +343,22 @@ export default function TicketDetail({
         {showCloseConfirm && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
             <Card className="w-[400px] p-6 space-y-4">
-              <h3 className="text-lg font-bold">Close Ticket?</h3>
+              <h3 className="text-lg font-bold">{t('tickets.closeConfirmTitle')}</h3>
               <p className="text-sm text-muted-foreground">
-                Are you sure you want to close this ticket? You can reopen it later if needed.
+                {t('tickets.closeConfirmMessage')}
               </p>
               <div className="flex gap-2 justify-end">
                 <Button
                   variant="secondary"
                   onClick={() => setShowCloseConfirm(false)}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
                 <Button
                   onClick={confirmClose}
                   className="bg-red-600 hover:bg-red-700"
                 >
-                  Close Ticket
+                  {t('tickets.closeButton')}
                 </Button>
               </div>
             </Card>

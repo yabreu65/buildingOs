@@ -96,16 +96,11 @@ export function useLeads() {
   const convert = async (
     id: string,
     dto: ConvertLeadDto
-  ): Promise<ConvertLeadResponse | null> => {
-    try {
-      const result = await convertLead(id, dto);
-      // Refresh list
-      await fetchLeads(state.filters, state.page);
-      return result;
-    } catch (err) {
-      console.error('Failed to convert lead:', err);
-      return null;
-    }
+  ): Promise<ConvertLeadResponse> => {
+    const result = await convertLead(id, dto);
+    // Refresh list
+    await fetchLeads(state.filters, state.page);
+    return result;
   };
 
   // Delete lead

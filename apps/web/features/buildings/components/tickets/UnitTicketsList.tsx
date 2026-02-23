@@ -10,7 +10,7 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Ticket as TicketIcon, Plus, Send, X, AlertCircle } from 'lucide-react';
 import type { Ticket } from '../../services/tickets.api';
-
+import { t } from '@/i18n';
 interface UnitTicketsListProps {
   buildingId: string;
   unitId: string;
@@ -40,20 +40,20 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
 
   const handleCreateSuccess = async (ticket: Ticket) => {
     setShowCreateForm(false);
-    toast('Ticket created successfully', 'success');
+    toast(t('tickets.created'), 'success');
     await refetch();
   };
 
   const handleAddComment = async () => {
     if (!selectedTicket || !commentBody.trim()) {
-      toast('Comment cannot be empty', 'error');
+      toast(t('tickets.errors.commentEmpty'), 'error');
       return;
     }
 
     setAddingComment(true);
     try {
       await addComment(selectedTicket.id, { body: commentBody });
-      toast('Comment added', 'success');
+      toast(t('tickets.commentAdded'), 'success');
       setCommentBody('');
       // Refresh to get updated ticket with new comment
       await refetch();
@@ -63,7 +63,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
         setSelectedTicket(updated);
       }
     } catch {
-      toast('Failed to add comment', 'error');
+      toast(t('tickets.errors.commentFailed'), 'error');
     } finally {
       setAddingComment(false);
     }
@@ -73,10 +73,10 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
     <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">My Maintenance Requests</h2>
+        <h2 className="text-lg font-semibold">{t('tickets.myRequests')}</h2>
         <Button onClick={() => setShowCreateForm(true)}>
           <Plus className="w-4 h-4 mr-2" />
-          Create Request
+          {t('tickets.createRequest')}
         </Button>
       </div>
 
@@ -84,7 +84,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
       {showCreateForm && (
         <Card className="border-blue-200 bg-blue-50">
           <div className="mb-4 flex justify-between items-center">
-            <h3 className="text-lg font-semibold">Create New Maintenance Request</h3>
+            <h3 className="text-lg font-semibold">{t('tickets.createNew')}</h3>
             <button
               onClick={() => setShowCreateForm(false)}
               className="text-gray-500 hover:text-gray-700"
@@ -117,10 +117,10 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
       {!loading && tickets.length === 0 && (
         <EmptyState
           icon={<TicketIcon className="w-12 h-12 text-muted-foreground" />}
-          title="No maintenance requests yet"
-          description="Create your first request to report issues with this unit."
+          title={t('tickets.emptyTitle')}
+          description={t('tickets.emptyDescription')}
           cta={{
-            text: 'Create Request',
+            text: t('tickets.createRequest'),
             onClick: () => setShowCreateForm(true),
           }}
         />
@@ -161,7 +161,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               </div>
               <div className="flex justify-between items-center text-xs text-muted-foreground">
                 <span>{ticket.category}</span>
-                <span>{ticket.comments?.length || 0} comments</span>
+                <span>{ticket.comments?.length || 0} {t('common.comments')}</span>
               </div>
             </Card>
           ))}
@@ -189,19 +189,19 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               <div className="flex gap-4">
                 <div>
                   <label className="block text-sm font-medium text-muted-foreground mb-1">
-                    Status
+                    {t('tickets.status')}
                   </label>
                   <div className="inline-block px-3 py-1 rounded bg-blue-100 text-blue-700 text-sm font-medium">
                     {selectedTicket.status}
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
-                    (Status managed by building staff)
+                    {t('tickets.statusManagedByStaff')}
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-muted-foreground mb-1">
-                    Priority
+                    {t('tickets.priority')}
                   </label>
                   <span className="text-sm font-medium px-2 py-1 rounded bg-orange-50 text-orange-700">
                     {selectedTicket.priority}
@@ -212,7 +212,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               {/* Timestamps */}
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-2">
-                  Timeline
+                  {t('tickets.timeline')}
                 </label>
                 <div className="text-sm space-y-1 text-muted-foreground">
                   <div>Created: {new Date(selectedTicket.createdAt).toLocaleString()}</div>
@@ -226,7 +226,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               {/* Description */}
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-2">
-                  Description
+                  {t('tickets.description')}
                 </label>
                 <p className="text-sm text-foreground">{selectedTicket.description}</p>
               </div>
@@ -234,7 +234,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               {/* Category */}
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Category
+                  {t('tickets.category')}
                 </label>
                 <p className="text-sm">{selectedTicket.category}</p>
               </div>
@@ -242,12 +242,12 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
               {/* Comments */}
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-3">
-                  Comments ({selectedTicket.comments?.length || 0})
+                  {t('common.comments')} ({selectedTicket.comments?.length || 0})
                 </label>
                 <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
                   {(!selectedTicket.comments || selectedTicket.comments.length === 0) && (
                     <p className="text-sm text-muted-foreground">
-                      No comments yet. Be the first to comment!
+                      {t('tickets.noCommentsFirst')}
                     </p>
                   )}
                   {selectedTicket.comments?.map((comment) => (
@@ -271,7 +271,7 @@ export default function UnitTicketsList({ buildingId, unitId }: UnitTicketsListP
                   <textarea
                     value={commentBody}
                     onChange={(e) => setCommentBody(e.target.value)}
-                    placeholder="Add a comment to follow up on your request..."
+                    placeholder={t('tickets.commentPlaceholder')}
                     className="flex-1 px-3 py-2 border rounded-md text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                     rows={2}
                   />
@@ -325,19 +325,19 @@ function UnitTicketForm({
 
     // Validation
     if (!title.trim()) {
-      setValidationError('Title is required');
+      setValidationError(t('tickets.errors.titleRequired'));
       return;
     }
     if (!description.trim()) {
-      setValidationError('Description is required');
+      setValidationError(t('tickets.errors.descriptionRequired'));
       return;
     }
     if (title.length < 3) {
-      setValidationError('Title must be at least 3 characters');
+      setValidationError(t('tickets.errors.titleMinLength'));
       return;
     }
     if (description.length < 5) {
-      setValidationError('Description must be at least 5 characters');
+      setValidationError(t('tickets.errors.descriptionMinLength'));
       return;
     }
 
@@ -355,7 +355,7 @@ function UnitTicketForm({
         onSuccess(ticket);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create request';
+      const message = err instanceof Error ? err.message : t('tickets.errors.createFailed');
       setValidationError(message);
       toast(message, 'error');
     } finally {
@@ -372,23 +372,23 @@ function UnitTicketForm({
       )}
 
       <div>
-        <label className="block text-sm font-medium mb-1">Title *</label>
+        <label className="block text-sm font-medium mb-1">{t('tickets.title')} *</label>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="e.g., Broken door lock"
+          placeholder={t('tickets.titlePlaceholder')}
           className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={submitting}
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-1">Description *</label>
+        <label className="block text-sm font-medium mb-1">{t('tickets.description')} *</label>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Describe the issue in detail..."
+          placeholder={t('tickets.descriptionPlaceholder')}
           className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           rows={4}
           disabled={submitting}
@@ -397,33 +397,33 @@ function UnitTicketForm({
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium mb-1">Category *</label>
+          <label className="block text-sm font-medium mb-1">{t('tickets.category')} *</label>
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >
-            <option value="MAINTENANCE">Maintenance</option>
-            <option value="REPAIR">Repair</option>
-            <option value="CLEANING">Cleaning</option>
-            <option value="COMPLAINT">Complaint</option>
-            <option value="OTHER">Other</option>
+            <option value="MAINTENANCE">{t('tickets.categories.maintenance')}</option>
+            <option value="REPAIR">{t('tickets.categories.repair')}</option>
+            <option value="CLEANING">{t('tickets.categories.cleaning')}</option>
+            <option value="COMPLAINT">{t('tickets.categories.complaint')}</option>
+            <option value="OTHER">{t('tickets.categories.other')}</option>
           </select>
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Priority</label>
+          <label className="block text-sm font-medium mb-1">{t('tickets.priority')}</label>
           <select
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >
-            <option value="LOW">Low</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="HIGH">High</option>
-            <option value="URGENT">Urgent</option>
+            <option value="LOW">{t('tickets.priorities.low')}</option>
+            <option value="MEDIUM">{t('tickets.priorities.medium')}</option>
+            <option value="HIGH">{t('tickets.priorities.high')}</option>
+            <option value="URGENT">{t('tickets.priorities.urgent')}</option>
           </select>
         </div>
       </div>
@@ -435,10 +435,10 @@ function UnitTicketForm({
           onClick={onCancel}
           disabled={submitting}
         >
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button type="submit" disabled={submitting}>
-          Create Request
+          {t('tickets.createRequest')}
         </Button>
       </div>
     </form>
