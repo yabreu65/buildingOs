@@ -11,6 +11,7 @@ import { TenancyService } from '../tenancy/tenancy.service';
 
 @Module({
   imports: [
+    ConfigModule,
     PrismaModule,
     BillingModule,
     PassportModule,
