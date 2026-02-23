@@ -169,11 +169,13 @@ export class FinanzasController {
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
+    const userId = req.user.sub;
     return this.finanzasService.cancelCharge(
       tenantId,
       buildingId,
       chargeId,
       userRoles,
+      userId,
       dto,
     );
   }

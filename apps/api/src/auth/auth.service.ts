@@ -109,6 +109,20 @@ export class AuthService {
       result.user.id,
     );
 
+    // Audit: USER_CREATE
+    void this.auditService.createLog({
+      tenantId: result.membership.tenantId,
+      actorUserId: result.user.id,
+      action: AuditAction.USER_CREATE,
+      entityType: 'User',
+      entityId: result.user.id,
+      metadata: {
+        email: result.user.email,
+        name: result.user.name,
+        tenantName: finalTenantName,
+      },
+    });
+
     return {
       accessToken: this.jwtService.sign({
         email: result.user.email,

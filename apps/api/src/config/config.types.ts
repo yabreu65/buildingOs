@@ -3,7 +3,7 @@
  * Defines all validated environment variables
  */
 
-export type NodeEnv = 'development' | 'staging' | 'production';
+export type NodeEnv = 'development' | 'staging' | 'production' | 'test';
 
 export interface AppConfig {
   // Server

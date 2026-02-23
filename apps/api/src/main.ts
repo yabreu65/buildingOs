@@ -5,6 +5,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { ConfigService } from "./config/config.service";
 import { RateLimitMiddleware } from "./security/rate-limit.middleware";
 import { SentryService } from "./observability/sentry.service";
+import helmet from "helmet";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -36,6 +37,63 @@ async function bootstrap() {
   });
 
   // =========================================================
+  // Security: Trust Proxy (for load balancer/nginx)
+  // =========================================================
+  const expressApp = app.getHttpAdapter().getInstance();
+  if (config.nodeEnv !== 'development') {
+    expressApp.set('trust proxy', 1);
+  }
+
+  // =========================================================
+  // Security: Helmet Headers
+  // =========================================================
+  app.use(
+    helmet({
+      // Content Security Policy - only in prod/staging
+      contentSecurityPolicy:
+        config.nodeEnv !== 'development'
+          ? {
+              directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'"],
+                styleSrc: ["'self'", "'unsafe-inline'"],
+                imgSrc: ["'self'", 'data:', 'https:'],
+                connectSrc: ["'self'"],
+                fontSrc: ["'self'"],
+                objectSrc: ["'none'"],
+                mediaSrc: ["'none'"],
+                frameSrc: ["'none'"],
+              },
+            }
+          : false,
+      // HSTS: only prod
+      hsts:
+        config.nodeEnv === 'production'
+          ? { maxAge: 31536000, includeSubDomains: true }
+          : false,
+      // Always active headers
+      xContentTypeOptions: true,
+      xFrameOptions: { action: 'deny' },
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      permittedCrossDomainPolicies: false,
+      crossOriginOpenerPolicy: { policy: 'same-origin' },
+      crossOriginResourcePolicy: { policy: 'same-origin' },
+    })
+  );
+
+  // =========================================================
+  // Security: Cache Control for sensitive endpoints
+  // =========================================================
+  app.use((req, res, next) => {
+    // Disable client-side caching for sensitive data
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    next();
+  });
+
+  // =========================================================
   // Security: Rate Limiting Middleware
   // =========================================================
   const rateLimitMiddleware = app.get(RateLimitMiddleware);
@@ -54,30 +112,6 @@ async function bootstrap() {
       },
     })
   );
-
-  // =========================================================
-  // Security: Response Headers
-  // =========================================================
-  app.use((req, res, next) => {
-    // Prevent MIME type sniffing
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-
-    // Prevent clickjacking
-    res.setHeader('X-Frame-Options', 'DENY');
-
-    // Referrer policy
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-
-    // Disable client-side caching for sensitive data
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-
-    // Remove X-Powered-By header
-    res.removeHeader('X-Powered-By');
-
-    next();
-  });
 
   // =========================================================
   // API Documentation (only in dev)

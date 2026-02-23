@@ -40,7 +40,7 @@ export const createConfigSchema = (nodeEnv: string) => {
   return z.object({
     // Server (always required)
     NODE_ENV: z
-      .enum(['development', 'staging', 'production'])
+      .enum(['development', 'staging', 'production', 'test'])
       .default('development'),
     PORT: z.coerce.number().int().positive().default(4000),
     LOG_LEVEL: z

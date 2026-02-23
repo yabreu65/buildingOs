@@ -1,35 +1,76 @@
-name: CI
+name: CI - Build & Test Gate
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  ci:
+    name: Build, Lint, Test, E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: buildingos
+          POSTGRES_PASSWORD: buildingos
+          POSTGRES_DB: buildingos
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos?schema=public
+      NODE_ENV: test
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 🔧 Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: npm ci
 
-      - name: Lint
+      - name: 🗂️ Setup database
+        run: npm run db:migrate
+
+      - name: 🔍 Lint
         run: npm run lint
+        continue-on-error: false
 
-      - name: Typecheck
+      - name: ✅ Typecheck
         run: npm run typecheck
+        continue-on-error: false
 
-      - name: Test
+      - name: 🧪 Unit & Integration Tests
         run: npm run test
+        continue-on-error: false
 
-      - name: Build
+      - name: 🧪 E2E Tests (API)
+        run: npm run test:e2e -w apps/api
+        continue-on-error: false
+
+      - name: 🏗️ Build
         run: npm run build
+        continue-on-error: false
+
+      - name: ✨ Build Success
+        if: success()
+        run: echo "✅ All checks passed! Ready to merge."

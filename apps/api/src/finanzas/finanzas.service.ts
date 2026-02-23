@@ -1,5 +1,6 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import {
   CreateChargeDto,
@@ -12,13 +13,14 @@ import {
   ListChargesQueryDto,
   ListPaymentsQueryDto,
 } from './finanzas.dto';
-import { ChargeStatus, PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
 
 @Injectable()
 export class FinanzasService {
   constructor(
     private prisma: PrismaService,
     private validators: FinanzasValidators,
+    private auditService: AuditService,
   ) {}
 
   // ============================================================================
@@ -77,7 +79,7 @@ export class FinanzasService {
     }
 
     // 5. Create charge with PENDING status
-    return this.prisma.charge.create({
+    const charge = await this.prisma.charge.create({
       data: {
         tenantId,
         buildingId,
@@ -92,6 +94,24 @@ export class FinanzasService {
         createdByMembershipId: dto.createdByMembershipId,
       },
     });
+
+    // Audit: CHARGE_CREATE
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: userId,
+      action: AuditAction.CHARGE_CREATE,
+      entityType: 'Charge',
+      entityId: charge.id,
+      metadata: {
+        unitId: dto.unitId,
+        amount: dto.amount,
+        type: dto.type,
+        concept: dto.concept,
+        period: charge.period,
+      },
+    });
+
+    return charge;
   }
 
   /**
@@ -276,6 +296,7 @@ export class FinanzasService {
     buildingId: string,
     chargeId: string,
     userRoles: string[],
+    userId: string,
     dto: CancelChargeDto,
   ) {
     // 1. Permission check
@@ -284,20 +305,37 @@ export class FinanzasService {
     }
 
     // 2. Validate charge
-    await this.validators.validateChargeBelongsToBuildingAndTenant(
+    const charge = await this.validators.validateChargeBelongsToBuildingAndTenant(
       tenantId,
       buildingId,
       chargeId,
     );
 
     // 3. Cancel
-    return this.prisma.charge.update({
+    const canceledCharge = await this.prisma.charge.update({
       where: { id: chargeId },
       data: {
         canceledAt: new Date(),
         updatedAt: new Date(),
       },
     });
+
+    // Audit: CHARGE_CANCEL
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: userId,
+      action: AuditAction.CHARGE_CANCEL,
+      entityType: 'Charge',
+      entityId: chargeId,
+      metadata: {
+        unitId: charge.unitId,
+        amount: charge.amount,
+        concept: charge.concept,
+        reason: dto.reason || 'No reason provided',
+      },
+    });
+
+    return canceledCharge;
   }
 
   // ============================================================================

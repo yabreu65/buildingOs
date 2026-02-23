@@ -112,13 +112,23 @@ export class RateLimitMiddleware implements NestMiddleware {
       return { max: 10, windowMs: 15 * 60 * 1000 }; // 10 attempts per 15 minutes
     }
 
+    if (path.includes('/invitations') && method === 'POST') {
+      return { max: 5, windowMs: 60 * 60 * 1000 }; // 5 creation attempts per hour
+    }
+
     // Super admin endpoints - very strict
     if (path.includes('/super-admin/impersonation/start') && method === 'POST') {
       return { max: 10, windowMs: 60 * 60 * 1000 }; // 10 attempts per hour
     }
 
-    // No rate limit for other endpoints
-    return null;
+    // Super-admin write operations (non-GET)
+    if (path.startsWith('/super-admin/') && method !== 'GET') {
+      return { max: 30, windowMs: 60 * 1000 }; // 30 per minute
+    }
+
+    // Global rate limit: all other API endpoints
+    // This provides a sensible default for any endpoint without specific config
+    return { max: 300, windowMs: 60 * 1000 }; // 300 requests per minute per IP
   }
 
   /**

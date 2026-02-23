@@ -6,14 +6,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
+import { AuditAction } from '@prisma/client';
 
 @Injectable()
 export class UnitsService {
   constructor(
     private prisma: PrismaService,
     private planEntitlements: PlanEntitlementsService,
+    private auditService: AuditService,
   ) {}
 
   async create(tenantId: string, buildingId: string, dto: CreateUnitDto) {
@@ -32,7 +35,7 @@ export class UnitsService {
     await this.planEntitlements.assertLimit(tenantId, 'units');
 
     try {
-      return await this.prisma.unit.create({
+      const unit = await this.prisma.unit.create({
         data: {
           buildingId,
           code: dto.code,
@@ -41,6 +44,22 @@ export class UnitsService {
           occupancyStatus: dto.occupancyStatus || 'UNKNOWN',
         },
       });
+
+      // Audit: UNIT_CREATE
+      void this.auditService.createLog({
+        tenantId,
+        action: AuditAction.UNIT_CREATE,
+        entityType: 'Unit',
+        entityId: unit.id,
+        metadata: {
+          buildingId,
+          code: unit.code,
+          label: unit.label,
+          unitType: unit.unitType,
+        },
+      });
+
+      return unit;
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new BadRequestException(
@@ -101,7 +120,7 @@ export class UnitsService {
     const unit = await this.findOne(tenantId, buildingId, unitId);
 
     try {
-      return await this.prisma.unit.update({
+      const updatedUnit = await this.prisma.unit.update({
         where: { id: unitId },
         data: {
           code: dto.code,
@@ -111,6 +130,23 @@ export class UnitsService {
         },
         include: { unitOccupants: { include: { user: true } } },
       });
+
+      // Audit: UNIT_UPDATE
+      void this.auditService.createLog({
+        tenantId,
+        action: AuditAction.UNIT_UPDATE,
+        entityType: 'Unit',
+        entityId: unitId,
+        metadata: {
+          buildingId,
+          code: updatedUnit.code,
+          label: updatedUnit.label,
+          unitType: updatedUnit.unitType,
+          occupancyStatus: updatedUnit.occupancyStatus,
+        },
+      });
+
+      return updatedUnit;
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new BadRequestException(
@@ -123,10 +159,25 @@ export class UnitsService {
 
   async remove(tenantId: string, buildingId: string, unitId: string) {
     // Verify building belongs to tenant and unit belongs to building
-    await this.findOne(tenantId, buildingId, unitId);
+    const unit = await this.findOne(tenantId, buildingId, unitId);
 
-    return await this.prisma.unit.delete({
+    const deletedUnit = await this.prisma.unit.delete({
       where: { id: unitId },
     });
+
+    // Audit: UNIT_DELETE
+    void this.auditService.createLog({
+      tenantId,
+      action: AuditAction.UNIT_DELETE,
+      entityType: 'Unit',
+      entityId: unitId,
+      metadata: {
+        buildingId,
+        code: unit.code,
+        label: unit.label,
+      },
+    });
+
+    return deletedUnit;
   }
 }

@@ -5,6 +5,7 @@
 
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { AppConfigModule } from '../config/config.module';
+import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerService } from './logger.service';
 import { SentryService } from './sentry.service';
 import { RequestIdMiddleware } from './request-id.middleware';
@@ -12,7 +13,7 @@ import { HealthService } from './health.service';
 import { HealthController } from './health.controller';
 
 @Module({
-  imports: [AppConfigModule],
+  imports: [AppConfigModule, PrismaModule],
   providers: [LoggerService, SentryService, HealthService],
   controllers: [HealthController],
   exports: [LoggerService, SentryService, HealthService],

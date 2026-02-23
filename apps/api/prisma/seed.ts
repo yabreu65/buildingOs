@@ -399,18 +399,114 @@ async function main() {
     },
   });
 
-  // 4) Buildings (minimal: 1 tenant → 1 building)
+  // 4) Buildings for ADMINISTRADORA tenant (2 buildings)
+  const building1Admin = await prisma.building.upsert({
+    where: { tenantId_name: { tenantId: tenantAdmin.id, name: "Building A - Downtown" } },
+    update: {},
+    create: {
+      tenantId: tenantAdmin.id,
+      name: "Building A - Downtown",
+      address: "456 Park Ave, Downtown District",
+    },
+  });
+
+  const building2Admin = await prisma.building.upsert({
+    where: { tenantId_name: { tenantId: tenantAdmin.id, name: "Building B - Uptown" } },
+    update: {},
+    create: {
+      tenantId: tenantAdmin.id,
+      name: "Building B - Uptown",
+      address: "789 Oak Boulevard, Uptown Area",
+    },
+  });
+
+  // 5) Units for ADMINISTRADORA buildings (3 units each)
+  // Building A units
+  const unitA1 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building1Admin.id, code: "A-101" } },
+    update: {},
+    create: {
+      buildingId: building1Admin.id,
+      code: "A-101",
+      label: "Apt A-101",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unitA2 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building1Admin.id, code: "A-102" } },
+    update: {},
+    create: {
+      buildingId: building1Admin.id,
+      code: "A-102",
+      label: "Apt A-102",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unitA3 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building1Admin.id, code: "A-103" } },
+    update: {},
+    create: {
+      buildingId: building1Admin.id,
+      code: "A-103",
+      label: "Apt A-103",
+      unitType: "APARTMENT",
+      occupancyStatus: "VACANT",
+    },
+  });
+
+  // Building B units
+  const unitB1 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building2Admin.id, code: "B-201" } },
+    update: {},
+    create: {
+      buildingId: building2Admin.id,
+      code: "B-201",
+      label: "Apt B-201",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unitB2 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building2Admin.id, code: "B-202" } },
+    update: {},
+    create: {
+      buildingId: building2Admin.id,
+      code: "B-202",
+      label: "Apt B-202",
+      unitType: "APARTMENT",
+      occupancyStatus: "VACANT",
+    },
+  });
+
+  const unitB3 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building2Admin.id, code: "B-203" } },
+    update: {},
+    create: {
+      buildingId: building2Admin.id,
+      code: "B-203",
+      label: "Apt B-203",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  // 6) Buildings for EDIFICIO_AUTOGESTION tenant (1 building)
   const building = await prisma.building.upsert({
-    where: { tenantId_name: { tenantId: tenantBuilding.id, name: "Demo Building" } },
+    where: { tenantId_name: { tenantId: tenantBuilding.id, name: "Demo Building - Self Managed" } },
     update: {},
     create: {
       tenantId: tenantBuilding.id,
-      name: "Demo Building",
+      name: "Demo Building - Self Managed",
       address: "123 Main St, Apartment Complex",
     },
   });
 
-  // 5) Units (minimal: 1 building → 2 units)
+  // 7) Units for EDIFICIO_AUTOGESTION building (6 units)
   const unit1 = await prisma.unit.upsert({
     where: { buildingId_code: { buildingId: building.id, code: "101" } },
     update: {},
@@ -431,11 +527,60 @@ async function main() {
       code: "102",
       label: "Apt 102",
       unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unit3 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "103" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "103",
+      label: "Apt 103",
+      unitType: "APARTMENT",
       occupancyStatus: "VACANT",
     },
   });
 
-  // 6) Unit Occupants (1 resident → unit 101 as OWNER + resident user → unit 102 as RESIDENT)
+  const unit4 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "201" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "201",
+      label: "Apt 201",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unit5 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "202" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "202",
+      label: "Apt 202",
+      unitType: "APARTMENT",
+      occupancyStatus: "OCCUPIED",
+    },
+  });
+
+  const unit6 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: building.id, code: "203" } },
+    update: {},
+    create: {
+      buildingId: building.id,
+      code: "203",
+      label: "Apt 203",
+      unitType: "APARTMENT",
+      occupancyStatus: "VACANT",
+    },
+  });
+
+  // 8) Unit Occupants for EDIFICIO_AUTOGESTION building
+  // Assign residents to occupied units
   await prisma.unitOccupant.upsert({
     where: {
       unitId_userId_role: {
@@ -463,6 +608,38 @@ async function main() {
     update: {},
     create: {
       unitId: unit2.id,
+      userId: residentUser.id,
+      role: "RESIDENT",
+    },
+  });
+
+  await prisma.unitOccupant.upsert({
+    where: {
+      unitId_userId_role: {
+        unitId: unit4.id,
+        userId: operatorUser.id,
+        role: "OWNER",
+      },
+    },
+    update: {},
+    create: {
+      unitId: unit4.id,
+      userId: operatorUser.id,
+      role: "OWNER",
+    },
+  });
+
+  await prisma.unitOccupant.upsert({
+    where: {
+      unitId_userId_role: {
+        unitId: unit5.id,
+        userId: residentUser.id,
+        role: "RESIDENT",
+      },
+    },
+    update: {},
+    create: {
+      unitId: unit5.id,
       userId: residentUser.id,
       role: "RESIDENT",
     },
