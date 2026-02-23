@@ -9,6 +9,7 @@ import Textarea from '@/shared/components/ui/Textarea';
 import Select from '@/shared/components/ui/Select';
 import Badge from '@/shared/components/ui/Badge';
 import { useLeads } from '@/features/super-admin/leads/useLeads';
+import { t } from '@/i18n';
 
 const STATUS_COLORS: Record<string, string> = {
   NEW: 'bg-blue-100 text-blue-800',
@@ -136,7 +137,7 @@ export default function LeadDetailPage() {
       {/* Header */}
       <div>
         <Button onClick={() => router.back()} className="mb-4">
-          ← Back
+          ← {t('common.back')}
         </Button>
         <h1 className="text-3xl font-bold">{lead.fullName}</h1>
         <p className="text-muted-foreground mt-2">ID: {lead.id}</p>
@@ -145,14 +146,14 @@ export default function LeadDetailPage() {
       {/* Messages */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <h3 className="font-medium text-red-900">Error</h3>
+          <h3 className="font-medium text-red-900">{t('common.error')}</h3>
           <p className="text-sm text-red-700">{error}</p>
         </div>
       )}
 
       {successMessage && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <h3 className="font-medium text-green-900">Success</h3>
+          <h3 className="font-medium text-green-900">{t('common.success')}</h3>
           <p className="text-sm text-green-700">{successMessage}</p>
         </div>
       )}
@@ -163,24 +164,24 @@ export default function LeadDetailPage() {
           {/* Basic Info */}
           <Card>
             <div className="p-6 border-b border-border">
-              <h2 className="text-lg font-semibold">Lead Information</h2>
+              <h2 className="text-lg font-semibold">{t('superAdmin.leads.title')}</h2>
             </div>
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Name</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('common.name')}</p>
                   <p className="mt-1">{lead.fullName}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Email</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('common.email')}</p>
                   <p className="mt-1">{lead.email}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Phone</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('common.phone')}</p>
                   <p className="mt-1">{lead.phone}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Type</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('superAdmin.leads.tenantType')}</p>
                   <p className="mt-1">
                     <Badge>
                       {lead.tenantType === 'ADMINISTRADORA' ? 'Adm' : 'Auto'}
@@ -188,11 +189,11 @@ export default function LeadDetailPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Buildings</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('superAdmin.leads.buildingsCount')}</p>
                   <p className="mt-1">{lead.buildingsCount || '-'}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Units Est.</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('superAdmin.leads.unitsEstimate')}</p>
                   <p className="mt-1">{lead.unitsEstimate || '-'}</p>
                 </div>
               </div>
@@ -209,25 +210,25 @@ export default function LeadDetailPage() {
           {/* Status & Notes */}
           <Card>
             <div className="p-6 border-b border-border">
-              <h2 className="text-lg font-semibold">Status & Notes</h2>
+              <h2 className="text-lg font-semibold">{t('superAdmin.leads.status')} & {t('superAdmin.leads.notes')}</h2>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-medium mb-2">Status</label>
+                <label className="block text-xs font-medium mb-2">{t('common.status')}</label>
                 <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                  <option value="NEW">New</option>
-                  <option value="CONTACTED">Contacted</option>
-                  <option value="QUALIFIED">Qualified</option>
-                  <option value="DISQUALIFIED">Disqualified</option>
+                  <option value="NEW">{t('superAdmin.leads.statusNew')}</option>
+                  <option value="CONTACTED">{t('superAdmin.leads.statusContacted')}</option>
+                  <option value="QUALIFIED">{t('superAdmin.leads.statusQualified')}</option>
+                  <option value="DISQUALIFIED">{t('superAdmin.leads.statusDisqualified')}</option>
                 </Select>
               </div>
 
               <div>
-                <label className="block text-xs font-medium mb-2">Notes</label>
+                <label className="block text-xs font-medium mb-2">{t('superAdmin.leads.notes')}</label>
                 <Textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Add notes..."
+                  placeholder={t('forms.placeholder')}
                   rows={4}
                 />
               </div>
@@ -237,7 +238,7 @@ export default function LeadDetailPage() {
                 disabled={isSaving}
                 className="w-full"
               >
-                {isSaving ? 'Saving...' : 'Save Changes'}
+                {isSaving ? t('common.loading') : t('common.save')}
               </Button>
             </div>
           </Card>
@@ -248,24 +249,24 @@ export default function LeadDetailPage() {
           {/* Metadata */}
           <Card>
             <div className="p-6 border-b border-border">
-              <h2 className="text-lg font-semibold">Details</h2>
+              <h2 className="text-lg font-semibold">{t('superAdmin.leads.view')}</h2>
             </div>
             <div className="p-6 space-y-4 text-sm">
               <div>
-                <p className="text-xs font-medium text-muted-foreground">Created</p>
+                <p className="text-xs font-medium text-muted-foreground">{t('common.createdAt')}</p>
                 <p className="mt-1">
-                  {new Date(lead.createdAt).toLocaleDateString()}
+                  {new Date(lead.createdAt).toLocaleDateString('es-419')}
                 </p>
               </div>
               <div>
-                <p className="text-xs font-medium text-muted-foreground">Updated</p>
+                <p className="text-xs font-medium text-muted-foreground">{t('common.updatedAt')}</p>
                 <p className="mt-1">
-                  {new Date(lead.updatedAt).toLocaleDateString()}
+                  {new Date(lead.updatedAt).toLocaleDateString('es-419')}
                 </p>
               </div>
               {lead.convertedTenantId && (
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground">Tenant ID</p>
+                  <p className="text-xs font-medium text-muted-foreground">{t('superAdmin.tenants.title')}</p>
                   <p className="mt-1 font-mono text-xs">{lead.convertedTenantId}</p>
                 </div>
               )}
@@ -276,7 +277,7 @@ export default function LeadDetailPage() {
           {!lead.convertedTenantId ? (
             <Card className="border-amber-200">
               <div className="p-6 border-b border-amber-200">
-                <h2 className="text-lg font-semibold">Convert Lead</h2>
+                <h2 className="text-lg font-semibold">{t('superAdmin.leads.convertToCustomer')}</h2>
               </div>
               <div className="p-6 space-y-4">
                 {!showConvertForm ? (
@@ -284,18 +285,18 @@ export default function LeadDetailPage() {
                     onClick={() => setShowConvertForm(true)}
                     className="w-full"
                   >
-                    Start Conversion
+                    {t('superAdmin.leads.convertButton')}
                   </Button>
                 ) : (
                   <>
                     <div>
                       <label className="block text-xs font-medium mb-2">
-                        Tenant Name *
+                        {t('superAdmin.leads.tenantName')} *
                       </label>
                       <Input
                         value={tenantName}
                         onChange={(e) => setTenantName(e.target.value)}
-                        placeholder="e.g., Acme Corp"
+                        placeholder={t('forms.placeholder')}
                       />
                     </div>
                     <div className="flex gap-2">
@@ -304,7 +305,7 @@ export default function LeadDetailPage() {
                         disabled={isConverting || !tenantName.trim()}
                         className="flex-1"
                       >
-                        {isConverting ? 'Converting...' : 'Convert'}
+                        {isConverting ? t('superAdmin.leads.converting') : t('superAdmin.leads.convertButton')}
                       </Button>
                       <Button
                         onClick={() => {
@@ -313,7 +314,7 @@ export default function LeadDetailPage() {
                         }}
                         className="flex-1"
                       >
-                        Cancel
+                        {t('common.cancel')}
                       </Button>
                     </div>
                   </>
@@ -323,7 +324,7 @@ export default function LeadDetailPage() {
           ) : (
             <Card className="border-green-200">
               <div className="p-6">
-                <p className="text-sm text-green-700">✓ Converted to customer</p>
+                <p className="text-sm text-green-700">✓ {t('superAdmin.leads.converted')}</p>
               </div>
             </Card>
           )}
