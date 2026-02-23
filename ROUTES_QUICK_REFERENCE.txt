@@ -1,0 +1,123 @@
+═══════════════════════════════════════════════════════════════════════════════
+INVENTARIO DE RUTAS - BuildingOS Frontend (Quick Reference)
+═══════════════════════════════════════════════════════════════════════════════
+
+TOTAL: 40 rutas | Auth: 3 | Super-Admin: 9 | Tenant: 28
+
+───────────────────────────────────────────────────────────────────────────────
+A) AUTH ROUTES (Públicas - 3 rutas)
+───────────────────────────────────────────────────────────────────────────────
+
+/login                                    | auth     | PUBLIC
+/signup                                   | auth     | PUBLIC
+/invite                                   | auth     | PUBLIC (token-based)
+
+───────────────────────────────────────────────────────────────────────────────
+B) SUPER-ADMIN ROUTES (Control Plane - 9 rutas)
+───────────────────────────────────────────────────────────────────────────────
+
+/super-admin                               | super-admin | SUPER_ADMIN (dashboard)
+/super-admin/overview                     | super-admin | SUPER_ADMIN (metrics)
+/super-admin/tenants                      | super-admin | SUPER_ADMIN (list)
+/super-admin/tenants/create               | super-admin | SUPER_ADMIN (create wizard)
+/super-admin/tenants/[tenantId]           | super-admin | SUPER_ADMIN (edit)
+/super-admin/users                        | super-admin | SUPER_ADMIN (manage users)
+/super-admin/audit-logs                   | super-admin | SUPER_ADMIN (audit trail)
+/super-admin/ai-analytics                 | super-admin | SUPER_ADMIN (ROI panel)
+/super-admin/support                      | super-admin | SUPER_ADMIN (support)
+
+───────────────────────────────────────────────────────────────────────────────
+C) TENANT PORTAL ROUTES (28 rutas)
+───────────────────────────────────────────────────────────────────────────────
+
+C.1) NAVIGATION & DASHBOARD
+
+/{tenantId}/dashboard                     | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+/{tenantId}/properties                    | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+
+C.2) BUILDINGS
+
+/{tenantId}/buildings                     | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]        | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/settings | tenant | TENANT_OWNER, TENANT_ADMIN
+
+C.3) UNITS
+
+/{tenantId}/units                         | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+/{tenantId}/buildings/[buildingId]/units  | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+/{tenantId}/buildings/[buildingId]/units/[unitId] | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT*
+
+C.4) OCCUPANTS
+
+/{tenantId}/buildings/[buildingId]/residents | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+
+C.5) OPERATIONS
+
+/{tenantId}/buildings/[buildingId]/tickets | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/communications | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/documents | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/vendors | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/quotes | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/work-orders | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+
+C.6) FINANCE & PAYMENTS
+
+/{tenantId}/payments                      | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+/{tenantId}/payments/review               | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+/{tenantId}/buildings/[buildingId]/payments | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR, RESIDENT
+
+C.7) COMMUNICATIONS
+
+/{tenantId}/inbox                         | tenant | ALL ROLES
+
+C.8) REPORTING & ANALYTICS
+
+/{tenantId}/reports                       | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/buildings/[buildingId]/reports | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+
+C.9) NOTIFICATIONS
+
+/{tenantId}/notifications                 | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+/{tenantId}/support                       | tenant | TENANT_OWNER, TENANT_ADMIN, OPERATOR
+
+C.10) SETTINGS
+
+/{tenantId}/settings/members              | tenant | TENANT_OWNER, TENANT_ADMIN
+/{tenantId}/settings/banking              | tenant | TENANT_OWNER, TENANT_ADMIN
+/{tenantId}/settings/ai                   | tenant | TENANT_OWNER, TENANT_ADMIN
+
+═══════════════════════════════════════════════════════════════════════════════
+LEYENDA
+═══════════════════════════════════════════════════════════════════════════════
+
+Scope:
+  auth         = Rutas públicas (sin autenticación)
+  super-admin  = Control plane (SUPER_ADMIN global)
+  tenant       = Portal de tenant (autenticado)
+
+Roles:
+  PUBLIC      = Sin login requerido
+  SUPER_ADMIN = Rol global de administración del sistema
+  TENANT_*    = Roles dentro del tenant específico
+  RESIDENT    = Rol de residente/ocupante
+  ALL ROLES   = Accesible por todos los roles autenticados
+
+* Acceso condicional (RESIDENT solo accede a sus units asignadas)
+
+═══════════════════════════════════════════════════════════════════════════════
+PATRONES DE ACCESO
+═══════════════════════════════════════════════════════════════════════════════
+
+Public Routes (No guard requerido)
+  └─ /login, /signup, /invite, /health
+
+Auth Routes (Guard: JWT + Tenant membership)
+  ├─ TenantLayout guard chequea: userId + tenantId + rol
+  ├─ SUPER_ADMIN: Redirect a /super-admin
+  └─ Tenant roles: Permitido acceso
+
+Super-Admin Routes (Guard: SUPER_ADMIN role)
+  ├─ SuperAdminLayout guard chequea: SUPER_ADMIN en memberships
+  └─ Si no: Redirect a dashboard o login
+
+═══════════════════════════════════════════════════════════════════════════════

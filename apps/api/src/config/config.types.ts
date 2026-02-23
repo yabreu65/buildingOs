@@ -49,6 +49,7 @@ export interface AppConfig {
   smtpUser?: string;
   smtpPass?: string;
   resendApiKey?: string;
+  salesTeamEmail?: string; // Email to notify when lead is submitted
 
   // Redis (optional, for queue/cache)
   redisUrl?: string;

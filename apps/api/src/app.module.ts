@@ -31,6 +31,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DemoSeedModule } from './demo-seed/demo-seed.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { AssistantModule } from './assistant/assistant.module';
+import { LeadsModule } from './leads/leads.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { AssistantModule } from './assistant/assistant.module';
     NotificationsModule,
     DemoSeedModule,
     AssistantModule,
+    LeadsModule,
   ],
   controllers: [],
   providers: [],

@@ -64,6 +64,13 @@ enum ChargeType {
   OTHER
 }
 
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  DISQUALIFIED
+}
+
 model Tenant {
   id                    String                 @id @default(cuid())
   name                  String                 @unique
@@ -396,6 +403,10 @@ enum AuditAction {
   PLAN_CHANGE_REQUEST_CANCELED
   PLAN_CHANGE_APPROVED
   PLAN_CHANGE_REJECTED
+  // LEADS (Marketing)
+  LEAD_CREATED
+  LEAD_STATUS_CHANGED
+  LEAD_DELETED
 }
 
 model AuditLog {
@@ -1137,6 +1148,7 @@ enum EmailType {
   INVITATION
   PASSWORD_RESET
   PAYMENT_SUBMITTED
+  LEAD_NOTIFICATION
 }
 
 model EmailLog {
@@ -1343,4 +1355,30 @@ model TenantMonthlyAiUsage {
   @@unique([tenantId, month])
   @@index([tenantId, month])
   @@index([tenantId])
+}
+
+// ============================================================================
+// LEADS (Marketing Lead Capture - No Tenant Creation)
+// ============================================================================
+
+model Lead {
+  id                    String    @id @default(cuid())
+  fullName              String
+  email                 String    @unique
+  phone                 String?
+  tenantType            TenantType
+  buildingsCount        Int?
+  unitsEstimate         Int
+  location              String?   // "Country, City"
+  message               String?
+  source                String?   // "pricing-page", "contact-form", etc.
+  status                LeadStatus @default(NEW)
+  contactedAt           DateTime?
+  notes                 String?   // Internal notes from sales
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
 }
