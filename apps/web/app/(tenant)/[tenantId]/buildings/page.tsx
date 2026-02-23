@@ -13,6 +13,7 @@ import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitEr
 import { routes } from '@/shared/lib/routes';
 import { Loader2, Plus, Edit, Trash2, Building2 } from 'lucide-react';
 import Link from 'next/link';
+import { t } from '@/i18n';
 
 type TenantParams = {
   tenantId: string;
@@ -52,14 +53,14 @@ export default function BuildingsPage() {
       await create({ name: formData.name, address: formData.address });
       setFormData({ name: '', address: '' });
       setShowCreateForm(false);
-      toast('Building created successfully', 'success');
+      toast(t('buildings.success'), 'success');
     } catch (err) {
       // Check if it's a plan limit error first
       if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
         toast(msg, type, duration);
       })) {
         // If not a plan limit error, handle as normal error
-        const message = err instanceof Error ? err.message : 'Failed to create building';
+        const message = err instanceof Error ? err.message : t('buildings.error');
         setCreateError(message);
         toast(message, 'error');
       }
@@ -74,31 +75,31 @@ export default function BuildingsPage() {
     setIsDeleting(true);
     try {
       await deleteBuilding(deleteConfirm.buildingId);
-      toast('Building deleted successfully', 'success');
+      toast(t('toasts.deleted'), 'success');
       setDeleteConfirm({ isOpen: false, buildingId: null });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete building';
+      const message = err instanceof Error ? err.message : t('buildings.error');
       toast(message, 'error');
     } finally {
       setIsDeleting(false);
     }
   };
 
-  if (!tenantId) return <div>Loading...</div>;
+  if (!tenantId) return <div>{t('common.loading')}</div>;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Buildings</h1>
+          <h1 className="text-3xl font-bold">{t('buildings.title')}</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your properties and units
+            {t('buildings.list')}
           </p>
         </div>
         <Button onClick={() => setShowCreateForm(!showCreateForm)}>
           <Plus className="w-4 h-4 mr-2" />
-          New Building
+          {t('buildings.create')}
         </Button>
       </div>
 
@@ -106,7 +107,7 @@ export default function BuildingsPage() {
       {showCreateForm && (
         <Card className="border-blue-200 bg-blue-50">
           <div className="mb-4">
-            <h3 className="text-lg font-semibold">Create New Building</h3>
+            <h3 className="text-lg font-semibold">{t('buildings.create')}</h3>
           </div>
           {createError && (
             <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded-md text-red-700 text-sm">
@@ -116,7 +117,7 @@ export default function BuildingsPage() {
           <form onSubmit={handleCreate} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">
-                Building Name *
+                {t('buildings.name')} *
               </label>
               <input
                 type="text"
@@ -126,12 +127,12 @@ export default function BuildingsPage() {
                   setFormData({ ...formData, name: e.target.value })
                 }
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g., Main Tower"
+                placeholder={t('forms.placeholder')}
               />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Address (optional)
+                {t('buildings.address')} ({t('forms.optional')})
               </label>
               <input
                 type="text"
@@ -140,7 +141,7 @@ export default function BuildingsPage() {
                   setFormData({ ...formData, address: e.target.value })
                 }
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g., 123 Main Street"
+                placeholder={t('forms.placeholder')}
               />
             </div>
             <div className="flex gap-2 justify-end">
@@ -152,16 +153,16 @@ export default function BuildingsPage() {
                   setCreateError(null);
                 }}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" disabled={submitting}>
                 {submitting ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Creating...
+                    {t('common.loading')}
                   </>
                 ) : (
-                  'Create Building'
+                  t('buildings.create')
                 )}
               </Button>
             </div>
@@ -188,10 +189,10 @@ export default function BuildingsPage() {
         /* Empty State */
         <EmptyState
           icon={<Building2 className="w-12 h-12 text-muted-foreground" />}
-          title="No buildings yet"
-          description="Create your first building to get started managing properties and units."
+          title={t('emptyStates.noBuildings')}
+          description={t('emptyStates.startCreating')}
           cta={{
-            text: 'Create First Building',
+            text: t('buildings.create'),
             onClick: () => setShowCreateForm(true),
           }}
         />
@@ -220,7 +221,7 @@ export default function BuildingsPage() {
                       size="sm"
                     >
                       <Edit className="w-4 h-4 mr-1" />
-                      View
+                      {t('common.view')}
                     </Button>
                   </Link>
                   <Button
@@ -241,8 +242,8 @@ export default function BuildingsPage() {
       {/* Delete Confirmation Dialog */}
       <DeleteConfirmDialog
         isOpen={deleteConfirm.isOpen}
-        title="Delete Building"
-        description="This action cannot be undone. All units and occupants associated with this building will be deleted."
+        title={t('buildings.delete')}
+        description={t('modals.deleteMessage')}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteConfirm({ isOpen: false, buildingId: null })}
         isLoading={isDeleting}

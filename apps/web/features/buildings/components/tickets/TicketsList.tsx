@@ -10,7 +10,7 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Ticket as TicketIcon, Plus, Filter } from 'lucide-react';
 import TicketForm from './TicketForm';
-import TicketDetail from './TicketDetail';
+import { t } from '@/i18n';import TicketDetail from './TicketDetail';
 import type { Ticket } from '../../services/tickets.api';
 
 interface TicketsListProps {
@@ -150,7 +150,7 @@ export default function TicketsList({ buildingId }: TicketsListProps) {
       {!loading && tickets.length === 0 && (
         <EmptyState
           icon={<TicketIcon className="w-12 h-12 text-muted-foreground" />}
-          title="No tickets yet"
+          title={t("emptyStates.noTickets")}
           description="Create your first ticket to report issues in this building."
           cta={{
             text: 'Create Ticket',
