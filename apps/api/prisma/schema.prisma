@@ -407,6 +407,7 @@ enum AuditAction {
   LEAD_CREATED
   LEAD_STATUS_CHANGED
   LEAD_DELETED
+  LEAD_CONVERTED
 }
 
 model AuditLog {
@@ -1375,10 +1376,14 @@ model Lead {
   status                LeadStatus @default(NEW)
   contactedAt           DateTime?
   notes                 String?   // Internal notes from sales
+  // Conversion tracking
+  convertedTenantId     String?   // Tenant ID if lead converted to customer
+  convertedAt           DateTime? // When conversion happened
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   @@index([email])
   @@index([status])
   @@index([createdAt])
+  @@index([convertedTenantId])
 }

@@ -3,9 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config/config.service';
-import { CreateLeadDto, UpdateLeadDto } from './leads.dto';
-import { AuditAction } from '@prisma/client';
+import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
+import { AuditAction, TenantType, Role } from '@prisma/client';
 import { EmailType } from '../email/email.types';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class LeadsService {
@@ -271,5 +272,223 @@ export class LeadsService {
       "'": '&#039;',
     };
     return text.replace(/[&<>"']/g, (char) => map[char]);
+  }
+
+  /**
+   * Convert a lead to a customer: creates tenant + owner + invitation
+   * Atomic transaction to ensure consistency
+   */
+  async convertLeadToTenant(
+    leadId: string,
+    dto: ConvertLeadDto,
+    superAdminUserId: string,
+  ): Promise<ConvertLeadResponseDto> {
+    // 1. Fetch lead and validate
+    const lead = await this.prisma.lead.findUnique({ where: { id: leadId } });
+
+    if (!lead) {
+      throw new NotFoundException('Lead not found');
+    }
+
+    if (lead.status === 'DISQUALIFIED') {
+      throw new BadRequestException('Cannot convert a DISQUALIFIED lead');
+    }
+
+    if (lead.convertedTenantId) {
+      throw new ConflictException('Lead already converted to a customer');
+    }
+
+    // 2. Use provided values or defaults from lead
+    const ownerEmail = dto.ownerEmail || lead.email;
+    const ownerFullName = dto.ownerFullName || lead.fullName;
+    const tenantType = dto.tenantType || lead.tenantType;
+
+    // Start atomic transaction
+    return await this.prisma.$transaction(async (tx) => {
+      // 3. Create tenant
+      const tenant = await tx.tenant.create({
+        data: {
+          name: dto.tenantName,
+          type: tenantType,
+        },
+      });
+
+      this.logger.log(`Created tenant ${tenant.id} for lead ${leadId}`);
+
+      // 4. Create subscription with plan
+      const planId = dto.planId || (await this.getDefaultPlanId());
+      await tx.subscription.create({
+        data: {
+          tenantId: tenant.id,
+          planId,
+          status: 'TRIAL',
+        },
+      });
+
+      // 5. Check if owner user exists
+      let ownerUser = await tx.user.findUnique({ where: { email: ownerEmail } });
+
+      if (!ownerUser) {
+        // Create new user with temporary password
+        const tempPassword = this.generateTemporaryPassword();
+        const passwordHash = await this.hashPassword(tempPassword);
+
+        ownerUser = await tx.user.create({
+          data: {
+            email: ownerEmail,
+            name: ownerFullName,
+            passwordHash,
+          },
+        });
+
+        this.logger.log(`Created user ${ownerUser.id} (${ownerEmail})`);
+      }
+
+      // 6. Create membership with TENANT_OWNER role
+      const membership = await tx.membership.create({
+        data: {
+          userId: ownerUser.id,
+          tenantId: tenant.id,
+        },
+      });
+
+      // Add roles to membership
+      await tx.membershipRole.createMany({
+        data: [
+          { membershipId: membership.id, role: Role.TENANT_OWNER },
+          { membershipId: membership.id, role: Role.TENANT_ADMIN },
+        ],
+      });
+
+      // 7. Generate invitation token
+      const inviteToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(inviteToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+      const invitation = await tx.invitation.create({
+        data: {
+          tenantId: tenant.id,
+          email: ownerEmail,
+          tokenHash,
+          roles: JSON.stringify([Role.TENANT_OWNER, Role.TENANT_ADMIN]),
+          invitedByMembershipId: membership.id,
+          expiresAt,
+          status: 'PENDING',
+        },
+      });
+
+      // 8. Send invitation email (fire-and-forget)
+      void this.sendInvitationEmail(ownerEmail, inviteToken, dto.tenantName).catch((error) => {
+        this.logger.error(`Failed to send invitation email: ${error.message}`);
+      });
+
+      // 9. Update lead status and mark as converted
+      await tx.lead.update({
+        where: { id: leadId },
+        data: {
+          status: 'QUALIFIED',
+          convertedTenantId: tenant.id,
+          convertedAt: new Date(),
+        },
+      });
+
+      // 10. Audit events (fire-and-forget)
+      void this.auditService
+        .createLog({
+          tenantId: tenant.id,
+          actorUserId: superAdminUserId,
+          action: AuditAction.TENANT_CREATE,
+          entityType: 'Tenant',
+          entityId: tenant.id,
+          metadata: {
+            source: 'lead_conversion',
+            leadId,
+            tenantType,
+          },
+        })
+        .catch((error) => {
+          this.logger.error(`Failed to audit tenant create: ${error.message}`);
+        });
+
+      void this.auditService
+        .createLog({
+          tenantId: tenant.id,
+          actorUserId: superAdminUserId,
+          action: AuditAction.LEAD_CONVERTED,
+          entityType: 'Lead',
+          entityId: leadId,
+          metadata: {
+            tenantId: tenant.id,
+            ownerUserId: ownerUser.id,
+          },
+        })
+        .catch((error) => {
+          this.logger.error(`Failed to audit lead converted: ${error.message}`);
+        });
+
+      return {
+        tenantId: tenant.id,
+        ownerUserId: ownerUser.id,
+        inviteSent: true,
+      };
+    });
+  }
+
+  /**
+   * Get default plan ID (TRIAL)
+   */
+  private async getDefaultPlanId(): Promise<string> {
+    const trialPlan = await this.prisma.billingPlan.findFirst({
+      where: { name: 'TRIAL' },
+    });
+
+    if (!trialPlan) {
+      throw new BadRequestException('No default TRIAL plan found');
+    }
+
+    return trialPlan.id;
+  }
+
+  /**
+   * Hash password (simple bcrypt)
+   */
+  private async hashPassword(password: string): Promise<string> {
+    const bcrypt = await import('bcrypt');
+    return bcrypt.hash(password, 10);
+  }
+
+  /**
+   * Generate temporary password
+   */
+  private generateTemporaryPassword(): string {
+    return crypto.randomBytes(12).toString('hex');
+  }
+
+  /**
+   * Send invitation email to owner
+   */
+  private async sendInvitationEmail(
+    email: string,
+    token: string,
+    tenantName: string,
+  ): Promise<void> {
+    const inviteLink = `${this.configService.getValue('appBaseUrl')}/invite?token=${token}`;
+
+    const htmlBody = `
+      <h2>Welcome to BuildingOS!</h2>
+      <p>Your account has been created for <strong>${this.escapeHtml(tenantName)}</strong>.</p>
+      <p><a href="${inviteLink}" style="background-color: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; display: inline-block;">Accept Invitation</a></p>
+      <p>This invitation expires in 7 days.</p>
+      <p style="color: #999; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+    `;
+
+    await this.emailService.sendEmail(
+      {
+        to: email,
+        subject: `Invitation to ${tenantName} - BuildingOS`,
+        htmlBody,
+      },
+      EmailType.INVITATION,
+    );
   }
 }

@@ -10,9 +10,11 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
+  Request,
 } from '@nestjs/common';
 import { LeadsService } from './leads.service';
-import { CreateLeadDto, UpdateLeadDto } from './leads.dto';
+import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 
@@ -94,5 +96,20 @@ export class LeadsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteLead(@Param('id') id: string) {
     await this.leadsService.deleteLead(id);
+  }
+
+  /**
+   * SUPER-ADMIN ENDPOINT: Convert lead to customer (create tenant + owner + send invitation)
+   */
+  @Post('admin/:id/convert')
+  @UseGuards(JwtAuthGuard, SuperAdminGuard)
+  @HttpCode(HttpStatus.CREATED)
+  async convertLead(
+    @Param('id') id: string,
+    @Body() dto: ConvertLeadDto,
+    @Request() req: any,
+  ): Promise<ConvertLeadResponseDto> {
+    const superAdminUserId = req.user?.id;
+    return this.leadsService.convertLeadToTenant(id, dto, superAdminUserId);
   }
 }
