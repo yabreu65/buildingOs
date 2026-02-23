@@ -296,10 +296,38 @@ export default function LeadDetailPage() {
                   {new Date(lead.updatedAt).toLocaleDateString('es-419')}
                 </p>
               </div>
-              {lead.convertedTenantId && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground">{t('superAdmin.tenants.title')}</p>
-                  <p className="mt-1 font-mono text-xs">{lead.convertedTenantId}</p>
+              {lead.convertedTenant && (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">Tenant Creado</p>
+                    <p className="mt-1 font-semibold text-base">{lead.convertedTenant.name}</p>
+                  </div>
+                  {lead.convertedTenant.subscription && lead.convertedTenant.subscription[0] && (
+                    <>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Plan</p>
+                        <div className="mt-1 flex items-center gap-2">
+                          <Badge className="bg-blue-100 text-blue-800">
+                            {lead.convertedTenant.subscription[0].plan?.name || lead.convertedTenant.subscription[0].planId}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {lead.convertedTenant.subscription[0].status === 'TRIAL' && '(Trial)'}
+                            {lead.convertedTenant.subscription[0].status === 'ACTIVE' && '(Activo)'}
+                            {lead.convertedTenant.subscription[0].status === 'CANCELED' && '(Cancelado)'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-border">
+                        <Button
+                          size="sm"
+                          onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant.id}`)}
+                          className="w-full"
+                        >
+                          Ver Tenant →
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -354,11 +382,65 @@ export default function LeadDetailPage() {
               </div>
             </Card>
           ) : (
-            <Card className="border-green-200">
-              <div className="p-6">
-                <p className="text-sm text-green-700">✓ {t('superAdmin.leads.converted')}</p>
-              </div>
-            </Card>
+            lead.convertedTenant && (
+              <Card className="border-green-200 bg-green-50">
+                <div className="p-6 space-y-4">
+                  <div>
+                    <p className="text-sm font-medium text-green-700">✓ {t('superAdmin.leads.converted')}</p>
+                  </div>
+
+                  <div className="space-y-3 border-t border-green-200 pt-4">
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground">Nombre del Tenant</p>
+                      <p className="mt-1 font-semibold">{lead.convertedTenant.name}</p>
+                    </div>
+
+                    {lead.convertedTenant.subscription && lead.convertedTenant.subscription[0] && (
+                      <>
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Plan & Estado</p>
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Badge className="bg-blue-100 text-blue-800">
+                                {lead.convertedTenant.subscription[0].plan?.name || lead.convertedTenant.subscription[0].planId}
+                              </Badge>
+                              <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                                {lead.convertedTenant.subscription[0].status === 'TRIAL' && 'Trial (14 días)'}
+                                {lead.convertedTenant.subscription[0].status === 'ACTIVE' && 'Activo'}
+                                {lead.convertedTenant.subscription[0].status === 'CANCELED' && 'Cancelado'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="flex gap-2 pt-2">
+                      <Button
+                        size="sm"
+                        onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant.id}`)}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                      >
+                        Ver Tenant
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          // Copy tenant ID to clipboard for support
+                          navigator.clipboard.writeText(lead.convertedTenant.id);
+                          setSuccessMessage('Tenant ID copied to clipboard');
+                          setTimeout(() => setSuccessMessage(null), 2000);
+                        }}
+                        className="flex-1"
+                      >
+                        Copiar ID
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )
           )}
         </div>
       </div>

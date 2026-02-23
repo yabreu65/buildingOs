@@ -82,7 +82,7 @@ export class LeadsService {
   }
 
   /**
-   * Get a single lead by ID (super-admin only)
+   * Get a single lead by ID with converted tenant details (super-admin only)
    */
   async getLead(id: string): Promise<any> {
     const lead = await this.prisma.lead.findUnique({
@@ -93,7 +93,45 @@ export class LeadsService {
       throw new NotFoundException('Lead not found');
     }
 
-    return lead;
+    // If lead is converted, fetch tenant and subscription details
+    let convertedTenant = null;
+    if (lead.convertedTenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: lead.convertedTenantId },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+        },
+      });
+
+      if (tenant) {
+        const subscription = await this.prisma.subscription.findFirst({
+          where: { tenantId: lead.convertedTenantId },
+          select: {
+            id: true,
+            status: true,
+            planId: true,
+            plan: {
+              select: {
+                planId: true,
+                name: true,
+              },
+            },
+          },
+        });
+
+        convertedTenant = {
+          ...tenant,
+          subscription: subscription || null,
+        };
+      }
+    }
+
+    return {
+      ...lead,
+      convertedTenant,
+    };
   }
 
   /**
@@ -346,15 +384,35 @@ export class LeadsService {
 
       // 4. Create subscription with plan
       this.logger.log(`[CONVERT] Creating subscription...`);
-      const planId = dto.planId || (await this.getDefaultPlanId());
-      await tx.subscription.create({
+
+      // Get billing plan (default BASIC, fallback to FREE)
+      const billingPlan = await this.getDefaultBillingPlan();
+
+      // Calculate trial period (14 days from now)
+      const now = new Date();
+      const trialEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+      // Check if subscription already exists (idempotence)
+      const existingSubscription = await tx.subscription.findUnique({
+        where: { tenantId: tenant.id },
+      });
+
+      if (existingSubscription) {
+        this.logger.warn(`[CONVERT] Subscription already exists for tenant ${tenant.id}`);
+        throw new ConflictException('Subscription already exists for this tenant');
+      }
+
+      const subscription = await tx.subscription.create({
         data: {
           tenantId: tenant.id,
-          planId,
+          planId: billingPlan.id,
           status: 'TRIAL',
+          trialEndDate,
+          currentPeriodStart: now,
+          currentPeriodEnd: trialEndDate,
         },
       });
-      this.logger.log(`[CONVERT] ✓ Subscription created`);
+      this.logger.log(`[CONVERT] ✓ Subscription created: ${subscription.id}, trial ends ${trialEndDate.toISOString()}`);
 
       // 5. Check if owner user exists
       this.logger.log(`[CONVERT] Checking if user exists: ${ownerEmail}`);
@@ -468,29 +526,44 @@ export class LeadsService {
           this.logger.error(`Failed to audit lead converted: ${error.message}`);
         });
 
-      this.logger.log(`[CONVERT] ✓✓✓ CONVERSION COMPLETE: tenantId=${tenant.id}, leadId=${leadId}`);
+      this.logger.log(`[CONVERT] ✓✓✓ CONVERSION COMPLETE: tenantId=${tenant.id}, leadId=${leadId}, plan=${billingPlan.planId}`);
 
       return {
         tenantId: tenant.id,
         ownerUserId: ownerUser.id,
         inviteSent: true,
+        plan: billingPlan.planId,
+        subscriptionStatus: 'TRIAL',
+        trialEndDate: trialEndDate.toISOString(),
       };
     });
   }
 
   /**
-   * Get default plan ID (TRIAL)
+   * Get default plan (BASIC with fallback to FREE)
+   * Used for new tenant conversions
    */
-  private async getDefaultPlanId(): Promise<string> {
-    const trialPlan = await this.prisma.billingPlan.findFirst({
-      where: { name: 'TRIAL' },
+  private async getDefaultBillingPlan() {
+    // Try BASIC first
+    let plan = await this.prisma.billingPlan.findFirst({
+      where: { planId: 'BASIC' },
     });
 
-    if (!trialPlan) {
-      throw new BadRequestException('No default TRIAL plan found');
+    // Fallback to FREE if BASIC doesn't exist
+    if (!plan) {
+      plan = await this.prisma.billingPlan.findFirst({
+        where: { planId: 'FREE' },
+      });
     }
 
-    return trialPlan.id;
+    // No plans seeded at all - fatal error
+    if (!plan) {
+      this.logger.error('[CONVERT] FATAL: No BillingPlans found in database. Run seed first.');
+      throw new BadRequestException('BillingPlans not seeded. Please initialize database.');
+    }
+
+    this.logger.log(`[CONVERT] Using default plan: ${plan.planId}`);
+    return plan;
   }
 
   /**

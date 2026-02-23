@@ -87,6 +87,9 @@ export class ConvertLeadResponseDto {
   tenantId: string;
   ownerUserId: string;
   inviteSent: boolean;
+  plan: string; // FREE | BASIC | PRO | ENTERPRISE (BillingPlanId)
+  subscriptionStatus: string; // TRIAL
+  trialEndDate: string; // ISO 8601 date
 }
 
 export class LeadResponseDto {
@@ -105,6 +108,20 @@ export class LeadResponseDto {
   notes?: string;
   convertedTenantId?: string;
   convertedAt?: Date;
+  convertedTenant?: {
+    id: string;
+    name: string;
+    type: string;
+    subscription?: {
+      id: string;
+      status: string;
+      planId: string;
+      plan?: {
+        planId: string;
+        name: string;
+      };
+    }[];
+  };
   createdAt: Date;
   updatedAt: Date;
 }
