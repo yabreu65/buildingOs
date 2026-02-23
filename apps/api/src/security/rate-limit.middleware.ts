@@ -94,6 +94,11 @@ export class RateLimitMiddleware implements NestMiddleware {
     const path = req.path;
     const method = req.method;
 
+    // Exempt authenticated GET requests from rate limiting (they're safe from abuse)
+    if (method === 'GET') {
+      return null;
+    }
+
     // Auth endpoints - strict limits
     if (path === '/auth/login' && method === 'POST') {
       return { max: 5, windowMs: 15 * 60 * 1000 }; // 5 attempts per 15 minutes
@@ -101,6 +106,11 @@ export class RateLimitMiddleware implements NestMiddleware {
 
     if (path === '/auth/signup' && method === 'POST') {
       return { max: 3, windowMs: 60 * 60 * 1000 }; // 3 attempts per hour
+    }
+
+    // Public lead submission - moderate limit
+    if (path === '/leads/public' && method === 'POST') {
+      return { max: 10, windowMs: 60 * 1000 }; // 10 per minute per IP
     }
 
     // Invitation endpoints - moderate limits
@@ -116,7 +126,7 @@ export class RateLimitMiddleware implements NestMiddleware {
       return { max: 5, windowMs: 60 * 60 * 1000 }; // 5 creation attempts per hour
     }
 
-    // Super admin endpoints - very strict
+    // Super admin endpoints - very strict for write operations
     if (path.includes('/super-admin/impersonation/start') && method === 'POST') {
       return { max: 10, windowMs: 60 * 60 * 1000 }; // 10 attempts per hour
     }
@@ -126,9 +136,9 @@ export class RateLimitMiddleware implements NestMiddleware {
       return { max: 30, windowMs: 60 * 1000 }; // 30 per minute
     }
 
-    // Global rate limit: all other API endpoints
-    // This provides a sensible default for any endpoint without specific config
-    return { max: 300, windowMs: 60 * 1000 }; // 300 requests per minute per IP
+    // Global rate limit: all other write operations (POST, PUT, DELETE, PATCH)
+    // This provides protection against abuse while allowing read operations
+    return { max: 100, windowMs: 60 * 1000 }; // 100 requests per minute per IP
   }
 
   /**
