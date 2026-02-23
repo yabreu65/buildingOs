@@ -60,7 +60,7 @@ export default function LeadDetailPage() {
     if (leadId) {
       loadLead();
     }
-  }, [leadId, fetchLead]);
+  }, [leadId]);
 
   const handleUpdateLead = async () => {
     try {
