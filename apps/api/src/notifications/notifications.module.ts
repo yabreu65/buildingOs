@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { AppConfigModule } from '../config/config.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { EmailModule } from '../email/email.module';
@@ -13,7 +14,7 @@ import { NotificationsController } from './notifications.controller';
  */
 @Global()
 @Module({
-  imports: [PrismaModule, AuditModule, EmailModule],
+  imports: [AppConfigModule, PrismaModule, AuditModule, EmailModule],
   providers: [NotificationsService],
   controllers: [NotificationsController],
   exports: [NotificationsService],

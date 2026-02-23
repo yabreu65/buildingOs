@@ -19,6 +19,8 @@
     "migrate:status": "prisma migrate status",
     "seed": "ts-node prisma/seed.ts",
     "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
+    "seed:pilot": "ts-node prisma/seed-pilot.ts",
+    "seed:pilot:staging": "NODE_ENV=staging ts-node prisma/seed-pilot.ts",
     "studio": "prisma studio"
   },
   "dependencies": {
