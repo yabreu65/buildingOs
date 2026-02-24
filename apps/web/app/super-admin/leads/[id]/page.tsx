@@ -37,6 +37,7 @@ export default function LeadDetailPage() {
   const [status, setStatus] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [tenantName, setTenantName] = useState<string>('');
+  const [ownerEmail, setOwnerEmail] = useState<string>('');
   const [showConvertForm, setShowConvertForm] = useState(false);
 
   useEffect(() => {
@@ -90,18 +91,25 @@ export default function LeadDetailPage() {
       return;
     }
 
+    if (!ownerEmail.trim()) {
+      setError('Owner email is required');
+      return;
+    }
+
     try {
       setIsConverting(true);
       setError(null);
       const result = await convert(leadId, {
         tenantName: tenantName.trim(),
         tenantType: lead?.tenantType,
+        ownerEmail: ownerEmail.trim(),
       });
       if (result && result.tenantId) {
         setSuccessMessage('Lead converted successfully!');
         setSuccessTenantId(result.tenantId);
         setShowConvertForm(false);
         setTenantName('');
+        setOwnerEmail('');
         // Refresh lead data
         const updated = await fetchLead(leadId);
         if (updated) {
@@ -342,7 +350,10 @@ export default function LeadDetailPage() {
               <div className="p-6 space-y-4">
                 {!showConvertForm ? (
                   <Button
-                    onClick={() => setShowConvertForm(true)}
+                    onClick={() => {
+                      setShowConvertForm(true);
+                      setOwnerEmail(lead?.email || '');
+                    }}
                     className="w-full"
                   >
                     {t('superAdmin.leads.convertButton')}
@@ -359,10 +370,21 @@ export default function LeadDetailPage() {
                         placeholder={t('forms.placeholder')}
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-2">
+                        Email del Dueño *
+                      </label>
+                      <Input
+                        type="email"
+                        value={ownerEmail}
+                        onChange={(e) => setOwnerEmail(e.target.value)}
+                        placeholder="owner@example.com"
+                      />
+                    </div>
                     <div className="flex gap-2">
                       <Button
                         onClick={handleConvertLead}
-                        disabled={isConverting || !tenantName.trim()}
+                        disabled={isConverting || !tenantName.trim() || !ownerEmail.trim()}
                         className="flex-1"
                       >
                         {isConverting ? t('superAdmin.leads.converting') : t('superAdmin.leads.convertButton')}
@@ -371,6 +393,7 @@ export default function LeadDetailPage() {
                         onClick={() => {
                           setShowConvertForm(false);
                           setTenantName('');
+                          setOwnerEmail('');
                         }}
                         className="flex-1"
                       >

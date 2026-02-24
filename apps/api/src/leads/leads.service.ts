@@ -364,9 +364,21 @@ export class LeadsService {
     }
 
     // 2. Use provided values or defaults from lead
-    const ownerEmail = dto.ownerEmail || lead.email;
+    const ownerEmail = (dto.ownerEmail || lead.email).trim().toLowerCase();
     const ownerFullName = dto.ownerFullName || lead.fullName;
     const tenantType = dto.tenantType || lead.tenantType;
+
+    // Validate ownerEmail
+    if (!ownerEmail || ownerEmail.length === 0) {
+      throw new BadRequestException('Owner email is required');
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(ownerEmail)) {
+      throw new BadRequestException(`Invalid owner email: ${ownerEmail}`);
+    }
+
+    this.logger.log(`[CONVERT] Using owner email: ${ownerEmail}`);
 
     // Start atomic transaction
     return await this.prisma.$transaction(async (tx) => {

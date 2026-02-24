@@ -56,7 +56,6 @@ export default function Sidebar() {
       <nav className="flex flex-col gap-1 px-2 pb-4">
         <NavItem href={routes.tenantDashboard(tenantId)} label="Dashboard" />
         <NavItem href={routes.buildingsList(tenantId)} label="Buildings" />
-        <NavItem href={`/${tenantId}/properties`} label="Properties" />
         <NavItem href={`/${tenantId}/units`} label="Units" />
         <NavItem href={`/${tenantId}/payments`} label="Payments" />
         <NavItem href={routes.tenantReports(tenantId)} label="Reportes" />

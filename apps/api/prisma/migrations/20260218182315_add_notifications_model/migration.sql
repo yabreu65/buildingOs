@@ -16,21 +16,6 @@ ALTER TYPE "AuditAction" ADD VALUE 'NOTIFICATION_CREATED';
 ALTER TYPE "AuditAction" ADD VALUE 'NOTIFICATION_READ';
 ALTER TYPE "AuditAction" ADD VALUE 'NOTIFICATION_DELETED';
 
--- DropForeignKey
-ALTER TABLE "SupportTicket" DROP CONSTRAINT "SupportTicket_assignedToUserId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SupportTicket" DROP CONSTRAINT "SupportTicket_createdByUserId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SupportTicket" DROP CONSTRAINT "SupportTicket_tenantId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SupportTicketComment" DROP CONSTRAINT "SupportTicketComment_authorUserId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SupportTicketComment" DROP CONSTRAINT "SupportTicketComment_supportTicketId_fkey";
-
 -- CreateTable
 CREATE TABLE "Notification" (
     "id" TEXT NOT NULL,
@@ -57,21 +42,6 @@ CREATE INDEX "Notification_userId_createdAt_idx" ON "Notification"("userId", "cr
 
 -- CreateIndex
 CREATE INDEX "Notification_tenantId_createdAt_idx" ON "Notification"("tenantId", "createdAt");
-
--- AddForeignKey
-ALTER TABLE "SupportTicket" ADD CONSTRAINT "SupportTicket_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "SupportTicket" ADD CONSTRAINT "SupportTicket_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "SupportTicket" ADD CONSTRAINT "SupportTicket_assignedToUserId_fkey" FOREIGN KEY ("assignedToUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "SupportTicketComment" ADD CONSTRAINT "SupportTicketComment_supportTicketId_fkey" FOREIGN KEY ("supportTicketId") REFERENCES "SupportTicket"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "SupportTicketComment" ADD CONSTRAINT "SupportTicketComment_authorUserId_fkey" FOREIGN KEY ("authorUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Notification" ADD CONSTRAINT "Notification_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

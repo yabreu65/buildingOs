@@ -9,7 +9,7 @@ import { useCan } from "@/features/rbac/rbac.hooks";
 import { getSession } from "@/features/auth/session.storage";
 import type { Role } from "@/features/auth/auth.types";
 import { useBoStorageTick } from "@/shared/lib/storage/useBoStorage";
-import { listProperties } from "@/features/properties/properties.storage";
+import { listBuildings } from "@/features/units/buildings.storage";
 import { listUnits } from "@/features/units/units.storage";
 import { listBankAccounts } from "@/features/banking/banking.storage";
 import { listPayments } from "@/features/payments/payments.storage";
@@ -42,13 +42,13 @@ export default function OnboardingChecklist() {
 
     // 1) Estado automático (source of truth: storages por feature)
     // Depende de storageTick para actualizarse cuando cambie el storage
-    const hasProperties = listProperties(tenantId).length > 0;
+    const hasBuildings = listBuildings(tenantId).length > 0;
     const hasUnits = listUnits(tenantId).length > 0;
     const hasAccounts = listBankAccounts(tenantId).length > 0;
     const hasPayments = listPayments(tenantId).length > 0;
 
     const autoStatus: Record<string, boolean> = {
-      properties: hasProperties,
+      properties: hasBuildings,
       units: hasUnits,
       banking: hasAccounts,
       payments: hasPayments,
@@ -59,9 +59,9 @@ export default function OnboardingChecklist() {
     const baseSteps: OnboardingStep[] = [
       {
         id: "properties",
-        label: "Crear Propiedades",
+        label: "Crear Edificios",
         description: "Registra el edificio o condominio.",
-        path: `/${tenantId}/properties`,
+        path: `/${tenantId}/buildings`,
         status: "TODO",
         condition: true,
         isManualOverrideAllowed: false,

@@ -9,7 +9,7 @@ import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { SendEmailOptions, EmailType, TenantBranding, EmailProvider } from './email.types';
-import nodemailer from 'nodemailer';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class EmailService {

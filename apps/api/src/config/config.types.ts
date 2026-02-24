@@ -61,6 +61,9 @@ export interface AppConfig {
   // Feature flags
   featurePortalResident: boolean;
   featurePaymentsMvp: boolean;
+
+  // Development overrides (optional)
+  invitationEmailOverride?: string;
 }
 
 /**

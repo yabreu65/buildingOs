@@ -126,7 +126,9 @@ export class InvitationsService {
     token: string,
   ): Promise<{
     tenantId: string;
+    tenantName: string;
     email: string;
+    roles: string[];
     expiresAt: Date;
   }> {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -160,16 +162,19 @@ export class InvitationsService {
 
     return {
       tenantId: invitation.tenantId,
+      tenantName: invitation.tenant.name,
       email: invitation.email,
+      roles: invitation.roles as string[],
       expiresAt: invitation.expiresAt,
     };
   }
 
   /**
    * Accept invitation: create user (or link existing) + membership + roles
-   * Returns AuthResponse with JWT
+   * Idempotent: allows accepting even if membership already exists
+   * Returns AuthResponse with JWT + metadata about creation
    */
-  async acceptInvitation(dto: AcceptInvitationDto): Promise<AuthResponse> {
+  async acceptInvitation(dto: AcceptInvitationDto): Promise<AuthResponse & { membershipExisted?: boolean; userExisted?: boolean }> {
     const tokenHash = crypto.createHash('sha256').update(dto.token).digest('hex');
 
     const invitation = await this.prisma.invitation.findFirst({
@@ -198,6 +203,8 @@ export class InvitationsService {
         where: { email },
       });
 
+      let userExisted = !!user;
+
       if (!user) {
         // New user: require name and password
         if (!dto.name || dto.name.length < 1) {
@@ -217,36 +224,45 @@ export class InvitationsService {
             passwordHash: hashedPassword,
           },
         });
+      } else {
+        // Existing user: allow setting password if empty (idempotent)
+        if (dto.password && dto.password.length >= 8 && !user.passwordHash) {
+          const hashedPassword = await bcrypt.hash(dto.password, 10);
+          user = await tx.user.update({
+            where: { id: user.id },
+            data: { passwordHash: hashedPassword },
+          });
+        }
       }
 
-      // Find or create membership
+      // Find or create membership (idempotent: allow if exists)
       let membership = await tx.membership.findUnique({
         where: { userId_tenantId: { userId: user.id, tenantId } },
       });
 
-      if (membership) {
-        // Already member: return conflict
-        throw new ConflictException('Este usuario ya es miembro del tenant');
-      }
+      let membershipExisted = !!membership;
 
-      membership = await tx.membership.create({
-        data: {
-          userId: user.id,
-          tenantId,
-        },
-      });
-
-      // Create roles
-      for (const role of roles) {
-        await tx.membershipRole.create({
+      if (!membership) {
+        // Create new membership
+        membership = await tx.membership.create({
           data: {
-            membershipId: membership.id,
-            role: role as any, // Role enum is validated in DTO
+            userId: user.id,
+            tenantId,
           },
         });
+
+        // Create roles (only for new membership)
+        for (const role of roles) {
+          await tx.membershipRole.create({
+            data: {
+              membershipId: membership.id,
+              role: role as any,
+            },
+          });
+        }
       }
 
-      // Mark invitation as accepted
+      // Mark invitation as accepted (always, even if membership existed)
       await tx.invitation.update({
         where: { id: invitation.id },
         data: {
@@ -255,7 +271,7 @@ export class InvitationsService {
         },
       });
 
-      return { user, membership };
+      return { user, membership, membershipExisted, userExisted };
     });
 
     // Get memberships for JWT payload
@@ -289,6 +305,8 @@ export class InvitationsService {
         name: result.user.name,
       },
       memberships,
+      membershipExisted: result.membershipExisted,
+      userExisted: result.userExisted,
     };
   }
 

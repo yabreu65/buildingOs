@@ -10,10 +10,25 @@ BEGIN
   END IF;
 END $$;
 
--- AlterTable
-ALTER TABLE "AiInteractionLog" ADD COLUMN "cacheHit" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN "modelSize" TEXT,
-ADD COLUMN "page" TEXT;
+-- CreateTable (AiInteractionLog) - only if not exists
+CREATE TABLE IF NOT EXISTS "AiInteractionLog" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "membershipId" TEXT NOT NULL,
+    "context" JSONB NOT NULL,
+    "prompt" TEXT NOT NULL,
+    "response" JSONB NOT NULL,
+    "provider" TEXT NOT NULL,
+    "tokensIn" INTEGER,
+    "tokensOut" INTEGER,
+    "cacheHit" BOOLEAN NOT NULL DEFAULT false,
+    "modelSize" TEXT,
+    "page" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AiInteractionLog_pkey" PRIMARY KEY ("id")
+);
 
 -- CreateTable
 CREATE TABLE "AiActionEvent" (
@@ -40,8 +55,23 @@ CREATE INDEX "AiActionEvent_tenantId_actionType_idx" ON "AiActionEvent"("tenantI
 -- CreateIndex
 CREATE INDEX "AiActionEvent_interactionId_idx" ON "AiActionEvent"("interactionId");
 
+-- CreateIndex for AiInteractionLog
+CREATE INDEX "AiInteractionLog_tenantId_createdAt_idx" ON "AiInteractionLog"("tenantId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AiInteractionLog_tenantId_userId_createdAt_idx" ON "AiInteractionLog"("tenantId", "userId", "createdAt");
+
 -- CreateIndex
 CREATE INDEX "AiInteractionLog_tenantId_page_createdAt_idx" ON "AiInteractionLog"("tenantId", "page", "createdAt");
+
+-- AddForeignKey for AiInteractionLog
+ALTER TABLE "AiInteractionLog" ADD CONSTRAINT "AiInteractionLog_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE;
+
+-- AddForeignKey for AiInteractionLog
+ALTER TABLE "AiInteractionLog" ADD CONSTRAINT "AiInteractionLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE;
+
+-- AddForeignKey for AiInteractionLog
+ALTER TABLE "AiInteractionLog" ADD CONSTRAINT "AiInteractionLog_membershipId_fkey" FOREIGN KEY ("membershipId") REFERENCES "Membership"("id") ON DELETE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AiActionEvent" ADD CONSTRAINT "AiActionEvent_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE;

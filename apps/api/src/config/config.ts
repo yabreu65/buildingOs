@@ -161,6 +161,12 @@ export const createConfigSchema = (nodeEnv: string) => {
     FEATURE_PAYMENTS_MVP: z
       .string()
       .transform((v) => parseBoolean(v, true)),
+
+    // Development overrides (optional)
+    INVITATION_EMAIL_OVERRIDE: z.preprocess(
+      emptyStringToUndefined,
+      z.string().email().optional(),
+    ),
   }).superRefine((data, ctx) => {
     if (data.MAIL_PROVIDER === 'smtp') {
       if (!data.SMTP_HOST) {
@@ -254,6 +260,9 @@ export function loadConfig(): AppConfig {
       // Feature flags
       featurePortalResident: parsed.FEATURE_PORTAL_RESIDENT,
       featurePaymentsMvp: parsed.FEATURE_PAYMENTS_MVP,
+
+      // Development overrides
+      invitationEmailOverride: parsed.INVITATION_EMAIL_OVERRIDE,
     };
 
     logConfigLoaded(config, nodeEnv);

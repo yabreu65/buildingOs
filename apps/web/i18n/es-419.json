@@ -55,7 +55,35 @@
     "invalidCredentials": "Correo o contraseña inválidos",
     "emailRequired": "El correo es requerido",
     "passwordRequired": "La contraseña es requerida",
-    "invalidEmail": "Correo electrónico inválido"
+    "invalidEmail": "Correo electrónico inválido",
+
+    "invite": {
+      "title": "Activá tu cuenta",
+      "subtitle": "Te invitaron a BuildingOS para acceder a:",
+      "instruction": "Completá tus datos y creá una contraseña para ingresar.",
+      "nameLabel": "Nombre completo",
+      "namePlaceholder": "Tu nombre",
+      "nameRequired": "El nombre es requerido",
+      "passwordLabel": "Crear contraseña",
+      "passwordPlaceholder": "Mínimo 8 caracteres",
+      "passwordHint": "Mínimo 8 caracteres",
+      "passwordMinimum": "La contraseña debe tener al menos 8 caracteres",
+      "submit": "Crear cuenta y entrar",
+      "processing": "Creando cuenta...",
+      "haveAccount": "¿Ya tienes cuenta?",
+      "loginLink": "Inicia sesión",
+      "validating": "Validando invitación...",
+      "invalidTitle": "Invitación inválida",
+      "invalidOrExpired": "La invitación es inválida o ha expirado",
+      "acceptError": "Error al aceptar la invitación",
+      "noTokenTitle": "Sin invitación",
+      "noTokenDescription": "Se requiere un enlace de invitación para aceptar la invitación",
+      "backToLogin": "Volver al inicio de sesión",
+      "expiresAt": "Válida hasta:",
+      "roles": "Tu rol:",
+      "invitedEmail": "Correo de invitación:",
+      "alreadyMemberSuccess": "Tu acceso ya estaba creado. Activamos tu cuenta."
+    }
   },
 
   "navigation": {
