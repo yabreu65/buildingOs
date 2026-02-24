@@ -9,7 +9,7 @@ import { useCan } from '../rbac/rbac.hooks';
 import type { Unit } from './units.api';
 import { useUnits } from './useUnits';
 import { UnitCreateForm } from './components';
-import { listBuildings, seedBuildingsIfEmpty } from './buildings.storage';
+import { useBuildings } from '../buildings/hooks';
 import { listUsers, seedUsersIfEmpty, listResidents } from './users.storage';
 import {
   getActiveResident,
@@ -44,8 +44,10 @@ export default function UnitsUI() {
     tenantId,
   });
 
-  // Mantener buildings y residents desde storage (para modales de asignación)
-  const [buildings, setBuildings] = useState<any[]>([]);
+  // Fetch buildings from API (real buildings, not mock storage)
+  const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
+
+  // Residents from storage (fallback for occupant assignment)
   const [residents, setResidents] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
@@ -63,17 +65,12 @@ export default function UnitsUI() {
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Inicialización: cargar edificios y residentes desde storage para lookups
+  // Load residents from storage for occupant assignment
   React.useEffect(() => {
     if (!tenantId) return;
 
-    seedBuildingsIfEmpty(tenantId);
     seedUsersIfEmpty(tenantId);
-
-    const loadedBuildings = listBuildings(tenantId);
     const loadedResidents = listResidents(tenantId);
-
-    setBuildings(loadedBuildings);
     setResidents(loadedResidents);
   }, [tenantId]);
 
