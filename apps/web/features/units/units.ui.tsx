@@ -2,16 +2,13 @@
 
 import { useParams } from 'next/navigation';
 import React, { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 import { Table, THead, TR, TH, TBody, TD } from '../../shared/components/ui/Table';
 import Badge from '../../shared/components/ui/Badge';
 import Button from '../../shared/components/ui/Button';
-import Input from '../../shared/components/ui/Input';
 import { useCan } from '../rbac/rbac.hooks';
 import type { Unit } from './units.api';
 import { useUnits } from './useUnits';
+import { UnitCreateForm } from './components';
 import { listBuildings, seedBuildingsIfEmpty } from './buildings.storage';
 import { listUsers, seedUsersIfEmpty, listResidents } from './users.storage';
 import {
@@ -19,17 +16,6 @@ import {
   assignResident,
   unassignResident,
 } from './unitResidents.storage';
-
-// Zod schema para crear/editar unidad
-const createUnitSchema = z.object({
-  buildingId: z.string().min(1, 'Edificio requerido'),
-  label: z.string().min(1, 'Label requerido').min(2, 'Label mínimo 2 caracteres'),
-  code: z.string().optional(),
-  unitType: z.enum(['APARTMENT', 'HOUSE', 'OFFICE', 'STORAGE', 'PARKING', 'OTHER']).optional(),
-  occupancyStatus: z.enum(['UNKNOWN', 'VACANT', 'OCCUPIED']).optional(),
-});
-
-type CreateUnitFormData = z.infer<typeof createUnitSchema>;
 
 // Building interface from storage
 interface Building {
@@ -91,54 +77,15 @@ export default function UnitsUI() {
     setResidents(loadedResidents);
   }, [tenantId]);
 
-  // React Hook Form setup
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-    reset,
-    watch,
-  } = useForm<CreateUnitFormData>({
-    resolver: zodResolver(createUnitSchema),
-    defaultValues: {
-      buildingId: '',
-      label: '',
-      code: '',
-      unitType: undefined,
-      occupancyStatus: undefined,
-    },
-  });
+  // Handler para crear unidad (delegado al componente unificado)
+  const handleCreateUnitSuccess = (unit: Unit) => {
+    setShowForm(false);
+    setFeedback({ type: 'success', message: `Unidad "${unit.label}" creada` });
+    setTimeout(() => setFeedback(null), 3000);
+  };
 
-  const selectedBuildingId = watch('buildingId');
-
-  // Handler para crear unidad
-  const onCreateUnit = async (data: CreateUnitFormData) => {
-    if (!tenantId) {
-      setFeedback({ type: 'error', message: 'Tenant ID no disponible' });
-      return;
-    }
-
-    try {
-      // 1. Limpiar inputs
-      const cleanedLabel = data.label.trim();
-      const cleanedCode = data.code?.trim();
-
-      // 2. Crear unidad vía API
-      const newUnit = await apiCreateUnit(data.buildingId, {
-        label: cleanedLabel,
-        code: cleanedCode,
-        unitType: data.unitType,
-        occupancyStatus: data.occupancyStatus,
-      });
-
-      reset();
-      setShowForm(false);
-      setFeedback({ type: 'success', message: `Unidad "${newUnit.label}" creada` });
-      setTimeout(() => setFeedback(null), 3000);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Error al crear unidad';
-      setFeedback({ type: 'error', message });
-    }
+  const handleCreateUnit = async (buildingId: string, input: any) => {
+    return await apiCreateUnit(buildingId, input);
   };
 
   // Handler para asignar residente
@@ -223,124 +170,15 @@ export default function UnitsUI() {
         </div>
       )}
 
-      {/* Formulario de creación */}
+      {/* Formulario de creación - Componente Unificado */}
       {showForm && canWrite && (
-        <div className="border border-input rounded-lg p-4 bg-muted/30 space-y-3">
-          <h4 className="font-medium text-sm">Crear nueva unidad</h4>
-
-          <form onSubmit={handleSubmit(onCreateUnit)} className="space-y-3">
-            {/* Edificio (requerido) */}
-            <div>
-              <label htmlFor="buildingId" className="block text-sm font-medium mb-1">
-                Edificio *
-              </label>
-              <select
-                id="buildingId"
-                className="w-full px-3 py-2 border border-input rounded-md bg-background text-sm"
-                {...register('buildingId')}
-              >
-                <option value="">Seleccionar edificio</option>
-                {buildings.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              {errors.buildingId && (
-                <p className="text-xs text-red-600 mt-1">{errors.buildingId.message}</p>
-              )}
-            </div>
-
-            {/* Label (requerido) */}
-            <div>
-              <label htmlFor="label" className="block text-sm font-medium mb-1">
-                Label *
-              </label>
-              <Input
-                id="label"
-                placeholder="Ej: Apto 101"
-                {...register('label')}
-              />
-              {errors.label && (
-                <p className="text-xs text-red-600 mt-1">{errors.label.message}</p>
-              )}
-            </div>
-
-            {/* Código / External ID (opcional) */}
-            <div>
-              <label htmlFor="code" className="block text-sm font-medium mb-1">
-                Código / External ID (opcional)
-              </label>
-              <Input
-                id="code"
-                placeholder="Ej: UF-101"
-                {...register('code')}
-              />
-              {errors.code && (
-                <p className="text-xs text-red-600 mt-1">{errors.code.message}</p>
-              )}
-            </div>
-
-            {/* Tipo de unidad (opcional) */}
-            <div>
-              <label htmlFor="unitType" className="block text-sm font-medium mb-1">
-                Tipo de unidad (opcional)
-              </label>
-              <select
-                id="unitType"
-                className="w-full px-3 py-2 border border-input rounded-md bg-background text-sm"
-                {...register('unitType')}
-              >
-                <option value="">Sin especificar</option>
-                <option value="APARTMENT">Apartamento</option>
-                <option value="HOUSE">Casa</option>
-                <option value="OFFICE">Oficina</option>
-                <option value="STORAGE">Almacén</option>
-                <option value="PARKING">Estacionamiento</option>
-                <option value="OTHER">Otro</option>
-              </select>
-              {errors.unitType && (
-                <p className="text-xs text-red-600 mt-1">{errors.unitType.message}</p>
-              )}
-            </div>
-
-            {/* Estado de ocupación (opcional) */}
-            <div>
-              <label htmlFor="occupancyStatus" className="block text-sm font-medium mb-1">
-                Estado de ocupación (opcional)
-              </label>
-              <select
-                id="occupancyStatus"
-                className="w-full px-3 py-2 border border-input rounded-md bg-background text-sm"
-                {...register('occupancyStatus')}
-              >
-                <option value="">Sin especificar</option>
-                <option value="UNKNOWN">Desconocido</option>
-                <option value="VACANT">Vacío</option>
-                <option value="OCCUPIED">Ocupado</option>
-              </select>
-              {errors.occupancyStatus && (
-                <p className="text-xs text-red-600 mt-1">{errors.occupancyStatus.message}</p>
-              )}
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Guardando...' : 'Guardar Unidad'}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setShowForm(false);
-                  reset();
-                }}
-              >
-                Cancelar
-              </Button>
-            </div>
-          </form>
-        </div>
+        <UnitCreateForm
+          tenantId={tenantId || ''}
+          buildings={buildings}
+          onSuccess={handleCreateUnitSuccess}
+          onCancel={() => setShowForm(false)}
+          onCreateUnit={handleCreateUnit}
+        />
       )}
 
       {/* Estado: Loading */}

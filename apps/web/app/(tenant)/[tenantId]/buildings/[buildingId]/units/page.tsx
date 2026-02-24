@@ -13,10 +13,12 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
+import { UnitCreateForm } from '@/features/units/components';
 import { useToast } from '@/shared/components/ui/Toast';
 import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
-import { Loader2, Plus, Edit, Trash2, LayoutGrid, X } from 'lucide-react';
+import { Edit, Trash2, LayoutGrid, Plus, X } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
+import type { Unit as ApiUnit } from '@/features/units/units.api';
 
 type UnitParams = {
   tenantId: string;
@@ -46,14 +48,6 @@ export default function UnitsPage() {
   } = useUnits(tenantId, buildingId);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [formData, setFormData] = useState({
-    code: '',
-    label: '',
-    unitType: 'APARTMENT',
-    occupancyStatus: 'UNKNOWN',
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   // Edit state
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
@@ -75,29 +69,25 @@ export default function UnitsPage() {
 
   const building = buildings.find((b) => b.id === buildingId);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.code.trim()) return;
+  const handleCreateSuccess = (unit: ApiUnit) => {
+    setShowCreateForm(false);
+    toast(t('units.created'), 'success');
+  };
 
-    setCreateError(null);
-    setSubmitting(true);
+  const handleCreateUnit = async (buildingId: string, input: any): Promise<ApiUnit> => {
     try {
-      await createUnit(formData);
-      setFormData({ code: '', label: '', unitType: 'APARTMENT', occupancyStatus: 'UNKNOWN' });
-      setShowCreateForm(false);
-      toast(t('units.created'), 'success');
+      const unit = await createUnit(input);
+      // Convert from old Unit type to ApiUnit type for UnitCreateForm
+      return unit as ApiUnit;
     } catch (err) {
       // Check if it's a plan limit error first
       if (!handlePlanLimitError(err, (msg, type = 'error', duration = 3000) => {
         toast(msg, type, duration);
       })) {
-        // If not a plan limit error, handle as normal error
-        const message = err instanceof Error ? err.message : t('units.errors.createFailed');
-        setCreateError(message);
-        toast(message, 'error');
+        // If not a plan limit error, rethrow
+        throw err;
       }
-    } finally {
-      setSubmitting(false);
+      throw err;
     }
   };
 
@@ -210,119 +200,16 @@ export default function UnitsPage() {
       {/* Navigation Tabs */}
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
 
-      {/* Create Form */}
+      {/* Create Form - Unified Component */}
       {showCreateForm && (
-        <Card className="border-blue-200 bg-blue-50">
-          <div className="mb-4 flex justify-between items-center">
-            <h3 className="text-lg font-semibold">Create New Unit</h3>
-            <button
-              onClick={() => {
-                setShowCreateForm(false);
-                setCreateError(null);
-              }}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          {createError && (
-            <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded-md text-red-700 text-sm">
-              {createError}
-            </div>
-          )}
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Unit Code *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.code}
-                  onChange={(e) =>
-                    setFormData({ ...formData, code: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder={t('units.codePlaceholder')}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Label (optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.label}
-                  onChange={(e) =>
-                    setFormData({ ...formData, label: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., Apt 101"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Type
-                </label>
-                <select
-                  value={formData.unitType}
-                  onChange={(e) =>
-                    setFormData({ ...formData, unitType: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="APARTMENT">{t('units.types.apartment')}</option>
-                  <option value="HOUSE">House</option>
-                  <option value="OFFICE">{t('units.types.office')}</option>
-                  <option value="STORAGE">Storage</option>
-                  <option value="PARKING">Parking</option>
-                  <option value="OTHER">Other</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Occupancy Status
-                </label>
-                <select
-                  value={formData.occupancyStatus}
-                  onChange={(e) =>
-                    setFormData({ ...formData, occupancyStatus: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="UNKNOWN">{t('units.statuses.unknown')}</option>
-                  <option value="VACANT">{t('units.statuses.vacant')}</option>
-                  <option value="OCCUPIED">{t('units.statuses.occupied')}</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex gap-2 justify-end">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setShowCreateForm(false);
-                  setCreateError(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={submitting}>
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  'Create Unit'
-                )}
-              </Button>
-            </div>
-          </form>
-        </Card>
+        <UnitCreateForm
+          tenantId={tenantId}
+          buildings={buildings}
+          defaultBuildingId={buildingId}
+          onSuccess={handleCreateSuccess}
+          onCancel={() => setShowCreateForm(false)}
+          onCreateUnit={handleCreateUnit}
+        />
       )}
 
       {/* Edit Form */}

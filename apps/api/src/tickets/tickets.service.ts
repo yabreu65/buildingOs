@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -21,6 +22,8 @@ import { AuditAction } from '@prisma/client';
  */
 @Injectable()
 export class TicketsService {
+  private readonly logger = new Logger(TicketsService.name);
+
   constructor(
     private prisma: PrismaService,
     private validators: TicketsValidators,
@@ -176,26 +179,54 @@ export class TicketsService {
     const where: any = { tenantId, buildingId };
     if (filters?.status) where.status = filters.status;
     if (filters?.priority) where.priority = filters.priority;
+    if (filters?.unitId) where.unitId = filters.unitId; // ✅ FIX: Include unitId filter
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
 
-    return await this.prisma.ticket.findMany({
-      where,
-      include: {
-        createdBy: { select: { id: true, name: true, email: true } },
-        assignedTo: {
-          include: { user: { select: { id: true, name: true, email: true } } },
+    // 3. Pagination (default: 50 per page)
+    const pageSize = Math.min(filters?.limit || 50, 100); // Max 100 per request
+    const skip = (filters?.page || 0) * pageSize;
+
+    // 4. Diagnostic logging
+    const startTime = Date.now();
+    this.logger.debug(
+      `[findAll] tenantId=${tenantId}, buildingId=${buildingId}, unitId=${filters?.unitId || 'none'}, pageSize=${pageSize}, skip=${skip}`,
+    );
+
+    try {
+      const tickets = await this.prisma.ticket.findMany({
+        where,
+        include: {
+          createdBy: { select: { id: true, name: true, email: true } },
+          assignedTo: {
+            include: { user: { select: { id: true, name: true, email: true } } },
+          },
+          building: { select: { id: true, name: true } },
+          unit: { select: { id: true, label: true, code: true } },
+          comments: {
+            take: 1,
+            orderBy: { createdAt: 'desc' },
+            include: { author: { select: { id: true, name: true } } },
+          },
         },
-        building: { select: { id: true, name: true } },
-        unit: { select: { id: true, label: true, code: true } },
-        comments: {
-          take: 1,
-          orderBy: { createdAt: 'desc' },
-          include: { author: { select: { id: true, name: true } } },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+        take: pageSize, // ✅ FIX: Pagination
+        skip: skip,
+      });
+
+      const duration = Date.now() - startTime;
+      this.logger.debug(
+        `[findAll] Found ${tickets.length} tickets in ${duration}ms`,
+      );
+
+      return tickets;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(
+        `[findAll] Error after ${duration}ms: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   }
 
   /**
