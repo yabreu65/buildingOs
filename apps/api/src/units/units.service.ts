@@ -70,6 +70,29 @@ export class UnitsService {
     }
   }
 
+  /**
+   * Get all units for a tenant (optionally filtered by buildingId)
+   * Multi-tenant safe: filters by building.tenantId
+   */
+  async findAllByTenant(tenantId: string, buildingId?: string) {
+    const where: any = {
+      building: { tenantId },
+    };
+
+    if (buildingId) {
+      where.buildingId = buildingId;
+    }
+
+    return await this.prisma.unit.findMany({
+      where,
+      include: {
+        building: { select: { id: true, name: true } },
+        unitOccupants: { include: { user: true } },
+      },
+      orderBy: [{ building: { name: 'asc' } }, { label: 'asc' }],
+    });
+  }
+
   async findAll(tenantId: string, buildingId: string) {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({

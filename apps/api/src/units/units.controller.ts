@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -15,9 +16,32 @@ import { UnitsService } from './units.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 
-@Controller('tenants/:tenantId/buildings/:buildingId/units')
+@Controller('tenants/:tenantId/units')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class UnitsController {
+  constructor(private readonly unitsService: UnitsService) {}
+
+  /**
+   * Get all units for a tenant (optionally filtered by buildingId)
+   * GET /tenants/:tenantId/units
+   * GET /tenants/:tenantId/units?buildingId=xyz
+   */
+  @Get()
+  findAllByTenant(
+    @TenantParam() tenantId: string,
+    @Query('buildingId') buildingId?: string,
+  ) {
+    return this.unitsService.findAllByTenant(tenantId, buildingId);
+  }
+}
+
+/**
+ * Building-scoped routes (kept for backward compatibility)
+ * POST/GET/PATCH/DELETE specific units within a building
+ */
+@Controller('tenants/:tenantId/buildings/:buildingId/units')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
+export class BuildingUnitsController {
   constructor(private readonly unitsService: UnitsService) {}
 
   @Post()

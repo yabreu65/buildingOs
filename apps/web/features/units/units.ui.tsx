@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -10,17 +10,11 @@ import Badge from '../../shared/components/ui/Badge';
 import Button from '../../shared/components/ui/Button';
 import Input from '../../shared/components/ui/Input';
 import { useCan } from '../rbac/rbac.hooks';
-import { useBoStorageTick } from '../../shared/lib/storage/useBoStorage';
-import type { Unit, Building, User } from './units.types';
-import {
-  listUnits,
-  createUnit,
-  deleteUnit,
-} from './units.storage';
+import type { Unit } from './units.api';
+import { useUnits } from './useUnits';
 import { listBuildings, seedBuildingsIfEmpty } from './buildings.storage';
 import { listUsers, seedUsersIfEmpty, listResidents } from './users.storage';
 import {
-  listUnitResidents,
   getActiveResident,
   assignResident,
   unassignResident,
@@ -30,12 +24,21 @@ import {
 const createUnitSchema = z.object({
   buildingId: z.string().min(1, 'Edificio requerido'),
   label: z.string().min(1, 'Label requerido').min(2, 'Label mínimo 2 caracteres'),
-  unitCode: z.string().optional(),
+  code: z.string().optional(),
   unitType: z.enum(['APARTMENT', 'HOUSE', 'OFFICE', 'STORAGE', 'PARKING', 'OTHER']).optional(),
   occupancyStatus: z.enum(['UNKNOWN', 'VACANT', 'OCCUPIED']).optional(),
 });
 
 type CreateUnitFormData = z.infer<typeof createUnitSchema>;
+
+// Building interface from storage
+interface Building {
+  id: string;
+  tenantId: string;
+  name: string;
+  address: string;
+  createdAt: string;
+}
 
 export default function UnitsUI() {
   const params = useParams();
@@ -43,13 +46,21 @@ export default function UnitsUI() {
 
   const canWrite = useCan('units.write');
 
-  // Re-render cuando cambie localStorage
-  useBoStorageTick();
+  // Fetch units from API (tenant-level - all units)
+  const {
+    units,
+    loading,
+    error,
+    refetch: refetchUnits,
+    createUnit: apiCreateUnit,
+    deleteUnit: apiDeleteUnit,
+  } = useUnits({
+    tenantId,
+  });
 
-  // Estado del componente
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [buildings, setBuildings] = useState<Building[]>([]);
-  const [residents, setResidents] = useState<User[]>([]);
+  // Mantener buildings y residents desde storage (para modales de asignación)
+  const [buildings, setBuildings] = useState<any[]>([]);
+  const [residents, setResidents] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null,
@@ -61,22 +72,21 @@ export default function UnitsUI() {
   const [selectedResident, setSelectedResident] = useState<string>('');
   const [deleteModal, setDeleteModal] = useState<{
     unitId: string;
+    buildingId: string;
     unitLabel: string;
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Inicialización: seed datos y cargar estado
-  useEffect(() => {
+  // Inicialización: cargar edificios y residentes desde storage para lookups
+  React.useEffect(() => {
     if (!tenantId) return;
 
     seedBuildingsIfEmpty(tenantId);
     seedUsersIfEmpty(tenantId);
 
-    const loadedUnits = listUnits(tenantId);
     const loadedBuildings = listBuildings(tenantId);
     const loadedResidents = listResidents(tenantId);
 
-    setUnits(loadedUnits);
     setBuildings(loadedBuildings);
     setResidents(loadedResidents);
   }, [tenantId]);
@@ -93,7 +103,7 @@ export default function UnitsUI() {
     defaultValues: {
       buildingId: '',
       label: '',
-      unitCode: '',
+      code: '',
       unitType: undefined,
       occupancyStatus: undefined,
     },
@@ -109,19 +119,18 @@ export default function UnitsUI() {
     }
 
     try {
-      // 1. Limpiar inputs antes de enviar al storage
+      // 1. Limpiar inputs
       const cleanedLabel = data.label.trim();
-      const cleanedUnitCode = data.unitCode?.trim() || undefined;
+      const cleanedCode = data.code?.trim();
 
-      // 2. Crear unidad con valores limpios
-      const newUnit = createUnit(tenantId, {
-        ...data,
+      // 2. Crear unidad vía API
+      const newUnit = await apiCreateUnit(data.buildingId, {
         label: cleanedLabel,
-        unitCode: cleanedUnitCode,
+        code: cleanedCode,
+        unitType: data.unitType,
+        occupancyStatus: data.occupancyStatus,
       });
 
-      const updated = listUnits(tenantId);
-      setUnits(updated);
       reset();
       setShowForm(false);
       setFeedback({ type: 'success', message: `Unidad "${newUnit.label}" creada` });
@@ -143,8 +152,8 @@ export default function UnitsUI() {
         unassignResident(tenantId, residentModal.unitId);
       }
 
-      const updated = listUnits(tenantId);
-      setUnits(updated);
+      // Refetch units to ensure consistency
+      await refetchUnits();
       setResidentModal(null);
       setSelectedResident('');
       setFeedback({ type: 'success', message: 'Residente actualizado' });
@@ -161,9 +170,7 @@ export default function UnitsUI() {
 
     setIsDeleting(true);
     try {
-      deleteUnit(tenantId, deleteModal.unitId);
-      const updated = listUnits(tenantId);
-      setUnits(updated);
+      await apiDeleteUnit(deleteModal.buildingId, deleteModal.unitId);
       setDeleteModal(null);
       setFeedback({ type: 'success', message: `Unidad "${deleteModal.unitLabel}" eliminada` });
       setTimeout(() => setFeedback(null), 3000);
@@ -184,9 +191,9 @@ export default function UnitsUI() {
     return user?.fullName || null;
   };
 
-  // Helper para obtener nombre del edificio
-  const getBuildingName = (buildingId: string): string => {
-    return buildings.find((b) => b.id === buildingId)?.name || '—';
+  // Helper para obtener nombre del edificio (desde API data)
+  const getBuildingName = (unit: Unit): string => {
+    return unit.building?.name || '—';
   };
 
   if (!tenantId) {
@@ -261,16 +268,16 @@ export default function UnitsUI() {
 
             {/* Código / External ID (opcional) */}
             <div>
-              <label htmlFor="unitCode" className="block text-sm font-medium mb-1">
+              <label htmlFor="code" className="block text-sm font-medium mb-1">
                 Código / External ID (opcional)
               </label>
               <Input
-                id="unitCode"
+                id="code"
                 placeholder="Ej: UF-101"
-                {...register('unitCode')}
+                {...register('code')}
               />
-              {errors.unitCode && (
-                <p className="text-xs text-red-600 mt-1">{errors.unitCode.message}</p>
+              {errors.code && (
+                <p className="text-xs text-red-600 mt-1">{errors.code.message}</p>
               )}
             </div>
 
@@ -336,12 +343,28 @@ export default function UnitsUI() {
         </div>
       )}
 
+      {/* Estado: Loading */}
+      {loading && (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          Cargando unidades...
+        </div>
+      )}
+
+      {/* Estado: Error */}
+      {error && !loading && (
+        <div className="px-4 py-3 rounded-md text-sm bg-red-50 border border-red-200 text-red-800">
+          Error al cargar unidades: {error.message}
+        </div>
+      )}
+
       {/* Tabla de unidades */}
-      {units.length === 0 ? (
+      {!loading && units.length === 0 && (
         <div className="text-center py-8 text-muted-foreground text-sm">
           Sin unidades registradas
         </div>
-      ) : (
+      )}
+
+      {!loading && units.length > 0 && (
         <Table>
           <THead>
             <TR>
@@ -358,9 +381,9 @@ export default function UnitsUI() {
               const activeResidentName = getActiveResidentName(u.id);
               return (
                 <TR key={u.id}>
-                  <TD>{getBuildingName(u.buildingId)}</TD>
+                  <TD>{getBuildingName(u)}</TD>
                   <TD className="font-medium">{u.label}</TD>
-                  <TD>{u.unitCode || '—'}</TD>
+                  <TD>{u.code || '—'}</TD>
                   <TD>
                     {u.occupancyStatus === 'VACANT' && (
                       <Badge className="bg-blue-100 text-blue-800">Vacío</Badge>
@@ -387,7 +410,9 @@ export default function UnitsUI() {
                       variant="ghost"
                       size="sm"
                       className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={() => setDeleteModal({ unitId: u.id, unitLabel: u.label })}
+                      onClick={() =>
+                        setDeleteModal({ unitId: u.id, buildingId: u.buildingId, unitLabel: u.label })
+                      }
                     >
                       Eliminar
                     </Button>
