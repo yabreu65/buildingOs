@@ -1,0 +1,122 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 2 * * *' # Run daily at 2 AM UTC
+
+jobs:
+  test:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: buildingos
+          POSTGRES_PASSWORD: buildingos
+          POSTGRES_DB: buildingos_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env.test
+          echo "DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test" >> .env.test
+
+      - name: Build API
+        working-directory: apps/api
+        run: npm run build
+        env:
+          NODE_ENV: test
+
+      - name: Run database migrations
+        working-directory: apps/api
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          NODE_ENV: test
+
+      - name: Seed test data
+        working-directory: apps/api
+        run: npm run db:seed
+        env:
+          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          NODE_ENV: test
+        continue-on-error: true
+
+      - name: Build web app
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run E2E tests
+        working-directory: apps/web
+        run: npm run test:e2e
+        env:
+          BASE_URL: http://localhost:3000
+          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          NODE_ENV: test
+
+      - name: Upload playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 30
+
+      - name: Upload test videos
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-videos
+          path: apps/web/test-results/
+          retention-days: 7
+
+      - name: Comment PR with test results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = 'apps/web/playwright-report/index.html';
+
+            let comment = '## E2E Test Results\n\n';
+            if (fs.existsSync(reportPath)) {
+              comment += '✅ Tests completed! [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
+            } else {
+              comment += '❌ Tests failed or report not found.\n';
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
