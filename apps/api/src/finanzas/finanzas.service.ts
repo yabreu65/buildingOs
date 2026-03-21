@@ -1,4 +1,5 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -13,7 +14,6 @@ import {
   ListChargesQueryDto,
   ListPaymentsQueryDto,
 } from './finanzas.dto';
-import { ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
 
 @Injectable()
 export class FinanzasService {
@@ -41,7 +41,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     dto: CreateChargeDto,
-  ) {
+  ): Promise<Charge> {
     // 1. Permission check
     if (!this.validators.canWriteCharges(userRoles)) {
       this.validators.throwForbidden('charges', 'create');
@@ -127,7 +127,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     query: ListChargesQueryDto,
-  ) {
+  ): Promise<(Charge & { paymentAllocations: unknown[] })[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -135,7 +135,7 @@ export class FinanzasService {
     );
 
     // 2. Build where clause
-    const where: any = {
+    const where: Prisma.ChargeWhereInput = {
       tenantId,
       buildingId,
       canceledAt: null, // Exclude canceled charges
@@ -199,7 +199,7 @@ export class FinanzasService {
     chargeId: string,
     userRoles: string[],
     userId: string,
-  ) {
+  ): Promise<Charge & { paymentAllocations: unknown[] }> {
     // 1. Validate charge belongs to building and tenant
     const charge = await this.prisma.charge.findFirst({
       where: {
@@ -243,7 +243,7 @@ export class FinanzasService {
     chargeId: string,
     userRoles: string[],
     dto: UpdateChargeDto,
-  ) {
+  ): Promise<Charge> {
     // 1. Permission check
     if (!this.validators.canWriteCharges(userRoles)) {
       this.validators.throwForbidden('charges', 'update');
@@ -298,7 +298,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     dto: CancelChargeDto,
-  ) {
+  ): Promise<Charge> {
     // 1. Permission check
     if (!this.validators.canWriteCharges(userRoles)) {
       this.validators.throwForbidden('charges', 'cancel');
@@ -355,7 +355,7 @@ export class FinanzasService {
     userId: string,
     userRoles: string[],
     dto: SubmitPaymentDto,
-  ) {
+  ): Promise<Payment> {
     // 1. Permission check
     if (!this.validators.canSubmitPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'submit');
@@ -415,7 +415,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     query: ListPaymentsQueryDto,
-  ) {
+  ): Promise<Payment[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -423,7 +423,7 @@ export class FinanzasService {
     );
 
     // 2. Build where clause
-    const where: any = {
+    const where: Prisma.PaymentWhereInput = {
       tenantId,
       buildingId,
     };
@@ -492,7 +492,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: ApprovePaymentDto,
-  ) {
+  ): Promise<Payment> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'approve');
@@ -538,7 +538,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: RejectPaymentDto,
-  ) {
+  ): Promise<Payment> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
@@ -586,7 +586,7 @@ export class FinanzasService {
     buildingId: string,
     userRoles: string[],
     dto: CreateAllocationDto,
-  ) {
+  ): Promise<PaymentAllocation> {
     // 1. Permission check
     if (!this.validators.canAllocate(userRoles)) {
       this.validators.throwForbidden('allocations', 'create');
@@ -684,7 +684,7 @@ export class FinanzasService {
     buildingId: string,
     allocationId: string,
     userRoles: string[],
-  ) {
+  ): Promise<void> {
     // 1. Permission check
     if (!this.validators.canAllocate(userRoles)) {
       this.validators.throwForbidden('allocations', 'delete');
@@ -793,7 +793,7 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     period?: string,
-  ) {
+  ): Promise<Record<string, any>> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -801,7 +801,7 @@ export class FinanzasService {
     );
 
     // Build filters
-    const where: any = {
+    const where: Prisma.ChargeWhereInput = {
       tenantId,
       buildingId,
       canceledAt: null, // Exclude canceled charges
@@ -884,7 +884,7 @@ export class FinanzasService {
     periodTo?: string,
     userRoles?: string[],
     userId?: string,
-  ) {
+  ): Promise<Record<string, any>> {
     // 1. Validate unit belongs to tenant
     const unit = await this.prisma.unit.findFirst({
       where: {
@@ -908,7 +908,7 @@ export class FinanzasService {
     }
 
     // 3. Build charge filters
-    const chargeWhere: any = {
+    const chargeWhere: Prisma.ChargeWhereInput = {
       tenantId,
       unitId,
       canceledAt: null,
@@ -991,7 +991,7 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     paymentId: string,
-  ) {
+  ): Promise<(PaymentAllocation & { charge: unknown })[]> {
     // 1. Validate payment
     const payment = await this.prisma.payment.findFirst({
       where: {

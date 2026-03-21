@@ -5,6 +5,7 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
+import { Ticket, TicketComment, Prisma, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { TicketsValidators } from './tickets.validators';
@@ -12,7 +13,6 @@ import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
-import { AuditAction } from '@prisma/client';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -168,7 +168,7 @@ export class TicketsService {
    *
    * @throws NotFoundException if building doesn't belong to tenant
    */
-  async findAll(tenantId: string, buildingId: string, filters?: any) {
+  async findAll(tenantId: string, buildingId: string, filters?: any): Promise<Ticket[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -176,7 +176,7 @@ export class TicketsService {
     );
 
     // 2. Build query
-    const where: any = { tenantId, buildingId };
+    const where: Prisma.TicketWhereInput = { tenantId, buildingId };
     if (filters?.status) where.status = filters.status;
     if (filters?.priority) where.priority = filters.priority;
     if (filters?.unitId) where.unitId = filters.unitId; // ✅ FIX: Include unitId filter
@@ -238,7 +238,7 @@ export class TicketsService {
    *
    * @throws NotFoundException if ticket or building doesn't belong to tenant
    */
-  async findOne(tenantId: string, buildingId: string, ticketId: string) {
+  async findOne(tenantId: string, buildingId: string, ticketId: string): Promise<Ticket & { comments: unknown[] }> {
     // 1. Validate scope
     await this.validators.validateTicketScope(
       tenantId,
@@ -296,7 +296,7 @@ export class TicketsService {
     buildingId: string,
     ticketId: string,
     dto: UpdateTicketDto,
-  ) {
+  ): Promise<Ticket> {
     // 1. Validate scope and fetch current ticket
     const currentTicket = await this.prisma.ticket.findFirst({
       where: { id: ticketId, tenantId, buildingId },
@@ -404,7 +404,7 @@ export class TicketsService {
    *
    * @throws NotFoundException if ticket or building doesn't belong to tenant
    */
-  async remove(tenantId: string, buildingId: string, ticketId: string) {
+  async remove(tenantId: string, buildingId: string, ticketId: string): Promise<Ticket> {
     // 1. Validate scope
     await this.validators.validateTicketScope(
       tenantId,
@@ -432,7 +432,7 @@ export class TicketsService {
     ticketId: string,
     userId: string,
     dto: AddTicketCommentDto,
-  ) {
+  ): Promise<TicketComment> {
     // 1. Validate ticket scope
     await this.validators.validateTicketBelongsToBuildingAndTenant(
       tenantId,
@@ -477,7 +477,7 @@ export class TicketsService {
     tenantId: string,
     buildingId: string,
     ticketId: string,
-  ) {
+  ): Promise<TicketComment[]> {
     // 1. Validate ticket scope
     await this.validators.validateTicketBelongsToBuildingAndTenant(
       tenantId,

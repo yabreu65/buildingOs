@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { UnitOccupant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
@@ -19,7 +20,7 @@ export class OccupantsService {
     unitId: string,
     dto: CreateOccupantDto,
     actorUserId?: string,
-  ) {
+  ): Promise<UnitOccupant> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId } },
@@ -72,8 +73,13 @@ export class OccupantsService {
       }
 
       return occupant;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
         throw new BadRequestException(
           `This user is already assigned to this unit with role ${dto.role}`,
         );
@@ -82,7 +88,7 @@ export class OccupantsService {
     }
   }
 
-  async findOccupants(tenantId: string, buildingId: string, unitId: string) {
+  async findOccupants(tenantId: string, buildingId: string, unitId: string): Promise<UnitOccupant[]> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId } },
@@ -107,7 +113,7 @@ export class OccupantsService {
     unitId: string,
     occupantId: string,
     actorUserId?: string,
-  ) {
+  ): Promise<UnitOccupant> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId } },

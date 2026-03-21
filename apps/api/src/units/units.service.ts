@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { Unit, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { AuditService } from '../audit/audit.service';
@@ -19,7 +20,7 @@ export class UnitsService {
     private auditService: AuditService,
   ) {}
 
-  async create(tenantId: string, buildingId: string, dto: CreateUnitDto) {
+  async create(tenantId: string, buildingId: string, dto: CreateUnitDto): Promise<Unit> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -60,8 +61,13 @@ export class UnitsService {
       });
 
       return unit;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
         throw new BadRequestException(
           `Unit code "${dto.code}" already exists in this building`,
         );
@@ -74,8 +80,8 @@ export class UnitsService {
    * Get all units for a tenant (optionally filtered by buildingId)
    * Multi-tenant safe: filters by building.tenantId
    */
-  async findAllByTenant(tenantId: string, buildingId?: string) {
-    const where: any = {
+  async findAllByTenant(tenantId: string, buildingId?: string): Promise<Unit[]> {
+    const where: Prisma.UnitWhereInput = {
       building: { tenantId },
     };
 
@@ -93,7 +99,7 @@ export class UnitsService {
     });
   }
 
-  async findAll(tenantId: string, buildingId: string) {
+  async findAll(tenantId: string, buildingId: string): Promise<Unit[]> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -112,7 +118,7 @@ export class UnitsService {
     });
   }
 
-  async findOne(tenantId: string, buildingId: string, unitId: string) {
+  async findOne(tenantId: string, buildingId: string, unitId: string): Promise<Unit> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -138,7 +144,7 @@ export class UnitsService {
     return unit;
   }
 
-  async update(tenantId: string, buildingId: string, unitId: string, dto: UpdateUnitDto) {
+  async update(tenantId: string, buildingId: string, unitId: string, dto: UpdateUnitDto): Promise<Unit> {
     // Verify building belongs to tenant and unit belongs to building
     const unit = await this.findOne(tenantId, buildingId, unitId);
 
@@ -170,8 +176,13 @@ export class UnitsService {
       });
 
       return updatedUnit;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
         throw new BadRequestException(
           `Unit code "${dto.code}" already exists in this building`,
         );
@@ -180,7 +191,7 @@ export class UnitsService {
     }
   }
 
-  async remove(tenantId: string, buildingId: string, unitId: string) {
+  async remove(tenantId: string, buildingId: string, unitId: string): Promise<Unit> {
     // Verify building belongs to tenant and unit belongs to building
     const unit = await this.findOne(tenantId, buildingId, unitId);
 

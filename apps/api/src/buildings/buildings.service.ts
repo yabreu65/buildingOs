@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { Building } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
@@ -19,7 +20,7 @@ export class BuildingsService {
     private planEntitlements: PlanEntitlementsService,
   ) {}
 
-  async create(tenantId: string, dto: CreateBuildingDto, userId?: string) {
+  async create(tenantId: string, dto: CreateBuildingDto, userId?: string): Promise<Building> {
     // 1. Check plan limit: maxBuildings
     await this.planEntitlements.assertLimit(tenantId, 'buildings');
 
@@ -49,8 +50,13 @@ export class BuildingsService {
       }
 
       return building;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
         throw new BadRequestException(
           `Building name "${dto.name}" already exists in this tenant`,
         );
@@ -59,7 +65,9 @@ export class BuildingsService {
     }
   }
 
-  async findAll(tenantId: string) {
+  async findAll(tenantId: string): Promise<
+    (Building & { units: unknown[] })[]
+  > {
     return await this.prisma.building.findMany({
       where: { tenantId },
       include: { units: true },
@@ -67,7 +75,9 @@ export class BuildingsService {
     });
   }
 
-  async findOne(tenantId: string, buildingId: string) {
+  async findOne(tenantId: string, buildingId: string): Promise<
+    Building & { units: unknown[] }
+  > {
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
       include: { units: { include: { unitOccupants: { include: { user: true } } } } },
@@ -82,7 +92,7 @@ export class BuildingsService {
     return building;
   }
 
-  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string) {
+  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string): Promise<Building & { units: unknown[] }> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -120,8 +130,13 @@ export class BuildingsService {
       }
 
       return updated;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
         throw new BadRequestException(
           `Building name "${dto.name}" already exists in this tenant`,
         );
@@ -130,7 +145,7 @@ export class BuildingsService {
     }
   }
 
-  async remove(tenantId: string, buildingId: string, userId?: string) {
+  async remove(tenantId: string, buildingId: string, userId?: string): Promise<Building> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },

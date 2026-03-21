@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Vendor, VendorAssignment, Quote, WorkOrder } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorsValidators } from './vendors.validators';
 import { CreateVendorDto } from './dto/create-vendor.dto';
@@ -29,7 +30,7 @@ export class VendorsService {
    * List all vendors for a tenant
    * Validates: none (tenant-level operation)
    */
-  async listVendors(tenantId: string) {
+  async listVendors(tenantId: string): Promise<(Vendor & { assignments: VendorAssignment[] })[]> {
     return await this.prisma.vendor.findMany({
       where: { tenantId },
       include: {
@@ -47,7 +48,7 @@ export class VendorsService {
    * Get a single vendor by ID
    * Validates: vendor belongs to tenant (404 if not)
    */
-  async getVendor(tenantId: string, vendorId: string) {
+  async getVendor(tenantId: string, vendorId: string): Promise<Vendor> {
     // Validate vendor belongs to tenant
     await this.validators.validateVendorBelongsToTenant(tenantId, vendorId);
 
@@ -84,7 +85,7 @@ export class VendorsService {
    * Create a new vendor
    * Validates: none required
    */
-  async createVendor(tenantId: string, dto: CreateVendorDto) {
+  async createVendor(tenantId: string, dto: CreateVendorDto): Promise<Vendor> {
     // Check for duplicate name in tenant
     const existing = await this.prisma.vendor.findFirst({
       where: {
@@ -115,7 +116,7 @@ export class VendorsService {
    * Update a vendor
    * Validates: vendor belongs to tenant (404 if not)
    */
-  async updateVendor(tenantId: string, vendorId: string, dto: UpdateVendorDto) {
+  async updateVendor(tenantId: string, vendorId: string, dto: UpdateVendorDto): Promise<Vendor> {
     // Validate vendor belongs to tenant
     await this.validators.validateVendorBelongsToTenant(tenantId, vendorId);
 
@@ -153,7 +154,7 @@ export class VendorsService {
    * Validates: vendor belongs to tenant (404 if not)
    * NOTE: Prisma will prevent deletion if vendor has quotes or assignments (RESTRICT constraint)
    */
-  async deleteVendor(tenantId: string, vendorId: string) {
+  async deleteVendor(tenantId: string, vendorId: string): Promise<Vendor> {
     // Validate vendor belongs to tenant
     await this.validators.validateVendorBelongsToTenant(tenantId, vendorId);
 
@@ -162,8 +163,13 @@ export class VendorsService {
       return await this.prisma.vendor.delete({
         where: { id: vendorId },
       });
-    } catch (error: any) {
-      if (error.code === 'P2014') {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2014'
+      ) {
         // Foreign key constraint error
         throw new BadRequestException(
           `Cannot delete vendor: it has associated quotes or assignments. Delete those first.`,
@@ -181,7 +187,7 @@ export class VendorsService {
    * List all vendor assignments for a building
    * Validates: building belongs to tenant
    */
-  async listVendorAssignments(tenantId: string, buildingId: string) {
+  async listVendorAssignments(tenantId: string, buildingId: string): Promise<VendorAssignment[]> {
     // Validate building
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
@@ -199,7 +205,7 @@ export class VendorsService {
    * Get a single vendor assignment
    * Validates: assignment belongs to tenant (404 if not)
    */
-  async getVendorAssignment(tenantId: string, assignmentId: string) {
+  async getVendorAssignment(tenantId: string, assignmentId: string): Promise<VendorAssignment> {
     // Validate assignment
     await this.validators.validateVendorAssignmentBelongsToTenant(
       tenantId,
@@ -224,7 +230,7 @@ export class VendorsService {
     buildingId: string,
     vendorId: string,
     serviceType: string,
-  ) {
+  ): Promise<VendorAssignment> {
     // Validate vendor and building
     await this.validators.validateVendorAndBuildingBelongToTenant(
       tenantId,
@@ -265,7 +271,7 @@ export class VendorsService {
    * Delete a vendor assignment
    * Validates: assignment belongs to tenant (404 if not)
    */
-  async deleteVendorAssignment(tenantId: string, assignmentId: string) {
+  async deleteVendorAssignment(tenantId: string, assignmentId: string): Promise<void> {
     // Validate assignment
     await this.validators.validateVendorAssignmentBelongsToTenant(
       tenantId,
@@ -292,7 +298,7 @@ export class VendorsService {
   async listQuotes(
     tenantId: string,
     buildingId: string,
-  ) {
+  ): Promise<Quote[]> {
     // Validate building
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
@@ -313,7 +319,7 @@ export class VendorsService {
    * Get a single quote
    * Validates: quote and associated ticket belong to tenant/building (404 if not)
    */
-  async getQuote(tenantId: string, buildingId: string, quoteId: string) {
+  async getQuote(tenantId: string, buildingId: string, quoteId: string): Promise<Quote> {
     // Validate quote scope
     await this.validators.validateQuoteScope(tenantId, buildingId, quoteId);
 
@@ -339,7 +345,7 @@ export class VendorsService {
   async listWorkOrders(
     tenantId: string,
     buildingId: string,
-  ) {
+  ): Promise<WorkOrder[]> {
     // Validate building
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
@@ -361,7 +367,7 @@ export class VendorsService {
    * Get a single work order
    * Validates: work order and associated ticket belong to tenant/building (404 if not)
    */
-  async getWorkOrder(tenantId: string, buildingId: string, workOrderId: string) {
+  async getWorkOrder(tenantId: string, buildingId: string, workOrderId: string): Promise<WorkOrder> {
     // Validate work order scope
     await this.validators.validateWorkOrderScope(tenantId, buildingId, workOrderId);
 
@@ -396,7 +402,7 @@ export class VendorsService {
       fileId?: string;
       notes?: string;
     },
-  ) {
+  ): Promise<Quote> {
     // Validate vendor and building
     await this.validators.validateVendorAndBuildingBelongToTenant(
       tenantId,
@@ -449,7 +455,7 @@ export class VendorsService {
       fileId?: string | null;
       notes?: string | null;
     },
-  ) {
+  ): Promise<Quote> {
     // Validate quote scope
     await this.validators.validateQuoteScope(tenantId, buildingId, quoteId);
 
@@ -497,7 +503,7 @@ export class VendorsService {
       description?: string;
       scheduledFor?: Date;
     },
-  ) {
+  ): Promise<WorkOrder> {
     // Validate building
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
@@ -552,7 +558,7 @@ export class VendorsService {
       description?: string;
       scheduledFor?: Date | null;
     },
-  ) {
+  ): Promise<WorkOrder> {
     // Validate work order scope
     await this.validators.validateWorkOrderScope(tenantId, buildingId, workOrderId);
 

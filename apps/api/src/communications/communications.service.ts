@@ -11,13 +11,16 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CommunicationsValidators } from './communications.validators';
 import {
+  Communication,
+  CommunicationRecipient,
   CommunicationChannel,
   CommunicationStatus,
   CommunicationTargetType,
+  Prisma,
 } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CommunicationsValidators } from './communications.validators';
 
 export interface CreateCommunicationInput {
   title: string;
@@ -66,7 +69,7 @@ export class CommunicationsService {
     tenantId: string,
     userId: string,
     input: CreateCommunicationInput,
-  ) {
+  ): Promise<Communication & { targets: unknown[] }> {
     // Get the user's membership for this tenant
     const membership = await this.prisma.membership.findFirst({
       where: { userId, tenantId },
@@ -159,7 +162,7 @@ export class CommunicationsService {
       buildingId?: string;
       status?: CommunicationStatus;
     },
-  ) {
+  ): Promise<(Communication & { targets: unknown[] })[]> {
     // Validate building if filtering
     if (filters?.buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
@@ -168,7 +171,7 @@ export class CommunicationsService {
       );
     }
 
-    const where: any = { tenantId };
+    const where: Prisma.CommunicationWhereInput = { tenantId };
     if (filters?.buildingId) where.buildingId = filters.buildingId;
     if (filters?.status) where.status = filters.status;
 
@@ -199,7 +202,7 @@ export class CommunicationsService {
    *
    * @throws NotFoundException if communication doesn't belong to tenant
    */
-  async findOne(tenantId: string, communicationId: string) {
+  async findOne(tenantId: string, communicationId: string): Promise<Communication & { targets: unknown[] }> {
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
       communicationId,
@@ -245,7 +248,7 @@ export class CommunicationsService {
     tenantId: string,
     communicationId: string,
     input: UpdateCommunicationInput,
-  ) {
+  ): Promise<Communication & { targets: unknown[] }> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -289,7 +292,7 @@ export class CommunicationsService {
     tenantId: string,
     communicationId: string,
     input: ScheduleCommunicationInput,
-  ) {
+  ): Promise<Communication> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -337,7 +340,7 @@ export class CommunicationsService {
    *
    * @throws NotFoundException if communication doesn't belong to tenant
    */
-  async send(tenantId: string, communicationId: string) {
+  async send(tenantId: string, communicationId: string): Promise<Communication> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -366,7 +369,7 @@ export class CommunicationsService {
    * @throws NotFoundException if communication doesn't belong to tenant
    * @throws BadRequestException if communication is not DRAFT
    */
-  async delete(tenantId: string, communicationId: string) {
+  async delete(tenantId: string, communicationId: string): Promise<Communication> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -406,7 +409,7 @@ export class CommunicationsService {
       buildingId?: string;
       readOnly?: boolean; // Only show read communications
     },
-  ) {
+  ): Promise<(Communication & { targets: unknown[] })[]> {
     // Validate building if filtering
     if (filters?.buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
@@ -466,7 +469,7 @@ export class CommunicationsService {
     tenantId: string,
     userId: string,
     communicationId: string,
-  ) {
+  ): Promise<{ count: number }> {
     return await this.prisma.communicationReceipt.updateMany({
       where: {
         communicationId,
@@ -488,7 +491,7 @@ export class CommunicationsService {
     tenantId: string,
     userId: string,
     communicationId: string,
-  ) {
+  ): Promise<{ count: number }> {
     return await this.prisma.communicationReceipt.updateMany({
       where: {
         communicationId,
