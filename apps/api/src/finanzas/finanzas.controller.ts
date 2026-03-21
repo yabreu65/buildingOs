@@ -13,7 +13,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { FinanzasService } from './finanzas.service';
-import { FinanzasValidators } from './finanzas.validators';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -24,6 +24,23 @@ import {
   CreateAllocationDto,
   ListChargesQueryDto,
   ListPaymentsQueryDto,
+  GetChargeParamDto,
+  UpdateChargeParamDto,
+  DeleteChargeParamDto,
+  ListChargesParamDto,
+  CreateChargeParamDto,
+  ListPaymentsParamDto,
+  CreatePaymentParamDto,
+  ApprovePaymentParamDto,
+  RejectPaymentParamDto,
+  CreateAllocationParamDto,
+  DeleteAllocationParamDto,
+  GetPaymentAllocationsParamDto,
+  FinancialSummaryParamDto,
+  FinancialSummaryQueryDto,
+  ChargeDetailDto,
+  PaymentDetailDto,
+  FinancialSummaryDto,
 } from './finanzas.dto';
 
 /**
@@ -48,14 +65,7 @@ import {
 @Controller('buildings/:buildingId')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class FinanzasController {
-  constructor(
-    private finanzasService: FinanzasService,
-    private validators: FinanzasValidators,
-  ) {}
-
-  private isResidentOrOwner(userRoles: string[]): boolean {
-    return this.validators.isResidentOrOwner(userRoles);
-  }
+  constructor(private finanzasService: FinanzasService) {}
 
   // ============================================================================
   // CHARGES ENDPOINTS
@@ -67,16 +77,16 @@ export class FinanzasController {
    */
   @Post('charges')
   async createCharge(
-    @Param('buildingId') buildingId: string,
+    @Param() params: CreateChargeParamDto,
     @Body() dto: CreateChargeDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ChargeDetailDto> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
     return this.finanzasService.createCharge(
       tenantId,
-      buildingId,
+      params.buildingId,
       userRoles,
       userId,
       dto,
@@ -92,16 +102,16 @@ export class FinanzasController {
    */
   @Get('charges')
   async listCharges(
-    @Param('buildingId') buildingId: string,
+    @Param() params: ListChargesParamDto,
     @Query() query: ListChargesQueryDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ChargeDetailDto[]> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
     return this.finanzasService.listCharges(
       tenantId,
-      buildingId,
+      params.buildingId,
       userRoles,
       userId,
       query,
@@ -116,17 +126,16 @@ export class FinanzasController {
    */
   @Get('charges/:chargeId')
   async getCharge(
-    @Param('buildingId') buildingId: string,
-    @Param('chargeId') chargeId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Param() params: GetChargeParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ChargeDetailDto> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
     return this.finanzasService.getCharge(
       tenantId,
-      buildingId,
-      chargeId,
+      params.buildingId,
+      params.chargeId,
       userRoles,
       userId,
     );
@@ -140,17 +149,16 @@ export class FinanzasController {
    */
   @Patch('charges/:chargeId')
   async updateCharge(
-    @Param('buildingId') buildingId: string,
-    @Param('chargeId') chargeId: string,
+    @Param() params: UpdateChargeParamDto,
     @Body() dto: UpdateChargeDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ChargeDetailDto> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     return this.finanzasService.updateCharge(
       tenantId,
-      buildingId,
-      chargeId,
+      params.buildingId,
+      params.chargeId,
       userRoles,
       dto,
     );
@@ -162,18 +170,17 @@ export class FinanzasController {
    */
   @Delete('charges/:chargeId')
   async cancelCharge(
-    @Param('buildingId') buildingId: string,
-    @Param('chargeId') chargeId: string,
+    @Param() params: DeleteChargeParamDto,
     @Body() dto: CancelChargeDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ChargeDetailDto> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
-    const userId = req.user.sub;
+    const userId = req.user.sub!;
     return this.finanzasService.cancelCharge(
       tenantId,
-      buildingId,
-      chargeId,
+      params.buildingId,
+      params.chargeId,
       userRoles,
       userId,
       dto,
@@ -193,16 +200,16 @@ export class FinanzasController {
    */
   @Post('payments')
   async submitPayment(
-    @Param('buildingId') buildingId: string,
+    @Param() params: CreatePaymentParamDto,
     @Body() dto: SubmitPaymentDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
     return this.finanzasService.submitPayment(
       tenantId,
-      buildingId,
+      params.buildingId,
       userId,
       userRoles,
       dto,
@@ -218,16 +225,16 @@ export class FinanzasController {
    */
   @Get('payments')
   async listPayments(
-    @Param('buildingId') buildingId: string,
+    @Param() params: ListPaymentsParamDto,
     @Query() query: ListPaymentsQueryDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto[]> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
     return this.finanzasService.listPayments(
       tenantId,
-      buildingId,
+      params.buildingId,
       userRoles,
       userId,
       query,
@@ -240,18 +247,17 @@ export class FinanzasController {
    */
   @Patch('payments/:paymentId/approve')
   async approvePayment(
-    @Param('buildingId') buildingId: string,
-    @Param('paymentId') paymentId: string,
+    @Param() params: ApprovePaymentParamDto,
     @Body() dto: ApprovePaymentDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
-    const membershipId = req.user.membershipId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
+    const membershipId = req.user.membershipId!;
     const userRoles = req.user.roles || [];
     return this.finanzasService.approvePayment(
       tenantId,
-      buildingId,
-      paymentId,
+      params.buildingId,
+      params.paymentId,
       userRoles,
       membershipId,
       dto,
@@ -264,18 +270,17 @@ export class FinanzasController {
    */
   @Patch('payments/:paymentId/reject')
   async rejectPayment(
-    @Param('buildingId') buildingId: string,
-    @Param('paymentId') paymentId: string,
+    @Param() params: RejectPaymentParamDto,
     @Body() dto: RejectPaymentDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
-    const membershipId = req.user.membershipId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
+    const membershipId = req.user.membershipId!;
     const userRoles = req.user.roles || [];
     return this.finanzasService.rejectPayment(
       tenantId,
-      buildingId,
-      paymentId,
+      params.buildingId,
+      params.paymentId,
       userRoles,
       membershipId,
       dto,
@@ -295,15 +300,15 @@ export class FinanzasController {
    */
   @Post('allocations')
   async createAllocation(
-    @Param('buildingId') buildingId: string,
+    @Param() params: CreateAllocationParamDto,
     @Body() dto: CreateAllocationDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Request() req: AuthenticatedRequest,
+  ): Promise<{ id: string }> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     return this.finanzasService.createAllocation(
       tenantId,
-      buildingId,
+      params.buildingId,
       userRoles,
       dto,
     );
@@ -317,16 +322,15 @@ export class FinanzasController {
    */
   @Delete('allocations/:allocationId')
   async deleteAllocation(
-    @Param('buildingId') buildingId: string,
-    @Param('allocationId') allocationId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Param() params: DeleteAllocationParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<void> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
-    return this.finanzasService.deleteAllocation(
+    await this.finanzasService.deleteAllocation(
       tenantId,
-      buildingId,
-      allocationId,
+      params.buildingId,
+      params.allocationId,
       userRoles,
     );
   }
@@ -337,15 +341,14 @@ export class FinanzasController {
    */
   @Get('payments/:paymentId/allocations')
   async getPaymentAllocations(
-    @Param('buildingId') buildingId: string,
-    @Param('paymentId') paymentId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Param() params: GetPaymentAllocationsParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<Array<{ id: string; paymentId: string; chargeId: string; amount: number }>> {
+    const tenantId = req.tenantId!;
     return this.finanzasService.getPaymentAllocations(
       tenantId,
-      buildingId,
-      paymentId,
+      params.buildingId,
+      params.paymentId,
     );
   }
 
@@ -364,15 +367,15 @@ export class FinanzasController {
    */
   @Get('finance/summary')
   async getBuildingFinancialSummary(
-    @Param('buildingId') buildingId: string,
-    @Query('period') period: string = '',
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId;
+    @Param() params: FinancialSummaryParamDto,
+    @Query() query: FinancialSummaryQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<FinancialSummaryDto> {
+    const tenantId = req.tenantId!;
     return this.finanzasService.getBuildingFinancialSummary(
       tenantId,
-      buildingId,
-      period || undefined,
+      params.buildingId,
+      query.period || undefined,
     );
   }
 }

@@ -6,13 +6,15 @@ import {
   IsOptional,
   MinLength,
   ArrayMinSize,
+  IsUUID,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CommunicationChannel, CommunicationTargetType } from '@prisma/client';
+import { BuildingCommunicationParamDto } from '../../common/dtos/params.dto';
 
 export class CreateCommunicationTargetDto {
   @IsEnum(CommunicationTargetType)
-  targetType: CommunicationTargetType;
+  targetType!: CommunicationTargetType;
 
   @IsOptional()
   @IsString()
@@ -22,14 +24,14 @@ export class CreateCommunicationTargetDto {
 export class CreateCommunicationDto {
   @IsString()
   @MinLength(3)
-  title: string;
+  title!: string;
 
   @IsString()
   @MinLength(3)
-  body: string;
+  body!: string;
 
   @IsEnum(CommunicationChannel)
-  channel: CommunicationChannel;
+  channel!: CommunicationChannel;
 
   @IsOptional()
   @IsString()
@@ -39,5 +41,22 @@ export class CreateCommunicationDto {
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => CreateCommunicationTargetDto)
-  targets: CreateCommunicationTargetDto[];
+  targets!: CreateCommunicationTargetDto[];
+}
+
+// ============================================================================
+// PARAM DTOs
+// ============================================================================
+
+export class CreateCommunicationParamDto extends BuildingCommunicationParamDto {
+  buildingId!: string;
+}
+
+export class GetCommunicationParamDto extends BuildingCommunicationParamDto {}
+export class UpdateCommunicationParamDto extends BuildingCommunicationParamDto {}
+export class DeleteCommunicationParamDto extends BuildingCommunicationParamDto {}
+export class SendCommunicationParamDto extends BuildingCommunicationParamDto {}
+export class ListCommunicationsParamDto {
+  @IsUUID()
+  buildingId!: string;
 }

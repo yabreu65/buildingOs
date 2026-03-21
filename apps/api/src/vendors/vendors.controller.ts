@@ -9,13 +9,22 @@ import {
   UseGuards,
   Request,
   Query,
-  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { VendorsService } from './vendors.service';
 import { VendorsValidators } from './vendors.validators';
-import { CreateVendorDto, UpdateVendorDto } from './dto';
+import { AuthenticatedRequest } from '../common/types/request.types';
+import {
+  CreateVendorDto,
+  UpdateVendorDto,
+  VendorIdParamDto,
+  BuildingVendorIdParamDto,
+  QuoteIdParamDto,
+  BuildingQuoteParamDto,
+  WorkOrderIdParamDto,
+  BuildingWorkOrderParamDto,
+} from './dto';
 
 /**
  * VendorsController: Vendors, Quotes, and WorkOrders management
@@ -67,7 +76,7 @@ export class VendorsController {
    * Permission: vendors.read
    */
   @Get('vendors')
-  async listVendors(@Request() req: any) {
+  async listVendors(@Request() req: AuthenticatedRequest) {
     const tenantId = req.user.tenantId; // From JWT context
     const userRoles = req.user.roles || [];
 
@@ -85,7 +94,7 @@ export class VendorsController {
    * Permission: vendors.read
    */
   @Get('vendors/:vendorId')
-  async getVendor(@Param('vendorId') vendorId: string, @Request() req: any) {
+  async getVendor(@Param('vendorId') vendorId: string, @Request() req: AuthenticatedRequest) {
     const tenantId = req.user.tenantId;
     const userRoles = req.user.roles || [];
 
@@ -105,7 +114,7 @@ export class VendorsController {
   @Post('vendors')
   async createVendor(
     @Body() dto: CreateVendorDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.user.tenantId;
     const userRoles = req.user.roles || [];
@@ -127,7 +136,7 @@ export class VendorsController {
   async updateVendor(
     @Param('vendorId') vendorId: string,
     @Body() dto: UpdateVendorDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.user.tenantId;
     const userRoles = req.user.roles || [];
@@ -146,7 +155,7 @@ export class VendorsController {
    * Permission: vendors.write
    */
   @Delete('vendors/:vendorId')
-  async deleteVendor(@Param('vendorId') vendorId: string, @Request() req: any) {
+  async deleteVendor(@Param('vendorId') vendorId: string, @Request() req: AuthenticatedRequest) {
     const tenantId = req.user.tenantId;
     const userRoles = req.user.roles || [];
 
@@ -171,7 +180,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async listVendorAssignments(
     @Param('buildingId') buildingId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId; // From BuildingAccessGuard
     const userRoles = req.user.roles || [];
@@ -194,7 +203,7 @@ export class VendorsController {
   async getVendorAssignment(
     @Param('buildingId') buildingId: string,
     @Param('assignmentId') assignmentId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -219,7 +228,7 @@ export class VendorsController {
   async createVendorAssignment(
     @Param('buildingId') buildingId: string,
     @Body() dto: { vendorId: string; serviceType: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -247,7 +256,7 @@ export class VendorsController {
   async deleteVendorAssignment(
     @Param('buildingId') buildingId: string,
     @Param('assignmentId') assignmentId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -273,7 +282,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async listQuotes(
     @Param('buildingId') buildingId: string,
-    @Request() req?: any,
+    @Request() req?: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -296,7 +305,7 @@ export class VendorsController {
   async getQuote(
     @Param('buildingId') buildingId: string,
     @Param('quoteId') quoteId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -321,7 +330,7 @@ export class VendorsController {
   async createQuote(
     @Param('buildingId') buildingId: string,
     @Body() dto: { vendorId: string; ticketId?: string; amount: number; currency?: string; status?: string; fileId?: string; notes?: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -348,7 +357,7 @@ export class VendorsController {
     @Param('buildingId') buildingId: string,
     @Param('quoteId') quoteId: string,
     @Body() dto: { vendorId?: string; amount?: number; currency?: string; status?: string; fileId?: string | null; notes?: string | null },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -384,7 +393,7 @@ export class VendorsController {
   async createWorkOrder(
     @Param('buildingId') buildingId: string,
     @Body() dto: { ticketId?: string; vendorId?: string; assignedToMembershipId?: string; description?: string; scheduledFor?: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -409,7 +418,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async listWorkOrders(
     @Param('buildingId') buildingId: string,
-    @Request() req?: any,
+    @Request() req?: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -432,7 +441,7 @@ export class VendorsController {
   async getWorkOrder(
     @Param('buildingId') buildingId: string,
     @Param('workOrderId') workOrderId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -459,7 +468,7 @@ export class VendorsController {
     @Param('buildingId') buildingId: string,
     @Param('workOrderId') workOrderId: string,
     @Body() dto: { status?: string; vendorId?: string | null; assignedToMembershipId?: string | null; description?: string; scheduledFor?: string | null },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];

@@ -1,5 +1,11 @@
-import { IsString, IsOptional, IsInt, IsPositive, IsDate, IsEnum, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
+import {
+  BuildingChargeParamDto,
+  BuildingPaymentParamDto,
+  BuildingAllocationParamDto,
+  BuildingParamDto,
+} from '../common/dtos/params.dto';
 
 // ============================================================================
 // CHARGE DTOs
@@ -7,17 +13,17 @@ import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod } from '@prisma/
 
 export class CreateChargeDto {
   @IsString()
-  unitId: string;
+  unitId!: string;
 
   @IsEnum(ChargeType)
-  type: ChargeType;
+  type!: ChargeType;
 
   @IsString()
-  concept: string;
+  concept!: string;
 
   @IsInt()
   @IsPositive()
-  amount: number; // In cents
+  amount!: number; // In cents
 
   @IsOptional()
   @IsString()
@@ -28,7 +34,7 @@ export class CreateChargeDto {
   period?: string; // YYYY-MM format, default: current month
 
   @IsDateString()
-  dueDate: string;
+  dueDate!: string;
 
   @IsOptional()
   @IsString()
@@ -75,14 +81,14 @@ export class SubmitPaymentDto {
 
   @IsInt()
   @IsPositive()
-  amount: number; // In cents
+  amount!: number; // In cents
 
   @IsOptional()
   @IsString()
   currency?: string; // Default: ARS
 
   @IsEnum(PaymentMethod)
-  method: PaymentMethod;
+  method!: PaymentMethod;
 
   @IsOptional()
   @IsString()
@@ -105,7 +111,7 @@ export class ApprovePaymentDto {
 
 export class RejectPaymentDto {
   @IsString()
-  reason: string;
+  reason!: string;
 }
 
 // ============================================================================
@@ -114,14 +120,14 @@ export class RejectPaymentDto {
 
 export class CreateAllocationDto {
   @IsString()
-  paymentId: string;
+  paymentId!: string;
 
   @IsString()
-  chargeId: string;
+  chargeId!: string;
 
   @IsInt()
   @IsPositive()
-  amount: number; // In cents (must be <= remaining payment amount)
+  amount!: number; // In cents (must be <= remaining payment amount)
 }
 
 export class UpdateAllocationDto {
@@ -176,10 +182,10 @@ export class ListPaymentsQueryDto {
 }
 
 // ============================================================================
-// RESPONSE DTOs (informational)
+// RESPONSE DTOs (informational - use as types, not classes)
 // ============================================================================
 
-export class ChargeDetailDto {
+export type ChargeDetailDto = {
   id: string;
   tenantId: string;
   buildingId: string;
@@ -193,25 +199,29 @@ export class ChargeDetailDto {
   status: ChargeStatus;
   createdAt: Date;
   updatedAt: Date;
-  canceledAt?: Date;
-}
+  canceledAt: Date | null;
+  createdByMembershipId: string | null;
+};
 
-export class PaymentDetailDto {
+export type PaymentDetailDto = {
   id: string;
   tenantId: string;
   buildingId: string;
-  unitId?: string;
+  unitId: string | null;
   amount: number;
   currency: string;
   method: PaymentMethod;
   status: PaymentStatus;
-  paidAt?: Date;
-  reference?: string;
+  paidAt: Date | null;
+  reference: string | null;
   createdAt: Date;
   updatedAt: Date;
-}
+  proofFileId: string | null;
+  createdByUserId: string;
+  reviewedByMembershipId: string | null;
+};
 
-export class FinancialSummaryDto {
+export type FinancialSummaryDto = {
   totalCharges: number;
   totalPaid: number;
   totalOutstanding: number;
@@ -221,9 +231,9 @@ export class FinancialSummaryDto {
     outstanding: number;
   }>;
   currency: string;
-}
+};
 
-export class UnitLedgerDto {
+export type UnitLedgerDto = {
   unitId: string;
   unitLabel: string;
   buildingId: string;
@@ -252,4 +262,35 @@ export class UnitLedgerDto {
     balance: number;
     currency: string;
   };
+};
+
+// ============================================================================
+// PARAM DTOs (extend base DTOs)
+// ============================================================================
+
+export class GetChargeParamDto extends BuildingChargeParamDto {}
+export class UpdateChargeParamDto extends BuildingChargeParamDto {}
+export class DeleteChargeParamDto extends BuildingChargeParamDto {}
+
+export class GetPaymentAllocationsParamDto extends BuildingPaymentParamDto {}
+export class ApprovePaymentParamDto extends BuildingPaymentParamDto {}
+export class RejectPaymentParamDto extends BuildingPaymentParamDto {}
+
+export class DeleteAllocationParamDto extends BuildingAllocationParamDto {}
+
+export class ListChargesParamDto extends BuildingParamDto {}
+export class CreateChargeParamDto extends BuildingParamDto {}
+export class ListPaymentsParamDto extends BuildingParamDto {}
+export class CreatePaymentParamDto extends BuildingParamDto {}
+export class CreateAllocationParamDto extends BuildingParamDto {}
+export class FinancialSummaryParamDto extends BuildingParamDto {}
+
+// ============================================================================
+// FINANCIAL SUMMARY QUERY DTO
+// ============================================================================
+
+export class FinancialSummaryQueryDto {
+  @IsOptional()
+  @IsString()
+  period?: string;
 }

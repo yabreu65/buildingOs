@@ -9,13 +9,20 @@ import {
   UseGuards,
   Request,
   Query,
-  BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
-import { CreateCommunicationDto } from './dto/create-communication.dto';
+import { AuthenticatedRequest } from '../common/types/request.types';
+import {
+  CreateCommunicationDto,
+  GetCommunicationParamDto,
+  UpdateCommunicationParamDto,
+  DeleteCommunicationParamDto,
+  SendCommunicationParamDto,
+  ListCommunicationsParamDto,
+} from './dto/create-communication.dto';
 import { UpdateCommunicationDto } from './dto/update-communication.dto';
 import { ScheduleCommunicationDto } from './dto/schedule-communication.dto';
 import { CommunicationStatus } from '@prisma/client';
@@ -101,23 +108,20 @@ export class CommunicationsController {
    */
   @Post()
   async create(
-    @Param('buildingId') routeBuildingId: string,
+    @Param() params: ListCommunicationsParamDto,
     @Body() dto: CreateCommunicationDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
 
-    // Admin-only: RESIDENT cannot create communications
     if (!this.isAdminRole(userRoles)) {
       throw new Error('Only administrators can create communications');
     }
 
-    // Use buildingId from DTO if provided, otherwise use route parameter
-    const buildingId = dto.buildingId || routeBuildingId;
+    const buildingId = dto.buildingId || params.buildingId;
 
-    // Validate building belongs to tenant (throws 404 if not)
     if (buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
         tenantId,
@@ -125,7 +129,6 @@ export class CommunicationsController {
       );
     }
 
-    // Create communication with targets and receipts
     return await this.communicationsService.create(
       tenantId,
       userId,
@@ -133,8 +136,11 @@ export class CommunicationsController {
         title: dto.title,
         body: dto.body,
         channel: dto.channel,
-        buildingId: buildingId || null,
-        targets: dto.targets,
+        buildingId: buildingId || undefined,
+        targets: dto.targets as Array<{
+          targetType: CommunicationTargetType;
+          targetId?: string;
+        }>,
       },
     );
   }
@@ -154,25 +160,19 @@ export class CommunicationsController {
    */
   @Get()
   async findAll(
-    @Param('buildingId') buildingId: string,
-    @Query('status') status?: CommunicationStatus,
-    @Request() req?: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
-    const userId = req.user.id;
-    const userRoles = req.user.roles || [];
+    @Param() params: ListCommunicationsParamDto,
+    @Query('status') _status?: CommunicationStatus,
+    @Request() req?: AuthenticatedRequest,
+  ): Promise<any[]> {
+    const tenantId = req!.tenantId!;
+    const userId = req!.user.id;
+    const userRoles = req!.user.roles || [];
 
-    const filters: any = {};
-    if (status) filters.status = status;
-    filters.buildingId = buildingId;
-
-    // RESIDENT sees only communications targeted to them
-    // Admin sees all communications
     return await this.communicationsService.findForUser(
       tenantId,
       userId,
       userRoles,
-      { buildingId },
+      { buildingId: params.buildingId },
     );
   }
 
@@ -190,26 +190,23 @@ export class CommunicationsController {
    */
   @Get(':communicationId')
   async findOne(
-    @Param('buildingId') buildingId: string,
-    @Param('communicationId') communicationId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Param() params: GetCommunicationParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any> {
+    const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
 
-    // Validate communication belongs to tenant (throws 404 if not)
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
 
-    // RESIDENT: Check if they have a receipt for this communication
     if (this.isResidentRole(userRoles)) {
       const canRead = await this.validators.canUserReadCommunication(
         tenantId,
         userId,
-        communicationId,
+        params.communicationId,
         userRoles,
       );
       if (!canRead) {
@@ -217,7 +214,7 @@ export class CommunicationsController {
       }
     }
 
-    return await this.communicationsService.findOne(tenantId, communicationId);
+    return await this.communicationsService.findOne(tenantId, params.communicationId);
   }
 
   /**
@@ -239,26 +236,23 @@ export class CommunicationsController {
    */
   @Patch(':communicationId')
   async update(
-    @Param('buildingId') buildingId: string,
-    @Param('communicationId') communicationId: string,
+    @Param() params: UpdateCommunicationParamDto,
     @Body() dto: UpdateCommunicationDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
 
-    // Admin-only: RESIDENT cannot update communications
     if (!this.isAdminRole(userRoles)) {
       throw new Error('Only administrators can update communications');
     }
 
-    // Validate scope (throws 404 if not found)
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
 
-    return await this.communicationsService.update(tenantId, communicationId, {
+    return await this.communicationsService.update(tenantId, params.communicationId, {
       title: dto.title,
       body: dto.body,
       channel: dto.channel,
@@ -284,34 +278,30 @@ export class CommunicationsController {
    */
   @Post(':communicationId/send')
   async send(
-    @Param('buildingId') buildingId: string,
-    @Param('communicationId') communicationId: string,
+    @Param() params: SendCommunicationParamDto,
     @Body() dto: ScheduleCommunicationDto,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
 
-    // Admin-only: RESIDENT cannot send communications
     if (!this.isAdminRole(userRoles)) {
       throw new Error('Only administrators can send communications');
     }
 
-    // Validate scope (throws 404 if not found)
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
 
-    // If scheduledAt is provided, schedule it; otherwise send immediately
     if (dto.scheduledAt) {
       return await this.communicationsService.schedule(
         tenantId,
-        communicationId,
+        params.communicationId,
         { scheduledAt: dto.scheduledAt },
       );
     } else {
-      return await this.communicationsService.send(tenantId, communicationId);
+      return await this.communicationsService.send(tenantId, params.communicationId);
     }
   }
 
@@ -329,25 +319,22 @@ export class CommunicationsController {
    */
   @Delete(':communicationId')
   async remove(
-    @Param('buildingId') buildingId: string,
-    @Param('communicationId') communicationId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Param() params: DeleteCommunicationParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
 
-    // Admin-only: RESIDENT cannot delete communications
     if (!this.isAdminRole(userRoles)) {
       throw new Error('Only administrators can delete communications');
     }
 
-    // Validate scope (throws 404 if not found)
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
 
-    return await this.communicationsService.delete(tenantId, communicationId);
+    return await this.communicationsService.delete(tenantId, params.communicationId);
   }
 
   /**
@@ -368,28 +355,24 @@ export class CommunicationsController {
    */
   @Get(':communicationId/receipts')
   async getReceipts(
-    @Param('communicationId') communicationId: string,
-    @Request() req: any,
-  ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    @Param() params: GetCommunicationParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<any[]> {
+    const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
 
-    // For now, admin-only to view all receipts
-    // RESIDENT can only see their own receipt via GET communication
     if (!this.isAdminRole(userRoles)) {
       throw new Error('Only administrators can view receipt list');
     }
 
-    // Validate scope (throws 404 if not found)
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
 
-    // Fetch and return receipts
     const communication = await this.communicationsService.findOne(
       tenantId,
-      communicationId,
+      params.communicationId,
     );
     return communication.receipts || [];
   }
