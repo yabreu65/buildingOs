@@ -1,3 +1,5 @@
+import 'reflect-metadata';
+
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import { ValidationPipe, Logger } from "@nestjs/common";
@@ -7,6 +9,11 @@ import { RateLimitMiddleware } from "./security/rate-limit.middleware";
 import { SentryService } from "./observability/sentry.service";
 import helmet from "helmet";
 
+/**
+ * Bootstrap the NestJS application with security middleware, validation, and observability.
+ * Configures CORS, Helmet security headers, rate limiting, Swagger documentation,
+ * and graceful shutdown handlers for Sentry event flushing.
+ */
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
@@ -156,7 +163,7 @@ async function bootstrap() {
   logger.log(`========================================`);
 }
 
-bootstrap().catch((error) => {
+bootstrap().catch((error: unknown) => {
   console.error('Fatal error during bootstrap:', error);
   process.exit(1);
 });
