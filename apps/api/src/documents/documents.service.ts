@@ -4,11 +4,17 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MinioService } from '../storage/minio.service';
 import { DocumentsValidators } from './documents.validators';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { PresignedUrlResponse } from './dto/presign-upload.dto';
-import { DocumentVisibility, Role } from '@prisma/client';
+import {
+  PresignedUrlResponse,
+  DocumentResponseDto,
+  DocumentWithFileResponseDto,
+  DownloadUrlResponseDto,
+} from './dto';
+import { DocumentVisibility, Role, Prisma } from '@prisma/client';
 
 /**
  * DocumentsService: CRUD operations for Documents and Files with MinIO integration
@@ -42,6 +48,7 @@ export class DocumentsService {
   constructor(
     private prisma: PrismaService,
     private validators: DocumentsValidators,
+    private minio: MinioService,
   ) {}
 
   /**
@@ -63,20 +70,15 @@ export class DocumentsService {
     // Generate objectKey with tenant isolation
     const objectKey = this.generateObjectKey(tenantId, originalName);
 
-    // TODO: Call MinIO presignedUrl() to get upload URL
-    // For now, return mock response (will be implemented with actual MinIO client)
-    // Example:
-    // const presignedUrl = await minioClient.presignedPutObject(
-    //   'documents',
-    //   objectKey,
-    //   24 * 60 * 60 // 24 hours
-    // );
+    // Generate presigned URL from MinIO (24 hours expiration)
+    const expirySeconds = 24 * 60 * 60;
+    const url = await this.minio.presignUpload('documents', objectKey, expirySeconds);
 
     return {
-      url: `https://minio.example.com/presigned-url/${objectKey}`, // Mock
+      url,
       bucket: 'documents',
       objectKey,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+      expiresAt: new Date(Date.now() + expirySeconds * 1000),
     };
   }
 
@@ -97,7 +99,7 @@ export class DocumentsService {
     tenantId: string,
     userMembershipId: string,
     dto: CreateDocumentDto,
-  ): Promise<any> {
+  ): Promise<DocumentWithFileResponseDto> {
     // Validate scope constraint
     this.validators.validateDocumentScope(dto.buildingId, dto.unitId);
 
@@ -118,9 +120,13 @@ export class DocumentsService {
       );
     }
 
-    // TODO: Validate objectKey exists in MinIO and matches file metadata
-    // For now, we trust client provided correct objectKey
-    // In production: call MinIO.statObject() to verify file exists
+    // Validate objectKey exists in MinIO before creating document record
+    const fileExists = await this.minio.objectExists('documents', dto.objectKey);
+    if (!fileExists) {
+      throw new BadRequestException(
+        'File not found in storage. Upload the file first and try again.',
+      );
+    }
 
     // Create File and Document atomically
     const file = await this.prisma.file.create({
@@ -155,7 +161,7 @@ export class DocumentsService {
       },
     });
 
-    return document;
+    return document as unknown as DocumentWithFileResponseDto;
   }
 
   /**
@@ -189,7 +195,7 @@ export class DocumentsService {
       category?: string;
       visibility?: DocumentVisibility;
     },
-  ): Promise<any[]> {
+  ): Promise<DocumentWithFileResponseDto[]> {
     const isAdmin =
       userRoles.includes(Role.TENANT_ADMIN) ||
       userRoles.includes(Role.TENANT_OWNER) ||
@@ -198,7 +204,7 @@ export class DocumentsService {
     const isResident = userRoles.includes(Role.RESIDENT);
 
     // Base query: always filter by tenant
-    const whereConditions: any = { tenantId };
+    const whereConditions: Prisma.DocumentWhereInput = { tenantId };
 
     // Add scope filters
     if (filters?.buildingId) {
@@ -265,7 +271,7 @@ export class DocumentsService {
       documents = documents.filter((doc) => doc !== null);
     }
 
-    return documents;
+    return documents as unknown as DocumentWithFileResponseDto[];
   }
 
   /**
@@ -279,7 +285,7 @@ export class DocumentsService {
     userId: string,
     userRoles: string[],
     isSuperAdmin: boolean,
-  ): Promise<any> {
+  ): Promise<DocumentWithFileResponseDto> {
     const document = await this.prisma.document.findFirst({
       where: { id: documentId, tenantId },
       include: {
@@ -324,7 +330,7 @@ export class DocumentsService {
       );
     }
 
-    return document;
+    return document as unknown as DocumentWithFileResponseDto;
   }
 
   /**
@@ -338,7 +344,7 @@ export class DocumentsService {
     userId: string,
     userRoles: string[],
     dto: UpdateDocumentDto,
-  ): Promise<any> {
+  ): Promise<DocumentWithFileResponseDto> {
     const document = await this.prisma.document.findFirst({
       where: { id: documentId, tenantId },
       include: {
@@ -362,7 +368,7 @@ export class DocumentsService {
     }
 
     // Update
-    return await this.prisma.document.update({
+    const updated = await this.prisma.document.update({
       where: { id: documentId },
       data: {
         ...(dto.title && { title: dto.title }),
@@ -376,6 +382,8 @@ export class DocumentsService {
         },
       },
     });
+
+    return updated as unknown as DocumentWithFileResponseDto;
   }
 
   /**
@@ -422,8 +430,16 @@ export class DocumentsService {
       where: { id: documentId },
     });
 
-    // TODO: Enqueue async job to delete from MinIO
-    // minioClient.removeObject('documents', fileInfo.objectKey)
+    // Delete file from MinIO asynchronously (fire-and-forget)
+    // Don't await or throw if it fails - document is already deleted
+    this.minio
+      .deleteObject(fileInfo.bucket, fileInfo.objectKey)
+      .catch((error) => {
+        console.error(
+          `Failed to delete file from MinIO: ${fileInfo.bucket}/${fileInfo.objectKey}`,
+          error,
+        );
+      });
   }
 
   /**
@@ -439,7 +455,7 @@ export class DocumentsService {
     userId: string,
     userRoles: string[],
     isSuperAdmin: boolean,
-  ): Promise<{ url: string; expiresAt: Date }> {
+  ): Promise<DownloadUrlResponseDto> {
     // First, validate document is accessible
     const document = await this.getDocument(
       tenantId,
@@ -449,16 +465,17 @@ export class DocumentsService {
       isSuperAdmin,
     );
 
-    // TODO: Generate presigned URL from MinIO
-    // const presignedUrl = await minioClient.presignedGetObject(
-    //   document.file.bucket,
-    //   document.file.objectKey,
-    //   24 * 60 * 60 // 24 hours
-    // );
+    // Generate presigned URL from MinIO (24 hours expiration)
+    const expirySeconds = 24 * 60 * 60;
+    const url = await this.minio.presignDownload(
+      document.file.bucket,
+      document.file.objectKey,
+      expirySeconds,
+    );
 
     return {
-      url: `https://minio.example.com/download/${document.file.objectKey}`, // Mock
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      url,
+      expiresAt: new Date(Date.now() + expirySeconds * 1000),
     };
   }
 

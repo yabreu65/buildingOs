@@ -45,16 +45,16 @@ services:
       retries: 5
 
   createbuckets:
-  image: minio/mc
-  depends_on:
-    minio:
-      condition: service_healthy
-  entrypoint: >
-    /bin/sh -c "
-    mc alias set myminio http://minio:9000 buildingos buildingos123;
-    mc mb --ignore-existing myminio/buildingos-local;
-    exit 0;
-    "
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 buildingos buildingos123;
+      mc mb --ignore-existing myminio/buildingos-local;
+      exit 0;
+      "
 
 
 volumes:
