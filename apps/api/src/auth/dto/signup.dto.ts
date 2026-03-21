@@ -16,19 +16,19 @@ export class SignupDto {
   @IsEmail({}, { message: 'Email must be valid' })
   @IsString()
   @MaxLength(255)
-  email: string;
+  email!: string;
 
   @IsNotEmpty({ message: 'Full name is required' })
   @IsString()
   @MinLength(2, { message: 'Name must be at least 2 characters' })
   @MaxLength(255, { message: 'Name must not exceed 255 characters' })
-  name: string;
+  name!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
   @MinLength(8, { message: 'Password must be at least 8 characters' })
   @MaxLength(255, { message: 'Password must not exceed 255 characters' })
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsString()

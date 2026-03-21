@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEnum, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, MinLength, MaxLength, IsOptional } from 'class-validator';
 
 export enum SupportTicketCategory {
   BILLING = 'BILLING',
@@ -21,17 +21,19 @@ export class CreateSupportTicketDto {
   @IsNotEmpty()
   @MinLength(5, { message: 'Title must be at least 5 characters' })
   @MaxLength(200, { message: 'Title must not exceed 200 characters' })
-  title: string;
+  title!: string;
 
   @IsString()
   @IsNotEmpty()
   @MinLength(10, { message: 'Description must be at least 10 characters' })
   @MaxLength(5000, { message: 'Description must not exceed 5000 characters' })
-  description: string;
+  description!: string;
 
+  @IsOptional()
   @IsEnum(SupportTicketCategory)
-  category: SupportTicketCategory = SupportTicketCategory.OTHER;
+  category?: SupportTicketCategory = SupportTicketCategory.OTHER;
 
+  @IsOptional()
   @IsEnum(SupportTicketPriority)
-  priority: SupportTicketPriority = SupportTicketPriority.MEDIUM;
+  priority?: SupportTicketPriority = SupportTicketPriority.MEDIUM;
 }

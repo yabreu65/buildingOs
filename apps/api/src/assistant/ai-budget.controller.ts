@@ -23,6 +23,8 @@ import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { AiBudgetService, UsageData, UsageWithLimits } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
+import { UpdateAiBudgetDto } from './dto/update-ai-budget.dto';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('tenants')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
@@ -123,22 +125,18 @@ export class AiBudgetController {
   @Patch('super-admin/tenants/:tenantId/ai/budget')
   async updateAiBudget(
     @Param('tenantId') tenantId: string,
-    @Body() body: { monthlyBudgetCents: number },
-    @Request() req?: any,
+    @Body() dto: UpdateAiBudgetDto,
+    @Request() req: AuthenticatedRequest,
   ): Promise<{ success: boolean }> {
     if (!tenantId || tenantId.trim().length === 0) {
       throw new BadRequestException('tenantId is required');
     }
 
-    if (!body || typeof body.monthlyBudgetCents !== 'number') {
-      throw new BadRequestException('monthlyBudgetCents is required and must be a number');
-    }
-
-    const actorUserId = req?.user?.id;
+    const actorUserId = req.user.id;
 
     await this.budgetService.updateBudget(
       tenantId,
-      body.monthlyBudgetCents,
+      dto.monthlyBudgetCents,
       actorUserId,
     );
 

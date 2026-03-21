@@ -4,10 +4,10 @@ import { TenantType } from '@prisma/client';
 export class CreateLeadDto {
   @IsString()
   @MaxLength(100)
-  fullName: string;
+  fullName!: string;
 
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsOptional()
   @IsString()
@@ -15,7 +15,7 @@ export class CreateLeadDto {
   phoneWhatsapp?: string;
 
   @IsEnum(TenantType)
-  tenantType: TenantType;
+  tenantType!: TenantType;
 
   @IsOptional()
   @IsInt()
@@ -24,7 +24,7 @@ export class CreateLeadDto {
 
   @IsInt()
   @Min(1)
-  unitsEstimate: number;
+  unitsEstimate!: number;
 
   @IsOptional()
   @IsString()
@@ -59,7 +59,7 @@ export class UpdateLeadDto {
 export class ConvertLeadDto {
   @IsString()
   @MaxLength(100)
-  tenantName: string;
+  tenantName!: string;
 
   @IsOptional()
   @IsEnum(TenantType)
@@ -84,26 +84,26 @@ export class ConvertLeadDto {
 }
 
 export class ConvertLeadResponseDto {
-  tenantId: string;
-  ownerUserId: string;
-  inviteSent: boolean;
-  plan: string; // FREE | BASIC | PRO | ENTERPRISE (BillingPlanId)
-  subscriptionStatus: string; // TRIAL
-  trialEndDate: string; // ISO 8601 date
+  tenantId!: string;
+  ownerUserId!: string;
+  inviteSent!: boolean;
+  plan!: string; // FREE | BASIC | PRO | ENTERPRISE (BillingPlanId)
+  subscriptionStatus!: string; // TRIAL
+  trialEndDate!: string; // ISO 8601 date
 }
 
 export class LeadResponseDto {
-  id: string;
-  fullName: string;
-  email: string;
+  id!: string;
+  fullName!: string;
+  email!: string;
   phone?: string;
-  tenantType: string;
+  tenantType!: string;
   buildingsCount?: number;
-  unitsEstimate: number;
+  unitsEstimate!: number;
   location?: string;
   message?: string;
   source?: string;
-  status: string;
+  status!: string;
   contactedAt?: Date;
   notes?: string;
   convertedTenantId?: string;
@@ -122,6 +122,6 @@ export class LeadResponseDto {
       };
     }[];
   };
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt!: Date;
+  updatedAt!: Date;
 }

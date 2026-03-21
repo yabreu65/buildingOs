@@ -3,7 +3,7 @@ import { IsString, MinLength, IsOptional } from 'class-validator';
 export class AcceptInvitationDto {
   @IsString()
   @MinLength(10)
-  token: string;
+  token!: string;
 
   @IsOptional()
   @IsString()

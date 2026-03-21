@@ -9,10 +9,10 @@ export enum ScopeTypeDto {
 
 export class AddRoleDto {
   @IsEnum(Role)
-  role: Role;
+  role!: Role;
 
   @IsEnum(ScopeTypeDto)
-  scopeType: ScopeTypeDto;
+  scopeType!: ScopeTypeDto;
 
   @IsOptional()
   @IsString()

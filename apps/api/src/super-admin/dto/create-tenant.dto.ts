@@ -5,8 +5,8 @@ export class CreateTenantDto {
   @IsString()
   @MinLength(3)
   @MaxLength(255)
-  name: string;
+  name!: string;
 
   @IsEnum(TenantType)
-  type: TenantType;
+  type!: TenantType;
 }

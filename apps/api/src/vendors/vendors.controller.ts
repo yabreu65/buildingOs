@@ -24,6 +24,11 @@ import {
   BuildingQuoteParamDto,
   WorkOrderIdParamDto,
   BuildingWorkOrderParamDto,
+  CreateVendorAssignmentDto,
+  CreateQuoteDto,
+  UpdateQuoteDto,
+  CreateWorkOrderDto,
+  UpdateWorkOrderDto,
 } from './dto';
 
 /**
@@ -227,7 +232,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async createVendorAssignment(
     @Param('buildingId') buildingId: string,
-    @Body() dto: { vendorId: string; serviceType: string },
+    @Body() dto: CreateVendorAssignmentDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
@@ -282,7 +287,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async listQuotes(
     @Param('buildingId') buildingId: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -329,7 +334,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async createQuote(
     @Param('buildingId') buildingId: string,
-    @Body() dto: { vendorId: string; ticketId?: string; amount: number; currency?: string; status?: string; fileId?: string; notes?: string },
+    @Body() dto: CreateQuoteDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
@@ -356,7 +361,7 @@ export class VendorsController {
   async updateQuote(
     @Param('buildingId') buildingId: string,
     @Param('quoteId') quoteId: string,
-    @Body() dto: { vendorId?: string; amount?: number; currency?: string; status?: string; fileId?: string | null; notes?: string | null },
+    @Body() dto: UpdateQuoteDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
@@ -392,7 +397,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async createWorkOrder(
     @Param('buildingId') buildingId: string,
-    @Body() dto: { ticketId?: string; vendorId?: string; assignedToMembershipId?: string; description?: string; scheduledFor?: string },
+    @Body() dto: CreateWorkOrderDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
@@ -418,7 +423,7 @@ export class VendorsController {
   @UseGuards(BuildingAccessGuard)
   async listWorkOrders(
     @Param('buildingId') buildingId: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;
     const userRoles = req.user.roles || [];
@@ -467,7 +472,7 @@ export class VendorsController {
   async updateWorkOrder(
     @Param('buildingId') buildingId: string,
     @Param('workOrderId') workOrderId: string,
-    @Body() dto: { status?: string; vendorId?: string | null; assignedToMembershipId?: string | null; description?: string; scheduledFor?: string | null },
+    @Body() dto: UpdateWorkOrderDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const tenantId = req.tenantId;

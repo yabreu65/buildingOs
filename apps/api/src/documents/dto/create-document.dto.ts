@@ -21,21 +21,21 @@ import { DocumentCategory, DocumentVisibility } from '@prisma/client';
 export class CreateDocumentDto {
   @IsString()
   @Length(1, 255)
-  title: string; // Display name
+  title!: string; // Display name
 
   @IsEnum(DocumentCategory)
-  category: DocumentCategory; // RULES, MINUTES, CONTRACT, BUDGET, INVOICE, RECEIPT, OTHER
+  category!: DocumentCategory; // RULES, MINUTES, CONTRACT, BUDGET, INVOICE, RECEIPT, OTHER
 
   @IsEnum(DocumentVisibility)
   @IsOptional()
   visibility?: DocumentVisibility; // Default: TENANT_ADMINS
 
   @IsString()
-  objectKey: string; // MinIO objectKey from presign response (validates file was uploaded)
+  objectKey!: string; // MinIO objectKey from presign response (validates file was uploaded)
 
   @IsInt()
   @Min(0)
-  size: number; // File size in bytes (from upload response)
+  size!: number; // File size in bytes (from upload response)
 
   @IsOptional()
   @IsString()

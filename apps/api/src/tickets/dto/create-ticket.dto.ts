@@ -4,15 +4,15 @@ import { TicketPriority } from '@prisma/client';
 export class CreateTicketDto {
   @IsString()
   @Length(3, 255)
-  title: string;
+  title!: string;
 
   @IsString()
   @Length(5, 2000)
-  description: string;
+  description!: string;
 
   @IsString()
   @Length(1, 100)
-  category: string; // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
+  category!: string; // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
 
   @IsOptional()
   @IsEnum(TicketPriority)

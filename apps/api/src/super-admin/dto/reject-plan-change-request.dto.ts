@@ -4,5 +4,5 @@ export class RejectPlanChangeRequestDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(1000)
-  reason: string;
+  reason!: string;
 }

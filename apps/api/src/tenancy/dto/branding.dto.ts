@@ -4,8 +4,8 @@ import { IsString, IsHexColor, IsOptional, IsIn, MaxLength } from 'class-validat
  * Get tenant branding response
  */
 export class GetBrandingResponseDto {
-  tenantId: string;
-  tenantName: string;
+  tenantId!: string;
+  tenantName!: string;
   brandName?: string;
   logoFileId?: string; // File ID stored; frontend generates presigned URL on-demand
   logoUrl?: string; // Deprecated: use logoFileId instead

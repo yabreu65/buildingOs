@@ -3,11 +3,11 @@ import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 export class CreatePlanChangeRequestDto {
   @IsString()
   @IsNotEmpty()
-  tenantId: string;
+  tenantId!: string;
 
   @IsString()
   @IsNotEmpty()
-  requestedPlanId: string;
+  requestedPlanId!: string;
 
   @IsOptional()
   @IsString()

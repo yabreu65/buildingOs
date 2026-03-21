@@ -28,7 +28,7 @@ export class UpdateSupportTicketDto {
 
 export class AddSupportTicketCommentDto {
   @IsString()
-  body: string;
+  body!: string;
 }
 
 export class AssignSupportTicketDto {

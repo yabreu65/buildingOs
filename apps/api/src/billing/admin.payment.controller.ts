@@ -12,13 +12,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { PaymentService } from './payment.service';
 import { PaymentVerificationStatus } from '@prisma/client';
-
-export interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    email: string;
-  };
-}
+import { RejectPaymentDto } from './dto/reject-payment.dto';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('admin/payments')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
@@ -56,7 +51,7 @@ export class AdminPaymentController {
   @Post(':id/approve')
   async approvePayment(
     @Param('id') paymentId: string,
-    @Request() req: RequestWithUser,
+    @Request() req: AuthenticatedRequest,
   ) {
     return this.paymentService.approvePayment(paymentId, {
       approvedByUserId: req.user.id,
@@ -70,8 +65,8 @@ export class AdminPaymentController {
   @Post(':id/reject')
   async rejectPayment(
     @Param('id') paymentId: string,
-    @Body() dto: { reason: string },
-    @Request() req: RequestWithUser,
+    @Body() dto: RejectPaymentDto,
+    @Request() req: AuthenticatedRequest,
   ) {
     return this.paymentService.rejectPayment(paymentId, {
       approvedByUserId: req.user.id,
