@@ -3,7 +3,7 @@ import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { EmailService } from '../email/email.service';
-import { Notification, DeliveryMethod, NotificationType } from '@prisma/client';
+import { Notification, NotificationType } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import { CreateNotificationInput, DEFAULT_NOTIFICATION_CONFIG } from './notifications.types';
 
@@ -13,7 +13,6 @@ export class NotificationsService {
     private prisma: PrismaService,
     private auditService: AuditService,
     private emailService: EmailService,
-    private configService: ConfigService,
   ) {}
 
   /**
@@ -48,7 +47,7 @@ export class NotificationsService {
         action: 'NOTIFICATION_CREATED',
         entityType: 'Notification',
         entityId: notification.id,
-        actorUserId: null, // System action, no actor
+        actorUserId: undefined, // System action, no actor
         metadata: { type: input.type },
       });
 

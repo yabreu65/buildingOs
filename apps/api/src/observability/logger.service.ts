@@ -23,7 +23,6 @@ export interface LogContext {
 @Injectable()
 export class LoggerService {
   private pinoLogger: PinoLogger;
-  private nestLogger = new NestLogger('LoggerService');
 
   constructor(private configService: ConfigService) {
     this.pinoLogger = this.initializePino();

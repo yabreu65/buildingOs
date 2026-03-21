@@ -62,22 +62,15 @@ class MockProvider implements AiProvider {
     const delayMs = options?.model === 'gpt-4.1-nano' ? 50 : 100;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-    const mockAnswers: Record<string, string> = {
-      tickets: 'You have 3 open tickets. View them to manage maintenance requests.',
-      payments:
-        'Current balance is $1,250. Outstanding payments are due by end of month.',
-      occupants:
-        "You have 8 occupants assigned. Recent activity shows good compliance.",
-      default: `I understand you're asking about "${message.substring(0, 50)}...". Let me help you find the right information.`,
-    };
-
-    let answer = mockAnswers.default;
+    let answer: string = `I understand you're asking about "${message.substring(0, 50)}...". Let me help you find the right information.`;
     if (message.toLowerCase().includes('ticket'))
-      answer = mockAnswers.tickets;
+      answer = 'You have 3 open tickets. View them to manage maintenance requests.';
     else if (message.toLowerCase().includes('payment'))
-      answer = mockAnswers.payments;
+      answer =
+        'Current balance is $1,250. Outstanding payments are due by end of month.';
     else if (message.toLowerCase().includes('occupant'))
-      answer = mockAnswers.occupants;
+      answer =
+        "You have 8 occupants assigned. Recent activity shows good compliance.";
 
     const suggestedActions: SuggestedAction[] = [
       {
@@ -387,7 +380,7 @@ export class AssistantService {
    * Uses TenantDailyAiUsage table with UNIQUE constraint
    */
   private async checkRateLimit(tenantId: string): Promise<void> {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today: string = new Date().toISOString().split('T')[0]!; // YYYY-MM-DD
 
     const usage = await this.prisma.tenantDailyAiUsage.findUnique({
       where: {
@@ -434,7 +427,7 @@ export class AssistantService {
   private filterSuggestedActions(
     actions: SuggestedAction[],
     userRoles: string[],
-    context: ContextValidation,
+    _context: ContextValidation,
   ): SuggestedAction[] {
     const canViewBuilding = userRoles.includes('TENANT_ADMIN') ||
       userRoles.includes('TENANT_OWNER') ||
@@ -510,6 +503,7 @@ export class AssistantService {
     } catch (error) {
       // Fire-and-forget: log but don't fail
       console.error('Failed to log AI interaction:', error);
+      return null;
     }
   }
 }

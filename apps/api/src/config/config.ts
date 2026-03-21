@@ -33,9 +33,8 @@ function emptyStringToUndefined(value: unknown): unknown {
  * Zod schema for environment validation
  * Split by env to enforce different requirements
  */
-export const createConfigSchema = (nodeEnv: string) => {
-  const isProduction = nodeEnv === 'production';
-  const isStaging = nodeEnv === 'staging';
+export const createConfigSchema = (_nodeEnv: string) => {
+  // Note: isProduction and isStaging would be used for conditional schema validation
 
   return z.object({
     // Server (always required)

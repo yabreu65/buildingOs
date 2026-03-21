@@ -4,7 +4,7 @@ import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config/config.service';
 import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
-import { AuditAction, TenantType, Role } from '@prisma/client';
+import { AuditAction, Role } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import * as crypto from 'crypto';
 

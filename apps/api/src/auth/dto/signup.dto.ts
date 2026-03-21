@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, MinLength, MaxLength, IsOptional, IsEnum, IsString, Matches } from 'class-validator';
+import { IsEmail, IsNotEmpty, MinLength, MaxLength, IsOptional, IsEnum, IsString } from 'class-validator';
 
 export enum TenantTypeEnum {
   ADMINISTRADORA = 'ADMINISTRADORA',

@@ -396,12 +396,14 @@ export class AiContextSummaryService {
         take: 3,
       });
 
-      snapshot.recentDocs = recentDocs.map(d => ({
-        id: d.id,
-        building: d.building.name,
-        title: d.title.substring(0, 40), // Truncate for brevity
-        category: d.category,
-      }));
+      snapshot.recentDocs = recentDocs
+        .filter(d => d.building !== null)
+        .map(d => ({
+          id: d.id,
+          building: d.building!.name,
+          title: d.title.substring(0, 40), // Truncate for brevity
+          category: d.category,
+        }));
     } catch (error) {
       console.error('Failed to enrich documents:', error);
     }

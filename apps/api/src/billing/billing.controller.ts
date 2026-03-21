@@ -8,6 +8,7 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
+import { Request as ExpressRequest } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { CancelPlanChangeRequestDto } from './dto/cancel-plan-change-request.dto';
@@ -20,24 +21,24 @@ export class BillingController {
   constructor(private readonly billingService: BillingService) {}
 
   @Post()
-  create(@Request() req, @Body() dto: CreatePlanChangeRequestDto) {
-    return this.billingService.createPlanChangeRequest(req.user, dto);
+  create(@Request() req: ExpressRequest, @Body() dto: CreatePlanChangeRequestDto) {
+    return this.billingService.createPlanChangeRequest((req as any).user, dto);
   }
 
   @Get()
-  list(@Request() req, @Query() query: ListPlanChangeRequestsDto) {
+  list(@Request() req: ExpressRequest, @Query() query: ListPlanChangeRequestsDto) {
     return this.billingService.listTenantPlanChangeRequests(
-      req.user,
+      (req as any).user,
       query.tenantId,
     );
   }
 
   @Post(':id/cancel')
   cancel(
-    @Request() req,
+    @Request() req: ExpressRequest,
     @Param('id') id: string,
     @Body() body: CancelPlanChangeRequestDto,
   ) {
-    return this.billingService.cancelPlanChangeRequest(req.user, body.tenantId, id);
+    return this.billingService.cancelPlanChangeRequest((req as any).user, body.tenantId, id);
   }
 }

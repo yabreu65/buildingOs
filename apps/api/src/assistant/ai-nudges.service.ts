@@ -64,7 +64,7 @@ export class AiNudgesService {
     }
 
     if (memberships.length === 1) {
-      return memberships[0].tenantId;
+      return memberships[0]!.tenantId;
     }
 
     throw new BadRequestException(
@@ -638,7 +638,9 @@ export class AiNudgesService {
   }
 
   private async getMonthAnalytics(tenantId: string, month: string) {
-    const [year, monthNum] = month.split('-').map(Number);
+    const parts = month.split('-').map(Number);
+    const year = parts[0]!;
+    const monthNum = parts[1]!;
     const start = new Date(year, monthNum - 1, 1);
     const end = new Date(year, monthNum, 0, 23, 59, 59, 999);
 
@@ -719,7 +721,9 @@ export class AiNudgesService {
   }
 
   private getPreviousMonth(month: string): string {
-    const [year, monthNum] = month.split('-').map(Number);
+    const parts = month.split('-').map(Number);
+    const year = parts[0]!;
+    const monthNum = parts[1]!;
     const date = new Date(year, monthNum - 1, 1);
     date.setMonth(date.getMonth() - 1);
     const prevYear = date.getFullYear();

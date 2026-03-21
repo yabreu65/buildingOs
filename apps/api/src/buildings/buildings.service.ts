@@ -2,7 +2,6 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
-  ConflictException,
 } from '@nestjs/common';
 import { Building } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';

@@ -1,0 +1,865 @@
+
+> @buildingos/api@0.0.1 build
+> nest build
+
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m67[0m:[93m14[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m67[0m       return memberships[0].tenantId;
+[7m  [0m [91m             ~~~~~~~~~~~~~~[0m
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m642[0m:[93m28[0m - [91merror[0m[90m TS2345: [0mArgument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+[7m642[0m     const start = new Date(year, monthNum - 1, 1);
+[7m   [0m [91m                           ~~~~[0m
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m642[0m:[93m34[0m - [91merror[0m[90m TS18048: [0m'monthNum' is possibly 'undefined'.
+
+[7m642[0m     const start = new Date(year, monthNum - 1, 1);
+[7m   [0m [91m                                 ~~~~~~~~[0m
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m643[0m:[93m26[0m - [91merror[0m[90m TS2345: [0mArgument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+[7m643[0m     const end = new Date(year, monthNum, 0, 23, 59, 59, 999);
+[7m   [0m [91m                         ~~~~[0m
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m723[0m:[93m27[0m - [91merror[0m[90m TS2345: [0mArgument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+[7m723[0m     const date = new Date(year, monthNum - 1, 1);
+[7m   [0m [91m                          ~~~~[0m
+[96msrc/assistant/ai-nudges.service.ts[0m:[93m723[0m:[93m33[0m - [91merror[0m[90m TS18048: [0m'monthNum' is possibly 'undefined'.
+
+[7m723[0m     const date = new Date(year, monthNum - 1, 1);
+[7m   [0m [91m                                ~~~~~~~~[0m
+[96msrc/assistant/analytics.service.ts[0m:[93m175[0m:[93m11[0m - [91merror[0m[90m TS6198: [0mAll destructured elements are unused.
+
+[7m175[0m     const { startDate, endDate } = this.getMonthRange(currentMonth);
+[7m   [0m [91m          ~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/assistant/analytics.service.ts[0m:[93m258[0m:[93m32[0m - [91merror[0m[90m TS2345: [0mArgument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+[7m258[0m     const startDate = new Date(year, monthStr - 1, 1);
+[7m   [0m [91m                               ~~~~[0m
+[96msrc/assistant/analytics.service.ts[0m:[93m258[0m:[93m38[0m - [91merror[0m[90m TS18048: [0m'monthStr' is possibly 'undefined'.
+
+[7m258[0m     const startDate = new Date(year, monthStr - 1, 1);
+[7m   [0m [91m                                     ~~~~~~~~[0m
+[96msrc/assistant/analytics.service.ts[0m:[93m259[0m:[93m30[0m - [91merror[0m[90m TS2345: [0mArgument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+[7m259[0m     const endDate = new Date(year, monthStr, 0, 23, 59, 59, 999);
+[7m   [0m [91m                             ~~~~[0m
+[96msrc/assistant/assistant.service.ts[0m:[93m96[0m:[93m14[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m96[0m     return { answer, suggestedActions };
+[7m  [0m [91m             ~~~~~~[0m
+
+  [96msrc/assistant/assistant.service.ts[0m:[93m25[0m:[93m3[0m
+    [7m25[0m   answer: string;
+    [7m  [0m [96m  ~~~~~~[0m
+    The expected type comes from property 'answer' which is declared here on type 'ChatResponse'
+[96msrc/assistant/assistant.service.ts[0m:[93m396[0m:[93m11[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m396[0m           day: today,
+[7m   [0m [91m          ~~~[0m
+[96msrc/assistant/assistant.service.ts[0m:[93m414[0m:[93m11[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m414[0m           day: today,
+[7m   [0m [91m          ~~~[0m
+[96msrc/assistant/assistant.service.ts[0m:[93m424[0m:[93m9[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m424[0m         day: today,
+[7m   [0m [91m        ~~~[0m
+
+  [96m../../node_modules/.prisma/client/index.d.ts[0m:[93m58455[0m:[93m5[0m
+    [7m58455[0m     day: string
+    [7m     [0m [96m    ~~~[0m
+    The expected type comes from property 'day' which is declared here on type '(Without<TenantDailyAiUsageCreateInput, TenantDailyAiUsageUncheckedCreateInput> & TenantDailyAiUsageUncheckedCreateInput) | (Without<...> & TenantDailyAiUsageCreateInput)'
+[96msrc/assistant/assistant.service.ts[0m:[93m437[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'context' is declared but its value is never read.
+
+[7m437[0m     context: ContextValidation,
+[7m   [0m [91m    ~~~~~~~[0m
+[96msrc/assistant/assistant.service.ts[0m:[93m483[0m:[93m6[0m - [91merror[0m[90m TS2366: [0mFunction lacks ending return statement and return type does not include 'undefined'.
+
+[7m483[0m   ): Promise<string | null> {
+[7m   [0m [91m     ~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/assistant/budget.service.ts[0m:[93m12[0m:[93m43[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m12[0m import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+[7m  [0m [91m                                          ~~~~~~~~~~~~~~~~~[0m
+[96msrc/assistant/context-summary.service.ts[0m:[93m401[0m:[93m19[0m - [91merror[0m[90m TS18047: [0m'd.building' is possibly 'null'.
+
+[7m401[0m         building: d.building.name,
+[7m   [0m [91m                  ~~~~~~~~~~[0m
+[96msrc/assistant/pricing.ts[0m:[93m48[0m:[93m22[0m - [91merror[0m[90m TS18048: [0m'defaultPricing' is possibly 'undefined'.
+
+[7m48[0m       (inputTokens * defaultPricing.input + outputTokens * defaultPricing.output) /
+[7m  [0m [91m                     ~~~~~~~~~~~~~~[0m
+[96msrc/assistant/pricing.ts[0m:[93m48[0m:[93m60[0m - [91merror[0m[90m TS18048: [0m'defaultPricing' is possibly 'undefined'.
+
+[7m48[0m       (inputTokens * defaultPricing.input + outputTokens * defaultPricing.output) /
+[7m  [0m [91m                                                           ~~~~~~~~~~~~~~[0m
+[96msrc/assistant/router.service.ts[0m:[93m180[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'savingsCents' is declared but its value is never read.
+
+[7m180[0m     const savingsCents = Math.round((allBigCost - totalCost) * 100);
+[7m   [0m [91m          ~~~~~~~~~~~~[0m
+[96msrc/assistant/template.service.ts[0m:[93m49[0m:[93m13[0m - [91merror[0m[90m TS6138: [0mProperty 'router' is declared but its value is never read.
+
+[7m49[0m     private router: AiRouterService,
+[7m  [0m [91m            ~~~~~~[0m
+[96msrc/assistant/template.service.ts[0m:[93m50[0m:[93m13[0m - [91merror[0m[90m TS6138: [0mProperty 'cache' is declared but its value is never read.
+
+[7m50[0m     private cache: AiCacheService,
+[7m  [0m [91m            ~~~~~[0m
+[96msrc/assistant/template.service.ts[0m:[93m300[0m:[93m58[0m - [91merror[0m[90m TS6133: [0m'response' is declared but its value is never read.
+
+[7m300[0m   private generateFollowUpQuestions(templateKey: string, response: ChatResponse): string[] {
+[7m   [0m [91m                                                         ~~~~~~~~[0m
+[96msrc/auth/dto/signup.dto.ts[0m:[93m1[0m:[93m83[0m - [91merror[0m[90m TS6133: [0m'Matches' is declared but its value is never read.
+
+[7m1[0m import { IsEmail, IsNotEmpty, MinLength, MaxLength, IsOptional, IsEnum, IsString, Matches } from 'class-validator';
+[7m [0m [91m                                                                                  ~~~~~~~[0m
+[96msrc/auth/jwt.strategy.ts[0m:[93m43[0m:[93m13[0m - [91merror[0m[90m TS6138: [0mProperty 'configService' is declared but its value is never read.
+
+[7m43[0m     private configService: ConfigService,
+[7m  [0m [91m            ~~~~~~~~~~~~~[0m
+[96msrc/billing/billing.controller.ts[0m:[93m23[0m:[93m10[0m - [91merror[0m[90m TS7006: [0mParameter 'req' implicitly has an 'any' type.
+
+[7m23[0m   create(@Request() req, @Body() dto: CreatePlanChangeRequestDto) {
+[7m  [0m [91m         ~~~~~~~~~~~~~~[0m
+[96msrc/billing/billing.controller.ts[0m:[93m28[0m:[93m8[0m - [91merror[0m[90m TS7006: [0mParameter 'req' implicitly has an 'any' type.
+
+[7m28[0m   list(@Request() req, @Query() query: ListPlanChangeRequestsDto) {
+[7m  [0m [91m       ~~~~~~~~~~~~~~[0m
+[96msrc/billing/billing.controller.ts[0m:[93m37[0m:[93m5[0m - [91merror[0m[90m TS7006: [0mParameter 'req' implicitly has an 'any' type.
+
+[7m37[0m     @Request() req,
+[7m  [0m [91m    ~~~~~~~~~~~~~~[0m
+[96msrc/billing/billing.service.ts[0m:[93m17[0m:[93m36[0m - [91merror[0m[90m TS7006: [0mParameter 'membership' implicitly has an 'any' type.
+
+[7m17[0m     return user.memberships?.some((membership) =>
+[7m  [0m [91m                                   ~~~~~~~~~~[0m
+[96msrc/billing/billing.service.ts[0m:[93m23[0m:[93m48[0m - [91merror[0m[90m TS7006: [0mParameter 'm' implicitly has an 'any' type.
+
+[7m23[0m     const membership = user.memberships?.find((m) => m.tenantId === tenantId);
+[7m  [0m [91m                                               ~[0m
+[96msrc/billing/billing.service.ts[0m:[93m29[0m:[93m50[0m - [91merror[0m[90m TS7006: [0mParameter 'role' implicitly has an 'any' type.
+
+[7m29[0m     const hasAdminRole = membership.roles?.some((role) =>
+[7m  [0m [91m                                                 ~~~~[0m
+[96msrc/billing/payment.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m5[0m   ConflictException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~[0m
+[96msrc/billing/plan-features.service.ts[0m:[93m3[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'SubscriptionStatus' is declared but its value is never read.
+
+[7m3[0m import { SubscriptionStatus } from '@prisma/client';
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/billing/subscription.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m5[0m   ConflictException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~[0m
+[96msrc/billing/subscription.service.ts[0m:[93m11[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'PaymentVerificationStatus' is declared but its value is never read.
+
+[7m11[0m   PaymentVerificationStatus,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/buildings/buildings.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m5[0m   ConflictException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~[0m
+[96msrc/common/dtos/params.dto.ts[0m:[93m1[0m:[93m28[0m - [91merror[0m[90m TS6133: [0m'IsOptional' is declared but its value is never read.
+
+[7m1[0m import { IsUUID, IsString, IsOptional } from 'class-validator';
+[7m [0m [91m                           ~~~~~~~~~~[0m
+[96msrc/communications/communications-user.controller.ts[0m:[93m9[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'Header' is declared but its value is never read.
+
+[7m9[0m   Header,
+[7m [0m [91m  ~~~~~~[0m
+[96msrc/communications/communications-user.controller.ts[0m:[93m80[0m:[93m46[0m - [91merror[0m[90m TS7006: [0mParameter 'm' implicitly has an 'any' type.
+
+[7m80[0m     const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+[7m  [0m [91m                                             ~[0m
+[96msrc/communications/communications-user.controller.ts[0m:[93m130[0m:[93m46[0m - [91merror[0m[90m TS7006: [0mParameter 'm' implicitly has an 'any' type.
+
+[7m130[0m     const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+[7m   [0m [91m                                             ~[0m
+[96msrc/communications/communications.controller.ts[0m:[93m141[0m:[93m23[0m - [91merror[0m[90m TS2304: [0mCannot find name 'CommunicationTargetType'.
+
+[7m141[0m           targetType: CommunicationTargetType;
+[7m   [0m [91m                      ~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/communications/communications.controller.ts[0m:[93m377[0m:[93m26[0m - [91merror[0m[90m TS2339: [0mProperty 'receipts' does not exist on type '{ id: string; tenantId: string; createdAt: Date; updatedAt: Date; status: CommunicationStatus; sentAt: Date | null; buildingId: string | null; ... 4 more ...; scheduledAt: Date | null; } & { ...; }'.
+
+[7m377[0m     return communication.receipts || [];
+[7m   [0m [91m                         ~~~~~~~~[0m
+[96msrc/communications/communications.service.ts[0m:[93m12[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ForbiddenException' is declared but its value is never read.
+
+[7m12[0m   ForbiddenException,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~[0m
+[96msrc/communications/communications.service.ts[0m:[93m16[0m:[93m3[0m - [91merror[0m[90m TS2724: [0m'"@prisma/client"' has no exported member named 'CommunicationRecipient'. Did you mean 'CommunicationReceipt'?
+
+[7m16[0m   CommunicationRecipient,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/communications/communications.service.ts[0m:[93m16[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'CommunicationRecipient' is declared but its value is never read.
+
+[7m16[0m   CommunicationRecipient,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/communications/communications.validators.ts[0m:[93m254[0m:[93m17[0m - [91merror[0m[90m TS2322: [0mType 'string | null' is not assignable to type 'string | StringFilter<"Building"> | undefined'.
+  Type 'null' is not assignable to type 'string | StringFilter<"Building"> | undefined'.
+
+[7m254[0m                 id: targetId,
+[7m   [0m [91m                ~~[0m
+[96msrc/communications/communications.validators.ts[0m:[93m268[0m:[93m13[0m - [91merror[0m[90m TS2322: [0mType 'string | null' is not assignable to type 'string | StringFilter<"UnitOccupant"> | undefined'.
+  Type 'null' is not assignable to type 'string | StringFilter<"UnitOccupant"> | undefined'.
+
+[7m268[0m             unitId: targetId,
+[7m   [0m [91m            ~~~~~~[0m
+[96msrc/communications/communications.validators.ts[0m:[93m312[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'tenantId' is declared but its value is never read.
+
+[7m312[0m     tenantId: string,
+[7m   [0m [91m    ~~~~~~~~[0m
+[96msrc/config/config.ts[0m:[93m37[0m:[93m9[0m - [91merror[0m[90m TS6133: [0m'isProduction' is declared but its value is never read.
+
+[7m37[0m   const isProduction = nodeEnv === 'production';
+[7m  [0m [91m        ~~~~~~~~~~~~[0m
+[96msrc/config/config.ts[0m:[93m38[0m:[93m9[0m - [91merror[0m[90m TS6133: [0m'isStaging' is declared but its value is never read.
+
+[7m38[0m   const isStaging = nodeEnv === 'staging';
+[7m  [0m [91m        ~~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m224[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'userId' is declared but its value is never read.
+
+[7m224[0m     userId: string,
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m260[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'tenantId' is declared but its value is never read.
+
+[7m260[0m     tenantId: string,
+[7m   [0m [91m    ~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m274[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType '{ code: string; id: string; label: string | null; }[]' is not assignable to type 'ContextOption[]'.
+  Type '{ code: string; id: string; label: string | null; }' is not assignable to type 'ContextOption'.
+    Types of property 'label' are incompatible.
+      Type 'string | null' is not assignable to type 'string | undefined'.
+        Type 'null' is not assignable to type 'string | undefined'.
+
+[7m274[0m       return this.prisma.unit.findMany({
+[7m   [0m [91m      ~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m287[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType '{ code: string; id: string; label: string | null; }[]' is not assignable to type 'ContextOption[]'.
+  Type '{ code: string; id: string; label: string | null; }' is not assignable to type 'ContextOption'.
+    Types of property 'label' are incompatible.
+      Type 'string | null' is not assignable to type 'string | undefined'.
+        Type 'null' is not assignable to type 'string | undefined'.
+
+[7m287[0m       return this.prisma.unit.findMany({
+[7m   [0m [91m      ~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m300[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType '{ code: string; id: string; label: string | null; }[]' is not assignable to type 'ContextOption[]'.
+  Type '{ code: string; id: string; label: string | null; }' is not assignable to type 'ContextOption'.
+    Types of property 'label' are incompatible.
+      Type 'string | null' is not assignable to type 'string | undefined'.
+        Type 'null' is not assignable to type 'string | undefined'.
+
+[7m300[0m       return this.prisma.unit.findMany({
+[7m   [0m [91m      ~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m346[0m:[93m9[0m - [91merror[0m[90m TS18048: [0m'building' is possibly 'undefined'.
+
+[7m346[0m         building.id,
+[7m   [0m [91m        ~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m349[0m:[93m50[0m - [91merror[0m[90m TS18048: [0m'building' is possibly 'undefined'.
+
+[7m349[0m         return this.setContext(userId, tenantId, building.id, units[0].id);
+[7m   [0m [91m                                                 ~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m349[0m:[93m63[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m349[0m         return this.setContext(userId, tenantId, building.id, units[0].id);
+[7m   [0m [91m                                                              ~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m352[0m:[93m48[0m - [91merror[0m[90m TS18048: [0m'building' is possibly 'undefined'.
+
+[7m352[0m       return this.setContext(userId, tenantId, building.id);
+[7m   [0m [91m                                               ~~~~~~~~[0m
+[96msrc/context/context.service.ts[0m:[93m356[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'userContext' is declared but its value is never read.
+
+[7m356[0m     const userContext = await this.prisma.userContext.create({
+[7m   [0m [91m          ~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m1[0m:[93m22[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+[7m [0m [91m                     ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m156[0m:[93m21[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m156[0m             unitId: units[assignment.unitIndex].id,
+[7m   [0m [91m                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m157[0m:[93m21[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m157[0m             userId: users[assignment.userIndex].id,
+[7m   [0m [91m                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m188[0m:[93m23[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m188[0m               unitId: units[idx % units.length].id,
+[7m   [0m [91m                      ~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m189[0m:[93m32[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m189[0m               createdByUserId: users[idx % users.length].id,
+[7m   [0m [91m                               ~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m193[0m:[93m15[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m193[0m               category: ticketCategories[idx % ticketCategories.length],
+[7m   [0m [91m              ~~~~~~~~[0m
+
+  [96m../../node_modules/.prisma/client/index.d.ts[0m:[93m56435[0m:[93m5[0m
+    [7m56435[0m     category: string
+    [7m     [0m [96m    ~~~~~~~~[0m
+    The expected type comes from property 'category' which is declared here on type '(Without<TicketCreateInput, TicketUncheckedCreateInput> & TicketUncheckedCreateInput) | (Without<...> & TicketCreateInput)'
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m227[0m:[93m32[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m227[0m               createdByUserId: users[idx % users.length].id,
+[7m   [0m [91m                               ~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m248[0m:[93m30[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m248[0m             createdByUserId: users[0].id,
+[7m   [0m [91m                             ~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m261[0m:[93m30[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m261[0m             createdByUserId: users[1].id,
+[7m   [0m [91m                             ~~~~~~~~[0m
+[96msrc/demo-seed/demo-seed.service.ts[0m:[93m289[0m:[93m15[0m - [91merror[0m[90m TS2322: [0mType 'DocumentCategory | undefined' is not assignable to type 'DocumentCategory'.
+  Type 'undefined' is not assignable to type 'DocumentCategory'.
+
+[7m289[0m               category: documentCategories[idx % documentCategories.length],
+[7m   [0m [91m              ~~~~~~~~[0m
+
+  [96m../../node_modules/.prisma/client/index.d.ts[0m:[93m57117[0m:[93m5[0m
+    [7m57117[0m     category: $Enums.DocumentCategory
+    [7m     [0m [96m    ~~~~~~~~[0m
+    The expected type comes from property 'category' which is declared here on type '(Without<DocumentCreateInput, DocumentUncheckedCreateInput> & DocumentUncheckedCreateInput) | (Without<...> & DocumentCreateInput)'
+[96msrc/documents/documents.controller.ts[0m:[93m92[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'isResidentRole' is declared but its value is never read.
+
+[7m92[0m   private isResidentRole(userRoles: string[]): boolean {
+[7m  [0m [91m          ~~~~~~~~~~~~~~[0m
+[96msrc/documents/documents.controller.ts[0m:[93m163[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'userId' is declared but its value is never read.
+
+[7m163[0m     const userId = req.user.id;
+[7m   [0m [91m          ~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m6[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Document' is declared but its value is never read.
+
+[7m6[0m import { Document } from '@prisma/client';
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m14[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'DocumentResponseDto' is declared but its value is never read.
+
+[7m14[0m   DocumentResponseDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m218[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType 'string' is not assignable to type 'DocumentCategory | EnumDocumentCategoryFilter<"Document"> | undefined'.
+
+[7m218[0m       whereConditions.category = filters.category;
+[7m   [0m [91m      ~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m254[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType '(({ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; } & { ...; }) | null)[]' is not assignable to type '({ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; } & { ...; })[]'.
+  Type '({ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; } & { ...; }) | null' is not assignable to type '{ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; } & { ...; }'.
+    Type 'null' is not assignable to type '{ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; } & { ...; }'.
+      Type 'null' is not assignable to type '{ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; }; createdByMembership: ({ ...; } & { ...; }) | null; }'.
+
+[7m254[0m       documents = await Promise.all(
+[7m   [0m [91m      ~~~~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m472[0m:[93m7[0m - [91merror[0m[90m TS18048: [0m'document.file' is possibly 'undefined'.
+
+[7m472[0m       document.file.bucket,
+[7m   [0m [91m      ~~~~~~~~~~~~~[0m
+[96msrc/documents/documents.service.ts[0m:[93m473[0m:[93m7[0m - [91merror[0m[90m TS18048: [0m'document.file' is possibly 'undefined'.
+
+[7m473[0m       document.file.objectKey,
+[7m   [0m [91m      ~~~~~~~~~~~~~[0m
+[96msrc/documents/dto/presign-upload.dto.ts[0m:[93m1[0m:[93m20[0m - [91merror[0m[90m TS6133: [0m'IsEnum' is declared but its value is never read.
+
+[7m1[0m import { IsString, IsEnum, Length } from 'class-validator';
+[7m [0m [91m                   ~~~~~~[0m
+[96msrc/email/email.service.ts[0m:[93m7[0m:[93m30[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m7[0m import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+[7m [0m [91m                             ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/email/email.service.ts[0m:[93m23[0m:[93m22[0m - [91merror[0m[90m TS6138: [0mProperty 'auditService' is declared but its value is never read.
+
+[7m23[0m     private readonly auditService: AuditService,
+[7m  [0m [91m                     ~~~~~~~~~~~~[0m
+[96msrc/email/email.service.ts[0m:[93m79[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'auditMetadata' is declared but its value is never read.
+
+[7m79[0m     const auditMetadata = {
+[7m  [0m [91m          ~~~~~~~~~~~~~[0m
+[96msrc/email/email.service.ts[0m:[93m175[0m:[93m33[0m - [91merror[0m[90m TS6133: [0m'options' is declared but its value is never read.
+
+[7m175[0m   private async sendViaSendGrid(options: SendEmailOptions): Promise<string> {
+[7m   [0m [91m                                ~~~~~~~[0m
+[96msrc/email/email.service.ts[0m:[93m183[0m:[93m32[0m - [91merror[0m[90m TS6133: [0m'options' is declared but its value is never read.
+
+[7m183[0m   private async sendViaMailgun(options: SendEmailOptions): Promise<string> {
+[7m   [0m [91m                               ~~~~~~~[0m
+[96msrc/finanzas/finanzas.controller.ts[0m:[93m375[0m:[93m5[0m - [91merror[0m[90m TS2740: [0mType 'Record<string, any>' is missing the following properties from type 'FinancialSummaryDto': totalCharges, totalPaid, totalOutstanding, delinquentUnitsCount, and 2 more.
+
+[7m375[0m     return this.finanzasService.getBuildingFinancialSummary(
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/finanzas/finanzas.service.ts[0m:[93m540[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'dto' is declared but its value is never read.
+
+[7m540[0m     dto: RejectPaymentDto,
+[7m   [0m [91m    ~~~[0m
+[96msrc/finanzas/finanzas.service.ts[0m:[93m1035[0m:[93m17[0m - [91merror[0m[90m TS6133: [0m'tryReconcilePayment' is declared but its value is never read.
+
+[7m1035[0m   private async tryReconcilePayment(paymentId: string): Promise<void> {
+[7m    [0m [91m                ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/finanzas/finanzas.validators.ts[0m:[93m1[0m:[93m41[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+[7m [0m [91m                                        ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/leads/leads.service.ts[0m:[93m7[0m:[93m23[0m - [91merror[0m[90m TS6133: [0m'TenantType' is declared but its value is never read.
+
+[7m7[0m import { AuditAction, TenantType, Role } from '@prisma/client';
+[7m [0m [91m                      ~~~~~~~~~~[0m
+[96msrc/leads/leads.service.ts[0m:[93m336[0m:[93m47[0m - [91merror[0m[90m TS2769: [0mNo overload matches this call.
+  The last overload gave the following error.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+
+[7m336[0m     return text.replace(/[&<>"']/g, (char) => map[char]);
+[7m   [0m [91m                                              ~~~~~~~~~[0m
+
+  [96mnode_modules/typescript/lib/lib.es5.d.ts[0m:[93m470[0m:[93m53[0m
+    [7m470[0m     replace(searchValue: string | RegExp, replacer: (substring: string, ...args: any[]) => string): string;
+    [7m   [0m [96m                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+    The expected type comes from the return type of this signature.
+  [96mnode_modules/typescript/lib/lib.es5.d.ts[0m:[93m470[0m:[93m5[0m
+    [7m470[0m     replace(searchValue: string | RegExp, replacer: (substring: string, ...args: any[]) => string): string;
+    [7m   [0m [96m    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+    The last overload is declared here.
+[96msrc/leads/leads.service.ts[0m:[93m476[0m:[93m13[0m - [91merror[0m[90m TS6133: [0m'invitation' is declared but its value is never read.
+
+[7m476[0m       const invitation = await tx.invitation.create({
+[7m   [0m [91m            ~~~~~~~~~~[0m
+[96msrc/main.ts[0m:[93m94[0m:[93m12[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m94[0m   app.use((req, res, next) => {
+[7m  [0m [91m           ~~~[0m
+[96msrc/main.ts[0m:[93m94[0m:[93m12[0m - [91merror[0m[90m TS7006: [0mParameter 'req' implicitly has an 'any' type.
+
+[7m94[0m   app.use((req, res, next) => {
+[7m  [0m [91m           ~~~[0m
+[96msrc/main.ts[0m:[93m94[0m:[93m17[0m - [91merror[0m[90m TS7006: [0mParameter 'res' implicitly has an 'any' type.
+
+[7m94[0m   app.use((req, res, next) => {
+[7m  [0m [91m                ~~~[0m
+[96msrc/main.ts[0m:[93m94[0m:[93m22[0m - [91merror[0m[90m TS7006: [0mParameter 'next' implicitly has an 'any' type.
+
+[7m94[0m   app.use((req, res, next) => {
+[7m  [0m [91m                     ~~~~[0m
+[96msrc/memberships/memberships.controller.ts[0m:[93m29[0m:[93m24[0m - [91merror[0m[90m TS6133: [0m'tenantId' is declared but its value is never read.
+
+[7m29[0m     @Param('tenantId') tenantId: string,
+[7m  [0m [91m                       ~~~~~~~~[0m
+[96msrc/memberships/memberships.controller.ts[0m:[93m31[0m:[93m12[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m31[0m     @Req() req: Request & { user: any },
+[7m  [0m [91m           ~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m4[0m:[93m22[0m - [91merror[0m[90m TS6133: [0m'ScopeTypeDto' is declared but its value is never read.
+
+[7m4[0m import { AddRoleDto, ScopeTypeDto } from './dto/add-role.dto';
+[7m [0m [91m                     ~~~~~~~~~~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m5[0m:[93m10[0m - [91merror[0m[90m TS6133: [0m'MembershipRole' is declared but its value is never read.
+
+[7m5[0m import { MembershipRole, Role } from '@prisma/client';
+[7m [0m [91m         ~~~~~~~~~~~~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m227[0m:[93m15[0m - [91merror[0m[90m TS18048: [0m'role' is possibly 'undefined'.
+
+[7m227[0m         role: role.role,
+[7m   [0m [91m              ~~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m228[0m:[93m20[0m - [91merror[0m[90m TS18048: [0m'role' is possibly 'undefined'.
+
+[7m228[0m         scopeType: role.scopeType,
+[7m   [0m [91m                   ~~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m229[0m:[93m26[0m - [91merror[0m[90m TS18048: [0m'role' is possibly 'undefined'.
+
+[7m229[0m         scopeBuildingId: role.scopeBuildingId,
+[7m   [0m [91m                         ~~~~[0m
+[96msrc/memberships/memberships.service.ts[0m:[93m230[0m:[93m22[0m - [91merror[0m[90m TS18048: [0m'role' is possibly 'undefined'.
+
+[7m230[0m         scopeUnitId: role.scopeUnitId,
+[7m   [0m [91m                     ~~~~[0m
+[96msrc/notifications/notifications.controller.ts[0m:[93m13[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'TenantAccessGuard' is declared but its value is never read.
+
+[7m13[0m import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+[7m  [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/notifications/notifications.service.ts[0m:[93m6[0m:[93m24[0m - [91merror[0m[90m TS6133: [0m'DeliveryMethod' is declared but its value is never read.
+
+[7m6[0m import { Notification, DeliveryMethod, NotificationType } from '@prisma/client';
+[7m [0m [91m                       ~~~~~~~~~~~~~~[0m
+[96msrc/notifications/notifications.service.ts[0m:[93m16[0m:[93m13[0m - [91merror[0m[90m TS6138: [0mProperty 'configService' is declared but its value is never read.
+
+[7m16[0m     private configService: ConfigService,
+[7m  [0m [91m            ~~~~~~~~~~~~~[0m
+[96msrc/notifications/notifications.service.ts[0m:[93m51[0m:[93m9[0m - [91merror[0m[90m TS2322: [0mType 'null' is not assignable to type 'string | undefined'.
+
+[7m51[0m         actorUserId: null, // System action, no actor
+[7m  [0m [91m        ~~~~~~~~~~~[0m
+
+  [96msrc/audit/audit.service.ts[0m:[93m7[0m:[93m3[0m
+    [7m7[0m   actorUserId?: string;
+    [7m [0m [96m  ~~~~~~~~~~~[0m
+    The expected type comes from property 'actorUserId' which is declared here on type 'AuditLogInput'
+[96msrc/observability/logger.service.ts[0m:[93m26[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'nestLogger' is declared but its value is never read.
+
+[7m26[0m   private nestLogger = new NestLogger('LoggerService');
+[7m  [0m [91m          ~~~~~~~~~~[0m
+[96msrc/observability/sentry.service.ts[0m:[93m45[0m:[93m25[0m - [91merror[0m[90m TS6133: [0m'hint' is declared but its value is never read.
+
+[7m45[0m       beforeSend(event, hint) {
+[7m  [0m [91m                        ~~~~[0m
+[96msrc/occupants/occupants.service.ts[0m:[93m1[0m:[93m62[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+[7m [0m [91m                                                             ~~~~~~~~~~~~~~~~~[0m
+[96msrc/reports/csv.utility.ts[0m:[93m125[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m125[0m     return date.toISOString().split('T')[0];
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/reports/reports.controller.ts[0m:[93m9[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m9[0m   BadRequestException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/reports/reports.service.ts[0m:[93m1[0m:[93m22[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, BadRequestException } from '@nestjs/common';
+[7m [0m [91m                     ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/reports/reports.service.ts[0m:[93m145[0m:[93m11[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m145[0m           t.comments[0].createdAt.getTime() - t.createdAt.getTime();
+[7m   [0m [91m          ~~~~~~~~~~~~~[0m
+[96msrc/security/rate-limit.middleware.ts[0m:[93m150[0m:[93m14[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m150[0m       return forwarded.split(',')[0].trim();
+[7m   [0m [91m             ~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m26[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m26[0m     this.bucket = this.configService.get<string>('s3Bucket');
+[7m  [0m [91m    ~~~~~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m29[0m:[93m25[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string | { toString: () => string; }'.
+  Type 'undefined' is not assignable to type 'string | { toString: () => string; }'.
+
+[7m29[0m     const url = new URL(endpoint);
+[7m  [0m [91m                        ~~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m73[0m:[93m50[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m73[0m         `Failed to generate presigned PUT URL: ${error.message}`,
+[7m  [0m [91m                                                 ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m74[0m:[93m9[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m74[0m         error.stack,
+[7m  [0m [91m        ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m107[0m:[93m50[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m107[0m         `Failed to generate presigned GET URL: ${error.message}`,
+[7m   [0m [91m                                                 ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m108[0m:[93m9[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m108[0m         error.stack,
+[7m   [0m [91m        ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m132[0m:[93m37[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m132[0m         `Failed to delete object: ${error.message}`,
+[7m   [0m [91m                                    ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m133[0m:[93m9[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m133[0m         error.stack,
+[7m   [0m [91m        ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m161[0m:[93m16[0m - [91merror[0m[90m TS2339: [0mProperty 'code' does not exist on type '{}'.
+
+[7m161[0m         error?.code === 'NotFound' ||
+[7m   [0m [91m               ~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m162[0m:[93m16[0m - [91merror[0m[90m TS2339: [0mProperty 'statusCode' does not exist on type '{}'.
+
+[7m162[0m         error?.statusCode === 404 ||
+[7m   [0m [91m               ~~~~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m163[0m:[93m16[0m - [91merror[0m[90m TS2339: [0mProperty 'message' does not exist on type '{}'.
+
+[7m163[0m         error?.message?.includes('NotFound');
+[7m   [0m [91m               ~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m171[0m:[93m53[0m - [91merror[0m[90m TS2339: [0mProperty 'message' does not exist on type '{}'.
+
+[7m171[0m         `Failed to check object existence: ${error?.message}`,
+[7m   [0m [91m                                                    ~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m172[0m:[93m16[0m - [91merror[0m[90m TS2339: [0mProperty 'stack' does not exist on type '{}'.
+
+[7m172[0m         error?.stack,
+[7m   [0m [91m               ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m198[0m:[93m24[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m198[0m           objects.push(obj.name);
+[7m   [0m [91m                       ~~~~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m218[0m:[93m36[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m218[0m         `Failed to list objects: ${error.message}`,
+[7m   [0m [91m                                   ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m219[0m:[93m9[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m219[0m         error.stack,
+[7m   [0m [91m        ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m247[0m:[93m39[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m247[0m         `Failed to get object stat: ${error.message}`,
+[7m   [0m [91m                                      ~~~~~[0m
+[96msrc/storage/minio.service.ts[0m:[93m248[0m:[93m9[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m248[0m         error.stack,
+[7m   [0m [91m        ~~~~~[0m
+[96msrc/super-admin/ai-caps.service.ts[0m:[93m94[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType 'number | null' is not assignable to type 'number | undefined'.
+  Type 'null' is not assignable to type 'number | undefined'.
+
+[7m94[0m       updateData.monthlyBudgetCents = dto.monthlyBudgetCents;
+[7m  [0m [91m      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/super-admin/ai-caps.service.ts[0m:[93m97[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType 'number | null' is not assignable to type 'number | undefined'.
+  Type 'null' is not assignable to type 'number | undefined'.
+
+[7m97[0m       updateData.monthlyCallsLimit = dto.monthlyCallsLimit;
+[7m  [0m [91m      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/super-admin/ai-caps.service.ts[0m:[93m100[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType 'boolean | null' is not assignable to type 'boolean | undefined'.
+  Type 'null' is not assignable to type 'boolean | undefined'.
+
+[7m100[0m       updateData.allowBigModelOverride = dto.allowBigModelOverride;
+[7m   [0m [91m      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m75[0m:[93m43[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m75[0m     return this.service.createTenant(dto, req.user.id);
+[7m  [0m [91m                                          ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m112[0m:[93m53[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m112[0m     return this.service.updateTenant(tenantId, dto, req.user.id);
+[7m   [0m [91m                                                    ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m125[0m:[93m48[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m125[0m     return this.service.deleteTenant(tenantId, req.user.id);
+[7m   [0m [91m                                               ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m138[0m:[93m51[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m138[0m     return this.service.changePlan(tenantId, dto, req.user.id);
+[7m   [0m [91m                                                  ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m191[0m:[93m58[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m191[0m     return this.service.startImpersonation(dto.tenantId, req.user.id);
+[7m   [0m [91m                                                         ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m203[0m:[93m22[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m203[0m     const tenantId = req.user.impersonatedTenantId || 'unknown';
+[7m   [0m [91m                     ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m204[0m:[93m25[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m204[0m     const actorUserId = req.user.actorSuperAdminUserId || req.user.id;
+[7m   [0m [91m                        ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m204[0m:[93m59[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m204[0m     const actorUserId = req.user.actorSuperAdminUserId || req.user.id;
+[7m   [0m [91m                                                          ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m254[0m:[93m58[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m254[0m     await this.aiCapsService.updateAiCaps(tenantId, dto, req.user.id);
+[7m   [0m [91m                                                         ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.controller.ts[0m:[93m267[0m:[93m58[0m - [91merror[0m[90m TS18048: [0m'req.user' is possibly 'undefined'.
+
+[7m267[0m     await this.aiCapsService.updateAiCaps(tenantId, dto, req.user.id);
+[7m   [0m [91m                                                         ~~~~~~~~[0m
+[96msrc/super-admin/super-admin.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m5[0m   BadRequestException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/support-tickets/support-tickets.service.ts[0m:[93m64[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'userId' is declared but its value is never read.
+
+[7m64[0m     userId: string,
+[7m  [0m [91m    ~~~~~~[0m
+[96msrc/tenancy/building-access.guard.ts[0m:[93m49[0m:[93m22[0m - [91merror[0m[90m TS6138: [0mProperty 'authorize' is declared but its value is never read.
+
+[7m49[0m     private readonly authorize: AuthorizeService,
+[7m  [0m [91m                     ~~~~~~~~~[0m
+[96msrc/tenancy/tenant-param.decorator.ts[0m:[93m12[0m:[93m4[0m - [91merror[0m[90m TS6133: [0m'data' is declared but its value is never read.
+
+[7m12[0m   (data: unknown, ctx: ExecutionContext) => {
+[7m  [0m [91m   ~~~~[0m
+[96msrc/tickets/tickets.controller.ts[0m:[93m19[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'UpdateTicketStatusDto' is declared but its value is never read.
+
+[7m19[0m import { UpdateTicketStatusDto } from './dto/update-ticket-status.dto';
+[7m  [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/tickets/tickets.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m5[0m   ConflictException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~[0m
+[96msrc/tickets/tickets.validators.ts[0m:[93m1[0m:[93m41[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+[7m [0m [91m                                        ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/units/dto/create-unit.dto.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS2564: [0mProperty 'code' has no initializer and is not definitely assigned in the constructor.
+
+[7m5[0m   code: string;
+[7m [0m [91m  ~~~~[0m
+[96msrc/units/units.service.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'ConflictException' is declared but its value is never read.
+
+[7m5[0m   ConflictException,
+[7m [0m [91m  ~~~~~~~~~~~~~~~~~[0m
+[96msrc/units/units.service.ts[0m:[93m149[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'unit' is declared but its value is never read.
+
+[7m149[0m     const unit = await this.findOne(tenantId, buildingId, unitId);
+[7m   [0m [91m          ~~~~[0m
+[96msrc/vendors/dto/create-vendor.dto.ts[0m:[93m5[0m:[93m3[0m - [91merror[0m[90m TS2564: [0mProperty 'name' has no initializer and is not definitely assigned in the constructor.
+
+[7m5[0m   name: string;
+[7m [0m [91m  ~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m11[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'Query' is declared but its value is never read.
+
+[7m11[0m   Query,
+[7m  [0m [91m  ~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m21[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'VendorIdParamDto' is declared but its value is never read.
+
+[7m21[0m   VendorIdParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m22[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'BuildingVendorIdParamDto' is declared but its value is never read.
+
+[7m22[0m   BuildingVendorIdParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m23[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'QuoteIdParamDto' is declared but its value is never read.
+
+[7m23[0m   QuoteIdParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m24[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'BuildingQuoteParamDto' is declared but its value is never read.
+
+[7m24[0m   BuildingQuoteParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m25[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'WorkOrderIdParamDto' is declared but its value is never read.
+
+[7m25[0m   WorkOrderIdParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m26[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'BuildingWorkOrderParamDto' is declared but its value is never read.
+
+[7m26[0m   BuildingWorkOrderParamDto,
+[7m  [0m [91m  ~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m93[0m:[93m50[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m93[0m     return await this.vendorsService.listVendors(tenantId);
+[7m  [0m [91m                                                 ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m111[0m:[93m48[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m111[0m     return await this.vendorsService.getVendor(tenantId, vendorId);
+[7m   [0m [91m                                               ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m132[0m:[93m51[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m132[0m     return await this.vendorsService.createVendor(tenantId, dto);
+[7m   [0m [91m                                                  ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m154[0m:[93m51[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m154[0m     return await this.vendorsService.updateVendor(tenantId, vendorId, dto);
+[7m   [0m [91m                                                  ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m172[0m:[93m51[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m172[0m     return await this.vendorsService.deleteVendor(tenantId, vendorId);
+[7m   [0m [91m                                                  ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m198[0m:[93m60[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m198[0m     return await this.vendorsService.listVendorAssignments(tenantId, buildingId);
+[7m   [0m [91m                                                           ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m209[0m:[93m26[0m - [91merror[0m[90m TS6133: [0m'buildingId' is declared but its value is never read.
+
+[7m209[0m     @Param('buildingId') buildingId: string,
+[7m   [0m [91m                         ~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m221[0m:[93m58[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m221[0m     return await this.vendorsService.getVendorAssignment(tenantId, assignmentId);
+[7m   [0m [91m                                                         ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m247[0m:[93m7[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m247[0m       tenantId,
+[7m   [0m [91m      ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m262[0m:[93m26[0m - [91merror[0m[90m TS6133: [0m'buildingId' is declared but its value is never read.
+
+[7m262[0m     @Param('buildingId') buildingId: string,
+[7m   [0m [91m                         ~~~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m274[0m:[93m61[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m274[0m     return await this.vendorsService.deleteVendorAssignment(tenantId, assignmentId);
+[7m   [0m [91m                                                            ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m300[0m:[93m49[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m300[0m     return await this.vendorsService.listQuotes(tenantId, buildingId);
+[7m   [0m [91m                                                ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m323[0m:[93m47[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m323[0m     return await this.vendorsService.getQuote(tenantId, buildingId, quoteId);
+[7m   [0m [91m                                              ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m348[0m:[93m50[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m348[0m     return await this.vendorsService.createQuote(tenantId, buildingId, dto);
+[7m   [0m [91m                                                 ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m382[0m:[93m50[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m382[0m     return await this.vendorsService.updateQuote(tenantId, buildingId, quoteId, dto);
+[7m   [0m [91m                                                 ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m411[0m:[93m54[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m411[0m     return await this.vendorsService.createWorkOrder(tenantId, buildingId, {
+[7m   [0m [91m                                                     ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m436[0m:[93m53[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m436[0m     return await this.vendorsService.listWorkOrders(tenantId, buildingId);
+[7m   [0m [91m                                                    ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m459[0m:[93m51[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m459[0m     return await this.vendorsService.getWorkOrder(tenantId, buildingId, workOrderId);
+[7m   [0m [91m                                                  ~~~~~~~~[0m
+[96msrc/vendors/vendors.controller.ts[0m:[93m493[0m:[93m54[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m493[0m     return await this.vendorsService.updateWorkOrder(tenantId, buildingId, workOrderId, {
+[7m   [0m [91m                                                     ~~~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m1[0m:[93m43[0m - [91merror[0m[90m TS6133: [0m'NotFoundException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+[7m [0m [91m                                          ~~~~~~~~~~~~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m55[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType '({ quotes: ({ building: { name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; address: string | null; }; ticket: { id: string; tenantId: string; createdAt: Date; ... 10 more ...; closedAt: Date | null; } | null; vendor: { ...; }; } & { ...; })[]; workOrders: ({ ...; } & { ...; })[]; assignm...' is not assignable to type '{ email: string | null; name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; taxId: string | null; phone: string | null; notes: string | null; }'.
+  Type 'null' is not assignable to type '{ email: string | null; name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; taxId: string | null; phone: string | null; notes: string | null; }'.
+
+[7m55[0m     return await this.prisma.vendor.findUnique({
+[7m  [0m [91m    ~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m215[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType '({ building: { name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; address: string | null; }; vendor: { email: string | null; name: string; id: string; tenantId: string; ... 4 more ...; notes: string | null; }; } & { ...; }) | null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; buildingId: string; vendorId: string; serviceType: string; }'.
+  Type 'null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; buildingId: string; vendorId: string; serviceType: string; }'.
+
+[7m215[0m     return await this.prisma.vendorAssignment.findUnique({
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m281[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType '{ building: { name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; address: string | null; }; vendor: { email: string | null; name: string; id: string; tenantId: string; ... 4 more ...; notes: string | null; }; } & { ...; }' is not assignable to type 'void'.
+
+[7m281[0m     return await this.prisma.vendorAssignment.delete({
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m326[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType '({ file: { id: string; tenantId: string; createdAt: Date; bucket: string; objectKey: string; originalName: string; mimeType: string; size: number; checksum: string | null; createdByMembershipId: string | null; } | null; building: { ...; }; ticket: { ...; } | null; vendor: { ...; }; } & { ...; }) | null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; updatedAt: Date; status: QuoteStatus; buildingId: string; amount: number; currency: string; ticketId: string | null; vendorId: string; fileId: string | null; notes: string | null; }'.
+  Type 'null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; updatedAt: Date; status: QuoteStatus; buildingId: string; amount: number; currency: string; ticketId: string | null; vendorId: string; fileId: string | null; notes: string | null; }'.
+
+[7m326[0m     return await this.prisma.quote.findUnique({
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/vendors/vendors.service.ts[0m:[93m374[0m:[93m5[0m - [91merror[0m[90m TS2322: [0mType '({ building: { name: string; id: string; tenantId: string; createdAt: Date; updatedAt: Date; address: string | null; }; ticket: { id: string; tenantId: string; createdAt: Date; ... 10 more ...; closedAt: Date | null; } | null; vendor: { ...; } | null; assignedTo: { ...; } | null; } & { ...; }) | null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; updatedAt: Date; status: WorkOrderStatus; description: string | null; buildingId: string; assignedToMembershipId: string | null; closedAt: Date | null; ticketId: string | null; vendorId: string | null; scheduledFor: Date | null; }'.
+  Type 'null' is not assignable to type '{ id: string; tenantId: string; createdAt: Date; updatedAt: Date; status: WorkOrderStatus; description: string | null; buildingId: string; assignedToMembershipId: string | null; closedAt: Date | null; ticketId: string | null; vendorId: string | null; scheduledFor: Date | null; }'.
+
+[7m374[0m     return await this.prisma.workOrder.findUnique({
+[7m   [0m [91m    ~~~~~~[0m
+[96msrc/vendors/vendors.validators.ts[0m:[93m1[0m:[93m41[0m - [91merror[0m[90m TS6133: [0m'BadRequestException' is declared but its value is never read.
+
+[7m1[0m import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+[7m [0m [91m                                        ~~~~~~~~~~~~~~~~~~~[0m
+
+Found 191 error(s).
+
+npm error Lifecycle script `build` failed with error:

@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SubscriptionStatus } from '@prisma/client';
 
 export interface PlanFeatures {
   canExportReports: boolean;

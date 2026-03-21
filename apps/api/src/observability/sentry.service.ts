@@ -42,7 +42,7 @@ export class SentryService {
       tracesSampleRate: config.nodeEnv === 'production' ? 0.1 : 1.0,
 
       // Redact sensitive data before sending
-      beforeSend(event, hint) {
+      beforeSend(event, _hint) {
         // Remove sensitive headers
         if (event.request) {
           delete event.request.headers?.['authorization'];

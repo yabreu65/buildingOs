@@ -251,7 +251,7 @@ export class CommunicationsValidators {
           where: {
             unit: {
               building: {
-                id: targetId,
+                id: targetId as string,
                 tenantId,
               },
             },
@@ -265,7 +265,7 @@ export class CommunicationsValidators {
         // All unit occupants in this unit
         const unitOccupants = await this.prisma.unitOccupant.findMany({
           where: {
-            unitId: targetId,
+            unitId: targetId as string,
             unit: {
               building: { tenantId },
             },
@@ -309,7 +309,7 @@ export class CommunicationsValidators {
    * @returns true if user can read, false otherwise
    */
   async canUserReadCommunication(
-    tenantId: string,
+    _tenantId: string,
     userId: string,
     communicationId: string,
     userRoles: string[],

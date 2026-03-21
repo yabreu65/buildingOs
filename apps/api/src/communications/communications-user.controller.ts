@@ -6,7 +6,6 @@ import {
   UseGuards,
   Request,
   Query,
-  Header,
   BadRequestException,
   HttpCode,
 } from '@nestjs/common';
@@ -77,7 +76,7 @@ export class CommunicationsUserController {
 
     // Get user's memberships to find matching tenant
     const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
     if (!membership) {
       throw new BadRequestException(
         'User does not have membership in the specified tenant',
@@ -127,7 +126,7 @@ export class CommunicationsUserController {
 
     // Get user's memberships to find matching tenant
     const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
     if (!membership) {
       throw new BadRequestException(
         'User does not have membership in the specified tenant',

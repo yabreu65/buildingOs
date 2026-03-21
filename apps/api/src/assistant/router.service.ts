@@ -177,7 +177,6 @@ export class AiRouterService {
     const totalCost = smallInputCost + smallOutputCost + bigInputCost + bigOutputCost;
     const allBigCost = ((smallCalls + bigCalls) * 50 * 15 + (smallCalls + bigCalls) * 150 * 60) / 1_000_000;
 
-    const savingsCents = Math.round((allBigCost - totalCost) * 100);
     const savingsPct = Math.round(((allBigCost - totalCost) / allBigCost) * 100);
 
     return {

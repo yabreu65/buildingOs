@@ -43,7 +43,7 @@ export function calculateTokenCost(
 
   if (!pricing) {
     // Unknown model, estimate based on gpt-4o-mini
-    const defaultPricing = MODEL_PRICING['gpt-4o-mini'];
+    const defaultPricing = MODEL_PRICING['gpt-4o-mini']!;
     const costUsd =
       (inputTokens * defaultPricing.input + outputTokens * defaultPricing.output) /
       1_000_000;

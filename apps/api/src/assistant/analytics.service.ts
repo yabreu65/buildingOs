@@ -172,7 +172,6 @@ export class AiAnalyticsService {
    */
   async getAllTenantsAnalytics(month?: string): Promise<TenantSummaryItem[]> {
     const currentMonth = month || this.getCurrentMonth();
-    const { startDate, endDate } = this.getMonthRange(currentMonth);
 
     const results = await this.prisma.$queryRaw<
       Array<{
@@ -254,7 +253,9 @@ export class AiAnalyticsService {
    * Helper: Get start and end dates for a month
    */
   private getMonthRange(month: string): { startDate: Date; endDate: Date } {
-    const [year, monthStr] = month.split('-').map(Number);
+    const parts = month.split('-').map(Number);
+    const year = parts[0]!;
+    const monthStr = parts[1]!;
     const startDate = new Date(year, monthStr - 1, 1);
     const endDate = new Date(year, monthStr, 0, 23, 59, 59, 999);
     return { startDate, endDate };

@@ -19,11 +19,11 @@ export class MinioService {
   private readonly bucket: string;
 
   constructor(private configService: ConfigService) {
-    const endpoint = this.configService.get<string>('s3Endpoint');
+    const endpoint = this.configService.get<string>('s3Endpoint') || 'http://localhost:9000';
     const region = this.configService.get<string>('s3Region', 'us-east-1');
     const accessKey = this.configService.get<string>('s3AccessKey');
     const secretKey = this.configService.get<string>('s3SecretKey');
-    this.bucket = this.configService.get<string>('s3Bucket');
+    this.bucket = this.configService.get<string>('s3Bucket') || 'buildingos-local';
 
     // Parse endpoint to extract host and port
     const url = new URL(endpoint);
@@ -69,9 +69,11 @@ export class MinioService {
       this.logger.debug(`Generated presigned PUT URL for ${bucketName}/${objectKey}`);
       return url;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(
-        `Failed to generate presigned PUT URL: ${error.message}`,
-        error.stack,
+        `Failed to generate presigned PUT URL: ${message}`,
+        stack,
       );
       throw error;
     }
@@ -103,9 +105,11 @@ export class MinioService {
       this.logger.debug(`Generated presigned GET URL for ${bucketName}/${objectKey}`);
       return url;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(
-        `Failed to generate presigned GET URL: ${error.message}`,
-        error.stack,
+        `Failed to generate presigned GET URL: ${message}`,
+        stack,
       );
       throw error;
     }

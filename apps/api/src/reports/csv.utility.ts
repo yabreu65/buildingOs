@@ -122,7 +122,7 @@ export class CsvUtility {
    */
   static formatDate(date?: Date): string {
     if (!date) return '';
-    return date.toISOString().split('T')[0];
+    return date.toISOString().split('T')[0]!;
   }
 
   /**

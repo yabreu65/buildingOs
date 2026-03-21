@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChargeStatus, PaymentStatus } from '@prisma/client';
 import { CsvUtility, CsvExportResult } from './csv.utility';
@@ -142,7 +142,7 @@ export class ReportsService {
       // Time to first response
       if (t.comments.length > 0) {
         const responseTime =
-          t.comments[0].createdAt.getTime() - t.createdAt.getTime();
+          t.comments[0]!.createdAt.getTime() - t.createdAt.getTime();
         totalResponseTime += responseTime;
         ticketsWithResponse++;
       }

@@ -9,11 +9,9 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
-  ForbiddenException,
 } from '@nestjs/common';
 import {
   Communication,
-  CommunicationRecipient,
   CommunicationChannel,
   CommunicationStatus,
   CommunicationTargetType,

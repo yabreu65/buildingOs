@@ -6,7 +6,6 @@ import {
   UseGuards,
   Request,
   Response,
-  BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';

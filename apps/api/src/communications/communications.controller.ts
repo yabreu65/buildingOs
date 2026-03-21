@@ -25,7 +25,7 @@ import {
 } from './dto/create-communication.dto';
 import { UpdateCommunicationDto } from './dto/update-communication.dto';
 import { ScheduleCommunicationDto } from './dto/schedule-communication.dto';
-import { CommunicationStatus } from '@prisma/client';
+import { CommunicationStatus, CommunicationTargetType } from '@prisma/client';
 
 /**
  * CommunicationsController: Communications (Comunicados) management endpoints
@@ -374,6 +374,6 @@ export class CommunicationsController {
       tenantId,
       params.communicationId,
     );
-    return communication.receipts || [];
+    return (communication as any).receipts || [];
   }
 }

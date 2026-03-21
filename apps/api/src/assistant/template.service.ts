@@ -14,8 +14,6 @@
 
 import { Injectable, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiRouterService } from './router.service';
-import { AiCacheService } from './cache.service';
 import { AiContextSummaryService } from './context-summary.service';
 import { AiBudgetService } from './budget.service';
 import { AuditService } from '../audit/audit.service';
@@ -46,8 +44,6 @@ export class AiTemplateService {
   constructor(
     private prisma: PrismaService,
     private assistant: AssistantService,
-    private router: AiRouterService,
-    private cache: AiCacheService,
     private contextSummary: AiContextSummaryService,
     private budget: AiBudgetService,
     private audit: AuditService,
@@ -297,7 +293,7 @@ export class AiTemplateService {
    *
    * @private
    */
-  private generateFollowUpQuestions(templateKey: string, response: ChatResponse): string[] {
+  private generateFollowUpQuestions(templateKey: string, _response: ChatResponse): string[] {
     // Map templates to relevant follow-up questions
     const followUpMap: Record<string, string[]> = {
       INBOX_PRIORITIZE: [

@@ -14,19 +14,19 @@ export class BillingService {
   constructor(private readonly prisma: PrismaService) {}
 
   private isSuperAdmin(user: any): boolean {
-    return user.memberships?.some((membership) =>
+    return user.memberships?.some((membership: any) =>
       membership.roles?.includes('SUPER_ADMIN'),
     );
   }
 
   private assertTenantAdmin(user: any, tenantId: string) {
-    const membership = user.memberships?.find((m) => m.tenantId === tenantId);
+    const membership = user.memberships?.find((m: any) => m.tenantId === tenantId);
 
     if (!membership) {
       throw new ForbiddenException('No tienes acceso al tenant indicado');
     }
 
-    const hasAdminRole = membership.roles?.some((role) =>
+    const hasAdminRole = membership.roles?.some((role: any) =>
       ['TENANT_OWNER', 'TENANT_ADMIN'].includes(role),
     );
 

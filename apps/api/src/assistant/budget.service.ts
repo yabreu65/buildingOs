@@ -9,7 +9,7 @@
  * - Supports plan-based limits with tenant overrides (Phase 13)
  */
 
-import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';

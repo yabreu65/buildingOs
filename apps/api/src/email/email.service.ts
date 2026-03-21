@@ -4,10 +4,9 @@
  * Supports template rendering with tenant branding
  */
 
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
 import { SendEmailOptions, EmailType, TenantBranding, EmailProvider } from './email.types';
 import * as nodemailer from 'nodemailer';
 
@@ -20,7 +19,6 @@ export class EmailService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly auditService: AuditService,
   ) {
     this.provider = this.config.getValue('mailProvider') as EmailProvider;
     this.initializeProvider();
@@ -75,14 +73,6 @@ export class EmailService {
     options: SendEmailOptions,
     emailType: EmailType,
   ): Promise<{ success: boolean; externalId?: string; error?: string }> {
-    // Log audit event
-    const auditMetadata = {
-      emailType,
-      to: options.to,
-      subject: options.subject,
-      provider: this.provider,
-    };
-
     if (this.provider === 'none') {
       this.logger.debug(`[Email] Provider is "none", skipping: ${options.to}`);
       return { success: true }; // Don't fail if email is disabled
@@ -172,7 +162,7 @@ export class EmailService {
   /**
    * Send via SendGrid
    */
-  private async sendViaSendGrid(options: SendEmailOptions): Promise<string> {
+  private async sendViaSendGrid(_options: SendEmailOptions): Promise<string> {
     // TODO: Implement SendGrid
     throw new Error('SendGrid not yet implemented');
   }
@@ -180,7 +170,7 @@ export class EmailService {
   /**
    * Send via Mailgun
    */
-  private async sendViaMailgun(options: SendEmailOptions): Promise<string> {
+  private async sendViaMailgun(_options: SendEmailOptions): Promise<string> {
     // TODO: Implement Mailgun
     throw new Error('Mailgun not yet implemented');
   }

@@ -2,14 +2,12 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
-  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import {
-  SubscriptionStatus,
-  PaymentVerificationStatus,
   AuditAction,
+  SubscriptionStatus,
 } from '@prisma/client';
 
 @Injectable()
