@@ -50,21 +50,21 @@ export function t(key: string, options: TranslateOptions = {}): string {
   try {
     // Navigate through the translation object using dot notation
     const keys = key.split('.');
-    let value: any = translations[lang];
+    let value: unknown = translations[lang];
 
     for (const k of keys) {
       if (value && typeof value === 'object' && k in value) {
-        value = value[k];
+        value = (value as Record<string, unknown>)[k];
       } else {
         // Key not found in target language
         console.warn(`[i18n] Missing translation: ${key} for language ${lang}`);
 
         // Try to fallback to default language if not already using it
         if (lang !== DEFAULT_LANGUAGE) {
-          let fallbackValue: any = translations[DEFAULT_LANGUAGE];
+          let fallbackValue: unknown = translations[DEFAULT_LANGUAGE];
           for (const k of keys) {
             if (fallbackValue && typeof fallbackValue === 'object' && k in fallbackValue) {
-              fallbackValue = fallbackValue[k];
+              fallbackValue = (fallbackValue as Record<string, unknown>)[k];
             } else {
               return fallback;
             }
@@ -104,7 +104,7 @@ export function getTranslations(lang: Language = DEFAULT_LANGUAGE): TranslationN
 /**
  * Check if a language is supported
  */
-export function isSupportedLanguage(lang: any): lang is Language {
+export function isSupportedLanguage(lang: unknown): lang is Language {
   return lang === 'es-419' || lang === 'en';
 }
 

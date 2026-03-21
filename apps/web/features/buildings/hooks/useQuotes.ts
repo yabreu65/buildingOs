@@ -11,6 +11,7 @@ import {
   type Quote,
   type CreateQuoteInput,
   type UpdateQuoteInput,
+  type QuoteStatus,
 } from '../services/vendors.api';
 
 interface UseQuotesOptions {
@@ -22,6 +23,11 @@ interface UseQuotesOptions {
   };
 }
 
+/**
+ * Hook to manage quotes state for a building
+ * @param options - Configuration with buildingId and filters
+ * @returns Quotes state with CRUD operations
+ */
 export function useQuotes(options: UseQuotesOptions) {
   const { buildingId, filters } = options;
 
@@ -76,7 +82,7 @@ export function useQuotes(options: UseQuotesOptions) {
     async (quoteId: string, status: string): Promise<Quote | null> => {
       if (!buildingId) return null;
       try {
-        const updated = await updateQuote(buildingId, quoteId, { status: status as any });
+        const updated = await updateQuote(buildingId, quoteId, { status: status as QuoteStatus });
         setQuotes((prev) =>
           prev.map((q) => (q.id === quoteId ? updated : q))
         );

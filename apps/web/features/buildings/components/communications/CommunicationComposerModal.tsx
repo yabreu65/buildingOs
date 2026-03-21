@@ -6,12 +6,14 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
 import type { Communication } from '../../services/communications.api';
+import type { CommunicationInput } from '@/types/communication';
+import type { CommunicationChannel } from '@/types/enums';
 
 interface CommunicationComposerModalProps {
   buildingId: string;
   tenantId: string;
   communication?: Communication;
-  onSave: (input: any) => Promise<void>;
+  onSave: (input: CommunicationInput) => Promise<void>;
   onClose: () => void;
 }
 
@@ -27,8 +29,8 @@ export function CommunicationComposerModal({
   const { toast } = useToast();
   const [title, setTitle] = useState(communication?.title || '');
   const [body, setBody] = useState(communication?.body || '');
-  const [channel, setChannel] = useState<'EMAIL' | 'SMS' | 'PUSH' | 'IN_APP'>(
-    (communication?.channel as any) || 'EMAIL'
+  const [channel, setChannel] = useState<CommunicationChannel>(
+    (communication?.channel as CommunicationChannel) || 'EMAIL'
   );
   const [isSaving, setIsSaving] = useState(false);
 
@@ -40,7 +42,7 @@ export function CommunicationComposerModal({
 
     setIsSaving(true);
     try {
-      const input = {
+      const input: CommunicationInput = {
         title: title.trim(),
         body: body.trim(),
         channel,
@@ -95,7 +97,7 @@ export function CommunicationComposerModal({
             <label className="text-sm font-medium">Channel</label>
             <select
               value={channel}
-              onChange={(e) => setChannel(e.target.value as any)}
+              onChange={(e) => setChannel(e.target.value as CommunicationChannel)}
               className="w-full mt-1 px-3 py-2 border rounded-lg"
             >
               <option value="EMAIL">Email</option>

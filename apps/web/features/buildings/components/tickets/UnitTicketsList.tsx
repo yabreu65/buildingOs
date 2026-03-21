@@ -11,6 +11,7 @@ import { useToast } from '@/shared/components/ui/Toast';
 import { Ticket as TicketIcon, Plus, Send, X, AlertCircle } from 'lucide-react';
 import type { Ticket } from '../../services/tickets.api';
 import { t } from '@/i18n';
+import type { TicketPriority } from '@/types/enums';
 interface UnitTicketsListProps {
   buildingId: string;
   unitId: string;
@@ -347,7 +348,7 @@ function UnitTicketForm({
         title: title.trim(),
         description: description.trim(),
         category,
-        priority: priority as any,
+        priority: priority as TicketPriority,
         unitId, // Pre-filled from unit context
       });
 

@@ -11,6 +11,7 @@ import {
   type WorkOrder,
   type CreateWorkOrderInput,
   type UpdateWorkOrderInput,
+  type WorkOrderStatus,
 } from '../services/vendors.api';
 
 interface UseWorkOrdersOptions {
@@ -21,6 +22,11 @@ interface UseWorkOrdersOptions {
   };
 }
 
+/**
+ * Hook to manage work orders state for a building
+ * @param options - Configuration with buildingId and filters
+ * @returns Work orders state with CRUD operations
+ */
 export function useWorkOrders(options: UseWorkOrdersOptions) {
   const { buildingId, filters } = options;
 
@@ -75,7 +81,7 @@ export function useWorkOrders(options: UseWorkOrdersOptions) {
     async (workOrderId: string, status: string): Promise<WorkOrder | null> => {
       if (!buildingId) return null;
       try {
-        const updated = await updateWorkOrder(buildingId, workOrderId, { status: status as any });
+        const updated = await updateWorkOrder(buildingId, workOrderId, { status: status as WorkOrderStatus });
         setWorkOrders((prev) =>
           prev.map((w) => (w.id === workOrderId ? updated : w))
         );

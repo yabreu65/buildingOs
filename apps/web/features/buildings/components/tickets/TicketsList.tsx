@@ -12,6 +12,7 @@ import { Ticket as TicketIcon, Plus, Filter } from 'lucide-react';
 import TicketForm from './TicketForm';
 import { t } from '@/i18n';import TicketDetail from './TicketDetail';
 import type { Ticket } from '../../services/tickets.api';
+import type { TicketStatus } from '@/types/enums';
 
 interface TicketsListProps {
   buildingId: string;
@@ -44,7 +45,7 @@ export default function TicketsList({ buildingId }: TicketsListProps) {
 
   const handleStatusChange = async (ticketId: string, newStatus: string) => {
     try {
-      await update(ticketId, { status: newStatus as any });
+      await update(ticketId, { status: newStatus as TicketStatus });
       toast(`Ticket status updated to ${newStatus}`, 'success');
       setSelectedTicket(null);
       await refetch();

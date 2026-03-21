@@ -14,6 +14,7 @@ import { CommunicationComposerModal } from './CommunicationComposerModal';
 import { CommunicationDetail } from './CommunicationDetail';
 import { Bell, Plus } from 'lucide-react';
 import type { Communication } from '../../services/communications.api';
+import type { CommunicationInput } from '@/types/communication';
 
 interface CommunicationsListProps {
   buildingId: string;
@@ -49,7 +50,7 @@ export function CommunicationsList({ buildingId, tenantId }: CommunicationsListP
     return c.status === statusFilter;
   });
 
-  const handleCreateOrUpdate = async (input: any, commId?: string) => {
+  const handleCreateOrUpdate = async (input: CommunicationInput, commId?: string) => {
     try {
       if (commId) {
         await update(commId, input);
@@ -119,7 +120,7 @@ export function CommunicationsList({ buildingId, tenantId }: CommunicationsListP
         {['all', 'DRAFT', 'SENT'].map((status) => (
           <button
             key={status}
-            onClick={() => setStatusFilter(status as any)}
+            onClick={() => setStatusFilter(status as 'all' | 'DRAFT' | 'SENT')}
             className={`px-3 py-1 rounded-full text-sm font-medium transition ${
               statusFilter === status
                 ? 'bg-primary text-primary-foreground'

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, type FieldError } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import Button from '@/shared/components/ui/Button';
@@ -9,7 +9,7 @@ import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
 import { X, Loader2 } from 'lucide-react';
 import { createQuote, type Vendor } from '../../services/vendors.api';
-import { listTickets } from '../../services/tickets.api';
+import { listTickets, type Ticket } from '../../services/tickets.api';
 
 const quoteSchema = z.object({
   vendorId: z.string().min(1, 'Vendor is required'),
@@ -41,7 +41,7 @@ export default function QuoteCreateModal({
 }: QuoteCreateModalProps) {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [tickets, setTickets] = useState<any[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loadingTickets, setLoadingTickets] = useState(false);
 
   useEffect(() => {
@@ -148,7 +148,7 @@ export default function QuoteCreateModal({
               {errors.amount && (
                 <p className="text-red-600 text-sm mt-1">
                   {typeof errors.amount === 'object' && errors.amount && 'message' in errors.amount
-                    ? (errors.amount as any).message
+                    ? (errors.amount as FieldError).message
                     : 'Invalid amount'}
                 </p>
               )}

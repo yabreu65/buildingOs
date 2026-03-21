@@ -2,6 +2,7 @@
 
 import { getSession } from './session.storage';
 import type { AuthSession } from './auth.types';
+import type { UserRole } from '@/types/enums';
 
 /**
  * Synchronous hook to get the current auth session
@@ -15,14 +16,14 @@ export function useAuthSession(): AuthSession | null {
 /**
  * Synchronous helper to check if user has a specific role in the current active tenant
  */
-export function useHasRole(role: string): boolean {
+export function useHasRole(role: UserRole): boolean {
   const session = useAuthSession();
   if (!session) return false;
 
   const activeMembership = session.memberships.find(
     (m) => m.tenantId === session.activeTenantId
   );
-  return activeMembership?.roles.includes(role as any) ?? false;
+  return activeMembership?.roles.includes(role) ?? false;
 }
 
 /**

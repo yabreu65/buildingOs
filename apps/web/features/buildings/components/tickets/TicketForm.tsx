@@ -7,6 +7,7 @@ import { useTickets } from '../../hooks/useTickets';
 import { Loader2 } from 'lucide-react';
 import type { Ticket } from '../../services/tickets.api';
 import { t } from '@/i18n';
+import type { TicketPriority } from '@/types/enums';
 interface TicketFormProps {
   buildingId: string;
   onSuccess: (ticket: Ticket) => void;
@@ -57,7 +58,7 @@ export default function TicketForm({
         title: title.trim(),
         description: description.trim(),
         category,
-        priority: priority as any,
+        priority: priority as TicketPriority,
         unitId: unitId || undefined,
       });
 

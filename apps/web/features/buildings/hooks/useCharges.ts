@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
-import { listCharges, createCharge, cancelCharge, Charge, ChargeType } from '../services/finance.api';
+import { listCharges, createCharge, cancelCharge, Charge, ChargeType, ChargeStatus } from '../services/finance.api';
 
+/**
+ * Hook to manage charges state for a building
+ * @param buildingId - Building ID to fetch charges for
+ * @param period - Optional period filter
+ * @param unitId - Optional unit ID filter
+ * @returns Charges state with CRUD operations
+ */
 export function useCharges(buildingId: string, period?: string, unitId?: string) {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [loading, setLoading] = useState(!!buildingId);
@@ -50,7 +57,7 @@ export function useCharges(buildingId: string, period?: string, unitId?: string)
   const cancel = async (chargeId: string) => {
     try {
       await cancelCharge(buildingId, chargeId);
-      setCharges(charges.map((c) => (c.id === chargeId ? { ...c, status: 'CANCELED' as any } : c)));
+      setCharges(charges.map((c) => (c.id === chargeId ? { ...c, status: 'CANCELED' as ChargeStatus } : c)));
     } catch (err) {
       throw err instanceof Error ? err : new Error('Failed to cancel charge');
     }
