@@ -9,7 +9,7 @@
  * - Big model: Analysis, complex reasoning, multi-step tasks, ANALYZE keyword
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 
 export type ModelSize = 'SMALL' | 'BIG';
 
@@ -28,7 +28,7 @@ export interface RouterRequest {
 }
 
 @Injectable()
-export class AiRouterService {
+export class AiRouterService implements OnModuleDestroy {
   // Keywords that trigger big model
   private readonly bigModelKeywords = [
     'analyze', 'analysis', 'complex', 'explain', 'calculate',
@@ -43,11 +43,21 @@ export class AiRouterService {
   ];
 
   // Page count - messages on same page use small model
-  private pageRequestCounts: Map<string, number> = new Map();
+  private readonly pageRequestCounts: Map<string, number> = new Map();
+
+  // Interval handle for cleanup on module destroy
+  private readonly intervalId: NodeJS.Timeout;
 
   constructor() {
     // Reset page counts every hour
-    setInterval(() => this.pageRequestCounts.clear(), 3600000);
+    this.intervalId = setInterval(() => this.pageRequestCounts.clear(), 3600000);
+  }
+
+  /**
+   * Cleanup on module destroy
+   */
+  onModuleDestroy(): void {
+    clearInterval(this.intervalId);
   }
 
   /**
@@ -59,7 +69,7 @@ export class AiRouterService {
    * 3. Check message complexity heuristics (low priority)
    * 4. Check repeated questions (likely small model)
    *
-   * @param request Router request with message and context
+   * @param request - Router request with message and context
    * @returns RouterDecision with model selection and reasoning
    */
   classifyRequest(request: RouterRequest): RouterDecision {
@@ -118,24 +128,24 @@ export class AiRouterService {
   /**
    * Get model name based on router decision
    *
-   * @param decision Router decision
-   * @returns Model name (e.g., 'gpt-4.1-nano' for SMALL, 'gpt-4o-mini' for BIG)
+   * @param decision - Model size (SMALL or BIG)
+   * @returns Model name (e.g., 'llama3' for SMALL, 'nemotron-3-super:cloud' for BIG)
    */
   getModelName(decision: ModelSize): string {
     switch (decision) {
       case 'SMALL':
-        return process.env.AI_SMALL_MODEL || 'gpt-4.1-nano';
+        return process.env.AI_SMALL_MODEL || 'llama3';
       case 'BIG':
-        return process.env.AI_BIG_MODEL || 'gpt-4o-mini';
+        return process.env.AI_BIG_MODEL || 'nemotron-3-super:cloud';
       default:
-        return 'gpt-4.1-nano';
+        return 'llama3';
     }
   }
 
   /**
    * Get max tokens for response based on model size
    *
-   * @param decision Router decision
+   * @param decision - Model size (SMALL or BIG)
    * @returns Max tokens for response
    */
   getMaxTokens(decision: ModelSize): number {
@@ -152,7 +162,9 @@ export class AiRouterService {
   /**
    * Estimate cost savings per 1000 requests
    *
-   * @returns Estimated monthly savings in cents
+   * Calculates estimated monthly costs using smart routing vs all big model
+   *
+   * @returns Object with call counts, estimated cost in cents, and savings percentage
    */
   estimateSavings(): {
     smallModelCalls: number;

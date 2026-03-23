@@ -6,26 +6,17 @@ import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
 import { AiContextSummaryService } from './context-summary.service';
+import { OllamaProvider } from './ollama.provider';
+import {
+  SuggestedActionType,
+  SuggestedAction,
+  ChatResponse,
+  AiProvider,
+  AiProviderContext,
+} from './ai.types';
 
-// Types
-export type SuggestedActionType =
-  | 'VIEW_TICKETS'
-  | 'VIEW_PAYMENTS'
-  | 'VIEW_REPORTS'
-  | 'SEARCH_DOCS'
-  | 'DRAFT_COMMUNICATION'
-  | 'CREATE_TICKET';
-
-export interface SuggestedAction {
-  type: SuggestedActionType;
-  payload: Record<string, any>;
-}
-
-export interface ChatResponse {
-  answer: string;
-  suggestedActions: SuggestedAction[];
-  interactionId?: string; // PHASE 12: For frontend action event tracking
-}
+// Re-export types for backward compatibility
+export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
 
 export interface ChatRequest {
   message: string;
@@ -44,11 +35,6 @@ interface ContextValidation {
   userRoles: string[];
   buildingScope?: string; // For BUILDING-scoped roles
   unitScope?: string; // For UNIT-scoped roles
-}
-
-// Provider interface
-interface AiProvider {
-  chat(message: string, context: any, options?: { model?: string; maxTokens?: number }): Promise<ChatResponse>;
 }
 
 // MOCK Provider - always works, good for development
@@ -105,8 +91,10 @@ export class AssistantService {
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
-    const providerName = process.env.AI_PROVIDER || 'MOCK';
-    if (providerName === 'OPENAI') {
+    const providerName = process.env.AI_PROVIDER || 'OLLAMA';
+    if (providerName === 'OLLAMA') {
+      this.provider = new OllamaProvider();
+    } else if (providerName === 'OPENAI') {
       // OPENAI provider will be implemented later
       // For now, fallback to MOCK
       this.provider = new MockProvider();
