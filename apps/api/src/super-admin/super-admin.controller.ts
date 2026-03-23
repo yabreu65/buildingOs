@@ -29,7 +29,7 @@ import { RejectPlanChangeRequestDto } from './dto/reject-plan-change-request.dto
 import { Response } from 'express';
 
 export interface RequestWithUser extends Request {
-  user?: {
+  user: {
     id: string;
     email: string;
     name: string;

@@ -484,6 +484,7 @@ model BillingPlan {
   aiBudgetCents         Int @default(0)    // $0 = no AI, 200 = $2, 800 = $8, 10000 = $100
   aiCallsMonthlyLimit   Int @default(0)    // 0 = no AI, 100, 600, 9999 (unlimited)
   aiAllowBigModel       Boolean @default(false)
+  aiConsultationsLimit  Int @default(0)    // FASE 1: Monthly consultation limit (0=disabled, 10=BASIC, 50=PRO, 999999=ENTERPRISE)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -504,6 +505,10 @@ model Subscription {
   currentPeriodStart DateTime  @default(now())
   currentPeriodEnd   DateTime? // Null for active, set on cancel
   trialEndDate       DateTime? // Null if not in trial
+
+  // FASE 1: AI Consultation tracking
+  aiConsultationsUsed Int @default(0) // Track monthly usage
+  aiConsultationsResetAt DateTime? // Timestamp of last reset (monthly)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -590,6 +595,16 @@ model PaymentVerification {
 // TICKETS (MVP — Maintenance requests / Reclamos)
 // ============================================================================
 
+enum TicketCategory {
+  MAINTENANCE
+  REPAIR
+  CLEANING
+  COMPLAINT
+  SAFETY
+  BILLING
+  OTHER
+}
+
 enum TicketPriority {
   LOW
   MEDIUM
@@ -614,9 +629,13 @@ model Ticket {
 
   title       String
   description String
-  category    String // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
+  category    TicketCategory @default(OTHER)
   priority    TicketPriority @default(MEDIUM)
   status      TicketStatus   @default(OPEN)
+
+  // FASE 2: AI categorization fields
+  aiSuggestedCategory Boolean  @default(false) // Was this AI-suggested?
+  aiCategorySuggestion String? // JSON: {category, priority, confidence, reasoning}
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

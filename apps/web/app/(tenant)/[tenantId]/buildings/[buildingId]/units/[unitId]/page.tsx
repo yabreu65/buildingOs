@@ -20,6 +20,7 @@ import { UnitTicketsList } from '@/features/buildings/components/tickets';
 import { InboxList } from '@/features/buildings/components/communications';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
+import { AiUnitAssistant } from '@/features/units/components/AiUnitAssistant';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 
@@ -194,6 +195,25 @@ export default function UnitDashboardPage() {
           )}
         </div>
       </Card>
+
+      {/* AI Unit Assistant - Pricing & Maintenance Insights */}
+      {isAdmin && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <AiUnitAssistant
+            tenantId={tenantId}
+            unitId={unitId}
+            type="pricing"
+            payload={{
+              unitType: unit.unitType,
+            }}
+          />
+          <AiUnitAssistant
+            tenantId={tenantId}
+            unitId={unitId}
+            type="maintenance"
+          />
+        </div>
+      )}
 
       {/* Occupants Section */}
       <Card>

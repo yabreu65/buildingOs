@@ -9,7 +9,7 @@ import { createParamDecorator, ExecutionContext } from '@nestjs/common';
  * findAll(@TenantParam() tenantId: string) { ... }
  */
 export const TenantParam = createParamDecorator(
-  (data: unknown, ctx: ExecutionContext) => {
+  (_data: unknown, ctx: ExecutionContext) => {
     const request = ctx.switchToHttp().getRequest();
     return request.params.tenantId;
   },

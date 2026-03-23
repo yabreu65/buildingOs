@@ -2,6 +2,7 @@ import { Injectable, ConflictException } from '@nestjs/common';
 import {
   TicketPriority,
   TicketStatus,
+  TicketCategory,
   SupportTicketCategory,
   SupportTicketPriority,
   SupportTicketStatus,
@@ -153,8 +154,8 @@ export class DemoSeedService {
       for (const assignment of occupantAssignments) {
         await this.prisma.unitOccupant.create({
           data: {
-            unitId: units[assignment.unitIndex].id,
-            userId: users[assignment.userIndex].id,
+            unitId: units[assignment.unitIndex]!.id,
+            userId: users[assignment.userIndex]!.id,
             role: assignment.role as any,
           },
         });
@@ -175,7 +176,7 @@ export class DemoSeedService {
         'Floor cleaning schedule',
       ];
 
-      const ticketCategories = ['MAINTENANCE', 'REPAIR', 'CLEANING', 'INSPECTION', 'URGENT_REPAIR'];
+      const ticketCategories: TicketCategory[] = ['MAINTENANCE', 'REPAIR', 'CLEANING', 'COMPLAINT', 'SAFETY'];
       const priorities: TicketPriority[] = ['LOW', 'MEDIUM', 'HIGH'];
       const ticketStatuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
 
@@ -185,8 +186,8 @@ export class DemoSeedService {
             data: {
               tenantId,
               buildingId: building.id,
-              unitId: units[idx % units.length].id,
-              createdByUserId: users[idx % users.length].id,
+              unitId: units[idx % units.length]!.id,
+              createdByUserId: users[idx % users.length]!.id,
               assignedToMembershipId: null,
               title,
               description: `Demo ticket: ${title}. This is sample data for exploring the system.`,
@@ -224,7 +225,7 @@ export class DemoSeedService {
           this.prisma.supportTicket.create({
             data: {
               tenantId,
-              createdByUserId: users[idx % users.length].id,
+              createdByUserId: users[idx % users.length]!.id,
               assignedToUserId: null,
               title,
               description: `Demo support ticket: ${title}. This is sample data for exploring the system.`,
@@ -245,7 +246,7 @@ export class DemoSeedService {
           data: {
             tenantId,
             buildingId: building.id,
-            createdByUserId: users[0].id,
+            createdByUserId: users[0]!.id,
             reviewedByMembershipId: null,
             amount: 500000, // In cents: 5000
             method: 'TRANSFER',
@@ -258,7 +259,7 @@ export class DemoSeedService {
           data: {
             tenantId,
             buildingId: building.id,
-            createdByUserId: users[1].id,
+            createdByUserId: users[1]!.id,
             reviewedByMembershipId: null,
             amount: 250000, // In cents: 2500
             method: 'ONLINE',
@@ -286,7 +287,7 @@ export class DemoSeedService {
               buildingId: building.id,
               createdByMembershipId: 'demo-membership-id',
               title,
-              category: documentCategories[idx % documentCategories.length],
+              category: documentCategories[idx % documentCategories.length]!,
               visibility: 'RESIDENTS' as DocumentVisibility,
               fileId: `demo-file-${idx}`,
             },

@@ -2,7 +2,7 @@ import { IsString, IsOptional, IsIn } from 'class-validator';
 
 export class CreateUnitDto {
   @IsString()
-  code: string;
+  code!: string;
 
   @IsOptional()
   @IsString()

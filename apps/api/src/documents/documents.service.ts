@@ -215,7 +215,7 @@ export class DocumentsService {
       whereConditions.unitId = filters.unitId;
     }
     if (filters?.category) {
-      whereConditions.category = filters.category;
+      whereConditions.category = filters.category as any;
     }
 
     // Visibility filtering for non-admin, non-creator users
@@ -251,7 +251,7 @@ export class DocumentsService {
 
     // Post-process: RESIDENT role scope validation
     if (isResident && !isAdmin) {
-      documents = await Promise.all(
+      const filteredDocs = await Promise.all(
         documents.map(async (doc) => {
           try {
             await this.validators.validateResidentDocumentAccess(
@@ -269,7 +269,7 @@ export class DocumentsService {
         }),
       );
 
-      documents = documents.filter((doc) => doc !== null);
+      documents = filteredDocs.filter((doc): doc is typeof documents[0] => doc !== null);
     }
 
     return documents as unknown as DocumentWithFileResponseDto[];
@@ -465,6 +465,10 @@ export class DocumentsService {
       userRoles,
       isSuperAdmin,
     );
+
+    if (!document.file) {
+      throw new Error('Document file not found');
+    }
 
     // Generate presigned URL from MinIO (24 hours expiration)
     const expirySeconds = 24 * 60 * 60;

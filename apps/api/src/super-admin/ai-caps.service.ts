@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
@@ -84,29 +84,26 @@ export class AiCapsService {
       where: { tenantId },
     });
 
-    const updateData: {
-      monthlyBudgetCents?: number;
-      monthlyCallsLimit?: number;
-      allowBigModelOverride?: boolean;
-    } = {};
+    const updateData: any = {};
+    const createData: any = { tenantId };
 
-    if (dto.monthlyBudgetCents !== undefined) {
+    if (dto.monthlyBudgetCents !== undefined && dto.monthlyBudgetCents !== null) {
       updateData.monthlyBudgetCents = dto.monthlyBudgetCents;
+      createData.monthlyBudgetCents = dto.monthlyBudgetCents;
     }
-    if (dto.monthlyCallsLimit !== undefined) {
+    if (dto.monthlyCallsLimit !== undefined && dto.monthlyCallsLimit !== null) {
       updateData.monthlyCallsLimit = dto.monthlyCallsLimit;
+      createData.monthlyCallsLimit = dto.monthlyCallsLimit;
     }
-    if (dto.allowBigModelOverride !== undefined) {
+    if (dto.allowBigModelOverride !== undefined && dto.allowBigModelOverride !== null) {
       updateData.allowBigModelOverride = dto.allowBigModelOverride;
+      createData.allowBigModelOverride = dto.allowBigModelOverride;
     }
 
     const after = await this.prisma.tenantAiBudget.upsert({
       where: { tenantId },
       update: updateData,
-      create: {
-        tenantId,
-        ...updateData,
-      },
+      create: createData,
     });
 
     void this.auditService.createLog({

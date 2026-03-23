@@ -31,7 +31,7 @@ export default function TicketsPage() {
 
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
 
-      <TicketsList buildingId={buildingId} />
+      <TicketsList buildingId={buildingId} tenantId={tenantId} />
     </div>
   );
 }

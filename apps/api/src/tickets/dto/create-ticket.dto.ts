@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsEnum, Length } from 'class-validator';
-import { TicketPriority } from '@prisma/client';
+import { TicketPriority, TicketCategory } from '@prisma/client';
 
 export class CreateTicketDto {
   @IsString()
@@ -10,13 +10,13 @@ export class CreateTicketDto {
   @Length(5, 2000)
   description!: string;
 
-  @IsString()
-  @Length(1, 100)
-  category!: string; // "MAINTENANCE", "REPAIR", "CLEANING", "COMPLAINT", etc.
+  @IsOptional()
+  @IsEnum(TicketCategory)
+  category?: TicketCategory; // AI will suggest if not provided
 
   @IsOptional()
   @IsEnum(TicketPriority)
-  priority?: TicketPriority; // LOW, MEDIUM, HIGH, URGENT
+  priority?: TicketPriority; // LOW, MEDIUM, HIGH, URGENT (AI will suggest if not provided)
 
   @IsOptional()
   @IsString()

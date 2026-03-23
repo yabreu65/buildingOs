@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { useAssistant } from '../hooks/useAssistant';
 import { SuggestedActionsList } from './SuggestedActionsList';
 import { useAiNudges } from '../hooks/useAiNudges';
+import { useCanAccessAi } from '@/features/auth/useUserRoles';
 
 interface AssistantWidgetProps {
   tenantId: string;
@@ -75,6 +76,13 @@ export function AssistantWidget({
   isOpen = true,
   onClose,
 }: AssistantWidgetProps) {
+  const canAccessAi = useCanAccessAi();
+
+  // Hide AI widget from residents - only admins/operators can see it
+  if (!canAccessAi) {
+    return null;
+  }
+
   const [message, setMessage] = useState('');
   const [expanded, setExpanded] = useState(isOpen);
   const inputRef = useRef<HTMLInputElement>(null);

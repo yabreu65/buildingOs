@@ -13,6 +13,7 @@ import {
   CreateAllocationDto,
   ListChargesQueryDto,
   ListPaymentsQueryDto,
+  FinancialSummaryDto,
 } from './finanzas.dto';
 
 @Injectable()
@@ -793,7 +794,7 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     period?: string,
-  ): Promise<Record<string, any>> {
+  ): Promise<FinancialSummaryDto> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,

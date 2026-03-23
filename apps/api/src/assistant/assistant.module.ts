@@ -5,6 +5,7 @@ import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { AssistantService } from './assistant.service';
 import { AssistantController, SuperAdminAiController } from './assistant.controller';
+import { AiUnitsController } from './ai-units.controller';
 import { AiBudgetService } from './budget.service';
 import { AiBudgetController } from './ai-budget.controller';
 import { AiRouterService } from './router.service';
@@ -16,6 +17,7 @@ import { AiAnalyticsService } from './analytics.service';
 import { AiActionEventsService } from './action-events.service';
 import { AiNudgesService } from './ai-nudges.service';
 import { AiNudgesController } from './ai-nudges.controller';
+import { AiTicketCategoryService } from './ai-ticket-category.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -75,6 +77,7 @@ import { AiNudgesController } from './ai-nudges.controller';
     AiTemplateController,
     SuperAdminAiController,
     AiNudgesController,
+    AiUnitsController,
   ],
   providers: [
     AssistantService,
@@ -86,6 +89,7 @@ import { AiNudgesController } from './ai-nudges.controller';
     AiAnalyticsService,
     AiActionEventsService,
     AiNudgesService,
+    AiTicketCategoryService,
   ],
   exports: [
     AssistantService,
@@ -97,6 +101,7 @@ import { AiNudgesController } from './ai-nudges.controller';
     AiAnalyticsService,
     AiActionEventsService,
     AiNudgesService,
+    AiTicketCategoryService,
   ],
 })
 export class AssistantModule {}

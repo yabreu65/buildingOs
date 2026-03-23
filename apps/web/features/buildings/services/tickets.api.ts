@@ -11,6 +11,17 @@ const isDev = process.env.NODE_ENV === 'development';
 // ============================================
 // Types
 // ============================================
+
+/**
+ * AI categorization metadata for tickets
+ */
+export interface AiCategorySuggestion {
+  category: string;
+  priority: string;
+  confidence: number;
+  reasoning: string;
+}
+
 export interface Ticket {
   id: string;
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
@@ -44,6 +55,9 @@ export interface Ticket {
     code: string;
   } | null;
   comments: TicketComment[];
+  // AI monetization - FASE 3
+  aiSuggestedCategory?: boolean;
+  aiCategorySuggestion?: AiCategorySuggestion;
 }
 
 export interface TicketComment {
@@ -263,6 +277,37 @@ export async function getComments(
 
   if (!response.ok) {
     const message = `Failed to get comments: ${response.statusText}`;
+    logError(endpoint, response.status, message);
+    throw new Error(message);
+  }
+
+  const data = await response.json();
+  return data;
+}
+
+/**
+ * Get AI-suggested replies for a ticket
+ * Used for smart reply suggestions when responding to tickets
+ *
+ * Returns 3 professional suggested replies based on ticket content
+ */
+export async function getTicketReplySuggestions(
+  tenantId: string,
+  ticketId: string,
+  title: string,
+  description: string
+): Promise<{ replies: string[] }> {
+  const endpoint = `/tenants/${tenantId}/assistant/ticket-replies`;
+  logRequest('POST', endpoint, { ticketId, title, description });
+
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ ticketId, title, description }),
+  });
+
+  if (!response.ok) {
+    const message = `Failed to get reply suggestions: ${response.statusText}`;
     logError(endpoint, response.status, message);
     throw new Error(message);
   }

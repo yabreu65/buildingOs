@@ -209,7 +209,7 @@ export class MembershipsService {
       throw new NotFoundException('Role not found');
     }
 
-    const role = membership.roles[0];
+    const role = membership.roles[0]!;
 
     // Delete the role
     await this.prisma.membershipRole.delete({

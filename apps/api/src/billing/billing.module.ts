@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { PlanEntitlementsService } from './plan-entitlements.service';
 import { PlanFeaturesService } from './plan-features.service';
+import { AiEntitlementsService } from './ai-entitlements.service';
 import { RequireFeatureGuard } from './require-feature.guard';
 import { SubscriptionService } from './subscription.service';
 import { PaymentService } from './payment.service';
@@ -43,6 +44,7 @@ import { BillingService } from './billing.service';
   providers: [
     PlanEntitlementsService,
     PlanFeaturesService,
+    AiEntitlementsService,
     RequireFeatureGuard,
     SubscriptionService,
     PaymentService,
@@ -51,6 +53,7 @@ import { BillingService } from './billing.service';
   exports: [
     PlanEntitlementsService,
     PlanFeaturesService,
+    AiEntitlementsService,
     RequireFeatureGuard,
     SubscriptionService,
     PaymentService,

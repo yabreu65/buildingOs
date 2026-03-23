@@ -17,6 +17,7 @@ async function main() {
         aiCallsMonthlyLimit: 0,
         aiAllowBigModel: false,
         canUseAI: false,
+        aiConsultationsLimit: 0,
       },
       create: {
         planId: BillingPlanId.FREE,
@@ -33,6 +34,7 @@ async function main() {
         aiBudgetCents: 0,
         aiCallsMonthlyLimit: 0,
         aiAllowBigModel: false,
+        aiConsultationsLimit: 0,
         supportLevel: "COMMUNITY",
       },
     }),
@@ -43,6 +45,7 @@ async function main() {
         aiBudgetCents: 200,
         aiCallsMonthlyLimit: 100,
         aiAllowBigModel: false,
+        aiConsultationsLimit: 10,
       },
       create: {
         planId: BillingPlanId.BASIC,
@@ -59,6 +62,7 @@ async function main() {
         aiBudgetCents: 200,
         aiCallsMonthlyLimit: 100,
         aiAllowBigModel: false,
+        aiConsultationsLimit: 10,
         supportLevel: "EMAIL",
       },
     }),
@@ -68,6 +72,7 @@ async function main() {
         aiBudgetCents: 800,
         aiCallsMonthlyLimit: 600,
         aiAllowBigModel: true,
+        aiConsultationsLimit: 50,
       },
       create: {
         planId: BillingPlanId.PRO,
@@ -84,6 +89,7 @@ async function main() {
         aiBudgetCents: 800,
         aiCallsMonthlyLimit: 600,
         aiAllowBigModel: true,
+        aiConsultationsLimit: 50,
         supportLevel: "PRIORITY",
       },
     }),
@@ -93,6 +99,7 @@ async function main() {
         aiBudgetCents: 10000,
         aiCallsMonthlyLimit: 9999,
         aiAllowBigModel: true,
+        aiConsultationsLimit: 999999,
       },
       create: {
         planId: BillingPlanId.ENTERPRISE,
@@ -109,6 +116,7 @@ async function main() {
         aiBudgetCents: 10000,
         aiCallsMonthlyLimit: 9999,
         aiAllowBigModel: true,
+        aiConsultationsLimit: 999999,
         supportLevel: "PRIORITY",
       },
     }),

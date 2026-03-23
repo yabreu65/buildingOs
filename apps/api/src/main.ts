@@ -91,7 +91,7 @@ async function bootstrap() {
   // =========================================================
   // Security: Cache Control for sensitive endpoints
   // =========================================================
-  app.use((req, res, next) => {
+  app.use((req: any, res: any, next: any) => {
     // Disable client-side caching for sensitive data
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');

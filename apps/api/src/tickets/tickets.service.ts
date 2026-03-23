@@ -1,8 +1,7 @@
 import {
   Injectable,
-  BadRequestException,
   NotFoundException,
-  ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { Ticket, TicketComment, Prisma, AuditAction } from '@prisma/client';
@@ -13,6 +12,7 @@ import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
+import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -28,6 +28,7 @@ export class TicketsService {
     private prisma: PrismaService,
     private validators: TicketsValidators,
     private auditService: AuditService,
+    private aiCategoryService: AiTicketCategoryService,
   ) {}
 
   /**
@@ -121,7 +122,7 @@ export class TicketsService {
       }
     }
 
-    // 4. Create ticket
+    // 4. Create ticket (with default category if not provided)
     const ticket = await this.prisma.ticket.create({
       data: {
         tenantId,
@@ -131,7 +132,7 @@ export class TicketsService {
         assignedToMembershipId: dto.assignedToMembershipId,
         title: dto.title,
         description: dto.description,
-        category: dto.category,
+        category: dto.category || 'OTHER', // Default to OTHER if not provided
         priority: dto.priority || 'MEDIUM',
         status: 'OPEN',
       },
@@ -160,7 +161,66 @@ export class TicketsService {
       },
     });
 
+    // FASE 2: Fire-and-forget AI categorization (never blocks user response)
+    // Only run if user didn't explicitly provide category/priority
+    if (!dto.category || !dto.priority) {
+      void this.runAiCategorization(tenantId, ticket.id, dto.title, dto.description, buildingId, dto.unitId);
+    }
+
     return ticket;
+  }
+
+  /**
+   * Run AI categorization in background (fire-and-forget)
+   * Never fails the main operation, never blocks ticket creation
+   */
+  private async runAiCategorization(
+    tenantId: string,
+    ticketId: string,
+    title: string,
+    description: string,
+    buildingId?: string,
+    unitId?: string,
+  ): Promise<void> {
+    try {
+      const suggestion = await this.aiCategoryService.suggestCategory(
+        tenantId,
+        title,
+        description,
+        buildingId,
+        unitId,
+      );
+
+      if (!suggestion) {
+        this.logger.debug(`[AI Categorization] No suggestion for ticket ${ticketId}`);
+        return;
+      }
+
+      // Update ticket with AI suggestion
+      await this.prisma.ticket.update({
+        where: { id: ticketId },
+        data: {
+          category: suggestion.category,
+          priority: suggestion.priority,
+          aiSuggestedCategory: true,
+          aiCategorySuggestion: JSON.stringify({
+            category: suggestion.category,
+            priority: suggestion.priority,
+            confidence: suggestion.confidence,
+            reasoning: suggestion.reasoning,
+          }),
+        },
+      });
+
+      this.logger.debug(
+        `[AI Categorization] Updated ticket ${ticketId}: category=${suggestion.category}, priority=${suggestion.priority}`,
+      );
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      this.logger.error(
+        `[AI Categorization] Failed for ticket ${ticketId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

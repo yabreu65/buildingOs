@@ -8,7 +8,6 @@ import {
   Body,
   UseGuards,
   Request,
-  Query,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
@@ -18,7 +17,6 @@ import { AuthenticatedRequest } from '../common/types/request.types';
 import {
   CreateVendorDto,
   UpdateVendorDto,
-  VendorIdParamDto,
   BuildingVendorIdParamDto,
   QuoteIdParamDto,
   BuildingQuoteParamDto,
@@ -71,6 +69,12 @@ export class VendorsController {
     private validators: VendorsValidators,
   ) {}
 
+  private getTenantId(req: AuthenticatedRequest): string {
+    const tenantId = req.tenantId ?? req.user?.tenantId;
+    if (!tenantId) throw new Error('TenantId not found in request context');
+    return tenantId;
+  }
+
   // ============================================================================
   // TENANT-LEVEL VENDORS (Read-only from tenant dashboard)
   // ============================================================================
@@ -82,7 +86,7 @@ export class VendorsController {
    */
   @Get('vendors')
   async listVendors(@Request() req: AuthenticatedRequest) {
-    const tenantId = req.user.tenantId; // From JWT context
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -100,7 +104,7 @@ export class VendorsController {
    */
   @Get('vendors/:vendorId')
   async getVendor(@Param('vendorId') vendorId: string, @Request() req: AuthenticatedRequest) {
-    const tenantId = req.user.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -121,7 +125,7 @@ export class VendorsController {
     @Body() dto: CreateVendorDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.user.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -143,7 +147,7 @@ export class VendorsController {
     @Body() dto: UpdateVendorDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.user.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -161,7 +165,7 @@ export class VendorsController {
    */
   @Delete('vendors/:vendorId')
   async deleteVendor(@Param('vendorId') vendorId: string, @Request() req: AuthenticatedRequest) {
-    const tenantId = req.user.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -187,7 +191,7 @@ export class VendorsController {
     @Param('buildingId') buildingId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId; // From BuildingAccessGuard
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -210,7 +214,7 @@ export class VendorsController {
     @Param('assignmentId') assignmentId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -235,7 +239,7 @@ export class VendorsController {
     @Body() dto: CreateVendorAssignmentDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -263,7 +267,7 @@ export class VendorsController {
     @Param('assignmentId') assignmentId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -289,7 +293,7 @@ export class VendorsController {
     @Param('buildingId') buildingId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -312,7 +316,7 @@ export class VendorsController {
     @Param('quoteId') quoteId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -337,7 +341,7 @@ export class VendorsController {
     @Body() dto: CreateQuoteDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -364,7 +368,7 @@ export class VendorsController {
     @Body() dto: UpdateQuoteDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // For approval status, check quotes.approve permission
@@ -400,7 +404,7 @@ export class VendorsController {
     @Body() dto: CreateWorkOrderDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -425,7 +429,7 @@ export class VendorsController {
     @Param('buildingId') buildingId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -448,7 +452,7 @@ export class VendorsController {
     @Param('workOrderId') workOrderId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // Check permission
@@ -475,7 +479,7 @@ export class VendorsController {
     @Body() dto: UpdateWorkOrderDto,
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantId = req.tenantId;
+    const tenantId = this.getTenantId(req);
     const userRoles = req.user.roles || [];
 
     // For status changes, check execute permission

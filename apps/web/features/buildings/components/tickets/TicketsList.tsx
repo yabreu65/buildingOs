@@ -16,9 +16,10 @@ import type { TicketStatus } from '@/types/enums';
 
 interface TicketsListProps {
   buildingId: string;
+  tenantId: string;
 }
 
-export default function TicketsList({ buildingId }: TicketsListProps) {
+export default function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const { toast } = useToast();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
@@ -206,6 +207,7 @@ export default function TicketsList({ buildingId }: TicketsListProps) {
       {selectedTicket && (
         <TicketDetail
           buildingId={buildingId}
+          tenantId={tenantId}
           ticket={selectedTicket}
           onClose={() => setSelectedTicket(null)}
           onStatusChange={handleStatusChange}

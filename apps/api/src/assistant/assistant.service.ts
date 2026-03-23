@@ -506,4 +506,95 @@ export class AssistantService {
       return null;
     }
   }
+
+  /**
+   * FASE 3: Get AI-suggested replies for a ticket
+   *
+   * Returns 3 professional suggested replies based on ticket title and description
+   * These are used to help admins compose faster responses to resident tickets
+   *
+   * @param tenantId - Tenant ID
+   * @param ticketId - Ticket ID (for reference)
+   * @param title - Ticket title
+   * @param description - Ticket description
+   * @returns Array of 3 suggested replies
+   */
+  async getTicketReplySuggestions(
+    tenantId: string,
+    ticketId: string,
+    title: string,
+    description: string,
+  ): Promise<string[]> {
+    // Build prompt for the AI provider
+    const prompt = `You are a professional property management assistant.
+Based on this resident ticket, suggest 3 professional and helpful response templates.
+
+Ticket Title: ${title}
+Ticket Description: ${description}
+
+Please provide 3 concise, professional replies that:
+1. Acknowledge the issue
+2. Are friendly and professional
+3. Are appropriate for a property manager to send
+
+Format each suggestion on a new line starting with 1., 2., 3.`;
+
+    try {
+      // Get response from provider
+      const response = await this.provider.chat(
+        prompt,
+        {
+          tenantId,
+          ticketId,
+          page: 'ticket-detail',
+        },
+        { model: 'gpt-4.1-nano', maxTokens: 500 }, // Use small model for quick replies
+      );
+
+      // Parse the response to extract 3 suggestions
+      // Expected format: "1. Reply 1\n2. Reply 2\n3. Reply 3"
+      const suggestions = this.parseReplySuggestions(response.answer);
+
+      return suggestions;
+    } catch (error) {
+      console.error('Failed to generate reply suggestions:', error);
+      // Return fallback replies if provider fails
+      return this.getFallbackReplies();
+    }
+  }
+
+  /**
+   * Parse AI response to extract 3 reply suggestions
+   */
+  private parseReplySuggestions(responseText: string): string[] {
+    const lines = responseText.split('\n').filter((line) => line.trim());
+    const suggestions: string[] = [];
+
+    for (const line of lines) {
+      // Match lines starting with "1. ", "2. ", "3. " or similar patterns
+      const match = line.match(/^\d+\.\s+(.+)$/);
+      if (match && match[1]) {
+        suggestions.push(match[1].trim());
+        if (suggestions.length === 3) break;
+      }
+    }
+
+    // If we couldn't parse 3 suggestions, return fallbacks
+    if (suggestions.length < 3) {
+      return this.getFallbackReplies();
+    }
+
+    return suggestions;
+  }
+
+  /**
+   * Fallback replies when AI provider fails or returns unexpected format
+   */
+  private getFallbackReplies(): string[] {
+    return [
+      'Thank you for reporting this issue. We will investigate and get back to you within 24 hours.',
+      'We appreciate your patience. Our maintenance team has been notified and will address this shortly.',
+      'Thank you for bringing this to our attention. A manager will review your request and follow up with you soon.',
+    ];
+  }
 }

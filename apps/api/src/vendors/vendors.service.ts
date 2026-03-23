@@ -52,7 +52,7 @@ export class VendorsService {
     // Validate vendor belongs to tenant
     await this.validators.validateVendorBelongsToTenant(tenantId, vendorId);
 
-    return await this.prisma.vendor.findUnique({
+    const vendor = await this.prisma.vendor.findUnique({
       where: { id: vendorId },
       include: {
         assignments: {
@@ -79,6 +79,12 @@ export class VendorsService {
         },
       },
     });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    return vendor;
   }
 
   /**
@@ -212,13 +218,19 @@ export class VendorsService {
       assignmentId,
     );
 
-    return await this.prisma.vendorAssignment.findUnique({
+    const assignment = await this.prisma.vendorAssignment.findUnique({
       where: { id: assignmentId },
       include: {
         vendor: true,
         building: true,
       },
     });
+
+    if (!assignment) {
+      throw new NotFoundException('Vendor assignment not found');
+    }
+
+    return assignment;
   }
 
   /**
@@ -278,12 +290,8 @@ export class VendorsService {
       assignmentId,
     );
 
-    return await this.prisma.vendorAssignment.delete({
+    await this.prisma.vendorAssignment.delete({
       where: { id: assignmentId },
-      include: {
-        vendor: true,
-        building: true,
-      },
     });
   }
 
@@ -323,7 +331,7 @@ export class VendorsService {
     // Validate quote scope
     await this.validators.validateQuoteScope(tenantId, buildingId, quoteId);
 
-    return await this.prisma.quote.findUnique({
+    const quote = await this.prisma.quote.findUnique({
       where: { id: quoteId },
       include: {
         vendor: true,
@@ -332,6 +340,12 @@ export class VendorsService {
         file: true,
       },
     });
+
+    if (!quote) {
+      throw new NotFoundException('Quote not found');
+    }
+
+    return quote;
   }
 
   // ============================================================================
@@ -371,7 +385,7 @@ export class VendorsService {
     // Validate work order scope
     await this.validators.validateWorkOrderScope(tenantId, buildingId, workOrderId);
 
-    return await this.prisma.workOrder.findUnique({
+    const workOrder = await this.prisma.workOrder.findUnique({
       where: { id: workOrderId },
       include: {
         vendor: true,
@@ -380,6 +394,12 @@ export class VendorsService {
         assignedTo: true,
       },
     });
+
+    if (!workOrder) {
+      throw new NotFoundException('Work order not found');
+    }
+
+    return workOrder;
   }
 
   // ============================================================================

@@ -5,6 +5,7 @@ export interface PlanFeatures {
   canExportReports: boolean;
   canBulkOperations: boolean;
   canUseAI: boolean; // Phase 13: AI feature gate
+  aiConsultationsPerMonth: number; // FASE 1: Monthly AI consultation limit
   supportLevel: 'COMMUNITY' | 'EMAIL' | 'PRIORITY';
 }
 
@@ -36,6 +37,7 @@ export class PlanFeaturesService {
       canExportReports: subscription.plan.canExportReports ?? false,
       canBulkOperations: subscription.plan.canBulkOperations ?? false,
       canUseAI: subscription.plan.canUseAI ?? false, // Phase 13
+      aiConsultationsPerMonth: subscription.plan.aiConsultationsLimit ?? 0, // FASE 1
       supportLevel: (subscription.plan.supportLevel as any) ?? 'COMMUNITY',
     };
   }

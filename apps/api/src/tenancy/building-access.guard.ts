@@ -45,8 +45,6 @@ export class BuildingAccessGuard implements CanActivate {
   constructor(
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
-    @Inject(AuthorizeService)
-    private readonly authorize: AuthorizeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

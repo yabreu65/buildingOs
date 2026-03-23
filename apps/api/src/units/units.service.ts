@@ -1,8 +1,7 @@
 import {
   Injectable,
-  BadRequestException,
   NotFoundException,
-  ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { Unit, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -146,7 +145,7 @@ export class UnitsService {
 
   async update(tenantId: string, buildingId: string, unitId: string, dto: UpdateUnitDto): Promise<Unit> {
     // Verify building belongs to tenant and unit belongs to building
-    const unit = await this.findOne(tenantId, buildingId, unitId);
+    await this.findOne(tenantId, buildingId, unitId);
 
     try {
       const updatedUnit = await this.prisma.unit.update({

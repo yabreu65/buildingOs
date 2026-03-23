@@ -6,6 +6,7 @@ import {
   Param,
   Request,
   BadRequestException,
+  ForbiddenException,
   Get,
   Query,
 } from '@nestjs/common';
@@ -13,6 +14,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { RequireFeatureGuard, RequireFeature } from '../billing/require-feature.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
+import { AiEntitlementsService } from '../billing/ai-entitlements.service';
 import { AssistantService, ChatRequest, ChatResponse } from './assistant.service';
 import { AiAnalyticsService, TenantAnalyticsResponse, TenantSummaryItem } from './analytics.service';
 import { AiActionEventsService, CreateActionEventDto } from './action-events.service';
@@ -24,6 +26,7 @@ export class AssistantController {
     private readonly assistantService: AssistantService,
     private readonly analyticsService: AiAnalyticsService,
     private readonly actionEventsService: AiActionEventsService,
+    private readonly aiEntitlements: AiEntitlementsService,
   ) {}
 
   /**
@@ -43,7 +46,7 @@ export class AssistantController {
    *
    * Errors:
    * - 400: Missing/invalid message, invalid building/unit
-   * - 403: Feature not available (canUseAI flag)
+   * - 403: Feature not available (canUseAI flag) or monthly consultation limit reached
    * - 429: Rate limit exceeded (100 per day)
    */
   @Post(':tenantId/chat')
@@ -77,13 +80,92 @@ export class AssistantController {
     const membershipId = membership.id;
     const userRoles = membership.roles || [];
 
-    return this.assistantService.chat(
+    // FASE 1: Check monthly AI consultation limit
+    const hasRemaining = await this.aiEntitlements.hasRemainingConsultations(tenantId);
+    if (!hasRemaining) {
+      throw new ForbiddenException('Monthly IA consultation limit reached');
+    }
+
+    // Call the assistant service
+    const response = await this.assistantService.chat(
       tenantId,
       userId,
       membershipId,
       request,
       userRoles,
     );
+
+    // FASE 1: Track consumption after successful chat
+    await this.aiEntitlements.trackConsumption(tenantId, 1);
+
+    return response;
+  }
+
+  /**
+   * POST /tenants/:tenantId/assistant/ticket-replies
+   *
+   * Get AI-suggested replies for a ticket
+   *
+   * Request body:
+   * - ticketId: string (ticket ID)
+   * - title: string (ticket title)
+   * - description: string (ticket description)
+   *
+   * Returns:
+   * - replies: string[] (3 professional suggested replies)
+   *
+   * Errors:
+   * - 400: Missing/invalid parameters
+   * - 403: Feature not available (canUseAI flag)
+   *
+   * Only admins can use this endpoint (checked via role validation)
+   */
+  @Post(':tenantId/ticket-replies')
+  @UseGuards(RequireFeatureGuard)
+  @RequireFeature('canUseAI')
+  async getTicketReplySuggestions(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: { ticketId: string; title: string; description: string },
+    @Request() req?: any,
+  ): Promise<{ replies: string[] }> {
+    // Validate tenantId
+    if (!tenantId || tenantId.trim().length === 0) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    // Validate request
+    if (!dto || !dto.ticketId || !dto.title || !dto.description) {
+      throw new BadRequestException('ticketId, title, and description are required');
+    }
+
+    // Extract user info from JWT
+    const userId = req.user?.id;
+    const membership = req.user?.memberships?.find(
+      (m: any) => m.tenantId === tenantId,
+    );
+
+    if (!userId || !membership) {
+      throw new BadRequestException('User not found in tenant');
+    }
+
+    // Check monthly AI consultation limit
+    const hasRemaining = await this.aiEntitlements.hasRemainingConsultations(tenantId);
+    if (!hasRemaining) {
+      throw new ForbiddenException('Monthly IA consultation limit reached');
+    }
+
+    // Get 3 suggested replies from assistant service
+    const replies = await this.assistantService.getTicketReplySuggestions(
+      tenantId,
+      dto.ticketId,
+      dto.title,
+      dto.description,
+    );
+
+    // Track consumption
+    await this.aiEntitlements.trackConsumption(tenantId, 1);
+
+    return { replies };
   }
 
   /**

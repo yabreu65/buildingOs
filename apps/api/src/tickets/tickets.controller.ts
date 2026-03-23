@@ -16,7 +16,6 @@ import { TicketsService } from './tickets.service';
 import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
-import { UpdateTicketStatusDto } from './dto/update-ticket-status.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 
 /**

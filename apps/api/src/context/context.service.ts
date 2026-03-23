@@ -12,7 +12,7 @@ export interface ContextOption {
   id: string;
   name?: string;
   code?: string;
-  label?: string;
+  label?: string | null;
 }
 
 export interface ContextOptions {
@@ -221,7 +221,7 @@ export class ContextService {
    */
   private async getAccessibleBuildings(
     roles: any[],
-    userId: string,
+    _userId: string,
     tenantId: string,
   ): Promise<ContextOption[]> {
     // Check if user has TENANT-scoped roles
@@ -257,7 +257,7 @@ export class ContextService {
   private async getAccessibleUnits(
     roles: any[],
     userId: string,
-    tenantId: string,
+    _tenantId: string,
     buildingId: string,
   ): Promise<ContextOption[]> {
 
@@ -278,7 +278,7 @@ export class ContextService {
             some: { userId },
           },
         },
-        select: { id: true, code: true, label: true },
+        select: { id: true, code: true, label: true as any },
       });
     }
 
@@ -286,7 +286,7 @@ export class ContextService {
     if (hasTenantScope || hasBuildingScope) {
       return this.prisma.unit.findMany({
         where: { buildingId },
-        select: { id: true, code: true, label: true },
+        select: { id: true, code: true, label: true as any },
       });
     }
 
@@ -302,7 +302,7 @@ export class ContextService {
           buildingId,
           id: { in: unitIds },
         },
-        select: { id: true, code: true, label: true },
+        select: { id: true, code: true, label: true as any },
       });
     }
 
@@ -336,7 +336,7 @@ export class ContextService {
     );
     if (buildings.length === 1) {
       // Auto-select this building
-      const building = buildings[0];
+      const building = buildings[0]!;
 
       // For RESIDENT: auto-select unit if only one
       const units = await this.getAccessibleUnits(
@@ -346,14 +346,14 @@ export class ContextService {
         building.id,
       );
       if (units.length === 1) {
-        return this.setContext(userId, tenantId, building.id, units[0].id);
+        return this.setContext(userId, tenantId, building.id, units[0]!.id);
       }
 
       return this.setContext(userId, tenantId, building.id);
     }
 
     // No auto-selection possible, just create empty context
-    const userContext = await this.prisma.userContext.create({
+    await this.prisma.userContext.create({
       data: {
         membershipId: membership.id,
       },

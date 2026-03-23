@@ -131,10 +131,11 @@ export class MinioService {
     try {
       await this.minioClient.removeObject(bucketName, objectKey);
       this.logger.debug(`Deleted object: ${bucketName}/${objectKey}`);
-    } catch (error) {
+    } catch (error: unknown) {
+      const errorObj = error as any;
       this.logger.error(
-        `Failed to delete object: ${error.message}`,
-        error.stack,
+        `Failed to delete object: ${errorObj?.message || String(error)}`,
+        errorObj?.stack,
       );
       throw error;
     }
@@ -158,13 +159,14 @@ export class MinioService {
       const stat = await this.minioClient.statObject(bucketName, objectKey);
       this.logger.debug(`Object exists: ${bucketName}/${objectKey} (size: ${stat.size})`);
       return true;
-    } catch (error) {
+    } catch (error: unknown) {
       // statObject throws if object doesn't exist
       // Check for NotFound error from MinIO SDK (can be via statusCode or code)
+      const errorObj = error as any;
       const isNotFound =
-        error?.code === 'NotFound' ||
-        error?.statusCode === 404 ||
-        error?.message?.includes('NotFound');
+        errorObj?.code === 'NotFound' ||
+        errorObj?.statusCode === 404 ||
+        errorObj?.message?.includes('NotFound');
 
       if (isNotFound) {
         this.logger.debug(`Object not found: ${bucketName}/${objectKey}`);
@@ -172,8 +174,8 @@ export class MinioService {
       }
 
       this.logger.error(
-        `Failed to check object existence: ${error?.message}`,
-        error?.stack,
+        `Failed to check object existence: ${errorObj?.message || String(error)}`,
+        errorObj?.stack,
       );
       throw error;
     }
@@ -199,13 +201,16 @@ export class MinioService {
 
       return new Promise((resolve, reject) => {
         stream.on('data', (obj) => {
-          objects.push(obj.name);
+          if (obj.name) {
+            objects.push(obj.name);
+          }
         });
 
-        stream.on('error', (error) => {
+        stream.on('error', (error: unknown) => {
+          const errorObj = error as any;
           this.logger.error(
-            `Failed to list objects: ${error.message}`,
-            error.stack,
+            `Failed to list objects: ${errorObj?.message || String(error)}`,
+            errorObj?.stack,
           );
           reject(error);
         });
@@ -217,10 +222,11 @@ export class MinioService {
           resolve(objects);
         });
       });
-    } catch (error) {
+    } catch (error: unknown) {
+      const errorObj = error as any;
       this.logger.error(
-        `Failed to list objects: ${error.message}`,
-        error.stack,
+        `Failed to list objects: ${errorObj?.message || String(error)}`,
+        errorObj?.stack,
       );
       throw error;
     }
@@ -246,10 +252,11 @@ export class MinioService {
       const stat = await this.minioClient.statObject(bucketName, objectKey);
       this.logger.debug(`Got stat for ${bucketName}/${objectKey}`);
       return stat;
-    } catch (error) {
+    } catch (error: unknown) {
+      const errorObj = error as any;
       this.logger.error(
-        `Failed to get object stat: ${error.message}`,
-        error.stack,
+        `Failed to get object stat: ${errorObj?.message || String(error)}`,
+        errorObj?.stack,
       );
       throw error;
     }
