@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FinanzasService } from './finanzas.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
-import { FinancialSummaryQueryDto, FinancialSummaryDto } from './finanzas.dto';
+import { FinancialSummaryQueryDto, FinancialSummaryDto, FinanceTrendQueryDto, MonthlyTrendDto } from './finanzas.dto';
 
 /**
  * TenantFinanceController: Tenant-level (aggregated) finance endpoints
@@ -42,6 +42,24 @@ export class TenantFinanceController {
     return this.finanzasService.getTenantFinancialSummary(
       tenantId,
       query.period || undefined,
+    );
+  }
+
+  /**
+   * GET /finance/trend?months=6
+   * Get monthly trend of charges, payments, outstanding, collection rate
+   * Aggregated across all buildings for the tenant
+   */
+  @Get('trend')
+  async getFinanceTrend(
+    @Query() query: FinanceTrendQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<MonthlyTrendDto[]> {
+    const tenantId = req.tenantId!;
+    return this.finanzasService.getFinanceTrend(
+      tenantId,
+      null, // null = tenant-level aggregation
+      query.months || 6,
     );
   }
 }

@@ -144,6 +144,14 @@ export interface UnitLedger {
   };
 }
 
+export interface MonthlyTrendDto {
+  period: string;
+  totalCharges: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  collectionRate: number;
+}
+
 // ============================================================================
 // CHARGES API
 // ============================================================================
@@ -555,3 +563,50 @@ export async function getTenantFinancialSummary(period?: string): Promise<Financ
 
   return response.json();
 }
+
+/**
+ * Get monthly trend data for a building
+ * @param buildingId - Building ID to fetch trend for
+ * @param months - Number of months to include (default: 6)
+ * @returns Array of monthly trend data with charges, payments, outstanding, and collection rate
+ */
+export async function getFinanceTrend(buildingId: string, months: number = 6): Promise<MonthlyTrendDto[]> {
+  const response = await fetch(
+    `/api/buildings/${buildingId}/finance/trend?months=${months}`,
+    { headers: getHeaders() }
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch finance trend');
+  }
+
+  return response.json();
+}
+
+/**
+ * Get CSV export URL for financial reports
+ * @param tenantId - Tenant ID to export reports for
+ * @returns URL string to download CSV export
+ */
+export function getFinanceExportUrl(tenantId: string): string {
+  return `/api/tenants/${tenantId}/reports/finance/export.csv`;
+}
+
+export const financeApi = {
+  listCharges,
+  createCharge,
+  getCharge,
+  cancelCharge,
+  listPayments,
+  submitPayment,
+  getPayment,
+  approvePayment,
+  rejectPayment,
+  getPaymentAllocations,
+  createAllocations,
+  getFinancialSummary,
+  getUnitLedger,
+  getTenantFinancialSummary,
+  getFinanceTrend,
+  getFinanceExportUrl,
+};

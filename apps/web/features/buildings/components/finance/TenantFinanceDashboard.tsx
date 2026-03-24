@@ -53,7 +53,13 @@ export const TenantFinanceDashboard = () => {
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'overview' && <BuildingsFinanceSummary />}
+        {activeTab === 'overview' && (
+          <Card>
+            <div className="p-6 text-center text-gray-500">
+              Cargando resumen de edificios...
+            </div>
+          </Card>
+        )}
 
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />

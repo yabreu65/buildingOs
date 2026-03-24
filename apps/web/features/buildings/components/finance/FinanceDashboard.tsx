@@ -8,6 +8,7 @@ import { FinanceSummaryCards } from './FinanceSummaryCards';
 import { PaymentsReviewList } from './PaymentsReviewList';
 import { ChargesTab } from './ChargesTab';
 import { DelinquentUnitsList } from './DelinquentUnitsList';
+import { FinanceChartsPanel } from './FinanceChartsPanel';
 import { cn } from '@/shared/lib/utils';
 
 interface FinanceDashboardProps {
@@ -15,7 +16,7 @@ interface FinanceDashboardProps {
   tenantId: string;
 }
 
-type TabType = 'payments' | 'charges' | 'delinquent';
+type TabType = 'payments' | 'charges' | 'delinquent' | 'analysis';
 
 /**
  * FinanceDashboard: Main orchestrator for finance management
@@ -49,6 +50,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
     { id: 'payments', label: 'Pagos Pendientes', count: payments.length },
     { id: 'charges', label: 'Cargos' },
     { id: 'delinquent', label: 'Unidades Morosas', count: summary?.delinquentUnitsCount },
+    { id: 'analysis', label: 'Análisis' },
   ];
 
   return (
@@ -131,6 +133,10 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             loading={summaryLoading}
             currency={summary?.currency || 'ARS'}
           />
+        )}
+
+        {activeTab === 'analysis' && (
+          <FinanceChartsPanel buildingId={buildingId} period={period} />
         )}
       </div>
     </div>

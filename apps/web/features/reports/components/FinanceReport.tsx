@@ -1,6 +1,8 @@
 'use client';
 
-import { Card, Skeleton, ErrorState, EmptyState } from '@/shared/components/ui';
+import { Card, Skeleton, ErrorState, EmptyState, Button } from '@/shared/components/ui';
+import { FinanceChartsPanel } from '@/features/buildings/components/finance';
+import { financeApi } from '@/features/buildings/services/finance.api';
 import type { FinanceReport } from '../services/reports.api';
 
 // Simple table-like div layout
@@ -28,6 +30,10 @@ interface FinanceReportProps {
   loading: boolean;
   error: string | null;
   onRetry?: () => void;
+  buildingId?: string;
+  period?: string;
+  tenantId?: string;
+  canExportReports?: boolean;
 }
 
 // Format amount from cents to display string
@@ -43,6 +49,10 @@ export function FinanceReportComponent({
   loading,
   error,
   onRetry,
+  buildingId,
+  period,
+  tenantId,
+  canExportReports,
 }: FinanceReportProps) {
   if (loading) {
     return (
@@ -106,6 +116,28 @@ export function FinanceReportComponent({
           title="Sin deudores"
           description="No hay unidades con cargos vencidos"
         />
+      )}
+
+      {/* Charts Section */}
+      {buildingId && (
+        <div>
+          <h3 className="text-lg font-semibold mb-4">Análisis Detallado</h3>
+          <FinanceChartsPanel buildingId={buildingId} period={period} />
+        </div>
+      )}
+
+      {/* Export Button */}
+      {canExportReports && tenantId && (
+        <div className="flex justify-end">
+          <a
+            href={financeApi.getFinanceExportUrl(tenantId)}
+            download="finance.csv"
+          >
+            <Button variant="secondary" size="sm">
+              ⬇ Exportar CSV
+            </Button>
+          </a>
+        </div>
       )}
     </div>
   );

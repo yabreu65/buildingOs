@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString, Min, Max } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
 import {
   BuildingChargeParamDto,
@@ -305,4 +305,24 @@ export class FinancialSummaryQueryDto {
   @IsOptional()
   @IsString()
   period?: string;
+}
+
+// ============================================================================
+// FINANCIAL TREND DTOs
+// ============================================================================
+
+export type MonthlyTrendDto = {
+  period: string;           // "YYYY-MM"
+  totalCharges: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  collectionRate: number;   // 0-100
+};
+
+export class FinanceTrendQueryDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  months?: number;  // default: 6
 }

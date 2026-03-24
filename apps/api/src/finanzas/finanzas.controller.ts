@@ -46,6 +46,8 @@ import {
   ChargeDetailDto,
   PaymentDetailDto,
   FinancialSummaryDto,
+  FinanceTrendQueryDto,
+  MonthlyTrendDto,
 } from './finanzas.dto';
 
 /**
@@ -452,6 +454,24 @@ export class FinanzasController {
       tenantId,
       params.buildingId,
       query.period || undefined,
+    );
+  }
+
+  /**
+   * GET /buildings/:buildingId/finance/trend?months=6
+   * Get monthly trend of charges, payments, outstanding, collection rate
+   */
+  @Get('finance/trend')
+  async getFinanceTrend(
+    @Param() params: FinancialSummaryParamDto,
+    @Query() query: FinanceTrendQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<MonthlyTrendDto[]> {
+    const tenantId = req.tenantId!;
+    return this.finanzasService.getFinanceTrend(
+      tenantId,
+      params.buildingId,
+      query.months || 6,
     );
   }
 }

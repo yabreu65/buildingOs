@@ -1434,6 +1434,54 @@ export class FinanzasService {
   }
 
   /**
+   * Get financial trend for building or tenant over N months
+   * Returns array of MonthlyTrendDto with collectionRate calculated
+   */
+  async getFinanceTrend(
+    tenantId: string,
+    buildingId?: string | null,
+    months: number = 6,
+  ): Promise<{ period: string; totalCharges: number; totalPaid: number; totalOutstanding: number; collectionRate: number }[]> {
+    // Validate months
+    const validMonths = Math.min(Math.max(months, 1), 12);
+
+    // Generate array of periods (current month backwards N months)
+    const now = new Date();
+    const periods: string[] = [];
+    for (let i = validMonths - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      periods.push(`${year}-${month}`);
+    }
+
+    // For each period, get summary
+    const trend: { period: string; totalCharges: number; totalPaid: number; totalOutstanding: number; collectionRate: number }[] = [];
+    for (const period of periods) {
+      let summary;
+      if (buildingId) {
+        summary = await this.getBuildingFinancialSummary(tenantId, buildingId, period);
+      } else {
+        summary = await this.getTenantFinancialSummary(tenantId, period);
+      }
+
+      const collectionRate = summary.totalCharges > 0
+        ? (summary.totalPaid / summary.totalCharges) * 100
+        : 0;
+
+      trend.push({
+        period,
+        totalCharges: summary.totalCharges,
+        totalPaid: summary.totalPaid,
+        totalOutstanding: summary.totalOutstanding,
+        collectionRate: Math.round(collectionRate * 10) / 10, // 1 decimal
+      });
+    }
+
+    return trend;
+  }
+
+  /**
    * Update payment status based on allocation state
    * If all charges for a payment are PAID, mark payment as RECONCILED
    *

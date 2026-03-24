@@ -9,3 +9,4 @@ export { DelinquentUnitsList } from './DelinquentUnitsList';
 export { TenantFinanceDashboard } from './TenantFinanceDashboard';
 export { BuildingsFinanceSummary } from './BuildingsFinanceSummary';
 export { TenantDelinquentUnitsList } from './TenantDelinquentUnitsList';
+export { FinanceChartsPanel } from './FinanceChartsPanel';

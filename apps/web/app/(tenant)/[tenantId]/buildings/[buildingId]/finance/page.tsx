@@ -13,25 +13,26 @@ interface BuildingParams {
  * FinancePage: Display financial dashboard for a building
  */
 export default function FinancePage() {
-  const params = useParams<BuildingParams>();
-  const tenantId = params?.tenantId;
-  const buildingId = params?.buildingId;
+  const params = useParams();
+  const { tenantId, buildingId } = params as unknown as BuildingParams;
+  const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
+  const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
 
-  if (!tenantId || !buildingId) {
+  if (!tenantIdStr || !buildingIdStr) {
     return <div>Invalid parameters</div>;
   }
 
   return (
     <div className="space-y-6">
       <BuildingBreadcrumb
-        tenantId={tenantId}
+        tenantId={tenantIdStr}
         buildingName="Finanzas"
-        buildingId={buildingId}
+        buildingId={buildingIdStr}
       />
 
-      <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
+      <BuildingSubnav tenantId={tenantIdStr} buildingId={buildingIdStr} />
 
-      <FinanceDashboard buildingId={buildingId} tenantId={tenantId} />
+      <FinanceDashboard buildingId={buildingIdStr} tenantId={tenantIdStr} />
     </div>
   );
 }
