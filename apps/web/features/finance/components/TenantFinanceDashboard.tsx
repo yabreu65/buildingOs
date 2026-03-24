@@ -30,12 +30,8 @@ export const TenantFinanceDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [period, setPeriod] = useState<string>('');
 
-  console.log('[DEBUG] TenantFinanceDashboard rendering, tenantId:', tenantId);
-
   const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(period);
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
-
-  console.log('[DEBUG] After hooks, summary:', summary, 'loading:', loading);
 
   const buildingIds = useMemo(() => buildings.map((b) => b.id), [buildings]);
   const buildingNames = useMemo(
