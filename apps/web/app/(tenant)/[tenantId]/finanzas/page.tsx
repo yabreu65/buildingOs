@@ -2,15 +2,20 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { TenantFinanceDashboard } from '@/features/buildings/components/finance';
+import { TenantFinanceDashboard } from '@/features/finance/components';
+
+interface Params {
+  tenantId: string;
+  [key: string]: string | string[];
+}
 
 /**
  * TenantFinanzasPage: Display aggregated financial dashboard for entire tenant
  * Shows summary across all buildings
  */
 export default function TenantFinanzasPage() {
-  const params = useParams();
-  const tenantId = params.tenantId as string;
+  const params = useParams<Params>();
+  const tenantId = params?.tenantId;
 
   if (!tenantId) {
     return <div>Invalid parameters</div>;

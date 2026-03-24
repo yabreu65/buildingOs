@@ -2,7 +2,7 @@
  * Communication domain types
  */
 import { CommunicationChannel, CommunicationType } from './enums';
-import type { TargetType } from '@/features/buildings/services/communications.api';
+import type { TargetType } from '@/features/communications/services/communications.api';
 
 export interface CommunicationTarget {
   targetType: TargetType;

@@ -2,19 +2,19 @@
 
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
-import { FinanceDashboard } from '@/features/buildings/components/finance';
+import { FinanceDashboard } from '@/features/finance/components';
 
 interface BuildingParams {
   tenantId: string;
   buildingId: string;
+  [key: string]: string | string[];
 }
 
 /**
  * FinancePage: Display financial dashboard for a building
  */
 export default function FinancePage() {
-  const params = useParams();
-  const { tenantId, buildingId } = params as unknown as BuildingParams;
+  const { tenantId, buildingId } = useParams<BuildingParams>();
   const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
   const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
 

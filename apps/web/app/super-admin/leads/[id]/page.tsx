@@ -10,6 +10,7 @@ import Select from '@/shared/components/ui/Select';
 import Badge from '@/shared/components/ui/Badge';
 import { useLeads } from '@/features/super-admin/leads/useLeads';
 import { t } from '@/i18n';
+import { ErrorBoundary } from '@/shared/components/error-boundary';
 
 const STATUS_COLORS: Record<string, string> = {
   NEW: 'bg-blue-100 text-blue-800',
@@ -18,6 +19,31 @@ const STATUS_COLORS: Record<string, string> = {
   DISQUALIFIED: 'bg-red-100 text-red-800',
 };
 
+interface Lead {
+  id: string;
+  fullName: string;
+  email: string;
+  phone?: string;
+  tenantType?: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
+  buildingsCount?: number;
+  unitsEstimate?: number;
+  message?: string;
+  status: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  convertedTenantId?: string;
+  convertedTenant?: {
+    id: string;
+    name: string;
+    subscription?: Array<{
+      plan?: { name: string };
+      planId: string;
+      status: string;
+    }>;
+  };
+}
+
 export default function LeadDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -25,7 +51,7 @@ export default function LeadDetailPage() {
 
   const { fetchLead, update, convert } = useLeads();
 
-  const [lead, setLead] = useState<any>(null);
+  const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -152,8 +178,9 @@ export default function LeadDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <ErrorBoundary level="page">
+      <div className="space-y-6">
+        {/* Header */}
       <div>
         <Button onClick={() => router.back()} className="mb-4">
           ← {t('common.back')}
@@ -328,7 +355,7 @@ export default function LeadDetailPage() {
                       <div className="pt-2 border-t border-border">
                         <Button
                           size="sm"
-                          onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant.id}`)}
+                          onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant!.id}`)}
                           className="w-full"
                         >
                           Ver Tenant →
@@ -441,7 +468,7 @@ export default function LeadDetailPage() {
                     <div className="flex gap-2 pt-2">
                       <Button
                         size="sm"
-                        onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant.id}`)}
+                        onClick={() => router.push(`/super-admin/tenants/${lead.convertedTenant!.id}`)}
                         className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                       >
                         Ver Tenant
@@ -451,7 +478,7 @@ export default function LeadDetailPage() {
                         variant="secondary"
                         onClick={() => {
                           // Copy tenant ID to clipboard for support
-                          navigator.clipboard.writeText(lead.convertedTenant.id);
+                          navigator.clipboard.writeText(lead.convertedTenant!.id);
                           setSuccessMessage('Tenant ID copied to clipboard');
                           setTimeout(() => setSuccessMessage(null), 2000);
                         }}
@@ -467,6 +494,7 @@ export default function LeadDetailPage() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 }

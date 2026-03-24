@@ -190,7 +190,7 @@ async function handleSearchDocs(
     };
   }
 
-  const safeQuery = encodeURIComponent(sanitize(query, 200));
+  const safeQuery = encodeURIComponent(sanitize(query as string, 200));
 
   if (buildingId && unitId) {
     context.router.push(
@@ -238,8 +238,8 @@ async function handleDraftCommunication(
     };
   }
 
-  const safeTitle = sanitize(title, 120);
-  const safeBody = sanitize(body, 2000);
+  const safeTitle = sanitize(title as string, 120);
+  const safeBody = sanitize(body as string, 2000);
 
   // Navigate with query params to signal modal open + prefills
   const params = new URLSearchParams();
@@ -295,15 +295,15 @@ async function handleCreateTicket(
     };
   }
 
-  const safeTitle = sanitize(title, 120);
-  const safeDescription = sanitize(description, 2000);
+  const safeTitle = sanitize(title as string, 120);
+  const safeDescription = sanitize(description as string, 2000);
 
   // Navigate with query params to signal modal open + prefills
   const params = new URLSearchParams();
   if (safeTitle) params.append('newTicket', '1');
   if (safeTitle) params.append('title', safeTitle);
   if (safeDescription) params.append('description', safeDescription);
-  if (unitId) params.append('unitId', unitId);
+  if (unitId) params.append('unitId', unitId as string);
 
   const queryString = params.toString();
 

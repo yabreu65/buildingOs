@@ -7,6 +7,7 @@ import z from 'zod';
 import { submitLead } from '@/shared/api/leads.api';
 import { Button, Input, Card } from '@/shared/components/ui';
 import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { ErrorBoundary } from '@/shared/components/error-boundary';
 
 // Zod validation schema
 const leadFormSchema = z.object({
@@ -185,8 +186,9 @@ export function LeadCaptureForm() {
   // Success state
   if (submitStatus === 'success') {
     return (
-      <Card className="w-full max-w-md mx-auto p-8 border-green-200 bg-green-50">
-        <div className="flex flex-col items-center text-center space-y-4">
+      <ErrorBoundary level="feature">
+        <Card className="w-full max-w-md mx-auto p-8 border-green-200 bg-green-50">
+          <div className="flex flex-col items-center text-center space-y-4">
           <CheckCircle className="w-16 h-16 text-green-600" />
           <div>
             <h3 className="text-lg font-semibold text-gray-900">Lead Submitted Successfully!</h3>
@@ -203,13 +205,15 @@ export function LeadCaptureForm() {
           >
             Submit Another
           </Button>
-        </div>
-      </Card>
+          </div>
+        </Card>
+      </ErrorBoundary>
     );
   }
 
   return (
-    <Card className="w-full max-w-md mx-auto p-6">
+    <ErrorBoundary level="feature">
+      <Card className="w-full max-w-md mx-auto p-6">
       <div className="space-y-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Get Started</h2>
@@ -402,6 +406,7 @@ export function LeadCaptureForm() {
         </form>
       </div>
     </Card>
+    </ErrorBoundary>
   );
 }
 

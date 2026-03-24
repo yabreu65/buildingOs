@@ -2,12 +2,13 @@
 
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
-import { TicketsList } from '@/features/buildings/components/tickets';
+import { TicketsList } from '@/features/tickets';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+  [key: string]: string | string[];
+}
 
 /**
  * TicketsPage: Display all tickets for a building with full CRUD

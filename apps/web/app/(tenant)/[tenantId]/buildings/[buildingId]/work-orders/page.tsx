@@ -3,13 +3,17 @@
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb } from '@/features/buildings/components/BuildingBreadcrumb';
 import { BuildingSubnav } from '@/features/buildings/components/BuildingSubnav';
-import { WorkOrdersList } from '@/features/buildings/components/vendors';
+import { WorkOrdersList } from '@/features/vendors';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+  [key: string]: string | string[];
+}
 
+/**
+ * Work orders page component
+ */
 export default function WorkOrdersPage() {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;

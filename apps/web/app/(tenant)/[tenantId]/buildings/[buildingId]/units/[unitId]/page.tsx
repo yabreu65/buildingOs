@@ -16,19 +16,21 @@ import { useOccupants } from '@/features/buildings/hooks/useOccupants';
 import { useAuth } from '@/features/auth/useAuth';
 import { routes } from '@/shared/lib/routes';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
-import { UnitTicketsList } from '@/features/buildings/components/tickets';
-import { InboxList } from '@/features/buildings/components/communications';
+import { UnitTicketsList } from '@/features/tickets';
+import { InboxList } from '@/features/communications';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
 import { AiUnitAssistant } from '@/features/units/components/AiUnitAssistant';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
+import { ErrorBoundary } from '@/shared/components/error-boundary';
 
-type UnitParams = {
+interface UnitParams {
   tenantId: string;
   buildingId: string;
   unitId: string;
-};
+  [key: string]: string | string[];
+}
 
 /**
  * UnitDashboard: View unit details and manage occupants
@@ -149,8 +151,9 @@ export default function UnitDashboardPage() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Breadcrumb */}
+    <ErrorBoundary level="page">
+      <div className="space-y-6">
+        {/* Breadcrumb */}
       <BuildingBreadcrumb tenantId={tenantId} buildingName={unit.label} buildingId={buildingId} />
 
       {/* Header */}
@@ -347,6 +350,7 @@ export default function UnitDashboardPage() {
         onCancel={() => setShowDeleteDialog({ isOpen: false, occupantId: null })}
         isLoading={isDeleting}
       />
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 }

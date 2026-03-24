@@ -3,13 +3,17 @@
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb } from '@/features/buildings/components/BuildingBreadcrumb';
 import { BuildingSubnav } from '@/features/buildings/components/BuildingSubnav';
-import { QuotesList } from '@/features/buildings/components/vendors';
+import { QuotesList } from '@/features/vendors';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+  [key: string]: string | string[];
+}
 
+/**
+ * Quotes page component
+ */
 export default function QuotesPage() {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;

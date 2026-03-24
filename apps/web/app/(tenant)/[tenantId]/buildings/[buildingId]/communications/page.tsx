@@ -3,12 +3,13 @@
 import { useParams } from 'next/navigation';
 import { t } from '@/i18n';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
-import { CommunicationsList } from '@/features/buildings/components/communications';
+import { CommunicationsList } from '@/features/communications';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+  [key: string]: string | string[];
+}
 
 /**
  * CommunicationsPage: Display all communications for a building with CRUD

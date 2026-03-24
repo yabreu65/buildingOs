@@ -1,12 +1,17 @@
 'use client';
 
 import { Card, Skeleton, ErrorState, EmptyState, Button } from '@/shared/components/ui';
-import { FinanceChartsPanel } from '@/features/buildings/components/finance';
-import { financeApi } from '@/features/buildings/services/finance.api';
+import { FinanceChartsPanel } from '@/features/finance/components';
+import { financeApi } from '@/features/finance/services/finance.api';
 import type { FinanceReport } from '../services/reports.api';
 
+interface SimpleTableProps {
+  headers: string[];
+  rows: React.ReactNode[][];
+}
+
 // Simple table-like div layout
-function SimpleTable({ headers, rows }: { headers: string[], rows: React.ReactNode[][] }) {
+function SimpleTable({ headers, rows }: SimpleTableProps) {
   return (
     <div className="border rounded-lg overflow-hidden">
       <div className="bg-muted text-muted-foreground border-b">

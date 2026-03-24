@@ -19,11 +19,13 @@ import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitEr
 import { Edit, Trash2, LayoutGrid, Plus, X } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import type { Unit as ApiUnit } from '@/features/units/units.api';
+import { ErrorBoundary } from '@/shared/components/error-boundary';
 
-type UnitParams = {
+interface UnitParams {
   tenantId: string;
   buildingId: string;
-};
+  [key: string]: string | string[];
+}
 
 /**
  * UnitsPage: List all units in a building
@@ -173,8 +175,9 @@ export default function UnitsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Breadcrumb */}
+    <ErrorBoundary level="page">
+      <div className="space-y-6">
+        {/* Breadcrumb */}
       <BuildingBreadcrumb
         tenantId={tenantId}
         buildingName={building.name}
@@ -439,6 +442,7 @@ export default function UnitsPage() {
         onCancel={() => setDeleteConfirm({ isOpen: false, unitId: null })}
         isLoading={isDeleting}
       />
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 }
