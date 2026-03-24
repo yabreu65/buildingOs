@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -368,8 +368,13 @@ export class FinanzasService {
       buildingId,
     );
 
-    // 3. If RESIDENT/OWNER and unitId provided, validate access
-    if (this.validators.isResidentOrOwner(userRoles) && dto.unitId) {
+    // 3. If RESIDENT/OWNER, unitId is REQUIRED
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      if (!dto.unitId) {
+        throw new BadRequestException(
+          'RESIDENT must specify unitId when submitting a payment',
+        );
+      }
       await this.validators.validateResidentUnitAccess(
         tenantId,
         userId,
@@ -515,7 +520,7 @@ export class FinanzasService {
     }
 
     // 3. Update to APPROVED
-    return this.prisma.payment.update({
+    const result = await this.prisma.payment.update({
       where: { id: paymentId },
       data: {
         status: PaymentStatus.APPROVED,
@@ -524,6 +529,21 @@ export class FinanzasService {
         updatedAt: new Date(),
       },
     });
+
+    // Audit: PAYMENT_APPROVE
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: membershipId,
+      action: AuditAction.PAYMENT_APPROVE,
+      entityType: 'Payment',
+      entityId: paymentId,
+      metadata: {
+        amount: payment.amount,
+        paidAt: result.paidAt,
+      },
+    });
+
+    return result;
   }
 
   /**
@@ -561,7 +581,7 @@ export class FinanzasService {
     }
 
     // 3. Update to REJECTED
-    return this.prisma.payment.update({
+    const result = await this.prisma.payment.update({
       where: { id: paymentId },
       data: {
         status: PaymentStatus.REJECTED,
@@ -569,6 +589,20 @@ export class FinanzasService {
         updatedAt: new Date(),
       },
     });
+
+    // Audit: PAYMENT_REJECT
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: membershipId,
+      action: AuditAction.PAYMENT_REJECT,
+      entityType: 'Payment',
+      entityId: paymentId,
+      metadata: {
+        reason: dto.reason,
+      },
+    });
+
+    return result;
   }
 
   // ============================================================================
@@ -581,11 +615,14 @@ export class FinanzasService {
    * Security:
    * - Admin/Operator only
    * - Cannot exceed payment amount
+   * - Uses transaction for atomicity
+   * - Recalculates charge status and attempts payment reconciliation
    */
   async createAllocation(
     tenantId: string,
     buildingId: string,
     userRoles: string[],
+    membershipId: string,
     dto: CreateAllocationDto,
   ): Promise<PaymentAllocation> {
     // 1. Permission check
@@ -599,7 +636,7 @@ export class FinanzasService {
       buildingId,
     );
 
-    // 3. Validate payment and charge
+    // 3. Validate payment and charge (outside transaction for initial validation)
     const payment = await this.prisma.payment.findFirst({
       where: {
         id: dto.paymentId,
@@ -643,7 +680,14 @@ export class FinanzasService {
       );
     }
 
-    // 5. Check for duplicate allocation
+    // 5. Validate allocation amount doesn't exceed charge amount
+    if (dto.amount > charge.amount) {
+      throw new ConflictException(
+        `Allocation amount (${dto.amount}) cannot exceed charge amount (${charge.amount})`,
+      );
+    }
+
+    // 6. Check for duplicate allocation
     const existing = await this.prisma.paymentAllocation.findFirst({
       where: {
         tenantId,
@@ -658,20 +702,39 @@ export class FinanzasService {
       );
     }
 
-    // 6. Create allocation
-    const allocation = await this.prisma.paymentAllocation.create({
-      data: {
+    // 7. Create allocation + recalculate status within transaction
+    return this.prisma.$transaction(async (tx) => {
+      const allocation = await tx.paymentAllocation.create({
+        data: {
+          tenantId,
+          paymentId: dto.paymentId,
+          chargeId: dto.chargeId,
+          amount: dto.amount,
+        },
+      });
+
+      // Recalculate charge status within transaction
+      await this.recalculateChargeStatus(dto.chargeId, tx);
+
+      // Attempt to reconcile payment if all charges are PAID
+      await this.tryReconcilePayment(dto.paymentId, tx);
+
+      // Audit: PAYMENT_ALLOCATE
+      void this.auditService.createLog({
         tenantId,
-        paymentId: dto.paymentId,
-        chargeId: dto.chargeId,
-        amount: dto.amount,
-      },
+        actorUserId: membershipId,
+        action: AuditAction.PAYMENT_ALLOCATE,
+        entityType: 'PaymentAllocation',
+        entityId: allocation.id,
+        metadata: {
+          paymentId: dto.paymentId,
+          chargeId: dto.chargeId,
+          amount: dto.amount,
+        },
+      });
+
+      return allocation;
     });
-
-    // 7. Recalculate charge status based on allocations
-    await this.recalculateChargeStatus(dto.chargeId);
-
-    return allocation;
   }
 
   /**
@@ -679,12 +742,15 @@ export class FinanzasService {
    *
    * Security:
    * - Admin/Operator only
+   * - Uses transaction for atomicity
+   * - Recalculates charge status and attempts payment reconciliation
    */
   async deleteAllocation(
     tenantId: string,
     buildingId: string,
     allocationId: string,
     userRoles: string[],
+    membershipId: string,
   ): Promise<void> {
     // 1. Permission check
     if (!this.validators.canAllocate(userRoles)) {
@@ -717,16 +783,33 @@ export class FinanzasService {
       );
     }
 
-    // 4. Get charge ID before deletion
-    const chargeId = allocation.chargeId;
+    // 4. Delete allocation + recalculate status within transaction
+    return this.prisma.$transaction(async (tx) => {
+      // Audit: ALLOCATION_DELETE (before deletion)
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId: membershipId,
+        action: AuditAction.ALLOCATION_DELETE,
+        entityType: 'PaymentAllocation',
+        entityId: allocationId,
+        metadata: {
+          paymentId: allocation.paymentId,
+          chargeId: allocation.chargeId,
+          amount: allocation.amount,
+        },
+      });
 
-    // 5. Delete allocation
-    await this.prisma.paymentAllocation.delete({
-      where: { id: allocationId },
+      // Delete allocation
+      await tx.paymentAllocation.delete({
+        where: { id: allocationId },
+      });
+
+      // Recalculate charge status within transaction
+      await this.recalculateChargeStatus(allocation.chargeId, tx);
+
+      // Attempt to reconcile payment if all charges are PAID
+      await this.tryReconcilePayment(allocation.paymentId, tx);
     });
-
-    // 6. Recalculate charge status
-    await this.recalculateChargeStatus(chargeId);
   }
 
   // ============================================================================
@@ -740,9 +823,17 @@ export class FinanzasService {
    * - allocations_sum == 0 → PENDING
    * - 0 < allocations_sum < amount → PARTIAL
    * - allocations_sum >= amount → PAID
+   *
+   * @param chargeId - ID of charge to recalculate
+   * @param tx - Optional Prisma transaction client (for use within transactions)
    */
-  private async recalculateChargeStatus(chargeId: string): Promise<void> {
-    const charge = await this.prisma.charge.findUnique({
+  private async recalculateChargeStatus(
+    chargeId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+
+    const charge = await client.charge.findUnique({
       where: { id: chargeId },
       include: {
         paymentAllocations: true,
@@ -766,7 +857,7 @@ export class FinanzasService {
     }
 
     if (newStatus !== charge.status) {
-      await this.prisma.charge.update({
+      await client.charge.update({
         where: { id: chargeId },
         data: {
           status: newStatus,
@@ -885,7 +976,7 @@ export class FinanzasService {
     periodTo?: string,
     userRoles?: string[],
     userId?: string,
-  ): Promise<Record<string, any>> {
+  ): Promise<Record<string, unknown>> {
     // 1. Validate unit belongs to tenant
     const unit = await this.prisma.unit.findFirst({
       where: {
@@ -1032,9 +1123,17 @@ export class FinanzasService {
   /**
    * Update payment status based on allocation state
    * If all charges for a payment are PAID, mark payment as RECONCILED
+   *
+   * @param paymentId - ID of payment to reconcile
+   * @param tx - Optional Prisma transaction client (for use within transactions)
    */
-  private async tryReconcilePayment(paymentId: string): Promise<void> {
-    const payment = await this.prisma.payment.findUnique({
+  private async tryReconcilePayment(
+    paymentId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+
+    const payment = await client.payment.findUnique({
       where: { id: paymentId },
       include: {
         paymentAllocations: {
@@ -1055,7 +1154,7 @@ export class FinanzasService {
     );
 
     if (allPaid && payment.paymentAllocations.length > 0) {
-      await this.prisma.payment.update({
+      await client.payment.update({
         where: { id: paymentId },
         data: {
           status: PaymentStatus.RECONCILED,

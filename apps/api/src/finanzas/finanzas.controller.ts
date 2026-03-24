@@ -306,10 +306,12 @@ export class FinanzasController {
   ): Promise<{ id: string }> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
+    const membershipId = req.user.membershipId!;
     return this.finanzasService.createAllocation(
       tenantId,
       params.buildingId,
       userRoles,
+      membershipId,
       dto,
     );
   }
@@ -327,11 +329,13 @@ export class FinanzasController {
   ): Promise<void> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
+    const membershipId = req.user.membershipId!;
     await this.finanzasService.deleteAllocation(
       tenantId,
       params.buildingId,
       params.allocationId,
       userRoles,
+      membershipId,
     );
   }
 
