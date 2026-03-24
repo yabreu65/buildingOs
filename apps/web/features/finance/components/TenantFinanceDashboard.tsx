@@ -89,6 +89,13 @@ export const TenantFinanceDashboard = () => {
               <Skeleton className="h-10" />
               <Skeleton className="h-10" />
             </div>
+          ) : buildingIds.length === 0 ? (
+            <Card>
+              <div className="p-6 text-center text-gray-600">
+                <p className="text-sm">No hay edificios disponibles</p>
+                <p className="text-xs text-muted-foreground mt-2">Crea un edificio para ver el resumen financiero</p>
+              </div>
+            </Card>
           ) : (
             <BuildingsFinanceSummary
               tenantId={tenantId || ''}
