@@ -1,63 +1,87 @@
+name: buildingos
+
+networks:
+  buildingos_net:
+    driver: bridge
+
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
+    container_name: buildingos-postgres
+    networks:
+      - buildingos_net
     environment:
-      POSTGRES_USER: buildingos
-      POSTGRES_PASSWORD: buildingos
-      POSTGRES_DB: buildingos
+      POSTGRES_USER: ${POSTGRES_USER:-buildingos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-buildingos}
+      POSTGRES_DB: ${POSTGRES_DB:-buildingos}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - buildingos_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U buildingos -d buildingos"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-buildingos} -d ${POSTGRES_DB:-buildingos}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
+    container_name: buildingos-redis
+    networks:
+      - buildingos_net
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6380}:6379"
     volumes:
-      - redisdata:/data
+      - buildingos_redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   minio:
-    image: minio/minio
+    image: minio/minio:latest
+    container_name: buildingos-minio
+    networks:
+      - buildingos_net
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: buildingos
-      MINIO_ROOT_PASSWORD: buildingos123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-buildingos}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-buildingos123}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_PORT:-9101}:9001"
     volumes:
-      - miniodata:/data
+      - buildingos_miniodata:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   createbuckets:
-    image: minio/mc
+    image: minio/mc:latest
+    container_name: buildingos-mc
+    networks:
+      - buildingos_net
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-buildingos}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-buildingos123}
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 buildingos buildingos123;
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-buildingos} ${MINIO_ROOT_PASSWORD:-buildingos123};
       mc mb --ignore-existing myminio/buildingos-local;
       exit 0;
       "
-
+    restart: on-failure
 
 volumes:
-  pgdata:
-  miniodata:
-  redisdata:
+  buildingos_pgdata:
+  buildingos_miniodata:
+  buildingos_redisdata:

@@ -12,3 +12,5 @@ export { useTickets } from './useTickets';
 export { useCommunicationsAdmin } from './useCommunicationsAdmin';
 
 export { useCommunicationsInbox } from './useCommunicationsInbox';
+
+export { useTenantFinanceSummary } from './useTenantFinanceSummary';

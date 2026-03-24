@@ -1355,6 +1355,85 @@ export class FinanzasService {
   }
 
   /**
+   * Get aggregated financial summary for entire tenant (all buildings)
+   *
+   * Security:
+   * - No additional validation needed (tenant scope is automatic via req.tenantId)
+   */
+  async getTenantFinancialSummary(
+    tenantId: string,
+    period?: string,
+  ): Promise<FinancialSummaryDto> {
+    // 1. Build where clause: ALL charges for this tenant (no buildingId filter)
+    const chargeWhere: Prisma.ChargeWhereInput = {
+      tenantId,
+      canceledAt: null,
+    };
+    if (period) {
+      chargeWhere.period = period;
+    }
+
+    // 2. Get all charges (aggregate by status, sum amounts)
+    const charges = await this.prisma.charge.findMany({
+      where: chargeWhere,
+      include: {
+        paymentAllocations: {
+          include: {
+            payment: true,
+          },
+        },
+      },
+    });
+
+    // 3. Calculate totals (only from APPROVED payments)
+    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
+
+    const totalPaid = charges.reduce((sum, c) => {
+      const allocated = c.paymentAllocations.reduce((asum, a) => {
+        return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
+      }, 0);
+      return sum + allocated;
+    }, 0);
+
+    const totalOutstanding = totalCharges - totalPaid;
+
+    // 4. Find delinquent units (past due with outstanding)
+    const now = new Date();
+    const delinquentCharges = charges.filter(
+      (c) =>
+        (c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL) &&
+        c.dueDate < now,
+    );
+
+    const delinquentByUnit = new Map<string, number>();
+    for (const charge of delinquentCharges) {
+      const allocated = charge.paymentAllocations.reduce((sum, a) => {
+        return sum + (a.payment ? a.amount : 0);
+      }, 0);
+      const outstanding = charge.amount - allocated;
+      delinquentByUnit.set(
+        charge.unitId,
+        (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
+      );
+    }
+
+    const delinquentUnitsCount = delinquentByUnit.size;
+    const topDelinquentUnits = Array.from(delinquentByUnit.entries())
+      .map(([unitId, outstanding]) => ({ unitId, outstanding }))
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 10); // Top 10
+
+    return {
+      totalCharges,
+      totalPaid,
+      totalOutstanding,
+      delinquentUnitsCount,
+      topDelinquentUnits,
+      currency: 'ARS',
+    };
+  }
+
+  /**
    * Update payment status based on allocation state
    * If all charges for a payment are PAID, mark payment as RECONCILED
    *

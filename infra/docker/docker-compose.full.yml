@@ -1,0 +1,79 @@
+include:
+  - docker-compose.yml
+
+name: buildingos
+
+networks:
+  buildingos_net:
+    driver: bridge
+
+services:
+  postgres:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  minio:
+    restart: unless-stopped
+
+  buildingos-api:
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    container_name: buildingos-api
+    networks:
+      - buildingos_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3010}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-buildingos}:${POSTGRES_PASSWORD:-buildingos}@postgres:5432/${POSTGRES_DB:-buildingos}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-buildingos}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-buildingos123}
+      MINIO_BUCKET: buildingos-local
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  buildingos-web:
+    build:
+      context: ../../
+      dockerfile: apps/web/Dockerfile
+    container_name: buildingos-web
+    networks:
+      - buildingos_net
+    depends_on:
+      buildingos-api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3011}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      NEXT_PUBLIC_API_URL: http://buildingos-api:3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped

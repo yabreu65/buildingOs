@@ -7,14 +7,19 @@
   ],
   "scripts": {
     "dev": "npm run dev -ws",
-    "dev:infra": "docker-compose -f infra/docker/docker-compose.yml up -d",
     "build": "npm run build -ws",
     "lint": "npm run lint -ws",
     "typecheck": "npm run typecheck -ws",
     "test": "npm run test -ws",
     "db:migrate": "npm run migrate -w apps/api",
     "db:seed": "npm run seed -w apps/api",
-    "db:studio": "npm run studio -w apps/api"
+    "db:studio": "npm run studio -w apps/api",
+    "infra:up": "docker compose -f infra/docker/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker/docker-compose.yml down",
+    "infra:reset": "docker compose -f infra/docker/docker-compose.yml down -v && npm run infra:up",
+    "infra:logs": "docker compose -f infra/docker/docker-compose.yml logs -f",
+    "stack:up": "docker compose -f infra/docker/docker-compose.full.yml up -d",
+    "stack:down": "docker compose -f infra/docker/docker-compose.full.yml down"
   },
   "prisma": {
   "seed": "ts-node prisma/seed.ts"

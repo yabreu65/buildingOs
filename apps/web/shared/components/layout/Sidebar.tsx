@@ -8,13 +8,13 @@ import { useCan } from "../../../features/rbac/rbac.hooks";
 import { useIsSuperAdmin } from "../../../features/auth/useAuthSession";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
 
-function NavItem({
+const NavItem = ({
   href,
   label,
 }: {
   href: string;
   label: string;
-}) {
+}) => {
   const pathname = usePathname();
   const isActive = pathname === href;
 
@@ -32,9 +32,9 @@ function NavItem({
       {label}
     </Link>
   );
-}
+};
 
-export default function Sidebar() {
+const Sidebar = () => {
   const tenantId = useTenantId();
   const canReview = useCan("payments.review");
   const isSuperAdmin = useIsSuperAdmin();
@@ -57,7 +57,7 @@ export default function Sidebar() {
         <NavItem href={routes.tenantDashboard(tenantId)} label="Dashboard" />
         <NavItem href={routes.buildingsList(tenantId)} label="Buildings" />
         <NavItem href={`/${tenantId}/units`} label="Units" />
-        <NavItem href={`/${tenantId}/payments`} label="Payments" />
+        <NavItem href={`/${tenantId}/finanzas`} label="Finanzas" />
         <NavItem href={routes.tenantReports(tenantId)} label="Reportes" />
 
         {canReview && (
@@ -65,7 +65,7 @@ export default function Sidebar() {
             <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Admin
             </div>
-            <NavItem href={`/${tenantId}/payments/review`} label="Review Payments" />
+            <NavItem href={`/${tenantId}/payments/review`} label="Validar pagos" />
           </>
         )}
 
@@ -76,4 +76,6 @@ export default function Sidebar() {
       </nav>
     </aside>
   );
-}
+};
+
+export default Sidebar;

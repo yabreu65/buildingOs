@@ -5,8 +5,8 @@ import { ROUTES } from '../helpers/navigation';
 test.describe('Auth - Login Flow', () => {
   test('should successfully login with valid credentials', async ({ page }) => {
     // STEP 1: Navigate to login
-    await page.goto('/auth/login');
-    expect(page.url()).toContain('/auth/login');
+    await page.goto('/login');
+    expect(page.url()).toContain('/login');
 
     // STEP 2: Login
     await login(page, TEST_USERS.tenantAdminA);
@@ -19,31 +19,31 @@ test.describe('Auth - Login Flow', () => {
 
   test('should show error on invalid credentials', async ({ page }) => {
     // STEP 1: Navigate to login
-    await page.goto('/auth/login');
+    await page.goto('/login');
 
     // STEP 2: Try login with wrong password
-    await page.fill('input[name="email"]', TEST_USERS.tenantAdminA.email);
-    await page.fill('input[name="password"]', 'wrongpassword');
-    await page.click('button:has-text("Sign In")');
+    await page.fill('input#email', TEST_USERS.tenantAdminA.email);
+    await page.fill('input#password', 'wrongpassword');
+    await page.click('button:has-text("Iniciar sesión")');
 
     // STEP 3: Verify error message
     await page.waitForTimeout(2000);
     const hasError = await page.locator('text=/invalid|wrong|credentials|failed/i').isVisible().catch(() => false);
-    expect(hasError || page.url().includes('/auth/login')).toBe(true);
+    expect(hasError || page.url().includes('/login')).toBe(true);
   });
 
   test('should show error on non-existent email', async ({ page }) => {
     // STEP 1: Navigate to login
-    await page.goto('/auth/login');
+    await page.goto('/login');
 
     // STEP 2: Try login with non-existent email
-    await page.fill('input[name="email"]', 'nonexistent@test.com');
-    await page.fill('input[name="password"]', 'anypassword');
-    await page.click('button:has-text("Sign In")');
+    await page.fill('input#email', 'nonexistent@test.com');
+    await page.fill('input#password', 'anypassword');
+    await page.click('button:has-text("Iniciar sesión")');
 
     // STEP 3: Verify still on login page
     await page.waitForTimeout(2000);
-    expect(page.url()).toContain('/auth/login');
+    expect(page.url()).toContain('/login');
   });
 
   test('should redirect to login when accessing protected route unauthenticated', async ({ page }) => {
@@ -51,8 +51,8 @@ test.describe('Auth - Login Flow', () => {
     await page.goto('/dashboard');
 
     // STEP 2: Should be redirected to login
-    await page.waitForURL('**/auth/login', { timeout: 10000 });
-    expect(page.url()).toContain('/auth/login');
+    await page.waitForURL('**/login', { timeout: 10000 });
+    expect(page.url()).toContain('/login');
   });
 
   test('should successfully logout', async ({ page }) => {
@@ -64,7 +64,7 @@ test.describe('Auth - Login Flow', () => {
     await logout(page);
 
     // STEP 3: Verify redirected to login
-    expect(page.url()).toContain('/auth/login');
+    expect(page.url()).toContain('/login');
   });
 
   test('should maintain session after page refresh', async ({ page }) => {

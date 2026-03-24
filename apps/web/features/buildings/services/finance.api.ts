@@ -5,6 +5,10 @@ import { getToken } from '@/features/auth/session.storage';
  * Handles all Finanzas module operations (charges, payments, allocations, summary, ledger)
  */
 
+/**
+ * Get request headers with authentication token
+ * @returns HeadersInit object with content-type and authorization
+ */
 function getHeaders(): HeadersInit {
   const token = getToken();
   return {
@@ -144,6 +148,16 @@ export interface UnitLedger {
 // CHARGES API
 // ============================================================================
 
+/**
+ * List all charges for a building
+ * @param buildingId - Building ID to fetch charges for
+ * @param period - Optional YYYY-MM format to filter by period
+ * @param unitId - Optional unit ID to filter by
+ * @param status - Optional charge status to filter by
+ * @param limit - Optional limit on results
+ * @param offset - Optional offset for pagination
+ * @returns Array of charges
+ */
 export async function listCharges(
   buildingId: string,
   period?: string,
@@ -172,6 +186,12 @@ export async function listCharges(
   return response.json();
 }
 
+/**
+ * Create a new charge for a unit
+ * @param buildingId - Building ID where charge will be created
+ * @param data - Charge creation data (unitId, type, concept, amount, dueDate, etc.)
+ * @returns Created charge
+ */
 export async function createCharge(
   buildingId: string,
   data: {
@@ -200,6 +220,12 @@ export async function createCharge(
   return response.json();
 }
 
+/**
+ * Get a specific charge by ID
+ * @param buildingId - Building ID the charge belongs to
+ * @param chargeId - Charge ID to fetch
+ * @returns Charge details
+ */
 export async function getCharge(
   buildingId: string,
   chargeId: string
@@ -216,6 +242,11 @@ export async function getCharge(
   return response.json();
 }
 
+/**
+ * Cancel a charge (soft delete)
+ * @param buildingId - Building ID the charge belongs to
+ * @param chargeId - Charge ID to cancel
+ */
 export async function cancelCharge(
   buildingId: string,
   chargeId: string
@@ -238,6 +269,15 @@ export async function cancelCharge(
 // PAYMENTS API
 // ============================================================================
 
+/**
+ * List all payments for a building
+ * @param buildingId - Building ID to fetch payments for
+ * @param status - Optional payment status to filter by
+ * @param unitId - Optional unit ID to filter by
+ * @param limit - Optional limit on results
+ * @param offset - Optional offset for pagination
+ * @returns Array of payments
+ */
 export async function listPayments(
   buildingId: string,
   status?: string,
@@ -264,6 +304,12 @@ export async function listPayments(
   return response.json();
 }
 
+/**
+ * Submit a new payment
+ * @param buildingId - Building ID where payment will be submitted
+ * @param data - Payment submission data (amount, method, reference, etc.)
+ * @returns Created payment
+ */
 export async function submitPayment(
   buildingId: string,
   data: {
@@ -292,6 +338,12 @@ export async function submitPayment(
   return response.json();
 }
 
+/**
+ * Get a specific payment by ID
+ * @param buildingId - Building ID the payment belongs to
+ * @param paymentId - Payment ID to fetch
+ * @returns Payment details
+ */
 export async function getPayment(
   buildingId: string,
   paymentId: string
@@ -308,6 +360,13 @@ export async function getPayment(
   return response.json();
 }
 
+/**
+ * Approve a submitted payment
+ * @param buildingId - Building ID the payment belongs to
+ * @param paymentId - Payment ID to approve
+ * @param paidAt - Optional date when payment was made (defaults to now)
+ * @returns Updated payment
+ */
 export async function approvePayment(
   buildingId: string,
   paymentId: string,
@@ -329,6 +388,13 @@ export async function approvePayment(
   return response.json();
 }
 
+/**
+ * Reject a submitted payment
+ * @param buildingId - Building ID the payment belongs to
+ * @param paymentId - Payment ID to reject
+ * @param reason - Optional reason for rejection
+ * @returns Updated payment
+ */
 export async function rejectPayment(
   buildingId: string,
   paymentId: string,
@@ -354,6 +420,12 @@ export async function rejectPayment(
 // ALLOCATIONS API
 // ============================================================================
 
+/**
+ * Get allocations for a payment
+ * @param buildingId - Building ID the payment belongs to
+ * @param paymentId - Payment ID to get allocations for
+ * @returns Array of payment allocations
+ */
 export async function getPaymentAllocations(
   buildingId: string,
   paymentId: string
@@ -370,6 +442,13 @@ export async function getPaymentAllocations(
   return response.json();
 }
 
+/**
+ * Create allocations for a payment (assign payment to charges)
+ * @param buildingId - Building ID the payment belongs to
+ * @param paymentId - Payment ID to create allocations for
+ * @param allocations - Array of {chargeId, amount} pairs
+ * @returns Array of created allocations
+ */
 export async function createAllocations(
   buildingId: string,
   paymentId: string,
@@ -395,6 +474,12 @@ export async function createAllocations(
 // SUMMARY & REPORTING API
 // ============================================================================
 
+/**
+ * Get financial summary for a building
+ * @param buildingId - Building ID to get summary for
+ * @param period - Optional YYYY-MM format to filter by period
+ * @returns Financial summary with totals and delinquent units
+ */
 export async function getFinancialSummary(
   buildingId: string,
   period?: string
@@ -416,6 +501,13 @@ export async function getFinancialSummary(
 // UNIT LEDGER API
 // ============================================================================
 
+/**
+ * Get ledger (transaction history) for a unit
+ * @param unitId - Unit ID to get ledger for
+ * @param periodFrom - Optional YYYY-MM format start period
+ * @param periodTo - Optional YYYY-MM format end period
+ * @returns Unit ledger with charges, payments, and balance
+ */
 export async function getUnitLedger(
   unitId: string,
   periodFrom?: string,
@@ -433,6 +525,32 @@ export async function getUnitLedger(
 
   if (!response.ok) {
     throw new Error(`Failed to get unit ledger: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// TENANT-LEVEL FINANCE API
+// ============================================================================
+
+/**
+ * Get aggregated financial summary for entire tenant (all buildings)
+ * @param period - Optional YYYY-MM format to filter by period
+ * @returns Aggregated financial summary across all buildings
+ */
+export async function getTenantFinancialSummary(period?: string): Promise<FinancialSummary> {
+  const params = new URLSearchParams();
+  if (period) params.append('period', period);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(
+    `/api/finance/summary${query}`,
+    { headers: getHeaders() }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tenant financial summary: ${response.statusText}`);
   }
 
   return response.json();
