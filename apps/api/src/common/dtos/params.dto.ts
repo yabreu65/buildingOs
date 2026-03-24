@@ -11,12 +11,12 @@ export class IdParamDto {
 }
 
 export class TenantParamDto {
-  @IsUUID()
+  @IsString()
   tenantId!: string;
 }
 
 export class BuildingParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 }
 
@@ -26,10 +26,10 @@ export class UnitParamDto {
 }
 
 export class TenantBuildingParamDto {
-  @IsUUID()
+  @IsString()
   tenantId!: string;
 
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 }
 

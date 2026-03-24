@@ -39,6 +39,7 @@ export class TenantFinanceController {
     @Request() req: AuthenticatedRequest,
   ): Promise<FinancialSummaryDto> {
     const tenantId = req.tenantId!;
+    console.log('[DEBUG] getTenantFinancialSummary called with tenantId:', tenantId);
     return this.finanzasService.getTenantFinancialSummary(
       tenantId,
       query.period || undefined,

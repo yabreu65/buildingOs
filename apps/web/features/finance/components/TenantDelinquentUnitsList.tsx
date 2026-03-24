@@ -7,7 +7,13 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { AlertCircle } from 'lucide-react';
 
 interface TenantDelinquentUnitsListProps {
-  delinquent: Array<{ unitId: string; outstanding: number }>;
+  delinquent: Array<{
+    unitId: string;
+    unitLabel: string;
+    buildingId: string;
+    buildingName: string;
+    outstanding: number;
+  }>;
   loading: boolean;
 }
 
@@ -35,13 +41,15 @@ export const TenantDelinquentUnitsList = ({ delinquent, loading }: TenantDelinqu
           <THead>
             <TR>
               <TH>Unidad</TH>
+              <TH>Edificio</TH>
               <TH className="text-right">Deuda Pendiente</TH>
             </TR>
           </THead>
           <TBody>
             {delinquent.map((item) => (
               <TR key={item.unitId}>
-                <TD className="font-medium">{item.unitId}</TD>
+                <TD className="font-medium">{item.unitLabel || item.unitId}</TD>
+                <TD className="text-muted-foreground">{item.buildingName || '-'}</TD>
                 <TD className="text-right font-semibold text-red-600">
                   ARS {item.outstanding.toFixed(2)}
                 </TD>

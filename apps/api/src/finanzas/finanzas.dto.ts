@@ -240,6 +240,9 @@ export type FinancialSummaryDto = {
   delinquentUnitsCount: number;
   topDelinquentUnits: Array<{
     unitId: string;
+    unitLabel: string;
+    buildingId: string;
+    buildingName: string;
     outstanding: number;
   }>;
   currency: string;

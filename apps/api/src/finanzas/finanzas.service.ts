@@ -973,10 +973,14 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals (only from APPROVED payments)
-    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
+    // 3. Calculate totals (only pending/partial charges)
+    const pendingCharges = charges.filter(
+      (c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL,
+    );
 
-    const totalPaid = charges.reduce((sum, c) => {
+    const totalCharges = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
+
+    const totalPaid = pendingCharges.reduce((sum, c) => {
       const allocated = c.paymentAllocations.reduce((asum, a) => {
         // Only count allocations from APPROVED payments
         return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
@@ -986,18 +990,13 @@ export class FinanzasService {
 
     const totalOutstanding = totalCharges - totalPaid;
 
-    // 4. Find delinquent units (past due with outstanding)
-    const now = new Date();
-    const delinquentCharges = charges.filter(
-      (c) =>
-        (c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL) &&
-        c.dueDate < now,
-    );
+    // 4. Find delinquent units (all units with pending charges - regardless of due date)
+    const delinquentCharges = pendingCharges;
 
     const delinquentByUnit = new Map<string, number>();
     for (const charge of delinquentCharges) {
       const allocated = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment ? a.amount : 0);
+        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
       }, 0);
       const outstanding = charge.amount - allocated;
       delinquentByUnit.set(
@@ -1006,9 +1005,26 @@ export class FinanzasService {
       );
     }
 
+    // Get unit info for delinquent units
+    const unitIds = Array.from(delinquentByUnit.keys());
+    const units = await this.prisma.unit.findMany({
+      where: { id: { in: unitIds } },
+      include: { building: true },
+    });
+    const unitInfoMap = new Map(units.map(u => [u.id, { label: u.label, buildingId: u.buildingId, buildingName: u.building.name }]));
+
     const delinquentUnitsCount = delinquentByUnit.size;
     const topDelinquentUnits = Array.from(delinquentByUnit.entries())
-      .map(([unitId, outstanding]) => ({ unitId, outstanding }))
+      .map(([unitId, outstanding]) => {
+        const info = unitInfoMap.get(unitId);
+        return {
+          unitId,
+          unitLabel: info?.label || unitId,
+          buildingId: info?.buildingId || '',
+          buildingName: info?.buildingName || '',
+          outstanding,
+        };
+      })
       .sort((a, b) => b.outstanding - a.outstanding)
       .slice(0, 10); // Top 10
 
@@ -1385,10 +1401,14 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals (only from APPROVED payments)
-    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
+    // 3. Calculate totals (only pending/partial charges)
+    const pendingCharges = charges.filter(
+      (c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL,
+    );
 
-    const totalPaid = charges.reduce((sum, c) => {
+    const totalCharges = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
+
+    const totalPaid = pendingCharges.reduce((sum, c) => {
       const allocated = c.paymentAllocations.reduce((asum, a) => {
         return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
       }, 0);
@@ -1397,18 +1417,13 @@ export class FinanzasService {
 
     const totalOutstanding = totalCharges - totalPaid;
 
-    // 4. Find delinquent units (past due with outstanding)
-    const now = new Date();
-    const delinquentCharges = charges.filter(
-      (c) =>
-        (c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL) &&
-        c.dueDate < now,
-    );
+    // 4. Find delinquent units (all units with pending charges - regardless of due date)
+    const delinquentCharges = pendingCharges;
 
     const delinquentByUnit = new Map<string, number>();
     for (const charge of delinquentCharges) {
       const allocated = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment ? a.amount : 0);
+        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
       }, 0);
       const outstanding = charge.amount - allocated;
       delinquentByUnit.set(
@@ -1417,9 +1432,26 @@ export class FinanzasService {
       );
     }
 
+    // Get unit and building info for delinquent units
+    const unitIds = Array.from(delinquentByUnit.keys());
+    const units = await this.prisma.unit.findMany({
+      where: { id: { in: unitIds } },
+      include: { building: true },
+    });
+    const unitInfoMap = new Map(units.map(u => [u.id, { label: u.label, buildingId: u.buildingId, buildingName: u.building.name }]));
+
     const delinquentUnitsCount = delinquentByUnit.size;
     const topDelinquentUnits = Array.from(delinquentByUnit.entries())
-      .map(([unitId, outstanding]) => ({ unitId, outstanding }))
+      .map(([unitId, outstanding]) => {
+        const info = unitInfoMap.get(unitId);
+        return {
+          unitId,
+          unitLabel: info?.label || unitId,
+          buildingId: info?.buildingId || '',
+          buildingName: info?.buildingName || '',
+          outstanding,
+        };
+      })
       .sort((a, b) => b.outstanding - a.outstanding)
       .slice(0, 10); // Top 10
 

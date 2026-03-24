@@ -1,15 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useParams } from 'next/navigation';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
 import { FinanceSummaryCards } from './FinanceSummaryCards';
 import { BuildingsFinanceSummary } from './BuildingsFinanceSummary';
 import { TenantDelinquentUnitsList } from './TenantDelinquentUnitsList';
 import { useTenantFinanceSummary } from '../hooks/useTenantFinanceSummary';
+import { useBuildings } from '@/features/buildings/hooks';
+import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
 
 type Tab = 'overview' | 'delinquent';
+
+interface Params {
+  tenantId: string;
+  [key: string]: string | string[];
+}
 
 /**
  * Dashboard component for tenant-level finance overview.
@@ -17,10 +25,23 @@ type Tab = 'overview' | 'delinquent';
  * @returns Dashboard with summary cards, buildings overview, and delinquent units list
  */
 export const TenantFinanceDashboard = () => {
+  const params = useParams<Params>();
+  const tenantId = params?.tenantId;
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [period, setPeriod] = useState<string>('');
 
+  console.log('[DEBUG] TenantFinanceDashboard rendering, tenantId:', tenantId);
+
   const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(period);
+  const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
+
+  console.log('[DEBUG] After hooks, summary:', summary, 'loading:', loading);
+
+  const buildingIds = useMemo(() => buildings.map((b) => b.id), [buildings]);
+  const buildingNames = useMemo(
+    () => buildings.reduce((acc, b) => ({ ...acc, [b.id]: b.name }), {} as Record<string, string>),
+    [buildings]
+  );
 
   // Convert React Query error to string message
   const errorMsg = error ? (error instanceof Error ? error.message : String(error)) : null;
@@ -62,11 +83,19 @@ export const TenantFinanceDashboard = () => {
 
         {/* Tab Content */}
         {activeTab === 'overview' && (
-          <Card>
-            <div className="p-6 text-center text-gray-500">
-              Cargando resumen de edificios...
+          buildingsLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-10" />
+              <Skeleton className="h-10" />
+              <Skeleton className="h-10" />
             </div>
-          </Card>
+          ) : (
+            <BuildingsFinanceSummary
+              tenantId={tenantId || ''}
+              buildingIds={buildingIds}
+              buildingNames={buildingNames}
+            />
+          )
         )}
 
         {activeTab === 'delinquent' && (

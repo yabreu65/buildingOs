@@ -21,6 +21,7 @@ import BuildingOnboardingCard from '@/features/onboarding/BuildingOnboardingCard
 interface BuildingParams {
   tenantId: string;
   buildingId: string;
+  [key: string]: string | string[];
 }
 
 /**

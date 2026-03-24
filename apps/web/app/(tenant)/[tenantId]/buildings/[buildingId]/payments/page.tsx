@@ -11,6 +11,7 @@ import { StorageService } from '@/shared/lib/storage';
 interface BuildingParams {
   tenantId: string;
   buildingId: string;
+  [key: string]: string | string[];
 }
 
 interface Payment {
