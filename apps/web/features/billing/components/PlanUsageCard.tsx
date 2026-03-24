@@ -48,7 +48,6 @@ export default function PlanUsageCard({
     { label: 'Buildings', used: usage.buildings, limit: plan.maxBuildings },
     { label: 'Units', used: usage.units, limit: plan.maxUnits },
     { label: 'Users', used: usage.users, limit: plan.maxUsers },
-    { label: 'Residents', used: usage.residents, limit: plan.maxOccupants },
   ];
 
   // Check if any resource is at/over limit (for warning banner)

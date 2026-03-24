@@ -53,16 +53,18 @@ export default function SuperAdminDashboard() {
           </Card>
         </Link>
 
-        {/* Platform Users Card (Coming Soon) */}
-        <Card className="h-32 flex flex-col justify-between opacity-50">
-          <div>
-            <h2 className="text-xl font-semibold">Platform Users</h2>
-            <p className="text-sm text-muted-foreground">
-              Manage global super admin users
-            </p>
-          </div>
-          <div className="text-xs font-semibold text-primary uppercase">Coming Soon</div>
-        </Card>
+        {/* Platform Users Card */}
+        <Link href="/super-admin/users">
+          <Card className="h-32 flex flex-col justify-between hover:bg-accent/5 cursor-pointer transition-colors">
+            <div>
+              <h2 className="text-xl font-semibold">Platform Users</h2>
+              <p className="text-sm text-muted-foreground">
+                Manage global super admin users
+              </p>
+            </div>
+            <div className="text-2xl font-bold text-primary">→</div>
+          </Card>
+        </Link>
       </div>
     </div>
   );

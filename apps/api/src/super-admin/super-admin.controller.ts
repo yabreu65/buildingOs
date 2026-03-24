@@ -26,6 +26,7 @@ import { UpdateAiOverrideDto } from './dto/update-ai-override.dto';
 import { StartImpersonationDto } from './dto/start-impersonation.dto';
 import { ListSuperAdminPlanChangeRequestsDto } from './dto/list-super-admin-plan-change-requests.dto';
 import { RejectPlanChangeRequestDto } from './dto/reject-plan-change-request.dto';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { Response } from 'express';
 
 export interface RequestWithUser extends Request {
@@ -175,6 +176,41 @@ export class SuperAdminController {
         action,
       },
     );
+  }
+
+  /**
+   * GET /api/super-admin/platform-users
+   * List all platform users (SUPER_ADMIN role)
+   */
+  @Get('platform-users')
+  async listPlatformUsers() {
+    return this.service.listPlatformUsers();
+  }
+
+  /**
+   * POST /api/super-admin/platform-users
+   * Create new platform user (SUPER_ADMIN)
+   */
+  @Post('platform-users')
+  @HttpCode(HttpStatus.CREATED)
+  async createPlatformUser(
+    @Body() dto: CreatePlatformUserDto,
+    @Request() req: RequestWithUser,
+  ) {
+    return this.service.createPlatformUser(dto, req.user.id);
+  }
+
+  /**
+   * DELETE /api/super-admin/platform-users/:id
+   * Revoke SUPER_ADMIN access from user
+   */
+  @Delete('platform-users/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deletePlatformUser(
+    @Param('id') userId: string,
+    @Request() req: RequestWithUser,
+  ): Promise<void> {
+    return this.service.deletePlatformUser(userId, req.user.id);
   }
 
   /**

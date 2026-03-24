@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { SuperAdminProvider } from '@/features/super-admin/super-admin-context';
 import { useAuth } from '@/features/auth/useAuth';
 import { useIsSuperAdmin, useAuthSession } from '@/features/auth/useAuthSession';
+import { UserMenu } from '@/features/super-admin/components/UserMenu';
 
 /**
  * Layout de SUPER_ADMIN Dashboard
@@ -87,20 +88,25 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
             </Link>
             <Link
               href="/super-admin/users"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium text-muted-foreground"
+              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
             >
-              Platform Users (soon)
+              Platform Users
             </Link>
             <Link
               href="/super-admin/audit-logs"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium text-muted-foreground"
+              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
             >
-              Audit Logs (soon)
+              Audit Logs
             </Link>
           </nav>
 
-          <div className="absolute bottom-6 left-6 text-xs text-muted-foreground">
-            <p>{session?.user?.email}</p>
+          <div className="absolute bottom-4 left-4 right-4">
+            {session && (
+              <UserMenu
+                email={session.user.email}
+                name={session.user.name}
+              />
+            )}
           </div>
         </aside>
 

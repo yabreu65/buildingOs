@@ -2,14 +2,17 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
-import { AuditAction, BillingPlanId } from '@prisma/client';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
+import { AuditAction, BillingPlanId, Tenant, AuditLog, Prisma } from '@prisma/client';
 
 export interface TenantResponse {
   id: string;
@@ -99,7 +102,7 @@ export class SuperAdminService {
       tenantId: result.id,
       actorUserId,
       action: AuditAction.TENANT_CREATE,
-      entityType: 'Tenant',
+      entity: 'Tenant',
       entityId: result.id,
       metadata: { name: result.name, type: result.type },
     });
@@ -185,7 +188,7 @@ export class SuperAdminService {
       tenantId: updated.id,
       actorUserId,
       action: AuditAction.TENANT_UPDATE,
-      entityType: 'Tenant',
+      entity: 'Tenant',
       entityId: updated.id,
       metadata: {
         before: { name: existing.name },
@@ -217,7 +220,7 @@ export class SuperAdminService {
       tenantId: tenant.id,
       actorUserId,
       action: AuditAction.TENANT_DELETE,
-      entityType: 'Tenant',
+      entity: 'Tenant',
       entityId: tenant.id,
       metadata: { name: tenant.name, type: tenant.type },
     });
@@ -337,7 +340,7 @@ export class SuperAdminService {
       tenantId,
       actorUserId,
       action: AuditAction.SUBSCRIPTION_UPDATE,
-      entityType: 'Subscription',
+      entity: 'Subscription',
       entityId: result.id,
       metadata: {
         prevPlanId: subscription.planId,
@@ -407,7 +410,7 @@ export class SuperAdminService {
       dateTo?: Date;
     },
   ): Promise<{ data: AuditLogResponse[]; total: number }> {
-    const where: any = {};
+    const where: Prisma.AuditLogWhereInput = {};
 
     if (filters?.tenantId) where.tenantId = filters.tenantId;
     if (filters?.actorUserId) where.actorUserId = filters.actorUserId;
@@ -483,7 +486,7 @@ export class SuperAdminService {
     void this.auditService.createLog({
       actorUserId,
       action: AuditAction.IMPERSONATION_START,
-      entityType: 'Tenant',
+      entity: 'Tenant',
       entityId: tenantId,
       metadata: {
         targetTenantId: tenantId,
@@ -511,7 +514,7 @@ export class SuperAdminService {
     void this.auditService.createLog({
       actorUserId,
       action: AuditAction.IMPERSONATION_END,
-      entityType: 'Tenant',
+      entity: 'Tenant',
       entityId: tenantId,
       metadata: { targetTenantId: tenantId },
     });
@@ -522,7 +525,7 @@ export class SuperAdminService {
   /**
    * Get impersonation status from JWT claims
    */
-  async getImpersonationStatus(req: any): Promise<{
+  async getImpersonationStatus(req: RequestWithUser): Promise<{
     isImpersonating: boolean;
     tenantId?: string;
     expiresAt?: string;
@@ -535,6 +538,176 @@ export class SuperAdminService {
       isImpersonating: true,
       tenantId: user.impersonatedTenantId,
     };
+  }
+
+  /**
+   * List all platform users (SUPER_ADMIN role)
+   */
+  async listPlatformUsers(): Promise<
+    Array<{ id: string; name: string; email: string; createdAt: string }>
+  > {
+    const users = await this.prisma.user.findMany({
+      where: {
+        memberships: {
+          some: {
+            roles: {
+              some: {
+                role: 'SUPER_ADMIN',
+              },
+            },
+          },
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return users.map((u) => ({
+      ...u,
+      createdAt: u.createdAt.toISOString(),
+    }));
+  }
+
+  /**
+   * Create new platform user (SUPER_ADMIN)
+   * SECURITY: Only the FOUNDER (first SUPER_ADMIN) can create other SUPER_ADMINS
+   */
+  async createPlatformUser(
+    dto: CreatePlatformUserDto,
+    creatorId: string,
+  ): Promise<{ id: string; email: string; name: string }> {
+    const { email, name, password } = dto;
+
+    // Verify creator is the founder (first/oldest SUPER_ADMIN)
+    const founder = await this.prisma.user.findFirst({
+      where: {
+        memberships: {
+          some: {
+            roles: {
+              some: {
+                role: 'SUPER_ADMIN',
+              },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!founder || founder.id !== creatorId) {
+      throw new ForbiddenException(
+        'Solo el founder puede crear nuevos super admins',
+      );
+    }
+
+    // Check if email exists
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existing) {
+      throw new ConflictException('El email ya está registrado');
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user + membership + SUPER_ADMIN role in transaction
+    const user = await this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          email,
+          name,
+          passwordHash: hashedPassword,
+        },
+      });
+
+      // Get or create platform tenant for super admins
+      let platformTenant = await tx.tenant.findFirst({
+        where: { name: 'BuildingOS Platform' },
+      });
+
+      if (!platformTenant) {
+        platformTenant = await tx.tenant.create({
+          data: {
+            name: 'BuildingOS Platform',
+            type: 'SYSTEM',
+            status: 'ACTIVE',
+            plan: 'ENTERPRISE',
+            billingCycleStartDate: new Date(),
+          },
+        });
+      }
+
+      // Create membership with SUPER_ADMIN role
+      await tx.membership.create({
+        data: {
+          userId: newUser.id,
+          tenantId: platformTenant.id,
+          roles: {
+            create: {
+              role: 'SUPER_ADMIN',
+            },
+          },
+        },
+      });
+
+      return newUser;
+    });
+
+    // Audit log
+    await this.auditService.createLog({
+      action: AuditAction.USER_CREATE,
+      entity: 'User',
+      entityId: user.id,
+      actorUserId: creatorId,
+      metadata: { email, name, scope: 'SUPER_ADMIN' },
+    });
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+    };
+  }
+
+  /**
+   * Delete platform user (revoke SUPER_ADMIN access)
+   */
+  async deletePlatformUser(userId: string, actorId: string): Promise<void> {
+    // Find user
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { memberships: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Remove SUPER_ADMIN role from all memberships
+    await this.prisma.membershipRole.deleteMany({
+      where: {
+        membership: {
+          userId,
+        },
+        role: 'SUPER_ADMIN',
+      },
+    });
+
+    // Audit log
+    await this.auditService.createLog({
+      action: AuditAction.USER_DELETE,
+      entity: 'User',
+      entityId: userId,
+      actorUserId: actorId,
+      metadata: { email: user.email, name: user.name, scope: 'SUPER_ADMIN' },
+    });
   }
 
   // ============================================================================
@@ -551,7 +724,7 @@ export class SuperAdminService {
     };
   }
 
-  private formatAuditLog(log: any): AuditLogResponse {
+  private formatAuditLog(log: AuditLog): AuditLogResponse {
     return {
       id: log.id,
       tenantId: log.tenantId,

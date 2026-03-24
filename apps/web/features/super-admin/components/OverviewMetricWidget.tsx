@@ -9,14 +9,14 @@ interface OverviewMetricWidgetProps {
   icon?: ReactNode;
 }
 
-export default function OverviewMetricWidget({
+export function OverviewMetricWidget({
   label,
   value,
   color = 'default',
   icon,
 }: OverviewMetricWidgetProps) {
   const colorClasses: Record<string, string> = {
-    default: 'text-gray-900',
+    default: 'text-foreground',
     green: 'text-green-600',
     blue: 'text-blue-600',
     red: 'text-red-600',

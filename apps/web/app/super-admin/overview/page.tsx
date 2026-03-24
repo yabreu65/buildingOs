@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Button from '@/shared/components/ui/Button';
-import OverviewMetricWidget from '@/features/super-admin/components/OverviewMetricWidget';
+import { OverviewMetricWidget } from '@/features/super-admin/components/OverviewMetricWidget';
 import { getGlobalStats, seedSuperAdminIfEmpty } from '@/features/super-admin/tenants.storage';
 import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
 import type { GlobalStats } from '@/features/super-admin/super-admin.types';
