@@ -28,6 +28,7 @@ import { ListSuperAdminPlanChangeRequestsDto } from './dto/list-super-admin-plan
 import { RejectPlanChangeRequestDto } from './dto/reject-plan-change-request.dto';
 import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { Response } from 'express';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -248,7 +249,7 @@ export class SuperAdminController {
    */
   @Get('impersonation/status')
   @UseGuards(JwtAuthGuard)
-  async getImpersonationStatus(@Request() req: RequestWithUser) {
+  async getImpersonationStatus(@Request() req: AuthenticatedRequest) {
     return this.service.getImpersonationStatus(req);
   }
 

@@ -15,6 +15,14 @@ import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { AuditAction, BillingPlanId, Tenant, AuditLog, Prisma } from '@prisma/client';
 import { AuthenticatedRequest } from '../common/types/request.types';
 
+// Union type for requests that may include impersonation claims
+type ImpersonationRequest = AuthenticatedRequest & {
+  user: AuthenticatedRequest['user'] & {
+    isImpersonating?: boolean;
+    impersonatedTenantId?: string;
+  };
+};
+
 export interface TenantResponse {
   id: string;
   name: string;
@@ -103,7 +111,7 @@ export class SuperAdminService {
       tenantId: result.id,
       actorUserId,
       action: AuditAction.TENANT_CREATE,
-      entity: 'Tenant',
+      entityType: 'Tenant',
       entityId: result.id,
       metadata: { name: result.name, type: result.type },
     });
@@ -189,7 +197,7 @@ export class SuperAdminService {
       tenantId: updated.id,
       actorUserId,
       action: AuditAction.TENANT_UPDATE,
-      entity: 'Tenant',
+      entityType: 'Tenant',
       entityId: updated.id,
       metadata: {
         before: { name: existing.name },
@@ -221,7 +229,7 @@ export class SuperAdminService {
       tenantId: tenant.id,
       actorUserId,
       action: AuditAction.TENANT_DELETE,
-      entity: 'Tenant',
+      entityType: 'Tenant',
       entityId: tenant.id,
       metadata: { name: tenant.name, type: tenant.type },
     });
@@ -341,7 +349,7 @@ export class SuperAdminService {
       tenantId,
       actorUserId,
       action: AuditAction.SUBSCRIPTION_UPDATE,
-      entity: 'Subscription',
+      entityType: 'Subscription',
       entityId: result.id,
       metadata: {
         prevPlanId: subscription.planId,
@@ -487,7 +495,7 @@ export class SuperAdminService {
     void this.auditService.createLog({
       actorUserId,
       action: AuditAction.IMPERSONATION_START,
-      entity: 'Tenant',
+      entityType: 'Tenant',
       entityId: tenantId,
       metadata: {
         targetTenantId: tenantId,
@@ -515,7 +523,7 @@ export class SuperAdminService {
     void this.auditService.createLog({
       actorUserId,
       action: AuditAction.IMPERSONATION_END,
-      entity: 'Tenant',
+      entityType: 'Tenant',
       entityId: tenantId,
       metadata: { targetTenantId: tenantId },
     });
@@ -526,18 +534,19 @@ export class SuperAdminService {
   /**
    * Get impersonation status from JWT claims
    */
-  async getImpersonationStatus(req: AuthenticatedRequest): Promise<{
+  async getImpersonationStatus(req: ImpersonationRequest): Promise<{
     isImpersonating: boolean;
     tenantId?: string;
     expiresAt?: string;
   }> {
     const user = req.user;
-    if (!user?.isImpersonating) {
+    const isImpersonating = !!(user?.isImpersonating);
+    if (!isImpersonating) {
       return { isImpersonating: false };
     }
     return {
       isImpersonating: true,
-      tenantId: user.impersonatedTenantId,
+      tenantId: user?.impersonatedTenantId,
     };
   }
 
@@ -638,9 +647,6 @@ export class SuperAdminService {
           data: {
             name: 'BuildingOS Platform',
             type: 'ADMINISTRADORA',
-            status: 'ACTIVE',
-            plan: 'ENTERPRISE',
-            billingCycleStartDate: new Date(),
           },
         });
       }
@@ -664,7 +670,7 @@ export class SuperAdminService {
     // Audit log
     void this.auditService.createLog({
       action: AuditAction.USER_CREATE,
-      entity: 'User',
+      entityType: 'User',
       entityId: user.id,
       actorUserId: creatorId,
       metadata: { email, name, scope: 'SUPER_ADMIN' },
@@ -704,7 +710,7 @@ export class SuperAdminService {
     // Audit log
     void this.auditService.createLog({
       action: AuditAction.USER_DELETE,
-      entity: 'User',
+      entityType: 'User',
       entityId: userId,
       actorUserId: actorId,
       metadata: { email: user.email, name: user.name, scope: 'SUPER_ADMIN' },
@@ -733,7 +739,7 @@ export class SuperAdminService {
       action: log.action,
       entity: log.entity,
       entityId: log.entityId,
-      metadata: log.metadata,
+      metadata: (log.metadata || {}) as Record<string, unknown>,
       createdAt: log.createdAt.toISOString(),
     };
   }
