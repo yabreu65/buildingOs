@@ -51,7 +51,7 @@ export const TenantFinanceDashboard = () => {
       </div>
 
       {/* KPI Cards */}
-      <FinanceSummaryCards summary={summary} loading={loading} error={errorMsg} onRetry={refetch} />
+      <FinanceSummaryCards summary={summary ?? null} loading={loading} error={errorMsg} onRetry={refetch} />
 
       {/* Tabs */}
       <div className="space-y-4">

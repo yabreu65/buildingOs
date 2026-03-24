@@ -243,4 +243,57 @@ export class EmailTemplates {
       html: this.baseTemplate(content, branding),
     };
   }
+
+  /**
+   * Welcome Email for Self-Registration
+   */
+  static welcomeEmail(
+    data: {
+      fullName: string;
+      tenantName: string;
+      inviteLink: string;
+    },
+    branding: TenantBranding,
+  ): { subject: string; html: string } {
+    const content = `
+<h2>¡Bienvenido/a a ${branding.brandName || 'BuildingOS'}, ${this.escapeHtml(data.fullName)}!</h2>
+<p>Tu cuenta para <strong>${this.escapeHtml(data.tenantName)}</strong> está lista para usar.</p>
+
+<p>Por favor, haz clic en el botón de abajo para crear tu contraseña y comenzar:</p>
+
+<div style="margin: 24px 0; text-align: center;">
+  <a href="${data.inviteLink}" class="button">Crear mi contraseña</a>
+</div>
+
+<p>O copia este enlace en tu navegador:</p>
+<p style="background-color: #f5f5f5; padding: 12px; border-radius: 4px; word-break: break-all; font-size: 12px;">
+  ${data.inviteLink}
+</p>
+
+<div class="alert">
+  <strong>⚠️ Importante:</strong> Este enlace es válido por <strong>24 horas</strong>. Por favor, completa tu registro antes de que expire.
+</div>
+
+<p>Si tienes alguna pregunta o necesitas ayuda, no dudes en contactar a nuestro equipo de soporte en ${branding.supportEmail || 'support@buildingos.example.com'}.</p>
+    `;
+
+    return {
+      subject: `¡Bienvenido/a a ${branding.brandName || 'BuildingOS'}!`,
+      html: this.baseTemplate(content, branding),
+    };
+  }
+
+  /**
+   * Escape HTML to prevent XSS in emails
+   */
+  private static escapeHtml(text: string): string {
+    const map: { [key: string]: string } = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;',
+    };
+    return text.replace(/[&<>"']/g, (char) => map[char] || char);
+  }
 }

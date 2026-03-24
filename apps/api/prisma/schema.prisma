@@ -1175,6 +1175,7 @@ enum EmailType {
   PASSWORD_RESET
   PAYMENT_SUBMITTED
   LEAD_NOTIFICATION
+  WELCOME
 }
 
 model EmailLog {

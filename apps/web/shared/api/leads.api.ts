@@ -8,11 +8,11 @@ export interface CreateLeadRequest {
   phoneWhatsapp?: string;
   tenantType: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
   buildingsCount?: number;
-  unitsEstimate: number;
+  unitsEstimate?: number;
   countryCity?: string;
   message?: string;
   source?: string;
-  intent?: 'DEMO' | 'CONTACT';
+  intent?: 'DEMO' | 'CONTACT' | 'SIGNUP';
 }
 
 export interface LeadResponse {
@@ -42,6 +42,33 @@ export async function submitLead(data: CreateLeadRequest): Promise<LeadResponse>
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: 'Failed to submit lead' }));
     throw new Error(error.message || 'Failed to submit lead');
+  }
+
+  return response.json();
+}
+
+/**
+ * Register a new user for SIGNUP flow (no authentication required)
+ * Creates a new tenant and sends invitation email with password setup link
+ */
+export async function registerUser(data: {
+  fullName: string;
+  email: string;
+  tenantName: string;
+  tenantType: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
+  phoneWhatsapp?: string;
+}): Promise<LeadResponse> {
+  const response = await fetch(`${API_URL}/leads/public/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Failed to register' }));
+    throw new Error(error.message || 'Failed to register');
   }
 
   return response.json();

@@ -9,6 +9,7 @@ import { useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { AlertCircle } from 'lucide-react';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
 import Input from '@/shared/components/ui/Input';
@@ -24,6 +25,13 @@ const acceptSchema = z.object({
 });
 
 type AcceptFormData = z.infer<typeof acceptSchema>;
+
+interface AcceptInvitationResponse {
+  accessToken: string;
+  user: { id: string; name: string; email: string };
+  memberships: Array<{ id: string; tenantId: string; roles: string[] }>;
+  membershipExisted?: boolean;
+}
 
 function InvitePageContent() {
   const router = useRouter();
@@ -62,13 +70,14 @@ function InvitePageContent() {
 
     const validateToken = async () => {
       try {
-        const response = await apiClient<{
+        interface ValidateInvitationResponse {
           tenantId: string;
           tenantName: string;
           email: string;
           roles: string[];
           expiresAt: string;
-        }>({
+        }
+        const response = await apiClient<ValidateInvitationResponse>({
           path: `/invitations/validate?token=${encodeURIComponent(token)}`,
           method: 'GET',
         });
@@ -78,8 +87,9 @@ function InvitePageContent() {
         setRoles(Array.isArray(response.roles) ? response.roles : []);
         setExpiresAt(new Date(response.expiresAt));
         setValidating(false);
-      } catch (err: any) {
-        setValidationError(err?.message || t('auth.invite.invalidOrExpired'));
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : t('auth.invite.invalidOrExpired');
+        setValidationError(errorMessage);
         setValidating(false);
       }
     };
@@ -95,7 +105,7 @@ function InvitePageContent() {
     try {
       setSubmitting(true);
       setSubmitError(null);
-      const response = await apiClient<any, { token: string; name: string; password: string }>({
+      const response = await apiClient<AcceptInvitationResponse, { token: string; name: string; password: string }>({
         path: '/invitations/accept',
         method: 'POST',
         body: {
@@ -126,8 +136,9 @@ function InvitePageContent() {
           router.push(`/${tenantId}/dashboard`);
         }
       }
-    } catch (err: any) {
-      setSubmitError(err?.message || t('auth.invite.acceptError'));
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : t('auth.invite.acceptError');
+      setSubmitError(errorMessage);
     } finally {
       setSubmitting(false);
     }
@@ -209,6 +220,19 @@ function InvitePageContent() {
         <div className="mb-6">
           <h1 className="text-3xl font-bold mb-2">{t('auth.invite.title')}</h1>
           <p className="text-gray-600 text-sm mb-4">{t('auth.invite.subtitle')}</p>
+
+          {/* 24-hour expiration warning */}
+          <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex gap-3 mb-6">
+            <AlertCircle className="w-5 h-5 text-yellow-700 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-yellow-800">
+                ⚠️ Este link de activación expira en 24 horas
+              </p>
+              <p className="text-xs text-yellow-700 mt-1">
+                Asegúrate de crear tu contraseña antes de que venza.
+              </p>
+            </div>
+          </div>
 
           {/* Organization name highlight */}
           <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">

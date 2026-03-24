@@ -1,5 +1,3 @@
-'use client';
-
 import { apiClient } from '@/shared/lib/http/client';
 
 export interface SupportTicket {
@@ -39,7 +37,7 @@ export async function listAllSupportTickets(
     skip?: number;
     take?: number;
   },
-) {
+): Promise<{ tickets: SupportTicket[]; total: number }> {
   const query = new URLSearchParams();
 
   if (params?.status) query.append('status', params.status);
@@ -54,7 +52,7 @@ export async function listAllSupportTickets(
   });
 }
 
-export async function getSupportTicket(id: string) {
+export async function getSupportTicket(id: string): Promise<SupportTicket> {
   return apiClient({
     path: `/super-admin/support/${id}`,
     method: 'GET',
@@ -68,7 +66,7 @@ export async function updateSupportTicket(
     description?: string;
     priority?: string;
   },
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/super-admin/support/${id}`,
     method: 'PATCH',
@@ -79,7 +77,7 @@ export async function updateSupportTicket(
 export async function updateSupportTicketStatus(
   id: string,
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED',
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/super-admin/support/${id}/status`,
     method: 'PATCH',
@@ -90,7 +88,7 @@ export async function updateSupportTicketStatus(
 export async function assignSupportTicket(
   id: string,
   assignedToUserId?: string,
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/super-admin/support/${id}/assign`,
     method: 'PATCH',
@@ -98,7 +96,7 @@ export async function assignSupportTicket(
   });
 }
 
-export async function closeSupportTicket(id: string) {
+export async function closeSupportTicket(id: string): Promise<SupportTicket> {
   return apiClient({
     path: `/super-admin/support/${id}`,
     method: 'DELETE',
@@ -108,7 +106,7 @@ export async function closeSupportTicket(id: string) {
 export async function addSupportTicketComment(
   id: string,
   body: string,
-) {
+): Promise<SupportTicketComment> {
   return apiClient({
     path: `/super-admin/support/${id}/comments`,
     method: 'POST',
@@ -128,7 +126,7 @@ export async function listTenantSupportTickets(
     skip?: number;
     take?: number;
   },
-) {
+): Promise<{ tickets: SupportTicket[]; total: number }> {
   const query = new URLSearchParams();
 
   if (params?.status) query.append('status', params.status);
@@ -150,7 +148,7 @@ export async function createSupportTicket(
     category?: string;
     priority?: string;
   },
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/${tenantId}/support`,
     method: 'POST',
@@ -161,7 +159,7 @@ export async function createSupportTicket(
 export async function getTenantSupportTicket(
   tenantId: string,
   id: string,
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/${tenantId}/support/${id}`,
     method: 'GET',
@@ -176,7 +174,7 @@ export async function updateTenantSupportTicket(
     description?: string;
     priority?: string;
   },
-) {
+): Promise<SupportTicket> {
   return apiClient({
     path: `/${tenantId}/support/${id}`,
     method: 'PATCH',
@@ -188,7 +186,7 @@ export async function addTenantSupportTicketComment(
   tenantId: string,
   id: string,
   body: string,
-) {
+): Promise<SupportTicketComment> {
   return apiClient({
     path: `/${tenantId}/support/${id}/comments`,
     method: 'POST',

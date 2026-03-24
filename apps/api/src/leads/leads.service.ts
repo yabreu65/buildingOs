@@ -3,9 +3,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config/config.service';
-import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
-import { AuditAction, Role } from '@prisma/client';
+import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto, SelfRegisterDto } from './leads.dto';
+import { AuditAction, Role, Lead, Prisma } from '@prisma/client';
 import { EmailType } from '../email/email.types';
+import { EmailTemplates } from '../email/email.templates';
+import { LeadResponse, LeadsListResponse, SelfRegisterResponse } from './leads.types';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -26,7 +28,7 @@ export class LeadsService {
    * - Logs audit event
    * - NO TENANT CREATION
    */
-  async createLead(dto: CreateLeadDto): Promise<any> {
+  async createLead(dto: CreateLeadDto): Promise<Lead> {
     // Check if email already exists
     const existingLead = await this.prisma.lead.findUnique({
       where: { email: dto.email },
@@ -48,7 +50,7 @@ export class LeadsService {
         location: dto.countryCity,
         message: dto.message,
         source: dto.source || (dto.intent === 'DEMO' ? 'landing' : 'contact-form'),
-        intent: (dto.intent as any) || 'CONTACT',
+        intent: dto.intent || 'CONTACT',
         status: 'NEW',
       },
     });
@@ -84,7 +86,7 @@ export class LeadsService {
   /**
    * Get a single lead by ID with converted tenant details (super-admin only)
    */
-  async getLead(id: string): Promise<any> {
+  async getLead(id: string): Promise<LeadResponse> {
     const lead = await this.prisma.lead.findUnique({
       where: { id },
     });
@@ -145,14 +147,14 @@ export class LeadsService {
       skip?: number;
       take?: number;
     },
-  ): Promise<{ data: any[]; total: number }> {
+  ): Promise<LeadsListResponse> {
     const skip = filter?.skip || 0;
     const take = filter?.take || 50;
 
     // Build where clause
-    const where: any = {};
+    const where: Prisma.LeadWhereInput = {};
     if (filter?.status) {
-      where.status = filter.status;
+      (where as Record<string, unknown>).status = filter.status;
     }
     if (filter?.email) {
       where.email = { contains: filter.email, mode: 'insensitive' };
@@ -177,7 +179,7 @@ export class LeadsService {
   /**
    * Update lead status and notes (super-admin only)
    */
-  async updateLead(id: string, dto: UpdateLeadDto): Promise<any> {
+  async updateLead(id: string, dto: UpdateLeadDto): Promise<Lead> {
     const lead = await this.prisma.lead.findUnique({
       where: { id },
     });
@@ -187,7 +189,7 @@ export class LeadsService {
     }
 
     // Only allow updates to status and notes
-    const updateData: any = {};
+    const updateData: Prisma.LeadUpdateInput = {};
     if (dto.status) {
       updateData.status = dto.status;
     }
@@ -262,7 +264,7 @@ export class LeadsService {
    * Send notification email to appropriate team based on lead intent
    * DEMO → sales@, CONTACT → info@ (or sales@ if info@ not configured)
    */
-  private async notifyTeam(lead: any): Promise<void> {
+  private async notifyTeam(lead: Lead): Promise<void> {
     // Get config values (may be undefined)
     const salesTeamEmail = this.configService.getValue('salesTeamEmail') as string | undefined;
     const infoEmail = this.configService.getValue('infoEmail') as string | undefined;
@@ -334,6 +336,252 @@ export class LeadsService {
       "'": '&#039;',
     };
     return text.replace(/[&<>"']/g, (char) => map[char] || char);
+  }
+
+  /**
+   * Self-registration endpoint: creates lead + tenant + user + invitation
+   * Atomic transaction to ensure consistency
+   * - Verifies email doesn't exist in Lead or User
+   * - Creates Lead (NEW, DEMO intent, self-registration source)
+   * - Creates Tenant with provided tenantName and tenantType
+   * - Creates Subscription (TRIAL, 14 days)
+   * - Creates User with empty passwordHash
+   * - Creates Membership with TENANT_OWNER + TENANT_ADMIN roles
+   * - Generates invitation token with 24-hour expiry
+   * - Sends welcome email
+   * - Notifies sales team
+   * - Returns { success: true } without exposing sensitive data
+   */
+  async selfRegister(dto: SelfRegisterDto): Promise<SelfRegisterResponse> {
+    const email = dto.email.trim().toLowerCase();
+
+    this.logger.log(`[SELF-REGISTER] Starting self-registration for email: ${email}`);
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      throw new BadRequestException(`Invalid email: ${email}`);
+    }
+
+    // Check if Lead already exists with this email
+    const existingLead = await this.prisma.lead.findUnique({
+      where: { email },
+    });
+
+    if (existingLead) {
+      throw new ConflictException('An account with this email already exists');
+    }
+
+    // Check if User already exists with this email
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('An account with this email already exists');
+    }
+
+    // Start atomic transaction
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. Create Lead (NEW status, DEMO intent, self-registration source)
+      this.logger.log(`[SELF-REGISTER] Creating Lead for ${email}`);
+
+      const lead = await tx.lead.create({
+        data: {
+          fullName: dto.fullName,
+          email,
+          phone: dto.phoneWhatsapp,
+          tenantType: dto.tenantType,
+          unitsEstimate: 0, // No estimate provided
+          status: 'NEW',
+          intent: 'DEMO',
+          source: 'self-registration',
+        },
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ Lead created: ${lead.id}`);
+
+      // 2. Create Tenant
+      this.logger.log(`[SELF-REGISTER] Creating Tenant: ${dto.tenantName}`);
+
+      const tenant = await tx.tenant.create({
+        data: {
+          name: dto.tenantName,
+          type: dto.tenantType,
+        },
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ Tenant created: ${tenant.id}`);
+
+      // 3. Create Subscription (TRIAL, 14 days)
+      this.logger.log(`[SELF-REGISTER] Creating Subscription...`);
+
+      const billingPlan = await this.getDefaultBillingPlan();
+      const now = new Date();
+      const trialEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+      const subscription = await tx.subscription.create({
+        data: {
+          tenantId: tenant.id,
+          planId: billingPlan.id,
+          status: 'TRIAL',
+          trialEndDate,
+          currentPeriodStart: now,
+          currentPeriodEnd: trialEndDate,
+        },
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ Subscription created: ${subscription.id}`);
+
+      // 4. Create User with empty passwordHash
+      this.logger.log(`[SELF-REGISTER] Creating User: ${email}`);
+
+      const user = await tx.user.create({
+        data: {
+          email,
+          name: dto.fullName,
+          passwordHash: '', // Empty - user cannot login until accepting invitation
+        },
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ User created: ${user.id}`);
+
+      // 5. Create Membership
+      this.logger.log(`[SELF-REGISTER] Creating Membership...`);
+
+      const membership = await tx.membership.create({
+        data: {
+          userId: user.id,
+          tenantId: tenant.id,
+        },
+      });
+
+      // Add roles to membership
+      await tx.membershipRole.createMany({
+        data: [
+          { membershipId: membership.id, role: Role.TENANT_OWNER },
+          { membershipId: membership.id, role: Role.TENANT_ADMIN },
+        ],
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ Membership created with roles`);
+
+      // 6. Generate invitation token (24-hour expiry)
+      this.logger.log(`[SELF-REGISTER] Generating invitation token...`);
+
+      const inviteToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(inviteToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours (not 7 days)
+
+      const invitation = await tx.invitation.create({
+        data: {
+          tenantId: tenant.id,
+          email,
+          tokenHash,
+          roles: JSON.stringify([Role.TENANT_OWNER, Role.TENANT_ADMIN]),
+          invitedByMembershipId: membership.id,
+          expiresAt,
+          status: 'PENDING',
+        },
+      });
+
+      this.logger.log(`[SELF-REGISTER] ✓ Invitation created with 24h expiry`);
+
+      // 7. Send welcome email (fire-and-forget)
+      this.logger.log(`[SELF-REGISTER] Sending welcome email...`);
+
+      void this.sendWelcomeEmail(email, dto.fullName, dto.tenantName, inviteToken).catch((error) => {
+        this.logger.error(`Failed to send welcome email: ${error.message}`);
+      });
+
+      // 8. Notify sales team (fire-and-forget)
+      this.logger.log(`[SELF-REGISTER] Notifying sales team...`);
+
+      const leadForNotification = {
+        ...lead,
+        intent: 'DEMO' as const,
+      };
+
+      void this.notifyTeam(leadForNotification).catch((error) => {
+        this.logger.error(`Failed to notify sales team: ${error.message}`);
+      });
+
+      // 9. Audit events (fire-and-forget)
+      void this.auditService
+        .createLog({
+          tenantId: tenant.id,
+          action: AuditAction.TENANT_CREATE,
+          entityType: 'Tenant',
+          entityId: tenant.id,
+          metadata: {
+            source: 'self-registration',
+            email,
+            tenantType: dto.tenantType,
+          },
+        })
+        .catch((error) => {
+          this.logger.error(`Failed to audit tenant create: ${error.message}`);
+        });
+
+      void this.auditService
+        .createLog({
+          tenantId: tenant.id,
+          action: AuditAction.LEAD_CREATED,
+          entityType: 'Lead',
+          entityId: lead.id,
+          metadata: {
+            email,
+            fullName: dto.fullName,
+            source: 'self-registration',
+          },
+        })
+        .catch((error) => {
+          this.logger.error(`Failed to audit lead creation: ${error.message}`);
+        });
+
+      this.logger.log(`[SELF-REGISTER] ✓✓✓ REGISTRATION COMPLETE: tenantId=${tenant.id}, userId=${user.id}`);
+
+      // Return minimal response (no sensitive data exposed)
+      return { success: true };
+    });
+  }
+
+  /**
+   * Send welcome email to newly registered user
+   */
+  private async sendWelcomeEmail(
+    email: string,
+    fullName: string,
+    tenantName: string,
+    inviteToken: string,
+  ): Promise<void> {
+    const inviteLink = `${this.configService.getValue('appBaseUrl')}/invite?token=${inviteToken}`;
+
+    // Get default branding (no tenant branding yet)
+    const supportEmail = this.configService.getValue('mailFrom') || 'support@buildingos.example.com';
+    const branding = {
+      brandName: 'BuildingOS',
+      primaryColor: '#2563eb',
+      supportEmail: supportEmail as string,
+    };
+
+    const emailData = EmailTemplates.welcomeEmail(
+      {
+        fullName,
+        tenantName,
+        inviteLink,
+      },
+      branding,
+    );
+
+    await this.emailService.sendEmail(
+      {
+        to: email,
+        subject: emailData.subject,
+        htmlBody: emailData.html,
+      },
+      EmailType.WELCOME,
+    );
   }
 
   /**

@@ -3,12 +3,12 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import z from 'zod';
-import { submitLead } from '@/shared/api/leads.api';
+import { z } from 'zod';
+import { submitLead, registerUser } from '@/shared/api/leads.api';
 import { Button, Input, Card } from '@/shared/components/ui';
 import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
-type LeadIntent = 'DEMO' | 'CONTACT';
+type LeadIntent = 'DEMO' | 'CONTACT' | 'SIGNUP';
 
 interface UnifiedLeadFormProps {
   intent: LeadIntent;
@@ -28,6 +28,12 @@ const leadFormSchema = z.object({
     .optional()
     .or(z.literal('')),
   tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
+  tenantName: z
+    .string()
+    .min(2, 'Nombre debe tener al menos 2 caracteres')
+    .max(100)
+    .optional()
+    .or(z.literal('')),
   unitsEstimate: z.number().min(1, 'Must be at least 1').optional().or(z.undefined()),
   countryCity: z
     .string()
@@ -76,21 +82,35 @@ export function UnifiedLeadForm({
     setSubmitError('');
 
     try {
-      const submitData = {
-        fullName: data.fullName,
-        email: data.email,
-        phoneWhatsapp: data.phoneWhatsapp || undefined,
-        tenantType: data.tenantType,
-        unitsEstimate: data.unitsEstimate || 1, // Default to 1 if not provided
-        countryCity: data.countryCity || undefined,
-        message: data.message || undefined,
-        source: intent === 'DEMO' ? 'landing' : 'contact-form',
-        intent,
-      };
+      // SIGNUP flow - register user
+      if (intent === 'SIGNUP' && data.tenantName) {
+        console.log(`📤 Submitting SIGNUP registration:`, data);
+        await registerUser({
+          fullName: data.fullName,
+          email: data.email,
+          tenantName: data.tenantName,
+          tenantType: data.tenantType,
+          phoneWhatsapp: data.phoneWhatsapp || undefined,
+        });
+        console.log(`✅ SIGNUP registration submitted successfully`);
+      } else {
+        // DEMO/CONTACT flow - submit as lead
+        const submitData = {
+          fullName: data.fullName,
+          email: data.email,
+          phoneWhatsapp: data.phoneWhatsapp || undefined,
+          tenantType: data.tenantType,
+          unitsEstimate: data.unitsEstimate || 1, // Default to 1 if not provided
+          countryCity: data.countryCity || undefined,
+          message: data.message || undefined,
+          source: intent === 'DEMO' ? 'landing' : 'contact-form',
+          intent,
+        };
 
-      console.log(`📤 Submitting ${intent} lead:`, submitData);
-      await submitLead(submitData);
-      console.log(`✅ ${intent} lead submitted successfully`);
+        console.log(`📤 Submitting ${intent} lead:`, submitData);
+        await submitLead(submitData);
+        console.log(`✅ ${intent} lead submitted successfully`);
+      }
 
       setSubmitStatus('success');
       reset();
@@ -108,17 +128,22 @@ export function UnifiedLeadForm({
 
   // Success state
   if (submitStatus === 'success') {
+    const defaultSuccessTitle = intent === 'SIGNUP' ? '¡Cuenta creada!' : '¡Solicitud recibida!';
+    const defaultSuccessMessage =
+      intent === 'SIGNUP'
+        ? 'Revisá tu email — enviamos el link para crear tu contraseña. El link expira en 24 horas.'
+        : 'Te contactaremos pronto. Gracias por tu interés en BuildingOS.';
+
     return (
       <Card className="w-full max-w-md mx-auto p-8 border-green-200 bg-green-50">
         <div className="flex flex-col items-center text-center space-y-4">
           <CheckCircle className="w-16 h-16 text-green-600" />
           <div>
             <h3 className="text-lg font-semibold text-gray-900">
-              {successTitle || '¡Solicitud recibida!'}
+              {successTitle || defaultSuccessTitle}
             </h3>
             <p className="text-sm text-gray-600 mt-2">
-              {successMessage ||
-                'Te contactaremos pronto. Gracias por tu interés en BuildingOS.'}
+              {successMessage || defaultSuccessMessage}
             </p>
           </div>
           <Button variant="secondary" onClick={() => reset()} className="mt-4">
@@ -134,10 +159,18 @@ export function UnifiedLeadForm({
       <div className="space-y-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">
-            {title || (intent === 'DEMO' ? 'Solicitar Demo' : 'Get Started')}
+            {title ||
+              (intent === 'SIGNUP'
+                ? 'Crear mi Cuenta'
+                : intent === 'DEMO'
+                ? 'Solicitar Demo'
+                : 'Get Started')}
           </h2>
           <p className="text-sm text-gray-600 mt-2">
-            {subtitle || 'Completa el formulario y nos pondremos en contacto.'}
+            {subtitle ||
+              (intent === 'SIGNUP'
+                ? 'Comenzá a usar BuildingOS hoy mismo.'
+                : 'Completa el formulario y nos pondremos en contacto.')}
           </p>
         </div>
 
@@ -219,6 +252,24 @@ export function UnifiedLeadForm({
             )}
           </div>
 
+          {/* Tenant Name - Only for SIGNUP */}
+          {intent === 'SIGNUP' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Nombre de tu empresa/edificio <span className="text-red-500">*</span>
+              </label>
+              <Input
+                {...register('tenantName')}
+                placeholder="Ej: Edificio Flor de Ceibo"
+                disabled={isSubmitting}
+                className={errors.tenantName ? 'border-red-500' : ''}
+              />
+              {errors.tenantName && (
+                <p className="text-sm text-red-600 mt-1">{errors.tenantName.message}</p>
+              )}
+            </div>
+          )}
+
           {/* Units Estimate - Only for CONTACT */}
           {intent === 'CONTACT' && (
             <div>
@@ -291,13 +342,19 @@ export function UnifiedLeadForm({
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Enviando...
               </>
+            ) : intent === 'SIGNUP' ? (
+              'Crear Cuenta'
+            ) : intent === 'DEMO' ? (
+              'Solicitar demo'
             ) : (
-              intent === 'DEMO' ? 'Solicitar demo' : 'Get Started'
+              'Get Started'
             )}
           </Button>
 
           <p className="text-xs text-gray-500 text-center">
-            {intent === 'DEMO'
+            {intent === 'SIGNUP'
+              ? 'Respetamos tu privacidad. Tu información será usada solo para crear tu cuenta.'
+              : intent === 'DEMO'
               ? 'Sumate a la lista de espera de BuildingOS.'
               : 'Respetamos tu privacidad. Tu información será usada solo para contactarte.'}
           </p>

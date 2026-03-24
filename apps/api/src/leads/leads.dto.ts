@@ -1,5 +1,25 @@
-import { IsEmail, IsEnum, IsInt, IsOptional, IsString, Min, MaxLength, IsBoolean } from 'class-validator';
+import { IsEmail, IsEnum, IsInt, IsOptional, IsString, Min, MaxLength, IsBoolean, MinLength, IsIn } from 'class-validator';
 import { TenantType } from '@prisma/client';
+
+export class SelfRegisterDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(2)
+  fullName!: string;
+
+  @IsString()
+  @MinLength(2)
+  tenantName!: string;
+
+  @IsEnum(TenantType)
+  tenantType!: TenantType;
+
+  @IsOptional()
+  @IsString()
+  phoneWhatsapp?: string;
+}
 
 export class CreateLeadDto {
   @IsString()
@@ -41,13 +61,13 @@ export class CreateLeadDto {
   source?: string; // "landing", "contact-form", etc.
 
   @IsOptional()
-  @IsEnum(['DEMO', 'CONTACT'])
+  @IsIn(['DEMO', 'CONTACT'])
   intent?: 'DEMO' | 'CONTACT'; // Defaults to CONTACT
 }
 
 export class UpdateLeadDto {
   @IsOptional()
-  @IsString()
+  @IsIn(['NEW', 'CONTACTED', 'QUALIFIED', 'DISQUALIFIED'])
   status?: 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'DISQUALIFIED';
 
   @IsOptional()
