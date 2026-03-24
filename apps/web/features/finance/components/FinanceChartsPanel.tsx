@@ -34,10 +34,16 @@ const formatARS = (cents: number) =>
 
 const formatPercentage = (val: number) => `${Math.round(val)}%`;
 
+/**
+ * Component displaying financial charts and metrics for a building.
+ * @param buildingId - Building ID to fetch financial data for
+ * @param period - Optional period filter for the financial summary
+ * @returns Chart panel with bar chart, collection rate, and trend line chart
+ */
 export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelProps) {
-  const { summary, loading: summaryLoading, error: summaryError } =
+  const { data: summary, isPending: summaryLoading, error: summaryError } =
     useFinanceSummary(buildingId, period);
-  const { trend, loading: trendLoading, error: trendError } = useFinanceTrend(buildingId, 6);
+  const { data: trend, isPending: trendLoading, error: trendError } = useFinanceTrend(buildingId, 6);
 
   const barChartData = useMemo(() => {
     if (!summary) return [];

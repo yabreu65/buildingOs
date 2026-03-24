@@ -1,66 +1,53 @@
-import { useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listPayments, approvePayment, rejectPayment, Payment } from '../services/finance.api';
 
+/**
+ * Hook to fetch payments for review for a building.
+ * @param buildingId - Building ID to fetch payments for
+ * @param status - Payment status filter (default: 'SUBMITTED')
+ * @returns useQuery result with payments list
+ */
 export function usePaymentsReview(buildingId: string, status?: string) {
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(!!buildingId);
-  const [error, setError] = useState<string | null>(null);
+  return useQuery({
+    queryKey: ['payments', buildingId, status],
+    queryFn: () => listPayments(buildingId, status || 'SUBMITTED'),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    enabled: !!buildingId, // Only fetch if buildingId exists
+    initialData: [],
+  });
+}
 
-  useEffect(() => {
-    if (!buildingId) {
-      setLoading(false);
-      return;
-    }
+/**
+ * Hook to approve a payment
+ * @param buildingId - Building ID
+ * @returns Mutation result with approve function
+ */
+export function useApprovePayment(buildingId: string, status?: string) {
+  const queryClient = useQueryClient();
 
-    const fetch = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await listPayments(buildingId, status || 'SUBMITTED');
-        setPayments(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load payments');
-        setPayments([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+  return useMutation({
+    mutationFn: async (params: { paymentId: string; paidAt?: string }) =>
+      approvePayment(buildingId, params.paymentId, params.paidAt),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments', buildingId, status] });
+    },
+  });
+}
 
-    fetch();
-  }, [buildingId, status]);
+/**
+ * Hook to reject a payment
+ * @param buildingId - Building ID
+ * @returns Mutation result with reject function
+ */
+export function useRejectPayment(buildingId: string, status?: string) {
+  const queryClient = useQueryClient();
 
-  const approve = async (paymentId: string, paidAt?: string) => {
-    try {
-      const updated = await approvePayment(buildingId, paymentId, paidAt);
-      setPayments(payments.map((p) => (p.id === paymentId ? updated : p)));
-      return updated;
-    } catch (err) {
-      throw err instanceof Error ? err : new Error('Failed to approve payment');
-    }
-  };
-
-  const reject = async (paymentId: string, reason?: string) => {
-    try {
-      const updated = await rejectPayment(buildingId, paymentId, reason);
-      setPayments(payments.map((p) => (p.id === paymentId ? updated : p)));
-      return updated;
-    } catch (err) {
-      throw err instanceof Error ? err : new Error('Failed to reject payment');
-    }
-  };
-
-  const refetch = async () => {
-    if (!buildingId) return;
-    try {
-      setLoading(true);
-      const data = await listPayments(buildingId, status || 'SUBMITTED');
-      setPayments(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return { payments, loading, error, approve, reject, refetch };
+  return useMutation({
+    mutationFn: async (params: { paymentId: string; reason?: string }) =>
+      rejectPayment(buildingId, params.paymentId, params.reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments', buildingId, status] });
+    },
+  });
 }

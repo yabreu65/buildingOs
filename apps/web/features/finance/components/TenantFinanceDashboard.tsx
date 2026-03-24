@@ -11,11 +11,19 @@ import { cn } from '@/shared/lib/utils';
 
 type Tab = 'overview' | 'delinquent';
 
+/**
+ * Dashboard component for tenant-level finance overview.
+ * Displays aggregated financial data across all buildings with tabs for overview and delinquent units.
+ * @returns Dashboard with summary cards, buildings overview, and delinquent units list
+ */
 export const TenantFinanceDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [period, setPeriod] = useState<string>('');
 
-  const { summary, loading, error, refetch } = useTenantFinanceSummary(period);
+  const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(period);
+
+  // Convert React Query error to string message
+  const errorMsg = error ? (error instanceof Error ? error.message : String(error)) : null;
 
   return (
     <div className="space-y-6">
@@ -26,7 +34,7 @@ export const TenantFinanceDashboard = () => {
       </div>
 
       {/* KPI Cards */}
-      <FinanceSummaryCards summary={summary} loading={loading} error={error} onRetry={refetch} />
+      <FinanceSummaryCards summary={summary} loading={loading} error={errorMsg} onRetry={refetch} />
 
       {/* Tabs */}
       <div className="space-y-4">

@@ -10,7 +10,7 @@ import ErrorState from '@/shared/components/ui/ErrorState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Payment } from '../services/finance.api';
-import { usePaymentsReview } from '../hooks/usePaymentsReview';
+import { useApprovePayment, useRejectPayment } from '../hooks/usePaymentsReview';
 import { PaymentApproveModal } from './PaymentApproveModal';
 import { CheckCircle, XCircle } from 'lucide-react';
 
@@ -37,10 +37,9 @@ export function PaymentsReviewList({
   onRefresh,
 }: PaymentsReviewListProps) {
   const { toast } = useToast();
-  const { approve, reject } = usePaymentsReview(buildingId, 'SUBMITTED');
+  const approveMutation = useApprovePayment(buildingId, 'SUBMITTED');
+  const rejectMutation = useRejectPayment(buildingId, 'SUBMITTED');
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
-  const [isApproving, setIsApproving] = useState(false);
-  const [isRejecting, setIsRejecting] = useState(false);
 
   if (error) {
     return <ErrorState message={error} onRetry={onRefresh} />;
@@ -63,28 +62,22 @@ export function PaymentsReviewList({
   const handleConfirmApprove = async (paidAt?: string) => {
     if (!selectedPaymentId) return;
     try {
-      setIsApproving(true);
-      await approve(selectedPaymentId, paidAt);
+      await approveMutation.mutateAsync({ paymentId: selectedPaymentId, paidAt });
       toast('Pago aprobado', 'success');
       await onPaymentApproved();
       setSelectedPaymentId(null);
     } catch (err) {
       toast('Error al aprobar pago', 'error');
-    } finally {
-      setIsApproving(false);
     }
   };
 
   const handleRejectClick = async (paymentId: string) => {
     try {
-      setIsRejecting(true);
-      await reject(paymentId);
+      await rejectMutation.mutateAsync({ paymentId });
       toast('Pago rechazado', 'success');
       await onPaymentRejected();
     } catch (err) {
       toast('Error al rechazar pago', 'error');
-    } finally {
-      setIsRejecting(false);
     }
   };
 
@@ -126,7 +119,7 @@ export function PaymentsReviewList({
                       size="sm"
                       variant="ghost"
                       onClick={() => handleApproveClick(payment.id)}
-                      disabled={isApproving}
+                      disabled={approveMutation.isPending}
                       className="text-green-600 hover:text-green-700 gap-1"
                     >
                       <CheckCircle className="w-4 h-4" />
@@ -136,7 +129,7 @@ export function PaymentsReviewList({
                       size="sm"
                       variant="ghost"
                       onClick={() => handleRejectClick(payment.id)}
-                      disabled={isRejecting}
+                      disabled={rejectMutation.isPending}
                       className="text-red-600 hover:text-red-700 gap-1"
                     >
                       <XCircle className="w-4 h-4" />
@@ -155,7 +148,7 @@ export function PaymentsReviewList({
           paymentId={selectedPaymentId}
           onConfirm={handleConfirmApprove}
           onCancel={() => setSelectedPaymentId(null)}
-          isSubmitting={isApproving}
+          isSubmitting={approveMutation.isPending}
         />
       )}
     </>

@@ -27,9 +27,22 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const [period, setPeriod] = useState<string>('');
 
   // Load data from hooks
-  const { summary, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useFinanceSummary(buildingId, period);
-  const { charges, loading: chargesLoading, error: chargesError, refetch: refetchCharges } = useCharges(buildingId, period);
-  const { payments, loading: paymentsLoading, error: paymentsError, refetch: refetchPayments } = usePaymentsReview(buildingId, 'SUBMITTED');
+  const { data: summary, isPending: summaryLoading, error: summaryError, refetch: refetchSummaryRaw } = useFinanceSummary(buildingId, period);
+  const { data: charges, isPending: chargesLoading, error: chargesError, refetch: refetchChargesRaw } = useCharges(buildingId, period);
+  const { data: payments, isPending: paymentsLoading, error: paymentsError, refetch: refetchPaymentsRaw } = usePaymentsReview(buildingId, 'SUBMITTED');
+
+  // Wrap refetch functions to match component prop signatures
+  const refetchSummary = async () => {
+    await refetchSummaryRaw();
+  };
+
+  const refetchCharges = async () => {
+    await refetchChargesRaw();
+  };
+
+  const refetchPayments = async () => {
+    await refetchPaymentsRaw();
+  };
 
   const handlePaymentApproved = async () => {
     await refetchPayments();
@@ -46,8 +59,13 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
     await refetchSummary();
   };
 
+  // Convert React Query errors to string messages
+  const summaryErrorMsg = summaryError ? (summaryError instanceof Error ? summaryError.message : String(summaryError)) : null;
+  const chargesErrorMsg = chargesError ? (chargesError instanceof Error ? chargesError.message : String(chargesError)) : null;
+  const paymentsErrorMsg = paymentsError ? (paymentsError instanceof Error ? paymentsError.message : String(paymentsError)) : null;
+
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
-    { id: 'payments', label: 'Pagos Pendientes', count: payments.length },
+    { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
     { id: 'charges', label: 'Cargos' },
     { id: 'delinquent', label: 'Unidades Morosas', count: summary?.delinquentUnitsCount },
     { id: 'analysis', label: 'Análisis' },
@@ -73,7 +91,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
       <FinanceSummaryCards
         summary={summary}
         loading={summaryLoading}
-        error={summaryError}
+        error={summaryErrorMsg}
         onRetry={refetchSummary}
       />
 
@@ -107,9 +125,9 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
         {activeTab === 'payments' && (
           <PaymentsReviewList
             buildingId={buildingId}
-            payments={payments}
+            payments={payments || []}
             loading={paymentsLoading}
-            error={paymentsError}
+            error={paymentsErrorMsg}
             onPaymentApproved={handlePaymentApproved}
             onPaymentRejected={handlePaymentRejected}
             onRefresh={refetchPayments}
@@ -119,9 +137,9 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
         {activeTab === 'charges' && (
           <ChargesTab
             buildingId={buildingId}
-            charges={charges}
+            charges={charges || []}
             loading={chargesLoading}
-            error={chargesError}
+            error={chargesErrorMsg}
             onChargeCreated={handleChargeCreated}
             onRefresh={refetchCharges}
           />

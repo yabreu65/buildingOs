@@ -5,7 +5,7 @@ import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Plus } from 'lucide-react';
 import { Charge, ChargeType } from '../services/finance.api';
-import { useCharges } from '../hooks/useCharges';
+import { useCreateCharge } from '../hooks/useCharges';
 import { ChargesTable } from './ChargesTable';
 import { ChargeCreateModal } from './ChargeCreateModal';
 
@@ -30,7 +30,7 @@ export function ChargesTab({
   onRefresh,
 }: ChargesTabProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const { create } = useCharges(buildingId);
+  const createMutation = useCreateCharge(buildingId);
 
   const handleCreateCharge = async (data: {
     unitId: string;
@@ -39,7 +39,7 @@ export function ChargesTab({
     amount: number;
     dueDate: string;
   }) => {
-    await create(data);
+    await createMutation.mutateAsync(data);
   };
 
   return (

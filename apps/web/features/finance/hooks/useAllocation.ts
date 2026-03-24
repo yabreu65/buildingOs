@@ -1,41 +1,36 @@
-import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getPaymentAllocations, createAllocations, PaymentAllocation } from '../services/finance.api';
 
-export function useAllocation(buildingId: string) {
-  const [allocations, setAllocations] = useState<PaymentAllocation[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/**
+ * Hook to fetch payment allocations for a specific payment.
+ * @param buildingId - Building ID
+ * @param paymentId - Payment ID to fetch allocations for
+ * @returns useQuery result with payment allocations data
+ */
+export function useAllocation(buildingId: string, paymentId?: string) {
+  return useQuery({
+    queryKey: ['allocations', buildingId, paymentId],
+    queryFn: () => getPaymentAllocations(buildingId, paymentId!),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    enabled: !!buildingId && !!paymentId, // Only fetch if both buildingId and paymentId exist
+    initialData: [],
+  });
+}
 
-  const fetchAllocations = async (paymentId: string) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await getPaymentAllocations(buildingId, paymentId);
-      setAllocations(data);
-      return data;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load allocations');
-      setAllocations([]);
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  };
+/**
+ * Hook to create payment allocations
+ * @param buildingId - Building ID
+ * @returns Mutation result with createAllocations function
+ */
+export function useCreateAllocations(buildingId: string, paymentId: string) {
+  const queryClient = useQueryClient();
 
-  const allocate = async (paymentId: string, allocs: Array<{ chargeId: string; amount: number }>) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const newAllocations = await createAllocations(buildingId, paymentId, allocs);
-      setAllocations([...allocations, ...newAllocations]);
-      return newAllocations;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create allocations');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return { allocations, loading, error, fetchAllocations, allocate };
+  return useMutation({
+    mutationFn: async (allocs: Array<{ chargeId: string; amount: number }>) =>
+      createAllocations(buildingId, paymentId, allocs),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allocations', buildingId, paymentId] });
+    },
+  });
 }

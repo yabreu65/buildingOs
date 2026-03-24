@@ -1,68 +1,45 @@
-import { useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUnitLedger, submitPayment, UnitLedger, PaymentMethod } from '../services/finance.api';
 
+/**
+ * Hook to fetch financial ledger for a specific unit.
+ * @param buildingId - Building ID (used for API calls)
+ * @param unitId - Unit ID to fetch ledger for
+ * @param periodFrom - Optional start period for ledger entries
+ * @param periodTo - Optional end period for ledger entries
+ * @returns useQuery result with unit ledger data (charges, payments, balance)
+ */
 export function useUnitLedger(buildingId: string, unitId: string, periodFrom?: string, periodTo?: string) {
-  const [ledger, setLedger] = useState<UnitLedger | null>(null);
-  const [loading, setLoading] = useState(!!unitId);
-  const [error, setError] = useState<string | null>(null);
+  return useQuery({
+    queryKey: ['unitLedger', unitId, periodFrom, periodTo],
+    queryFn: () => getUnitLedger(unitId, periodFrom, periodTo),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    enabled: !!unitId, // Only fetch if unitId exists
+    initialData: null,
+  });
+}
 
-  useEffect(() => {
-    if (!unitId) {
-      setLoading(false);
-      return;
-    }
+/**
+ * Hook to submit payment for a unit
+ * @param buildingId - Building ID
+ * @param unitId - Unit ID
+ * @returns Mutation result with submitPayment function
+ */
+export function useSubmitUnitPayment(buildingId: string, unitId: string, periodFrom?: string, periodTo?: string) {
+  const queryClient = useQueryClient();
 
-    const fetch = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await getUnitLedger(unitId, periodFrom, periodTo);
-        setLedger(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load ledger');
-        setLedger(null);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetch();
-  }, [unitId, periodFrom, periodTo]);
-
-  const submitPaymentForUnit = async (data: {
-    amount: number;
-    currency?: string;
-    method: PaymentMethod;
-    reference?: string;
-    paidAt?: string;
-    proofFileId?: string;
-  }) => {
-    if (!ledger) throw new Error('Ledger not loaded');
-    try {
-      const payment = await submitPayment(buildingId, {
-        unitId: ledger.unitId,
-        ...data,
-      });
-      // Refresh ledger to show new payment
-      await refetch();
-      return payment;
-    } catch (err) {
-      throw err instanceof Error ? err : new Error('Failed to submit payment');
-    }
-  };
-
-  const refetch = async () => {
-    if (!unitId) return;
-    try {
-      setLoading(true);
-      const data = await getUnitLedger(unitId, periodFrom, periodTo);
-      setLedger(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return { ledger, loading, error, submitPaymentForUnit, refetch };
+  return useMutation({
+    mutationFn: async (data: {
+      amount: number;
+      currency?: string;
+      method: PaymentMethod;
+      reference?: string;
+      paidAt?: string;
+      proofFileId?: string;
+    }) => submitPayment(buildingId, { unitId, ...data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unitLedger', unitId, periodFrom, periodTo] });
+    },
+  });
 }
