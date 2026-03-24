@@ -1,25 +1,6 @@
 'use client';
 
-import { getToken } from '@/features/auth/session.storage';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-
-function getHeaders(tenantId?: string) {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  const token = getToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  if (tenantId) {
-    headers['X-Tenant-Id'] = tenantId;
-  }
-
-  return headers;
-}
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface OnboardingStep {
   id: string;
@@ -56,16 +37,13 @@ export interface BuildingStepsResponse {
  * Fetch tenant-level onboarding steps
  */
 export async function getTenantSteps(tenantId: string): Promise<TenantStepsResponse> {
-  const response = await fetch(`${API_BASE}/onboarding/tenant`, {
+  return apiClient<TenantStepsResponse>({
+    path: '/onboarding/tenant',
     method: 'GET',
-    headers: getHeaders(tenantId),
+    headers: {
+      'X-Tenant-Id': tenantId,
+    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch tenant steps: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -75,46 +53,37 @@ export async function getBuildingSteps(
   tenantId: string,
   buildingId: string,
 ): Promise<BuildingStepsResponse> {
-  const response = await fetch(`${API_BASE}/onboarding/buildings/${buildingId}`, {
+  return apiClient<BuildingStepsResponse>({
+    path: `/onboarding/buildings/${buildingId}`,
     method: 'GET',
-    headers: getHeaders(tenantId),
+    headers: {
+      'X-Tenant-Id': tenantId,
+    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch building steps: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 /**
  * Dismiss onboarding checklist for the tenant
  */
 export async function dismissOnboarding(tenantId: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/onboarding/dismiss`, {
+  return apiClient<{ success: boolean }>({
+    path: '/onboarding/dismiss',
     method: 'PATCH',
-    headers: getHeaders(tenantId),
+    headers: {
+      'X-Tenant-Id': tenantId,
+    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to dismiss onboarding: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 /**
  * Restore onboarding checklist visibility for the tenant
  */
 export async function restoreOnboarding(tenantId: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/onboarding/restore`, {
+  return apiClient<{ success: boolean }>({
+    path: '/onboarding/restore',
     method: 'PATCH',
-    headers: getHeaders(tenantId),
+    headers: {
+      'X-Tenant-Id': tenantId,
+    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to restore onboarding: ${response.statusText}`);
-  }
-
-  return response.json();
 }

@@ -1,25 +1,17 @@
 import { UserContext, ContextOptions } from './context.types';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
+import { apiClient } from '@/shared/lib/http/client';
 
 /**
  * Get current user context for active tenant
  */
 export async function getContext(tenantId: string): Promise<UserContext> {
-  const response = await fetch(`${API_URL}/me/context`, {
+  return apiClient<UserContext>({
+    path: '/me/context',
     method: 'GET',
     headers: {
-      'Content-Type': 'application/json',
       'X-Tenant-Id': tenantId,
-      Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
     },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to get context: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -30,43 +22,28 @@ export async function setContext(
   activeBuildingId?: string | null,
   activeUnitId?: string | null,
 ): Promise<UserContext> {
-  const response = await fetch(`${API_URL}/me/context`, {
+  return apiClient<UserContext, { activeBuildingId: string | null; activeUnitId: string | null }>({
+    path: '/me/context',
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       'X-Tenant-Id': tenantId,
-      Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
     },
-    body: JSON.stringify({
+    body: {
       activeBuildingId: activeBuildingId || null,
       activeUnitId: activeUnitId || null,
-    }),
+    },
   });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to set context: ${error}`);
-  }
-
-  return response.json();
 }
 
 /**
  * Get available buildings and units for context selection
  */
 export async function getContextOptions(tenantId: string): Promise<ContextOptions> {
-  const response = await fetch(`${API_URL}/me/context/options`, {
+  return apiClient<ContextOptions>({
+    path: '/me/context/options',
     method: 'GET',
     headers: {
-      'Content-Type': 'application/json',
       'X-Tenant-Id': tenantId,
-      Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
     },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to get context options: ${response.statusText}`);
-  }
-
-  return response.json();
 }

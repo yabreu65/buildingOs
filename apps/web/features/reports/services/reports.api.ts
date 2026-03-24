@@ -3,9 +3,8 @@
  * Calls the backend reports endpoints for aggregated metrics
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -14,21 +13,10 @@ const isDev = process.env.NODE_ENV === 'development';
 function logRequest(
   method: string,
   endpoint: string,
-  headers: HeadersInit,
   body?: unknown
 ) {
   if (!isDev) return;
-  const headersObj = headers as Record<string, string>;
-  console.log(`[REPORTS API] ${method} ${endpoint}`, {
-    headers: {
-      'Content-Type': headersObj['Content-Type'],
-      'Authorization': headersObj['Authorization']
-        ? `Bearer ${headersObj['Authorization'].substring(0, 20)}...`
-        : 'NONE',
-      'X-Tenant-Id': headersObj['X-Tenant-Id'] || 'NONE',
-    },
-    body: body && JSON.stringify(body),
-  });
+  console.log(`[REPORTS API] ${method} ${endpoint}`, body && JSON.stringify(body));
 }
 
 function logResponse(endpoint: string, status: number, data: unknown) {
@@ -39,28 +27,6 @@ function logResponse(endpoint: string, status: number, data: unknown) {
 function logError(endpoint: string, status: number, error: Error) {
   if (!isDev) return;
   console.error(`[REPORTS API ERROR] ${endpoint} (${status})`, error.message);
-}
-
-// ============================================
-// Headers Helper
-// ============================================
-function validateTenantId(tenantId: string | undefined): asserts tenantId is string {
-  if (!tenantId || tenantId.trim() === '') {
-    throw new Error(
-      '[REPORTS API] Missing tenantId - cannot make tenant-scoped API calls without tenant context'
-    );
-  }
-}
-
-function getHeaders(tenantId?: string): HeadersInit {
-  validateTenantId(tenantId);
-
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-    'X-Tenant-Id': tenantId,
-  };
 }
 
 // ============================================
@@ -140,25 +106,24 @@ export async function getTicketsReport(
     from,
     to,
   })}`;
-  const url = `${API_URL}${endpoint}`;
-  const headers = getHeaders(tenantId);
 
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}`);
-    logError(endpoint, response.status, error);
+  try {
+    const data = await apiClient<TicketsReport>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await response.json();
-  logResponse(endpoint, response.status, data);
-  return data;
 }
 
 export async function getFinanceReport(
@@ -169,25 +134,24 @@ export async function getFinanceReport(
     buildingId,
     period,
   })}`;
-  const url = `${API_URL}${endpoint}`;
-  const headers = getHeaders(tenantId);
 
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}`);
-    logError(endpoint, response.status, error);
+  try {
+    const data = await apiClient<FinanceReport>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await response.json();
-  logResponse(endpoint, response.status, data);
-  return data;
 }
 
 export async function getCommunicationsReport(
@@ -203,25 +167,24 @@ export async function getCommunicationsReport(
     from,
     to,
   })}`;
-  const url = `${API_URL}${endpoint}`;
-  const headers = getHeaders(tenantId);
 
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}`);
-    logError(endpoint, response.status, error);
+  try {
+    const data = await apiClient<CommunicationsReport>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await response.json();
-  logResponse(endpoint, response.status, data);
-  return data;
 }
 
 export async function getActivityReport(
@@ -237,23 +200,22 @@ export async function getActivityReport(
     from,
     to,
   })}`;
-  const url = `${API_URL}${endpoint}`;
-  const headers = getHeaders(tenantId);
 
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}`);
-    logError(endpoint, response.status, error);
+  try {
+    const data = await apiClient<ActivityReport>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await response.json();
-  logResponse(endpoint, response.status, data);
-  return data;
 }

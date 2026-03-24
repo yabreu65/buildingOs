@@ -3,9 +3,8 @@
  * Calls the backend API endpoints for units (tenant-level and building-scoped)
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -71,17 +70,6 @@ function logError(endpoint: string, status: number, message: string) {
   console.error(`[API ERROR] ${endpoint} (${status})`, message);
 }
 
-// ============================================
-// Headers Helper
-// ============================================
-
-function getHeaders(): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : '',
-  };
-}
 
 // ============================================
 // Tenant-Level Units API (List All)
@@ -99,19 +87,17 @@ export async function listUnitsByTenant(
   const endpoint = `/tenants/${tenantId}/units${queryParams}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list units: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Unit[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 // ============================================
@@ -129,19 +115,17 @@ export async function listUnitsByBuilding(
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list building units: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Unit[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -156,19 +140,17 @@ export async function getUnit(
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get unit: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Unit>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -183,20 +165,18 @@ export async function createUnit(
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create unit: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Unit, Omit<CreateUnitInput, 'buildingId'>>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -212,20 +192,18 @@ export async function updateUnit(
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update unit: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Unit, UpdateUnitInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -240,14 +218,14 @@ export async function deleteUnit(
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
   logRequest('DELETE', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to delete unit: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+    });
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
 }

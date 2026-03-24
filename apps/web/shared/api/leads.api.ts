@@ -1,4 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+/**
+ * Public Leads API - no authentication required
+ */
 
 export interface CreateLeadRequest {
   fullName: string;
@@ -22,8 +24,11 @@ export interface LeadResponse {
   message: string;
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
 /**
  * Submit a new marketing lead (no authentication required)
+ * Note: This uses direct fetch because it's a public endpoint that doesn't need auth
  */
 export async function submitLead(data: CreateLeadRequest): Promise<LeadResponse> {
   const response = await fetch(`${API_URL}/leads/public`, {

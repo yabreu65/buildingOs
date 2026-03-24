@@ -1,4 +1,4 @@
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface AuditLog {
   id: string;
@@ -16,35 +16,6 @@ export interface AuditLogsResponse {
   total: number;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function makeRequest<T>(
-  endpoint: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const token = getToken();
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${API_URL}/api${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  return response.json();
-}
-
 export const auditLogsApi = {
   /**
    * Fetches paginated audit logs for the platform.
@@ -55,7 +26,8 @@ export const auditLogsApi = {
    * @returns Promise resolving to paginated response with audit logs array and total count
    */
   async listLogs(skip = 0, take = 50): Promise<AuditLogsResponse> {
-    return makeRequest(`/super-admin/audit-logs?skip=${skip}&take=${take}`, {
+    return apiClient<AuditLogsResponse>({
+      path: `/super-admin/audit-logs?skip=${skip}&take=${take}`,
       method: 'GET',
     });
   },

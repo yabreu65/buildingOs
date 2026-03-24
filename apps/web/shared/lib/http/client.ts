@@ -1,4 +1,4 @@
-import { getToken } from '../../../features/auth/session.storage';
+import { getToken, clearToken } from '../../../features/auth/session.storage';
 
 export interface HttpRequestConfig<TReq = never> {
   path: string;
@@ -68,6 +68,15 @@ export async function apiClient<TRes, TReq = never>(
   const response = await fetch(url, init);
 
   if (!response.ok) {
+    // Centralized 401 handler: clear token and redirect to login
+    if (response.status === 401) {
+      clearToken();
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login';
+      }
+      throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Redirigiendo a login...');
+    }
+
     const message = await parseErrorMessage(response);
     throw new HttpError(response.status, response.statusText, message);
   }

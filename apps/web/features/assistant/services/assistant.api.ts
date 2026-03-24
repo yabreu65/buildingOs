@@ -5,6 +5,8 @@
  * All requests include X-Tenant-Id header for multi-tenant isolation.
  */
 
+import { apiClient, HttpError } from '@/shared/lib/http/client';
+
 export interface SuggestedAction {
   type:
     | 'VIEW_TICKETS'
@@ -13,7 +15,7 @@ export interface SuggestedAction {
     | 'SEARCH_DOCS'
     | 'DRAFT_COMMUNICATION'
     | 'CREATE_TICKET';
-  payload: Record<string, any>;
+  payload: Record<string, unknown>;
 }
 
 export interface ChatResponse {
@@ -29,12 +31,6 @@ export interface ChatRequest {
 }
 
 export class AssistantApi {
-  private baseUrl: string;
-
-  constructor(baseUrl: string = '/api') {
-    this.baseUrl = baseUrl;
-  }
-
   /**
    * Send chat message to AI assistant
    *
@@ -44,52 +40,42 @@ export class AssistantApi {
    * @throws Error if feature not available, rate limited, or request fails
    */
   async chat(tenantId: string, request: ChatRequest): Promise<ChatResponse> {
-    const url = `${this.baseUrl}/tenants/${tenantId}/assistant/${tenantId}/chat`;
-
-    const token = sessionStorage.getItem('authToken');
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'X-Tenant-Id': tenantId,
-      },
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: response.statusText }));
+    try {
+      return await apiClient<ChatResponse, ChatRequest>({
+        path: `/tenants/${tenantId}/assistant/${tenantId}/chat`,
+        method: 'POST',
+        body: request,
+        headers: {
+          'X-Tenant-Id': tenantId,
+        },
+      });
+    } catch (error) {
+      const httpError = error as HttpError;
 
       // Special handling for rate limit
-      if (response.status === 429) {
+      if (httpError.status === 429) {
         throw {
           code: 'AI_RATE_LIMITED',
-          message: error.message || 'Daily AI limit exceeded',
+          message: httpError.message || 'Daily AI limit exceeded',
           status: 429,
         };
       }
 
       // Feature not available
-      if (response.status === 403) {
+      if (httpError.status === 403) {
         throw {
           code: 'FEATURE_NOT_AVAILABLE',
-          message: error.message || 'AI Assistant not available on your plan',
+          message: httpError.message || 'AI Assistant not available on your plan',
           status: 403,
         };
       }
 
       throw {
         code: 'AI_ERROR',
-        message: error.message || 'Failed to get AI response',
-        status: response.status,
+        message: httpError.message || 'Failed to get AI response',
+        status: httpError.status,
       };
     }
-
-    return response.json();
   }
 }
 

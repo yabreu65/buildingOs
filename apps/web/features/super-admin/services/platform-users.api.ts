@@ -1,4 +1,4 @@
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface PlatformUser {
   id: string;
@@ -13,39 +13,6 @@ export interface CreatePlatformUserDto {
   password: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function makeRequest<T>(
-  endpoint: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const token = getToken();
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${API_URL}/api${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json();
-}
-
 export const platformUsersApi = {
   /**
    * Fetches the list of all platform super admin users.
@@ -53,7 +20,10 @@ export const platformUsersApi = {
    * @returns Promise resolving to array of platform users with id, name, email, createdAt
    */
   async listUsers(): Promise<PlatformUser[]> {
-    return makeRequest('/super-admin/platform-users', { method: 'GET' });
+    return apiClient<PlatformUser[]>({
+      path: '/super-admin/platform-users',
+      method: 'GET',
+    });
   },
 
   /**
@@ -64,9 +34,10 @@ export const platformUsersApi = {
    * @returns Promise resolving to the created PlatformUser object
    */
   async createUser(dto: CreatePlatformUserDto): Promise<PlatformUser> {
-    return makeRequest('/super-admin/platform-users', {
+    return apiClient<PlatformUser, CreatePlatformUserDto>({
+      path: '/super-admin/platform-users',
       method: 'POST',
-      body: JSON.stringify(dto),
+      body: dto,
     });
   },
 
@@ -77,7 +48,8 @@ export const platformUsersApi = {
    * @returns Promise resolving when deletion is complete
    */
   async deleteUser(userId: string): Promise<void> {
-    return makeRequest(`/super-admin/platform-users/${userId}`, {
+    await apiClient<void>({
+      path: `/super-admin/platform-users/${userId}`,
       method: 'DELETE',
     });
   },

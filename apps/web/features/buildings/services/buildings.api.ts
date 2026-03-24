@@ -3,10 +3,9 @@
  * Calls the backend API endpoints for buildings, units, and occupants
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 import type { Building, Unit, User } from '@/features/units/units.types';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -15,19 +14,10 @@ const isDev = process.env.NODE_ENV === 'development';
 function logRequest(
   method: string,
   endpoint: string,
-  headers: HeadersInit,
   body?: unknown
 ) {
   if (!isDev) return;
-  const headersObj = headers as Record<string, string>;
   console.log(`[API] ${method} ${endpoint}`, {
-    headers: {
-      'Content-Type': headersObj['Content-Type'],
-      'Authorization': headersObj['Authorization']
-        ? `Bearer ${headersObj['Authorization'].substring(0, 20)}...`
-        : 'NONE',
-      'X-Tenant-Id': headersObj['X-Tenant-Id'] || 'NONE',
-    },
     body: body && JSON.stringify(body),
   });
 }
@@ -53,15 +43,10 @@ function validateTenantId(tenantId: string | undefined): asserts tenantId is str
   }
 }
 
-function getHeaders(tenantId?: string): HeadersInit {
-  // ✅ Validate tenantId before making any requests
+function getTenantHeaders(tenantId: string): Record<string, string> {
   validateTenantId(tenantId);
-
-  const token = getToken();
   return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
-    'X-Tenant-Id': tenantId, // ✅ Always include X-Tenant-Id (validated above)
+    'X-Tenant-Id': tenantId,
   };
 }
 
@@ -75,23 +60,21 @@ function getHeaders(tenantId?: string): HeadersInit {
  */
 export async function fetchBuildings(tenantId: string): Promise<Building[]> {
   const endpoint = `/tenants/${tenantId}/buildings`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch buildings: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<Building[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 /**
@@ -102,16 +85,22 @@ export async function fetchBuildingById(
   tenantId: string,
   buildingId: string
 ): Promise<Building & { units: Unit[] }> {
-  const res = await fetch(`${API_URL}/tenants/${tenantId}/buildings/${buildingId}`, {
-    method: 'GET',
-    headers: getHeaders(tenantId),
-  });
+  const endpoint = `/tenants/${tenantId}/buildings/${buildingId}`;
+  logRequest('GET', endpoint);
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch building: ${res.status}`);
+  try {
+    const data = await apiClient<Building & { units: Unit[] }>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
+    throw error;
   }
-
-  return res.json();
 }
 
 /**
@@ -123,24 +112,22 @@ export async function createBuilding(
   data: { name: string; address?: string }
 ): Promise<Building> {
   const endpoint = `/tenants/${tenantId}/buildings`;
-  const headers = getHeaders(tenantId);
-  logRequest('POST', endpoint, headers, data);
+  logRequest('POST', endpoint, data);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to create building: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const result = await apiClient<Building, typeof data>({
+      path: endpoint,
+      method: 'POST',
+      body: data,
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 201, result);
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const result = await res.json();
-  logResponse(endpoint, res.status, result);
-  return result;
 }
 
 /**
@@ -153,24 +140,22 @@ export async function updateBuilding(
   data: { name?: string; address?: string }
 ): Promise<Building> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('PATCH', endpoint, headers, data);
+  logRequest('PATCH', endpoint, data);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to update building: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const result = await apiClient<Building, typeof data>({
+      path: endpoint,
+      method: 'PATCH',
+      body: data,
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, result);
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const result = await res.json();
-  logResponse(endpoint, res.status, result);
-  return result;
 }
 
 /**
@@ -179,21 +164,20 @@ export async function updateBuilding(
  */
 export async function deleteBuilding(tenantId: string, buildingId: string): Promise<void> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('DELETE', endpoint, headers);
+  logRequest('DELETE', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to delete building: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 204, { success: true });
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  logResponse(endpoint, res.status, { success: true });
 }
 
 // ============================================
@@ -206,23 +190,21 @@ export async function deleteBuilding(tenantId: string, buildingId: string): Prom
  */
 export async function fetchUnits(tenantId: string, buildingId: string): Promise<Unit[]> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch units: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<Unit[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 /**
@@ -235,23 +217,21 @@ export async function fetchUnitById(
   unitId: string
 ): Promise<Unit & { unitOccupants: Occupant[] }> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch unit: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<Unit & { unitOccupants: Occupant[] }>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 /**
@@ -269,24 +249,22 @@ export async function createUnit(
   }
 ): Promise<Unit> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units`;
-  const headers = getHeaders(tenantId);
-  logRequest('POST', endpoint, headers, data);
+  logRequest('POST', endpoint, data);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to create unit: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const result = await apiClient<Unit, typeof data>({
+      path: endpoint,
+      method: 'POST',
+      body: data,
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 201, result);
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const result = await res.json();
-  logResponse(endpoint, res.status, result);
-  return result;
 }
 
 /**
@@ -305,24 +283,22 @@ export async function updateUnit(
   }
 ): Promise<Unit> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('PATCH', endpoint, headers, data);
+  logRequest('PATCH', endpoint, data);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to update unit: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const result = await apiClient<Unit, typeof data>({
+      path: endpoint,
+      method: 'PATCH',
+      body: data,
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, result);
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const result = await res.json();
-  logResponse(endpoint, res.status, result);
-  return result;
 }
 
 /**
@@ -335,21 +311,20 @@ export async function deleteUnit(
   unitId: string
 ): Promise<void> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('DELETE', endpoint, headers);
+  logRequest('DELETE', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to delete unit: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 204, { success: true });
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  logResponse(endpoint, res.status, { success: true });
 }
 
 // ============================================
@@ -377,23 +352,21 @@ export async function fetchOccupants(
   unitId: string
 ): Promise<Occupant[]> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}/occupants`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch occupants: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<Occupant[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 /**
@@ -407,24 +380,22 @@ export async function assignOccupant(
   data: { userId: string; role: 'OWNER' | 'RESIDENT' }
 ): Promise<Occupant> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}/occupants`;
-  const headers = getHeaders(tenantId);
-  logRequest('POST', endpoint, headers, data);
+  logRequest('POST', endpoint, data);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to assign occupant: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const result = await apiClient<Occupant, typeof data>({
+      path: endpoint,
+      method: 'POST',
+      body: data,
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 201, result);
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  const result = await res.json();
-  logResponse(endpoint, res.status, result);
-  return result;
 }
 
 /**
@@ -438,19 +409,18 @@ export async function removeOccupant(
   occupantId: string
 ): Promise<void> {
   const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}/occupants/${occupantId}`;
-  const headers = getHeaders(tenantId);
-  logRequest('DELETE', endpoint, headers);
+  logRequest('DELETE', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to remove occupant: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+      headers: getTenantHeaders(tenantId),
+    });
+    logResponse(endpoint, 204, { success: true });
+  } catch (error) {
+    const err = error as Error;
+    logError(endpoint, 500, err);
     throw error;
   }
-
-  logResponse(endpoint, res.status, { success: true });
 }

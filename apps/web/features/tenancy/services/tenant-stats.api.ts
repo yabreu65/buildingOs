@@ -3,9 +3,8 @@
  * Calls the backend API endpoints for tenant statistics, billing, and audit logs
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -14,21 +13,10 @@ const isDev = process.env.NODE_ENV === 'development';
 function logRequest(
   method: string,
   endpoint: string,
-  headers: HeadersInit,
   body?: unknown
 ) {
   if (!isDev) return;
-  const headersObj = headers as Record<string, string>;
-  console.log(`[API] ${method} ${endpoint}`, {
-    headers: {
-      'Content-Type': headersObj['Content-Type'],
-      'Authorization': headersObj['Authorization']
-        ? `Bearer ${headersObj['Authorization'].substring(0, 20)}...`
-        : 'NONE',
-      'X-Tenant-Id': headersObj['X-Tenant-Id'] || 'NONE',
-    },
-    body: body && JSON.stringify(body),
-  });
+  console.log(`[API] ${method} ${endpoint}`, body && JSON.stringify(body));
 }
 
 function logResponse(endpoint: string, status: number, data: unknown) {
@@ -39,18 +27,6 @@ function logResponse(endpoint: string, status: number, data: unknown) {
 function logError(endpoint: string, status: number, error: Error) {
   if (!isDev) return;
   console.error(`[API ERROR] ${endpoint} (${status})`, error.message);
-}
-
-// ============================================
-// Headers Helper
-// ============================================
-function getHeaders(tenantId?: string): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
-    ...(tenantId && { 'X-Tenant-Id': tenantId }),
-  };
 }
 
 // ============================================
@@ -127,23 +103,23 @@ export async function fetchTenantStats(
   tenantId: string
 ): Promise<TenantStatsResponse> {
   const endpoint = `/tenants/${tenantId}/stats`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch tenant stats: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<TenantStatsResponse>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 // ============================================
@@ -158,23 +134,23 @@ export async function fetchTenantBilling(
   tenantId: string
 ): Promise<TenantBillingResponse> {
   const endpoint = `/tenants/${tenantId}/billing`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch tenant billing: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<TenantBillingResponse>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }
 
 // ============================================
@@ -207,21 +183,21 @@ export async function fetchTenantAuditLogs(
 
   const queryStr = params.toString();
   const endpoint = `/tenants/${tenantId}/audit-logs${queryStr ? `?${queryStr}` : ''}`;
-  const headers = getHeaders(tenantId);
-  logRequest('GET', endpoint, headers);
+  logRequest('GET', endpoint);
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch audit logs: ${res.status}`);
-    logError(endpoint, res.status, error);
+  try {
+    const data = await apiClient<AuditLogsResponse>({
+      path: endpoint,
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+      },
+    });
+    logResponse(endpoint, 200, data);
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError);
     throw error;
   }
-
-  const data = await res.json();
-  logResponse(endpoint, res.status, data);
-  return data;
 }

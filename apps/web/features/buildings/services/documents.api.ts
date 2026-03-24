@@ -8,9 +8,8 @@
  * 3. POST /documents → create Document record with file metadata
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -109,12 +108,9 @@ function validateTenantId(tenantId: string | undefined): asserts tenantId is str
   }
 }
 
-function getHeaders(tenantId: string): HeadersInit {
+function getTenantHeaders(tenantId: string): Record<string, string> {
   validateTenantId(tenantId);
-  const token = getToken();
   return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
     'X-Tenant-Id': tenantId,
   };
 }
@@ -140,19 +136,18 @@ export async function presignUpload(
   const body = { originalName, mimeType, ...(size && { size }) };
   logRequest('POST', endpoint, body);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(tenantId),
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to presign upload: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<PresignResponse, typeof body>({
+      path: endpoint,
+      method: 'POST',
+      body,
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to presign upload: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -220,19 +215,18 @@ export async function createDocument(
   const endpoint = '/documents';
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(tenantId),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create document: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Document, CreateDocumentInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to create document: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -259,18 +253,17 @@ export async function listDocuments(
   const endpoint = `/documents${queryString ? '?' + queryString : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list documents: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Document[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to list documents: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -285,18 +278,17 @@ export async function getDocument(
   const endpoint = `/documents/${documentId}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get document: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Document>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to get document: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -312,19 +304,18 @@ export async function updateDocument(
   const endpoint = `/documents/${documentId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getHeaders(tenantId),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update document: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Document, UpdateDocumentInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to update document: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -339,15 +330,16 @@ export async function deleteDocument(
   const endpoint = `/documents/${documentId}`;
   logRequest('DELETE', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers: getHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to delete document: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to delete document: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
 }
 
@@ -364,16 +356,15 @@ export async function getDownloadUrl(
   const endpoint = `/documents/${documentId}/download`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get download URL: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<DownloadUrlResponse>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to get download URL: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }

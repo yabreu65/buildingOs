@@ -3,9 +3,8 @@
  * Calls the backend API endpoints for tickets and comments
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -107,16 +106,6 @@ function logError(endpoint: string, status: number, message: string) {
   console.error(`[API ERROR] ${endpoint} (${status})`, message);
 }
 
-// ============================================
-// Headers Helper
-// ============================================
-function getHeaders(): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : '',
-  };
-}
 
 // ============================================
 // Tickets API Endpoints
@@ -143,19 +132,17 @@ export async function listTickets(
   const endpoint = `/buildings/${buildingId}/tickets${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list tickets: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Ticket[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -165,19 +152,17 @@ export async function getTicket(buildingId: string, ticketId: string): Promise<T
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get ticket: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Ticket>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -190,20 +175,18 @@ export async function createTicket(
   const endpoint = `/buildings/${buildingId}/tickets`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create ticket: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Ticket, CreateTicketInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -217,20 +200,18 @@ export async function updateTicket(
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update ticket: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<Ticket, UpdateTicketInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -244,20 +225,18 @@ export async function addComment(
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}/comments`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to add comment: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<TicketComment, CreateCommentInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -270,19 +249,17 @@ export async function getComments(
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}/comments`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get comments: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<TicketComment[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -300,18 +277,16 @@ export async function getTicketReplySuggestions(
   const endpoint = `/tenants/${tenantId}/assistant/ticket-replies`;
   logRequest('POST', endpoint, { ticketId, title, description });
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ ticketId, title, description }),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get reply suggestions: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    const data = await apiClient<{ replies: string[] }, { ticketId: string; title: string; description: string }>({
+      path: endpoint,
+      method: 'POST',
+      body: { ticketId, title, description },
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }

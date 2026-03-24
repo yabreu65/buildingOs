@@ -3,9 +3,8 @@
  * Calls backend endpoints for communications (admin + user inbox)
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -89,21 +88,10 @@ function validateTenantId(tenantId: string | undefined): asserts tenantId is str
   }
 }
 
-function getAdminHeaders(tenantId: string): HeadersInit {
+function getAdminHeaders(tenantId: string): Record<string, string> {
   validateTenantId(tenantId);
-  const token = getToken();
   return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
     'X-Tenant-Id': tenantId,
-  };
-}
-
-function getUserHeaders(): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
   };
 }
 
@@ -129,18 +117,17 @@ export async function listCommunications(
   const endpoint = `/buildings/${buildingId}/communications${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getAdminHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list communications: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Communication[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to list communications: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -154,18 +141,17 @@ export async function getCommunication(
   const endpoint = `/buildings/${buildingId}/communications/${communicationId}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getAdminHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get communication: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Communication>({
+      path: endpoint,
+      method: 'GET',
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to get communication: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -179,19 +165,18 @@ export async function createCommunication(
   const endpoint = `/buildings/${buildingId}/communications`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getAdminHeaders(tenantId),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create communication: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Communication, CreateCommunicationInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to create communication: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -206,19 +191,18 @@ export async function updateCommunication(
   const endpoint = `/buildings/${buildingId}/communications/${communicationId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getAdminHeaders(tenantId),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update communication: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Communication, UpdateCommunicationInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to update communication: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -232,18 +216,17 @@ export async function sendCommunication(
   const endpoint = `/buildings/${buildingId}/communications/${communicationId}/send`;
   logRequest('POST', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getAdminHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to send communication: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Communication>({
+      path: endpoint,
+      method: 'POST',
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to send communication: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -257,15 +240,16 @@ export async function deleteCommunication(
   const endpoint = `/buildings/${buildingId}/communications/${communicationId}`;
   logRequest('DELETE', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers: getAdminHeaders(tenantId),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to delete communication: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to delete communication: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
 }
 
@@ -287,18 +271,16 @@ export async function getInbox(filters?: {
   const endpoint = `/me/communications${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getUserHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to get inbox: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<InboxCommunication[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to get inbox: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -308,14 +290,14 @@ export async function markAsRead(communicationId: string): Promise<void> {
   const endpoint = `/me/communications/${communicationId}/read`;
   logRequest('POST', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getUserHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to mark as read: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'POST',
+    });
+  } catch (error) {
+    const message = `Failed to mark as read: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
 }

@@ -1,4 +1,5 @@
 import { ScopedRole } from '../auth/auth.types';
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface AddRoleInput {
   role: string;
@@ -7,8 +8,6 @@ export interface AddRoleInput {
   scopeUnitId?: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
-
 /**
  * Get all scoped roles for a membership
  */
@@ -16,22 +15,10 @@ export async function listMemberRoles(
   tenantId: string,
   membershipId: string,
 ): Promise<ScopedRole[]> {
-  const response = await fetch(
-    `${API_URL}/tenants/${tenantId}/memberships/${membershipId}/roles`,
-    {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-      },
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to list roles: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<ScopedRole[]>({
+    path: `/tenants/${tenantId}/memberships/${membershipId}/roles`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -42,24 +29,11 @@ export async function addMemberRole(
   membershipId: string,
   input: AddRoleInput,
 ): Promise<ScopedRole> {
-  const response = await fetch(
-    `${API_URL}/tenants/${tenantId}/memberships/${membershipId}/roles`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-      },
-      body: JSON.stringify(input),
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to add role: ${error}`);
-  }
-
-  return response.json();
+  return apiClient<ScopedRole, AddRoleInput>({
+    path: `/tenants/${tenantId}/memberships/${membershipId}/roles`,
+    method: 'POST',
+    body: input,
+  });
 }
 
 /**
@@ -70,17 +44,8 @@ export async function removeMemberRole(
   membershipId: string,
   roleId: string,
 ): Promise<void> {
-  const response = await fetch(
-    `${API_URL}/tenants/${tenantId}/memberships/${membershipId}/roles/${roleId}`,
-    {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-      },
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to remove role: ${response.statusText}`);
-  }
+  await apiClient<void>({
+    path: `/tenants/${tenantId}/memberships/${membershipId}/roles/${roleId}`,
+    method: 'DELETE',
+  });
 }

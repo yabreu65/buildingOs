@@ -3,9 +3,8 @@
  * Calls the backend API endpoints for vendors, assignments, quotes, and work orders
  */
 
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
@@ -126,17 +125,6 @@ function logError(endpoint: string, status: number, message: string) {
 }
 
 // ============================================
-// Headers Helper
-// ============================================
-function getHeaders(): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : '',
-  };
-}
-
-// ============================================
 // Vendors API Endpoints
 // ============================================
 
@@ -147,19 +135,16 @@ export async function listAllVendors(): Promise<Vendor[]> {
   const endpoint = '/vendors';
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list vendors: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Vendor[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to list vendors: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -169,20 +154,17 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
   const endpoint = '/vendors';
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create vendor: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Vendor, CreateVendorInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to create vendor: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 // ============================================
@@ -196,19 +178,16 @@ export async function listBuildingVendors(buildingId: string): Promise<VendorAss
   const endpoint = `/buildings/${buildingId}/vendors/assignments`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list vendor assignments: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<VendorAssignment[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to list vendor assignments: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -221,20 +200,17 @@ export async function createVendorAssignment(
   const endpoint = `/buildings/${buildingId}/vendors/assignments`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create vendor assignment: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<VendorAssignment, CreateVendorAssignmentInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to create vendor assignment: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -247,15 +223,15 @@ export async function deleteVendorAssignment(
   const endpoint = `/buildings/${buildingId}/vendors/assignments/${assignmentId}`;
   logRequest('DELETE', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to delete vendor assignment: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    await apiClient<void>({
+      path: endpoint,
+      method: 'DELETE',
+    });
+  } catch (error) {
+    const message = `Failed to delete vendor assignment: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
 }
 
@@ -282,19 +258,16 @@ export async function listQuotes(
   const endpoint = `/buildings/${buildingId}/quotes${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list quotes: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Quote[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to list quotes: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -304,20 +277,17 @@ export async function createQuote(buildingId: string, input: CreateQuoteInput): 
   const endpoint = `/buildings/${buildingId}/quotes`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create quote: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Quote, CreateQuoteInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to create quote: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -331,20 +301,17 @@ export async function updateQuote(
   const endpoint = `/buildings/${buildingId}/quotes/${quoteId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update quote: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<Quote, UpdateQuoteInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to update quote: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 // ============================================
@@ -368,19 +335,16 @@ export async function listWorkOrders(
   const endpoint = `/buildings/${buildingId}/work-orders${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to list work orders: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<WorkOrder[]>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to list work orders: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -393,20 +357,17 @@ export async function createWorkOrder(
   const endpoint = `/buildings/${buildingId}/work-orders`;
   logRequest('POST', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to create work order: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<WorkOrder, CreateWorkOrderInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to create work order: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -420,18 +381,15 @@ export async function updateWorkOrder(
   const endpoint = `/buildings/${buildingId}/work-orders/${workOrderId}`;
   logRequest('PATCH', endpoint, input);
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = `Failed to update work order: ${response.statusText}`;
-    logError(endpoint, response.status, message);
-    throw new Error(message);
+  try {
+    return await apiClient<WorkOrder, UpdateWorkOrderInput>({
+      path: endpoint,
+      method: 'PATCH',
+      body: input,
+    });
+  } catch (error) {
+    const message = `Failed to update work order: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
   }
-
-  const data = await response.json();
-  return data;
 }

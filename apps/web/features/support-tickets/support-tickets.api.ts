@@ -1,8 +1,6 @@
 'use client';
 
-import { getToken } from '@/features/auth/session.storage';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface SupportTicket {
   id: string;
@@ -42,7 +40,6 @@ export async function listAllSupportTickets(
     take?: number;
   },
 ) {
-  const token = getToken();
   const query = new URLSearchParams();
 
   if (params?.status) query.append('status', params.status);
@@ -51,33 +48,17 @@ export async function listAllSupportTickets(
   if (params?.skip) query.append('skip', params.skip.toString());
   if (params?.take) query.append('take', params.take.toString());
 
-  const response = await fetch(`${API_URL}/super-admin/support?${query}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return apiClient({
+    path: `/super-admin/support?${query}`,
+    method: 'GET',
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch support tickets: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function getSupportTicket(id: string) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return apiClient({
+    path: `/super-admin/support/${id}`,
+    method: 'GET',
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function updateSupportTicket(
@@ -88,105 +69,51 @@ export async function updateSupportTicket(
     priority?: string;
   },
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}`, {
+  return apiClient({
+    path: `/super-admin/support/${id}`,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(data),
+    body: data,
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to update support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function updateSupportTicketStatus(
   id: string,
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED',
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}/status`, {
+  return apiClient({
+    path: `/super-admin/support/${id}/status`,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ status }),
+    body: { status },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to update ticket status: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function assignSupportTicket(
   id: string,
   assignedToUserId?: string,
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}/assign`, {
+  return apiClient({
+    path: `/super-admin/support/${id}/assign`,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ assignedToUserId }),
+    body: { assignedToUserId },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to assign support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function closeSupportTicket(id: string) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}`, {
+  return apiClient({
+    path: `/super-admin/support/${id}`,
     method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to close support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function addSupportTicketComment(
   id: string,
   body: string,
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/super-admin/support/${id}/comments`, {
+  return apiClient({
+    path: `/super-admin/support/${id}/comments`,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ body }),
+    body: { body },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to add comment: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 // ============================================================================
@@ -202,7 +129,6 @@ export async function listTenantSupportTickets(
     take?: number;
   },
 ) {
-  const token = getToken();
   const query = new URLSearchParams();
 
   if (params?.status) query.append('status', params.status);
@@ -210,17 +136,10 @@ export async function listTenantSupportTickets(
   if (params?.skip) query.append('skip', params.skip.toString());
   if (params?.take) query.append('take', params.take.toString());
 
-  const response = await fetch(`${API_URL}/${tenantId}/support?${query}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return apiClient({
+    path: `/${tenantId}/support?${query}`,
+    method: 'GET',
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch support tickets: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function createSupportTicket(
@@ -232,41 +151,21 @@ export async function createSupportTicket(
     priority?: string;
   },
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/${tenantId}/support`, {
+  return apiClient({
+    path: `/${tenantId}/support`,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(data),
+    body: data,
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function getTenantSupportTicket(
   tenantId: string,
   id: string,
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/${tenantId}/support/${id}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return apiClient({
+    path: `/${tenantId}/support/${id}`,
+    method: 'GET',
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function updateTenantSupportTicket(
@@ -278,22 +177,11 @@ export async function updateTenantSupportTicket(
     priority?: string;
   },
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/${tenantId}/support/${id}`, {
+  return apiClient({
+    path: `/${tenantId}/support/${id}`,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(data),
+    body: data,
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to update support ticket: ${response.statusText}`);
-  }
-
-  return response.json();
 }
 
 export async function addTenantSupportTicketComment(
@@ -301,20 +189,9 @@ export async function addTenantSupportTicketComment(
   id: string,
   body: string,
 ) {
-  const token = getToken();
-
-  const response = await fetch(`${API_URL}/${tenantId}/support/${id}/comments`, {
+  return apiClient({
+    path: `/${tenantId}/support/${id}/comments`,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ body }),
+    body: { body },
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to add comment: ${response.statusText}`);
-  }
-
-  return response.json();
 }

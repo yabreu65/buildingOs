@@ -1,21 +1,9 @@
-import { getToken } from '@/features/auth/session.storage';
+import { apiClient } from '@/shared/lib/http/client';
 
 /**
  * Finance API Service
  * Handles all Finanzas module operations (charges, payments, allocations, summary, ledger)
  */
-
-/**
- * Get request headers with authentication token
- * @returns HeadersInit object with content-type and authorization
- */
-function getHeaders(): HeadersInit {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : '',
-  };
-}
 
 // ============================================================================
 // TYPES
@@ -101,6 +89,14 @@ export interface PaymentAllocation {
   };
 }
 
+export interface MonthlyTrendDto {
+  period: string;
+  totalCharges: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  collectionRate: number;
+}
+
 export interface FinancialSummary {
   totalCharges: number;
   totalPaid: number;
@@ -115,41 +111,13 @@ export interface FinancialSummary {
 
 export interface UnitLedger {
   unitId: string;
-  unitLabel: string;
-  buildingId: string;
-  buildingName: string;
-  charges: Array<{
-    id: string;
-    period: string;
-    concept: string;
-    amount: number;
-    type: ChargeType;
-    status: ChargeStatus;
-    dueDate: string;
-    allocated: number;
-  }>;
-  payments: Array<{
-    id: string;
-    amount: number;
-    method: PaymentMethod;
-    status: PaymentStatus;
-    createdAt: string;
-    allocated: number;
-  }>;
+  charges: Charge[];
+  payments: Payment[];
   totals: {
     totalCharges: number;
-    totalAllocated: number;
+    totalPaid: number;
     balance: number;
-    currency: string;
   };
-}
-
-export interface MonthlyTrendDto {
-  period: string;
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
-  collectionRate: number;
 }
 
 // ============================================================================
@@ -182,16 +150,10 @@ export async function listCharges(
   if (offset) params.append('offset', offset.toString());
 
   const query = params.toString() ? `?${params.toString()}` : '';
-  const response = await fetch(
-    `/api/buildings/${buildingId}/charges${query}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to list charges: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Charge[]>({
+    path: `/buildings/${buildingId}/charges${query}`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -212,20 +174,11 @@ export async function createCharge(
     dueDate: string;
   }
 ): Promise<Charge> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/charges`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to create charge: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Charge, typeof data>({
+    path: `/buildings/${buildingId}/charges`,
+    method: 'POST',
+    body: data,
+  });
 }
 
 /**
@@ -238,16 +191,10 @@ export async function getCharge(
   buildingId: string,
   chargeId: string
 ): Promise<Charge> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/charges/${chargeId}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to get charge: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Charge>({
+    path: `/buildings/${buildingId}/charges/${chargeId}`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -259,18 +206,10 @@ export async function cancelCharge(
   buildingId: string,
   chargeId: string
 ): Promise<void> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/charges/${chargeId}`,
-    {
-      method: 'DELETE',
-      headers: getHeaders(),
-      body: JSON.stringify({}),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to cancel charge: ${response.statusText}`);
-  }
+  await apiClient<void>({
+    path: `/buildings/${buildingId}/charges/${chargeId}`,
+    method: 'DELETE',
+  });
 }
 
 // ============================================================================
@@ -300,16 +239,10 @@ export async function listPayments(
   if (offset) params.append('offset', offset.toString());
 
   const query = params.toString() ? `?${params.toString()}` : '';
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments${query}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to list payments: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Payment[]>({
+    path: `/buildings/${buildingId}/payments${query}`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -330,20 +263,11 @@ export async function submitPayment(
     proofFileId?: string;
   }
 ): Promise<Payment> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to submit payment: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Payment, typeof data>({
+    path: `/buildings/${buildingId}/payments`,
+    method: 'POST',
+    body: data,
+  });
 }
 
 /**
@@ -356,16 +280,10 @@ export async function getPayment(
   buildingId: string,
   paymentId: string
 ): Promise<Payment> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments/${paymentId}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to get payment: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Payment>({
+    path: `/buildings/${buildingId}/payments/${paymentId}`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -380,20 +298,11 @@ export async function approvePayment(
   paymentId: string,
   paidAt?: string
 ): Promise<Payment> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments/${paymentId}/approve`,
-    {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ paidAt: paidAt || new Date().toISOString() }),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to approve payment: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Payment, { paidAt: string }>({
+    path: `/buildings/${buildingId}/payments/${paymentId}/approve`,
+    method: 'PATCH',
+    body: { paidAt: paidAt || new Date().toISOString() },
+  });
 }
 
 /**
@@ -408,20 +317,11 @@ export async function rejectPayment(
   paymentId: string,
   reason?: string
 ): Promise<Payment> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments/${paymentId}/reject`,
-    {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ reason: reason || '' }),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to reject payment: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<Payment, { reason: string }>({
+    path: `/buildings/${buildingId}/payments/${paymentId}/reject`,
+    method: 'PATCH',
+    body: { reason: reason || '' },
+  });
 }
 
 // ============================================================================
@@ -438,16 +338,10 @@ export async function getPaymentAllocations(
   buildingId: string,
   paymentId: string
 ): Promise<PaymentAllocation[]> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments/${paymentId}/allocations`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to get allocations: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<PaymentAllocation[]>({
+    path: `/buildings/${buildingId}/payments/${paymentId}/allocations`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -462,20 +356,11 @@ export async function createAllocations(
   paymentId: string,
   allocations: Array<{ chargeId: string; amount: number }>
 ): Promise<PaymentAllocation[]> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/payments/${paymentId}/allocations`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ allocations }),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to create allocations: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<PaymentAllocation[], { allocations: typeof allocations }>({
+    path: `/buildings/${buildingId}/payments/${paymentId}/allocations`,
+    method: 'POST',
+    body: { allocations },
+  });
 }
 
 // ============================================================================
@@ -493,16 +378,10 @@ export async function getFinancialSummary(
   period?: string
 ): Promise<FinancialSummary> {
   const query = period ? `?period=${period}` : '';
-  const response = await fetch(
-    `/api/buildings/${buildingId}/finance/summary${query}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to get financial summary: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<FinancialSummary>({
+    path: `/buildings/${buildingId}/finance/summary${query}`,
+    method: 'GET',
+  });
 }
 
 // ============================================================================
@@ -526,16 +405,10 @@ export async function getUnitLedger(
   if (periodTo) params.append('periodTo', periodTo);
 
   const query = params.toString() ? `?${params.toString()}` : '';
-  const response = await fetch(
-    `/api/units/${unitId}/ledger${query}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to get unit ledger: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<UnitLedger>({
+    path: `/units/${unitId}/ledger${query}`,
+    method: 'GET',
+  });
 }
 
 // ============================================================================
@@ -552,16 +425,10 @@ export async function getTenantFinancialSummary(period?: string): Promise<Financ
   if (period) params.append('period', period);
 
   const query = params.toString() ? `?${params.toString()}` : '';
-  const response = await fetch(
-    `/api/finance/summary${query}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch tenant financial summary: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<FinancialSummary>({
+    path: `/finance/summary${query}`,
+    method: 'GET',
+  });
 }
 
 /**
@@ -571,16 +438,10 @@ export async function getTenantFinancialSummary(period?: string): Promise<Financ
  * @returns Array of monthly trend data with charges, payments, outstanding, and collection rate
  */
 export async function getFinanceTrend(buildingId: string, months: number = 6): Promise<MonthlyTrendDto[]> {
-  const response = await fetch(
-    `/api/buildings/${buildingId}/finance/trend?months=${months}`,
-    { headers: getHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch finance trend');
-  }
-
-  return response.json();
+  return apiClient<MonthlyTrendDto[]>({
+    path: `/buildings/${buildingId}/finance/trend?months=${months}`,
+    method: 'GET',
+  });
 }
 
 /**

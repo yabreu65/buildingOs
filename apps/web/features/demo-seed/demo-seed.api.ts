@@ -1,8 +1,6 @@
 'use client';
 
-import { getToken } from '@/features/auth/session.storage';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+import { apiClient } from '@/shared/lib/http/client';
 
 export interface DemoSeedCheckResponse {
   canGenerate: boolean;
@@ -29,44 +27,18 @@ export interface DemoSeedResult {
 export async function checkCanGenerateDemoData(
   tenantId: string,
 ): Promise<DemoSeedCheckResponse> {
-  const token = getToken();
-
-  const response = await fetch(
-    `${API_URL}/super-admin/tenants/${tenantId}/demo-seed/check`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to check demo data generation: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<DemoSeedCheckResponse>({
+    path: `/super-admin/tenants/${tenantId}/demo-seed/check`,
+    method: 'GET',
+  });
 }
 
 /**
  * Generate demo data for TRIAL tenant
  */
 export async function generateDemoData(tenantId: string): Promise<DemoSeedResult> {
-  const token = getToken();
-
-  const response = await fetch(
-    `${API_URL}/super-admin/tenants/${tenantId}/demo-seed/generate`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to generate demo data: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiClient<DemoSeedResult>({
+    path: `/super-admin/tenants/${tenantId}/demo-seed/generate`,
+    method: 'POST',
+  });
 }
