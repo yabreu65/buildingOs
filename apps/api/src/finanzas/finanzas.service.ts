@@ -432,6 +432,7 @@ export class FinanzasService {
     const where: Prisma.PaymentWhereInput = {
       tenantId,
       buildingId,
+      canceledAt: null, // Exclude soft-deleted payments
     };
 
     // 3. Apply RESIDENT/OWNER scope
@@ -519,15 +520,71 @@ export class FinanzasService {
       );
     }
 
-    // 3. Update to APPROVED
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.APPROVED,
-        paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
-        reviewedByMembershipId: membershipId,
-        updatedAt: new Date(),
-      },
+    // 3. Approve + FIFO allocation in transaction
+    const result = await this.prisma.$transaction(async (tx) => {
+      // 3a. Update to APPROVED
+      const approvedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.APPROVED,
+          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+          reviewedByMembershipId: membershipId,
+          updatedAt: new Date(),
+        },
+      });
+
+      // 3b. FIFO allocation: if unitId exists, auto-allocate to oldest charges
+      if (payment.unitId) {
+        const pendingCharges = await tx.charge.findMany({
+          where: {
+            tenantId,
+            buildingId,
+            unitId: payment.unitId,
+            status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+            canceledAt: null,
+          },
+          include: { paymentAllocations: true },
+          orderBy: { dueDate: 'asc' }, // FIFO: oldest first
+        });
+
+        let remainingAmount = payment.amount;
+
+        for (const charge of pendingCharges) {
+          if (remainingAmount <= 0) break;
+
+          const alreadyAllocated = charge.paymentAllocations.reduce(
+            (sum, a) => sum + a.amount,
+            0,
+          );
+          const outstanding = charge.amount - alreadyAllocated;
+          const toAllocate = Math.min(remainingAmount, outstanding);
+
+          if (toAllocate <= 0) continue;
+
+          // Verify no existing allocation for this pair
+          const existingAllocation = await tx.paymentAllocation.findFirst({
+            where: { tenantId, paymentId, chargeId: charge.id },
+          });
+          if (existingAllocation) continue;
+
+          await tx.paymentAllocation.create({
+            data: {
+              tenantId,
+              paymentId,
+              chargeId: charge.id,
+              amount: toAllocate,
+            },
+          });
+
+          await this.recalculateChargeStatus(charge.id, tx);
+          remainingAmount -= toAllocate;
+        }
+      }
+
+      // 3c. Try to reconcile if all charges are paid
+      await this.tryReconcilePayment(paymentId, tx);
+
+      return approvedPayment;
     });
 
     // Audit: PAYMENT_APPROVE
@@ -540,6 +597,7 @@ export class FinanzasService {
       metadata: {
         amount: payment.amount,
         paidAt: result.paidAt,
+        fifoAllocated: payment.unitId ? true : false,
       },
     });
 
@@ -1030,6 +1088,7 @@ export class FinanzasService {
       where: {
         tenantId,
         unitId,
+        canceledAt: null, // Exclude soft-deleted payments
       },
       include: {
         paymentAllocations: true,
@@ -1090,6 +1149,7 @@ export class FinanzasService {
         id: paymentId,
         tenantId,
         buildingId,
+        canceledAt: null, // Exclude soft-deleted payments
       },
     });
 
@@ -1118,6 +1178,180 @@ export class FinanzasService {
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * Revive a rejected payment (REJECTED → SUBMITTED)
+   *
+   * Security:
+   * - Admin/Operator only
+   */
+  async revivePayment(
+    tenantId: string,
+    buildingId: string,
+    paymentId: string,
+    userRoles: string[],
+    membershipId: string,
+  ): Promise<Payment> {
+    // 1. Permission check
+    if (!this.validators.canReviewPayments(userRoles)) {
+      this.validators.throwForbidden('payments', 'revive');
+    }
+
+    // 2. Validate payment
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId, buildingId },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(
+        `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // 3. Validate status is REJECTED
+    if (payment.status !== PaymentStatus.REJECTED) {
+      throw new ConflictException(`Only REJECTED payments can be revived`);
+    }
+
+    // 4. Update to SUBMITTED
+    const result = await this.prisma.payment.update({
+      where: { id: paymentId },
+      data: {
+        status: PaymentStatus.SUBMITTED,
+        reviewedByMembershipId: null,
+        updatedAt: new Date(),
+      },
+    });
+
+    // Audit
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: membershipId,
+      action: AuditAction.PAYMENT_SUBMIT,
+      entityType: 'Payment',
+      entityId: paymentId,
+      metadata: { action: 'REVIVED', previousStatus: 'REJECTED' },
+    });
+
+    return result;
+  }
+
+  /**
+   * Get a single payment with allocations
+   *
+   * Security:
+   * - RESIDENT: can view only their own unit's payments
+   * - Admin/Operator: can view any payment
+   */
+  async getPayment(
+    tenantId: string,
+    buildingId: string,
+    paymentId: string,
+    userRoles: string[],
+    userId: string,
+  ): Promise<Payment & { paymentAllocations: PaymentAllocation[] }> {
+    // 1. Find payment
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId, buildingId },
+      include: {
+        paymentAllocations: {
+          include: {
+            charge: {
+              select: {
+                id: true,
+                concept: true,
+                amount: true,
+                status: true,
+                period: true,
+              },
+            },
+          },
+        },
+        createdByUser: { select: { id: true, name: true, email: true } },
+        reviewedByMembership: {
+          select: { id: true, user: { select: { name: true } } },
+        },
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(
+        `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // 2. RESIDENT: validate unit ownership
+    if (this.validators.isResidentOrOwner(userRoles) && payment.unitId) {
+      await this.validators.validateResidentUnitAccess(
+        tenantId,
+        userId,
+        payment.unitId,
+      );
+    }
+
+    return payment as Payment & { paymentAllocations: PaymentAllocation[] };
+  }
+
+  /**
+   * Cancel a payment (soft delete via canceledAt)
+   *
+   * Security:
+   * - Admin/Operator only
+   * - Cannot cancel if has allocations
+   */
+  async cancelPayment(
+    tenantId: string,
+    buildingId: string,
+    paymentId: string,
+    userRoles: string[],
+    membershipId: string,
+    reason?: string,
+  ): Promise<Payment> {
+    // 1. Permission check
+    if (!this.validators.canReviewPayments(userRoles)) {
+      this.validators.throwForbidden('payments', 'cancel');
+    }
+
+    // 2. Validate payment (only active payments)
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId, buildingId, canceledAt: null },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(
+        `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // 3. Cannot cancel if has allocations
+    const allocationCount = await this.prisma.paymentAllocation.count({
+      where: { tenantId, paymentId },
+    });
+
+    if (allocationCount > 0) {
+      throw new ConflictException(
+        `Cannot cancel payment with existing allocations. Remove allocations first.`,
+      );
+    }
+
+    // 4. Update canceledAt
+    const result = await this.prisma.payment.update({
+      where: { id: paymentId },
+      data: { canceledAt: new Date(), updatedAt: new Date() },
+    });
+
+    // Audit
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: membershipId,
+      action: AuditAction.PAYMENT_REJECT,
+      entityType: 'Payment',
+      entityId: paymentId,
+      metadata: { action: 'CANCELED', reason: reason || 'No reason provided' },
+    });
+
+    return result;
   }
 
   /**

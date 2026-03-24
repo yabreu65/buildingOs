@@ -10,6 +10,7 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import { Payment, PaymentAllocation } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { FinanzasService } from './finanzas.service';
@@ -21,6 +22,10 @@ import {
   SubmitPaymentDto,
   ApprovePaymentDto,
   RejectPaymentDto,
+  RevivePaymentParamDto,
+  GetPaymentParamDto,
+  CancelPaymentParamDto,
+  CancelPaymentDto,
   CreateAllocationDto,
   ListChargesQueryDto,
   ListPaymentsQueryDto,
@@ -285,6 +290,73 @@ export class FinanzasController {
       membershipId,
       dto,
     );
+  }
+
+  /**
+   * PATCH /buildings/:buildingId/payments/:paymentId/revive
+   * Revive a rejected payment (REJECTED → SUBMITTED)
+   */
+  @Patch('payments/:paymentId/revive')
+  async revivePayment(
+    @Param() params: RevivePaymentParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
+    const membershipId = req.user.membershipId!;
+    const userRoles = req.user.roles || [];
+    return this.finanzasService.revivePayment(
+      tenantId,
+      params.buildingId,
+      params.paymentId,
+      userRoles,
+      membershipId,
+    ) as Promise<PaymentDetailDto>;
+  }
+
+  /**
+   * GET /buildings/:buildingId/payments/:paymentId
+   * Get a single payment with allocations
+   *
+   * RESIDENT/OWNER: only if it's their unit (404 otherwise)
+   */
+  @Get('payments/:paymentId')
+  async getPayment(
+    @Param() params: GetPaymentParamDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    return this.finanzasService.getPayment(
+      tenantId,
+      params.buildingId,
+      params.paymentId,
+      userRoles,
+      userId,
+    ) as Promise<PaymentDetailDto>;
+  }
+
+  /**
+   * DELETE /buildings/:buildingId/payments/:paymentId
+   * Cancel a payment (soft delete via canceledAt, admin/operator only)
+   */
+  @Delete('payments/:paymentId')
+  async cancelPayment(
+    @Param() params: CancelPaymentParamDto,
+    @Body() dto: CancelPaymentDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PaymentDetailDto> {
+    const tenantId = req.tenantId!;
+    const membershipId = req.user.membershipId!;
+    const userRoles = req.user.roles || [];
+    return this.finanzasService.cancelPayment(
+      tenantId,
+      params.buildingId,
+      params.paymentId,
+      userRoles,
+      membershipId,
+      dto.reason,
+    ) as Promise<PaymentDetailDto>;
   }
 
   // ============================================================================

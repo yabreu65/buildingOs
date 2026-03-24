@@ -1111,6 +1111,7 @@ model Payment {
   proofFileId              String?        // Link to proof document
   createdByUserId          String         // Who submitted the payment (resident)
   reviewedByMembershipId   String?        // Who approved the payment (admin)
+  canceledAt               DateTime?      // Soft delete: NULL = active, timestamp = canceled
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 

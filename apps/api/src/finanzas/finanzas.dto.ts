@@ -114,6 +114,18 @@ export class RejectPaymentDto {
   reason!: string;
 }
 
+export class RevivePaymentParamDto extends BuildingPaymentParamDto {}
+
+export class GetPaymentParamDto extends BuildingPaymentParamDto {}
+
+export class CancelPaymentParamDto extends BuildingPaymentParamDto {}
+
+export class CancelPaymentDto {
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
 // ============================================================================
 // ALLOCATION DTOs
 // ============================================================================
