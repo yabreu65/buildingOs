@@ -8,6 +8,7 @@ import { submitLead } from '@/shared/api/leads.api';
 import { Button, Input, Card } from '@/shared/components/ui';
 import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+import { StorageService } from '@/shared/lib/storage';
 
 // Zod validation schema
 const leadFormSchema = z.object({
@@ -79,9 +80,11 @@ export function LeadCaptureForm() {
   // Check rate limiting (client-side)
   const checkRateLimit = useCallback((): boolean => {
     const now = Date.now();
-    const key = 'lead_form_submissions';
-    const stored = localStorage.getItem(key);
-    const data = stored ? JSON.parse(stored) : { count: 0, resetTime: now + 60000 };
+    const data = StorageService.get<{ count: number; resetTime: number }>(
+      'lead_form_submissions',
+      undefined,
+      { count: 0, resetTime: now + 60000 }
+    ) || { count: 0, resetTime: now + 60000 };
 
     if (now > data.resetTime) {
       // Reset window
@@ -94,7 +97,7 @@ export function LeadCaptureForm() {
       data.count += 1;
     }
 
-    localStorage.setItem(key, JSON.stringify(data));
+    StorageService.set('lead_form_submissions', data);
     return true;
   }, []);
 
@@ -413,6 +416,6 @@ export function LeadCaptureForm() {
 // Declare gtag for analytics
 declare global {
   interface Window {
-    gtag?: (command: string, event: string, data?: Record<string, any>) => void;
+    gtag?: (command: string, event: string, data?: Record<string, string | number | boolean | undefined>) => void;
   }
 }

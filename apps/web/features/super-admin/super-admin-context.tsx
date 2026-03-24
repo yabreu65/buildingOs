@@ -1,21 +1,30 @@
 'use client';
 
 import { createContext, ReactNode, useState, useEffect } from 'react';
+import { StorageService } from '@/shared/lib/storage';
 
-export type SuperAdminContextType = {
+export interface SuperAdminContextType {
   activeTenantId?: string;
   setActiveTenantId: (tenantId: string | undefined) => void;
-};
+}
 
+/**
+ * Context for managing the active tenant in super-admin interface.
+ * Provides access to tenant switching functionality.
+ */
 export const SuperAdminContext = createContext<SuperAdminContextType | null>(null);
 
+/**
+ * Provider component for SuperAdminContext.
+ * Manages active tenant state with localStorage persistence.
+ */
 export function SuperAdminProvider({ children }: { children: ReactNode }) {
   const [activeTenantId, setActiveTenantId] = useState<string | undefined>();
   const [isHydrated, setIsHydrated] = useState(false);
 
   // Restaurar desde localStorage en el cliente
   useEffect(() => {
-    const stored = localStorage.getItem('bo_active_tenant_id');
+    const stored = StorageService.get<string>('active_tenant_id');
     if (stored) {
       setActiveTenantId(stored);
     }
@@ -26,9 +35,9 @@ export function SuperAdminProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isHydrated) return;
     if (activeTenantId) {
-      localStorage.setItem('bo_active_tenant_id', activeTenantId);
+      StorageService.set('active_tenant_id', activeTenantId);
     } else {
-      localStorage.removeItem('bo_active_tenant_id');
+      StorageService.remove('active_tenant_id');
     }
   }, [activeTenantId, isHydrated]);
 

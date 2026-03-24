@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { t } from '@/i18n';
 import { useParams } from 'next/navigation';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { CreditCard } from 'lucide-react';
+import { StorageService } from '@/shared/lib/storage';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+}
 
 interface Payment {
   id: string;
@@ -32,10 +32,9 @@ export default function PaymentsPage() {
 
   // Load payments from localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined' && tenantId) {
+    if (tenantId) {
       try {
-        const raw = localStorage.getItem(`bo_payments_${tenantId}`);
-        const data = raw ? JSON.parse(raw) : [];
+        const data = StorageService.get<Payment[]>('payments', tenantId, []);
         setPayments(data);
       } catch (err) {
         // Silently ignore localStorage errors

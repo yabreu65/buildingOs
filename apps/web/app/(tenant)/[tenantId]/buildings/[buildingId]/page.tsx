@@ -13,13 +13,15 @@ import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Home, Grid3x3, Plus, Settings, Users, Ticket, CreditCard } from 'lucide-react';
+import { StorageService } from '@/shared/lib/storage';
+import type { Payment } from '@/features/payments/payments.types';
 
 import BuildingOnboardingCard from '@/features/onboarding/BuildingOnboardingCard';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
-};
+}
 
 /**
  * BuildingHubPage: Central operations hub for a building
@@ -40,11 +42,10 @@ export default function BuildingHubPage() {
 
   // Load payment data from localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined' && tenantId) {
+    if (tenantId) {
       try {
-        const raw = localStorage.getItem(`bo_payments_${tenantId}`);
-        const payments = raw ? JSON.parse(raw) : [];
-        const pending = payments.filter((p: any) => p.status === 'PENDING').length;
+        const payments = StorageService.get<Payment[]>('payments', tenantId, []);
+        const pending = payments.filter((p) => p.status === 'PENDING').length;
         setPendingPayments(pending);
         setTotalPayments(payments.length);
       } catch (err) {
