@@ -8,12 +8,12 @@ import { IsEmail, IsString, MinLength } from 'class-validator';
 export class CreatePlatformUserDto {
   @IsString()
   @MinLength(2)
-  name: string;
+  name!: string;
 
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsString()
   @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
-  password: string;
+  password!: string;
 }

@@ -13,6 +13,7 @@ import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
 import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { AuditAction, BillingPlanId, Tenant, AuditLog, Prisma } from '@prisma/client';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 export interface TenantResponse {
   id: string;
@@ -36,7 +37,7 @@ export interface AuditLogResponse {
   action: string;
   entity: string;
   entityId: string;
-  metadata: any;
+  metadata: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -414,7 +415,7 @@ export class SuperAdminService {
 
     if (filters?.tenantId) where.tenantId = filters.tenantId;
     if (filters?.actorUserId) where.actorUserId = filters.actorUserId;
-    if (filters?.action) where.action = filters.action;
+    if (filters?.action) where.action = filters.action as AuditAction;
     if (filters?.dateFrom || filters?.dateTo) {
       where.createdAt = {};
       if (filters.dateFrom) where.createdAt.gte = filters.dateFrom;
@@ -525,7 +526,7 @@ export class SuperAdminService {
   /**
    * Get impersonation status from JWT claims
    */
-  async getImpersonationStatus(req: RequestWithUser): Promise<{
+  async getImpersonationStatus(req: AuthenticatedRequest): Promise<{
     isImpersonating: boolean;
     tenantId?: string;
     expiresAt?: string;
@@ -636,7 +637,7 @@ export class SuperAdminService {
         platformTenant = await tx.tenant.create({
           data: {
             name: 'BuildingOS Platform',
-            type: 'SYSTEM',
+            type: 'ADMINISTRADORA',
             status: 'ACTIVE',
             plan: 'ENTERPRISE',
             billingCycleStartDate: new Date(),
@@ -661,7 +662,7 @@ export class SuperAdminService {
     });
 
     // Audit log
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       action: AuditAction.USER_CREATE,
       entity: 'User',
       entityId: user.id,
@@ -701,7 +702,7 @@ export class SuperAdminService {
     });
 
     // Audit log
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       action: AuditAction.USER_DELETE,
       entity: 'User',
       entityId: userId,
@@ -714,7 +715,7 @@ export class SuperAdminService {
   // HELPERS
   // ============================================================================
 
-  private formatTenant(tenant: any): TenantResponse {
+  private formatTenant(tenant: Tenant): TenantResponse {
     return {
       id: tenant.id,
       name: tenant.name,
