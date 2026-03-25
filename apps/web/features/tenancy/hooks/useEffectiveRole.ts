@@ -36,10 +36,10 @@ export function useEffectiveRole(tenantId: string | undefined): Role | null {
 
   // Return the highest-priority role
   const sortedRoles = [...membership.roles].sort(
-    (a, b) => (ROLE_PRIORITY[b] ?? 0) - (ROLE_PRIORITY[a] ?? 0)
+    (a, b) => (ROLE_PRIORITY[b as Role] ?? 0) - (ROLE_PRIORITY[a as Role] ?? 0)
   );
 
-  return sortedRoles[0] ?? null;
+  return (sortedRoles[0] as Role) ?? null;
 }
 
 /**

@@ -1,7 +1,8 @@
 'use client';
 
-import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import {
   CategoriesList,
@@ -30,6 +31,8 @@ interface BuildingParams {
  */
 export default function ExpenseAllocationPage() {
   const { tenantId, buildingId } = useParams<BuildingParams>();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
   const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
 
@@ -40,8 +43,20 @@ export default function ExpenseAllocationPage() {
   // Period form state
   const [showPeriodForm, setShowPeriodForm] = useState(false);
 
-  // Period selection state
+  // Period selection state (from URL params)
   const [selectedPeriod, setSelectedPeriod] = useState<ExpensePeriod | undefined>();
+  const [allPeriods, setAllPeriods] = useState<ExpensePeriod[]>([]);
+
+  // Load selectedPeriodId from URL on mount
+  useEffect(() => {
+    const selectedPeriodId = searchParams.get('periodId');
+    if (selectedPeriodId && allPeriods.length > 0) {
+      const period = allPeriods.find((p) => p.id === selectedPeriodId);
+      if (period) {
+        setSelectedPeriod(period);
+      }
+    }
+  }, [searchParams, allPeriods]);
 
   const handleEditCategory = (category: UnitCategory) => {
     setSelectedCategory(category);
@@ -56,6 +71,16 @@ export default function ExpenseAllocationPage() {
   const handlePeriodFormSuccess = () => {
     setShowPeriodForm(false);
     setSelectedPeriod(undefined);
+  };
+
+  const handlePeriodClick = (period: ExpensePeriod) => {
+    setSelectedPeriod(period);
+    router.push(`?periodId=${period.id}`, { scroll: false });
+  };
+
+  const handleClosePeriodDetail = () => {
+    setSelectedPeriod(undefined);
+    router.push('?', { scroll: false });
   };
 
   if (!tenantIdStr || !buildingIdStr) {
@@ -78,6 +103,7 @@ export default function ExpenseAllocationPage() {
           {/* Categories Section */}
           <section>
             <CategoriesList
+              tenantId={tenantIdStr}
               buildingId={buildingIdStr}
               onEditCategory={handleEditCategory}
               onAutoAssignClick={() => {
@@ -89,9 +115,11 @@ export default function ExpenseAllocationPage() {
           {/* Periods Section */}
           <section>
             <PeriodsList
+              tenantId={tenantIdStr}
               buildingId={buildingIdStr}
               onCreateClick={() => setShowPeriodForm(true)}
-              onPeriodClick={setSelectedPeriod}
+              onPeriodClick={handlePeriodClick}
+              onPeriodsLoaded={setAllPeriods}
             />
           </section>
         </div>
@@ -101,6 +129,7 @@ export default function ExpenseAllocationPage() {
           {/* Category Form Modal */}
           {showCategoryForm && (
             <CategoryForm
+              tenantId={tenantIdStr}
               buildingId={buildingIdStr}
               category={selectedCategory}
               onSuccess={handleFormSuccess}
@@ -114,6 +143,7 @@ export default function ExpenseAllocationPage() {
           {/* Period Form Modal */}
           {showPeriodForm && (
             <PeriodForm
+              tenantId={tenantIdStr}
               buildingId={buildingIdStr}
               onSuccess={handlePeriodFormSuccess}
               onCancel={() => setShowPeriodForm(false)}
@@ -123,11 +153,13 @@ export default function ExpenseAllocationPage() {
           {/* Period Detail */}
           {selectedPeriod && !showPeriodForm && (
             <PeriodDetail
+              tenantId={tenantIdStr}
               buildingId={buildingIdStr}
               period={selectedPeriod}
-              onClose={() => setSelectedPeriod(undefined)}
+              onClose={handleClosePeriodDetail}
               onSuccess={() => {
                 setSelectedPeriod(undefined);
+                router.push('?', { scroll: false });
               }}
             />
           )}

@@ -34,6 +34,16 @@ export class ExpensePeriodsService {
   ) {}
 
   /**
+   * Convert Prisma ExpensePeriod to DTO (handles BigInt serialization)
+   */
+  private toDto(period: ExpensePeriod): ExpensePeriodDto {
+    return {
+      ...period,
+      totalToAllocate: period.totalToAllocate.toString(),
+    };
+  }
+
+  /**
    * List expense periods for a building
    */
   async listPeriods(
@@ -64,7 +74,7 @@ export class ExpensePeriodsService {
       orderBy: [{ year: 'desc' }, { month: 'desc' }],
     });
 
-    return periods;
+    return periods.map((p) => this.toDto(p));
   }
 
   /**
@@ -113,6 +123,7 @@ export class ExpensePeriodsService {
 
     return {
       ...period,
+      totalToAllocate: period.totalToAllocate.toString(),
       charges: period.charges.map((c) => ({
         id: c.id,
         unitId: c.unitId,
@@ -188,12 +199,12 @@ export class ExpensePeriodsService {
       metadata: {
         year: period.year,
         month: period.month,
-        totalToAllocate: period.totalToAllocate,
+        totalToAllocate: period.totalToAllocate.toString(),
         concept: period.concept,
       },
     });
 
-    return period;
+    return this.toDto(period);
   }
 
   /**
@@ -253,7 +264,7 @@ export class ExpensePeriodsService {
     // Audit: EXPENSE_PERIOD_UPDATE (implicit, no dedicated action)
     // Skipped for simplicity
 
-    return updated;
+    return this.toDto(updated);
   }
 
   /**
@@ -374,8 +385,11 @@ export class ExpensePeriodsService {
       );
     }
 
-    // 3. Validate totalToAllocate > 0
-    if (period.totalToAllocate === 0) {
+    // 3. Convert BigInt to number for calculations
+    const totalToAllocateNum = Number(period.totalToAllocate);
+
+    // 3.5. Validate totalToAllocate > 0
+    if (totalToAllocateNum === 0) {
       throw new BadRequestException('totalToAllocate must be > 0');
     }
 
@@ -426,7 +440,7 @@ export class ExpensePeriodsService {
 
     for (const unit of billableUnits) {
       const coef = unit.unitCategory!.coefficient;
-      const amountExact = (coef / sumCoef) * period.totalToAllocate;
+      const amountExact = (coef / sumCoef) * totalToAllocateNum;
       const amountInt = Math.floor(amountExact);
       const fraction = amountExact - amountInt;
 
@@ -440,7 +454,7 @@ export class ExpensePeriodsService {
     }
 
     // 8. Distribute remainder (delta)
-    const delta = period.totalToAllocate - totalAllocated;
+    const delta = totalToAllocateNum - totalAllocated;
 
     // Sort by fraction descending, add 1 to top delta units
     const sorted = amounts.sort((a, b) => b.fraction - a.fraction);
@@ -466,7 +480,7 @@ export class ExpensePeriodsService {
         periodId: period.id,
         coefficientSnapshot: unit.unitCategory!.coefficient,
         sumCoefSnapshot: sumCoef,
-        totalToAllocateSnapshot: period.totalToAllocate,
+        totalToAllocateSnapshot: Number(period.totalToAllocate),
         categorySnapshotId: unit.unitCategory!.id,
       };
     });
@@ -499,14 +513,14 @@ export class ExpensePeriodsService {
       actorUserId: userId,
       metadata: {
         chargesCount: charges.length,
-        totalAllocated: period.totalToAllocate,
+        totalAllocated: period.totalToAllocate.toString(),
         sumCoef,
       },
     });
 
     return {
       chargesCount: charges.length,
-      totalAllocated: period.totalToAllocate,
+      totalAllocated: period.totalToAllocate.toString(),
     };
   }
 
@@ -566,6 +580,6 @@ export class ExpensePeriodsService {
       },
     });
 
-    return published;
+    return this.toDto(published);
   }
 }

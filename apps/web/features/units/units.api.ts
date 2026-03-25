@@ -28,6 +28,11 @@ export interface UnitOccupant {
   };
 }
 
+export interface UnitCategory {
+  id: string;
+  name: string;
+}
+
 export interface Unit {
   id: string;
   buildingId: string;
@@ -35,6 +40,8 @@ export interface Unit {
   label: string;
   unitType: 'APARTMENT' | 'HOUSE' | 'OFFICE' | 'STORAGE' | 'PARKING' | 'OTHER';
   occupancyStatus: 'UNKNOWN' | 'VACANT' | 'OCCUPIED';
+  m2?: number;
+  unitCategory?: UnitCategory | null;
   createdAt: string;
   updatedAt: string;
   building?: Building;
@@ -47,6 +54,7 @@ export interface CreateUnitInput {
   label: string;
   unitType?: string;
   occupancyStatus?: string;
+  m2?: number;
 }
 
 export interface UpdateUnitInput {
@@ -54,6 +62,8 @@ export interface UpdateUnitInput {
   label?: string;
   unitType?: string;
   occupancyStatus?: string;
+  m2?: number;
+  unitCategoryId?: string | null;
 }
 
 // ============================================

@@ -14,22 +14,22 @@ import {
 } from '../services/expense-periods.api';
 
 // Query Hook: List all periods
-export function usePeriods(buildingId: string, year?: number, month?: number, status?: ExpensePeriodStatus) {
+export function usePeriods(tenantId: string, buildingId: string, year?: number, month?: number, status?: ExpensePeriodStatus) {
   return useQuery({
-    queryKey: ['periods', buildingId, year, month, status],
-    queryFn: () => listPeriods(buildingId, year, month, status),
+    queryKey: ['periods', tenantId, buildingId, year, month, status],
+    queryFn: () => listPeriods(tenantId, buildingId, year, month, status),
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
-    enabled: !!buildingId,
-    initialData: [],
+    enabled: !!tenantId && !!buildingId,
+    placeholderData: [],
   });
 }
 
 // Query Hook: Get single period with charges
-export function usePeriod(buildingId: string, periodId: string) {
+export function usePeriod(tenantId: string, buildingId: string, periodId: string) {
   return useQuery({
-    queryKey: ['period', buildingId, periodId],
-    queryFn: () => getPeriod(buildingId, periodId),
+    queryKey: ['period', tenantId, buildingId, periodId],
+    queryFn: () => getPeriod(tenantId, buildingId, periodId),
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
     enabled: !!buildingId && !!periodId,
@@ -37,7 +37,7 @@ export function usePeriod(buildingId: string, periodId: string) {
 }
 
 // Mutation Hook: Create period
-export function useCreatePeriod(buildingId: string) {
+export function useCreatePeriod(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -48,15 +48,15 @@ export function useCreatePeriod(buildingId: string) {
       currency?: string;
       dueDate: string;
       concept: string;
-    }) => createPeriod(buildingId, data),
+    }) => createPeriod(tenantId, buildingId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['periods', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['periods', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Update period
-export function useUpdatePeriod(buildingId: string, periodId: string) {
+export function useUpdatePeriod(tenantId: string, buildingId: string, periodId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -65,48 +65,48 @@ export function useUpdatePeriod(buildingId: string, periodId: string) {
       currency?: string;
       dueDate?: string;
       concept?: string;
-    }) => updatePeriod(buildingId, periodId, data),
+    }) => updatePeriod(tenantId, buildingId, periodId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['period', buildingId, periodId] });
-      queryClient.invalidateQueries({ queryKey: ['periods', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['period', tenantId, buildingId, periodId] });
+      queryClient.invalidateQueries({ queryKey: ['periods', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Delete period
-export function useDeletePeriod(buildingId: string) {
+export function useDeletePeriod(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (periodId: string) => deletePeriod(buildingId, periodId),
+    mutationFn: async (periodId: string) => deletePeriod(tenantId, buildingId, periodId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['periods', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['periods', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Generate charges
-export function useGenerateCharges(buildingId: string, periodId: string) {
+export function useGenerateCharges(tenantId: string, buildingId: string, periodId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async () => generateCharges(buildingId, periodId),
+    mutationFn: async () => generateCharges(tenantId, buildingId, periodId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['period', buildingId, periodId] });
-      queryClient.invalidateQueries({ queryKey: ['periods', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['period', tenantId, buildingId, periodId] });
+      queryClient.invalidateQueries({ queryKey: ['periods', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Publish period
-export function usePublishPeriod(buildingId: string, periodId: string) {
+export function usePublishPeriod(tenantId: string, buildingId: string, periodId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async () => publishPeriod(buildingId, periodId),
+    mutationFn: async () => publishPeriod(tenantId, buildingId, periodId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['period', buildingId, periodId] });
-      queryClient.invalidateQueries({ queryKey: ['periods', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['period', tenantId, buildingId, periodId] });
+      queryClient.invalidateQueries({ queryKey: ['periods', tenantId, buildingId] });
     },
   });
 }

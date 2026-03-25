@@ -34,7 +34,7 @@ import {
   GenerateResultDto,
 } from './expense-periods.dto';
 
-@Controller('buildings/:buildingId/expense-periods')
+@Controller('tenants/:tenantId/buildings/:buildingId/expense-periods')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class ExpensePeriodsController {
   constructor(private periodsService: ExpensePeriodsService) {}

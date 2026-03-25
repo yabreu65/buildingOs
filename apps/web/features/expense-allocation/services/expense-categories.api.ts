@@ -31,21 +31,22 @@ export interface AutoAssignResult {
 }
 
 // API Functions
-export async function listCategories(buildingId: string): Promise<UnitCategory[]> {
+export async function listCategories(tenantId: string, buildingId: string): Promise<UnitCategory[]> {
   return apiClient<UnitCategory[]>({
-    path: `/buildings/${buildingId}/expense-categories`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories`,
     method: 'GET',
   });
 }
 
-export async function getCategory(buildingId: string, categoryId: string): Promise<UnitCategory> {
+export async function getCategory(tenantId: string, buildingId: string, categoryId: string): Promise<UnitCategory> {
   return apiClient<UnitCategory>({
-    path: `/buildings/${buildingId}/expense-categories/${categoryId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories/${categoryId}`,
     method: 'GET',
   });
 }
 
 export async function createCategory(
+  tenantId: string,
   buildingId: string,
   data: {
     name: string;
@@ -55,13 +56,14 @@ export async function createCategory(
   }
 ): Promise<UnitCategory> {
   return apiClient<UnitCategory, typeof data>({
-    path: `/buildings/${buildingId}/expense-categories`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories`,
     method: 'POST',
     body: data,
   });
 }
 
 export async function updateCategory(
+  tenantId: string,
   buildingId: string,
   categoryId: string,
   data: {
@@ -73,36 +75,38 @@ export async function updateCategory(
   }
 ): Promise<UnitCategory> {
   return apiClient<UnitCategory, typeof data>({
-    path: `/buildings/${buildingId}/expense-categories/${categoryId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories/${categoryId}`,
     method: 'PATCH',
     body: data,
   });
 }
 
-export async function deleteCategory(buildingId: string, categoryId: string): Promise<void> {
+export async function deleteCategory(tenantId: string, buildingId: string, categoryId: string): Promise<void> {
   return apiClient<void>({
-    path: `/buildings/${buildingId}/expense-categories/${categoryId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories/${categoryId}`,
     method: 'DELETE',
   });
 }
 
 export async function autoAssignPreview(
+  tenantId: string,
   buildingId: string,
   force: boolean = false
 ): Promise<AutoAssignResult> {
   return apiClient<AutoAssignResult, { force: boolean }>({
-    path: `/buildings/${buildingId}/expense-categories/auto-assign/preview`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories/auto-assign/preview`,
     method: 'POST',
     body: { force },
   });
 }
 
 export async function autoAssignUnits(
+  tenantId: string,
   buildingId: string,
   force: boolean = false
 ): Promise<AutoAssignResult> {
   return apiClient<AutoAssignResult, { force: boolean }>({
-    path: `/buildings/${buildingId}/expense-categories/auto-assign`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-categories/auto-assign`,
     method: 'POST',
     body: { force },
   });

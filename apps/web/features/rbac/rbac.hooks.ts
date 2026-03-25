@@ -15,7 +15,7 @@
      if (!activeMembership || activeMembership.roles.length === 0) return false;
      // Check if any role has permission
      return activeMembership.roles.some((role) =>
-       canPermission(role, permission),
+       canPermission(role as any, permission),
      );
    }, [session, permission]);
    return allowed;

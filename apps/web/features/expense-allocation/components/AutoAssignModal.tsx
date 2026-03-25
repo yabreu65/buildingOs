@@ -9,21 +9,23 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 
 interface AutoAssignModalProps {
+  tenantId: string;
   buildingId: string;
   onClose: () => void;
   onSuccess?: () => void;
 }
 
-export default function AutoAssignModal({ buildingId, onClose, onSuccess }: AutoAssignModalProps) {
+export default function AutoAssignModal({ tenantId, buildingId, onClose, onSuccess }: AutoAssignModalProps) {
   const { toast } = useToast();
   const [force, setForce] = useState(false);
 
   // Fetch preview with current force value
   const { data: previewResult, isPending: isPreviewLoading } = useAutoAssignPreview(
+    tenantId,
     buildingId,
     force
   );
-  const { mutateAsync: autoAssign, isPending: isAssigning } = useAutoAssign(buildingId);
+  const { mutateAsync: autoAssign, isPending: isAssigning } = useAutoAssign(tenantId, buildingId);
 
   const handleAssign = async () => {
     try {

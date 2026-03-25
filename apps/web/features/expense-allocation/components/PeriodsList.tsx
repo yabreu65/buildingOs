@@ -1,5 +1,6 @@
 'use client';
 
+import React, { useEffect } from 'react';
 import { Calendar, Zap, FileText } from 'lucide-react';
 import { usePeriods } from '../index';
 import { ExpensePeriod } from '../services/expense-periods.api';
@@ -8,17 +9,28 @@ import Card from '@/shared/components/ui/Card';
 import Skeleton from '@/shared/components/ui/Skeleton';
 
 interface PeriodsListProps {
+  tenantId: string;
   buildingId: string;
   onCreateClick: () => void;
   onPeriodClick: (period: ExpensePeriod) => void;
+  onPeriodsLoaded?: (periods: ExpensePeriod[]) => void;
 }
 
 export default function PeriodsList({
+  tenantId,
   buildingId,
   onCreateClick,
   onPeriodClick,
+  onPeriodsLoaded,
 }: PeriodsListProps) {
-  const { data: periods, isPending, error } = usePeriods(buildingId);
+  const { data: periods, isPending, error } = usePeriods(tenantId, buildingId);
+
+  // Notify parent when periods load
+  useEffect(() => {
+    if (periods && !isPending) {
+      onPeriodsLoaded?.(periods);
+    }
+  }, [periods, isPending, onPeriodsLoaded]);
 
   if (isPending) {
     return (

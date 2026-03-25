@@ -305,12 +305,16 @@ export class FinanzasService {
       this.validators.throwForbidden('charges', 'cancel');
     }
 
-    // 2. Validate charge
-    const charge = await this.validators.validateChargeBelongsToBuildingAndTenant(
+    // 2. Validate and fetch charge
+    await this.validators.validateChargeBelongsToBuildingAndTenant(
       tenantId,
       buildingId,
       chargeId,
     );
+
+    const charge = await this.prisma.charge.findUnique({
+      where: { id: chargeId },
+    });
 
     // 3. Cancel
     const canceledCharge = await this.prisma.charge.update({
@@ -329,9 +333,9 @@ export class FinanzasService {
       entityType: 'Charge',
       entityId: chargeId,
       metadata: {
-        unitId: charge.unitId,
-        amount: charge.amount,
-        concept: charge.concept,
+        unitId: charge?.unitId,
+        amount: charge?.amount,
+        concept: charge?.concept,
         reason: dto.reason || 'No reason provided',
       },
     });

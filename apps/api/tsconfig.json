@@ -34,7 +34,7 @@
     "experimentalDecorators": true,
 
     "skipLibCheck": true,
-    "incremental": true,
+    "incremental": false,
     "forceConsistentCasingInFileNames": true,
     "removeComments": true,
     "typeRoots": ["./node_modules/@types", "./src/types"]

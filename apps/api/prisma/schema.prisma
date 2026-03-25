@@ -348,7 +348,7 @@ model ExpensePeriod {
   buildingId      String
   year            Int
   month           Int
-  totalToAllocate Int                   // En centavos (ej: 1500000 = $15,000)
+  totalToAllocate BigInt                // En centavos (ej: 1500000 = $15,000)
   currency        String                @default("ARS")
   dueDate         DateTime
   concept         String                // Ej: "Expensas Comunes - Enero 2026"
@@ -1159,7 +1159,7 @@ model Charge {
   periodId                    String?     // FK al ExpensePeriod (si viene de generación automática)
   coefficientSnapshot         Float?      // Coeficiente al momento del cálculo
   sumCoefSnapshot             Float?      // Suma total de coeficientes al momento del cálculo
-  totalToAllocateSnapshot     Int?        // Total distribuido al momento del cálculo
+  totalToAllocateSnapshot     BigInt?     // Total distribuido al momento del cálculo (BigInt para valores grandes)
   categorySnapshotId          String?     // ID de la categoría asignada al momento del cálculo
 
   // Relations

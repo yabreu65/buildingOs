@@ -20,10 +20,10 @@ import { UnitTicketsList } from '@/features/tickets';
 import { InboxList } from '@/features/communications';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
-import { AiUnitAssistant } from '@/features/units/components/AiUnitAssistant';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+import AssignResidentModal from './AssignResidentModal';
 
 interface UnitParams {
   tenantId: string;
@@ -65,6 +65,8 @@ export default function UnitDashboardPage() {
     occupantId: null,
   });
   const [isDeleting, setIsDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'tickets' | 'messages' | 'documents'>('overview');
+  const [showAssignModal, setShowAssignModal] = useState(false);
 
   const unit = units.find((u) => u.id === unitId);
 
@@ -199,32 +201,13 @@ export default function UnitDashboardPage() {
         </div>
       </Card>
 
-      {/* AI Unit Assistant - Pricing & Maintenance Insights */}
-      {isAdmin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <AiUnitAssistant
-            tenantId={tenantId}
-            unitId={unitId}
-            type="pricing"
-            payload={{
-              unitType: unit.unitType,
-            }}
-          />
-          <AiUnitAssistant
-            tenantId={tenantId}
-            unitId={unitId}
-            type="maintenance"
-          />
-        </div>
-      )}
-
       {/* Occupants Section */}
       <Card>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Occupants</h2>
           {isAdmin && (
             <Button
-              onClick={() => router.push(routes.buildingUnits(tenantId, buildingId))}
+              onClick={() => setShowAssignModal(true)}
               variant="secondary"
               size="sm"
             >
@@ -253,7 +236,7 @@ export default function UnitDashboardPage() {
               isAdmin
                 ? {
                     text: 'Assign Occupant',
-                    onClick: () => router.push(routes.buildingUnits(tenantId, buildingId)),
+                    onClick: () => setShowAssignModal(true),
                   }
                 : undefined
             }
@@ -315,31 +298,98 @@ export default function UnitDashboardPage() {
         <div className="p-6 text-center border-2 border-dashed rounded-lg">
           <p className="text-muted-foreground">Payment ledger coming soon</p>
         </div>
-      </Card>      {/* Tickets Section */}
-      <UnitTicketsList buildingId={buildingId} unitId={unitId} />
-
-      {/* Comunicados Section */}
-      <Card>
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Comunicados</h2>
-        </div>
-        <InboxList buildingId={buildingId} />
       </Card>
 
-      {/* Documentos Section */}
+      {/* Tabs for Tickets, Messages, Documents */}
       <Card>
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Documentos</h2>
+        <div className="border-b mb-4">
+          <div className="flex gap-4">
+            <button
+              onClick={() => setActiveTab('overview')}
+              className={`px-4 py-2 font-medium border-b-2 transition ${
+                activeTab === 'overview'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Overview
+            </button>
+            <button
+              onClick={() => setActiveTab('tickets')}
+              className={`px-4 py-2 font-medium border-b-2 transition ${
+                activeTab === 'tickets'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Tickets
+            </button>
+            <button
+              onClick={() => setActiveTab('messages')}
+              className={`px-4 py-2 font-medium border-b-2 transition ${
+                activeTab === 'messages'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Comunicados
+            </button>
+            <button
+              onClick={() => setActiveTab('documents')}
+              className={`px-4 py-2 font-medium border-b-2 transition ${
+                activeTab === 'documents'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Documentos
+            </button>
+          </div>
         </div>
-        <DocumentList
-          documents={documents}
-          loading={documentsLoading}
-          error={documentsError}
+
+        {/* Tickets Tab */}
+        {activeTab === 'tickets' && (
+          <div>
+            <UnitTicketsList buildingId={buildingId} unitId={unitId} />
+          </div>
+        )}
+
+        {/* Messages Tab */}
+        {activeTab === 'messages' && (
+          <div>
+            <InboxList buildingId={buildingId} />
+          </div>
+        )}
+
+        {/* Documents Tab */}
+        {activeTab === 'documents' && (
+          <div>
+            <DocumentList
+              documents={documents}
+              loading={documentsLoading}
+              error={documentsError}
+              tenantId={tenantId}
+              onRetry={refetchDocuments}
+              readOnly={true}
+            />
+          </div>
+        )}
+      </Card>
+
+      {/* Assign Resident Modal */}
+      {showAssignModal && (
+        <AssignResidentModal
           tenantId={tenantId}
-          onRetry={refetchDocuments}
-          readOnly={true}
+          buildingId={buildingId}
+          unitId={unitId}
+          onClose={() => setShowAssignModal(false)}
+          onSuccess={() => {
+            setShowAssignModal(false);
+            refetchOccupants();
+            toast('Resident assigned successfully', 'success');
+          }}
         />
-      </Card>
+      )}
 
       {/* Delete Occupant Dialog */}
       <DeleteConfirmDialog

@@ -193,13 +193,17 @@ export async function fetchUnits(tenantId: string, buildingId: string): Promise<
   logRequest('GET', endpoint);
 
   try {
-    const data = await apiClient<Unit[]>({
+    const data = await apiClient<any[]>({
       path: endpoint,
       method: 'GET',
       headers: getTenantHeaders(tenantId),
     });
     logResponse(endpoint, 200, data);
-    return data;
+    // Map 'code' from backend to 'unitCode' in frontend type
+    return data.map((u) => ({
+      ...u,
+      unitCode: u.code || u.unitCode,
+    })) as Unit[];
   } catch (error) {
     const err = error as Error;
     logError(endpoint, 500, err);

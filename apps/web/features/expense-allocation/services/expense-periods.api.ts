@@ -51,6 +51,7 @@ export interface BlockedGenerationError {
 
 // API Functions
 export async function listPeriods(
+  tenantId: string,
   buildingId: string,
   year?: number,
   month?: number,
@@ -63,19 +64,20 @@ export async function listPeriods(
 
   const query = params.toString() ? `?${params.toString()}` : '';
   return apiClient<ExpensePeriod[]>({
-    path: `/buildings/${buildingId}/expense-periods${query}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods${query}`,
     method: 'GET',
   });
 }
 
-export async function getPeriod(buildingId: string, periodId: string): Promise<ExpensePeriodDetail> {
+export async function getPeriod(tenantId: string, buildingId: string, periodId: string): Promise<ExpensePeriodDetail> {
   return apiClient<ExpensePeriodDetail>({
-    path: `/buildings/${buildingId}/expense-periods/${periodId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods/${periodId}`,
     method: 'GET',
   });
 }
 
 export async function createPeriod(
+  tenantId: string,
   buildingId: string,
   data: {
     year: number;
@@ -87,13 +89,14 @@ export async function createPeriod(
   }
 ): Promise<ExpensePeriod> {
   return apiClient<ExpensePeriod, typeof data>({
-    path: `/buildings/${buildingId}/expense-periods`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods`,
     method: 'POST',
     body: data,
   });
 }
 
 export async function updatePeriod(
+  tenantId: string,
   buildingId: string,
   periodId: string,
   data: {
@@ -104,33 +107,34 @@ export async function updatePeriod(
   }
 ): Promise<ExpensePeriod> {
   return apiClient<ExpensePeriod, typeof data>({
-    path: `/buildings/${buildingId}/expense-periods/${periodId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods/${periodId}`,
     method: 'PATCH',
     body: data,
   });
 }
 
-export async function deletePeriod(buildingId: string, periodId: string): Promise<void> {
+export async function deletePeriod(tenantId: string, buildingId: string, periodId: string): Promise<void> {
   return apiClient<void>({
-    path: `/buildings/${buildingId}/expense-periods/${periodId}`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods/${periodId}`,
     method: 'DELETE',
   });
 }
 
 export async function generateCharges(
+  tenantId: string,
   buildingId: string,
   periodId: string
 ): Promise<GenerateResult> {
   return apiClient<GenerateResult, {}>({
-    path: `/buildings/${buildingId}/expense-periods/${periodId}/generate`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods/${periodId}/generate`,
     method: 'POST',
     body: {},
   });
 }
 
-export async function publishPeriod(buildingId: string, periodId: string): Promise<ExpensePeriod> {
+export async function publishPeriod(tenantId: string, buildingId: string, periodId: string): Promise<ExpensePeriod> {
   return apiClient<ExpensePeriod, {}>({
-    path: `/buildings/${buildingId}/expense-periods/${periodId}/publish`,
+    path: `/tenants/${tenantId}/buildings/${buildingId}/expense-periods/${periodId}/publish`,
     method: 'POST',
     body: {},
   });

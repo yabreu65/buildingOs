@@ -17,7 +17,7 @@ export type ScopedRole = {
 
 export type Membership = {
   tenantId: string;
-  roles: Role[];
+  roles: string[];
   scopedRoles?: ScopedRole[];
 };
 

@@ -512,6 +512,7 @@ export class ExpenseCategoriesService {
 
   /**
    * Validate that a new range doesn't overlap with existing active categories
+   * Ranges must be mutually exclusive so each unit falls into exactly one category
    */
   private async validateNoOverlap(
     tenantId: string,

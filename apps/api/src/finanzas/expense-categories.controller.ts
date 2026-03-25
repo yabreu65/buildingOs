@@ -30,7 +30,7 @@ import {
   AutoAssignResultDto,
 } from './expense-categories.dto';
 
-@Controller('buildings/:buildingId/expense-categories')
+@Controller('tenants/:tenantId/buildings/:buildingId/expense-categories')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class ExpenseCategoriesController {
   constructor(private categoriesService: ExpenseCategoriesService) {}

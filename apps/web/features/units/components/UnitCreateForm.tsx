@@ -33,6 +33,7 @@ interface UnitCreateFormProps {
     label?: string;
     unitType?: string;
     occupancyStatus?: string;
+    m2?: number;
   }) => Promise<Unit>;
 }
 
@@ -42,6 +43,7 @@ const unitSchema = z.object({
   label: z.string().optional(),
   unitType: z.enum(['APARTMENT', 'HOUSE', 'OFFICE', 'STORAGE', 'PARKING', 'OTHER']).optional(),
   occupancyStatus: z.enum(['UNKNOWN', 'VACANT', 'OCCUPIED']).optional(),
+  m2: z.union([z.number().positive('m² must be a positive number'), z.undefined()]).optional(),
   buildingId: z.string().min(1, 'Building is required'),
 });
 
@@ -86,6 +88,7 @@ export default function UnitCreateForm({
       buildingId: defaultBuildingId || '',
       unitType: 'APARTMENT',
       occupancyStatus: 'UNKNOWN',
+      m2: undefined,
     },
   });
 
@@ -99,6 +102,7 @@ export default function UnitCreateForm({
         label: data.label,
         unitType: data.unitType,
         occupancyStatus: data.occupancyStatus,
+        m2: data.m2,
       });
 
       reset();
@@ -185,6 +189,24 @@ export default function UnitCreateForm({
               {...register('label')}
             />
           </div>
+        </div>
+
+        {/* m² */}
+        <div>
+          <label htmlFor="m2" className="block text-sm font-medium mb-1">
+            m² (Square Meters) - Optional
+          </label>
+          <Input
+            id="m2"
+            type="number"
+            placeholder="e.g., 65"
+            step="0.01"
+            {...register('m2')}
+            className={errors.m2 ? 'border-red-500' : ''}
+          />
+          {errors.m2 && (
+            <p className="text-xs text-red-600 mt-1">{errors.m2.message}</p>
+          )}
         </div>
 
         {/* Type and Occupancy */}

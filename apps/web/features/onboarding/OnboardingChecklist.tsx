@@ -111,7 +111,7 @@ export default function OnboardingChecklist() {
   // Evitar render en SSR/hidratación (localStorage)
   if (!isMounted || !session || !tenantId) return null;
 
-  const rolesForTenant: Role[] =
+  const rolesForTenant: string[] =
     session.memberships.find((m) => m.tenantId === tenantId)?.roles ?? [];
 
   const isAdmin =

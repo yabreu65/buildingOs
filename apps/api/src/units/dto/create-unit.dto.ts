@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsNumber, Min } from 'class-validator';
 
 export class CreateUnitDto {
   @IsString()
@@ -15,4 +15,9 @@ export class CreateUnitDto {
   @IsOptional()
   @IsIn(['UNKNOWN', 'VACANT', 'OCCUPIED'])
   occupancyStatus?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  m2?: number;
 }

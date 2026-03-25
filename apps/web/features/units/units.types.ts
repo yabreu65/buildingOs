@@ -9,6 +9,11 @@ export type Unit = {
   unitCode?: string; // Ej: "UF-101", código externo
   unitType?: 'APARTMENT' | 'HOUSE' | 'OFFICE' | 'STORAGE' | 'PARKING' | 'OTHER';
   occupancyStatus?: 'UNKNOWN' | 'VACANT' | 'OCCUPIED';
+  m2?: number; // Metros cuadrados
+  unitCategory?: {
+    id: string;
+    name: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -61,4 +66,7 @@ export type CreateUnitInput = {
   occupancyStatus?: Unit['occupancyStatus'];
 };
 
-export type UpdateUnitInput = Partial<CreateUnitInput>;
+export type UpdateUnitInput = Partial<CreateUnitInput> & {
+  m2?: number;
+  unitCategoryId?: string | null;
+};

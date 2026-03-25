@@ -14,12 +14,14 @@ import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/compone
 import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { UnitCreateForm } from '@/features/units/components';
+import { useCategories } from '@/features/expense-allocation';
 import { useToast } from '@/shared/components/ui/Toast';
 import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
 import { Edit, Trash2, LayoutGrid, Plus, X } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import type { Unit as ApiUnit } from '@/features/units/units.api';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+import CategoryChangeDialog from './CategoryChangeDialog';
 
 interface UnitParams {
   tenantId: string;
@@ -48,6 +50,7 @@ export default function UnitsPage() {
     delete: deleteUnit,
     refetch: refetchUnits,
   } = useUnits(tenantId, buildingId);
+  const { data: categories = [] } = useCategories(tenantId, buildingId);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
 
@@ -58,6 +61,7 @@ export default function UnitsPage() {
     label: '',
     unitType: 'APARTMENT',
     occupancyStatus: 'UNKNOWN',
+    m2: undefined as number | undefined,
   });
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -68,6 +72,16 @@ export default function UnitsPage() {
     unitId: string | null;
   }>({ isOpen: false, unitId: null });
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Category change dialog state
+  const [categoryChangeDialog, setCategoryChangeDialog] = useState<{
+    isOpen: boolean;
+    unitId: string | null;
+    newCategoryId: string | null;
+    newCategoryName?: string;
+    newM2?: number;
+  }>({ isOpen: false, unitId: null, newCategoryId: null });
+  const [isCategoryChanging, setIsCategoryChanging] = useState(false);
 
   const building = buildings.find((b) => b.id === buildingId);
 
@@ -100,6 +114,7 @@ export default function UnitsPage() {
       label: unit.label,
       unitType: unit.unitType || 'APARTMENT',
       occupancyStatus: unit.occupancyStatus || 'UNKNOWN',
+      m2: unit.m2 || undefined,
     });
     setEditError(null);
   };
@@ -141,6 +156,40 @@ export default function UnitsPage() {
       toast(message, 'error');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleCategoryChange = (unitId: string, categoryId: string) => {
+    const selectedCategory = categories.find((c) => c.id === categoryId);
+    const m2ToSet = selectedCategory ? selectedCategory.maxM2 || selectedCategory.minM2 : undefined;
+
+    // Open dialog for confirmation
+    setCategoryChangeDialog({
+      isOpen: true,
+      unitId,
+      newCategoryId: categoryId || null,
+      newCategoryName: selectedCategory?.name,
+      newM2: m2ToSet,
+    });
+  };
+
+  const handleCategoryChangeConfirm = async () => {
+    const { unitId, newCategoryId, newM2 } = categoryChangeDialog;
+    if (!unitId || newCategoryId === null) return;
+
+    setIsCategoryChanging(true);
+    try {
+      await updateUnit(unitId, {
+        unitCategoryId: newCategoryId || null,
+        m2: newM2,
+      });
+      toast('Categoría actualizada' + (newM2 ? ` (m² actualizado: ${newM2})` : ''), 'success');
+      setCategoryChangeDialog({ isOpen: false, unitId: null, newCategoryId: null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error al actualizar categoría';
+      toast(message, 'error');
+    } finally {
+      setIsCategoryChanging(false);
     }
   };
 
@@ -299,6 +348,24 @@ export default function UnitsPage() {
                 </select>
               </div>
             </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                m² (Square Meters) - Optional
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={editFormData.m2 ?? ''}
+                onChange={(e) =>
+                  setEditFormData({
+                    ...editFormData,
+                    m2: e.target.value ? parseFloat(e.target.value) : undefined,
+                  })
+                }
+                placeholder="e.g., 65"
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
             <div className="flex gap-2 justify-end">
               <Button
                 type="button"
@@ -332,6 +399,8 @@ export default function UnitsPage() {
                 <tr className="border-b">
                   <th className="text-left py-3 px-4 font-medium">Code</th>
                   <th className="text-left py-3 px-4 font-medium">Label</th>
+                  <th className="text-left py-3 px-4 font-medium">m²</th>
+                  <th className="text-left py-3 px-4 font-medium">Categoría</th>
                   <th className="text-left py-3 px-4 font-medium">Type</th>
                   <th className="text-left py-3 px-4 font-medium">Status</th>
                   <th className="text-left py-3 px-4 font-medium">Actions</th>
@@ -342,6 +411,8 @@ export default function UnitsPage() {
                   <tr key={i} className="border-b">
                     <td className="py-3 px-4"><Skeleton width="60px" height="20px" /></td>
                     <td className="py-3 px-4"><Skeleton width="80px" height="20px" /></td>
+                    <td className="py-3 px-4"><Skeleton width="60px" height="20px" /></td>
+                    <td className="py-3 px-4"><Skeleton width="100px" height="20px" /></td>
                     <td className="py-3 px-4"><Skeleton width="80px" height="20px" /></td>
                     <td className="py-3 px-4"><Skeleton width="80px" height="20px" /></td>
                     <td className="py-3 px-4"><Skeleton width="60px" height="20px" /></td>
@@ -371,6 +442,8 @@ export default function UnitsPage() {
                 <tr className="border-b">
                   <th className="text-left py-3 px-4 font-medium">Code</th>
                   <th className="text-left py-3 px-4 font-medium">Label</th>
+                  <th className="text-left py-3 px-4 font-medium">m²</th>
+                  <th className="text-left py-3 px-4 font-medium">Categoría</th>
                   <th className="text-left py-3 px-4 font-medium">Type</th>
                   <th className="text-left py-3 px-4 font-medium">Status</th>
                   <th className="text-left py-3 px-4 font-medium">Actions</th>
@@ -381,6 +454,21 @@ export default function UnitsPage() {
                   <tr key={unit.id} className="border-b hover:bg-muted/50 transition">
                     <td className="py-3 px-4 font-medium">{unit.unitCode || 'N/A'}</td>
                     <td className="py-3 px-4">{unit.label || '-'}</td>
+                    <td className="py-3 px-4 text-right">{unit.m2 ? `${unit.m2} m²` : '-'}</td>
+                    <td className="py-3 px-4">
+                      <select
+                        value={unit.unitCategory?.id || ''}
+                        onChange={(e) => handleCategoryChange(unit.id, e.target.value)}
+                        className="px-2 py-1 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Sin categoría</option>
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="py-3 px-4">
                       <span className="text-xs bg-gray-200 px-2 py-1 rounded">
                         {unit.unitType || 'N/A'}
@@ -442,6 +530,21 @@ export default function UnitsPage() {
         onCancel={() => setDeleteConfirm({ isOpen: false, unitId: null })}
         isLoading={isDeleting}
       />
+
+      {/* Category Change Dialog */}
+      {categoryChangeDialog.unitId && (
+        <CategoryChangeDialog
+          isOpen={categoryChangeDialog.isOpen}
+          unitLabel={units.find((u) => u.id === categoryChangeDialog.unitId)?.label || ''}
+          currentCategory={units.find((u) => u.id === categoryChangeDialog.unitId)?.unitCategory?.name}
+          newCategory={categoryChangeDialog.newCategoryName || ''}
+          currentM2={units.find((u) => u.id === categoryChangeDialog.unitId)?.m2}
+          newM2={categoryChangeDialog.newM2}
+          onConfirm={handleCategoryChangeConfirm}
+          onCancel={() => setCategoryChangeDialog({ isOpen: false, unitId: null, newCategoryId: null })}
+          isLoading={isCategoryChanging}
+        />
+      )}
       </div>
     </ErrorBoundary>
   );

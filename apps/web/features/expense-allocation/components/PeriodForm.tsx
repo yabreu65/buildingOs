@@ -10,15 +10,16 @@ import Input from '@/shared/components/ui/Input';
 import { useToast } from '@/shared/components/ui/Toast';
 
 interface PeriodFormProps {
+  tenantId: string;
   buildingId: string;
   period?: ExpensePeriod;
   onSuccess: () => void;
   onCancel: () => void;
 }
 
-export default function PeriodForm({ buildingId, period, onSuccess, onCancel }: PeriodFormProps) {
+export default function PeriodForm({ tenantId, buildingId, period, onSuccess, onCancel }: PeriodFormProps) {
   const { toast } = useToast();
-  const { mutateAsync: create, isPending: isCreating } = useCreatePeriod(buildingId);
+  const { mutateAsync: create, isPending: isCreating } = useCreatePeriod(tenantId, buildingId);
 
   const now = new Date();
   const defaultYear = now.getFullYear();

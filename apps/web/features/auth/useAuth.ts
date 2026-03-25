@@ -9,7 +9,7 @@ interface CurrentUser {
   id: string;
   email: string;
   name: string;
-  roles?: Role[];
+  roles?: string[];
 }
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';

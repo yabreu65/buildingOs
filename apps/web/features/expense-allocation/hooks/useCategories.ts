@@ -11,19 +11,19 @@ import {
 } from '../services/expense-categories.api';
 
 // Query Hook: List all categories
-export function useCategories(buildingId: string) {
+export function useCategories(tenantId: string, buildingId: string) {
   return useQuery({
-    queryKey: ['categories', buildingId],
-    queryFn: () => listCategories(buildingId),
+    queryKey: ['categories', tenantId, buildingId],
+    queryFn: () => listCategories(tenantId, buildingId),
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
-    enabled: !!buildingId,
-    initialData: [],
+    enabled: !!tenantId && !!buildingId,
+    placeholderData: [],
   });
 }
 
 // Mutation Hook: Create category
-export function useCreateCategory(buildingId: string) {
+export function useCreateCategory(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -32,15 +32,15 @@ export function useCreateCategory(buildingId: string) {
       minM2: number;
       maxM2: number | null;
       coefficient: number;
-    }) => createCategory(buildingId, data),
+    }) => createCategory(tenantId, buildingId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['categories', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Update category
-export function useUpdateCategory(buildingId: string) {
+export function useUpdateCategory(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -56,45 +56,45 @@ export function useUpdateCategory(buildingId: string) {
         coefficient?: number;
         active?: boolean;
       };
-    }) => updateCategory(buildingId, categoryId, data),
+    }) => updateCategory(tenantId, buildingId, categoryId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['categories', tenantId, buildingId] });
     },
   });
 }
 
 // Mutation Hook: Delete category
-export function useDeleteCategory(buildingId: string) {
+export function useDeleteCategory(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (categoryId: string) => deleteCategory(buildingId, categoryId),
+    mutationFn: async (categoryId: string) => deleteCategory(tenantId, buildingId, categoryId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['categories', tenantId, buildingId] });
     },
   });
 }
 
 // Query Hook: Auto-assign preview (read-only)
-export function useAutoAssignPreview(buildingId: string, force: boolean = false) {
+export function useAutoAssignPreview(tenantId: string, buildingId: string, force: boolean = false) {
   return useQuery({
-    queryKey: ['auto-assign-preview', buildingId, force],
-    queryFn: () => autoAssignPreview(buildingId, force),
+    queryKey: ['auto-assign-preview', tenantId, buildingId, force],
+    queryFn: () => autoAssignPreview(tenantId, buildingId, force),
     staleTime: 1 * 60 * 1000, // 1 minute
     gcTime: 5 * 60 * 1000,
-    enabled: !!buildingId,
+    enabled: !!tenantId && !!buildingId,
   });
 }
 
 // Mutation Hook: Auto-assign and save
-export function useAutoAssign(buildingId: string) {
+export function useAutoAssign(tenantId: string, buildingId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (force: boolean = false) => autoAssignUnits(buildingId, force),
+    mutationFn: async (force: boolean = false) => autoAssignUnits(tenantId, buildingId, force),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories', buildingId] });
-      queryClient.invalidateQueries({ queryKey: ['auto-assign-preview', buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['categories', tenantId, buildingId] });
+      queryClient.invalidateQueries({ queryKey: ['auto-assign-preview', tenantId, buildingId] });
     },
   });
 }

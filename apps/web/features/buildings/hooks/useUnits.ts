@@ -28,6 +28,8 @@ export interface UseUnits extends UseUnitsState {
       label?: string;
       unitType?: string;
       occupancyStatus?: string;
+      m2?: number;
+      unitCategoryId?: string | null;
     }
   ) => Promise<Unit>;
   delete: (unitId: string) => Promise<void>;

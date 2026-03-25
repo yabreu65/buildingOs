@@ -12,19 +12,21 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 
 interface CategoriesListProps {
+  tenantId: string;
   buildingId: string;
   onEditCategory: (category: UnitCategory) => void;
   onAutoAssignClick: () => void;
 }
 
 export default function CategoriesList({
+  tenantId,
   buildingId,
   onEditCategory,
   onAutoAssignClick,
 }: CategoriesListProps) {
   const { toast } = useToast();
-  const { data: categories, isPending, error } = useCategories(buildingId);
-  const { mutate: deleteCategory, isPending: isDeleting } = useDeleteCategory(buildingId);
+  const { data: categories, isPending, error } = useCategories(tenantId, buildingId);
+  const { mutate: deleteCategory, isPending: isDeleting } = useDeleteCategory(tenantId, buildingId);
   const [toDeleteId, setToDeleteId] = useState<string | null>(null);
   const [showAutoAssignModal, setShowAutoAssignModal] = useState(false);
 
@@ -81,6 +83,7 @@ export default function CategoriesList({
       {/* Auto-Assign Modal */}
       {showAutoAssignModal && (
         <AutoAssignModal
+          tenantId={tenantId}
           buildingId={buildingId}
           onClose={() => setShowAutoAssignModal(false)}
           onSuccess={() => {

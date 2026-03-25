@@ -69,7 +69,7 @@ export interface ExpensePeriodDto {
   buildingId: string;
   year: number;
   month: number;
-  totalToAllocate: number;
+  totalToAllocate: string; // BigInt converted to string
   currency: string;
   dueDate: Date;
   concept: string;
@@ -81,7 +81,7 @@ export interface ExpensePeriodDto {
 
 export interface GenerateResultDto {
   chargesCount: number;
-  totalAllocated: number; // Should equal totalToAllocate
+  totalAllocated: string; // BigInt converted to string; Should equal totalToAllocate
 }
 
 export interface ExpensePeriodDetailDto extends ExpensePeriodDto {

@@ -42,6 +42,11 @@ export class UnitsService {
           label: dto.label,
           unitType: dto.unitType || 'APARTMENT',
           occupancyStatus: dto.occupancyStatus || 'UNKNOWN',
+          m2: dto.m2,
+        },
+        include: {
+          unitCategory: { select: { id: true, name: true } },
+          unitOccupants: { include: { user: true } },
         },
       });
 
@@ -92,6 +97,7 @@ export class UnitsService {
       where,
       include: {
         building: { select: { id: true, name: true } },
+        unitCategory: { select: { id: true, name: true } },
         unitOccupants: { include: { user: true } },
       },
       orderBy: [{ building: { name: 'asc' } }, { label: 'asc' }],
@@ -112,7 +118,10 @@ export class UnitsService {
 
     return await this.prisma.unit.findMany({
       where: { buildingId },
-      include: { unitOccupants: { include: { user: true } } },
+      include: {
+        unitCategory: { select: { id: true, name: true } },
+        unitOccupants: { include: { user: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -131,7 +140,10 @@ export class UnitsService {
 
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, buildingId },
-      include: { unitOccupants: { include: { user: true } } },
+      include: {
+        unitCategory: { select: { id: true, name: true } },
+        unitOccupants: { include: { user: true } },
+      },
     });
 
     if (!unit) {
@@ -155,8 +167,13 @@ export class UnitsService {
           label: dto.label,
           unitType: dto.unitType,
           occupancyStatus: dto.occupancyStatus,
+          m2: dto.m2,
+          unitCategoryId: dto.unitCategoryId,
         },
-        include: { unitOccupants: { include: { user: true } } },
+        include: {
+          unitCategory: { select: { id: true, name: true } },
+          unitOccupants: { include: { user: true } },
+        },
       });
 
       // Audit: UNIT_UPDATE

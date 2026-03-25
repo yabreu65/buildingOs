@@ -10,6 +10,7 @@ import Input from '@/shared/components/ui/Input';
 import { useToast } from '@/shared/components/ui/Toast';
 
 interface CategoryFormProps {
+  tenantId: string;
   buildingId: string;
   category?: UnitCategory;
   onSuccess: () => void;
@@ -17,14 +18,15 @@ interface CategoryFormProps {
 }
 
 export default function CategoryForm({
+  tenantId,
   buildingId,
   category,
   onSuccess,
   onCancel,
 }: CategoryFormProps) {
   const { toast } = useToast();
-  const { mutateAsync: create, isPending: isCreating } = useCreateCategory(buildingId);
-  const { mutateAsync: update, isPending: isUpdating } = useUpdateCategory(buildingId);
+  const { mutateAsync: create, isPending: isCreating } = useCreateCategory(tenantId, buildingId);
+  const { mutateAsync: update, isPending: isUpdating } = useUpdateCategory(tenantId, buildingId);
 
   const [formData, setFormData] = useState({
     name: category?.name || '',
