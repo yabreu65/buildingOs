@@ -152,7 +152,7 @@ export class FinanzasValidators {
     tenantId: string,
     buildingId: string,
     chargeId: string,
-  ) {
+  ): Promise<void> {
     const charge = await this.prisma.charge.findFirst({
       where: { id: chargeId, tenantId, buildingId },
     });
@@ -162,8 +162,6 @@ export class FinanzasValidators {
         `Charge not found or does not belong to this building/tenant`,
       );
     }
-
-    return charge;
   }
 
   /**
@@ -387,6 +385,7 @@ export class FinanzasValidators {
    */
   isAdminOrOperator(userRoles: string[]): boolean {
     return this.hasRole(userRoles, 'TENANT_ADMIN') ||
+           this.hasRole(userRoles, 'TENANT_OWNER') ||
            this.hasRole(userRoles, 'OPERATOR');
   }
 
