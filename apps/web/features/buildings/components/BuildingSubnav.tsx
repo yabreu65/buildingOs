@@ -63,6 +63,10 @@ export function BuildingSubnav({ tenantId, buildingId }: BuildingSubnavProps) {
       href: `/${tenantId}/buildings/${buildingId}/finance`,
     },
     {
+      label: 'Expensas',
+      href: `/${tenantId}/buildings/${buildingId}/expense-allocation`,
+    },
+    {
       label: 'Reportes',
       href: `/${tenantId}/buildings/${buildingId}/reports`,
     },

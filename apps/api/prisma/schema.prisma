@@ -64,6 +64,13 @@ enum ChargeType {
   OTHER
 }
 
+enum ExpensePeriodStatus {
+  DRAFT
+  GENERATED
+  PUBLISHED
+  CLOSED
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -123,6 +130,8 @@ model Tenant {
   aiTemplates           AiTemplate[]
   aiActionEvents        AiActionEvent[]
   planChangeRequests    PlanChangeRequest[]
+  unitCategories        UnitCategory[]
+  expensePeriods        ExpensePeriod[]
 }
 
 model User {
@@ -237,12 +246,13 @@ model Invitation {
 }
 
 model Building {
-  id        String   @id @default(cuid())
-  tenantId  String
-  name      String
-  address   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  tenantId       String
+  name           String
+  address        String?
+  allocationMode String   @default("MANUAL") // "MANUAL" | "BY_CATEGORY_RANGE_M2_COEFFICIENT"
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   units                 Unit[]
@@ -256,6 +266,8 @@ model Building {
   payments              Payment[]
   membershipRoles       MembershipRole[]      @relation("BuildingMembershipRoles")
   userContexts          UserContext[]         @relation("UserContextBuilding")
+  unitCategories        UnitCategory[]
+  expensePeriods        ExpensePeriod[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -268,20 +280,25 @@ model Unit {
   label           String?
   unitType        String   @default("APARTMENT") // APARTMENT, HOUSE, OFFICE, STORAGE, PARKING
   occupancyStatus String   @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
+  m2              Float?   // Metros cuadrados (nullable — no todos los edificios los tienen)
+  isBillable      Boolean  @default(true) // false = pasillos, depósitos, excluir del prorrateo
+  unitCategoryId  String?  // FK a UnitCategory (auto-asignado por el motor)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  building        Building         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  building        Building          @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitCategory    UnitCategory?     @relation("UnitCategoryUnits", fields: [unitCategoryId], references: [id], onDelete: SetNull)
   unitOccupants   UnitOccupant[]
   tickets         Ticket[]
   documents       Document[]
   charges         Charge[]
   payments        Payment[]
-  membershipRoles MembershipRole[] @relation("UnitMembershipRoles")
-  userContexts    UserContext[]    @relation("UserContextUnit")
+  membershipRoles MembershipRole[]  @relation("UnitMembershipRoles")
+  userContexts    UserContext[]     @relation("UserContextUnit")
 
   @@unique([buildingId, code])
   @@index([buildingId])
+  @@index([buildingId, unitCategoryId])
 }
 
 model UnitOccupant {
@@ -298,6 +315,55 @@ model UnitOccupant {
   @@unique([unitId, userId, role])
   @@index([unitId])
   @@index([userId])
+}
+
+// ============================================================================
+// EXPENSE ALLOCATION: Categories and Periods
+// ============================================================================
+
+model UnitCategory {
+  id          String   @id @default(cuid())
+  tenantId    String
+  buildingId  String
+  name        String
+  minM2       Float
+  maxM2       Float?   // null = sin límite superior (catch-all)
+  coefficient Float    // Factor de prorrateo. Debe ser > 0
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  units    Unit[]   @relation("UnitCategoryUnits")
+
+  @@unique([buildingId, name])
+  @@index([tenantId, buildingId])
+  @@index([buildingId, active])
+}
+
+model ExpensePeriod {
+  id              String                @id @default(cuid())
+  tenantId        String
+  buildingId      String
+  year            Int
+  month           Int
+  totalToAllocate Int                   // En centavos (ej: 1500000 = $15,000)
+  currency        String                @default("ARS")
+  dueDate         DateTime
+  concept         String                // Ej: "Expensas Comunes - Enero 2026"
+  status          ExpensePeriodStatus   @default(DRAFT)
+  publishedAt     DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  charges  Charge[]
+
+  @@unique([buildingId, year, month]) // Un período por mes por edificio
+  @@index([tenantId, buildingId])
+  @@index([tenantId, status])
 }
 
 // ============================================================================
@@ -413,6 +479,15 @@ enum AuditAction {
   LEAD_STATUS_CHANGED
   LEAD_DELETED
   LEAD_CONVERTED
+  // EXPENSE ALLOCATION
+  UNIT_CATEGORY_CREATE
+  UNIT_CATEGORY_UPDATE
+  UNIT_CATEGORY_DELETE
+  UNIT_CATEGORY_AUTO_ASSIGN
+  EXPENSE_PERIOD_CREATE
+  EXPENSE_PERIOD_GENERATE
+  EXPENSE_PERIOD_PUBLISH
+  EXPENSE_PERIOD_DELETE
 }
 
 model AuditLog {
@@ -1064,34 +1139,43 @@ model WorkOrder {
 // FINANZAS: Charge (Cargo/Expensa por unidad)
 // ============================================================================
 model Charge {
-  id                     String      @id @default(cuid())
-  tenantId               String
-  buildingId             String
-  unitId                 String
-  period                 String      // YYYY-MM format (e.g., "2026-02")
-  type                   ChargeType  @default(COMMON_EXPENSE)
-  concept                String      // e.g., "Expensas Comunes Febrero 2026"
-  amount                 Int         // Amount in cents (e.g., 10000 = $100.00)
-  currency               String      @default("ARS")
-  dueDate                DateTime
-  status                 ChargeStatus @default(PENDING)
-  createdByMembershipId  String?     // Who created this charge (admin)
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
-  canceledAt             DateTime?
+  id                          String      @id @default(cuid())
+  tenantId                    String
+  buildingId                  String
+  unitId                      String
+  period                      String      // YYYY-MM format (e.g., "2026-02")
+  type                        ChargeType  @default(COMMON_EXPENSE)
+  concept                     String      // e.g., "Expensas Comunes Febrero 2026"
+  amount                      Int         // Amount in cents (e.g., 10000 = $100.00)
+  currency                    String      @default("ARS")
+  dueDate                     DateTime
+  status                      ChargeStatus @default(PENDING)
+  createdByMembershipId       String?     // Who created this charge (admin)
+  createdAt                   DateTime     @default(now())
+  updatedAt                   DateTime     @updatedAt
+  canceledAt                  DateTime?
+
+  // Expense allocation snapshots (optional — null si charge es manual)
+  periodId                    String?     // FK al ExpensePeriod (si viene de generación automática)
+  coefficientSnapshot         Float?      // Coeficiente al momento del cálculo
+  sumCoefSnapshot             Float?      // Suma total de coeficientes al momento del cálculo
+  totalToAllocateSnapshot     Int?        // Total distribuido al momento del cálculo
+  categorySnapshotId          String?     // ID de la categoría asignada al momento del cálculo
 
   // Relations
-  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building              Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unit                  Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  createdByMembership   Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
-  paymentAllocations    PaymentAllocation[]
+  tenant                      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building                    Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                        Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdByMembership         Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  expensePeriod               ExpensePeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  paymentAllocations          PaymentAllocation[]
 
   @@unique([unitId, period, concept]) // One charge per unit/period/concept
   @@index([tenantId, buildingId, period])
   @@index([tenantId, unitId, status])
   @@index([tenantId, buildingId, status])
   @@index([dueDate])
+  @@index([periodId])
 }
 
 // ============================================================================
