@@ -12,13 +12,24 @@ import {
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
-import { MembershipsService, ScopedRoleResponse } from './memberships.service';
+import { MembershipsService, ScopedRoleResponse, AssignableResidentResponse } from './memberships.service';
 import { AddRoleDto } from './dto/add-role.dto';
 
 @Controller('tenants/:tenantId/memberships')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class MembershipsController {
   constructor(private readonly membershipsService: MembershipsService) {}
+
+  /**
+   * GET /tenants/:tenantId/memberships/assignable-residents
+   * List members who can be assigned as residents (non-admin users)
+   */
+  @Get('assignable-residents')
+  async getAssignableResidents(
+    @Param('tenantId') tenantId: string,
+  ): Promise<AssignableResidentResponse[]> {
+    return this.membershipsService.getAssignableResidents(tenantId);
+  }
 
   /**
    * GET /tenants/:tenantId/memberships/:membershipId/roles

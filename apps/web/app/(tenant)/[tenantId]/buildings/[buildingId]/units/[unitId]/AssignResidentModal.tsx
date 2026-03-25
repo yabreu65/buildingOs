@@ -38,18 +38,11 @@ export default function AssignResidentModal({
     const fetchResidents = async () => {
       try {
         setLoading(true);
-        const data = await apiClient<Array<Resident & { roles?: string[] }>>({
-          path: `/tenants/${tenantId}/memberships`,
+        const data = await apiClient<Resident[]>({
+          path: `/tenants/${tenantId}/memberships/assignable-residents`,
           method: 'GET',
         });
-        
-        // Filter out admin roles - show only non-admin users
-        const adminRoles = ['TENANT_ADMIN', 'TENANT_OWNER', 'SUPER_ADMIN'];
-        const filteredResidents = data.filter(
-          member => !member.roles?.some(role => adminRoles.includes(role))
-        );
-        
-        setResidents(filteredResidents);
+        setResidents(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error loading residents');
       } finally {

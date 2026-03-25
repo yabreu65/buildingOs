@@ -12,6 +12,12 @@ export interface ScopedRoleResponse {
   scopeUnitId: string | null;
 }
 
+export interface AssignableResidentResponse {
+  id: string;
+  name: string;
+  email: string;
+}
+
 @Injectable()
 export class MembershipsService {
   constructor(
@@ -233,4 +239,43 @@ export class MembershipsService {
       },
     });
   }
+
+  /**
+   * Get members who can be assigned as residents (non-admin users)
+   * Filters out TENANT_ADMIN, TENANT_OWNER, and SUPER_ADMIN
+   */
+  async getAssignableResidents(tenantId: string): Promise<AssignableResidentResponse[]> {
+    const adminRoles = ['TENANT_ADMIN', 'TENANT_OWNER', 'SUPER_ADMIN'];
+    
+    const memberships = await this.prisma.membership.findMany({
+      where: { tenantId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        roles: {
+          select: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    // Filter out admin users - return only those without admin roles
+    return memberships
+      .filter(m => {
+        const hasAdminRole = m.roles.some(r => adminRoles.includes(r.role));
+        return !hasAdminRole;
+      })
+      .map(m => ({
+        id: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+      }));
+  }
+
 }
