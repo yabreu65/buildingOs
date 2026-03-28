@@ -7,6 +7,16 @@ import { Notification, NotificationType, Prisma } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import { CreateNotificationInput, DEFAULT_NOTIFICATION_CONFIG } from './notifications.types';
 
+interface NotificationQueryFilters {
+  readonly isRead?: boolean;
+  readonly type?: NotificationType;
+}
+
+interface NotificationQueryResponse {
+  readonly notifications: Notification[];
+  readonly total: number;
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -148,10 +158,10 @@ export class NotificationsService {
   async queryNotifications(
     tenantId: string,
     userId: string,
-    filters?: { isRead?: boolean; type?: NotificationType },
+    filters?: NotificationQueryFilters,
     skip: number = 0,
     take: number = 50,
-  ): Promise<{ notifications: Notification[]; total: number }> {
+  ): Promise<NotificationQueryResponse> {
     const where: Prisma.NotificationWhereInput = {
       tenantId,
       userId,
