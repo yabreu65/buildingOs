@@ -3,7 +3,7 @@
  * Manages tickets state and operations (fetch, create, update, comment)
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   listTickets,
   getTicket,
@@ -34,6 +34,13 @@ export function useTickets(options: UseTicketsOptions) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const stableFilters = useMemo(() => filters, [
+    filters?.status,
+    filters?.priority,
+    filters?.unitId,
+    filters?.assignedToMembership,
+  ]);
+
   // Fetch all tickets
   const fetchTickets = useCallback(async () => {
     if (!buildingId) {
@@ -44,7 +51,7 @@ export function useTickets(options: UseTicketsOptions) {
     setLoading(true);
     setError(null);
     try {
-      const data = await listTickets(buildingId, filters);
+      const data = await listTickets(buildingId, stableFilters);
       setTickets(data);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch tickets';
@@ -52,7 +59,7 @@ export function useTickets(options: UseTicketsOptions) {
     } finally {
       setLoading(false);
     }
-  }, [buildingId, filters]);
+  }, [buildingId, stableFilters]);
 
   // Auto-fetch on mount and dependency changes
   useEffect(() => {

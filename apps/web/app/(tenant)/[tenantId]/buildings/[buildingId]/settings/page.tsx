@@ -11,17 +11,19 @@ import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/compone
 import { useBuildings } from '@/features/buildings/hooks';
 import { routes } from '@/shared/lib/routes';
 import { useToast } from '@/shared/components/ui/Toast';
+import { t } from '@/i18n';
 import { Trash2 } from 'lucide-react';
 
-type BuildingParams = {
+interface BuildingParams {
   tenantId: string;
   buildingId: string;
+  [key: string]: string | string[];
 };
 
 /**
  * SettingsPage: Edit building details and manage dangerous actions
  */
-export default function SettingsPage() {
+const SettingsPage = () => {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
@@ -70,7 +72,7 @@ export default function SettingsPage() {
   if (!building) {
     return (
       <ErrorState
-        message="Building not found. It may have been deleted or you don't have access."
+        message={t('buildings.notFound')}
         onRetry={() => refetchBuildings()}
       />
     );
@@ -87,9 +89,9 @@ export default function SettingsPage() {
         name: formData.name,
         address: formData.address || undefined,
       });
-      toast('Building updated successfully', 'success');
+      toast(t('buildings.updateSuccess'), 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update building';
+      const message = err instanceof Error ? err.message : t('buildings.updateError');
       setSubmitError(message);
       toast(message, 'error');
     } finally {
@@ -101,10 +103,10 @@ export default function SettingsPage() {
     setIsDeleting(true);
     try {
       await deleteBuilding(buildingId);
-      toast('Building deleted successfully', 'success');
+      toast(t('buildings.deleteSuccess'), 'success');
       router.push(routes.buildingsList(tenantId));
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete building';
+      const message = err instanceof Error ? err.message : t('buildings.deleteError');
       toast(message, 'error');
       setShowDeleteDialog(false);
     } finally {
@@ -163,7 +165,7 @@ export default function SettingsPage() {
 
           <div className="flex gap-2 justify-start pt-2">
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Saving...' : 'Save Changes'}
+              {isSubmitting ? t('common.loading') : t('common.save')}
             </Button>
           </div>
         </form>
@@ -172,14 +174,14 @@ export default function SettingsPage() {
       {/* Danger Zone */}
       <Card className="border-red-200 bg-red-50">
         <div className="mb-6">
-          <h2 className="text-xl font-semibold text-red-900">Danger Zone</h2>
-          <p className="text-sm text-red-700 mt-1">Irreversible actions</p>
+          <h2 className="text-xl font-semibold text-red-900">{t('buildings.dangerZone')}</h2>
+          <p className="text-sm text-red-700 mt-1">{t('buildings.irreversible')}</p>
         </div>
 
         <div className="flex items-center justify-between p-4 bg-white border border-red-200 rounded-md">
           <div>
-            <p className="font-medium text-foreground">Delete Building</p>
-            <p className="text-sm text-muted-foreground">Permanently delete this building and all its data</p>
+            <p className="font-medium text-foreground">{t('buildings.delete')}</p>
+            <p className="text-sm text-muted-foreground">{t('buildings.deleteWarning')}</p>
           </div>
           <Button
             variant="secondary"
@@ -204,4 +206,6 @@ export default function SettingsPage() {
       />
     </div>
   );
-}
+};
+
+export default SettingsPage;

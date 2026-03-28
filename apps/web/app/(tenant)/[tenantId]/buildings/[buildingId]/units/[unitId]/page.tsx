@@ -18,12 +18,13 @@ import { routes } from '@/shared/lib/routes';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { UnitTicketsList } from '@/features/tickets';
 import { InboxList } from '@/features/communications';
+import { t } from '@/i18n';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
-import AssignResidentModal from './AssignResidentModal';
+import { AssignResidentModal } from './AssignResidentModal';
 
 interface UnitParams {
   tenantId: string;
@@ -37,7 +38,7 @@ interface UnitParams {
  * - Admins: can assign/remove occupants for any unit
  * - Residents: can view their own unit info
  */
-export default function UnitDashboardPage() {
+const UnitDashboardPage = () => {
   const params = useParams<UnitParams>();
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
@@ -74,7 +75,7 @@ export default function UnitDashboardPage() {
   const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r));
 
   // Check if current user is occupant of this unit
-  const isOccupantOfUnit = occupants.some((o) => o.userId === currentUser?.id);
+  const isOccupantOfUnit = occupants.some((o) => o.user?.id === currentUser?.id);
 
   // Access control: residents can only see their own unit
   const hasAccess = isAdmin || isOccupantOfUnit;
@@ -86,7 +87,7 @@ export default function UnitDashboardPage() {
   if (buildingsError || unitsError) {
     return (
       <ErrorState
-        message={buildingsError || unitsError || 'An error occurred'}
+        message={buildingsError || unitsError || t('common.error')}
         onRetry={() => {}}
       />
     );
@@ -106,7 +107,7 @@ export default function UnitDashboardPage() {
   if (!unit) {
     return (
       <ErrorState
-        message="Unit not found. It may have been deleted or you don't have access."
+        message={t('units.notFound')}
         onRetry={() => router.back()}
       />
     );
@@ -118,10 +119,10 @@ export default function UnitDashboardPage() {
         <BuildingBreadcrumb tenantId={tenantId} buildingName={unit.label} buildingId={buildingId} />
         <EmptyState
           icon={<Lock className="w-12 h-12 text-muted-foreground" />}
-          title="Access Denied"
-          description="You don't have permission to access this unit. Residents can only view their assigned units."
+          title={t('common.accessDenied')}
+          description={t('units.accessDenied')}
           cta={{
-            text: 'Go Back',
+            text: t('common.goBack'),
             onClick: () => router.back(),
           }}
         />
@@ -135,7 +136,7 @@ export default function UnitDashboardPage() {
     setIsDeleting(true);
     try {
       await removeOccupant(showDeleteDialog.occupantId);
-      toast('Occupant removed successfully', 'success');
+      toast(t('units.residentRemoved'), 'success');
       setShowDeleteDialog({ isOpen: false, occupantId: null });
       await refetchOccupants();
     } catch (err) {
@@ -144,7 +145,7 @@ export default function UnitDashboardPage() {
         toast(msg, type, duration);
       })) {
         // If not a plan limit error, handle as normal error
-        const message = err instanceof Error ? err.message : 'Failed to remove occupant';
+        const message = err instanceof Error ? err.message : t('units.removeOccupantError');
         toast(message, 'error');
       }
     } finally {
@@ -231,11 +232,11 @@ export default function UnitDashboardPage() {
           <EmptyState
             icon={<Users className="w-12 h-12 text-muted-foreground" />}
             title="No Occupants"
-            description="This unit has no occupants assigned yet."
+            description={t('units.noOccupants')}
             cta={
               isAdmin
                 ? {
-                    text: 'Assign Occupant',
+                    text: t('units.assignResident'),
                     onClick: () => setShowAssignModal(true),
                   }
                 : undefined
@@ -249,7 +250,7 @@ export default function UnitDashboardPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <User className="w-4 h-4 text-muted-foreground" />
-                      <p className="font-semibold">{occupant.user?.fullName || 'Unknown User'}</p>
+                      <p className="font-semibold">{occupant.user?.fullName || t('common.unknown')}</p>
                       <span className="text-xs font-medium px-2 py-1 rounded bg-blue-100 text-blue-700">
                         {occupant.role}
                       </span>
@@ -403,4 +404,6 @@ export default function UnitDashboardPage() {
       </div>
     </ErrorBoundary>
   );
-}
+};
+
+export default UnitDashboardPage;

@@ -306,8 +306,9 @@ async function seedPilot() {
   // Assign resident to Unit 1
   await prisma.unitOccupant.create({
     data: {
+      tenantId: tenant.id,
       unitId: units[0].id,
-      userId: residentUser.id,
+      memberId: residentMembership.id,
       role: UnitOccupantRole.RESIDENT,
     },
   });

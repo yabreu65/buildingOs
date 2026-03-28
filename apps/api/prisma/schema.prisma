@@ -30,6 +30,13 @@ enum UnitOccupantRole {
   OWNER
   RESIDENT
 }
+enum MemberStatus {
+  DRAFT
+  PENDING_INVITE
+  ACTIVE
+  DISABLED
+}
+
 
 // ============================================================================
 // FINANZAS (Charges, Payments, Allocations)
@@ -54,6 +61,16 @@ enum PaymentMethod {
   CASH
   CARD
   ONLINE
+}
+
+enum RejectionReason {
+  MONTO_INCORRECTO
+  REFERENCIA_INVALIDA
+  SIN_COMPROBANTE
+  COMPROBANTE_ILEGIBLE
+  PAGO_DUPLICADO
+  CUENTA_DESTINO_INVALIDA
+  OTRO
 }
 
 enum ChargeType {
@@ -118,6 +135,7 @@ model Tenant {
   charges               Charge[]
   payments              Payment[]
   paymentAllocations    PaymentAllocation[]
+  paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
   invitations           Invitation[]
   onboardingState       OnboardingState?
   emailLogs             EmailLog[]
@@ -132,6 +150,9 @@ model Tenant {
   planChangeRequests    PlanChangeRequest[]
   unitCategories        UnitCategory[]
   expensePeriods        ExpensePeriod[]
+  tenantMembers         TenantMember[]
+  tenantInvitations     TenantInvitation[]
+  unitOccupants         UnitOccupant[]
 }
 
 model User {
@@ -142,7 +163,6 @@ model User {
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
   memberships           Membership[]
-  unitOccupants         UnitOccupant[]
   auditLogs             AuditLog[]
   ticketsCreated        Ticket[]               @relation("TicketCreatedBy")
   ticketComments        TicketComment[]        @relation("TicketCommentAuthor")
@@ -154,6 +174,7 @@ model User {
   notifications         Notification[]         @relation("UserNotifications")
   aiInteractionLogs     AiInteractionLog[]
   reviewedPlanRequests  PlanChangeRequest[]    @relation("PlanRequestReviewedBy")
+  tenantMembers        TenantMember[]
 }
 
 model Membership {
@@ -173,6 +194,7 @@ model Membership {
   assignedWorkOrders    WorkOrder[]           @relation("WorkOrderAssignedTo")
   chargesCreatedBy      Charge[]
   paymentsReviewedBy    Payment[]
+  paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
   invitationsSent       Invitation[]          @relation("InvitationsSent")
   aiInteractionLogs     AiInteractionLog[]
   aiActionEvents        AiActionEvent[]
@@ -302,19 +324,25 @@ model Unit {
 }
 
 model UnitOccupant {
-  id        String           @id @default(cuid())
-  unitId    String
-  userId    String
-  role      UnitOccupantRole
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id            String           @id @default(cuid())
+  tenantId      String
+  unitId        String
+  memberId      String
+  role          UnitOccupantRole
+  isPrimary     Boolean          @default(false)
+  startDate     DateTime         @default(now())
+  endDate       DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
-  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit     Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  member   TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
-  @@unique([unitId, userId, role])
+  @@unique([unitId, memberId])
+  @@index([tenantId, memberId])
   @@index([unitId])
-  @@index([userId])
+  @@index([unitId, isPrimary])
 }
 
 // ============================================================================
@@ -407,6 +435,11 @@ enum AuditAction {
   UNIT_DELETE
   OCCUPANT_ASSIGN
   OCCUPANT_REMOVE
+  // TENANT MEMBERS
+  TENANT_MEMBER_CREATE
+  TENANT_MEMBER_UPDATE
+  TENANT_MEMBER_INVITED
+  TENANT_MEMBER_DELETE
   // TICKETS
   TICKET_CREATE
   TICKET_UPDATE
@@ -431,6 +464,7 @@ enum AuditAction {
   PAYMENT_SUBMIT
   PAYMENT_APPROVE
   PAYMENT_REJECT
+  PAYMENT_CANCEL
   PAYMENT_ALLOCATE
   ALLOCATION_DELETE
   // VENDORS/OPS
@@ -1194,8 +1228,22 @@ model Payment {
   reference                String?        // Payment reference (operation number, receipt)
   proofFileId              String?        // Link to proof document
   createdByUserId          String         // Who submitted the payment (resident)
-  reviewedByMembershipId   String?        // Who approved the payment (admin)
+  reviewedByMembershipId  String?        // Who approved the payment (admin)
   canceledAt               DateTime?      // Soft delete: NULL = active, timestamp = canceled
+  
+  // Datos de transferencia bancaria
+  transferDate             DateTime?      // Fecha en que se realizó la transferencia
+  sourceBank               String?        // Banco/emisor de la transferencia
+  sourceAccount            String?        // Cuenta de origen (CBU/CVU/alia)
+  sourceHolder             String?        // Nombre del titular de la cuenta origen
+  destinationAccount       String?        // Cuenta destino (CBU/CVU/alias)
+  
+  // Auditoría completa
+  rejectionReason          RejectionReason?  // Motivo de rechazo (catálogo estructurado)
+  rejectionComment         String?           // Comentario adicional opcional del revisor
+  reviewedAt               DateTime?         // Cuándo se revisó (aprobó/rechazó)
+  notes                    String?           // Notas internas del revisor
+  
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 
@@ -1207,6 +1255,7 @@ model Payment {
   reviewedByMembership    Membership?         @relation(fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
   proofFile               File?               @relation(fields: [proofFileId], references: [id], onDelete: SetNull)
   paymentAllocations      PaymentAllocation[]
+  auditLogs               PaymentAuditLog[]
 
   @@index([tenantId, buildingId, status])
   @@index([tenantId, unitId, status])
@@ -1233,6 +1282,42 @@ model PaymentAllocation {
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
   @@index([tenantId, chargeId])
+}
+
+// ============================================================================
+// AUDITORÍA: PaymentAuditLog - Registro de todas las acciones en pagos
+// ============================================================================
+
+enum PaymentAuditAction {
+  SUBMITTED   // Usuario resident creó el pago
+  APPROVED   // Admin aprobó el pago
+  REJECTED   // Admin rechazó el pago
+  RECONCILED // Sistema Concilió (asignaciones completadas)
+  CANCELLED  // Admin/anfitrión canceló el pago
+  VIEWED     // Admin visualizó el pago para revisión
+}
+
+model PaymentAuditLog {
+  id            String              @id @default(cuid())
+  tenantId      String
+  paymentId     String
+  action        PaymentAuditAction
+  membershipId  String?             // Quién ejecutó la acción
+  reason        String?             // Motivo (para reject)
+  comment       String?             // Comentario adicional
+  metadata      Json?               // Datos adicionales en formato libre
+  ipAddress     String?             // IP desde donde se ejecutó
+  userAgent     String?             // Navegador/dispositivo
+  createdAt     DateTime            @default(now())
+
+  // Relations
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment       Payment            @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  membership    Membership?        @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId, createdAt])
+  @@index([tenantId, action, createdAt])
+  @@index([membershipId, createdAt])
 }
 
 // ============================================================================
@@ -1499,3 +1584,50 @@ model Lead {
   @@index([createdAt])
   @@index([convertedTenantId])
 }
+
+// ============================================================================
+// TENANT MEMBERS (Residentes y Operadores)
+// ============================================================================
+
+model TenantMember {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String?
+  name          String
+  email         String?
+  phone         String?
+  role          Role     @default(RESIDENT)
+  status        MemberStatus @default(DRAFT)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  disabledAt    DateTime?
+  notes         String?
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  occupancies   UnitOccupant[]
+  invitations   TenantInvitation[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@index([tenantId, status])
+  @@index([tenantId, role])
+}
+
+model TenantInvitation {
+  id            String   @id @default(cuid())
+  tenantId      String
+  memberId      String
+  tokenHash     String   @unique
+  expiresAt     DateTime
+  attempts      Int      @default(0)
+  acceptedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  member        TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tokenHash])
+  @@index([tenantId, expiresAt])
+}
+

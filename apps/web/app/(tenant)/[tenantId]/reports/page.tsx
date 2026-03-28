@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useHasRole } from '@/features/auth/useAuthSession';
 import { useBuildings } from '@/features/buildings/hooks/useBuildings';
 import { useTicketsReport } from '@/features/reports/hooks/useTicketsReport';
 import { useFinanceReport } from '@/features/reports/hooks/useFinanceReport';
@@ -19,9 +20,17 @@ import { Download } from 'lucide-react';
 
 type TabType = 'tickets' | 'finance' | 'communications' | 'activity';
 
-export default function ReportsPage() {
+const ReportsPage = () => {
   const params = useParams();
   const tenantId = params.tenantId as string;
+  const router = useRouter();
+  const isResident = useHasRole('RESIDENT');
+
+  useEffect(() => {
+    if (isResident && tenantId) {
+      router.replace(`/${tenantId}/dashboard`);
+    }
+  }, [isResident, tenantId, router]);
 
   const [activeTab, setActiveTab] = useState<TabType>('tickets');
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | undefined>();
@@ -165,4 +174,6 @@ export default function ReportsPage() {
       </div>
     </div>
   );
-}
+};
+
+export default ReportsPage;

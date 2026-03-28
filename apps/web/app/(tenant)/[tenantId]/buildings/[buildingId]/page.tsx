@@ -5,13 +5,13 @@ import { useParams, useRouter } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import ErrorState from '@/shared/components/ui/ErrorState';
-import EmptyState from '@/shared/components/ui/EmptyState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { routes } from '@/shared/lib/routes';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
-import { useToast } from '@/shared/components/ui/Toast';
+import { t } from '@/i18n';
+
 import { Home, Grid3x3, Plus, Settings, Users, Ticket, CreditCard } from 'lucide-react';
 import { StorageService } from '@/shared/lib/storage';
 import type { Payment } from '@/features/payments/payments.types';
@@ -27,7 +27,7 @@ interface BuildingParams {
 /**
  * BuildingHubPage: Central operations hub for a building
  */
-export default function BuildingHubPage() {
+const BuildingHubPage = () => {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
@@ -86,7 +86,7 @@ export default function BuildingHubPage() {
   if (!building) {
     return (
       <ErrorState
-        message="Building not found. It may have been deleted or you don't have access."
+        message={t('buildings.notFound')}
         onRetry={() => refetchBuildings()}
       />
     );
@@ -226,9 +226,9 @@ export default function BuildingHubPage() {
             <div className="flex items-start justify-between mb-3">
               <Grid3x3 className="w-5 h-5 text-blue-600" />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">Units</h3>
+            <h3 className="font-semibold text-foreground mb-1">{t('navigation.units')}</h3>
             <p className="text-sm text-muted-foreground">
-              {unitsLoading ? 'Loading...' : `${totalUnits} units · Manage`}
+              {unitsLoading ? t('common.loading') : `${totalUnits} ${t('navigation.units')} · ${t('common.manage')}`}
             </p>
           </Card>
         </div>
@@ -239,8 +239,8 @@ export default function BuildingHubPage() {
             <div className="flex items-start justify-between mb-3">
               <Users className="w-5 h-5 text-gray-400" />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">Residents</h3>
-            <p className="text-sm text-muted-foreground">Coming soon</p>
+            <h3 className="font-semibold text-foreground mb-1">{t('navigation.residents')}</h3>
+            <p className="text-sm text-muted-foreground">Próximamente</p>
           </Card>
         </div>
 
@@ -257,13 +257,13 @@ export default function BuildingHubPage() {
             <div className="flex items-start justify-between mb-3">
               <CreditCard className={totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'} />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">Payments</h3>
+            <h3 className="font-semibold text-foreground mb-1">{t('finance.payments')}</h3>
             <p className="text-sm text-muted-foreground">
               {totalPayments === 0
-                ? 'No payment records yet'
+                ? t('finance.noPaymentRecords')
                 : pendingPayments > 0
-                ? `${pendingPayments} pending`
-                : 'All paid'}
+                ? `${pendingPayments} ${t('finance.pending')}`
+                : t('finance.allPaid')}
             </p>
           </Card>
         </div>
@@ -274,76 +274,14 @@ export default function BuildingHubPage() {
             <div className="flex items-start justify-between mb-3">
               <Ticket className="w-5 h-5 text-gray-400" />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">Tickets</h3>
+            <h3 className="font-semibold text-foreground mb-1">{t('navigation.tickets')}</h3>
             <p className="text-sm text-muted-foreground">Coming soon</p>
           </Card>
         </div>
       </div>
 
-      {/* Recent Units Table */}
-      {!unitsLoading && units.length > 0 && (
-        <Card>
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold">Recent Units</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Label</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Code</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Type</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Status</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {units.slice(0, 5).map((unit) => (
-                  <tr key={unit.id} className="border-b hover:bg-muted/50 transition">
-                    <td className="py-3 px-4">{unit.label}</td>
-                    <td className="py-3 px-4 text-muted-foreground">{unit.unitCode || '—'}</td>
-                    <td className="py-3 px-4">{unit.unitType}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`text-xs font-medium px-2 py-1 rounded-full ${
-                          unit.occupancyStatus === 'OCCUPIED'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-orange-100 text-orange-700'
-                        }`}
-                      >
-                        {unit.occupancyStatus}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() =>
-                          router.push(routes.buildingUnits(tenantId, buildingId))
-                        }
-                      >
-                        View
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {!unitsLoading && units.length === 0 && (
-        <EmptyState
-          icon={<Grid3x3 className="w-12 h-12 text-muted-foreground" />}
-          title="No Units Yet"
-          description="Start by adding your first unit to this building."
-          cta={{
-            text: 'Add Unit',
-            onClick: () => router.push(routes.buildingUnits(tenantId, buildingId)),
-          }}
-        />
-      )}
     </div>
   );
-}
+};
+
+export default BuildingHubPage;

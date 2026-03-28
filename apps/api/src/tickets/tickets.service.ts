@@ -20,15 +20,24 @@ import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service
  * All methods validate that resources belong to the tenant/building.
  * No cross-tenant/building access is possible, even with guessed IDs.
  */
+interface TicketFilters {
+  status?: string;
+  priority?: string;
+  unitId?: string;
+  assignedToMembershipId?: string;
+  limit?: number;
+  page?: number;
+}
+
 @Injectable()
 export class TicketsService {
   private readonly logger = new Logger(TicketsService.name);
 
   constructor(
-    private prisma: PrismaService,
-    private validators: TicketsValidators,
-    private auditService: AuditService,
-    private aiCategoryService: AiTicketCategoryService,
+    private readonly prisma: PrismaService,
+    private readonly validators: TicketsValidators,
+    private readonly auditService: AuditService,
+    private readonly aiCategoryService: AiTicketCategoryService,
   ) {}
 
   /**
@@ -40,9 +49,23 @@ export class TicketsService {
    * @returns Array of unit IDs where user is an occupant
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
+    // Find the TenantMember for this user in this tenant
+    const member = await this.prisma.tenantMember.findFirst({
+      where: {
+        tenantId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!member) {
+      return [];
+    }
+
+    // Find all UnitOccupants for this member
     const occupancies = await this.prisma.unitOccupant.findMany({
       where: {
-        userId,
+        memberId: member.id,
         unit: {
           building: { tenantId }, // Ensure unit belongs to tenant
         },
@@ -228,7 +251,7 @@ export class TicketsService {
    *
    * @throws NotFoundException if building doesn't belong to tenant
    */
-  async findAll(tenantId: string, buildingId: string, filters?: any): Promise<Ticket[]> {
+  async findAll(tenantId: string, buildingId: string, filters?: TicketFilters): Promise<Ticket[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -237,9 +260,20 @@ export class TicketsService {
 
     // 2. Build query
     const where: Prisma.TicketWhereInput = { tenantId, buildingId };
-    if (filters?.status) where.status = filters.status;
-    if (filters?.priority) where.priority = filters.priority;
-    if (filters?.unitId) where.unitId = filters.unitId; // ✅ FIX: Include unitId filter
+    
+    // Handle multiple status values (comma-separated: "OPEN,IN_PROGRESS")
+    if (filters?.status) {
+      const validStatuses = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
+      const statusValues = filters.status.split(',').filter(s => validStatuses.includes(s));
+      
+      if (statusValues.length === 1) {
+        where.status = statusValues[0] as any;
+      } else if (statusValues.length > 1) {
+        where.status = { in: statusValues } as any;
+      }
+    }
+    if (filters?.priority) where.priority = filters.priority as any;
+    if (filters?.unitId) where.unitId = filters.unitId;
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
 
@@ -403,13 +437,13 @@ export class TicketsService {
     }
 
     // 5. Build update data
-    const data: any = {};
+    const data: Prisma.TicketUpdateInput = {};
     if (dto.title) data.title = dto.title;
     if (dto.description) data.description = dto.description;
-    if (dto.category) data.category = dto.category;
-    if (dto.priority) data.priority = dto.priority;
+    if (dto.category) data.category = dto.category as Prisma.EnumTicketCategoryFieldUpdateOperationsInput;
+    if (dto.priority) data.priority = dto.priority as Prisma.EnumTicketPriorityFieldUpdateOperationsInput;
     if (dto.status) {
-      data.status = dto.status;
+      data.status = dto.status as Prisma.EnumTicketStatusFieldUpdateOperationsInput;
       // Set closedAt when transitioning to CLOSED
       if (dto.status === 'CLOSED' && currentTicket.status !== 'CLOSED') {
         data.closedAt = new Date();
@@ -419,9 +453,18 @@ export class TicketsService {
         data.closedAt = null;
       }
     }
-    if (dto.unitId !== undefined) data.unitId = dto.unitId;
-    if (dto.assignedToMembershipId !== undefined)
-      data.assignedToMembershipId = dto.assignedToMembershipId;
+    if (dto.unitId !== undefined && dto.unitId !== null) {
+      data.unit = { connect: { id: dto.unitId } };
+    } else if (dto.unitId === null) {
+      data.unit = { disconnect: true };
+    }
+    if (dto.assignedToMembershipId !== undefined) {
+      if (dto.assignedToMembershipId) {
+        data.assignedTo = { connect: { id: dto.assignedToMembershipId } };
+      } else {
+        data.assignedTo = { disconnect: true };
+      }
+    }
 
     const ticket = await this.prisma.ticket.update({
       where: { id: ticketId },

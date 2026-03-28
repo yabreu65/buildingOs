@@ -6,7 +6,7 @@ import { apiLogin, apiSignup, type LoginPayload, type SignupPayload } from './au
 import { setToken, setSession, setLastTenant, clearAuth } from './session.storage';
 import type { AuthSession } from './auth.types';
 
-export function useLogin() {
+export const useLogin = () => {
   const router = useRouter();
 
   return useMutation({
@@ -29,12 +29,19 @@ export function useLogin() {
       setSession(session);
       setLastTenant(activeTenantId);
 
-      router.push(`/${activeTenantId}/dashboard`);
+      const isResident =
+        memberships[0].roles.length === 1 &&
+        memberships[0].roles.includes('RESIDENT');
+      router.push(
+        isResident
+          ? `/${activeTenantId}/resident/dashboard`
+          : `/${activeTenantId}/dashboard`,
+      );
     },
   });
-}
+};
 
-export function useSignup() {
+export const useSignup = () => {
   const router = useRouter();
 
   return useMutation({
@@ -57,16 +64,23 @@ export function useSignup() {
       setSession(session);
       setLastTenant(activeTenantId);
 
-      router.push(`/${activeTenantId}/dashboard`);
+      const isResident =
+        memberships[0].roles.length === 1 &&
+        memberships[0].roles.includes('RESIDENT');
+      router.push(
+        isResident
+          ? `/${activeTenantId}/resident/dashboard`
+          : `/${activeTenantId}/dashboard`,
+      );
     },
   });
-}
+};
 
-export function useLogout() {
+export const useLogout = () => {
   const router = useRouter();
 
   return () => {
     clearAuth();
     router.push('/login');
   };
-}
+};

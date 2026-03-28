@@ -18,13 +18,14 @@ export interface Building {
 
 export interface UnitOccupant {
   id: string;
-  userId: string;
+  memberId: string;
   unitId: string;
   role: 'OWNER' | 'RESIDENT';
-  user: {
+  member: {
     id: string;
     name: string;
-    email: string;
+    email?: string;
+    phone?: string;
   };
 }
 
@@ -50,8 +51,8 @@ export interface Unit {
 
 export interface CreateUnitInput {
   buildingId: string;
-  code?: string;
-  label: string;
+  code: string;
+  label?: string;
   unitType?: string;
   occupancyStatus?: string;
   m2?: number;
@@ -91,8 +92,13 @@ function logError(endpoint: string, status: number, message: string) {
  */
 export async function listUnitsByTenant(
   tenantId: string,
-  buildingId?: string,
+  buildingId?: string | null,
 ): Promise<Unit[]> {
+  // If buildingId is null, return empty array (no building selected)
+  if (buildingId === null) {
+    return [];
+  }
+  
   const queryParams = buildingId ? `?buildingId=${buildingId}` : '';
   const endpoint = `/tenants/${tenantId}/units${queryParams}`;
   logRequest('GET', endpoint);
@@ -214,6 +220,46 @@ export async function updateUnit(
     logError(endpoint, httpError.status, httpError.message);
     throw error;
   }
+}
+
+/**
+ * Assign an occupant to a unit
+ * POST /tenants/:tenantId/buildings/:buildingId/units/:unitId/occupants
+ */
+export async function assignOccupant(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+  memberId: string,
+  role: 'OWNER' | 'RESIDENT' = 'RESIDENT',
+): Promise<UnitOccupant> {
+  const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}/occupants`;
+  logRequest('POST', endpoint, { memberId, role });
+
+  return apiClient<UnitOccupant, { memberId: string; role: string }>({
+    path: endpoint,
+    method: 'POST',
+    body: { memberId, role },
+  });
+}
+
+/**
+ * Remove an occupant from a unit
+ * DELETE /tenants/:tenantId/buildings/:buildingId/units/:unitId/occupants/:occupantId
+ */
+export async function removeOccupant(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+  occupantId: string,
+): Promise<void> {
+  const endpoint = `/tenants/${tenantId}/buildings/${buildingId}/units/${unitId}/occupants/${occupantId}`;
+  logRequest('DELETE', endpoint);
+
+  await apiClient<void>({
+    path: endpoint,
+    method: 'DELETE',
+  });
 }
 
 /**

@@ -456,6 +456,201 @@ export function getFinanceExportUrl(tenantId: string): string {
   return `/api/tenants/${tenantId}/reports/finance/export.csv`;
 }
 
+// ============================================================================
+// TENANT-LEVEL PAYMENTS REVIEW API
+// ============================================================================
+
+export interface PendingPayment {
+  id: string;
+  unitId?: string;
+  unit?: {
+    id: string;
+    label: string;
+  };
+  buildingId: string;
+  building?: {
+    id: string;
+    name: string;
+  };
+  amount: number;
+  currency: string;
+  method: PaymentMethod;
+  status: PaymentStatus;
+  reference?: string;
+  proofFileId?: string;
+  paidAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByUser?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  reviewedByMembership?: {
+    id: string;
+    user: { name: string };
+  };
+}
+
+export interface PendingPaymentQuery {
+  status?: PaymentStatus;
+  buildingId?: string;
+  unitId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listPendingPayments(
+  tenantId: string,
+  query: PendingPaymentQuery = {}
+): Promise<PendingPayment[]> {
+  const params = new URLSearchParams();
+  if (query.status) params.append('status', query.status);
+  if (query.buildingId) params.append('buildingId', query.buildingId);
+  if (query.unitId) params.append('unitId', query.unitId);
+  if (query.dateFrom) params.append('dateFrom', query.dateFrom);
+  if (query.dateTo) params.append('dateTo', query.dateTo);
+  if (query.limit) params.append('limit', query.limit.toString());
+  if (query.offset) params.append('offset', query.offset.toString());
+
+  const queryString = params.toString();
+  return apiClient<PendingPayment[]>({
+    path: `/finance/payments/pending${queryString ? `?${queryString}` : ''}`,
+    method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
+  });
+}
+
+export async function approvePaymentTenant(
+  tenantId: string,
+  paymentId: string,
+  paidAt?: string
+): Promise<PendingPayment> {
+  return apiClient<PendingPayment, { paidAt?: string }>({
+    path: `/finance/payments/${paymentId}/approve`,
+    method: 'PATCH',
+    headers: { 'X-Tenant-Id': tenantId },
+    body: { paidAt },
+  });
+}
+
+export async function rejectPaymentTenant(
+  tenantId: string,
+  paymentId: string,
+  reason: string,
+  comment?: string,
+  notes?: string
+): Promise<PendingPayment> {
+  return apiClient<PendingPayment, { reason: string; comment?: string; notes?: string }>({
+    path: `/finance/payments/${paymentId}/reject`,
+    method: 'PATCH',
+    headers: { 'X-Tenant-Id': tenantId },
+    body: { reason, comment, notes },
+  });
+}
+
+// ============================================================================
+// PAYMENT METRICS API
+// ============================================================================
+
+export interface PaymentMetrics {
+  backlogCount: number;
+  backlogAmount: number;
+  agingMedianDays: number;
+  agingP95Days: number;
+  totalReviewed: number;
+  approvalRate: number;
+  rejectionRate: number;
+  rejectionReasons: Array<{ reason: string; count: number }>;
+  byBuilding: Array<{
+    buildingId: string;
+    buildingName: string;
+    pending: number;
+    pendingAmount: number;
+    approved: number;
+    rejected: number;
+  }>;
+}
+
+export interface PaymentMetricsQuery {
+  dateFrom?: string;
+  dateTo?: string;
+  buildingId?: string;
+}
+
+export async function getPaymentMetrics(
+  tenantId: string,
+  query: PaymentMetricsQuery = {}
+): Promise<PaymentMetrics> {
+  const params = new URLSearchParams();
+  if (query.dateFrom) params.append('dateFrom', query.dateFrom);
+  if (query.dateTo) params.append('dateTo', query.dateTo);
+  if (query.buildingId) params.append('buildingId', query.buildingId);
+
+  const queryString = params.toString();
+  return apiClient<PaymentMetrics>({
+    path: `/finance/payments/metrics${queryString ? `?${queryString}` : ''}`,
+    method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
+  });
+}
+
+// ============================================================================
+// PAYMENT AUDIT LOG API
+// ============================================================================
+
+export interface PaymentAuditLogEntry {
+  id: string;
+  tenantId: string;
+  paymentId: string;
+  action: string;
+  membershipId?: string;
+  reason?: string;
+  comment?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  userName?: string;
+  userEmail?: string;
+}
+
+export async function getPaymentAuditLog(
+  tenantId: string,
+  paymentId: string,
+  limit?: number
+): Promise<PaymentAuditLogEntry[]> {
+  const params = limit ? `?limit=${limit}` : '';
+  return apiClient<PaymentAuditLogEntry[]>({
+    path: `/finance/payments/${paymentId}/audit${params}`,
+    method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
+  });
+}
+
+// ============================================================================
+// PAYMENT DUPLICATE CHECK API
+// ============================================================================
+
+export interface PaymentDuplicateCheck {
+  hasDuplicate: boolean;
+  duplicatePaymentId?: string;
+  duplicateAmount?: number;
+  duplicateReference?: string;
+  duplicateCreatedAt?: string;
+}
+
+export async function checkPaymentDuplicate(
+  tenantId: string,
+  paymentId: string
+): Promise<PaymentDuplicateCheck> {
+  return apiClient<PaymentDuplicateCheck>({
+    path: `/finance/payments/${paymentId}/duplicate-check`,
+    method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
+  });
+}
+
 export const financeApi = {
   listCharges,
   createCharge,
@@ -473,4 +668,10 @@ export const financeApi = {
   getTenantFinancialSummary,
   getFinanceTrend,
   getFinanceExportUrl,
+  listPendingPayments,
+  approvePaymentTenant,
+  rejectPaymentTenant,
+  getPaymentMetrics,
+  getPaymentAuditLog,
+  checkPaymentDuplicate,
 };

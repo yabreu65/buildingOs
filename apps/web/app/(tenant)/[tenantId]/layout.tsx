@@ -10,6 +10,7 @@ import { useImpersonation } from '../../../features/impersonation/useImpersonati
 
 type TenantParams = {
   tenantId?: string;
+  [key: string]: string | string[] | undefined;
 };
 
 type AuthState = 'loading' | 'authorized' | 'unauthorized';

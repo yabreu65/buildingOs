@@ -284,6 +284,61 @@ async function main() {
     },
   });
 
+  // Create TenantMembers for users (required for UnitOccupant)
+  const adminTenantMember = await prisma.tenantMember.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenantBuilding.id,
+        email: adminUser.email!,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      userId: adminUser.id,
+      name: adminUser.name,
+      email: adminUser.email,
+      role: 'TENANT_ADMIN',
+      status: 'ACTIVE',
+    },
+  });
+
+  const operatorTenantMember = await prisma.tenantMember.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenantBuilding.id,
+        email: operatorUser.email!,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      userId: operatorUser.id,
+      name: operatorUser.name,
+      email: operatorUser.email,
+      role: 'OPERATOR',
+      status: 'ACTIVE',
+    },
+  });
+
+  const residentTenantMember = await prisma.tenantMember.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenantBuilding.id,
+        email: residentUser.email!,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantBuilding.id,
+      userId: residentUser.id,
+      name: residentUser.name,
+      email: residentUser.email,
+      role: 'RESIDENT',
+      status: 'ACTIVE',
+    },
+  });
+
   // Helper: upsert membership por unique compuesto (userId, tenantId)
   async function upsertMembershipWithRole(params: {
     tenantId: string;
@@ -311,8 +366,9 @@ async function main() {
           scopeType: 'TENANT',
         },
       });
-    } catch (e) {
-      // Ignore if it already exists
+    } catch (_e: unknown) {
+      if ((_e as { code?: string }).code !== 'P2002') throw _e;
+      // P2002 = unique constraint violation (already exists)
     }
 
     return membership;
@@ -588,67 +644,67 @@ async function main() {
   });
 
   // 8) Unit Occupants for EDIFICIO_AUTOGESTION building
-  // Assign residents to occupied units
+  // Assign residents to occupied units using TenantMember references
   await prisma.unitOccupant.upsert({
     where: {
-      unitId_userId_role: {
+      unitId_memberId: {
         unitId: unit1.id,
-        userId: adminUser.id,
-        role: "OWNER",
+        memberId: adminTenantMember.id,
       },
     },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       unitId: unit1.id,
-      userId: adminUser.id,
+      memberId: adminTenantMember.id,
       role: "OWNER",
     },
   });
 
   await prisma.unitOccupant.upsert({
     where: {
-      unitId_userId_role: {
+      unitId_memberId: {
         unitId: unit2.id,
-        userId: residentUser.id,
-        role: "RESIDENT",
+        memberId: residentTenantMember.id,
       },
     },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       unitId: unit2.id,
-      userId: residentUser.id,
+      memberId: residentTenantMember.id,
       role: "RESIDENT",
     },
   });
 
   await prisma.unitOccupant.upsert({
     where: {
-      unitId_userId_role: {
+      unitId_memberId: {
         unitId: unit4.id,
-        userId: operatorUser.id,
-        role: "OWNER",
+        memberId: operatorTenantMember.id,
       },
     },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       unitId: unit4.id,
-      userId: operatorUser.id,
+      memberId: operatorTenantMember.id,
       role: "OWNER",
     },
   });
 
   await prisma.unitOccupant.upsert({
     where: {
-      unitId_userId_role: {
+      unitId_memberId: {
         unitId: unit5.id,
-        userId: residentUser.id,
-        role: "RESIDENT",
+        memberId: residentTenantMember.id,
       },
     },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       unitId: unit5.id,
-      userId: residentUser.id,
+      memberId: residentTenantMember.id,
       role: "RESIDENT",
     },
   });

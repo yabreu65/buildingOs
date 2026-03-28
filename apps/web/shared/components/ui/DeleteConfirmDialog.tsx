@@ -3,6 +3,7 @@
 import { AlertTriangle } from 'lucide-react';
 import Card from './Card';
 import Button from './Button';
+import { t } from '@/i18n';
 
 interface DeleteConfirmDialogProps {
   isOpen: boolean;
@@ -13,14 +14,14 @@ interface DeleteConfirmDialogProps {
   isLoading?: boolean;
 }
 
-export default function DeleteConfirmDialog({
+export const DeleteConfirmDialog = ({
   isOpen,
   title,
   description,
   onConfirm,
   onCancel,
   isLoading = false,
-}: DeleteConfirmDialogProps) {
+}: DeleteConfirmDialogProps) => {
   if (!isOpen) return null;
 
   const handleConfirm = async () => {
@@ -42,17 +43,19 @@ export default function DeleteConfirmDialog({
             size="sm"
             disabled={isLoading}
           >
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             onClick={handleConfirm}
             disabled={isLoading}
             size="sm"
           >
-            {isLoading ? 'Deleting...' : 'Delete'}
+            {isLoading ? t('common.deleteLoading') : t('common.delete')}
           </Button>
         </div>
       </Card>
     </div>
   );
-}
+};
+
+export default DeleteConfirmDialog;

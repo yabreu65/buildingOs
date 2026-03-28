@@ -21,7 +21,9 @@ export function useFinanceReport(
   const [loading, setLoading] = useState(() => !!tenantId); // Only load if tenantId provided
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async () => {
+  const { buildingId, period } = options;
+
+  const loadReport = useCallback(async () => {
     if (!tenantId) {
       setLoading(false);
       return;
@@ -31,7 +33,7 @@ export function useFinanceReport(
     setError(null);
 
     try {
-      const result = await getFinanceReport(tenantId, options);
+      const result = await getFinanceReport(tenantId, { buildingId, period });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load report');
@@ -39,15 +41,15 @@ export function useFinanceReport(
     } finally {
       setLoading(false);
     }
-  }, [tenantId, options]);
+  }, [tenantId, buildingId, period]);
 
   const refetch = useCallback(() => {
-    fetch();
-  }, [fetch]);
+    loadReport();
+  }, [loadReport]);
 
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    loadReport();
+  }, [loadReport]);
 
   return { data, loading, error, refetch };
 }

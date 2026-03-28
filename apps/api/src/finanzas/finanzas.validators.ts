@@ -23,7 +23,7 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class FinanzasValidators {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   // ============================================================================
   // RESIDENT UNIT ACCESS (CRITICAL)
@@ -38,9 +38,22 @@ export class FinanzasValidators {
    * @returns Array of unit IDs where user has active occupancy
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
+    // Find the TenantMember for this user
+    const member = await this.prisma.tenantMember.findFirst({
+      where: {
+        tenantId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!member) {
+      return [];
+    }
+
     const occupancies = await this.prisma.unitOccupant.findMany({
       where: {
-        userId,
+        memberId: member.id,
         unit: {
           building: { tenantId }, // Ensure unit belongs to tenant
         },
@@ -394,8 +407,7 @@ export class FinanzasValidators {
    * @returns true if user is resident or owner
    */
   isResidentOrOwner(userRoles: string[]): boolean {
-    return this.hasRole(userRoles, 'RESIDENT') ||
-           this.hasRole(userRoles, 'TENANT_OWNER');
+    return this.hasRole(userRoles, 'RESIDENT');
   }
 
   /**
@@ -405,7 +417,7 @@ export class FinanzasValidators {
    */
   canReadCharges(userRoles: string[]): boolean {
     // All authenticated users can read
-    return userRoles && userRoles.length > 0;
+    return userRoles.length > 0;
   }
 
   /**
@@ -424,7 +436,7 @@ export class FinanzasValidators {
    */
   canSubmitPayments(userRoles: string[]): boolean {
     // All authenticated users can submit payments
-    return userRoles && userRoles.length > 0;
+    return userRoles.length > 0;
   }
 
   /**

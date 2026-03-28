@@ -14,11 +14,14 @@ import { AuditAction } from '@prisma/client';
 @Injectable()
 export class UnitsService {
   constructor(
-    private prisma: PrismaService,
-    private planEntitlements: PlanEntitlementsService,
-    private auditService: AuditService,
+    private readonly prisma: PrismaService,
+    private readonly planEntitlements: PlanEntitlementsService,
+    private readonly auditService: AuditService,
   ) {}
 
+  /**
+   * Create a new unit inside a building
+   */
   async create(tenantId: string, buildingId: string, dto: CreateUnitDto): Promise<Unit> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
@@ -46,7 +49,7 @@ export class UnitsService {
         },
         include: {
           unitCategory: { select: { id: true, name: true } },
-          unitOccupants: { include: { user: true } },
+          unitOccupants: { include: { member: true } },
         },
       });
 
@@ -98,12 +101,15 @@ export class UnitsService {
       include: {
         building: { select: { id: true, name: true } },
         unitCategory: { select: { id: true, name: true } },
-        unitOccupants: { include: { user: true } },
+        unitOccupants: { include: { member: true } },
       },
       orderBy: [{ building: { name: 'asc' } }, { label: 'asc' }],
     });
   }
 
+  /**
+   * List all units in a building, scoped to tenant
+   */
   async findAll(tenantId: string, buildingId: string): Promise<Unit[]> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
@@ -120,12 +126,15 @@ export class UnitsService {
       where: { buildingId },
       include: {
         unitCategory: { select: { id: true, name: true } },
-        unitOccupants: { include: { user: true } },
+        unitOccupants: { include: { member: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
+  /**
+   * Get a single unit by ID, scoped to tenant and building
+   */
   async findOne(tenantId: string, buildingId: string, unitId: string): Promise<Unit> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
@@ -142,7 +151,7 @@ export class UnitsService {
       where: { id: unitId, buildingId },
       include: {
         unitCategory: { select: { id: true, name: true } },
-        unitOccupants: { include: { user: true } },
+        unitOccupants: { include: { member: true } },
       },
     });
 
@@ -155,6 +164,9 @@ export class UnitsService {
     return unit;
   }
 
+  /**
+   * Update a unit's properties
+   */
   async update(tenantId: string, buildingId: string, unitId: string, dto: UpdateUnitDto): Promise<Unit> {
     // Verify building belongs to tenant and unit belongs to building
     await this.findOne(tenantId, buildingId, unitId);
@@ -172,7 +184,7 @@ export class UnitsService {
         },
         include: {
           unitCategory: { select: { id: true, name: true } },
-          unitOccupants: { include: { user: true } },
+          unitOccupants: { include: { member: true } },
         },
       });
 
@@ -207,6 +219,9 @@ export class UnitsService {
     }
   }
 
+  /**
+   * Delete a unit (must be vacant)
+   */
   async remove(tenantId: string, buildingId: string, unitId: string): Promise<Unit> {
     // Verify building belongs to tenant and unit belongs to building
     const unit = await this.findOne(tenantId, buildingId, unitId);

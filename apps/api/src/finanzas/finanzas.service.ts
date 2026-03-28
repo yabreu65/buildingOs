@@ -1,5 +1,5 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
+import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -13,15 +13,21 @@ import {
   CreateAllocationDto,
   ListChargesQueryDto,
   ListPaymentsQueryDto,
+  ListPendingPaymentsQueryDto,
   FinancialSummaryDto,
+  PaymentMetricsQueryDto,
+  PaymentMetricsDto,
+  PaymentAuditLogDto,
+  PaymentDuplicateCheckResultDto,
+  UnitLedgerDto,
 } from './finanzas.dto';
 
 @Injectable()
 export class FinanzasService {
   constructor(
-    private prisma: PrismaService,
-    private validators: FinanzasValidators,
-    private auditService: AuditService,
+    private readonly prisma: PrismaService,
+    private readonly validators: FinanzasValidators,
+    private readonly auditService: AuditService,
   ) {}
 
   // ============================================================================
@@ -395,7 +401,26 @@ export class FinanzasService {
       );
     }
 
-    // 5. Create payment with SUBMITTED status
+    // 5. Duplicate detection: check for similar payments in last 48 hours
+    const duplicateWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const duplicatePayment = await this.prisma.payment.findFirst({
+      where: {
+        tenantId,
+        buildingId,
+        amount: dto.amount,
+        reference: dto.reference,
+        createdAt: { gte: duplicateWindow },
+        status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
+      },
+    });
+
+    if (duplicatePayment) {
+      throw new ConflictException(
+        `Posible pago duplicado detectado: Ya existe un pago con el mismo monto y referencia en las últimas 48 horas (ID: ${duplicatePayment.id}). Por favor verificá antes de continuar.`,
+      );
+    }
+
+    // 6. Create payment with SUBMITTED status
     return this.prisma.payment.create({
       data: {
         tenantId,
@@ -1054,7 +1079,7 @@ export class FinanzasService {
     periodTo?: string,
     userRoles?: string[],
     userId?: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<UnitLedgerDto> {
     // 1. Validate unit belongs to tenant
     const unit = await this.prisma.unit.findFirst({
       where: {
@@ -1365,10 +1390,10 @@ export class FinanzasService {
     void this.auditService.createLog({
       tenantId,
       actorUserId: membershipId,
-      action: AuditAction.PAYMENT_REJECT,
+      action: AuditAction.PAYMENT_CANCEL,
       entityType: 'Payment',
       entityId: paymentId,
-      metadata: { action: 'CANCELED', reason: reason || 'No reason provided' },
+      metadata: { reason: reason || 'No reason provided' },
     });
 
     return result;
@@ -1477,7 +1502,7 @@ export class FinanzasService {
     tenantId: string,
     buildingId?: string | null,
     months: number = 6,
-  ): Promise<{ period: string; totalCharges: number; totalPaid: number; totalOutstanding: number; collectionRate: number }[]> {
+  ): Promise<MonthlyTrendDto[]> {
     // Validate months
     const validMonths = Math.min(Math.max(months, 1), 12);
 
@@ -1559,5 +1584,506 @@ export class FinanzasService {
         },
       });
     }
+  }
+
+  // ============================================================================
+  // TENANT-LEVEL PAYMENT REVIEW OPERATIONS
+  // ============================================================================
+
+  /**
+   * List pending payments across all buildings for a tenant
+   * Supports filtering by building, unit, date range, status
+   */
+  async listPendingPayments(
+    tenantId: string,
+    userRoles: string[],
+    userId: string,
+    query: ListPendingPaymentsQueryDto,
+  ): Promise<Payment[]> {
+    // Build where clause
+    const where: Prisma.PaymentWhereInput = {
+      tenantId,
+      canceledAt: null,
+    };
+
+    // Apply filters
+    if (query.status) {
+      where.status = query.status;
+    } else {
+      // Default to SUBMITTED if no status specified
+      where.status = PaymentStatus.SUBMITTED;
+    }
+
+    if (query.buildingId) {
+      where.buildingId = query.buildingId;
+    }
+
+    if (query.unitId) {
+      where.unitId = query.unitId;
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      where.createdAt = {};
+      if (query.dateFrom) {
+        where.createdAt.gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        where.createdAt.lte = new Date(query.dateTo);
+      }
+    }
+
+    // For RESIDENT/OWNER: filter to their units or their submissions
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      const userUnitIds = await this.validators.getUserUnitIds(tenantId, userId);
+      if (userUnitIds.length === 0) {
+        return [];
+      }
+      where.OR = [
+        { unitId: { in: userUnitIds } },
+        { createdByUserId: userId },
+      ];
+    }
+
+    // Execute query
+    const limit = Math.min(query.limit || 50, 100);
+    const offset = query.offset || 0;
+
+    return this.prisma.payment.findMany({
+      where,
+      orderBy: { createdAt: 'asc' }, // Oldest first for review priority
+      take: limit,
+      skip: offset,
+      include: {
+        building: {
+          select: { id: true, name: true },
+        },
+        unit: {
+          select: { id: true, label: true },
+        },
+        createdByUser: {
+          select: { id: true, name: true, email: true },
+        },
+        reviewedByMembership: {
+          select: { id: true, user: { select: { name: true } } },
+        },
+      },
+    });
+  }
+
+  /**
+   * Approve a payment at tenant level (any building)
+   */
+  async approvePaymentTenant(
+    tenantId: string,
+    paymentId: string,
+    userRoles: string[],
+    membershipId: string,
+    dto: ApprovePaymentDto,
+  ): Promise<Payment> {
+    // Permission check
+    if (!this.validators.canReviewPayments(userRoles)) {
+      this.validators.throwForbidden('payments', 'approve');
+    }
+
+    // Find payment - tenant level (any building)
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        id: paymentId,
+        tenantId,
+      },
+      include: {
+        paymentAllocations: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Validate current status
+    if (payment.status !== PaymentStatus.SUBMITTED) {
+      throw new BadRequestException(
+        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
+      );
+    }
+
+    if (payment.canceledAt) {
+      throw new BadRequestException('Cannot approve a canceled payment');
+    }
+
+    // Execute approval with auto-allocation
+    return this.prisma.$transaction(async (tx) => {
+      // Update payment status
+      const approvedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.APPROVED,
+          reviewedByMembershipId: membershipId,
+          reviewedAt: new Date(),
+          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+          updatedAt: new Date(),
+        },
+      });
+
+      // Auto-allocation: find pending charges for the unit and allocate
+      if (payment.unitId) {
+        const pendingCharges = await tx.charge.findMany({
+          where: {
+            tenantId,
+            buildingId: payment.buildingId,
+            unitId: payment.unitId,
+            status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+            canceledAt: null,
+          },
+          orderBy: { dueDate: 'asc' }, // FIFO by due date
+        });
+
+        let remainingAmount = payment.amount;
+
+        for (const charge of pendingCharges) {
+          if (remainingAmount <= 0) break;
+
+          const allocatedAmount = Math.min(remainingAmount, charge.amount);
+          const existingAllocations = await tx.paymentAllocation.aggregate({
+            where: { chargeId: charge.id },
+            _sum: { amount: true },
+          });
+          const alreadyAllocated = existingAllocations._sum.amount || 0;
+          const chargeRemaining = charge.amount - alreadyAllocated;
+
+          const allocationAmount = Math.min(allocatedAmount, chargeRemaining);
+
+          if (allocationAmount > 0) {
+            await tx.paymentAllocation.create({
+              data: {
+                tenantId,
+                paymentId: payment.id,
+                chargeId: charge.id,
+                amount: allocationAmount,
+              },
+            });
+
+            // Update charge status
+            const newChargeAllocated = alreadyAllocated + allocationAmount;
+            const newChargeStatus =
+              newChargeAllocated >= charge.amount ? ChargeStatus.PAID : ChargeStatus.PARTIAL;
+
+            await tx.charge.update({
+              where: { id: charge.id },
+              data: { status: newChargeStatus, updatedAt: new Date() },
+            });
+
+            remainingAmount -= allocationAmount;
+          }
+        }
+      }
+
+      // Registrar auditoría de aprobación
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.APPROVED,
+          membershipId,
+          reason: null,
+          comment: null,
+          metadata: {
+            amount: payment.amount,
+            currency: payment.currency,
+            method: payment.method,
+            reference: payment.reference,
+          },
+        },
+      });
+
+      return approvedPayment;
+    });
+  }
+
+  /**
+   * Reject a payment at tenant level (any building)
+   */
+  async rejectPaymentTenant(
+    tenantId: string,
+    paymentId: string,
+    userRoles: string[],
+    membershipId: string,
+    dto: RejectPaymentDto,
+  ): Promise<Payment> {
+    // Permission check
+    if (!this.validators.canReviewPayments(userRoles)) {
+      this.validators.throwForbidden('payments', 'reject');
+    }
+
+    // Validate reason
+    if (!dto.reason || dto.reason.trim().length === 0) {
+      throw new BadRequestException('Rejection reason is required');
+    }
+
+    // Find payment - tenant level (any building)
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        id: paymentId,
+        tenantId,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Validate current status
+    if (payment.status !== PaymentStatus.SUBMITTED) {
+      throw new BadRequestException(
+        `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+      );
+    }
+
+    if (payment.canceledAt) {
+      throw new BadRequestException('Cannot reject a canceled payment');
+    }
+
+    // Update payment status with full audit trail
+    const rejectedPayment = await this.prisma.payment.update({
+      where: { id: paymentId },
+      data: {
+        status: PaymentStatus.REJECTED,
+        reviewedByMembershipId: membershipId,
+        rejectionReason: dto.reason as RejectionReason,
+        rejectionComment: dto.comment || null,
+        reviewedAt: new Date(),
+        notes: dto.notes || null,
+        updatedAt: new Date(),
+      },
+    });
+
+    // Registrar auditoría
+    await this.prisma.paymentAuditLog.create({
+      data: {
+        tenantId,
+        paymentId,
+        action: PaymentAuditAction.REJECTED,
+        membershipId,
+        reason: dto.reason,
+        comment: dto.comment || null,
+        metadata: {
+          amount: payment.amount,
+          currency: payment.currency,
+          method: payment.method,
+          reference: payment.reference,
+        },
+      },
+    });
+
+    return rejectedPayment;
+  }
+
+  // ============================================================================
+  // PAYMENT METRICS
+  // ============================================================================
+
+  /**
+   * Get operational metrics for payment review
+   */
+  async getPaymentMetrics(
+    tenantId: string,
+    query: PaymentMetricsQueryDto,
+  ): Promise<PaymentMetricsDto> {
+    // Date range for metrics
+    const dateFrom = query.dateFrom ? new Date(query.dateFrom) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const dateTo = query.dateTo ? new Date(query.dateTo) : new Date();
+
+    // Build where clause for pending (SUBMITTED)
+    const pendingWhere: Prisma.PaymentWhereInput = {
+      tenantId,
+      status: PaymentStatus.SUBMITTED,
+      canceledAt: null,
+    };
+    if (query.buildingId) {
+      pendingWhere.buildingId = query.buildingId;
+    }
+
+    // Get pending payments
+    const pendingPayments = await this.prisma.payment.findMany({
+      where: pendingWhere,
+      select: { amount: true, createdAt: true, buildingId: true },
+    });
+
+    // Calculate backlog
+    const backlogCount = pendingPayments.length;
+    const backlogAmount = pendingPayments.reduce((sum, p) => sum + p.amount, 0);
+
+    // Calculate aging
+    const now = new Date();
+    const ages = pendingPayments.map(p => {
+      const created = new Date(p.createdAt);
+      return Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
+    });
+    ages.sort((a, b) => a - b);
+    const agingMedianDays = ages.length > 0 ? ages[Math.floor(ages.length / 2)] : 0;
+    const agingP95Days = ages.length > 0 ? ages[Math.floor(ages.length * 0.95)] : 0;
+
+    // Get reviewed payments (APPROVED + REJECTED) in date range
+    const reviewedWhere: Prisma.PaymentWhereInput = {
+      tenantId,
+      status: { in: [PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+      updatedAt: { gte: dateFrom, lte: dateTo },
+      canceledAt: null,
+    };
+    if (query.buildingId) {
+      reviewedWhere.buildingId = query.buildingId;
+    }
+
+    const reviewedPayments = await this.prisma.payment.findMany({
+      where: reviewedWhere,
+      select: { status: true, reference: true },
+    });
+
+    const totalReviewed = reviewedPayments.length;
+    const approvedCount = reviewedPayments.filter(p => p.status === PaymentStatus.APPROVED).length;
+    const rejectedCount = reviewedPayments.filter(p => p.status === PaymentStatus.REJECTED).length;
+
+    const approvalRate = totalReviewed > 0 ? (approvedCount / totalReviewed) * 100 : 0;
+    const rejectionRate = totalReviewed > 0 ? (rejectedCount / totalReviewed) * 100 : 0;
+
+    // Rejection reasons (from reference field)
+    const reasonCounts = new Map<string, number>();
+    reviewedPayments
+      .filter(p => p.status === PaymentStatus.REJECTED && p.reference)
+      .forEach(p => {
+        const reason = p.reference || 'OTRO';
+        reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+      });
+    const rejectionReasons = Array.from(reasonCounts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // By building
+    const buildings = await this.prisma.building.findMany({
+      where: { tenantId, ...(query.buildingId ? { id: query.buildingId } : {}) },
+      select: { id: true, name: true },
+    });
+
+    const buildingIds = buildings.map(b => b.id);
+    const paymentsByBuilding = await this.prisma.payment.groupBy({
+      by: ['buildingId', 'status'],
+      where: {
+        tenantId,
+        buildingId: { in: buildingIds },
+        canceledAt: null,
+      },
+      _count: true,
+      _sum: { amount: true },
+    });
+
+    const byBuilding = buildings.map(b => {
+      const pending = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.SUBMITTED);
+      const approved = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.APPROVED);
+      const rejected = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.REJECTED);
+      return {
+        buildingId: b.id,
+        buildingName: b.name,
+        pending: pending?._count || 0,
+        pendingAmount: pending?._sum?.amount || 0,
+        approved: approved?._count || 0,
+        rejected: rejected?._count || 0,
+      };
+    });
+
+    return {
+      backlogCount,
+      backlogAmount,
+      agingMedianDays: agingMedianDays || 0,
+      agingP95Days: agingP95Days || 0,
+      totalReviewed,
+      approvalRate,
+      rejectionRate,
+      rejectionReasons,
+      byBuilding,
+    };
+  }
+
+  // ============================================================================
+  // PAYMENT AUDIT LOG
+  // ============================================================================
+
+  /**
+   * Get audit history for a specific payment
+   */
+  async getPaymentAuditLog(
+    tenantId: string,
+    paymentId: string,
+    query: { limit?: number },
+  ): Promise<PaymentAuditLogDto[]> {
+    // Validate payment belongs to tenant
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    const logs = await this.prisma.paymentAuditLog.findMany({
+      where: { paymentId },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit || 20,
+      include: {
+        membership: {
+          select: { id: true, user: { select: { name: true, email: true } } },
+        },
+      },
+    });
+
+    return logs.map(log => ({
+      id: log.id,
+      tenantId: log.tenantId,
+      paymentId: log.paymentId,
+      action: log.action,
+      membershipId: log.membershipId || undefined,
+      reason: log.reason || undefined,
+      comment: log.comment || undefined,
+      metadata: log.metadata as Record<string, unknown> | undefined,
+      createdAt: log.createdAt,
+      userName: log.membership?.user.name || undefined,
+      userEmail: log.membership?.user.email || undefined,
+    }));
+  }
+
+  /**
+   * Check for potential duplicates (for admin review)
+   */
+  async checkPaymentDuplicate(
+    tenantId: string,
+    paymentId: string,
+  ): Promise<PaymentDuplicateCheckResultDto> {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Look for similar payments in last 48 hours
+    const duplicateWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const duplicate = await this.prisma.payment.findFirst({
+      where: {
+        tenantId,
+        id: { not: paymentId }, // Exclude self
+        amount: payment.amount,
+        reference: payment.reference,
+        createdAt: { gte: duplicateWindow },
+        status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
+      },
+    });
+
+    return {
+      hasDuplicate: !!duplicate,
+      duplicatePaymentId: duplicate?.id,
+      duplicateAmount: duplicate?.amount,
+      duplicateReference: duplicate?.reference || undefined,
+      duplicateCreatedAt: duplicate?.createdAt,
+    };
   }
 }

@@ -18,24 +18,24 @@ interface NavItem {
  * BuildingSubnav: Tabs for building sections
  * Overview, Units, Residents, Tickets, Payments, Settings
  */
-export function BuildingSubnav({ tenantId, buildingId }: BuildingSubnavProps) {
+export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) => {
   const pathname = usePathname();
 
   const items: NavItem[] = [
     {
-      label: 'Overview',
+      label: 'Resumen',
       href: `/${tenantId}/buildings/${buildingId}`,
     },
     {
-      label: 'Units',
+      label: 'Unidades',
       href: `/${tenantId}/buildings/${buildingId}/units`,
     },
     {
-      label: 'Residents',
+      label: 'Residentes',
       href: `/${tenantId}/buildings/${buildingId}/residents`,
     },
     {
-      label: 'Tickets',
+      label: 'Solicitudes',
       href: `/${tenantId}/buildings/${buildingId}/tickets`,
     },
     {
@@ -71,7 +71,7 @@ export function BuildingSubnav({ tenantId, buildingId }: BuildingSubnavProps) {
       href: `/${tenantId}/buildings/${buildingId}/reports`,
     },
     {
-      label: 'Settings',
+      label: 'Configuración',
       href: `/${tenantId}/buildings/${buildingId}/settings`,
     },
   ];

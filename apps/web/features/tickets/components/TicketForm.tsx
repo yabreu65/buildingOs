@@ -6,16 +6,20 @@ import { useToast } from '@/shared/components/ui/Toast';
 import { useTickets } from '../hooks/useTickets';
 import { Loader2 } from 'lucide-react';
 import type { Ticket } from '../services/tickets.api';
+import type { Unit } from '@/features/units/units.types';
 import { t } from '@/i18n';
 import type { TicketPriority } from '@/types/enums';
+
 interface TicketFormProps {
   buildingId: string;
+  units?: Unit[];
   onSuccess: (ticket: Ticket) => void;
   onCancel: () => void;
 }
 
 export default function TicketForm({
   buildingId,
+  units = [],
   onSuccess,
   onCancel,
 }: TicketFormProps) {
@@ -34,7 +38,6 @@ export default function TicketForm({
     e.preventDefault();
     setValidationError('');
 
-    // Validation
     if (!title.trim()) {
       setValidationError(t('tickets.errors.titleRequired'));
       return;
@@ -141,14 +144,30 @@ export default function TicketForm({
 
       <div>
         <label className="block text-sm font-medium mb-1">{t('tickets.unitOptional')}</label>
-        <input
-          type="text"
-          value={unitId}
-          onChange={(e) => setUnitId(e.target.value)}
-          placeholder={t('tickets.unitPlaceholder')}
-          className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={submitting}
-        />
+        {units.length > 0 ? (
+          <select
+            value={unitId}
+            onChange={(e) => setUnitId(e.target.value)}
+            className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={submitting}
+          >
+            <option value="">Sin unidad específica</option>
+            {units.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.label || u.unitCode || u.id}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={unitId}
+            onChange={(e) => setUnitId(e.target.value)}
+            placeholder={t('tickets.unitPlaceholder')}
+            className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={submitting}
+          />
+        )}
       </div>
 
       <div className="flex gap-2 justify-end pt-2">

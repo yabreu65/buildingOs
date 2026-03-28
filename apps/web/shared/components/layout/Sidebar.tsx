@@ -5,16 +5,16 @@ import { usePathname } from "next/navigation";
 import { routes } from "../../../shared/lib/routes";
 import { useTenantId } from "../../../features/tenancy/tenant.hooks";
 import { useCan } from "../../../features/rbac/rbac.hooks";
-import { useIsSuperAdmin } from "../../../features/auth/useAuthSession";
+import { useIsSuperAdmin, useHasRole } from "../../../features/auth/useAuthSession";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
+import { t } from "@/i18n";
 
-const NavItem = ({
-  href,
-  label,
-}: {
+interface NavItemProps {
   href: string;
   label: string;
-}) => {
+}
+
+const NavItem = ({ href, label }: NavItemProps) => {
   const pathname = usePathname();
   const isActive = pathname === href;
 
@@ -34,14 +34,13 @@ const NavItem = ({
   );
 };
 
-const Sidebar = () => {
+export const Sidebar = () => {
   const tenantId = useTenantId();
   const canReview = useCan("payments.review");
   const isSuperAdmin = useIsSuperAdmin();
+  const isResident = useHasRole("RESIDENT");
   const { isImpersonating } = useImpersonation();
 
-  // SUPER_ADMIN users should not see tenant-level sidebar
-  // EXCEPT during impersonation (when they're acting as tenant admin)
   if ((isSuperAdmin && !isImpersonating) || !tenantId) return null;
 
   return (
@@ -49,33 +48,47 @@ const Sidebar = () => {
       <div className="p-4">
         <div className="font-semibold text-base">BuildingOS</div>
         <div className="mt-1 text-xs text-muted-foreground">
-          Tenant: <span className="font-medium text-foreground">{tenantId}</span>
+          {t('common.tenant')}: <span className="font-medium text-foreground">{tenantId}</span>
         </div>
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-4">
-        <NavItem href={routes.tenantDashboard(tenantId)} label="Dashboard" />
-        <NavItem href={routes.buildingsList(tenantId)} label="Buildings" />
-        <NavItem href={`/${tenantId}/units`} label="Units" />
-        <NavItem href={`/${tenantId}/finanzas`} label="Finanzas" />
-        <NavItem href={routes.tenantReports(tenantId)} label="Reportes" />
+        <NavItem href={routes.tenantDashboard(tenantId)} label={t('navigation.dashboard')} />
 
-        {canReview && (
+        {isResident ? (
           <>
+            <NavItem href={`/${tenantId}/resident/payments`} label={t('navigation.payments')} />
+            <NavItem href={`/${tenantId}/resident/announcements`} label={t('navigation.communications')} />
+            <NavItem href={`/${tenantId}/resident/tickets`} label={t('navigation.tickets')} />
+            <NavItem href={`/${tenantId}/resident/unit`} label={t('navigation.myUnit')} />
+            <NavItem href={`/${tenantId}/resident/documents`} label={t('navigation.documents')} />
+          </>
+        ) : (
+          <>
+            <NavItem href={routes.buildingsList(tenantId)} label={t('navigation.buildings')} />
+            <NavItem href={`/${tenantId}/units`} label={t('navigation.units')} />
+            <NavItem href={`/${tenantId}/finanzas`} label={t('navigation.finanzas')} />
+            <NavItem href={routes.tenantReports(tenantId)} label={t('navigation.reports')} />
+
+            {canReview && (
+              <>
+                <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {t('sidebar.admin')}
+                </div>
+                <NavItem href={`/${tenantId}/payments/review`} label={t('payments.review')} />
+              </>
+            )}
+
             <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Admin
+              {t('navigation.settings')}
             </div>
-            <NavItem href={`/${tenantId}/payments/review`} label="Validar pagos" />
+            <NavItem href={`/${tenantId}/settings/members`} label={t('sidebar.myTeam')} />
           </>
         )}
-
-        <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          Settings
-        </div>
-        <NavItem href={`/${tenantId}/settings/members`} label="Team" />
       </nav>
     </aside>
   );
 };
 
 export default Sidebar;
+

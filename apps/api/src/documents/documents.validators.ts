@@ -18,7 +18,7 @@ import { DocumentVisibility, Role } from '@prisma/client';
  */
 @Injectable()
 export class DocumentsValidators {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Validate document scope constraint
@@ -139,9 +139,22 @@ export class DocumentsValidators {
    * @returns Array of unit IDs user can access
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
+    // Find the TenantMember for this user
+    const member = await this.prisma.tenantMember.findFirst({
+      where: {
+        tenantId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!member) {
+      return [];
+    }
+
     const occupancies = await this.prisma.unitOccupant.findMany({
       where: {
-        userId,
+        memberId: member.id,
         unit: {
           building: { tenantId },
         },
@@ -162,13 +175,26 @@ export class DocumentsValidators {
    * @returns Array of building IDs user can access
    */
   async getUserBuildingIds(tenantId: string, userId: string): Promise<string[]> {
+    // Find the TenantMember for this user
+    const member = await this.prisma.tenantMember.findFirst({
+      where: {
+        tenantId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!member) {
+      return [];
+    }
+
     const buildings = await this.prisma.building.findMany({
       where: {
         tenantId,
         units: {
           some: {
             unitOccupants: {
-              some: { userId },
+              some: { memberId: member.id },
             },
           },
         },

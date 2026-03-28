@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { TenantFinanceDashboard } from '@/features/finance/components';
+import { useHasRole } from '@/features/auth/useAuthSession';
 
 interface Params {
   tenantId: string;
@@ -13,9 +15,17 @@ interface Params {
  * TenantFinanzasPage: Display aggregated financial dashboard for entire tenant
  * Shows summary across all buildings
  */
-export default function TenantFinanzasPage() {
+const TenantFinanzasPage = () => {
   const params = useParams<Params>();
   const tenantId = params?.tenantId;
+  const router = useRouter();
+  const isResident = useHasRole('RESIDENT');
+
+  useEffect(() => {
+    if (isResident && tenantId) {
+      router.replace(`/${tenantId}/dashboard`);
+    }
+  }, [isResident, tenantId, router]);
 
   if (!tenantId) {
     return <div>Invalid parameters</div>;
@@ -34,4 +44,6 @@ export default function TenantFinanzasPage() {
       <TenantFinanceDashboard />
     </div>
   );
-}
+};
+
+export default TenantFinanzasPage;

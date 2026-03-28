@@ -32,6 +32,8 @@ import { DemoSeedModule } from './demo-seed/demo-seed.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { LeadsModule } from './leads/leads.module';
+import { TenantMembersModule } from './tenant-members/tenant-members.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -67,6 +69,8 @@ import { LeadsModule } from './leads/leads.module';
     DemoSeedModule,
     AssistantModule,
     LeadsModule,
+    TenantMembersModule,
+    DashboardModule,
   ],
   controllers: [],
   providers: [],

@@ -30,8 +30,8 @@ interface DemoSeedResult {
 @Injectable()
 export class DemoSeedService {
   constructor(
-    private prisma: PrismaService,
-    private auditService: AuditService,
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -136,27 +136,44 @@ export class DemoSeedService {
             data: {
               email: `${tenantId}-${user.email}`,
               name: user.name,
-              passwordHash: 'demo-hashed-password', // Demo users can't login
+              passwordHash: '', // Demo users cannot log in — no valid hash
             },
           }),
         ),
       );
       result.summary.usersCreated = users.length;
 
+      // Create TenantMembers for demo users
+      const members = await Promise.all(
+        users.map((user) =>
+          this.prisma.tenantMember.create({
+            data: {
+              tenantId,
+              userId: user.id,
+              name: user.name,
+              email: user.email,
+              role: 'RESIDENT',
+              status: 'ACTIVE',
+            },
+          }),
+        ),
+      );
+
       // Assign occupants to units
       const occupantAssignments = [
-        { unitIndex: 0, userIndex: 0, role: 'OWNER' }, // Owner in 101
-        { unitIndex: 2, userIndex: 0, role: 'RESIDENT' }, // Also in 103
-        { unitIndex: 3, userIndex: 1, role: 'OWNER' }, // Manager in 201
-        { unitIndex: 4, userIndex: 2, role: 'OWNER' }, // Admin in 202
+        { unitIndex: 0, memberIndex: 0, role: 'OWNER' }, // Owner in 101
+        { unitIndex: 2, memberIndex: 0, role: 'RESIDENT' }, // Also in 103
+        { unitIndex: 3, memberIndex: 1, role: 'OWNER' }, // Manager in 201
+        { unitIndex: 4, memberIndex: 2, role: 'OWNER' }, // Admin in 202
       ];
 
       for (const assignment of occupantAssignments) {
         await this.prisma.unitOccupant.create({
           data: {
+            tenantId,
             unitId: units[assignment.unitIndex]!.id,
-            userId: users[assignment.userIndex]!.id,
-            role: assignment.role as any,
+            memberId: members[assignment.memberIndex]!.id,
+            role: assignment.role as 'OWNER' | 'RESIDENT',
           },
         });
         result.summary.occupantsCreated++;
@@ -285,7 +302,7 @@ export class DemoSeedService {
             data: {
               tenantId,
               buildingId: building.id,
-              createdByMembershipId: 'demo-membership-id',
+              createdByMembershipId: userId,
               title,
               category: documentCategories[idx % documentCategories.length]!,
               visibility: 'RESIDENTS' as DocumentVisibility,
@@ -299,7 +316,7 @@ export class DemoSeedService {
       // Success: Audit the seed operation
       await this.auditService.createLog({
         tenantId,
-        action: 'DEMO_SEED_CREATED' as AuditAction,
+        action: AuditAction.DEMO_SEED_CREATED,
         entityType: 'Tenant',
         entityId: tenantId,
         actorUserId: userId,

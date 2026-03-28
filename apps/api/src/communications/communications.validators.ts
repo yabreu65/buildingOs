@@ -14,11 +14,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CommunicationTargetType } from '@prisma/client';
+import { CommunicationTargetType, Role } from '@prisma/client';
 
 @Injectable()
 export class CommunicationsValidators {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Validate that a communication belongs to the tenant
@@ -162,13 +162,12 @@ export class CommunicationsValidators {
         await this.validateUnitBelongsToTenant(tenantId, targetId);
         break;
 
-      case 'ROLE':
+      case 'ROLE': {
         if (!targetId) {
           throw new BadRequestException(
             `ROLE target requires role code in targetId`,
           );
         }
-        // Validate role is a valid value (RESIDENT, OWNER, etc)
         const validRoles = ['RESIDENT', 'OWNER', 'OPERATOR', 'TENANT_ADMIN', 'TENANT_OWNER', 'SUPER_ADMIN'];
         if (!validRoles.includes(targetId.toUpperCase())) {
           throw new BadRequestException(
@@ -176,6 +175,7 @@ export class CommunicationsValidators {
           );
         }
         break;
+      }
 
       default:
         throw new BadRequestException(
@@ -231,7 +231,7 @@ export class CommunicationsValidators {
     targetId: string | null,
   ): Promise<string[]> {
     switch (targetType) {
-      case 'ALL_TENANT':
+      case 'ALL_TENANT': {
         // All users in the tenant
         const tenantUsers = await this.prisma.user.findMany({
           where: {
@@ -244,8 +244,9 @@ export class CommunicationsValidators {
           select: { id: true },
         });
         return tenantUsers.map((u) => u.id);
+      }
 
-      case 'BUILDING':
+      case 'BUILDING': {
         // All unit occupants in this building
         const buildingOccupants = await this.prisma.unitOccupant.findMany({
           where: {
@@ -256,12 +257,15 @@ export class CommunicationsValidators {
               },
             },
           },
-          select: { userId: true },
-          distinct: ['userId'],
+          include: { member: { select: { userId: true } } },
+          distinct: ['memberId'],
         });
-        return buildingOccupants.map((o) => o.userId);
+        return buildingOccupants
+          .filter((o) => o.member.userId)
+          .map((o) => o.member.userId!);
+      }
 
-      case 'UNIT':
+      case 'UNIT': {
         // All unit occupants in this unit
         const unitOccupants = await this.prisma.unitOccupant.findMany({
           where: {
@@ -270,10 +274,13 @@ export class CommunicationsValidators {
               building: { tenantId },
             },
           },
-          select: { userId: true },
-          distinct: ['userId'],
+          include: { member: { select: { userId: true } } },
+          distinct: ['memberId'],
         });
-        return unitOccupants.map((o) => o.userId);
+        return unitOccupants
+          .filter((o) => o.member.userId)
+          .map((o) => o.member.userId!);
+      }
 
       case 'ROLE':
         // All users with this role in the tenant
@@ -284,7 +291,7 @@ export class CommunicationsValidators {
                 tenantId,
                 roles: {
                   some: {
-                    role: targetId as any,
+                    role: targetId as Role,
                   },
                 },
               },

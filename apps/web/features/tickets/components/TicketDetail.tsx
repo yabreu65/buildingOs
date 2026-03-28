@@ -170,8 +170,16 @@ export default function TicketDetail({
                 {t('tickets.status')}
               </label>
               <div className="space-y-2">
-                <div className="inline-block px-3 py-1 rounded bg-blue-100 text-blue-700 text-sm font-medium">
-                  {ticket.status}
+                <div className={`inline-block px-3 py-1 rounded text-sm font-medium ${
+                  ticket.status === 'OPEN' ? 'bg-blue-100 text-blue-700' :
+                  ticket.status === 'IN_PROGRESS' ? 'bg-yellow-100 text-yellow-700' :
+                  ticket.status === 'RESOLVED' ? 'bg-green-100 text-green-700' :
+                  'bg-gray-100 text-gray-700'
+                }`}>
+                  {ticket.status === 'OPEN' ? 'Abierta' :
+                   ticket.status === 'IN_PROGRESS' ? 'En progreso' :
+                   ticket.status === 'RESOLVED' ? 'Resuelta' :
+                   ticket.status === 'CLOSED' ? 'Cerrada' : ticket.status}
                 </div>
                 {allowedTransitions.length > 0 && (
                   <div className="space-y-1">
@@ -185,7 +193,10 @@ export default function TicketDetail({
                         className="w-full justify-start"
                       >
                         {status === 'CLOSED' && <AlertCircle className="w-3 h-3 mr-2" />}
-                        {status}
+                        {status === 'OPEN' ? 'Abrir' :
+                         status === 'IN_PROGRESS' ? 'En progreso' :
+                         status === 'RESOLVED' ? 'Resolver' :
+                         status === 'CLOSED' ? 'Cerrar' : status}
                       </Button>
                     ))}
                   </div>
@@ -197,8 +208,16 @@ export default function TicketDetail({
               <label className="block text-sm font-medium text-muted-foreground mb-1">
                 {t('tickets.priority')}
               </label>
-              <span className="text-sm font-medium px-2 py-1 rounded bg-orange-50 text-orange-700">
-                {ticket.priority}
+              <span className={`text-sm font-medium px-2 py-1 rounded ${
+                ticket.priority === 'LOW' ? 'bg-green-50 text-green-700' :
+                ticket.priority === 'MEDIUM' ? 'bg-blue-50 text-blue-700' :
+                ticket.priority === 'HIGH' ? 'bg-orange-50 text-orange-700' :
+                ticket.priority === 'URGENT' ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-700'
+              }`}>
+                {ticket.priority === 'LOW' ? 'Baja' :
+                 ticket.priority === 'MEDIUM' ? 'Media' :
+                 ticket.priority === 'HIGH' ? 'Alta' :
+                 ticket.priority === 'URGENT' ? 'Urgente' : ticket.priority}
               </span>
             </div>
           </div>
@@ -209,10 +228,10 @@ export default function TicketDetail({
               {t('tickets.timeline')}
             </label>
             <div className="text-sm space-y-1 text-muted-foreground">
-              <div>Created: {new Date(ticket.createdAt).toLocaleString()}</div>
-              <div>Updated: {new Date(ticket.updatedAt).toLocaleString()}</div>
+              <div>Creado: {new Date(ticket.createdAt).toLocaleString('es-AR')}</div>
+              <div>Actualizado: {new Date(ticket.updatedAt).toLocaleString('es-AR')}</div>
               {ticket.closedAt && (
-                <div>Closed: {new Date(ticket.closedAt).toLocaleString()}</div>
+                <div>Cerrado: {new Date(ticket.closedAt).toLocaleString('es-AR')}</div>
               )}
             </div>
           </div>

@@ -4,11 +4,12 @@ import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config/config.service';
 import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto, SelfRegisterDto } from './leads.dto';
-import { AuditAction, Role, Lead, Prisma } from '@prisma/client';
+import { AuditAction, Role, Lead, LeadStatus, Prisma } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import { EmailTemplates } from '../email/email.templates';
 import { LeadResponse, LeadsListResponse, SelfRegisterResponse } from './leads.types';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class LeadsService {
@@ -154,7 +155,7 @@ export class LeadsService {
     // Build where clause
     const where: Prisma.LeadWhereInput = {};
     if (filter?.status) {
-      (where as Record<string, unknown>).status = filter.status;
+      where.status = filter.status as LeadStatus;
     }
     if (filter?.email) {
       where.email = { contains: filter.email, mode: 'insensitive' };
@@ -308,7 +309,7 @@ export class LeadsService {
       <p><strong>Lead ID:</strong> <code>${lead.id}</code></p>
       <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
       <p style="color: #666; font-size: 12px;">
-        <a href="http://localhost:3000/super-admin/leads/${lead.id}">View in dashboard</a> |
+        <a href="${this.configService.getValue('appBaseUrl') || ''}/super-admin/leads/${lead.id}">View in dashboard</a> |
         Submitted: ${lead.createdAt.toISOString()}
       </p>
     `;
@@ -318,7 +319,6 @@ export class LeadsService {
         to: recipientEmail,
         subject,
         htmlBody,
-        replyTo: lead.email,
       },
       EmailType.LEAD_NOTIFICATION,
     );
@@ -830,7 +830,6 @@ export class LeadsService {
    * Hash password (simple bcrypt)
    */
   private async hashPassword(password: string): Promise<string> {
-    const bcrypt = await import('bcrypt');
     return bcrypt.hash(password, 10);
   }
 

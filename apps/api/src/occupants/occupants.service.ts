@@ -9,11 +9,14 @@ import { AuditAction } from '@prisma/client';
 @Injectable()
 export class OccupantsService {
   constructor(
-    private prisma: PrismaService,
-    private auditService: AuditService,
-    private planEntitlements: PlanEntitlementsService,
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+    private readonly planEntitlements: PlanEntitlementsService,
   ) {}
 
+  /**
+   * Assign a tenant member as an occupant of a unit
+   */
   async assignOccupant(
     tenantId: string,
     buildingId: string,
@@ -32,14 +35,14 @@ export class OccupantsService {
       );
     }
 
-    // Verify user exists in the same tenant
-    const userInTenant = await this.prisma.membership.findFirst({
-      where: { userId: dto.userId, tenantId },
+    // Verify member exists in the same tenant
+    const memberInTenant = await this.prisma.tenantMember.findFirst({
+      where: { id: dto.memberId, tenantId },
     });
 
-    if (!userInTenant) {
+    if (!memberInTenant) {
       throw new BadRequestException(
-        `User not found in this tenant`,
+        `Member not found in this tenant`,
       );
     }
 
@@ -49,11 +52,12 @@ export class OccupantsService {
     try {
       const occupant = await this.prisma.unitOccupant.create({
         data: {
+          tenantId,
           unitId,
-          userId: dto.userId,
+          memberId: dto.memberId,
           role: dto.role,
         },
-        include: { user: true, unit: true },
+        include: { member: true, unit: true },
       });
 
       // Audit: OCCUPANT_ASSIGN
@@ -66,7 +70,7 @@ export class OccupantsService {
           entityId: occupant.id,
           metadata: {
             unitId,
-            userId: dto.userId,
+            memberId: dto.memberId,
             role: dto.role,
           },
         });
@@ -81,13 +85,16 @@ export class OccupantsService {
         error.code === 'P2002'
       ) {
         throw new BadRequestException(
-          `This user is already assigned to this unit with role ${dto.role}`,
+          `This member is already assigned to this unit with role ${dto.role}`,
         );
       }
       throw error;
     }
   }
 
+  /**
+   * List all occupants for a unit
+   */
   async findOccupants(tenantId: string, buildingId: string, unitId: string): Promise<UnitOccupant[]> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
@@ -102,11 +109,14 @@ export class OccupantsService {
 
     return await this.prisma.unitOccupant.findMany({
       where: { unitId },
-      include: { user: true },
+      include: { member: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
+  /**
+   * Remove an occupant from a unit
+   */
   async removeOccupant(
     tenantId: string,
     buildingId: string,
@@ -150,7 +160,7 @@ export class OccupantsService {
         entityId: occupantId,
         metadata: {
           unitId,
-          userId: occupant.userId,
+          memberId: occupant.memberId,
           role: occupant.role,
         },
       });

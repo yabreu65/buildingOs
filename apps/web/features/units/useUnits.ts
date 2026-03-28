@@ -17,7 +17,7 @@ import {
 
 interface UseUnitsOptions {
   tenantId?: string;
-  buildingId?: string; // Optional filter
+  buildingId?: string | null; // Optional filter, null means no building selected (show nothing)
 }
 
 interface UseUnitsResult {

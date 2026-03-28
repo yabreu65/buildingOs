@@ -3,22 +3,26 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { Building } from '@prisma/client';
+import { AuditAction, Building, Unit } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
-import { AuditAction } from '@prisma/client';
+
+interface BuildingWithUnits extends Building { units: Unit[] }
 
 @Injectable()
 export class BuildingsService {
   constructor(
-    private prisma: PrismaService,
-    private auditService: AuditService,
-    private planEntitlements: PlanEntitlementsService,
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+    private readonly planEntitlements: PlanEntitlementsService,
   ) {}
 
+  /**
+   * Create a new building for the tenant
+   */
   async create(tenantId: string, dto: CreateBuildingDto, userId?: string): Promise<Building> {
     // 1. Check plan limit: maxBuildings
     await this.planEntitlements.assertLimit(tenantId, 'buildings');
@@ -64,8 +68,11 @@ export class BuildingsService {
     }
   }
 
+  /**
+   * List all buildings for a tenant
+   */
   async findAll(tenantId: string): Promise<
-    (Building & { units: unknown[] })[]
+    (BuildingWithUnits)[]
   > {
     return await this.prisma.building.findMany({
       where: { tenantId },
@@ -74,12 +81,15 @@ export class BuildingsService {
     });
   }
 
+  /**
+   * Get a single building by ID, scoped to tenant
+   */
   async findOne(tenantId: string, buildingId: string): Promise<
-    Building & { units: unknown[] }
+    BuildingWithUnits
   > {
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
-      include: { units: { include: { unitOccupants: { include: { user: true } } } } },
+      include: { units: { include: { unitOccupants: { include: { member: true } } } } },
     });
 
     if (!building) {
@@ -91,7 +101,10 @@ export class BuildingsService {
     return building;
   }
 
-  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string): Promise<Building & { units: unknown[] }> {
+  /**
+   * Update building name/address
+   */
+  async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string): Promise<BuildingWithUnits> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -144,6 +157,9 @@ export class BuildingsService {
     }
   }
 
+  /**
+   * Delete a building (cascades to units/occupants)
+   */
   async remove(tenantId: string, buildingId: string, userId?: string): Promise<Building> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({

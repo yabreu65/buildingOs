@@ -19,7 +19,7 @@ import { useToast } from '@/shared/components/ui/Toast';
 import { handlePlanLimitError } from '@/features/billing/utils/handlePlanLimitError';
 import { Edit, Trash2, LayoutGrid, Plus, X } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
-import type { Unit as ApiUnit } from '@/features/units/units.api';
+import type { Unit as ApiUnit, CreateUnitInput } from '@/features/units/units.api';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import CategoryChangeDialog from './CategoryChangeDialog';
 
@@ -33,7 +33,7 @@ interface UnitParams {
  * UnitsPage: List all units in a building
  * Shows: units table with occupancy status, resident info, create/edit/delete actions
  */
-export default function UnitsPage() {
+const UnitsPage = () => {
   const params = useParams<UnitParams>();
   const router = useRouter();
   const tenantId = params?.tenantId;
@@ -90,7 +90,7 @@ export default function UnitsPage() {
     toast(t('units.created'), 'success');
   };
 
-  const handleCreateUnit = async (buildingId: string, input: any): Promise<ApiUnit> => {
+  const handleCreateUnit = async (buildingId: string, input: Omit<CreateUnitInput, 'buildingId'>): Promise<ApiUnit> => {
     try {
       const unit = await createUnit(input);
       // Convert from old Unit type to ApiUnit type for UnitCreateForm
@@ -268,7 +268,7 @@ export default function UnitsPage() {
       {editingUnit && (
         <Card className="border-green-200 bg-green-50">
           <div className="mb-4 flex justify-between items-center">
-            <h3 className="text-lg font-semibold">Edit Unit</h3>
+            <h3 className="text-lg font-semibold">{t('units.edit')}</h3>
             <button
               onClick={() => setEditingUnit(null)}
               className="text-muted-foreground hover:text-foreground"
@@ -372,10 +372,10 @@ export default function UnitsPage() {
                 variant="secondary"
                 onClick={() => setEditingUnit(null)}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" disabled={editSubmitting}>
-                {editSubmitting ? 'Saving...' : 'Save Changes'}
+                {editSubmitting ? t('units.saving') : t('units.saveChanges')}
               </Button>
             </div>
           </form>
@@ -401,8 +401,8 @@ export default function UnitsPage() {
                   <th className="text-left py-3 px-4 font-medium">Label</th>
                   <th className="text-left py-3 px-4 font-medium">m²</th>
                   <th className="text-left py-3 px-4 font-medium">Categoría</th>
-                  <th className="text-left py-3 px-4 font-medium">Type</th>
-                  <th className="text-left py-3 px-4 font-medium">Status</th>
+                  <th className="text-left py-3 px-4 font-medium">Tipo</th>
+                  <th className="text-left py-3 px-4 font-medium">Estado</th>
                   <th className="text-left py-3 px-4 font-medium">Actions</th>
                 </tr>
               </thead>
@@ -427,11 +427,11 @@ export default function UnitsPage() {
         <EmptyState
           icon={<LayoutGrid className="w-12 h-12 text-muted-foreground" />}
           title="No units yet"
-          description="Create your first unit to start managing occupancy and resident information."
-          cta={{
-            text: 'Create First Unit',
-            onClick: () => setShowCreateForm(true),
-          }}
+        description={t('units.empty')}
+        cta={{
+          text: t('units.createFirst'),
+          onClick: () => setShowCreateForm(true),
+        }}
         />
       ) : (
         /* Units Table */
@@ -444,8 +444,8 @@ export default function UnitsPage() {
                   <th className="text-left py-3 px-4 font-medium">Label</th>
                   <th className="text-left py-3 px-4 font-medium">m²</th>
                   <th className="text-left py-3 px-4 font-medium">Categoría</th>
-                  <th className="text-left py-3 px-4 font-medium">Type</th>
-                  <th className="text-left py-3 px-4 font-medium">Status</th>
+                  <th className="text-left py-3 px-4 font-medium">Tipo</th>
+                  <th className="text-left py-3 px-4 font-medium">Estado</th>
                   <th className="text-left py-3 px-4 font-medium">Actions</th>
                 </tr>
               </thead>
@@ -470,8 +470,28 @@ export default function UnitsPage() {
                       </select>
                     </td>
                     <td className="py-3 px-4">
-                      <span className="text-xs bg-gray-200 px-2 py-1 rounded">
-                        {unit.unitType || 'N/A'}
+                      <span
+                        className={`text-xs px-2 py-1 rounded font-medium ${
+                          unit.unitType === 'APARTMENT'
+                            ? 'bg-blue-100 text-blue-800'
+                            : unit.unitType === 'HOUSE'
+                              ? 'bg-green-100 text-green-800'
+                              : unit.unitType === 'OFFICE'
+                                ? 'bg-purple-100 text-purple-800'
+                                : unit.unitType === 'STORAGE'
+                                  ? 'bg-gray-200 text-gray-700'
+                                  : unit.unitType === 'PARKING'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {unit.unitType === 'APARTMENT' && 'Apartamento'}
+                        {unit.unitType === 'HOUSE' && 'Casa'}
+                        {unit.unitType === 'OFFICE' && 'Oficina'}
+                        {unit.unitType === 'STORAGE' && 'Depósito'}
+                        {unit.unitType === 'PARKING' && 'Estacionamiento'}
+                        {unit.unitType === 'OTHER' && 'Otro'}
+                        {!unit.unitType && '—'}
                       </span>
                     </td>
                     <td className="py-3 px-4">
@@ -481,10 +501,13 @@ export default function UnitsPage() {
                             ? 'bg-green-100 text-green-800'
                             : unit.occupancyStatus === 'VACANT'
                               ? 'bg-orange-100 text-orange-800'
-                              : 'bg-gray-100 text-gray-800'
+                              : 'bg-gray-100 text-gray-600'
                         }`}
                       >
-                        {unit.occupancyStatus || 'Unknown'}
+                        {unit.occupancyStatus === 'OCCUPIED' && 'Ocupado'}
+                        {unit.occupancyStatus === 'VACANT' && 'Vacío'}
+                        {unit.occupancyStatus === 'UNKNOWN' && 'Desconocido'}
+                        {!unit.occupancyStatus && '—'}
                       </span>
                     </td>
                     <td className="py-3 px-4">
@@ -524,8 +547,8 @@ export default function UnitsPage() {
       {/* Delete Confirmation Dialog */}
       <DeleteConfirmDialog
         isOpen={deleteConfirm.isOpen}
-        title="Delete Unit"
-        description="This action cannot be undone. The unit and all associated occupant data will be deleted."
+        title={t('units.delete')}
+        description={t('units.confirmDelete')}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteConfirm({ isOpen: false, unitId: null })}
         isLoading={isDeleting}
@@ -548,4 +571,6 @@ export default function UnitsPage() {
       </div>
     </ErrorBoundary>
   );
-}
+};
+
+export default UnitsPage;

@@ -22,7 +22,9 @@ export function useCommunicationsReport(
   const [loading, setLoading] = useState(() => !!tenantId); // Only load if tenantId provided
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async () => {
+  const { buildingId, from, to } = options;
+
+  const loadReport = useCallback(async () => {
     if (!tenantId) {
       setLoading(false);
       return;
@@ -32,7 +34,7 @@ export function useCommunicationsReport(
     setError(null);
 
     try {
-      const result = await getCommunicationsReport(tenantId, options);
+      const result = await getCommunicationsReport(tenantId, { buildingId, from, to });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load report');
@@ -40,15 +42,15 @@ export function useCommunicationsReport(
     } finally {
       setLoading(false);
     }
-  }, [tenantId, options]);
+  }, [tenantId, buildingId, from, to]);
 
   const refetch = useCallback(() => {
-    fetch();
-  }, [fetch]);
+    loadReport();
+  }, [loadReport]);
 
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    loadReport();
+  }, [loadReport]);
 
   return { data, loading, error, refetch };
 }

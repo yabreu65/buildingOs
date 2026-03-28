@@ -2,6 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
+import { useBuildings } from '@/features/buildings/hooks';
 import { TicketsList } from '@/features/tickets';
 
 interface BuildingParams {
@@ -10,13 +11,13 @@ interface BuildingParams {
   [key: string]: string | string[];
 }
 
-/**
- * TicketsPage: Display all tickets for a building with full CRUD
- */
 export default function TicketsPage() {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
+
+  const { buildings } = useBuildings(tenantId);
+  const building = buildings.find((b) => b.id === buildingId);
 
   if (!tenantId || !buildingId) {
     return <div>Invalid parameters</div>;
@@ -26,7 +27,7 @@ export default function TicketsPage() {
     <div className="space-y-6">
       <BuildingBreadcrumb
         tenantId={tenantId}
-        buildingName="Tickets"
+        buildingName={building?.name || 'Tickets'}
         buildingId={buildingId}
       />
 

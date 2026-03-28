@@ -19,6 +19,10 @@ export interface AuthenticatedRequest extends Request {
     membershipId?: string;
     permissions?: string[];
     tenantId?: string; // From JWT context for tenant-level routes
+    memberships?: Array<{
+      tenantId: string;
+      roles: string[];
+    }>;
   };
 }
 

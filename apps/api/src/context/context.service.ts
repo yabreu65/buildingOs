@@ -2,6 +2,13 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthorizeService } from '../rbac/authorize.service';
 
+interface MembershipRoleShape {
+  role: string;
+  scopeType: string | null;
+  scopeBuildingId: string | null;
+  scopeUnitId?: string | null;
+}
+
 export interface UserContextData {
   tenantId: string;
   activeBuildingId?: string | null;
@@ -40,10 +47,16 @@ export class ContextService {
       throw new NotFoundException('Membership not found');
     }
 
+    // Auto-initialize if no context exists OR if context is empty (both null — never properly initialized)
+    const ctx = membership.userContext;
+    if (!ctx || (!ctx.activeBuildingId && !ctx.activeUnitId)) {
+      return this.initializeContext(userId, tenantId);
+    }
+
     return {
       tenantId,
-      activeBuildingId: membership.userContext?.activeBuildingId ?? null,
-      activeUnitId: membership.userContext?.activeUnitId ?? null,
+      activeBuildingId: ctx.activeBuildingId ?? null,
+      activeUnitId: ctx.activeUnitId ?? null,
     };
   }
 
@@ -91,6 +104,10 @@ export class ContextService {
       effectiveBuildingId = unit.buildingId;
     }
 
+    // Determine if user is RESIDENT (skip buildings.read check — they validate via UnitOccupant)
+    const rolesForCheck = membership.roles || [];
+    const isResidentForBuildingCheck = rolesForCheck.some((r: MembershipRoleShape) => r.role === 'RESIDENT');
+
     // Validate building if specified
     if (effectiveBuildingId) {
       const building = await this.prisma.building.findUnique({
@@ -101,16 +118,18 @@ export class ContextService {
         throw new NotFoundException('Building not found or does not belong to this tenant');
       }
 
-      // Validate user has access to this building
-      const hasAccess = await this.authorize.authorize({
-        userId,
-        tenantId,
-        permission: 'buildings.read',
-        buildingId: effectiveBuildingId,
-      });
+      // RESIDENT access is validated at unit level via UnitOccupant — skip buildings.read check
+      if (!isResidentForBuildingCheck) {
+        const hasAccess = await this.authorize.authorize({
+          userId,
+          tenantId,
+          permission: 'buildings.read',
+          buildingId: effectiveBuildingId,
+        });
 
-      if (!hasAccess) {
-        throw new ForbiddenException('No access to this building');
+        if (!hasAccess) {
+          throw new ForbiddenException('No access to this building');
+        }
       }
     }
 
@@ -118,14 +137,27 @@ export class ContextService {
     if (effectiveUnitId) {
       // Get user's roles to check if RESIDENT
       const roles = membership.roles || [];
-      const isResident = roles.some((r: any) => r.role === 'RESIDENT');
+      const isResident = roles.some((r: MembershipRoleShape) => r.role === 'RESIDENT');
 
       if (isResident) {
         // RESIDENT: can only access units where they are an occupant
+        // First find the TenantMember for this user
+        const member = await this.prisma.tenantMember.findFirst({
+          where: {
+            tenantId,
+            userId,
+          },
+          select: { id: true },
+        });
+
+        if (!member) {
+          throw new ForbiddenException('No access to this unit');
+        }
+
         const isOccupant = await this.prisma.unitOccupant.findFirst({
           where: {
             unitId: effectiveUnitId,
-            userId,
+            memberId: member.id,
           },
         });
 
@@ -220,65 +252,101 @@ export class ContextService {
    * Get buildings accessible to user based on roles and scope
    */
   private async getAccessibleBuildings(
-    roles: any[],
-    _userId: string,
+    roles: MembershipRoleShape[],
+    userId: string,
     tenantId: string,
   ): Promise<ContextOption[]> {
-    // Check if user has TENANT-scoped roles
-    const hasTenantScope = roles.some((r: any) => r.scopeType === 'TENANT');
+    // RESIDENT always derives buildings from their UnitOccupant records (regardless of scopeType)
+    const isResident = roles.some((r: MembershipRoleShape) => r.role === 'RESIDENT');
+    if (isResident) {
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { tenantId, userId },
+        select: { id: true },
+      });
 
+      if (!member) return [];
+
+      const occupancies = await this.prisma.unitOccupant.findMany({
+        where: { memberId: member.id },
+        include: { unit: { include: { building: true } } },
+      });
+
+      const seen = new Set<string>();
+      const buildings: ContextOption[] = [];
+      for (const occ of occupancies) {
+        if (!seen.has(occ.unit.buildingId)) {
+          seen.add(occ.unit.buildingId);
+          buildings.push({ id: occ.unit.buildingId, name: occ.unit.building.name });
+        }
+      }
+      return buildings;
+    }
+
+    // Non-RESIDENT: check scope
+    const hasTenantScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'TENANT');
     if (hasTenantScope) {
-      // User has tenant-wide access: return all buildings
       return this.prisma.building.findMany({
         where: { tenantId },
         select: { id: true, name: true },
       });
     }
 
-    // Get BUILDING-scoped building IDs
-    const buildingScopedRoles = roles.filter((r: any) => r.scopeType === 'BUILDING');
+    const buildingScopedRoles = roles.filter((r: MembershipRoleShape) => r.scopeType === 'BUILDING');
     const buildingIds = buildingScopedRoles
-      .map((r: any) => r.scopeBuildingId)
+      .map((r: MembershipRoleShape) => r.scopeBuildingId)
       .filter((id: string | null) => id !== null);
 
-    if (buildingIds.length === 0) {
-      return [];
+    if (buildingIds.length > 0) {
+      return this.prisma.building.findMany({
+        where: { id: { in: buildingIds } },
+        select: { id: true, name: true },
+      });
     }
 
-    return this.prisma.building.findMany({
-      where: { id: { in: buildingIds } },
-      select: { id: true, name: true },
-    });
+    return [];
   }
 
   /**
    * Get units accessible to user in a specific building
    */
   private async getAccessibleUnits(
-    roles: any[],
+    roles: MembershipRoleShape[],
     userId: string,
     _tenantId: string,
     buildingId: string,
   ): Promise<ContextOption[]> {
 
     // Check role scopes
-    const hasTenantScope = roles.some((r: any) => r.scopeType === 'TENANT');
+    const hasTenantScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'TENANT');
     const hasBuildingScope = roles.some(
-      (r: any) => r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId,
+      (r: MembershipRoleShape) => r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId,
     );
-    const hasUnitScope = roles.some((r: any) => r.scopeType === 'UNIT');
+    const hasUnitScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'UNIT');
 
-    // If RESIDENT: only units where user is occupant
-    const isResident = roles.some((r: any) => r.role === 'RESIDENT');
-    if (isResident && !hasTenantScope && !hasBuildingScope) {
+    // RESIDENT always sees only units where they are an occupant — regardless of scope
+    const isResident = roles.some((r: MembershipRoleShape) => r.role === 'RESIDENT');
+    if (isResident) {
+      // Find the TenantMember for this user
+      const member = await this.prisma.tenantMember.findFirst({
+        where: {
+          tenantId: _tenantId,
+          userId,
+        },
+        select: { id: true },
+      });
+
+      if (!member) {
+        return [];
+      }
+
       return this.prisma.unit.findMany({
         where: {
           buildingId,
           unitOccupants: {
-            some: { userId },
+            some: { memberId: member.id },
           },
         },
-        select: { id: true, code: true, label: true as any },
+        select: { id: true, code: true, label: true },
       });
     }
 
@@ -286,23 +354,23 @@ export class ContextService {
     if (hasTenantScope || hasBuildingScope) {
       return this.prisma.unit.findMany({
         where: { buildingId },
-        select: { id: true, code: true, label: true as any },
+        select: { id: true, code: true, label: true },
       });
     }
 
     // If only UNIT-scoped: return units in this building that user has scope for
     if (hasUnitScope) {
-      const unitScopedRoles = roles.filter((r: any) => r.scopeType === 'UNIT');
+      const unitScopedRoles = roles.filter((r: MembershipRoleShape) => r.scopeType === 'UNIT');
       const unitIds = unitScopedRoles
-        .map((r: any) => r.scopeUnitId)
-        .filter((id: string | null) => id !== null);
+        .map((r: MembershipRoleShape) => r.scopeUnitId)
+        .filter((id): id is string => id !== null && id !== undefined);
 
       return this.prisma.unit.findMany({
         where: {
           buildingId,
           id: { in: unitIds },
         },
-        select: { id: true, code: true, label: true as any },
+        select: { id: true, code: true, label: true },
       });
     }
 

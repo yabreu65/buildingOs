@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
+import { useHasRole } from '@/features/auth/useAuthSession';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
@@ -15,18 +16,27 @@ import { Loader2, Plus, Edit, Trash2, Building2 } from 'lucide-react';
 import Link from 'next/link';
 import { t } from '@/i18n';
 
-type TenantParams = {
+interface TenantParams {
   tenantId: string;
+  [key: string]: string | string[];
 };
 
 /**
  * BuildingsPage: List all buildings for a tenant
  * Shows: building list, create button, edit/delete actions
  */
-export default function BuildingsPage() {
+const BuildingsPage = () => {
   const params = useParams<TenantParams>();
   const tenantId = params?.tenantId;
+  const router = useRouter();
+  const isResident = useHasRole('RESIDENT');
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isResident && tenantId) {
+      router.replace(`/${tenantId}/dashboard`);
+    }
+  }, [isResident, tenantId, router]);
 
   const { buildings, loading, error, create, delete: deleteBuilding, refetch } =
     useBuildings(tenantId);
@@ -250,4 +260,6 @@ export default function BuildingsPage() {
       />
     </div>
   );
-}
+};
+
+export default BuildingsPage;

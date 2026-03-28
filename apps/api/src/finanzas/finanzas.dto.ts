@@ -112,6 +112,14 @@ export class ApprovePaymentDto {
 export class RejectPaymentDto {
   @IsString()
   reason!: string;
+
+  @IsOptional()
+  @IsString()
+  comment?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }
 
 export class RevivePaymentParamDto extends BuildingPaymentParamDto {}
@@ -152,6 +160,72 @@ export class UpdateAllocationDto {
 // ============================================================================
 // QUERY DTOs
 // ============================================================================
+
+export class PaymentMetricsQueryDto {
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+
+  @IsOptional()
+  @IsString()
+  buildingId?: string;
+}
+
+export class PaymentMetricsDto {
+  backlogCount!: number;
+  backlogAmount!: number;
+  agingMedianDays!: number;
+  agingP95Days!: number;
+  totalReviewed!: number;
+  approvalRate!: number;
+  rejectionRate!: number;
+  rejectionReasons!: Array<{ reason: string; count: number }>;
+  byBuilding!: Array<{
+    buildingId: string;
+    buildingName: string;
+    pending: number;
+    pendingAmount: number;
+    approved: number;
+    rejected: number;
+  }>;
+}
+
+export class ListPendingPaymentsQueryDto {
+  @IsOptional()
+  @IsEnum(PaymentStatus)
+  status?: PaymentStatus;
+
+  @IsOptional()
+  @IsString()
+  buildingId?: string;
+
+  @IsOptional()
+  @IsString()
+  unitId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  offset?: number;
+
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+}
 
 export class ListChargesQueryDto {
   @IsOptional()
@@ -197,7 +271,7 @@ export class ListPaymentsQueryDto {
 // RESPONSE DTOs (informational - use as types, not classes)
 // ============================================================================
 
-export type ChargeDetailDto = {
+export interface ChargeDetailDto {
   id: string;
   tenantId: string;
   buildingId: string;
@@ -213,9 +287,9 @@ export type ChargeDetailDto = {
   updatedAt: Date;
   canceledAt: Date | null;
   createdByMembershipId: string | null;
-};
+}
 
-export type PaymentDetailDto = {
+export interface PaymentDetailDto {
   id: string;
   tenantId: string;
   buildingId: string;
@@ -231,9 +305,9 @@ export type PaymentDetailDto = {
   proofFileId: string | null;
   createdByUserId: string;
   reviewedByMembershipId: string | null;
-};
+}
 
-export type FinancialSummaryDto = {
+export interface FinancialSummaryDto {
   totalCharges: number;
   totalPaid: number;
   totalOutstanding: number;
@@ -246,9 +320,9 @@ export type FinancialSummaryDto = {
     outstanding: number;
   }>;
   currency: string;
-};
+}
 
-export type UnitLedgerDto = {
+export interface UnitLedgerDto {
   unitId: string;
   unitLabel: string;
   buildingId: string;
@@ -277,7 +351,7 @@ export type UnitLedgerDto = {
     balance: number;
     currency: string;
   };
-};
+}
 
 // ============================================================================
 // PARAM DTOs (extend base DTOs)
@@ -314,13 +388,13 @@ export class FinancialSummaryQueryDto {
 // FINANCIAL TREND DTOs
 // ============================================================================
 
-export type MonthlyTrendDto = {
+export interface MonthlyTrendDto {
   period: string;           // "YYYY-MM"
   totalCharges: number;
   totalPaid: number;
   totalOutstanding: number;
   collectionRate: number;   // 0-100
-};
+}
 
 export class FinanceTrendQueryDto {
   @IsOptional()
@@ -328,4 +402,35 @@ export class FinanceTrendQueryDto {
   @Min(1)
   @Max(12)
   months?: number;  // default: 6
+}
+
+// ============================================================================
+// PAYMENT AUDIT & DUPLICATE DTOs
+// ============================================================================
+
+export class PaymentAuditLogDto {
+  id!: string;
+  tenantId!: string;
+  paymentId!: string;
+  action!: string;
+  membershipId?: string;
+  reason?: string;
+  comment?: string;
+  metadata?: Record<string, unknown>;
+  createdAt!: Date;
+}
+
+export class PaymentDuplicateCheckResultDto {
+  hasDuplicate!: boolean;
+  duplicatePaymentId?: string;
+  duplicateAmount?: number;
+  duplicateReference?: string;
+  duplicateCreatedAt?: Date;
+}
+
+export class GetPaymentAuditLogQueryDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  limit?: number;
 }

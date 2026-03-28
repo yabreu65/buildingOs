@@ -37,35 +37,52 @@ export function FinanceSummaryCards({
     );
   }
 
+  // Format currency using Intl for consistency
+  const formatCurrency = (amount: number): string => {
+    return new Intl.NumberFormat('es-AR', {
+      style: 'currency',
+      currency: summary.currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  };
+
   const cards = [
     {
       label: 'Total Cargos',
-      value: `${summary.currency} ${summary.totalCharges.toFixed(2)}`,
+      value: formatCurrency(summary.totalCharges),
       color: 'text-blue-600',
+      bgColor: 'bg-blue-50',
     },
     {
       label: 'Total Pagado',
-      value: `${summary.currency} ${summary.totalPaid.toFixed(2)}`,
+      value: formatCurrency(summary.totalPaid),
       color: 'text-green-600',
+      bgColor: 'bg-green-50',
     },
     {
       label: 'Saldo Pendiente',
-      value: `${summary.currency} ${summary.totalOutstanding.toFixed(2)}`,
+      value: formatCurrency(summary.totalOutstanding),
       color: 'text-orange-600',
+      bgColor: 'bg-orange-50',
     },
     {
       label: 'Unidades Morosas',
       value: summary.delinquentUnitsCount.toString(),
       color: 'text-red-600',
+      bgColor: 'bg-red-50',
     },
   ];
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.label} className="p-4">
-          <p className="text-sm font-medium text-gray-600">{card.label}</p>
-          <p className={`text-2xl font-bold ${card.color} mt-2`}>{card.value}</p>
+        <Card key={card.label} className={`p-6 ${card.bgColor} rounded-lg border border-gray-200`}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium text-gray-500">{card.label}</p>
+            <p className="text-xs text-gray-400">{card.label === 'Unidades Morosas' ? 'unid.' : ''}</p>
+          </div>
+          <p className={`text-3xl font-bold ${card.color} mb-1`}>{card.value}</p>
         </Card>
       ))}
     </div>

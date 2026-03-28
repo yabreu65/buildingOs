@@ -20,11 +20,12 @@ interface BuildingsFinanceSummaryProps {
   buildingNames: Record<string, string>;
 }
 
-const formatARS = (cents: number) =>
+const formatCurrency = (cents: number, currency: string = 'ARS') =>
   new Intl.NumberFormat('es-AR', {
     style: 'currency',
-    currency: 'ARS',
-    maximumFractionDigits: 0,
+    currency: currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(cents / 100);
 
 const formatPercentage = (val: number) => `${Math.round(val)}%`;
@@ -86,70 +87,96 @@ export function BuildingsFinanceSummary({
 
   if (loading) {
     return (
-      <div className="space-y-2">
-        <Skeleton className="h-10" />
-        <Skeleton className="h-10" />
-        <Skeleton className="h-10" />
+      <div className="space-y-4">
+        <div className="text-center py-8">
+          <Skeleton className="h-10 w-56 mx-auto" />
+          <Skeleton className="h-10 w-48 mx-auto mt-2" />
+          <Skeleton className="h-10 w-40 mx-auto mt-2" />
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <ErrorState message={error.message} />
+      <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
+        <p className="text-red-700">Error al cargar datos: {error.message}</p>
+      </div>
     );
   }
 
   if (summaries.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center">
+      <div className="bg-gray-50 border-l-4 border-gray-300 p-4 mb-6">
         <p className="text-gray-600">No hay edificios para mostrar</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-      <Table>
-        <THead>
-          <TR>
-            <TH>Edificio</TH>
-            <TH className="text-right">Cargos totales</TH>
-            <TH className="text-right">Pagado</TH>
-            <TH className="text-right">Pendiente</TH>
-            <TH className="text-right">Cobranza</TH>
-          </TR>
-        </THead>
-        <TBody>
-          {summaries.map((summary) => (
-            <TR key={summary.buildingId}>
-              <TD className="font-medium">{summary.buildingName}</TD>
-              <TD className="text-right">{formatARS(summary.totalCharges)}</TD>
-              <TD className="text-right text-green-600">
-                {formatARS(summary.totalPaid)}
-              </TD>
-              <TD className="text-right text-red-600">
-                {formatARS(summary.totalOutstanding)}
-              </TD>
-              <TD className="text-right">
-                <div className="flex items-center justify-end gap-2">
-                  <div className="w-20 h-2 rounded-full bg-gray-200">
-                    <div
-                      className="h-full rounded-full bg-blue-500"
-                      style={{
-                        width: `${Math.min(summary.collectionRate, 100)}%`,
-                      }}
-                    />
-                  </div>
-                  <span className="font-semibold text-sm w-12 text-right">
-                    {formatPercentage(summary.collectionRate)}
-                  </span>
-                </div>
-              </TD>
+    <div className="space-y-6">
+      <div className="mb-4">
+        <h2 className="text-xl font-semibold text-gray-800">Rendimiento por edificio</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Vista comparativa de la eficiencia de cobranza entre todos los edificios del tenant
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <Table className="min-w-full divide-y divide-gray-200">
+          <THead className="bg-gray-50">
+            <TR>
+              <TH className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Edificio
+              </TH>
+              <TH className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Cargos totales
+              </TH>
+              <TH className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Pagado
+              </TH>
+              <TH className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Pendiente
+              </TH>
+              <TH className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Cobranza
+              </TH>
             </TR>
-          ))}
-        </TBody>
-      </Table>
+          </THead>
+          <TBody className="bg-white divide-y divide-gray-200">
+            {summaries.map((summary, index) => (
+              <TR key={summary.buildingId} className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-gray-100`}>
+                <TD className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                  {summary.buildingName}
+                </TD>
+                <TD className="px-6 py-4 text-right text-sm font-medium text-gray-900">
+                  {formatCurrency(summary.totalCharges)}
+                </TD>
+                <TD className="px-6 py-4 text-right text-sm font-medium text-green-600">
+                  {formatCurrency(summary.totalPaid)}
+                </TD>
+                <TD className="px-6 py-4 text-right text-sm font-medium text-red-600">
+                  {formatCurrency(summary.totalOutstanding)}
+                </TD>
+                <TD className="px-6 py-4 text-right text-sm font-medium">
+                  <div className="flex items-center">
+                    <div className="relative w-24 h-2.5 bg-gray-200 rounded-full">
+                      <div
+                        className="absolute left-0 h-full rounded-full bg-blue-600"
+                        style={{
+                          width: `${Math.min(summary.collectionRate, 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="ml-2 text-xs font-semibold text-gray-900">
+                      {formatPercentage(summary.collectionRate)}
+                    </span>
+                  </div>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      </div>
     </div>
   );
 }

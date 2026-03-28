@@ -44,63 +44,66 @@ export const TenantFinanceDashboard = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Finanzas del Tenant</h1>
-        <p className="text-muted-foreground">Resumen agregado de todos los edificios</p>
-      </div>
+       {/* Header */}
+       <div className="space-y-3">
+         <h1 className="text-2xl font-bold">Resumen financiero</h1>
+         <p className="text-sm text-muted-foreground">
+           Estado consolidado de {buildingIds.length} edificio{buildingIds.length !== 1 ? 's' : ''}
+         </p>
+       </div>
 
       {/* KPI Cards */}
       <FinanceSummaryCards summary={summary ?? null} loading={loading} error={errorMsg} onRetry={refetch} />
 
-      {/* Tabs */}
+       {/* Tabs */}
+       <div className="space-y-4">
+         <div className="flex flex-wrap gap-2">
+           {[
+             { id: 'overview', label: 'Resumen' },
+             { id: 'delinquent', label: `Unidades Morosas (${summary?.delinquentUnitsCount || 0})` },
+           ].map((tab) => (
+             <button
+               key={tab.id}
+               onClick={() => setActiveTab(tab.id as Tab)}
+               className={cn(
+                 'flex-1 items-center justify-center px-3 py-2 rounded-md text-sm font-medium transition-all',
+                 activeTab === tab.id
+                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                   : 'bg-muted text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+               )}
+             >
+               {tab.label}
+             </button>
+           ))}
+         </div>
+       </div>
+
+      {/* Tab Content */}
       <div className="space-y-4">
-        <div className="border-b">
-          <nav className="flex gap-1">
-            {[
-              { id: 'overview', label: 'Resumen' },
-              { id: 'delinquent', label: `Unidades Morosas (${summary?.delinquentUnitsCount || 0})` },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as Tab)}
-                className={cn(
-                  'px-4 py-2 border-b-2 transition -mb-px text-sm font-medium',
-                  activeTab === tab.id
-                    ? 'border-primary text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {/* Tab Content */}
         {activeTab === 'overview' && (
-          buildingsLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-10" />
-              <Skeleton className="h-10" />
-              <Skeleton className="h-10" />
-            </div>
-          ) : buildingIds.length === 0 ? (
-            <Card>
-              <div className="p-6 text-center text-gray-600">
-                <p className="text-sm">No hay edificios disponibles</p>
-                <p className="text-xs text-muted-foreground mt-2">Crea un edificio para ver el resumen financiero</p>
-              </div>
-            </Card>
-          ) : (
-            <BuildingsFinanceSummary
-              tenantId={tenantId || ''}
-              buildingIds={buildingIds}
-              buildingNames={buildingNames}
-            />
-          )
+          <>
+            {buildingsLoading ? (
+              <>
+                <Skeleton className="h-10" />
+                <Skeleton className="h-10" />
+                <Skeleton className="h-10" />
+              </>
+            ) : buildingIds.length === 0 ? (
+              <Card>
+                <div className="p-6 text-center text-gray-600">
+                  <p className="text-sm">No hay edificios disponibles</p>
+                  <p className="text-xs text-muted-foreground mt-2">Crea un edificio para ver el resumen financiero</p>
+                </div>
+              </Card>
+            ) : (
+              <BuildingsFinanceSummary
+                tenantId={tenantId || ''}
+                buildingIds={buildingIds}
+                buildingNames={buildingNames}
+              />
+            )}
+          </>
         )}
-
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />
         )}

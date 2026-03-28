@@ -12,7 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
-import { AuditAction, InvitationStatus } from '@prisma/client';
+import { AuditAction, InvitationStatus, Role } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 
@@ -32,11 +32,11 @@ export interface AuthResponse {
 @Injectable()
 export class InvitationsService {
   constructor(
-    private prisma: PrismaService,
-    private jwtService: JwtService,
-    private tenancyService: TenancyService,
-    private auditService: AuditService,
-    private planEntitlements: PlanEntitlementsService,
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly tenancyService: TenancyService,
+    private readonly auditService: AuditService,
+    private readonly planEntitlements: PlanEntitlementsService,
   ) {}
 
   /**
@@ -106,10 +106,8 @@ export class InvitationsService {
       },
     });
 
-    // STUB: Email would be sent here
-    console.log(
-      `[EMAIL STUB] Invitation link: http://localhost:3000/invite?token=${token}`,
-    );
+    // STUB: Email sending handled by real EmailService in production
+    console.log(`[EMAIL STUB] Invitation token generated for ${dto.email}`);
 
     return {
       id: invitation.id,
@@ -256,13 +254,19 @@ export class InvitationsService {
           await tx.membershipRole.create({
             data: {
               membershipId: membership.id,
-              role: role as any,
+              role: role as Role,
             },
           });
         }
       }
 
-      // Mark invitation as accepted (always, even if membership existed)
+      // Clear any previous ACCEPTED records for same email+tenant to avoid unique constraint
+      await tx.invitation.updateMany({
+        where: { tenantId, email, status: InvitationStatus.ACCEPTED },
+        data: { status: InvitationStatus.REVOKED },
+      });
+
+      // Mark invitation as accepted
       await tx.invitation.update({
         where: { id: invitation.id },
         data: {
@@ -270,6 +274,19 @@ export class InvitationsService {
           acceptedAt: new Date(),
         },
       });
+
+      // If RESIDENT invitation, link TenantMember to the new user and mark ACTIVE
+      if (roles.includes('RESIDENT')) {
+        const tenantMember = await tx.tenantMember.findFirst({
+          where: { tenantId, email },
+        });
+        if (tenantMember) {
+          await tx.tenantMember.update({
+            where: { id: tenantMember.id },
+            data: { userId: user.id, status: 'ACTIVE' },
+          });
+        }
+      }
 
       return { user, membership, membershipExisted, userExisted };
     });
@@ -460,10 +477,8 @@ export class InvitationsService {
       },
     });
 
-    // STUB: Email would be sent here with new token
-    console.log(
-      `[EMAIL STUB] Resent invitation link: http://localhost:3000/invite?token=${token}`,
-    );
+    // STUB: Email sending handled by real EmailService in production
+    console.log(`[EMAIL STUB] Invitation token resent for ${updated.email}`);
 
     return {
       id: updated.id,

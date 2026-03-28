@@ -1,0 +1,2 @@
+-- Add PAYMENT_CANCEL to AuditAction enum
+ALTER TYPE "AuditAction" ADD VALUE IF NOT EXISTS 'PAYMENT_CANCEL';

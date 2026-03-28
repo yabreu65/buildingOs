@@ -13,8 +13,9 @@ import {
   useToast,
 } from '@/shared/components/ui';
 import { Trash2, Check, CheckCheck } from 'lucide-react';
+import { t } from '@/i18n';
 
-export default function NotificationsPage() {
+const NotificationsPage = () => {
   const params = useParams();
   const tenantId = params.tenantId as string;
   const [isRead, setIsRead] = useState<boolean | undefined>(undefined);
@@ -35,27 +36,27 @@ export default function NotificationsPage() {
     if (currentRead) return;
     try {
       await markAsRead(id);
-      toast('Notification marked as read', 'success');
+      toast(t('notifications.success'), 'success');
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to mark as read', 'error');
+      toast(err instanceof Error ? err.message : t('notifications.markReadError'), 'error');
     }
   };
 
   const handleMarkAllAsRead = async () => {
     try {
       await markAllAsRead();
-      toast('All notifications marked as read', 'success');
+      toast(t('notifications.success'), 'success');
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to mark all as read', 'error');
+      toast(err instanceof Error ? err.message : t('notifications.markAllReadError'), 'error');
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await deleteNotification(id);
-      toast('Notification deleted', 'success');
+      toast(t('notifications.success'), 'success');
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to delete notification', 'error');
+      toast(err instanceof Error ? err.message : t('notifications.deleteError'), 'error');
     }
   };
 
@@ -77,7 +78,7 @@ export default function NotificationsPage() {
   if (loading && notifications.length === 0) {
     return (
       <div className="p-6 space-y-4">
-        <h1 className="text-3xl font-bold">Notifications</h1>
+        <h1 className="text-3xl font-bold">{t('notifications.title')}</h1>
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-20 rounded" />
@@ -90,7 +91,7 @@ export default function NotificationsPage() {
   if (error && notifications.length === 0) {
     return (
       <div className="p-6">
-        <h1 className="text-3xl font-bold mb-6">Notifications</h1>
+        <h1 className="text-3xl font-bold mb-6">{t('notifications.title')}</h1>
         <ErrorState
           message={error}
           onRetry={() => fetch({ isRead, skip, take })}
@@ -103,9 +104,9 @@ export default function NotificationsPage() {
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Notifications</h1>
+          <h1 className="text-3xl font-bold">{t('notifications.title')}</h1>
           <p className="text-gray-600 mt-2">
-            {unreadCount > 0 ? `${unreadCount} unread notification${unreadCount !== 1 ? 's' : ''}` : 'All notifications read'}
+            {unreadCount > 0 ? `${unreadCount} notification${unreadCount !== 1 ? 's' : ''} sin leer` : t('notifications.allRead')}
           </p>
         </div>
         {unreadCount > 0 && (
@@ -203,4 +204,6 @@ export default function NotificationsPage() {
       )}
     </div>
   );
-}
+};
+
+export default NotificationsPage;

@@ -12,6 +12,7 @@ import {
   Skeleton,
   useToast,
 } from '@/shared/components/ui';
+import { t } from '@/i18n';
 
 interface CreateTicketFormState {
   title: string;
@@ -20,7 +21,7 @@ interface CreateTicketFormState {
   priority: string;
 }
 
-export default function TenantSupportPage() {
+const TenantSupportPage = () => {
   const params = useParams();
   const tenantId = params.tenantId as string;
 
@@ -54,7 +55,7 @@ export default function TenantSupportPage() {
     e.preventDefault();
 
     if (!formData.title.trim() || !formData.description.trim()) {
-      toast('Title and description are required', 'error');
+      toast(t('tickets.titleRequired'), 'error');
       return;
     }
 
@@ -65,13 +66,13 @@ export default function TenantSupportPage() {
         category: formData.category,
         priority: formData.priority,
       });
-      toast('Ticket created successfully', 'success');
+      toast(t('tickets.createSuccess'), 'success');
       setFormData({ title: '', description: '', category: 'OTHER', priority: 'MEDIUM' });
       setShowCreateForm(false);
       setSkip(0);
       fetch({ status: status || undefined, skip: 0, take });
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to create ticket', 'error');
+      toast(err instanceof Error ? err.message : t('tickets.createError'), 'error');
     }
   };
 
@@ -92,7 +93,7 @@ export default function TenantSupportPage() {
   if (loading && tickets.length === 0) {
     return (
       <div className="p-6 space-y-4">
-        <h1 className="text-3xl font-bold">Support Requests</h1>
+        <h1 className="text-3xl font-bold">{t('tickets.title')}</h1>
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded" />
@@ -105,7 +106,7 @@ export default function TenantSupportPage() {
   if (error && tickets.length === 0) {
     return (
       <div className="p-6">
-        <h1 className="text-3xl font-bold mb-6">Support Requests</h1>
+        <h1 className="text-3xl font-bold mb-6">{t('tickets.title')}</h1>
         <ErrorState
           message={error}
           onRetry={() => fetch({ status: status || undefined, skip, take })}
@@ -118,36 +119,36 @@ export default function TenantSupportPage() {
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Support Requests</h1>
-          <p className="text-gray-600 mt-2">Submit and manage your support tickets</p>
+          <h1 className="text-3xl font-bold">{t('tickets.title')}</h1>
+          <p className="text-gray-600 mt-2">Envía y gestiona tus solicitudes de soporte</p>
         </div>
         <Button onClick={() => setShowCreateForm(!showCreateForm)} variant="primary">
-          {showCreateForm ? 'Cancel' : 'Create Ticket'}
+          {showCreateForm ? t('tickets.cancel') : t('tickets.create')}
         </Button>
       </div>
 
       {/* Create Form */}
       {showCreateForm && (
         <Card className="p-6 bg-blue-50">
-          <h2 className="text-xl font-semibold mb-4">Create New Support Ticket</h2>
+          <h2 className="text-xl font-semibold mb-4">{t('tickets.create')}</h2>
           <form onSubmit={handleCreateTicket} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">Title</label>
+              <label className="block text-sm font-medium mb-2">{t('tickets.title')}</label>
               <input
                 type="text"
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="Enter ticket title"
+                placeholder={t('tickets.titlePlaceholder')}
                 className="w-full px-3 py-2 border rounded-md"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">Description</label>
+              <label className="block text-sm font-medium mb-2">{t('tickets.description')}</label>
               <textarea
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Describe your issue"
+                placeholder={t('tickets.descriptionPlaceholder')}
                 rows={4}
                 className="w-full px-3 py-2 border rounded-md"
               />
@@ -155,7 +156,7 @@ export default function TenantSupportPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Category</label>
+                <label className="block text-sm font-medium mb-2">{t('tickets.category')}</label>
                 <select
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
@@ -186,13 +187,13 @@ export default function TenantSupportPage() {
             </div>
 
             <div className="flex gap-2">
-              <Button type="submit" variant="primary">Create Ticket</Button>
+              <Button type="submit" variant="primary">{t('tickets.create')}</Button>
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => setShowCreateForm(false)}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
             </div>
           </form>
@@ -203,7 +204,7 @@ export default function TenantSupportPage() {
       <Card className="p-4">
         <div className="flex gap-4 items-end">
           <div className="flex-1">
-            <label className="block text-sm font-medium mb-2">Status</label>
+            <label className="block text-sm font-medium mb-2">{t('tickets.status')}</label>
             <select
               value={status}
               onChange={(e) => {
@@ -225,8 +226,8 @@ export default function TenantSupportPage() {
       {/* Tickets List */}
       {tickets.length === 0 ? (
         <EmptyState
-          title="No support tickets"
-          description={showCreateForm ? "Submit your first support request above" : "You don't have any support tickets yet"}
+          title={t('tickets.noTickets')}
+          description={showCreateForm ? t('tickets.firstAbove') : t('tickets.none')}
         />
       ) : (
         <div className="space-y-3">
@@ -278,4 +279,6 @@ export default function TenantSupportPage() {
       )}
     </div>
   );
-}
+};
+
+export default TenantSupportPage;
