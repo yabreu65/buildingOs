@@ -132,7 +132,7 @@ export async function presignUpload(
   mimeType: string,
   size?: number,
 ): Promise<PresignResponse> {
-  const endpoint = '/documents/presign';
+  const endpoint = `/tenants/${tenantId}/documents/presign`;
   const body = { originalName, mimeType, ...(size && { size }) };
   logRequest('POST', endpoint, body);
 
@@ -212,7 +212,7 @@ export async function createDocument(
   tenantId: string,
   input: CreateDocumentInput,
 ): Promise<Document> {
-  const endpoint = '/documents';
+  const endpoint = `/tenants/${tenantId}/documents`;
   logRequest('POST', endpoint, input);
 
   try {
@@ -250,7 +250,7 @@ export async function listDocuments(
   if (filters?.visibility) params.append('visibility', filters.visibility);
 
   const queryString = params.toString();
-  const endpoint = `/documents${queryString ? '?' + queryString : ''}`;
+  const endpoint = `/tenants/${tenantId}/documents${queryString ? '?' + queryString : ''}`;
   logRequest('GET', endpoint);
 
   try {
@@ -275,7 +275,7 @@ export async function getDocument(
   tenantId: string,
   documentId: string,
 ): Promise<Document> {
-  const endpoint = `/documents/${documentId}`;
+  const endpoint = `/tenants/${tenantId}/documents/${documentId}`;
   logRequest('GET', endpoint);
 
   try {
@@ -301,7 +301,7 @@ export async function updateDocument(
   documentId: string,
   input: UpdateDocumentInput,
 ): Promise<Document> {
-  const endpoint = `/documents/${documentId}`;
+  const endpoint = `/tenants/${tenantId}/documents/${documentId}`;
   logRequest('PATCH', endpoint, input);
 
   try {
@@ -327,7 +327,7 @@ export async function deleteDocument(
   tenantId: string,
   documentId: string,
 ): Promise<void> {
-  const endpoint = `/documents/${documentId}`;
+  const endpoint = `/tenants/${tenantId}/documents/${documentId}`;
   logRequest('DELETE', endpoint);
 
   try {
@@ -353,7 +353,7 @@ export async function getDownloadUrl(
   tenantId: string,
   documentId: string,
 ): Promise<DownloadUrlResponse> {
-  const endpoint = `/documents/${documentId}/download`;
+  const endpoint = `/tenants/${tenantId}/documents/${documentId}/download`;
   logRequest('GET', endpoint);
 
   try {
