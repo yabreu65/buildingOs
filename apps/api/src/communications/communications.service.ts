@@ -204,7 +204,7 @@ export class CommunicationsService {
       );
     }
 
-    const where: Prisma.CommunicationWhereInput = {
+    const whereBase: Prisma.CommunicationWhereInput = {
       tenantId,
       deletedAt: null,
       ...(filters?.buildingId ? { buildingId: filters.buildingId } : {}),
@@ -222,7 +222,7 @@ export class CommunicationsService {
     const sortOrder = filters?.sortOrder ?? 'desc';
 
     return await this.prisma.communication.findMany({
-      where,
+      where: whereBase,
       include: COMMUNICATION_INCLUDE,
       orderBy: { [sortField]: sortOrder },
     });
@@ -445,7 +445,7 @@ export class CommunicationsService {
       });
     } else {
       // RESIDENT sees only communications they received
-      const where: Prisma.CommunicationWhereInput = {
+      const whereBase: Prisma.CommunicationWhereInput = {
         tenantId,
         deletedAt: null,
         receipts: {
@@ -469,7 +469,7 @@ export class CommunicationsService {
       const sortOrder = filters?.sortOrder ?? 'desc';
 
       return await this.prisma.communication.findMany({
-        where,
+        where: whereBase,
         include: {
           ...COMMUNICATION_INCLUDE,
           receipts: {
