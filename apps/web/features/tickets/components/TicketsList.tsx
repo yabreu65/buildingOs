@@ -23,6 +23,9 @@ interface TicketsListProps {
 
 type StatusFilterValue = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'all_open' | '';
 
+/**
+ * Renderiza el listado de tickets del edificio con filtros y KPIs.
+ */
 export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const { toast } = useToast();
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -34,7 +37,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const { units } = useUnits(tenantId, buildingId);
 
   const filters = useMemo(() => ({
-    status: statusFilter === 'all_open' ? 'OPEN,IN_PROGRESS' : statusFilter || undefined,
+    status: statusFilter === 'all_open' ? undefined : statusFilter || undefined,
     priority: priorityFilter || undefined,
     unitId: unitIdFilter || undefined,
   }), [statusFilter, priorityFilter, unitIdFilter]);
@@ -52,6 +55,13 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
       closed: tickets.filter((t) => t.status === 'CLOSED').length,
     };
   }, [tickets]);
+
+  const visibleTickets = useMemo(() => {
+    if (statusFilter === 'all_open') {
+      return tickets.filter((t) => t.status === 'OPEN' || t.status === 'IN_PROGRESS');
+    }
+    return tickets;
+  }, [tickets, statusFilter]);
 
   const handleCreateSuccess = useCallback(async (ticket: Ticket) => {
     setShowCreateForm(false);
@@ -265,7 +275,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
         </div>
       )}
 
-      {!loading && tickets.length === 0 && (
+      {!loading && visibleTickets.length === 0 && (
         <EmptyState
           icon={<TicketIcon className="w-12 h-12 text-muted-foreground" />}
           title={t('tickets.noTickets')}
@@ -277,9 +287,9 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
         />
       )}
 
-      {!loading && tickets.length > 0 && (
+      {!loading && visibleTickets.length > 0 && (
         <div className="space-y-3">
-          {tickets.map((ticket) => (
+          {visibleTickets.map((ticket) => (
             <Card
               key={ticket.id}
               className="cursor-pointer hover:shadow-md transition p-4"
