@@ -28,7 +28,16 @@ export class MembershipsService {
   /**
    * Get all roles for a membership with scope information
    */
-  async getRoles(membershipId: string): Promise<ScopedRoleResponse[]> {
+  async getRoles(tenantId: string, membershipId: string): Promise<ScopedRoleResponse[]> {
+    const membership = await this.prisma.membership.findUnique({
+      where: { id: membershipId },
+      select: { tenantId: true },
+    });
+
+    if (!membership || membership.tenantId !== tenantId) {
+      throw new NotFoundException('Membership not found');
+    }
+
     const roles = await this.prisma.membershipRole.findMany({
       where: { membershipId },
       select: {

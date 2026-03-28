@@ -13,6 +13,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { DocumentsService } from './documents.service';
 import { PresignUploadDto, PresignedUrlResponse } from './dto/presign-upload.dto';
 import { CreateDocumentDto } from './dto/create-document.dto';
@@ -81,8 +82,8 @@ import { UpdateDocumentDto } from './dto/update-document.dto';
  *   c) Unit-scoped and user occupies that unit
  *   d) Created by themselves (PRIVATE)
  */
-@Controller('documents')
-@UseGuards(JwtAuthGuard)
+@Controller('tenants/:tenantId/documents')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class DocumentsController {
   constructor(private documentsService: DocumentsService) {}
 
@@ -114,7 +115,7 @@ export class DocumentsController {
    * In this MVP, we'll get it from user's active membership
    */
   private getTenantId(req: any): string {
-    return req.tenantId || req.user.tenantId;
+    return req.tenantId;
   }
 
   /**

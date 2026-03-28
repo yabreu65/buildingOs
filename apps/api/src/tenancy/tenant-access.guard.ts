@@ -10,6 +10,7 @@ import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface RequestWithUser extends Request {
+  tenantId?: string;
   user: {
     id: string;
     email: string;
@@ -86,7 +87,10 @@ export class TenantAccessGuard implements CanActivate {
       );
     }
 
-    // 6. Permite ejecución
+    // 6. Set tenantId in request for downstream use
+    request.tenantId = tenantId;
+
+    // 7. Permite ejecución
     return true;
   }
 }

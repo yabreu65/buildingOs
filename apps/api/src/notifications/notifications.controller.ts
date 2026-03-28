@@ -8,9 +8,11 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import { NotificationType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 /**
  * Notifications Controller
@@ -26,7 +28,7 @@ import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 @Controller('me/notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationsController {
-  constructor(private notificationsService: NotificationsService) {}
+  constructor(private readonly notificationsService: NotificationsService) {}
 
   /**
    * List user's notifications with pagination
@@ -34,14 +36,14 @@ export class NotificationsController {
    */
   @Get()
   async listNotifications(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Query('isRead') isRead?: string,
     @Query('type') type?: string,
     @Query('skip') skip: string = '0',
     @Query('take') take: string = '50',
   ) {
     const user = req.user;
-    const tenantId = user.activeTenantId; // Get active tenant from user session
+    const tenantId = user.memberships?.[0]?.tenantId;
     const skipNum = Math.max(0, parseInt(skip, 10));
     const takeNum = Math.min(100, parseInt(take, 10) || 50);
 
@@ -55,7 +57,7 @@ export class NotificationsController {
       user.id,
       {
         isRead: isReadFilter,
-        type: type as any,
+        type: type as NotificationType | undefined,
       },
       skipNum,
       takeNum,
@@ -67,9 +69,9 @@ export class NotificationsController {
    * GET /me/notifications/unread-count
    */
   @Get('unread-count')
-  async getUnreadCount(@Request() req: any) {
+  async getUnreadCount(@Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = user.activeTenantId;
+    const tenantId = user.memberships?.[0]?.tenantId;
 
     const count = await this.notificationsService.getUnreadCount(tenantId, user.id);
     return { unreadCount: count };
@@ -80,9 +82,9 @@ export class NotificationsController {
    * PATCH /me/notifications/:id/read
    */
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string, @Request() req: any) {
+  async markAsRead(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = user.activeTenantId;
+    const tenantId = user.memberships?.[0]?.tenantId;
 
     return this.notificationsService.markAsRead(id, tenantId, user.id);
   }
@@ -92,9 +94,9 @@ export class NotificationsController {
    * PATCH /me/notifications/read-all
    */
   @Patch('read-all')
-  async markAllAsRead(@Request() req: any) {
+  async markAllAsRead(@Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = user.activeTenantId;
+    const tenantId = user.memberships?.[0]?.tenantId;
 
     return this.notificationsService.markAllAsRead(tenantId, user.id);
   }
@@ -104,9 +106,9 @@ export class NotificationsController {
    * DELETE /me/notifications/:id
    */
   @Delete(':id')
-  async deleteNotification(@Param('id') id: string, @Request() req: any) {
+  async deleteNotification(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = user.activeTenantId;
+    const tenantId = user.memberships?.[0]?.tenantId;
 
     await this.notificationsService.deleteNotification(id, tenantId, user.id);
     return { success: true };

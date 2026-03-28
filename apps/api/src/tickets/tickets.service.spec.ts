@@ -7,6 +7,7 @@ import { TicketsService } from './tickets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { TicketsValidators } from './tickets.validators';
+import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
@@ -42,6 +43,9 @@ describe('TicketsService', () => {
             unitOccupant: {
               findMany: jest.fn(),
             },
+            tenantMember: {
+              findFirst: jest.fn(),
+            },
             membership: {
               findFirst: jest.fn(),
             },
@@ -59,6 +63,12 @@ describe('TicketsService', () => {
             validateBuildingBelongsToTenant: jest.fn(),
             validateUnitBelongsToBuildingAndTenant: jest.fn(),
             canStatusTransition: jest.fn(),
+          },
+        },
+        {
+          provide: AiTicketCategoryService,
+          useValue: {
+            categorizeTicket: jest.fn().mockResolvedValue({ category: 'MAINTENANCE', confidence: 0.9 }),
           },
         },
       ],
@@ -81,12 +91,15 @@ describe('TicketsService', () => {
       // ARRANGE
       const tenantId = 'tenant-123';
       const userId = 'user-123';
+      const memberId = 'member-123';
 
+      const member = { id: memberId };
       const occupancies = [
         { unitId: 'unit-1' },
         { unitId: 'unit-2' },
       ];
 
+      jest.spyOn(prismaService.tenantMember, 'findFirst').mockResolvedValue(member as any);
       jest
         .spyOn(prismaService.unitOccupant, 'findMany')
         .mockResolvedValue(occupancies as any);
@@ -96,9 +109,13 @@ describe('TicketsService', () => {
 
       // ASSERT
       expect(result).toEqual(['unit-1', 'unit-2']);
+      expect(prismaService.tenantMember.findFirst).toHaveBeenCalledWith({
+        where: { tenantId, userId },
+        select: { id: true },
+      });
       expect(prismaService.unitOccupant.findMany).toHaveBeenCalledWith({
         where: {
-          userId,
+          memberId,
           unit: {
             building: { tenantId },
           },
@@ -113,6 +130,7 @@ describe('TicketsService', () => {
       const tenantId = 'tenant-123';
       const userId = 'user-123';
 
+      jest.spyOn(prismaService.tenantMember, 'findFirst').mockResolvedValue(null);
       jest.spyOn(prismaService.unitOccupant, 'findMany').mockResolvedValue([]);
 
       // ACT

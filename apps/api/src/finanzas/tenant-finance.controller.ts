@@ -1,5 +1,6 @@
 import { Controller, Get, Patch, Param, Query, UseGuards, Request, Body, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { FinanzasService } from './finanzas.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import {
@@ -28,8 +29,8 @@ interface GetPaymentAuditLogQuery { limit?: number }
  * 2. Auto-scoped to req.tenantId (from JWT claims)
  * 3. No additional building validation needed (aggregates all buildings for tenant)
  */
-@Controller('finance')
-@UseGuards(JwtAuthGuard)
+@Controller('tenants/:tenantId/finance')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class TenantFinanceController {
   constructor(private finanzasService: FinanzasService) {}
 

@@ -9,23 +9,16 @@ import {
 } from '@nestjs/common';
 import { OnboardingService } from './onboarding.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import {
   TenantStepsResponseDto,
   BuildingStepsResponseDto,
 } from './dtos/onboarding.dto';
 
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-  };
-  tenantId?: string;
-}
-
-@Controller('onboarding')
-@UseGuards(JwtAuthGuard)
+@Controller('tenants/:tenantId/onboarding')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class OnboardingController {
   constructor(
     private readonly onboardingService: OnboardingService,
@@ -41,21 +34,12 @@ export class OnboardingController {
    */
   @Get('tenant')
   async getTenantSteps(
-    @Request() req: RequestWithUser,
+    @Request() req: AuthenticatedRequest,
   ): Promise<TenantStepsResponseDto> {
     const tenantId = req.tenantId;
 
     if (!tenantId) {
-      throw new BadRequestException('Tenant context required (X-Tenant-Id header)');
-    }
-
-    // Verify tenant exists and user has access
-    const membership = await this.prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: req.user.id, tenantId } },
-    });
-
-    if (!membership) {
-      throw new BadRequestException('User does not have access to this tenant');
+      throw new BadRequestException('Tenant context required');
     }
 
     const steps = await this.onboardingService.calculateTenantSteps(tenantId);
@@ -83,7 +67,7 @@ export class OnboardingController {
   @Get('buildings/:buildingId')
   async getBuildingSteps(
     @Param('buildingId') buildingId: string,
-    @Request() req: RequestWithUser,
+    @Request() req: AuthenticatedRequest,
   ): Promise<BuildingStepsResponseDto> {
     const tenantId = req.tenantId;
 

@@ -16,9 +16,9 @@
  * - Privacy: Read-only summary, no PII
  */
 
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Prisma, TicketStatus, PaymentStatus, ChargeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { TicketStatus, PaymentStatus, ChargeStatus } from '@prisma/client';
 
 export interface ContextSnapshot {
   now: string; // ISO timestamp
@@ -78,6 +78,8 @@ export class AiContextSummaryService {
   // Cache for summaries (in-memory LRU, separate from response cache)
   private summaryCache: Map<string, { data: ContextSummary; expiresAt: number }> = new Map();
   private readonly cacheTtlSeconds: number = 45; // 45s default
+
+  private readonly logger = new Logger(AiContextSummaryService.name);
 
   constructor(private prisma: PrismaService) {
     // Cleanup expired entries every 30 seconds
@@ -168,7 +170,7 @@ export class AiContextSummaryService {
 
     try {
       // Build where clause based on scope
-      const where: any = {
+      const where: Prisma.TicketWhereInput = {
         tenantId: request.tenantId,
       };
 
@@ -179,14 +181,6 @@ export class AiContextSummaryService {
       if (request.unitId) {
         where.unitId = request.unitId;
       }
-
-      // Get KPI: count of open tickets
-      snapshot.kpis.openTickets = await this.prisma.ticket.count({
-        where: {
-          ...where,
-          status: TicketStatus.OPEN,
-        },
-      });
 
       // Get top 5 open tickets
       const topTickets = await this.prisma.ticket.findMany({
@@ -237,18 +231,12 @@ export class AiContextSummaryService {
 
     try {
       // Build where clause based on scope
-      const where: any = {
+      const where: Prisma.PaymentWhereInput = {
         tenantId: request.tenantId,
         status: PaymentStatus.SUBMITTED,
+        ...(request.buildingId ? { buildingId: request.buildingId } : {}),
+        ...(request.unitId ? { unitId: request.unitId } : {}),
       };
-
-      if (request.buildingId) {
-        where.buildingId = request.buildingId;
-      }
-
-      if (request.unitId) {
-        where.unitId = request.unitId;
-      }
 
       // Get KPI: count of submitted payments
       snapshot.kpis.submittedPayments = await this.prisma.payment.count({
@@ -299,18 +287,12 @@ export class AiContextSummaryService {
 
     try {
       // Build base where clause
-      const where: any = {
+      const where: Prisma.ChargeWhereInput = {
         tenantId: request.tenantId,
         status: ChargeStatus.PENDING,
+        ...(request.buildingId ? { buildingId: request.buildingId } : {}),
+        ...(request.unitId ? { unitId: request.unitId } : {}),
       };
-
-      if (request.buildingId) {
-        where.buildingId = request.buildingId;
-      }
-
-      if (request.unitId) {
-        where.unitId = request.unitId;
-      }
 
       // Get total outstanding amount
       const summary = await this.prisma.charge.aggregate({
@@ -338,8 +320,8 @@ export class AiContextSummaryService {
         LEFT JOIN "Unit" u ON c."unitId" = u.id
         WHERE c."tenantId" = ${request.tenantId}
           AND c.status = ${ChargeStatus.PENDING}
-          ${request.buildingId ? `AND c."buildingId" = '${request.buildingId}'` : ''}
-          ${request.unitId ? `AND c."unitId" = '${request.unitId}'` : ''}
+          ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
+          ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
         GROUP BY b.id, b.name, u.id, u.label
         ORDER BY outstanding DESC
         LIMIT 5
@@ -372,17 +354,11 @@ export class AiContextSummaryService {
 
     try {
       // Build where clause based on scope
-      const where: any = {
+      const where: Prisma.DocumentWhereInput = {
         tenantId: request.tenantId,
+        ...(request.buildingId ? { buildingId: request.buildingId } : {}),
+        ...(request.unitId ? { unitId: request.unitId } : {}),
       };
-
-      if (request.buildingId) {
-        where.buildingId = request.buildingId;
-      }
-
-      if (request.unitId) {
-        where.unitId = request.unitId;
-      }
 
       // Get last 3 documents
       const recentDocs = await this.prisma.document.findMany({

@@ -39,12 +39,8 @@ export class MembershipsController {
   async getRoles(
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,
-    @Req() req: Request & { user: any },
   ): Promise<ScopedRoleResponse[]> {
-    // TODO: Verify user has members.manage permission
-    // For now, just allow TENANT_ADMIN and above
-
-    return this.membershipsService.getRoles(membershipId);
+    return this.membershipsService.getRoles(tenantId, membershipId);
   }
 
   /**
