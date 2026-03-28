@@ -12,7 +12,7 @@ interface NotificationQueryFilters {
   readonly type?: NotificationType;
 }
 
-interface NotificationQueryResponse {
+export interface NotificationQueryResponse {
   readonly notifications: Notification[];
   readonly total: number;
 }

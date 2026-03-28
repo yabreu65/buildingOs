@@ -47,8 +47,7 @@ class SuccessResponseDto {
 
 class NotificationParamDto {
   @IsString()
-  @IsOptional()
-  id?: string;
+  id!: string;
 }
 
 /**
