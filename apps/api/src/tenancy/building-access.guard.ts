@@ -5,17 +5,16 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
-  Inject,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuthorizeService } from '../rbac/authorize.service';
 
 export interface RequestWithUser extends Request {
   user: {
     id: string;
     email: string;
     name: string;
+    roles?: string[];
     memberships: Array<{
       tenantId: string;
       roles: string[];
@@ -42,11 +41,13 @@ export interface RequestWithUser extends Request {
  */
 @Injectable()
 export class BuildingAccessGuard implements CanActivate {
-  constructor(
-    @Inject(PrismaService)
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Validate user has access to the building
+   * @param context - NestJS execution context
+   * @returns true if access is granted
+   */
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
 
@@ -132,7 +133,7 @@ export class BuildingAccessGuard implements CanActivate {
     const tenantRoles = membership.roles
       .filter(r => r.scopeType === 'TENANT' || (r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId))
       .map(r => r.role as string);
-    (request.user as any).roles = tenantRoles;
+    (request.user as RequestWithUser['user'] & { roles?: string[] }).roles = tenantRoles;
 
     return true;
   }

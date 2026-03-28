@@ -1,10 +1,10 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { UnitOccupant } from '@prisma/client';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { UnitOccupant, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
+import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
-import { AuditAction } from '@prisma/client';
 
 @Injectable()
 export class OccupantsService {
@@ -12,6 +12,7 @@ export class OccupantsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly planEntitlements: PlanEntitlementsService,
+    private readonly authorizeService: AuthorizeService,
   ) {}
 
   /**
@@ -22,8 +23,20 @@ export class OccupantsService {
     buildingId: string,
     unitId: string,
     dto: CreateOccupantDto,
-    actorUserId?: string,
+    actorUserId: string,
   ): Promise<UnitOccupant> {
+    // RBAC: check permission to manage members/occupants
+    const hasAccess = await this.authorizeService.authorize({
+      userId: actorUserId,
+      tenantId,
+      permission: 'members.manage',
+      buildingId,
+      unitId,
+    });
+    if (!hasAccess) {
+      throw new ForbiddenException('No tiene permiso para gestionar ocupantes');
+    }
+
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId } },
@@ -122,8 +135,20 @@ export class OccupantsService {
     buildingId: string,
     unitId: string,
     occupantId: string,
-    actorUserId?: string,
+    actorUserId: string,
   ): Promise<UnitOccupant> {
+    // RBAC: check permission to manage members/occupants
+    const hasAccess = await this.authorizeService.authorize({
+      userId: actorUserId,
+      tenantId,
+      permission: 'members.manage',
+      buildingId,
+      unitId,
+    });
+    if (!hasAccess) {
+      throw new ForbiddenException('No tiene permiso para gestionar ocupantes');
+    }
+
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId } },

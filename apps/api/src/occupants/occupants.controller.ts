@@ -10,23 +10,20 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
+import { RequestWithUser } from '../tenancy/building-access.guard';
 import { OccupantsService } from './occupants.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
 
-export interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-  };
-}
-
 @Controller('tenants/:tenantId/buildings/:buildingId/units/:unitId/occupants')
-@UseGuards(JwtAuthGuard, TenantAccessGuard)
+@UseGuards(JwtAuthGuard, TenantAccessGuard, BuildingAccessGuard)
 export class OccupantsController {
   constructor(private readonly occupantsService: OccupantsService) {}
 
+  /**
+   * Assign a member as occupant of a unit
+   */
   @Post()
   assign(
     @TenantParam() tenantId: string,
@@ -38,6 +35,9 @@ export class OccupantsController {
     return this.occupantsService.assignOccupant(tenantId, buildingId, unitId, dto, req.user.id);
   }
 
+  /**
+   * List all occupants for a unit
+   */
   @Get()
   findAll(
     @TenantParam() tenantId: string,
@@ -47,6 +47,9 @@ export class OccupantsController {
     return this.occupantsService.findOccupants(tenantId, buildingId, unitId);
   }
 
+  /**
+   * Remove an occupant from a unit
+   */
   @Delete(':occupantId')
   remove(
     @TenantParam() tenantId: string,
