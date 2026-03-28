@@ -14,12 +14,9 @@ import { listTickets, type Ticket } from '@/features/tickets/services/tickets.ap
 const quoteSchema = z.object({
   vendorId: z.string().min(1, 'Vendor is required'),
   ticketId: z.string().optional(),
-  amount: z.any().transform((v) => (typeof v === 'string' ? parseFloat(v) : v)),
+  amount: z.number().min(0.01, 'Amount must be greater than 0'),
   currency: z.enum(['ARS', 'USD']),
   notes: z.string().optional().or(z.literal('')),
-}).refine((data) => data.amount >= 0.01, {
-  message: 'Amount must be greater than 0',
-  path: ['amount'],
 });
 
 type QuoteFormData = z.infer<typeof quoteSchema>;
@@ -32,13 +29,13 @@ interface QuoteCreateModalProps {
   onClose: () => void;
 }
 
-export default function QuoteCreateModal({
+export const QuoteCreateModal = ({
   buildingId,
   vendors,
   presetTicketId,
   onSave,
   onClose,
-}: QuoteCreateModalProps) {
+}: QuoteCreateModalProps) => {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -49,7 +46,7 @@ export default function QuoteCreateModal({
       setLoadingTickets(true);
       try {
         const data = await listTickets(buildingId, { status: 'OPEN,IN_PROGRESS' });
-        setTickets(data);
+        setTickets(data.tickets);
       } catch (error) {
         console.error('Failed to load tickets:', error);
       } finally {
@@ -141,7 +138,7 @@ export default function QuoteCreateModal({
               <input
                 type="number"
                 step="0.01"
-                {...register('amount')}
+                {...register('amount', { valueAsNumber: true })}
                 className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 placeholder="0.00"
               />
@@ -191,4 +188,4 @@ export default function QuoteCreateModal({
       </Card>
     </div>
   );
-}
+};

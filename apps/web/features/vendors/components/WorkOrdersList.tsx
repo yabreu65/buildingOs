@@ -12,7 +12,7 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { Wrench, Plus } from 'lucide-react';
-import WorkOrderCreateModal from './WorkOrderCreateModal';
+import { WorkOrderCreateModal } from './WorkOrderCreateModal';
 import type { WorkOrder } from '../services/vendors.api';
 
 interface WorkOrdersListProps {

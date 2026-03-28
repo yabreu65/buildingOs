@@ -9,7 +9,7 @@ import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
 import { X, Loader2 } from 'lucide-react';
 import { createWorkOrder, type Vendor } from '../services/vendors.api';
-import { listTickets } from '@/features/tickets/services/tickets.api';
+import { listTickets, type Ticket } from '@/features/tickets/services/tickets.api';
 
 const workOrderSchema = z.object({
   ticketId: z.string().optional(),
@@ -28,16 +28,16 @@ interface WorkOrderCreateModalProps {
   onClose: () => void;
 }
 
-export default function WorkOrderCreateModal({
+export const WorkOrderCreateModal = ({
   buildingId,
   vendors,
   presetTicketId,
   onSave,
   onClose,
-}: WorkOrderCreateModalProps) {
+}: WorkOrderCreateModalProps) => {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [tickets, setTickets] = useState<any[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loadingTickets, setLoadingTickets] = useState(false);
 
   useEffect(() => {
@@ -45,7 +45,7 @@ export default function WorkOrderCreateModal({
       setLoadingTickets(true);
       try {
         const data = await listTickets(buildingId, { status: 'OPEN,IN_PROGRESS' });
-        setTickets(data);
+        setTickets(data.tickets);
       } catch (error) {
         console.error('Failed to load tickets:', error);
       } finally {
@@ -163,4 +163,4 @@ export default function WorkOrderCreateModal({
       </Card>
     </div>
   );
-}
+};

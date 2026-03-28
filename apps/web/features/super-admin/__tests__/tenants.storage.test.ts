@@ -56,9 +56,10 @@ describe('Tenants Storage - CRUD Operations', () => {
 
       const freeTenant = createTenant(freeInput);
 
-      expect(freeTenant.limits.buildings).toBe(1);
-      expect(freeTenant.limits.units).toBe(10);
-      expect(freeTenant.limits.users).toBe(20);
+      expect(freeTenant.limits).toBeDefined();
+      expect(freeTenant.limits?.buildings).toBe(1);
+      expect(freeTenant.limits?.units).toBe(10);
+      expect(freeTenant.limits?.users).toBe(20);
     });
 
     it('should trim whitespace from tenant name', () => {
@@ -156,8 +157,9 @@ describe('Tenants Storage - CRUD Operations', () => {
       const updated = updateTenant(tenant.id, { plan: 'ENTERPRISE' });
 
       expect(updated.plan).toBe('ENTERPRISE');
-      expect(updated.limits.buildings).toBe(999);
-      expect(updated.limits.units).toBe(9999);
+      expect(updated.limits).toBeDefined();
+      expect(updated.limits?.buildings).toBe(999);
+      expect(updated.limits?.units).toBe(9999);
     });
 
     it('should throw error for non-existent tenant', () => {

@@ -11,7 +11,7 @@ import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
 import { FileText, Plus } from 'lucide-react';
-import QuoteCreateModal from './QuoteCreateModal';
+import { QuoteCreateModal } from './QuoteCreateModal';
 import type { Quote } from '../services/vendors.api';
 
 interface QuotesListProps {

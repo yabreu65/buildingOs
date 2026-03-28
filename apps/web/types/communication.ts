@@ -1,8 +1,11 @@
 /**
  * Communication domain types
  */
-import { CommunicationChannel, CommunicationType } from './enums';
-import type { TargetType } from '@/features/communications/services/communications.api';
+import { CommunicationType } from './enums';
+import type {
+  TargetType,
+  CommunicationChannel as ApiCommunicationChannel,
+} from '@/features/communications/services/communications.api';
 
 export interface CommunicationTarget {
   targetType: TargetType;
@@ -12,7 +15,7 @@ export interface CommunicationTarget {
 export interface CommunicationInput {
   title: string;
   body: string;
-  channel: CommunicationChannel;
+  channel: ApiCommunicationChannel;
   type?: CommunicationType;
   targets: CommunicationTarget[];
   scheduledFor?: string;
@@ -23,7 +26,7 @@ export interface CommunicationResponse {
   id: string;
   title: string;
   body: string;
-  channel: CommunicationChannel;
+  channel: ApiCommunicationChannel;
   type?: CommunicationType;
   targets: CommunicationTarget[];
   createdAt: string;

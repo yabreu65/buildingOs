@@ -261,7 +261,7 @@ describe('Super Admin Utils - Summary', () => {
     });
 
     it('should work with all status types', () => {
-      const trialTenant = { ...mockTenant, status: 'TRIAL' };
+      const trialTenant: Tenant = { ...mockTenant, status: 'TRIAL' };
       const summary = getTenantSummary(trialTenant);
       expect(summary.statusLabel).toBe('Prueba');
     });
