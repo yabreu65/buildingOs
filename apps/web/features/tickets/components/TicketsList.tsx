@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useTickets } from '../hooks/useTickets';
-import { useUnits } from '@/features/buildings/hooks/useUnits';
+import { useUnits, useBuildings } from '@/features/buildings/hooks';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
@@ -36,6 +36,9 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const [unitIdFilter, setUnitIdFilter] = useState<string>('');
 
   const { units } = useUnits(tenantId, buildingId);
+  const { buildings } = useBuildings(tenantId);
+  const building = buildings.find((b) => b.id === buildingId);
+  const buildingName = building?.name || 'Edificio';
   const [searchInput, setSearchInput] = useState('');
 
   const filters = useMemo(() => ({
@@ -213,6 +216,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
           </div>
           <TicketForm
             buildingId={buildingId}
+            buildingName={buildingName}
             units={units}
             onSuccess={handleCreateSuccess}
             onCancel={() => setShowCreateForm(false)}

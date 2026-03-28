@@ -12,6 +12,7 @@ import type { TicketPriority } from '@/types/enums';
 
 interface TicketFormProps {
   buildingId: string;
+  buildingName?: string;
   units?: Unit[];
   onSuccess: (ticket: Ticket) => void;
   onCancel: () => void;
@@ -19,6 +20,7 @@ interface TicketFormProps {
 
 export default function TicketForm({
   buildingId,
+  buildingName = 'Edificio',
   units = [],
   onSuccess,
   onCancel,
@@ -151,7 +153,7 @@ export default function TicketForm({
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >
-            <option value="">Sin unidad específica</option>
+            <option value="">{buildingName} (área común)</option>
             {units.map((u) => (
               <option key={u.id} value={u.id}>
                 {u.label || u.unitCode || u.id}
