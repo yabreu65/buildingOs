@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEnum, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsEnum } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum DashboardPeriod {
@@ -18,51 +18,51 @@ export class DashboardQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsUUID()
+  @IsString()
   buildingId?: string;
 }
 
-export type TicketSummary = {
+export interface TicketSummary {
   id: string;
   title: string;
   status: string;
   buildingId: string;
   buildingName: string;
   createdAt: string;
-};
+}
 
-export type PaymentToValidateSummary = {
+export interface PaymentToValidateSummary {
   id: string;
   unitLabel: string;
   buildingName: string;
   amount: number;
   submittedAt: string;
-};
+}
 
-export type UnitWithoutResponsibleSummary = {
+export interface UnitWithoutResponsibleSummary {
   unitId: string;
   unitLabel: string;
   buildingId: string;
   buildingName: string;
-};
+}
 
-export type BuildingAlert = {
+export interface BuildingAlert {
   buildingId: string;
   buildingName: string;
   outstandingAmount: number;
   overdueTickets: number;
   unitsWithoutResponsible: number;
   riskScore: 'HIGH' | 'MEDIUM' | 'LOW';
-};
+}
 
-export type DashboardKpis = {
+export interface DashboardKpis {
   outstandingAmount: number | null;
   collectedAmount: number | null;
   collectionRate: number | null;
   delinquentUnits: number | null;
-};
+}
 
-export type DashboardQueues = {
+export interface DashboardQueues {
   tickets: {
     open: number;
     inProgress: number;
@@ -77,9 +77,9 @@ export type DashboardQueues = {
     count: number;
     top: UnitWithoutResponsibleSummary[];
   };
-};
+}
 
-export type DashboardSummaryDto = {
+export interface DashboardSummaryDto {
   kpis: DashboardKpis;
   queues: DashboardQueues;
   buildingAlerts: BuildingAlert[];
@@ -90,4 +90,4 @@ export type DashboardSummaryDto = {
     generatedAt: string;
     moduleStatus?: 'FINANCIAL_MODULE_OK' | 'FINANCIAL_MODULE_DISABLED';
   };
-};
+}

@@ -4,19 +4,31 @@ import {
   DashboardSummaryDto,
   DashboardQueryDto,
   DashboardPeriod,
+  DashboardKpis,
+  DashboardQueues,
   TicketSummary,
   PaymentToValidateSummary,
   UnitWithoutResponsibleSummary,
   BuildingAlert,
 } from './dashboard.dto';
-import { PaymentStatus, ChargeStatus, TicketStatus } from '@prisma/client';
+import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
+
+type UnitWithOccupants = Prisma.UnitGetPayload<{
+  include: { unitOccupants: true; building: { select: { name: true } } };
+}>;
 
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Get admin dashboard summary for the given tenant and period.
+   *
+   * @param tenantId - Tenant identifier
+   * @param query - Period and optional building filter
+   */
   async getSummary(
     tenantId: string,
     query: DashboardQueryDto,
@@ -112,7 +124,7 @@ export class DashboardService {
     buildingIds: string[],
     startDate: Date,
     endDate: Date,
-  ) {
+  ): Promise<DashboardKpis> {
     // Get charges for the period
     const charges = await this.prisma.charge.findMany({
       where: {
@@ -143,6 +155,7 @@ export class DashboardService {
     // Calculate collected amount (from APPROVED payments in period)
     const collectedAmount = await this.prisma.payment.aggregate({
       where: {
+        tenantId,
         buildingId: { in: buildingIds },
         status: PaymentStatus.APPROVED,
         updatedAt: { gte: startDate, lte: endDate },
@@ -185,10 +198,11 @@ export class DashboardService {
     buildingIds: string[],
     startDate: Date,
     endDate: Date,
-  ) {
+  ): Promise<DashboardQueues> {
     // Tickets queue - count by status
     const openTickets = await this.prisma.ticket.count({
       where: {
+        tenantId,
         buildingId: { in: buildingIds },
         status: TicketStatus.OPEN,
         createdAt: { gte: startDate, lte: endDate },
@@ -197,6 +211,7 @@ export class DashboardService {
 
     const inProgressTickets = await this.prisma.ticket.count({
       where: {
+        tenantId,
         buildingId: { in: buildingIds },
         status: TicketStatus.IN_PROGRESS,
         createdAt: { gte: startDate, lte: endDate },
@@ -206,6 +221,7 @@ export class DashboardService {
     // Get top 5 tickets (oldest open/in-progress)
     const topTickets = await this.prisma.ticket.findMany({
       where: {
+        tenantId,
         buildingId: { in: buildingIds },
         status: { in: [TicketStatus.OPEN, TicketStatus.IN_PROGRESS] },
       },
@@ -216,7 +232,7 @@ export class DashboardService {
     // Fill building names for tickets
     const ticketBuildingIds = [...new Set(topTickets.map((t) => t.buildingId))];
     const ticketBuildings = await this.prisma.building.findMany({
-      where: { id: { in: ticketBuildingIds } },
+      where: { tenantId, id: { in: ticketBuildingIds } },
       select: { id: true, name: true },
     });
     const ticketBuildingMap = new Map(ticketBuildings.map((b) => [b.id, b.name]));
@@ -231,19 +247,24 @@ export class DashboardService {
     }));
 
     // Payments to validate queue (SUBMITTED status = pending validation)
-    const pendingPayments = await this.prisma.payment.findMany({
-      where: {
-        status: PaymentStatus.SUBMITTED,
-        buildingId: { in: buildingIds },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      include: {
-        unit: {
-          select: { label: true, building: { select: { name: true } } },
+    const pendingPaymentsWhere = {
+      tenantId,
+      status: PaymentStatus.SUBMITTED,
+      buildingId: { in: buildingIds },
+    };
+    const [pendingPaymentsCount, pendingPayments] = await Promise.all([
+      this.prisma.payment.count({ where: pendingPaymentsWhere }),
+      this.prisma.payment.findMany({
+        where: pendingPaymentsWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        include: {
+          unit: {
+            select: { label: true, building: { select: { name: true } } },
+          },
         },
-      },
-    });
+      }),
+    ]);
 
     const paymentSummaries: PaymentToValidateSummary[] = pendingPayments.map((p) => ({
       id: p.id,
@@ -254,23 +275,20 @@ export class DashboardService {
     }));
 
     // Units without primary occupant
-    const units = await this.prisma.unit.findMany({
-      where: { buildingId: { in: buildingIds } },
+    const units: UnitWithOccupants[] = await this.prisma.unit.findMany({
+      where: { tenantId, buildingId: { in: buildingIds } },
       include: {
         building: { select: { name: true } },
         unitOccupants: true,
       },
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    type UnitWithOccupants = any;
-
     const unitsWithoutResponsible: UnitWithoutResponsibleSummary[] = [];
 
-    for (const unit of units as UnitWithOccupants[]) {
-      const hasPrimaryOccupant = 
-        unit.unitOccupants && 
-        unit.unitOccupants.some((o: { isPrimary: boolean; endDate: Date | null }) => o.isPrimary === true && o.endDate === null);
+    for (const unit of units) {
+      const hasPrimaryOccupant =
+        unit.unitOccupants &&
+        unit.unitOccupants.some((o) => o.isPrimary === true && o.endDate === null);
       if (!hasPrimaryOccupant) {
         unitsWithoutResponsible.push({
           unitId: unit.id,
@@ -289,7 +307,7 @@ export class DashboardService {
         top: ticketSummaries,
       },
       paymentsToValidate: {
-        count: pendingPayments.length,
+        count: pendingPaymentsCount,
         top: paymentSummaries,
       },
       unitsWithoutResponsible: {
@@ -304,20 +322,54 @@ export class DashboardService {
     buildingIds: string[],
     buildingMap: Map<string, string>,
   ): Promise<BuildingAlert[]> {
-    const alerts: BuildingAlert[] = [];
-
-    for (const buildingId of buildingIds) {
-      // Get outstanding amount per building
-      const charges = await this.prisma.charge.findMany({
+    const [allCharges, allTickets, allUnits] = await Promise.all([
+      this.prisma.charge.findMany({
         where: {
           tenantId,
-          buildingId,
+          buildingId: { in: buildingIds },
           status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
           canceledAt: null,
         },
         include: { paymentAllocations: { include: { payment: true } } },
-      });
+      }),
+      this.prisma.ticket.groupBy({
+        by: ['buildingId'],
+        where: {
+          tenantId,
+          buildingId: { in: buildingIds },
+          status: { in: [TicketStatus.OPEN, TicketStatus.IN_PROGRESS] },
+        },
+        _count: { id: true },
+      }),
+      this.prisma.unit.findMany({
+        where: { tenantId, buildingId: { in: buildingIds } },
+        include: { unitOccupants: true },
+      }),
+    ]);
 
+    const chargesByBuilding = new Map<string, typeof allCharges>();
+    for (const charge of allCharges) {
+      const existing = chargesByBuilding.get(charge.buildingId) || [];
+      existing.push(charge);
+      chargesByBuilding.set(charge.buildingId, existing);
+    }
+
+    const ticketsByBuilding = new Map<string, number>();
+    for (const ticket of allTickets) {
+      ticketsByBuilding.set(ticket.buildingId, ticket._count.id);
+    }
+
+    const unitsByBuilding = new Map<string, typeof allUnits>();
+    for (const unit of allUnits) {
+      const existing = unitsByBuilding.get(unit.buildingId) || [];
+      existing.push(unit);
+      unitsByBuilding.set(unit.buildingId, existing);
+    }
+
+    const alerts: BuildingAlert[] = [];
+
+    for (const buildingId of buildingIds) {
+      const charges = chargesByBuilding.get(buildingId) || [];
       const outstandingAmount = charges.reduce((sum, charge) => {
         const allocated = charge.paymentAllocations.reduce((aSum, a) => {
           return aSum + (a.payment?.status === PaymentStatus.APPROVED ? a.amount : 0);
@@ -325,30 +377,13 @@ export class DashboardService {
         return sum + (charge.amount - allocated);
       }, 0);
 
-      // Get open tickets per building
-      const openTickets = await this.prisma.ticket.count({
-        where: {
-          buildingId,
-          status: { in: [TicketStatus.OPEN, TicketStatus.IN_PROGRESS] },
-        },
-      });
+      const openTickets = ticketsByBuilding.get(buildingId) || 0;
 
-      // Get units without primary occupant per building
-      const units = await this.prisma.unit.findMany({
-        where: { buildingId },
-        include: {
-          unitOccupants: true,
-        },
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      type UnitWithOccupants = any;
-
-      const unitsWithoutResponsible = (units as UnitWithOccupants[]).filter(
-        (u) => !u.unitOccupants || !u.unitOccupants.some((o: { isPrimary: boolean; endDate: Date | null }) => o.isPrimary === true && o.endDate === null),
+      const units = unitsByBuilding.get(buildingId) || [];
+      const unitsWithoutResponsible = units.filter(
+        (u) => !u.unitOccupants || !u.unitOccupants.some((o) => o.isPrimary === true && o.endDate === null),
       ).length;
 
-      // Calculate risk score
       let riskScore: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
       if (outstandingAmount > 1000000 || openTickets > 3 || unitsWithoutResponsible > 5) {
         riskScore = 'HIGH';
@@ -356,7 +391,6 @@ export class DashboardService {
         riskScore = 'MEDIUM';
       }
 
-      // Only include buildings with alerts
       if (outstandingAmount > 0 || openTickets > 0 || unitsWithoutResponsible > 0) {
         alerts.push({
           buildingId,
@@ -369,7 +403,6 @@ export class DashboardService {
       }
     }
 
-    // Sort by risk score
     const riskOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
     return alerts.sort((a, b) => riskOrder[a.riskScore] - riskOrder[b.riskScore]);
   }
