@@ -56,21 +56,20 @@ class SuccessResponseDto {
  * DELETE /me/notifications/:id               → Delete notification
  */
 
-@Controller('me/notifications')
-@UseGuards(JwtAuthGuard)
+@Controller('tenants/:tenantId/notifications')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   /**
-   * Resolve tenantId from authenticated user memberships
+   * Get tenantId from guard-populated request param
    * @throws BadRequestException when tenant context is missing
    */
-  private resolveTenantId(req: AuthenticatedRequest): string {
-    const tenantId = req.user.memberships?.[0]?.tenantId;
-    if (!tenantId) {
-      throw new BadRequestException('Tenant context required');
+  private getTenantId(req: AuthenticatedRequest): string {
+    if (!req.tenantId) {
+      throw new BadRequestException('Tenant ID required');
     }
-    return tenantId;
+    return req.tenantId;
   }
 
   /**
@@ -83,9 +82,9 @@ export class NotificationsController {
     @Query() query: ListNotificationsQueryDto,
   ) {
     const user = req.user;
-    const tenantId = this.resolveTenantId(req);
-    const skipNum = Math.max(0, Number(query.skip ?? 0));
-    const takeNum = Math.min(100, Number(query.take ?? 50));
+    const tenantId = this.getTenantId(req);
+    const skipNum = Math.max(0, query.skip ?? 0);
+    const takeNum = Math.min(100, query.take ?? 50);
 
     let isRead: boolean | undefined;
     if (query.isRead === 'true') {
@@ -113,7 +112,7 @@ export class NotificationsController {
   @Get('unread-count')
   async getUnreadCount(@Request() req: AuthenticatedRequest): Promise<UnreadCountResponseDto> {
     const user = req.user;
-    const tenantId = this.resolveTenantId(req);
+    const tenantId = this.getTenantId(req);
 
     const count = await this.notificationsService.getUnreadCount(tenantId, user.id);
     return { unreadCount: count };
@@ -126,7 +125,7 @@ export class NotificationsController {
   @Patch(':id/read')
   async markAsRead(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = this.resolveTenantId(req);
+    const tenantId = this.getTenantId(req);
 
     return this.notificationsService.markAsRead(id, tenantId, user.id);
   }
@@ -138,7 +137,7 @@ export class NotificationsController {
   @Patch('read-all')
   async markAllAsRead(@Request() req: AuthenticatedRequest): Promise<SuccessResponseDto> {
     const user = req.user;
-    const tenantId = this.resolveTenantId(req);
+    const tenantId = this.getTenantId(req);
 
     await this.notificationsService.markAllAsRead(tenantId, user.id);
     return { success: true };
@@ -154,7 +153,7 @@ export class NotificationsController {
     @Request() req: AuthenticatedRequest,
   ): Promise<SuccessResponseDto> {
     const user = req.user;
-    const tenantId = this.resolveTenantId(req);
+    const tenantId = this.getTenantId(req);
 
     await this.notificationsService.deleteNotification(id, tenantId, user.id);
     return { success: true };

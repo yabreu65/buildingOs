@@ -83,8 +83,13 @@ export class DashboardService {
         },
       };
     } catch (error) {
-      this.logger.error(`Failed to generate dashboard summary for tenant ${tenantId}`, error);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to generate dashboard summary for tenant ${tenantId}: ${message}`);
+      // Re-throw NestJS-recognized errors, wrap others
+      if (error instanceof Error && error.constructor.name.includes('Prisma')) {
+        throw error;
+      }
+      throw new Error(`Dashboard summary generation failed: ${message}`);
     }
   }
 
