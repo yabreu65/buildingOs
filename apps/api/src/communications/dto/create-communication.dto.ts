@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CommunicationChannel, CommunicationStatus, CommunicationTargetType } from '@prisma/client';
-import { BuildingCommunicationParamDto } from '../../common/dtos/params.dto';
+import { BuildingCommunicationParamDto, BuildingParamDto } from '../../common/dtos/params.dto';
 
 export class CreateCommunicationTargetDto {
   @IsEnum(CommunicationTargetType)
@@ -78,4 +78,4 @@ export class GetCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class UpdateCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class DeleteCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class SendCommunicationParamDto extends BuildingCommunicationParamDto {}
-export class ListCommunicationsParamDto extends BuildingCommunicationParamDto {}
+export class ListCommunicationsParamDto extends BuildingParamDto {}
