@@ -4,13 +4,15 @@ import { useState } from 'react';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
-import { X, Send, AlertCircle, Plus, FileText, Wrench, Lightbulb } from 'lucide-react';
+import { X, Send, AlertCircle, Plus, FileText, Wrench, Lightbulb, UserPlus, History } from 'lucide-react';
 import type { Ticket } from '../services/tickets.api';
 import { getTicketReplySuggestions } from '../services/tickets.api';
 import { useAuth } from '@/features/auth';
 import { useQuotes, useWorkOrders, QuoteCreateModal, WorkOrderCreateModal } from '@/features/vendors';
+import { useTenantMembers } from '@/features/tenant-members';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+
 interface TicketDetailProps {
   buildingId: string;
   ticket: Ticket;
@@ -18,6 +20,7 @@ interface TicketDetailProps {
   onClose: () => void;
   onStatusChange: (ticketId: string, newStatus: string) => Promise<void>;
   onAddComment: (ticketId: string, body: string) => Promise<void>;
+  onAssign?: (ticketId: string, membershipId: string) => Promise<void>;
 }
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -34,6 +37,7 @@ export default function TicketDetail({
   onClose,
   onStatusChange,
   onAddComment,
+  onAssign,
 }: TicketDetailProps) {
   const { toast } = useToast();
   const { currentUser } = useAuth();
@@ -48,6 +52,10 @@ export default function TicketDetail({
   const [loadingReplies, setLoadingReplies] = useState(false);
 
   const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r)) ?? false;
+
+  const { data: members } = useTenantMembers(tenantId, 'ACTIVE');
+  const [assigning, setAssigning] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState(ticket.assignedTo?.id || '');
 
   const { quotes, refetch: refetchQuotes } = useQuotes({
     buildingId,
@@ -95,6 +103,19 @@ export default function TicketDetail({
       await onStatusChange(ticket.id, 'CLOSED');
     } catch {
       // Error already handled in onStatusChange
+    }
+  };
+
+  const handleAssign = async () => {
+    if (!onAssign) return;
+    setAssigning(true);
+    try {
+      await onAssign(ticket.id, selectedMemberId || '');
+      toast(selectedMemberId ? 'Responsable asignado' : 'Responsable removido', 'success');
+    } catch {
+      toast('Error al asignar responsable', 'error');
+    } finally {
+      setAssigning(false);
     }
   };
 
@@ -264,6 +285,37 @@ export default function TicketDetail({
             )}
           </div>
 
+          {/* Assign Responsible (Admin Only) */}
+          {isAdmin && (
+            <div>
+              <label className="block text-sm font-medium text-muted-foreground mb-1 flex items-center gap-2">
+                <UserPlus className="w-4 h-4" />
+                Asignar responsable
+              </label>
+              <div className="flex gap-2">
+                <select
+                  value={selectedMemberId}
+                  onChange={(e) => setSelectedMemberId(e.target.value)}
+                  className="flex-1 px-3 py-2 border rounded-md text-sm"
+                >
+                  <option value="">Sin asignar</option>
+                  {members?.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  onClick={handleAssign}
+                  disabled={assigning}
+                >
+                  {assigning ? 'Asignando...' : 'Asignar'}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Quotes Section (Admin Only) */}
           {isAdmin && (
             <div>
@@ -331,6 +383,48 @@ export default function TicketDetail({
               )}
             </div>
           )}
+
+          {/* Status History */}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+              <History className="w-4 h-4" />
+              Historial de cambios
+            </label>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 text-sm">
+                <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-500" />
+                <div>
+                  <p className="font-medium">Ticket creado</p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(ticket.createdAt).toLocaleString('es-AR')}
+                    {ticket.createdBy && ` por ${ticket.createdBy.name}`}
+                  </p>
+                </div>
+              </div>
+              {ticket.updatedAt !== ticket.createdAt && (
+                <div className="flex items-start gap-2 text-sm">
+                  <div className="w-2 h-2 mt-1.5 rounded-full bg-yellow-500" />
+                  <div>
+                    <p className="font-medium">Última actualización</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(ticket.updatedAt).toLocaleString('es-AR')}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {ticket.closedAt && (
+                <div className="flex items-start gap-2 text-sm">
+                  <div className="w-2 h-2 mt-1.5 rounded-full bg-green-500" />
+                  <div>
+                    <p className="font-medium">Ticket cerrado</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(ticket.closedAt).toLocaleString('es-AR')}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Comments */}
           <div>

@@ -123,13 +123,17 @@ export class TicketsController {
     @Query('priority') priority?: string,
     @Query('unitId') unitId?: string,
     @Query('assignedToMembership') assignedToMembership?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
     @Request() req?: any,
   ) {
-    const tenantId = req.tenantId; // Populated by BuildingAccessGuard
+    const tenantId = req.tenantId;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
 
-    // RESIDENT role: validate unitId filter if provided
     if (this.isResidentRole(userRoles) && unitId) {
       await this.ticketsService.validateResidentUnitAccess(
         tenantId,
@@ -143,6 +147,11 @@ export class TicketsController {
     if (priority) filters.priority = priority;
     if (unitId) filters.unitId = unitId;
     if (assignedToMembership) filters.assignedToMembershipId = assignedToMembership;
+    if (search) filters.search = search;
+    if (page) filters.page = parseInt(page, 10);
+    if (limit) filters.limit = parseInt(limit, 10);
+    if (sortBy) filters.sortBy = sortBy;
+    if (sortOrder) filters.sortOrder = sortOrder;
 
     return await this.ticketsService.findAll(tenantId, buildingId, filters);
   }

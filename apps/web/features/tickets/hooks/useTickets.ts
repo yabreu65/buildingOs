@@ -15,6 +15,8 @@ import {
   type CreateTicketInput,
   type UpdateTicketInput,
   type CreateCommentInput,
+  type TicketsListParams,
+  type PaginatedTickets,
 } from '../services/tickets.api';
 
 interface UseTicketsOptions {
@@ -33,15 +35,28 @@ export function useTickets(options: UseTicketsOptions) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Pagination, search, sort state
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+  });
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'createdAt' | 'updatedAt' | 'priority' | 'status'>('createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
-  const stableFilters = useMemo(() => filters, [
-    filters?.status,
-    filters?.priority,
-    filters?.unitId,
-    filters?.assignedToMembership,
-  ]);
+  const apiParams = useMemo((): TicketsListParams => ({
+    ...filters,
+    search: search || undefined,
+    page: pagination.page,
+    limit: pagination.limit,
+    sortBy,
+    sortOrder,
+  }), [filters, search, pagination.page, pagination.limit, sortBy, sortOrder]);
 
-  // Fetch all tickets
+  // Fetch tickets
   const fetchTickets = useCallback(async () => {
     if (!buildingId) {
       setTickets([]);
@@ -51,20 +66,42 @@ export function useTickets(options: UseTicketsOptions) {
     setLoading(true);
     setError(null);
     try {
-      const data = await listTickets(buildingId, stableFilters);
-      setTickets(data);
+      const data: PaginatedTickets = await listTickets(buildingId, apiParams);
+      setTickets(data.tickets);
+      setPagination(prev => ({
+        ...prev,
+        total: data.total,
+        totalPages: data.totalPages,
+      }));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch tickets';
       setError(message);
     } finally {
       setLoading(false);
     }
-  }, [buildingId, stableFilters]);
+  }, [buildingId, apiParams]);
 
   // Auto-fetch on mount and dependency changes
   useEffect(() => {
     fetchTickets();
   }, [fetchTickets]);
+
+  // Pagination controls
+  const goToPage = useCallback((page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+  }, []);
+
+  const nextPage = useCallback(() => {
+    setPagination(prev => ({ ...prev, page: prev.page + 1 }));
+  }, []);
+
+  const prevPage = useCallback(() => {
+    setPagination(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }));
+  }, []);
+
+  const setPageSize = useCallback((limit: number) => {
+    setPagination(prev => ({ ...prev, limit, page: 1 }));
+  }, []);
 
   // Fetch single ticket
   const fetch = useCallback(
@@ -144,6 +181,18 @@ export function useTickets(options: UseTicketsOptions) {
     fetchTickets();
   }, [fetchTickets]);
 
+  // Search and sort
+  const updateSearch = useCallback((newSearch: string) => {
+    setSearch(newSearch);
+    setPagination(prev => ({ ...prev, page: 1 }));
+  }, []);
+
+  const updateSort = useCallback((newSortBy: 'createdAt' | 'updatedAt' | 'priority' | 'status', newSortOrder?: 'asc' | 'desc') => {
+    setSortBy(newSortBy);
+    if (newSortOrder) setSortOrder(newSortOrder);
+    setPagination(prev => ({ ...prev, page: 1 }));
+  }, []);
+
   return {
     tickets,
     loading,
@@ -153,5 +202,15 @@ export function useTickets(options: UseTicketsOptions) {
     update,
     addComment: addNewComment,
     refetch,
+    pagination,
+    goToPage,
+    nextPage,
+    prevPage,
+    setPageSize,
+    search,
+    updateSearch,
+    sortBy,
+    sortOrder,
+    updateSort,
   };
 }

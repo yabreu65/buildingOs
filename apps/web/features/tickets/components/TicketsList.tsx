@@ -9,7 +9,8 @@ import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
-import { Ticket as TicketIcon, Plus, Filter, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Ticket as TicketIcon, Plus, Filter, AlertCircle, Clock, CheckCircle, XCircle, Search, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import Input from '@/shared/components/ui/Input';
 import TicketForm from './TicketForm';
 import { t } from '@/i18n';
 import TicketDetail from './TicketDetail';
@@ -35,6 +36,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const [unitIdFilter, setUnitIdFilter] = useState<string>('');
 
   const { units } = useUnits(tenantId, buildingId);
+  const [searchInput, setSearchInput] = useState('');
 
   const filters = useMemo(() => ({
     status: statusFilter === 'all_open' ? undefined : statusFilter || undefined,
@@ -42,10 +44,33 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
     unitId: unitIdFilter || undefined,
   }), [statusFilter, priorityFilter, unitIdFilter]);
 
-  const { tickets, loading, error, create, update, addComment, refetch } = useTickets({
+  const { 
+    tickets, 
+    loading, 
+    error, 
+    create, 
+    update, 
+    addComment, 
+    refetch,
+    pagination,
+    goToPage,
+    nextPage,
+    prevPage,
+    setPageSize,
+    search,
+    updateSearch,
+    sortBy,
+    sortOrder,
+    updateSort,
+  } = useTickets({
     buildingId,
     filters,
   });
+
+  const handleSearch = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    updateSearch(searchInput);
+  }, [searchInput, updateSearch]);
 
   const statusCounts = useMemo(() => {
     return {
@@ -92,6 +117,22 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
       toast(t('tickets.errors.commentFailed'), 'error');
     }
   }, [addComment, tickets, toast]);
+
+  const handleAssign = useCallback(async (ticketId: string, membershipId: string) => {
+    try {
+      await update(ticketId, { 
+        assignedToMembershipId: membershipId || null 
+      });
+      toast('Responsable actualizado', 'success');
+      await refetch();
+      const updated = tickets.find((tk) => tk.id === ticketId);
+      if (updated) {
+        setSelectedTicket(updated);
+      }
+    } catch {
+      toast('Error al asignar responsable', 'error');
+    }
+  }, [update, refetch, tickets, toast]);
 
   const handleTicketClick = useCallback((ticket: Ticket) => {
     setSelectedTicket(ticket);
@@ -263,6 +304,45 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
             ))}
           </select>
         </div>
+
+        <div className="flex-1">
+          <form onSubmit={handleSearch} className="flex gap-2">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Buscar tickets..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Button type="submit" variant="secondary" size="sm">
+              Buscar
+            </Button>
+          </form>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-muted-foreground">Ordenar:</label>
+          <select
+            value={sortBy}
+            onChange={(e) => updateSort(e.target.value as any)}
+            className="px-2 py-1 border rounded text-sm"
+          >
+            <option value="createdAt">Fecha creación</option>
+            <option value="updatedAt">Última actualización</option>
+            <option value="priority">Prioridad</option>
+            <option value="status">Estado</option>
+          </select>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => updateSort(sortBy, sortOrder === 'asc' ? 'desc' : 'asc')}
+          >
+            {sortOrder === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />}
+          </Button>
+        </div>
       </div>
 
       {error && <ErrorState message={error} onRetry={refetch} />}
@@ -336,6 +416,60 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
         </div>
       )}
 
+      {/* Pagination */}
+      {!loading && visibleTickets.length > 0 && pagination.totalPages > 1 && (
+        <div className="flex justify-between items-center pt-4 border-t">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              Mostrando {((pagination.page - 1) * pagination.limit) + 1}-
+              {Math.min(pagination.page * pagination.limit, pagination.total)} de {pagination.total}
+            </span>
+            <select
+              value={pagination.limit}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="px-2 py-1 border rounded text-sm"
+            >
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+            <span className="text-sm text-muted-foreground">por página</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={prevPage}
+              disabled={pagination.page <= 1}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+              const pageNum = i + 1;
+              return (
+                <Button
+                  key={pageNum}
+                  variant={pagination.page === pageNum ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => goToPage(pageNum)}
+                  className="w-8"
+                >
+                  {pageNum}
+                </Button>
+              );
+            })}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={nextPage}
+              disabled={pagination.page >= pagination.totalPages}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {selectedTicket && (
         <TicketDetail
           buildingId={buildingId}
@@ -344,6 +478,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
           onClose={() => setSelectedTicket(null)}
           onStatusChange={handleStatusChange}
           onAddComment={handleAddComment}
+          onAssign={handleAssign}
         />
       )}
     </div>

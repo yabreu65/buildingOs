@@ -27,6 +27,9 @@ interface TicketFilters {
   assignedToMembershipId?: string;
   limit?: number;
   page?: number;
+  search?: string;
+  sortBy?: 'createdAt' | 'updatedAt' | 'priority' | 'status';
+  sortOrder?: 'asc' | 'desc';
 }
 
 @Injectable()
@@ -277,43 +280,67 @@ export class TicketsService {
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
 
-    // 3. Pagination (default: 50 per page)
-    const pageSize = Math.min(filters?.limit || 50, 100); // Max 100 per request
-    const skip = (filters?.page || 0) * pageSize;
+    // Search by title or description
+    if (filters?.search) {
+      where.OR = [
+        { title: { contains: filters.search, mode: 'insensitive' } },
+        { description: { contains: filters.search, mode: 'insensitive' } },
+      ];
+    }
 
-    // 4. Diagnostic logging
+    // 3. Pagination (default: 10 per page)
+    const pageSize = Math.min(filters?.limit || 10, 100);
+    const currentPage = filters?.page || 1;
+    const skip = (currentPage - 1) * pageSize;
+
+    // 4. Sorting
+    const sortBy = filters?.sortBy || 'createdAt';
+    const sortOrder = filters?.sortOrder || 'desc';
+    const orderBy: any = {};
+    orderBy[sortBy] = sortOrder;
+
+    // 5. Diagnostic logging
     const startTime = Date.now();
     this.logger.debug(
-      `[findAll] tenantId=${tenantId}, buildingId=${buildingId}, unitId=${filters?.unitId || 'none'}, pageSize=${pageSize}, skip=${skip}`,
+      `[findAll] tenantId=${tenantId}, buildingId=${buildingId}, search=${filters?.search || 'none'}, page=${currentPage}, pageSize=${pageSize}, sortBy=${sortBy}, sortOrder=${sortOrder}`,
     );
 
     try {
-      const tickets = await this.prisma.ticket.findMany({
-        where,
-        include: {
-          createdBy: { select: { id: true, name: true, email: true } },
-          assignedTo: {
-            include: { user: { select: { id: true, name: true, email: true } } },
+      const [tickets, total] = await Promise.all([
+        this.prisma.ticket.findMany({
+          where,
+          include: {
+            createdBy: { select: { id: true, name: true, email: true } },
+            assignedTo: {
+              include: { user: { select: { id: true, name: true, email: true } } },
+            },
+            building: { select: { id: true, name: true } },
+            unit: { select: { id: true, label: true, code: true } },
+            comments: {
+              take: 1,
+              orderBy: { createdAt: 'desc' },
+              include: { author: { select: { id: true, name: true } } },
+            },
           },
-          building: { select: { id: true, name: true } },
-          unit: { select: { id: true, label: true, code: true } },
-          comments: {
-            take: 1,
-            orderBy: { createdAt: 'desc' },
-            include: { author: { select: { id: true, name: true } } },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: pageSize, // ✅ FIX: Pagination
-        skip: skip,
-      });
+          orderBy,
+          take: pageSize,
+          skip,
+        }),
+        this.prisma.ticket.count({ where }),
+      ]);
 
       const duration = Date.now() - startTime;
       this.logger.debug(
-        `[findAll] Found ${tickets.length} tickets in ${duration}ms`,
+        `[findAll] Found ${tickets.length} of ${total} tickets in ${duration}ms`,
       );
 
-      return tickets;
+      return {
+        tickets: tickets as any,
+        total,
+        page: currentPage,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      };
     } catch (error) {
       const duration = Date.now() - startTime;
       this.logger.error(

@@ -112,28 +112,48 @@ function logError(endpoint: string, status: number, message: string) {
 // ============================================
 
 /**
- * List all tickets in a building
+ * List all tickets in a building with pagination, search, and sorting
  */
+export interface TicketsListParams {
+  status?: string;
+  priority?: string;
+  unitId?: string;
+  assignedToMembership?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+  sortBy?: 'createdAt' | 'updatedAt' | 'priority' | 'status';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface PaginatedTickets {
+  tickets: Ticket[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export async function listTickets(
   buildingId: string,
-  filters?: {
-    status?: string;
-    priority?: string;
-    unitId?: string;
-    assignedToMembership?: string;
-  }
-): Promise<Ticket[]> {
-  const params = new URLSearchParams();
-  if (filters?.status) params.append('status', filters.status);
-  if (filters?.priority) params.append('priority', filters.priority);
-  if (filters?.unitId) params.append('unitId', filters.unitId);
-  if (filters?.assignedToMembership) params.append('assignedToMembership', filters.assignedToMembership);
+  params?: TicketsListParams
+): Promise<PaginatedTickets> {
+  const query = new URLSearchParams();
+  if (params?.status) query.append('status', params.status);
+  if (params?.priority) query.append('priority', params.priority);
+  if (params?.unitId) query.append('unitId', params.unitId);
+  if (params?.assignedToMembership) query.append('assignedToMembership', params.assignedToMembership);
+  if (params?.search) query.append('search', params.search);
+  if (params?.page) query.append('page', String(params.page));
+  if (params?.limit) query.append('limit', String(params.limit));
+  if (params?.sortBy) query.append('sortBy', params.sortBy);
+  if (params?.sortOrder) query.append('sortOrder', params.sortOrder);
 
-  const endpoint = `/buildings/${buildingId}/tickets${params.toString() ? '?' + params.toString() : ''}`;
+  const endpoint = `/buildings/${buildingId}/tickets${query.toString() ? '?' + query.toString() : ''}`;
   logRequest('GET', endpoint);
 
   try {
-    const data = await apiClient<Ticket[]>({
+    const data = await apiClient<PaginatedTickets>({
       path: endpoint,
       method: 'GET',
     });
