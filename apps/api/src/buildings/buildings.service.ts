@@ -3,7 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { AuditAction, Building, Member, Unit, UnitOccupant } from '@prisma/client';
+import { AuditAction, Building, TenantMember, Unit, UnitOccupant } from '@prisma/client';
 
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,7 +14,7 @@ import { UpdateBuildingDto } from './dto/update-building.dto';
 
 export interface BuildingWithUnits extends Building { units: Unit[] }
 export interface BuildingWithUnitsDetail extends Building {
-  units: (Unit & { unitOccupants: (UnitOccupant & { member: Member })[] })[];
+  units: (Unit & { unitOccupants: (UnitOccupant & { member: TenantMember })[] })[];
 }
 
 @Injectable()

@@ -356,7 +356,7 @@ describe('BuildingsService', () => {
           units: {
             include: {
               unitOccupants: {
-                include: { user: true },
+                include: { member: true },
               },
             },
           },
