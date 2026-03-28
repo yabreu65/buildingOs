@@ -7,48 +7,80 @@ import Card from '@/shared/components/ui/Card';
 import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { useToast } from '@/shared/components/ui/Toast';
 import { CommunicationComposerModal } from './CommunicationComposerModal';
-import { Eye, Mail, Trash2 } from 'lucide-react';
+import { Eye, Mail, Trash2, X, Clock } from 'lucide-react';
 import type { Communication } from '../services/communications.api';
+import type { CommunicationInput } from '@/types/communication';
+import { StatusBadge } from './StatusBadge';
+
+type ReceiptFilter = 'all' | 'read' | 'unread';
 
 interface CommunicationDetailProps {
   communication: Communication;
   isAdmin: boolean;
-  onSave?: (input: any) => Promise<void>;
-  onSend?: () => Promise<void>;
+  onSave?: (input: CommunicationInput) => Promise<void>;
+  onSend?: (scheduledAt?: Date) => Promise<void>;
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }
 
 /**
- * CommunicationDetail: View communication + stats + admin actions
+ * CommunicationDetail: View communication details, stats, receipts + admin actions
+ * Supports scheduling on publish
  */
-export function CommunicationDetail({
+export const CommunicationDetail = ({
   communication,
   isAdmin,
   onSave,
   onSend,
   onDelete,
   onClose,
-}: CommunicationDetailProps) {
+}: CommunicationDetailProps) => {
   const { toast } = useToast();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [showScheduler, setShowScheduler] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [receiptFilter, setReceiptFilter] = useState<ReceiptFilter>('all');
 
-  const readCount = communication.receipts?.filter((r) => r.readAt).length || 0;
-  const totalRecipients = communication.receipts?.length || 0;
-  const readRate =
-    totalRecipients > 0 ? Math.round((readCount / totalRecipients) * 100) : 0;
+  const receipts = communication.receipts ?? [];
+  const readCount = receipts.filter((r) => r.readAt).length;
+  const totalRecipients = receipts.length;
+  const readRate = totalRecipients > 0 ? Math.round((readCount / totalRecipients) * 100) : 0;
 
-  const handleSend = async () => {
+  const filteredReceipts = receipts.filter((r) => {
+    if (receiptFilter === 'read') return !!r.readAt;
+    if (receiptFilter === 'unread') return !r.readAt;
+    return true;
+  });
+
+  const handleSendNow = async () => {
     if (!onSend) return;
     setIsSending(true);
     try {
       await onSend();
-      toast('Communication published', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to publish';
+      const message = err instanceof Error ? err.message : t('communications.error');
+      toast(message, 'error');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    if (!onSend || !scheduledAt) return;
+    const date = new Date(scheduledAt);
+    if (date <= new Date()) {
+      toast(t('communications.admin.pastDateError'), 'error');
+      return;
+    }
+    setIsSending(true);
+    try {
+      await onSend(date);
+      setShowScheduler(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('communications.error');
       toast(message, 'error');
     } finally {
       setIsSending(false);
@@ -60,11 +92,10 @@ export function CommunicationDetail({
     setIsDeleting(true);
     try {
       await onDelete();
-      toast('Communication deleted', 'success');
       setShowDeleteDialog(false);
       onClose();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete';
+      const message = err instanceof Error ? err.message : t('communications.error');
       toast(message, 'error');
     } finally {
       setIsDeleting(false);
@@ -72,26 +103,30 @@ export function CommunicationDetail({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-50">
-      <Card className="w-full md:w-2xl md:max-h-[90vh] md:rounded-lg rounded-t-lg overflow-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-50 p-0 md:p-4">
+      <Card className="w-full md:max-w-2xl md:max-h-[90vh] md:rounded-lg rounded-t-2xl overflow-auto">
         <div className="p-6 space-y-4">
           {/* Header */}
           <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-2xl font-bold">{communication.title}</h2>
-              <p className="text-sm text-muted-foreground mt-1">{communication.channel}</p>
+            <div className="flex-1 min-w-0 mr-3">
+              <h2 className="text-xl font-bold leading-tight">{communication.title}</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <StatusBadge status={communication.status} />
+                <span className="text-xs text-muted-foreground">
+                  {communication.channel === 'EMAIL' ? t('communications.admin.channelEmail') :
+                   communication.channel === 'WHATSAPP' ? t('communications.admin.channelWhatsapp') :
+                   communication.channel === 'PUSH' ? t('communications.admin.channelPush') :
+                   t('communications.admin.channelInApp')}
+                </span>
+              </div>
             </div>
-            <span
-              className={`text-xs font-medium px-2 py-1 rounded-full whitespace-nowrap ${
-                communication.status === 'DRAFT'
-                  ? 'bg-yellow-100 text-yellow-700'
-                  : communication.status === 'SCHEDULED'
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-green-100 text-green-700'
-              }`}
+            <button
+              onClick={onClose}
+              className="p-1 rounded hover:bg-muted transition flex-shrink-0"
+              disabled={isSending || isDeleting}
             >
-              {communication.status}
-            </span>
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           {/* Body */}
@@ -100,60 +135,84 @@ export function CommunicationDetail({
           </div>
 
           {/* Metadata */}
-          <div className="text-xs text-muted-foreground space-y-1">
-            <p>Created by {communication.createdBy?.name}</p>
-            <p>
-              Created {new Date(communication.createdAt).toLocaleString()}
-            </p>
+          <div className="text-xs text-muted-foreground space-y-0.5">
+            {communication.createdBy?.name && (
+              <p>{t('communications.admin.createdBy')}: <span className="text-foreground">{communication.createdBy.name}</span></p>
+            )}
+            <p>{t('communications.admin.createdAt')}: {new Date(communication.createdAt).toLocaleString('es-AR')}</p>
             {communication.sentAt && (
-              <p>Sent {new Date(communication.sentAt).toLocaleString()}</p>
+              <p>{t('communications.admin.sentAtLabel')}: {new Date(communication.sentAt).toLocaleString('es-AR')}</p>
             )}
             {communication.scheduledAt && (
-              <p>
-                Scheduled {new Date(communication.scheduledAt).toLocaleString()}
-              </p>
+              <p>{t('communications.admin.scheduledAtLabel')}: {new Date(communication.scheduledAt).toLocaleString('es-AR')}</p>
             )}
           </div>
 
-          {/* Stats (only for SENT) */}
+          {/* Stats (SENT only) */}
           {communication.status === 'SENT' && totalRecipients > 0 && (
             <div className="grid grid-cols-3 gap-2">
               <div className="p-3 bg-muted rounded-lg text-center">
-                <p className="text-xs text-muted-foreground">Total</p>
-                <p className="text-lg font-semibold">{totalRecipients}</p>
+                <p className="text-xs text-muted-foreground">{t('communications.admin.statsTotal')}</p>
+                <p className="text-xl font-bold">{totalRecipients}</p>
               </div>
               <div className="p-3 bg-muted rounded-lg text-center">
-                <p className="text-xs text-muted-foreground">Read</p>
-                <p className="text-lg font-semibold">{readCount}</p>
+                <p className="text-xs text-muted-foreground">{t('communications.admin.statsRead')}</p>
+                <p className="text-xl font-bold">{readCount}</p>
               </div>
               <div className="p-3 bg-muted rounded-lg text-center">
-                <p className="text-xs text-muted-foreground">Rate</p>
-                <p className="text-lg font-semibold">{readRate}%</p>
+                <p className="text-xs text-muted-foreground">{t('communications.admin.statsRate')}</p>
+                <p className="text-xl font-bold">{readRate}%</p>
               </div>
             </div>
           )}
 
-          {/* Recipients List (for SENT) */}
-          {communication.status === 'SENT' && communication.receipts?.length > 0 && (
+          {/* Recipients list */}
+          {receipts.length > 0 && (
             <div>
-              <h3 className="text-sm font-semibold mb-2">Recipients</h3>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {communication.receipts.map((receipt) => (
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold">{t('communications.admin.recipientsList')} ({receipts.length})</h3>
+                {communication.status === 'SENT' && (
+                  <div className="flex gap-1">
+                    {(['all', 'read', 'unread'] as ReceiptFilter[]).map((f) => (
+                      <button
+                        key={f}
+                        onClick={() => setReceiptFilter(f)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition ${
+                          receiptFilter === f
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                        }`}
+                      >
+                        {f === 'all'
+                          ? t('communications.admin.filterAllReceipts')
+                          : f === 'read'
+                          ? t('communications.admin.filterRead')
+                          : t('communications.admin.filterUnread')}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {filteredReceipts.map((receipt) => (
                   <div
                     key={receipt.id}
                     className="flex items-center gap-2 p-2 text-xs bg-muted rounded"
                   >
                     {receipt.readAt ? (
-                      <Eye className="w-4 h-4 text-green-600" />
+                      <Eye className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
                     ) : (
-                      <Mail className="w-4 h-4 text-muted-foreground" />
+                      <Mail className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                     )}
-                    <span className="flex-1">
+                    <span className="flex-1 font-medium truncate">
+                      {receipt.user?.name ?? receipt.userId}
+                    </span>
+                    <span className="text-muted-foreground whitespace-nowrap">
                       {receipt.readAt
-                        ? `Read ${new Date(receipt.readAt).toLocaleString()}`
+                        ? `${t('communications.admin.readAt')} ${new Date(receipt.readAt).toLocaleDateString('es-AR')}`
                         : receipt.deliveredAt
-                        ? `Delivered ${new Date(receipt.deliveredAt).toLocaleString()}`
-                        : `Created ${new Date(receipt.createdAt).toLocaleString()}`}
+                        ? `${t('communications.admin.deliveredAt')} ${new Date(receipt.deliveredAt).toLocaleDateString('es-AR')}`
+                        : t('communications.admin.notRead')}
                     </span>
                   </div>
                 ))}
@@ -161,21 +220,45 @@ export function CommunicationDetail({
             </div>
           )}
 
+          {/* Schedule input (shown when isAdmin + DRAFT + showScheduler) */}
+          {showScheduler && (
+            <div className="p-3 bg-muted rounded-lg space-y-2">
+              <label className="text-sm font-medium block">
+                {t('communications.admin.scheduleLabel')}
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(e) => setScheduledAt(e.target.value)}
+                  min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                  className="flex-1 px-3 py-2 border rounded-lg text-sm"
+                />
+                <Button size="sm" onClick={handleSchedule} disabled={!scheduledAt || isSending}>
+                  {isSending ? t('communications.admin.publishing') : t('communications.admin.schedule')}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setShowScheduler(false)} disabled={isSending}>
+                  {t('communications.admin.cancel')}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2 justify-end border-t pt-4">
             <Button variant="secondary" onClick={onClose} disabled={isSending || isDeleting}>
-              Close
+              {t('communications.admin.close')}
             </Button>
 
-            {/* Draft Actions */}
-            {communication.status === 'DRAFT' && isAdmin && (
+            {communication.status === 'DRAFT' && isAdmin && !showScheduler && (
               <>
                 <Button
                   variant="secondary"
+                  size="sm"
                   onClick={() => setShowEditor(true)}
                   disabled={isSending}
                 >
-                  Edit
+                  {t('communications.admin.edit')}
                 </Button>
                 <Button
                   variant="danger"
@@ -185,8 +268,17 @@ export function CommunicationDetail({
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>
-                <Button onClick={handleSend} disabled={isSending || isDeleting}>
-                  {isSending ? 'Publishing...' : 'Publish Now'}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowScheduler(true)}
+                  disabled={isSending}
+                >
+                  <Clock className="w-4 h-4 mr-1" />
+                  {t('communications.admin.schedule')}
+                </Button>
+                <Button onClick={handleSendNow} disabled={isSending || isDeleting}>
+                  {isSending ? t('communications.admin.publishing') : t('communications.admin.publishNow')}
                 </Button>
               </>
             )}
@@ -197,8 +289,8 @@ export function CommunicationDetail({
       {/* Delete Confirmation */}
       <DeleteConfirmDialog
         isOpen={showDeleteDialog}
-        title="Delete Communication"
-        description="This action cannot be undone. The draft will be permanently deleted."
+        title={t('communications.admin.deleteTitle')}
+        description={t('communications.admin.deleteDesc')}
         onConfirm={handleDelete}
         onCancel={() => setShowDeleteDialog(false)}
         isLoading={isDeleting}
@@ -208,12 +300,11 @@ export function CommunicationDetail({
       {showEditor && (
         <CommunicationComposerModal
           buildingId={communication.buildingId}
-          tenantId={communication.tenantId}
           communication={communication}
-          onSave={onSave || (async () => {})}
+          onSave={onSave ?? (async () => {})}
           onClose={() => setShowEditor(false)}
         />
       )}
     </div>
   );
-}
+};

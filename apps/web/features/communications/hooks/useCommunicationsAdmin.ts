@@ -1,9 +1,9 @@
 /**
  * useCommunicationsAdmin Hook
- * Manages admin communications (CRUD)
+ * Manages admin communications (CRUD) with search, filter, and sort state
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   listCommunications,
   getCommunication,
@@ -12,6 +12,8 @@ import {
   sendCommunication,
   deleteCommunication,
   type Communication,
+  type CommunicationStatus,
+  type CommunicationChannel,
   type CreateCommunicationInput,
   type UpdateCommunicationInput,
 } from '../services/communications.api';
@@ -19,19 +21,35 @@ import {
 interface UseCommunicationsAdminOptions {
   buildingId?: string;
   tenantId?: string;
-  filters?: {
-    status?: 'DRAFT' | 'SCHEDULED' | 'SENT';
-  };
 }
 
+export interface CommunicationsAdminFilters {
+  status: 'all' | CommunicationStatus;
+  channel: 'all' | CommunicationChannel;
+  search: string;
+  sortOrder: 'asc' | 'desc';
+}
+
+/**
+ * useCommunicationsAdmin: Hook for managing admin communications.
+ * Handles CRUD operations with search, filter, and sort state.
+ * Calculates KPI metrics (draft, scheduled, sent counts) from loaded data.
+ */
 export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
-  const { buildingId, tenantId, filters } = options;
+  const { buildingId, tenantId } = options;
 
   const [communications, setCommunications] = useState<Communication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch all communications
+  const [filters, setFilters] = useState<CommunicationsAdminFilters>({
+    status: 'all',
+    channel: 'all',
+    search: '',
+    sortOrder: 'desc',
+  });
+
+  // Fetch all communications (with backend filters applied)
   const fetchCommunications = useCallback(async () => {
     if (!buildingId || !tenantId) {
       setCommunications([]);
@@ -41,29 +59,51 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
     setLoading(true);
     setError(null);
     try {
-      const data = await listCommunications(buildingId, tenantId, filters);
+      const data = await listCommunications(buildingId, tenantId, {
+        status: filters.status !== 'all' ? filters.status : undefined,
+        channel: filters.channel !== 'all' ? filters.channel : undefined,
+        search: filters.search || undefined,
+        sortBy: 'createdAt',
+        sortOrder: filters.sortOrder,
+      });
       setCommunications(data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to fetch communications';
+      const message = err instanceof Error ? err.message : 'Error al cargar comunicados';
       setError(message);
     } finally {
       setLoading(false);
     }
   }, [buildingId, tenantId, filters]);
 
-  // Auto-fetch on mount and dependency changes
   useEffect(() => {
     fetchCommunications();
   }, [fetchCommunications]);
 
+  // KPI metrics derived from current list
+  const metrics = useMemo(() => {
+    const sentComms = communications.filter((c) => c.status === 'SENT');
+    const totalRecipients = sentComms.reduce((acc, c) => acc + (c.receipts?.length || 0), 0);
+    const totalRead = sentComms.reduce(
+      (acc, c) => acc + (c.receipts?.filter((r) => r.readAt).length || 0),
+      0
+    );
+
+    return {
+      sent: sentComms.length,
+      drafts: communications.filter((c) => c.status === 'DRAFT').length,
+      scheduled: communications.filter((c) => c.status === 'SCHEDULED').length,
+      readRate: totalRecipients > 0 ? Math.round((totalRead / totalRecipients) * 100) : 0,
+    };
+  }, [communications]);
+
   // Fetch single communication
-  const fetch = useCallback(
+  const fetchOne = useCallback(
     async (communicationId: string): Promise<Communication | null> => {
       if (!buildingId || !tenantId) return null;
       try {
         return await getCommunication(buildingId, communicationId, tenantId);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to fetch communication';
+        const message = err instanceof Error ? err.message : 'Error al cargar comunicado';
         setError(message);
         return null;
       }
@@ -80,7 +120,7 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
         setCommunications((prev) => [newComm, ...prev]);
         return newComm;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to create communication';
+        const message = err instanceof Error ? err.message : 'Error al crear comunicado';
         setError(message);
         throw err;
       }
@@ -99,7 +139,7 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
         );
         return updated;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to update communication';
+        const message = err instanceof Error ? err.message : 'Error al actualizar comunicado';
         setError(message);
         throw err;
       }
@@ -109,16 +149,16 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
 
   // Send communication (DRAFT → SENT/SCHEDULED)
   const send = useCallback(
-    async (communicationId: string): Promise<Communication | null> => {
+    async (communicationId: string, scheduledAt?: Date): Promise<Communication | null> => {
       if (!buildingId || !tenantId) return null;
       try {
-        const sent = await sendCommunication(buildingId, communicationId, tenantId);
+        const sent = await sendCommunication(buildingId, communicationId, tenantId, scheduledAt);
         setCommunications((prev) =>
           prev.map((c) => (c.id === communicationId ? sent : c))
         );
         return sent;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to send communication';
+        const message = err instanceof Error ? err.message : 'Error al publicar comunicado';
         setError(message);
         throw err;
       }
@@ -136,7 +176,7 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
           prev.filter((c) => c.id !== communicationId)
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to delete communication';
+        const message = err instanceof Error ? err.message : 'Error al eliminar comunicado';
         setError(message);
         throw err;
       }
@@ -144,7 +184,6 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
     [buildingId, tenantId]
   );
 
-  // Refetch communications
   const refetch = useCallback(() => {
     fetchCommunications();
   }, [fetchCommunications]);
@@ -153,7 +192,10 @@ export function useCommunicationsAdmin(options: UseCommunicationsAdminOptions) {
     communications,
     loading,
     error,
-    fetch,
+    filters,
+    setFilters,
+    metrics,
+    fetchOne,
     create,
     update,
     send,

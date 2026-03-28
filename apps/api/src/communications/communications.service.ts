@@ -13,12 +13,39 @@ import {
 import {
   Communication,
   CommunicationChannel,
+  CommunicationReceipt,
   CommunicationStatus,
+  CommunicationTarget,
   CommunicationTargetType,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunicationsValidators } from './communications.validators';
+import { ADMIN_ROLES } from '@buildingos/contracts';
+
+export interface CommunicationWithDetails extends Communication {
+  targets: CommunicationTarget[];
+  receipts: CommunicationReceipt[];
+}
+
+export interface FindAllFilters {
+  buildingId?: string;
+  status?: CommunicationStatus;
+  channel?: CommunicationChannel;
+  search?: string;
+  sortBy?: 'createdAt' | 'sentAt' | 'scheduledAt';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface FindForUserFilters {
+  buildingId?: string;
+  readOnly?: boolean;
+  status?: CommunicationStatus;
+  channel?: CommunicationChannel;
+  search?: string;
+  sortBy?: 'createdAt' | 'sentAt' | 'scheduledAt';
+  sortOrder?: 'asc' | 'desc';
+}
 
 export interface CreateCommunicationInput {
   title: string;
@@ -44,8 +71,8 @@ export interface ScheduleCommunicationInput {
 @Injectable()
 export class CommunicationsService {
   constructor(
-    private prisma: PrismaService,
-    private validators: CommunicationsValidators,
+    private readonly prisma: PrismaService,
+    private readonly validators: CommunicationsValidators,
   ) {}
 
   /**
@@ -67,7 +94,7 @@ export class CommunicationsService {
     tenantId: string,
     userId: string,
     input: CreateCommunicationInput,
-  ): Promise<Communication & { targets: unknown[] }> {
+  ): Promise<CommunicationWithDetails> {
     // Get the user's membership for this tenant
     const membership = await this.prisma.membership.findFirst({
       where: { userId, tenantId },
@@ -137,10 +164,10 @@ export class CommunicationsService {
 
     if (recipientIds.length > 0) {
       await this.prisma.communicationReceipt.createMany({
-        data: recipientIds.map((userId) => ({
+        data: recipientIds.map((recipientUserId) => ({
           tenantId,
           communicationId: communication.id,
-          userId,
+          userId: recipientUserId,
         })),
         skipDuplicates: true, // If user is in multiple targets
       });
@@ -156,11 +183,8 @@ export class CommunicationsService {
    */
   async findAll(
     tenantId: string,
-    filters?: {
-      buildingId?: string;
-      status?: CommunicationStatus;
-    },
-  ): Promise<(Communication & { targets: unknown[] })[]> {
+    filters?: FindAllFilters,
+  ): Promise<CommunicationWithDetails[]> {
     // Validate building if filtering
     if (filters?.buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
@@ -169,9 +193,19 @@ export class CommunicationsService {
       );
     }
 
-    const where: Prisma.CommunicationWhereInput = { tenantId };
+    const where: Prisma.CommunicationWhereInput = { tenantId, deletedAt: null };
     if (filters?.buildingId) where.buildingId = filters.buildingId;
     if (filters?.status) where.status = filters.status;
+    if (filters?.channel) where.channel = filters.channel;
+    if (filters?.search) {
+      where.OR = [
+        { title: { contains: filters.search, mode: 'insensitive' } },
+        { body: { contains: filters.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortField = filters?.sortBy ?? 'createdAt';
+    const sortOrder = filters?.sortOrder ?? 'desc';
 
     return await this.prisma.communication.findMany({
       where,
@@ -183,6 +217,7 @@ export class CommunicationsService {
             userId: true,
             deliveredAt: true,
             readAt: true,
+            user: { select: { id: true, name: true, email: true } },
           },
         },
         createdByMembership: {
@@ -191,7 +226,7 @@ export class CommunicationsService {
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { [sortField]: sortOrder },
     });
   }
 
@@ -200,7 +235,7 @@ export class CommunicationsService {
    *
    * @throws NotFoundException if communication doesn't belong to tenant
    */
-  async findOne(tenantId: string, communicationId: string): Promise<Communication & { targets: unknown[] }> {
+  async findOne(tenantId: string, communicationId: string): Promise<CommunicationWithDetails> {
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
       communicationId,
@@ -246,7 +281,7 @@ export class CommunicationsService {
     tenantId: string,
     communicationId: string,
     input: UpdateCommunicationInput,
-  ): Promise<Communication & { targets: unknown[] }> {
+  ): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -259,9 +294,12 @@ export class CommunicationsService {
       select: { status: true },
     });
 
-    if (communication?.status !== 'DRAFT') {
+    if (!communication) {
+      throw new NotFoundException(`Communication not found`);
+    }
+    if (communication.status !== 'DRAFT') {
       throw new BadRequestException(
-        `Can only update DRAFT communications. Current status: ${communication?.status}`,
+        `Can only update DRAFT communications. Current status: ${communication.status}`,
       );
     }
 
@@ -290,7 +328,7 @@ export class CommunicationsService {
     tenantId: string,
     communicationId: string,
     input: ScheduleCommunicationInput,
-  ): Promise<Communication> {
+  ): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -303,9 +341,12 @@ export class CommunicationsService {
       select: { status: true },
     });
 
-    if (communication?.status !== 'DRAFT') {
+    if (!communication) {
+      throw new NotFoundException(`Communication not found`);
+    }
+    if (communication.status !== 'DRAFT') {
       throw new BadRequestException(
-        `Can only schedule DRAFT communications. Current status: ${communication?.status}`,
+        `Can only schedule DRAFT communications. Current status: ${communication.status}`,
       );
     }
 
@@ -338,7 +379,7 @@ export class CommunicationsService {
    *
    * @throws NotFoundException if communication doesn't belong to tenant
    */
-  async send(tenantId: string, communicationId: string): Promise<Communication> {
+  async send(tenantId: string, communicationId: string): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -380,14 +421,19 @@ export class CommunicationsService {
       select: { status: true },
     });
 
-    if (communication?.status !== 'DRAFT') {
+    if (!communication) {
+      throw new NotFoundException(`Communication not found`);
+    }
+    if (communication.status !== 'DRAFT') {
       throw new BadRequestException(
-        `Can only delete DRAFT communications. Current status: ${communication?.status}`,
+        `Can only delete DRAFT communications. Current status: ${communication.status}`,
       );
     }
 
-    return await this.prisma.communication.delete({
+    // Soft delete: preserve record and receipt history
+    return await this.prisma.communication.update({
       where: { id: communicationId },
+      data: { deletedAt: new Date() },
     });
   }
 
@@ -403,11 +449,8 @@ export class CommunicationsService {
     tenantId: string,
     userId: string,
     userRoles: string[],
-    filters?: {
-      buildingId?: string;
-      readOnly?: boolean; // Only show read communications
-    },
-  ): Promise<(Communication & { targets: unknown[] })[]> {
+    filters?: FindForUserFilters,
+  ): Promise<CommunicationWithDetails[]> {
     // Validate building if filtering
     if (filters?.buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
@@ -416,29 +459,42 @@ export class CommunicationsService {
       );
     }
 
-    const adminRoles = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'];
-    const isAdmin = userRoles.some((r) => adminRoles.includes(r));
+    const isAdmin = userRoles.some((r) => ADMIN_ROLES.includes(r as typeof ADMIN_ROLES[number]));
 
     if (isAdmin) {
       // Admin sees all communications
       return this.findAll(tenantId, {
         buildingId: filters?.buildingId,
+        status: filters?.status,
+        channel: filters?.channel,
+        search: filters?.search,
+        sortBy: filters?.sortBy,
+        sortOrder: filters?.sortOrder,
       });
     } else {
       // RESIDENT sees only communications they received
-      const where: any = {
+      const where: Prisma.CommunicationWhereInput = {
         tenantId,
+        deletedAt: null,
         receipts: {
           some: {
             userId,
+            ...(filters?.readOnly ? { readAt: { not: null } } : {}),
           },
         },
+        ...(filters?.buildingId ? { buildingId: filters.buildingId } : {}),
+        ...(filters?.status ? { status: filters.status } : {}),
+        ...(filters?.channel ? { channel: filters.channel } : {}),
+        ...(filters?.search ? {
+          OR: [
+            { title: { contains: filters.search, mode: 'insensitive' } },
+            { body: { contains: filters.search, mode: 'insensitive' } },
+          ],
+        } : {}),
       };
 
-      if (filters?.buildingId) where.buildingId = filters.buildingId;
-      if (filters?.readOnly) {
-        where.receipts.some.readAt = { not: null };
-      }
+      const sortField = filters?.sortBy ?? 'createdAt';
+      const sortOrder = filters?.sortOrder ?? 'desc';
 
       return await this.prisma.communication.findMany({
         where,
@@ -448,12 +504,17 @@ export class CommunicationsService {
             where: { userId },
             select: {
               id: true,
+              tenantId: true,
+              communicationId: true,
+              userId: true,
               deliveredAt: true,
               readAt: true,
+              createdAt: true,
+              user: { select: { id: true, name: true, email: true } },
             },
           },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { [sortField]: sortOrder },
       });
     }
   }
@@ -461,7 +522,7 @@ export class CommunicationsService {
   /**
    * Mark a communication as read by a user
    *
-   * @throws NotFoundException if receipt doesn't exist
+   * Returns { count: 0 } silently if no matching receipt found
    */
   async markAsRead(
     tenantId: string,
@@ -483,7 +544,7 @@ export class CommunicationsService {
   /**
    * Mark a communication as delivered to a user
    *
-   * @throws NotFoundException if receipt doesn't exist
+   * Returns { count: 0 } silently if no matching receipt found
    */
   async markAsDelivered(
     tenantId: string,

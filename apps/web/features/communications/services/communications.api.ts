@@ -11,7 +11,7 @@ const isDev = process.env.NODE_ENV === 'development';
 // Types
 // ============================================
 export type CommunicationStatus = 'DRAFT' | 'SCHEDULED' | 'SENT';
-export type CommunicationChannel = 'EMAIL' | 'SMS' | 'PUSH' | 'IN_APP';
+export type CommunicationChannel = 'EMAIL' | 'WHATSAPP' | 'PUSH' | 'IN_APP';
 export type TargetType = 'ALL_TENANT' | 'BUILDING' | 'UNIT' | 'ROLE';
 
 export interface CommunicationTarget {
@@ -23,9 +23,14 @@ export interface CommunicationTarget {
 export interface CommunicationReceipt {
   id: string;
   userId: string;
-  createdAt: string;
+  createdAt?: string;
   deliveredAt?: string;
   readAt?: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+  };
 }
 
 export interface Communication {
@@ -79,6 +84,14 @@ function logError(endpoint: string, status: number, message: string) {
   console.error(`[API ERROR] ${endpoint} (${status})`, message);
 }
 
+export interface ListCommunicationsFilters {
+  status?: CommunicationStatus;
+  channel?: CommunicationChannel;
+  search?: string;
+  sortBy?: 'createdAt' | 'sentAt' | 'scheduledAt';
+  sortOrder?: 'asc' | 'desc';
+}
+
 // ============================================
 // Headers Helpers
 // ============================================
@@ -105,14 +118,14 @@ function getAdminHeaders(tenantId: string): Record<string, string> {
 export async function listCommunications(
   buildingId: string,
   tenantId: string,
-  filters?: {
-    status?: CommunicationStatus;
-    channel?: CommunicationChannel;
-  }
+  filters?: ListCommunicationsFilters,
 ): Promise<Communication[]> {
   const params = new URLSearchParams();
   if (filters?.status) params.append('status', filters.status);
   if (filters?.channel) params.append('channel', filters.channel);
+  if (filters?.search) params.append('search', filters.search);
+  if (filters?.sortBy) params.append('sortBy', filters.sortBy);
+  if (filters?.sortOrder) params.append('sortOrder', filters.sortOrder);
 
   const endpoint = `/buildings/${buildingId}/communications${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
@@ -125,7 +138,7 @@ export async function listCommunications(
     });
   } catch (error) {
     const message = `Failed to list communications: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -149,7 +162,7 @@ export async function getCommunication(
     });
   } catch (error) {
     const message = `Failed to get communication: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -174,7 +187,7 @@ export async function createCommunication(
     });
   } catch (error) {
     const message = `Failed to create communication: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -200,31 +213,35 @@ export async function updateCommunication(
     });
   } catch (error) {
     const message = `Failed to update communication: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
 
 /**
- * Send/publish a communication (DRAFT → SENT/SCHEDULED)
+ * Send/publish a communication (DRAFT → SENT or SCHEDULED)
+ * If scheduledAt is provided, transitions to SCHEDULED; otherwise to SENT immediately
  */
 export async function sendCommunication(
   buildingId: string,
   communicationId: string,
-  tenantId: string
+  tenantId: string,
+  scheduledAt?: Date
 ): Promise<Communication> {
   const endpoint = `/buildings/${buildingId}/communications/${communicationId}/send`;
-  logRequest('POST', endpoint);
+  const body: { scheduledAt?: string } = scheduledAt ? { scheduledAt: scheduledAt.toISOString() } : {};
+  logRequest('POST', endpoint, body);
 
   try {
-    return await apiClient<Communication>({
+    return await apiClient<Communication, { scheduledAt?: string }>({
       path: endpoint,
       method: 'POST',
+      body,
       headers: getAdminHeaders(tenantId),
     });
   } catch (error) {
     const message = `Failed to send communication: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -248,7 +265,7 @@ export async function deleteCommunication(
     });
   } catch (error) {
     const message = `Failed to delete communication: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -257,13 +274,15 @@ export async function deleteCommunication(
 // User Inbox Endpoints
 // ============================================
 
+export interface GetInboxFilters {
+  status?: CommunicationStatus;
+  buildingId?: string;
+}
+
 /**
  * Get user's inbox communications
  */
-export async function getInbox(filters?: {
-  status?: CommunicationStatus;
-  buildingId?: string;
-}): Promise<InboxCommunication[]> {
+export async function getInbox(filters?: GetInboxFilters): Promise<InboxCommunication[]> {
   const params = new URLSearchParams();
   if (filters?.status) params.append('status', filters.status);
   if (filters?.buildingId) params.append('buildingId', filters.buildingId);
@@ -278,7 +297,7 @@ export async function getInbox(filters?: {
     });
   } catch (error) {
     const message = `Failed to get inbox: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }
@@ -297,7 +316,7 @@ export async function markAsRead(communicationId: string): Promise<void> {
     });
   } catch (error) {
     const message = `Failed to mark as read: ${(error as Error).message}`;
-    logError(endpoint, 500, message);
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }
 }

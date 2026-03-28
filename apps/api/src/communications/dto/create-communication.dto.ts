@@ -6,10 +6,10 @@ import {
   IsOptional,
   MinLength,
   ArrayMinSize,
-  IsUUID,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CommunicationChannel, CommunicationTargetType } from '@prisma/client';
+import { CommunicationChannel, CommunicationStatus, CommunicationTargetType } from '@prisma/client';
 import { BuildingCommunicationParamDto } from '../../common/dtos/params.dto';
 
 export class CreateCommunicationTargetDto {
@@ -18,7 +18,7 @@ export class CreateCommunicationTargetDto {
 
   @IsOptional()
   @IsString()
-  targetId?: string | null;
+  targetId?: string;
 }
 
 export class CreateCommunicationDto {
@@ -45,18 +45,37 @@ export class CreateCommunicationDto {
 }
 
 // ============================================================================
-// PARAM DTOs
+// QUERY DTOs
 // ============================================================================
 
-export class CreateCommunicationParamDto extends BuildingCommunicationParamDto {
-  buildingId!: string;
+export class ListCommunicationsQueryDto {
+  @IsOptional()
+  @IsEnum(CommunicationStatus)
+  status?: CommunicationStatus;
+
+  @IsOptional()
+  @IsEnum(CommunicationChannel)
+  channel?: CommunicationChannel;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsIn(['createdAt', 'sentAt', 'scheduledAt'])
+  sortBy?: 'createdAt' | 'sentAt' | 'scheduledAt';
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
+
+// ============================================================================
+// PARAM DTOs
+// ============================================================================
 
 export class GetCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class UpdateCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class DeleteCommunicationParamDto extends BuildingCommunicationParamDto {}
 export class SendCommunicationParamDto extends BuildingCommunicationParamDto {}
-export class ListCommunicationsParamDto {
-  @IsUUID()
-  buildingId!: string;
-}
+export class ListCommunicationsParamDto extends BuildingCommunicationParamDto {}

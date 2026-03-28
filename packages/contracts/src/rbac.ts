@@ -5,6 +5,10 @@ export type Role =
   | "OPERATOR"
   | "RESIDENT";
 
+/** Roles with administrative privileges (can manage communications, buildings, etc.) */
+export const ADMIN_ROLES = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] as const;
+export type AdminRole = typeof ADMIN_ROLES[number];
+
 export type Permission =
   | "properties.read"
   | "properties.write"
@@ -19,8 +23,8 @@ export type Permission =
   | "communications.read"
   | "communications.publish";
 
-export type Scope = {
+export interface Scope {
   tenantId: string;
   propertyId?: string;
   unitId?: string;
-};
+}

@@ -9,10 +9,12 @@ import {
   UseGuards,
   Request,
   Query,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
-import { CommunicationsService } from './communications.service';
+import { AdminRoleGuard } from './admin-role.guard';
+import { CommunicationsService, CommunicationWithDetails, FindAllFilters } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import {
@@ -22,10 +24,11 @@ import {
   DeleteCommunicationParamDto,
   SendCommunicationParamDto,
   ListCommunicationsParamDto,
+  ListCommunicationsQueryDto,
 } from './dto/create-communication.dto';
 import { UpdateCommunicationDto } from './dto/update-communication.dto';
 import { ScheduleCommunicationDto } from './dto/schedule-communication.dto';
-import { CommunicationStatus, CommunicationTargetType } from '@prisma/client';
+import { Communication, CommunicationReceipt, CommunicationTargetType } from '@prisma/client';
 
 /**
  * CommunicationsController: Communications (Comunicados) management endpoints
@@ -67,21 +70,11 @@ import { CommunicationStatus, CommunicationTargetType } from '@prisma/client';
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class CommunicationsController {
   constructor(
-    private communicationsService: CommunicationsService,
-    private validators: CommunicationsValidators,
+    private readonly communicationsService: CommunicationsService,
+    private readonly validators: CommunicationsValidators,
   ) {}
 
-  /**
-   * Check if user has admin roles
-   */
-  private isAdminRole(userRoles: string[]): boolean {
-    const adminRoles = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'];
-    return userRoles?.some((r) => adminRoles.includes(r)) || false;
-  }
-
-  /**
-   * Check if user is RESIDENT
-   */
+  /** Check if user is RESIDENT */
   private isResidentRole(userRoles: string[]): boolean {
     return userRoles?.includes('RESIDENT') || false;
   }
@@ -99,7 +92,7 @@ export class CommunicationsController {
    *
    * Returns: Communication with targets and receipts
    *
-   * Admin only: tickets.publish permission required
+   * Admin only: communications.publish permission required
    *
    * Validation:
    * - Building (if provided) must belong to tenant (404 if not)
@@ -107,18 +100,14 @@ export class CommunicationsController {
    * - At least one target required
    */
   @Post()
+  @UseGuards(AdminRoleGuard)
   async create(
     @Param() params: ListCommunicationsParamDto,
     @Body() dto: CreateCommunicationDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any> {
+  ): Promise<CommunicationWithDetails> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
-    const userRoles = req.user.roles || [];
-
-    if (!this.isAdminRole(userRoles)) {
-      throw new Error('Only administrators can create communications');
-    }
 
     const buildingId = dto.buildingId || params.buildingId;
 
@@ -151,6 +140,10 @@ export class CommunicationsController {
    *
    * Query filters:
    * - status: DRAFT | SCHEDULED | SENT
+   * - channel: EMAIL | SMS | PUSH | IN_APP
+   * - search: search in title/body
+   * - sortBy: createdAt | sentAt | scheduledAt
+   * - sortOrder: asc | desc
    *
    * Returns:
    * - Admin: All communications
@@ -161,19 +154,22 @@ export class CommunicationsController {
   @Get()
   async findAll(
     @Param() params: ListCommunicationsParamDto,
-    @Query('status') _status?: CommunicationStatus,
-    @Request() req?: AuthenticatedRequest,
-  ): Promise<any[]> {
-    const tenantId = req!.tenantId!;
-    const userId = req!.user.id;
-    const userRoles = req!.user.roles || [];
+    @Query() query: ListCommunicationsQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<CommunicationWithDetails[]> {
+    const tenantId = req.tenantId!;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
 
-    return await this.communicationsService.findForUser(
-      tenantId,
-      userId,
-      userRoles,
-      { buildingId: params.buildingId },
-    );
+    // findForUser handles admin/resident branching internally
+    return await this.communicationsService.findForUser(tenantId, userId, userRoles, {
+      buildingId: params.buildingId,
+      status: query.status,
+      channel: query.channel,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+    });
   }
 
   /**
@@ -192,7 +188,7 @@ export class CommunicationsController {
   async findOne(
     @Param() params: GetCommunicationParamDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any> {
+  ): Promise<CommunicationWithDetails> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -210,7 +206,7 @@ export class CommunicationsController {
         userRoles,
       );
       if (!canRead) {
-        throw new Error('Communication not found or access denied');
+        throw new NotFoundException('Communication not found or access denied');
       }
     }
 
@@ -235,17 +231,13 @@ export class CommunicationsController {
    * Requires: communications.manage permission
    */
   @Patch(':communicationId')
+  @UseGuards(AdminRoleGuard)
   async update(
     @Param() params: UpdateCommunicationParamDto,
     @Body() dto: UpdateCommunicationDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any> {
+  ): Promise<CommunicationWithDetails> {
     const tenantId = req.tenantId!;
-    const userRoles = req.user.roles || [];
-
-    if (!this.isAdminRole(userRoles)) {
-      throw new Error('Only administrators can update communications');
-    }
 
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -277,17 +269,13 @@ export class CommunicationsController {
    * Requires: communications.publish permission
    */
   @Post(':communicationId/send')
+  @UseGuards(AdminRoleGuard)
   async send(
     @Param() params: SendCommunicationParamDto,
     @Body() dto: ScheduleCommunicationDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any> {
+  ): Promise<CommunicationWithDetails> {
     const tenantId = req.tenantId!;
-    const userRoles = req.user.roles || [];
-
-    if (!this.isAdminRole(userRoles)) {
-      throw new Error('Only administrators can send communications');
-    }
 
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -318,16 +306,12 @@ export class CommunicationsController {
    * Requires: communications.manage permission
    */
   @Delete(':communicationId')
+  @UseGuards(AdminRoleGuard)
   async remove(
     @Param() params: DeleteCommunicationParamDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any> {
+  ): Promise<Communication> {
     const tenantId = req.tenantId!;
-    const userRoles = req.user.roles || [];
-
-    if (!this.isAdminRole(userRoles)) {
-      throw new Error('Only administrators can delete communications');
-    }
 
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -338,7 +322,7 @@ export class CommunicationsController {
   }
 
   /**
-   * GET /communications/:communicationId/receipts
+   * GET /buildings/:buildingId/communications/:communicationId/receipts
    * Get all receipts (delivery status) for a communication
    *
    * Returns array of receipts with:
@@ -349,21 +333,14 @@ export class CommunicationsController {
    * Admin only: RESIDENT cannot view receipt list
    *
    * Requires: communications.read permission
-   *
-   * Note: This is a tenant-level endpoint (not building-scoped)
-   * but included here for completeness
    */
   @Get(':communicationId/receipts')
+  @UseGuards(AdminRoleGuard)
   async getReceipts(
     @Param() params: GetCommunicationParamDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<any[]> {
+  ): Promise<CommunicationReceipt[]> {
     const tenantId = req.tenantId!;
-    const userRoles = req.user.roles || [];
-
-    if (!this.isAdminRole(userRoles)) {
-      throw new Error('Only administrators can view receipt list');
-    }
 
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -374,6 +351,6 @@ export class CommunicationsController {
       tenantId,
       params.communicationId,
     );
-    return (communication as any).receipts || [];
+    return communication.receipts ?? [];
   }
 }
