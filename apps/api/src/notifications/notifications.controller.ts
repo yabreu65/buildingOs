@@ -47,8 +47,8 @@ class SuccessResponseDto {
 
 class NotificationParamDto {
   @IsString()
-  @ValidateIf((obj) => obj.id && obj.id.length > 0)
-  id!: string;
+  @IsOptional()
+  id?: string;
 }
 
 /**

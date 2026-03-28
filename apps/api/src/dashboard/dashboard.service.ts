@@ -17,6 +17,11 @@ interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
 }> {}
 
+interface UnitOccupant {
+  readonly isPrimary: boolean;
+  readonly endDate: Date | null;
+}
+
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
@@ -386,7 +391,7 @@ export class DashboardService {
 
       const units = unitsByBuilding.get(buildingId) || [];
       const unitsWithoutResponsible = units.filter(
-        (u) => !u.unitOccupants || !u.unitOccupants.some((o: { isPrimary: boolean; endDate: Date | null }) => o.isPrimary === true && o.endDate === null),
+        (u) => !u.unitOccupants || !u.unitOccupants.some((o: UnitOccupant) => o.isPrimary === true && o.endDate === null),
       ).length;
 
       let riskScore: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
