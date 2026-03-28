@@ -73,19 +73,21 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   }, [searchInput, updateSearch]);
 
   const statusCounts = useMemo(() => {
+    const ticketList = tickets || [];
     return {
-      open: tickets.filter((t) => t.status === 'OPEN').length,
-      inProgress: tickets.filter((t) => t.status === 'IN_PROGRESS').length,
-      resolved: tickets.filter((t) => t.status === 'RESOLVED').length,
-      closed: tickets.filter((t) => t.status === 'CLOSED').length,
+      open: ticketList.filter((t) => t.status === 'OPEN').length,
+      inProgress: ticketList.filter((t) => t.status === 'IN_PROGRESS').length,
+      resolved: ticketList.filter((t) => t.status === 'RESOLVED').length,
+      closed: ticketList.filter((t) => t.status === 'CLOSED').length,
     };
   }, [tickets]);
 
   const visibleTickets = useMemo(() => {
+    const ticketList = tickets || [];
     if (statusFilter === 'all_open') {
-      return tickets.filter((t) => t.status === 'OPEN' || t.status === 'IN_PROGRESS');
+      return ticketList.filter((t) => t.status === 'OPEN' || t.status === 'IN_PROGRESS');
     }
-    return tickets;
+    return ticketList;
   }, [tickets, statusFilter]);
 
   const handleCreateSuccess = useCallback(async (ticket: Ticket) => {
