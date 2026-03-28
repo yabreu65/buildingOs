@@ -254,7 +254,7 @@ export class TicketsService {
    *
    * @throws NotFoundException if building doesn't belong to tenant
    */
-  async findAll(tenantId: string, buildingId: string, filters?: TicketFilters): Promise<Ticket[]> {
+  async findAll(tenantId: string, buildingId: string, filters?: TicketFilters): Promise<any> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
