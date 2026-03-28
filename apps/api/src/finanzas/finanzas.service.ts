@@ -20,6 +20,7 @@ import {
   PaymentAuditLogDto,
   PaymentDuplicateCheckResultDto,
   UnitLedgerDto,
+  MonthlyTrendDto,
 } from './finanzas.dto';
 
 @Injectable()
@@ -134,7 +135,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     query: ListChargesQueryDto,
-  ): Promise<(Charge & { paymentAllocations: unknown[] })[]> {
+  ): Promise<(Charge & { paymentAllocations: PaymentAllocation[] })[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -206,7 +207,7 @@ export class FinanzasService {
     chargeId: string,
     userRoles: string[],
     userId: string,
-  ): Promise<Charge & { paymentAllocations: unknown[] }> {
+  ): Promise<Charge & { paymentAllocations: PaymentAllocation[] }> {
     // 1. Validate charge belongs to building and tenant
     const charge = await this.prisma.charge.findFirst({
       where: {
@@ -1150,7 +1151,7 @@ export class FinanzasService {
 
     return {
       unitId,
-      unitLabel: unit.label,
+      unitLabel: unit.label ?? '',
       buildingId: unit.buildingId,
       buildingName: unit.building.name,
       charges: charges.map((c) => ({
@@ -1187,7 +1188,7 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     paymentId: string,
-  ): Promise<(PaymentAllocation & { charge: unknown })[]> {
+  ): Promise<(PaymentAllocation & { charge: { id: string; concept: string; amount: number; status: ChargeStatus; period: string } })[]> {
     // 1. Validate payment
     const payment = await this.prisma.payment.findFirst({
       where: {
