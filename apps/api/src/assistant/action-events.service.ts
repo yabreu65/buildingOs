@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
@@ -14,7 +14,12 @@ export interface CreateActionEventDto {
 
 @Injectable()
 export class AiActionEventsService {
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  private readonly logger = new Logger(AiActionEventsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * Track a click on a suggested action (fire-and-forget)
@@ -61,7 +66,7 @@ export class AiActionEventsService {
         });
     } catch (error) {
       // Fire-and-forget: log but don't fail
-      console.error('Failed to track AI action event:', error);
+      this.logger.error('Failed to track AI action event', error);
     }
   }
 }

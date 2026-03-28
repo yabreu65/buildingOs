@@ -1,18 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { EmailService } from '../email/email.service';
-import { Notification, NotificationType } from '@prisma/client';
+import { Notification, NotificationType, Prisma } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import { CreateNotificationInput, DEFAULT_NOTIFICATION_CONFIG } from './notifications.types';
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private auditService: AuditService,
-    private emailService: EmailService,
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+    private readonly emailService: EmailService,
   ) {}
 
   /**
@@ -58,7 +60,7 @@ export class NotificationsService {
     } catch (err) {
       // RULE: Never fail main operation on notification failure
       const message = err instanceof Error ? err.message : String(err);
-      console.error('[NotificationsService] Failed to create notification:', {
+      this.logger.error('[NotificationsService] Failed to create notification', {
         message,
         input,
         timestamp: new Date().toISOString(),
@@ -74,16 +76,11 @@ export class NotificationsService {
     tenantId: string,
     userId: string,
   ): Promise<Notification> {
-    const notification = await this.prisma.notification.findUnique({
-      where: { id: notificationId },
+    const notification = await this.prisma.notification.findFirst({
+      where: { id: notificationId, tenantId, userId, deletedAt: null },
     });
 
     if (!notification) {
-      throw new NotFoundException('Notification not found');
-    }
-
-    // Verify ownership
-    if (notification.userId !== userId || notification.tenantId !== tenantId) {
       throw new NotFoundException('Notification not found');
     }
 
@@ -120,6 +117,7 @@ export class NotificationsService {
         tenantId,
         userId,
         isRead: false,
+        deletedAt: null,
       },
       data: {
         isRead: true,
@@ -139,6 +137,7 @@ export class NotificationsService {
         tenantId,
         userId,
         isRead: false,
+        deletedAt: null,
       },
     });
   }
@@ -153,9 +152,10 @@ export class NotificationsService {
     skip: number = 0,
     take: number = 50,
   ): Promise<{ notifications: Notification[]; total: number }> {
-    const where: any = {
+    const where: Prisma.NotificationWhereInput = {
       tenantId,
       userId,
+      deletedAt: null,
     };
 
     // Apply filters
@@ -188,16 +188,11 @@ export class NotificationsService {
     tenantId: string,
     userId: string,
   ): Promise<void> {
-    const notification = await this.prisma.notification.findUnique({
-      where: { id: notificationId },
+    const notification = await this.prisma.notification.findFirst({
+      where: { id: notificationId, tenantId, userId, deletedAt: null },
     });
 
     if (!notification) {
-      throw new NotFoundException('Notification not found');
-    }
-
-    // Verify ownership
-    if (notification.userId !== userId || notification.tenantId !== tenantId) {
       throw new NotFoundException('Notification not found');
     }
 
@@ -262,7 +257,7 @@ export class NotificationsService {
       );
     } catch (err) {
       // RULE: Never fail main operation
-      console.error('[NotificationsService] Failed to send email:', {
+      this.logger.error('[NotificationsService] Failed to send email', {
         error: err instanceof Error ? err.message : String(err),
         type: input.type,
       });
@@ -272,7 +267,7 @@ export class NotificationsService {
   /**
    * Private: Substitute {{variable}} placeholders with data
    */
-  private substituteVariables(template: string, data?: Record<string, any>): string {
+  private substituteVariables(template: string, data?: Record<string, unknown>): string {
     if (!data) {
       return template;
     }

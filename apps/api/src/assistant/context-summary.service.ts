@@ -81,7 +81,7 @@ export class AiContextSummaryService {
 
   private readonly logger = new Logger(AiContextSummaryService.name);
 
-  constructor(private prisma: PrismaService) {
+  constructor(private readonly prisma: PrismaService) {
     // Cleanup expired entries every 30 seconds
     setInterval(() => this.cleanupExpiredSummaries(), 30000);
   }
@@ -206,7 +206,7 @@ export class AiContextSummaryService {
       }));
     } catch (error) {
       // Silently fail - context enrichment never blocks main request
-      console.error('Failed to enrich tickets:', error);
+      this.logger.error('Failed to enrich tickets', error);
     }
   }
 
@@ -266,7 +266,7 @@ export class AiContextSummaryService {
         status: p.status,
       }));
     } catch (error) {
-      console.error('Failed to enrich payments:', error);
+      this.logger.error('Failed to enrich payments', error);
     }
   }
 
@@ -333,7 +333,7 @@ export class AiContextSummaryService {
         outstanding: Number(d.outstanding) || 0,
       }));
     } catch (error) {
-      console.error('Failed to enrich delinquency:', error);
+      this.logger.error('Failed to enrich delinquency', error);
     }
   }
 
@@ -381,7 +381,7 @@ export class AiContextSummaryService {
           category: d.category,
         }));
     } catch (error) {
-      console.error('Failed to enrich documents:', error);
+      this.logger.error('Failed to enrich documents', error);
     }
   }
 

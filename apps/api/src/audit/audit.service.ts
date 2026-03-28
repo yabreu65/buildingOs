@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditAction, AuditLog } from '@prisma/client';
+import { AuditAction, AuditLog, Prisma } from '@prisma/client';
 
 export interface AuditLogInput {
   tenantId?: string;
@@ -9,7 +9,7 @@ export interface AuditLogInput {
   action: AuditAction;
   entityType: string;
   entityId: string;
-  metadata?: Record<string, any>;
+  metadata?: unknown;
 }
 
 export interface AuditLogQueryFilters {
@@ -38,7 +38,9 @@ export interface AuditLogQueryResponse {
  */
 @Injectable()
 export class AuditService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(AuditService.name);
+
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Write audit log entry (fire-and-forget pattern)
@@ -58,13 +60,13 @@ export class AuditService {
           action: input.action,
           entity: input.entityType,
           entityId: input.entityId,
-          metadata: input.metadata ?? {},
+          metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
         },
       });
     } catch (err) {
       // RULE: Never fail main operation on audit write failure
       const message = err instanceof Error ? err.message : String(err);
-      console.error('[AuditService] Failed to write audit log:', {
+      this.logger.error('[AuditService] Failed to write audit log', {
         message,
         input,
         timestamp: new Date().toISOString(),
@@ -94,7 +96,7 @@ export class AuditService {
     } = filters;
 
     // Build dynamic where clause
-    const where: any = {};
+    const where: Prisma.AuditLogWhereInput = {};
 
     if (tenantId) {
       where.tenantId = tenantId;

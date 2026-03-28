@@ -7,6 +7,7 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
+import { IsString, MinLength } from 'class-validator';
 import { OnboardingService } from './onboarding.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -16,6 +17,12 @@ import {
   TenantStepsResponseDto,
   BuildingStepsResponseDto,
 } from './dtos/onboarding.dto';
+
+class BuildingParamDto {
+  @IsString()
+  @MinLength(1)
+  buildingId!: string;
+}
 
 @Controller('tenants/:tenantId/onboarding')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
@@ -66,9 +73,10 @@ export class OnboardingController {
    */
   @Get('buildings/:buildingId')
   async getBuildingSteps(
-    @Param('buildingId') buildingId: string,
+    @Param() params: BuildingParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<BuildingStepsResponseDto> {
+    const { buildingId } = params;
     const tenantId = req.tenantId;
 
     if (!tenantId) {
@@ -114,7 +122,7 @@ export class OnboardingController {
    * @param req Request with user and tenantId context
    */
   @Patch('dismiss')
-  async dismissOnboarding(@Request() req: RequestWithUser): Promise<{ success: boolean }> {
+  async dismissOnboarding(@Request() req: AuthenticatedRequest): Promise<{ success: boolean }> {
     const tenantId = req.tenantId;
 
     if (!tenantId) {
@@ -142,7 +150,7 @@ export class OnboardingController {
    * @param req Request with user and tenantId context
    */
   @Patch('restore')
-  async restoreOnboarding(@Request() req: RequestWithUser): Promise<{ success: boolean }> {
+  async restoreOnboarding(@Request() req: AuthenticatedRequest): Promise<{ success: boolean }> {
     const tenantId = req.tenantId;
 
     if (!tenantId) {

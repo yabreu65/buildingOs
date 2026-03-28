@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { Document } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,7 +16,7 @@ import {
   DocumentWithFileResponseDto,
   DownloadUrlResponseDto,
 } from './dto';
-import { DocumentVisibility, Role, Prisma } from '@prisma/client';
+import { DocumentCategory, DocumentVisibility, Role, Prisma } from '@prisma/client';
 
 /**
  * DocumentsService: CRUD operations for Documents and Files with MinIO integration
@@ -46,10 +47,12 @@ import { DocumentVisibility, Role, Prisma } from '@prisma/client';
  */
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private validators: DocumentsValidators,
-    private minio: MinioService,
+    private readonly prisma: PrismaService,
+    private readonly validators: DocumentsValidators,
+    private readonly minio: MinioService,
   ) {}
 
   /**
@@ -193,7 +196,7 @@ export class DocumentsService {
     filters?: {
       buildingId?: string;
       unitId?: string;
-      category?: string;
+      category?: DocumentCategory;
       visibility?: DocumentVisibility;
     },
   ): Promise<DocumentWithFileResponseDto[]> {
@@ -215,7 +218,7 @@ export class DocumentsService {
       whereConditions.unitId = filters.unitId;
     }
     if (filters?.category) {
-      whereConditions.category = filters.category as any;
+      whereConditions.category = filters.category;
     }
 
     // Visibility filtering for non-admin, non-creator users
@@ -436,7 +439,7 @@ export class DocumentsService {
     this.minio
       .deleteObject(fileInfo.bucket, fileInfo.objectKey)
       .catch((error) => {
-        console.error(
+        this.logger.error(
           `Failed to delete file from MinIO: ${fileInfo.bucket}/${fileInfo.objectKey}`,
           error,
         );
@@ -467,7 +470,7 @@ export class DocumentsService {
     );
 
     if (!document.file) {
-      throw new Error('Document file not found');
+      throw new NotFoundException('Document file not found');
     }
 
     // Generate presigned URL from MinIO (24 hours expiration)

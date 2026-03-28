@@ -3,7 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
-import { AssistantService } from './assistant.service';
+import { AssistantService, MockAiProvider } from './assistant.service';
 import { AssistantController, SuperAdminAiController } from './assistant.controller';
 import { AiUnitsController } from './ai-units.controller';
 import { AiBudgetService } from './budget.service';
@@ -18,6 +18,7 @@ import { AiActionEventsService } from './action-events.service';
 import { AiNudgesService } from './ai-nudges.service';
 import { AiNudgesController } from './ai-nudges.controller';
 import { AiTicketCategoryService } from './ai-ticket-category.service';
+import { OllamaProvider } from './ollama.provider';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -90,6 +91,8 @@ import { AiTicketCategoryService } from './ai-ticket-category.service';
     AiActionEventsService,
     AiNudgesService,
     AiTicketCategoryService,
+    OllamaProvider,
+    MockAiProvider,
   ],
   exports: [
     AssistantService,

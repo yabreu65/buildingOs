@@ -7,12 +7,43 @@ import {
   Query,
   UseGuards,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
+
+class ListNotificationsQueryDto {
+  @IsOptional()
+  @IsString()
+  isRead?: string;
+
+  @IsOptional()
+  @IsEnum(NotificationType)
+  type?: NotificationType;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  skip?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  take?: number;
+}
+
+class UnreadCountResponseDto {
+  unreadCount!: number;
+}
+
+class SuccessResponseDto {
+  success!: boolean;
+}
 
 /**
  * Notifications Controller
@@ -31,33 +62,44 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   /**
+   * Resolve tenantId from authenticated user memberships
+   * @throws BadRequestException when tenant context is missing
+   */
+  private resolveTenantId(req: AuthenticatedRequest): string {
+    const tenantId = req.user.memberships?.[0]?.tenantId;
+    if (!tenantId) {
+      throw new BadRequestException('Tenant context required');
+    }
+    return tenantId;
+  }
+
+  /**
    * List user's notifications with pagination
    * GET /me/notifications?isRead=false&type=TICKET_STATUS_CHANGED&skip=0&take=50
    */
   @Get()
   async listNotifications(
     @Request() req: AuthenticatedRequest,
-    @Query('isRead') isRead?: string,
-    @Query('type') type?: string,
-    @Query('skip') skip: string = '0',
-    @Query('take') take: string = '50',
+    @Query() query: ListNotificationsQueryDto,
   ) {
     const user = req.user;
-    const tenantId = user.memberships?.[0]?.tenantId;
-    const skipNum = Math.max(0, parseInt(skip, 10));
-    const takeNum = Math.min(100, parseInt(take, 10) || 50);
+    const tenantId = this.resolveTenantId(req);
+    const skipNum = Math.max(0, Number(query.skip ?? 0));
+    const takeNum = Math.min(100, Number(query.take ?? 50));
 
-    // Parse isRead filter
-    let isReadFilter: boolean | undefined;
-    if (isRead === 'true') isReadFilter = true;
-    if (isRead === 'false') isReadFilter = false;
+    let isRead: boolean | undefined;
+    if (query.isRead === 'true') {
+      isRead = true;
+    } else if (query.isRead === 'false') {
+      isRead = false;
+    }
 
     return this.notificationsService.queryNotifications(
       tenantId,
       user.id,
       {
-        isRead: isReadFilter,
-        type: type as NotificationType | undefined,
+        isRead,
+        type: query.type,
       },
       skipNum,
       takeNum,
@@ -69,9 +111,9 @@ export class NotificationsController {
    * GET /me/notifications/unread-count
    */
   @Get('unread-count')
-  async getUnreadCount(@Request() req: AuthenticatedRequest) {
+  async getUnreadCount(@Request() req: AuthenticatedRequest): Promise<UnreadCountResponseDto> {
     const user = req.user;
-    const tenantId = user.memberships?.[0]?.tenantId;
+    const tenantId = this.resolveTenantId(req);
 
     const count = await this.notificationsService.getUnreadCount(tenantId, user.id);
     return { unreadCount: count };
@@ -84,7 +126,7 @@ export class NotificationsController {
   @Patch(':id/read')
   async markAsRead(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
-    const tenantId = user.memberships?.[0]?.tenantId;
+    const tenantId = this.resolveTenantId(req);
 
     return this.notificationsService.markAsRead(id, tenantId, user.id);
   }
@@ -94,11 +136,12 @@ export class NotificationsController {
    * PATCH /me/notifications/read-all
    */
   @Patch('read-all')
-  async markAllAsRead(@Request() req: AuthenticatedRequest) {
+  async markAllAsRead(@Request() req: AuthenticatedRequest): Promise<SuccessResponseDto> {
     const user = req.user;
-    const tenantId = user.memberships?.[0]?.tenantId;
+    const tenantId = this.resolveTenantId(req);
 
-    return this.notificationsService.markAllAsRead(tenantId, user.id);
+    await this.notificationsService.markAllAsRead(tenantId, user.id);
+    return { success: true };
   }
 
   /**
@@ -106,9 +149,12 @@ export class NotificationsController {
    * DELETE /me/notifications/:id
    */
   @Delete(':id')
-  async deleteNotification(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+  async deleteNotification(
+    @Param('id') id: string,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<SuccessResponseDto> {
     const user = req.user;
-    const tenantId = user.memberships?.[0]?.tenantId;
+    const tenantId = this.resolveTenantId(req);
 
     await this.notificationsService.deleteNotification(id, tenantId, user.id);
     return { success: true };

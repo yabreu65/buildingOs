@@ -1,11 +1,11 @@
-import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
-import { AiContextSummaryService } from './context-summary.service';
+import { AiContextSummaryService, ContextSummary } from './context-summary.service';
 import { OllamaProvider } from './ollama.provider';
 import {
   SuggestedActionType,
@@ -38,10 +38,14 @@ interface ContextValidation {
 }
 
 // MOCK Provider - always works, good for development
-class MockProvider implements AiProvider {
+@Injectable()
+export class MockAiProvider implements AiProvider {
+  /**
+   * Generate deterministic mock response for development/testing.
+   */
   async chat(
     message: string,
-    context: any,
+    context: AiProviderContext,
     options?: { model?: string; maxTokens?: number }
   ): Promise<ChatResponse> {
     // Simulate thinking (less time for small model)
@@ -78,28 +82,31 @@ class MockProvider implements AiProvider {
 
 @Injectable()
 export class AssistantService {
-  private provider: AiProvider;
+  private readonly provider: AiProvider;
   private readonly dailyLimit: number;
+  private readonly logger = new Logger(AssistantService.name);
 
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
-    private budget: AiBudgetService,
-    private router: AiRouterService,
-    private cache: AiCacheService,
-    private contextSummary: AiContextSummaryService,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly budget: AiBudgetService,
+    private readonly router: AiRouterService,
+    private readonly cache: AiCacheService,
+    private readonly contextSummary: AiContextSummaryService,
+    private readonly ollamaProvider: OllamaProvider,
+    private readonly mockAiProvider: MockAiProvider,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'OLLAMA';
     if (providerName === 'OLLAMA') {
-      this.provider = new OllamaProvider();
+      this.provider = this.ollamaProvider;
     } else if (providerName === 'OPENAI') {
       // OPENAI provider will be implemented later
       // For now, fallback to MOCK
-      this.provider = new MockProvider();
+      this.provider = this.mockAiProvider;
     } else {
-      this.provider = new MockProvider();
+      this.provider = this.mockAiProvider;
     }
   }
 
@@ -205,7 +212,7 @@ export class AssistantService {
     const maxTokens = this.router.getMaxTokens(routerDecision.model);
 
     // Step 2.5: Enrich context with real data (minimal snapshot)
-    let contextSummary: any = null;
+    let contextSummary: ContextSummary | null = null;
     try {
       const summaryResult = await this.contextSummary.getSummary({
         tenantId,
@@ -218,7 +225,7 @@ export class AssistantService {
       contextSummary = summaryResult;
     } catch (error) {
       // Context enrichment never blocks main request
-      console.error('Failed to enrich context:', error);
+      this.logger.error('Failed to enrich context', error);
     }
 
     // Step 3: Check budget (and enforce hard stop or soft degrade)
@@ -241,7 +248,7 @@ export class AssistantService {
           unitId: request.unitId,
           page: request.page,
           tenantId,
-          contextSnapshot: contextSummary?.snapshot,
+          contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
         },
         { model: 'gpt-4.1-nano', maxTokens: 150 } // Use small model for degraded
       );
@@ -257,7 +264,7 @@ export class AssistantService {
           unitId: request.unitId,
           page: request.page,
           tenantId,
-          contextSnapshot: contextSummary?.snapshot,
+          contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
         },
         { model: modelName, maxTokens }
       );
@@ -464,6 +471,7 @@ export class AssistantService {
   ): Promise<string | null> {
     try {
       const log = await this.prisma.aiInteractionLog.create({
+        
         data: {
           tenantId,
           userId,
@@ -472,12 +480,12 @@ export class AssistantService {
             buildingId: request.buildingId,
             unitId: request.unitId,
             page: request.page,
-          } as any,
+          } as Prisma.InputJsonValue,
           prompt: request.message,
           response: {
             answer: response.answer,
             suggestedActions: response.suggestedActions,
-          } as any,
+          } as unknown as Prisma.InputJsonValue,
           provider: process.env.AI_PROVIDER || 'MOCK',
           tokensIn: null,
           tokensOut: null,
@@ -490,7 +498,7 @@ export class AssistantService {
       return log.id;
     } catch (error) {
       // Fire-and-forget: log but don't fail
-      console.error('Failed to log AI interaction:', error);
+      this.logger.error('Failed to log AI interaction', error);
       return null;
     }
   }
@@ -545,7 +553,7 @@ Format each suggestion on a new line starting with 1., 2., 3.`;
 
       return suggestions;
     } catch (error) {
-      console.error('Failed to generate reply suggestions:', error);
+      this.logger.error('Failed to generate reply suggestions', error);
       // Return fallback replies if provider fails
       return this.getFallbackReplies();
     }

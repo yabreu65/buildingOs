@@ -9,7 +9,7 @@
  * - Supports plan-based limits with tenant overrides (Phase 13)
  */
 
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
@@ -77,10 +77,11 @@ export class AiBudgetService {
   private readonly warnThreshold: number;
   private readonly softDegradeOnExceeded: boolean;
   private readonly defaultBudgetCents: number;
+  private readonly logger = new Logger(AiBudgetService.name);
 
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
   ) {
     this.warnThreshold = parseFloat(process.env.AI_BUDGET_WARN_THRESHOLD || '0.8');
     this.softDegradeOnExceeded =
@@ -115,7 +116,7 @@ export class AiBudgetService {
       };
     } catch (error) {
       // Fallback on error (fire-and-forget pattern)
-      console.error('Failed to get effective limits:', error);
+      this.logger.error('Failed to get effective limits', error);
       return {
         budgetCents: this.defaultBudgetCents,
         callsLimit: 100,
@@ -454,7 +455,7 @@ export class AiBudgetService {
         metadata: { reason },
       });
     } catch (error) {
-      console.error('Failed to log degraded response:', error);
+      this.logger.error('Failed to log degraded response', error);
     }
   }
 

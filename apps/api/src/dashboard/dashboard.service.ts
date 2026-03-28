@@ -13,9 +13,9 @@ import {
 } from './dashboard.dto';
 import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
 
-type UnitWithOccupants = Prisma.UnitGetPayload<{
+interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
-}>;
+}> {}
 
 @Injectable()
 export class DashboardService {
@@ -276,7 +276,7 @@ export class DashboardService {
 
     // Units without primary occupant
     const units: UnitWithOccupants[] = await this.prisma.unit.findMany({
-      where: { tenantId, buildingId: { in: buildingIds } },
+      where: { building: { tenantId }, buildingId: { in: buildingIds } },
       include: {
         building: { select: { name: true } },
         unitOccupants: true,
@@ -342,7 +342,7 @@ export class DashboardService {
         _count: { id: true },
       }),
       this.prisma.unit.findMany({
-        where: { tenantId, buildingId: { in: buildingIds } },
+        where: { building: { tenantId }, buildingId: { in: buildingIds } },
         include: { unitOccupants: true },
       }),
     ]);
@@ -359,7 +359,7 @@ export class DashboardService {
       ticketsByBuilding.set(ticket.buildingId, ticket._count.id);
     }
 
-    const unitsByBuilding = new Map<string, typeof allUnits>();
+    const unitsByBuilding = new Map<string, Array<Prisma.UnitGetPayload<{ include: { unitOccupants: true } }>>>();
     for (const unit of allUnits) {
       const existing = unitsByBuilding.get(unit.buildingId) || [];
       existing.push(unit);
@@ -381,7 +381,7 @@ export class DashboardService {
 
       const units = unitsByBuilding.get(buildingId) || [];
       const unitsWithoutResponsible = units.filter(
-        (u) => !u.unitOccupants || !u.unitOccupants.some((o) => o.isPrimary === true && o.endDate === null),
+        (u) => !u.unitOccupants || !u.unitOccupants.some((o: { isPrimary: boolean; endDate: Date | null }) => o.isPrimary === true && o.endDate === null),
       ).length;
 
       let riskScore: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
