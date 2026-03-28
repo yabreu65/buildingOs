@@ -11,22 +11,33 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
-  Communication,
   CommunicationChannel,
-  CommunicationReceipt,
   CommunicationStatus,
-  CommunicationTarget,
   CommunicationTargetType,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunicationsValidators } from './communications.validators';
-import { ADMIN_ROLES } from '@buildingos/contracts';
+import { ADMIN_ROLES } from './admin-role.guard';
 
-export interface CommunicationWithDetails extends Communication {
-  targets: CommunicationTarget[];
-  receipts: CommunicationReceipt[];
-}
+/** Include spec shared by all queries that return full communication details */
+const COMMUNICATION_INCLUDE = {
+  targets: true,
+  receipts: {
+    include: {
+      user: { select: { id: true, name: true, email: true } },
+    },
+  },
+  createdByMembership: {
+    include: {
+      user: { select: { id: true, name: true, email: true } },
+    },
+  },
+} as const;
+
+export type CommunicationWithDetails = Prisma.CommunicationGetPayload<{
+  include: typeof COMMUNICATION_INCLUDE;
+}>;
 
 export interface FindAllFilters {
   buildingId?: string;
@@ -193,39 +204,26 @@ export class CommunicationsService {
       );
     }
 
-    const where: Prisma.CommunicationWhereInput = { tenantId, deletedAt: null };
-    if (filters?.buildingId) where.buildingId = filters.buildingId;
-    if (filters?.status) where.status = filters.status;
-    if (filters?.channel) where.channel = filters.channel;
-    if (filters?.search) {
-      where.OR = [
-        { title: { contains: filters.search, mode: 'insensitive' } },
-        { body: { contains: filters.search, mode: 'insensitive' } },
-      ];
-    }
+    const where: Prisma.CommunicationWhereInput = {
+      tenantId,
+      deletedAt: null,
+      ...(filters?.buildingId ? { buildingId: filters.buildingId } : {}),
+      ...(filters?.status ? { status: filters.status } : {}),
+      ...(filters?.channel ? { channel: filters.channel } : {}),
+      ...(filters?.search ? {
+        OR: [
+          { title: { contains: filters.search, mode: 'insensitive' } },
+          { body: { contains: filters.search, mode: 'insensitive' } },
+        ],
+      } : {}),
+    };
 
     const sortField = filters?.sortBy ?? 'createdAt';
     const sortOrder = filters?.sortOrder ?? 'desc';
 
     return await this.prisma.communication.findMany({
       where,
-      include: {
-        targets: true,
-        receipts: {
-          select: {
-            id: true,
-            userId: true,
-            deliveredAt: true,
-            readAt: true,
-            user: { select: { id: true, name: true, email: true } },
-          },
-        },
-        createdByMembership: {
-          include: {
-            user: { select: { id: true, name: true, email: true } },
-          },
-        },
-      },
+      include: COMMUNICATION_INCLUDE,
       orderBy: { [sortField]: sortOrder },
     });
   }
@@ -243,25 +241,7 @@ export class CommunicationsService {
 
     const communication = await this.prisma.communication.findUnique({
       where: { id: communicationId },
-      include: {
-        tenant: { select: { id: true, name: true } },
-        building: { select: { id: true, name: true } },
-        targets: true,
-        receipts: {
-          select: {
-            id: true,
-            userId: true,
-            deliveredAt: true,
-            readAt: true,
-            user: { select: { id: true, name: true, email: true } },
-          },
-        },
-        createdByMembership: {
-          include: {
-            user: { select: { id: true, name: true, email: true } },
-          },
-        },
-      },
+      include: COMMUNICATION_INCLUDE,
     });
 
     if (!communication) {
@@ -311,10 +291,7 @@ export class CommunicationsService {
         channel: input.channel,
         updatedAt: new Date(),
       },
-      include: {
-        targets: true,
-        receipts: true,
-      },
+      include: COMMUNICATION_INCLUDE,
     });
   }
 
@@ -364,10 +341,7 @@ export class CommunicationsService {
         scheduledAt: input.scheduledAt,
         updatedAt: new Date(),
       },
-      include: {
-        targets: true,
-        receipts: true,
-      },
+      include: COMMUNICATION_INCLUDE,
     });
   }
 
@@ -393,10 +367,7 @@ export class CommunicationsService {
         sentAt: new Date(),
         updatedAt: new Date(),
       },
-      include: {
-        targets: true,
-        receipts: true,
-      },
+      include: COMMUNICATION_INCLUDE,
     });
   }
 
@@ -408,7 +379,7 @@ export class CommunicationsService {
    * @throws NotFoundException if communication doesn't belong to tenant
    * @throws BadRequestException if communication is not DRAFT
    */
-  async delete(tenantId: string, communicationId: string): Promise<Communication> {
+  async delete(tenantId: string, communicationId: string): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -434,6 +405,7 @@ export class CommunicationsService {
     return await this.prisma.communication.update({
       where: { id: communicationId },
       data: { deletedAt: new Date() },
+      include: COMMUNICATION_INCLUDE,
     });
   }
 
@@ -499,17 +471,10 @@ export class CommunicationsService {
       return await this.prisma.communication.findMany({
         where,
         include: {
-          targets: true,
+          ...COMMUNICATION_INCLUDE,
           receipts: {
             where: { userId },
-            select: {
-              id: true,
-              tenantId: true,
-              communicationId: true,
-              userId: true,
-              deliveredAt: true,
-              readAt: true,
-              createdAt: true,
+            include: {
               user: { select: { id: true, name: true, email: true } },
             },
           },

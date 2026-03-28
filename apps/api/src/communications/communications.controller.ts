@@ -28,7 +28,7 @@ import {
 } from './dto/create-communication.dto';
 import { UpdateCommunicationDto } from './dto/update-communication.dto';
 import { ScheduleCommunicationDto } from './dto/schedule-communication.dto';
-import { Communication, CommunicationReceipt, CommunicationTargetType } from '@prisma/client';
+import { CommunicationReceipt, CommunicationTargetType } from '@prisma/client';
 
 /**
  * CommunicationsController: Communications (Comunicados) management endpoints
@@ -310,7 +310,7 @@ export class CommunicationsController {
   async remove(
     @Param() params: DeleteCommunicationParamDto,
     @Request() req: AuthenticatedRequest,
-  ): Promise<Communication> {
+  ): Promise<CommunicationWithDetails> {
     const tenantId = req.tenantId!;
 
     await this.validators.validateCommunicationBelongsToTenant(

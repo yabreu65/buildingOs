@@ -1,6 +1,8 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
-import { ADMIN_ROLES } from '@buildingos/contracts';
 import { AuthenticatedRequest } from '../common/types/request.types';
+
+/** Admin roles — mirrors ADMIN_ROLES in @buildingos/contracts */
+export const ADMIN_ROLES = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] as const;
 
 /**
  * AdminRoleGuard: Restricts access to admin roles (TENANT_ADMIN, TENANT_OWNER, OPERATOR).
