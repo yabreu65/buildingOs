@@ -38,7 +38,7 @@ export interface BuildingStepsResponse {
  */
 export async function getTenantSteps(tenantId: string): Promise<TenantStepsResponse> {
   return apiClient<TenantStepsResponse>({
-    path: '/onboarding/tenant',
+    path: `/tenants/${tenantId}/onboarding/tenant`,
     method: 'GET',
     headers: {
       'X-Tenant-Id': tenantId,
@@ -54,7 +54,7 @@ export async function getBuildingSteps(
   buildingId: string,
 ): Promise<BuildingStepsResponse> {
   return apiClient<BuildingStepsResponse>({
-    path: `/onboarding/buildings/${buildingId}`,
+    path: `/tenants/${tenantId}/onboarding/buildings/${buildingId}`,
     method: 'GET',
     headers: {
       'X-Tenant-Id': tenantId,
@@ -67,7 +67,7 @@ export async function getBuildingSteps(
  */
 export async function dismissOnboarding(tenantId: string): Promise<{ success: boolean }> {
   return apiClient<{ success: boolean }>({
-    path: '/onboarding/dismiss',
+    path: `/tenants/${tenantId}/onboarding/dismiss`,
     method: 'PATCH',
     headers: {
       'X-Tenant-Id': tenantId,
@@ -80,7 +80,7 @@ export async function dismissOnboarding(tenantId: string): Promise<{ success: bo
  */
 export async function restoreOnboarding(tenantId: string): Promise<{ success: boolean }> {
   return apiClient<{ success: boolean }>({
-    path: '/onboarding/restore',
+    path: `/tenants/${tenantId}/onboarding/restore`,
     method: 'PATCH',
     headers: {
       'X-Tenant-Id': tenantId,
