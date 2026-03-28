@@ -1,35 +1,35 @@
-import { IsUUID } from 'class-validator';
+import { IsString } from 'class-validator';
 import { BuildingVendorParamDto } from '../../common/dtos/params.dto';
 
 export class VendorIdParamDto {
-  @IsUUID()
+  @IsString()
   vendorId!: string;
 }
 
 export class BuildingVendorIdParamDto extends BuildingVendorParamDto {}
 
 export class QuoteIdParamDto {
-  @IsUUID()
+  @IsString()
   quoteId!: string;
 }
 
 export class BuildingQuoteParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   quoteId!: string;
 }
 
 export class WorkOrderIdParamDto {
-  @IsUUID()
+  @IsString()
   workOrderId!: string;
 }
 
 export class BuildingWorkOrderParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   workOrderId!: string;
 }
