@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DashboardSummaryDto,
@@ -85,11 +85,11 @@ export class DashboardService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to generate dashboard summary for tenant ${tenantId}: ${message}`);
-      // Re-throw NestJS-recognized errors, wrap others
-      if (error instanceof Error && error.constructor.name.includes('Prisma')) {
+      // Rethrow Prisma errors as-is; wrap generic errors
+      if (error instanceof Error && error.name.startsWith('Prisma')) {
         throw error;
       }
-      throw new Error(`Dashboard summary generation failed: ${message}`);
+      throw new InternalServerErrorException(`Dashboard generation failed: ${message}`);
     }
   }
 
@@ -412,8 +412,12 @@ export class DashboardService {
     return alerts.sort((a, b) => riskOrder[a.riskScore] - riskOrder[b.riskScore]);
   }
 
+  /**
+   * Get available quick actions for the admin dashboard.
+   * Actual permission checks occur at the endpoint level.
+   * @returns Array of available quick action identifiers
+   */
   private getQuickActions(): string[] {
-    // TODO: Based on permissions and module availability
     return [
       'CREATE_CHARGE',
       'RECORD_PAYMENT',

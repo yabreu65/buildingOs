@@ -10,7 +10,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min, ValidateIf } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -43,6 +43,12 @@ class UnreadCountResponseDto {
 
 class SuccessResponseDto {
   success!: boolean;
+}
+
+class NotificationParamDto {
+  @IsString()
+  @ValidateIf((obj) => obj.id && obj.id.length > 0)
+  id!: string;
 }
 
 /**
@@ -120,10 +126,11 @@ export class NotificationsController {
 
   /**
    * Mark single notification as read
-   * PATCH /me/notifications/:id/read
+   * PATCH /tenants/:tenantId/notifications/:id/read
    */
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+  async markAsRead(@Param() params: NotificationParamDto, @Request() req: AuthenticatedRequest) {
+    const { id } = params;
     const user = req.user;
     const tenantId = this.getTenantId(req);
 
@@ -145,13 +152,14 @@ export class NotificationsController {
 
   /**
    * Delete notification
-   * DELETE /me/notifications/:id
+   * DELETE /tenants/:tenantId/notifications/:id
    */
   @Delete(':id')
   async deleteNotification(
-    @Param('id') id: string,
+    @Param() params: NotificationParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<SuccessResponseDto> {
+    const { id } = params;
     const user = req.user;
     const tenantId = this.getTenantId(req);
 
