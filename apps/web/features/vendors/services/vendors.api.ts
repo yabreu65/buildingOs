@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from '@/shared/lib/http/client';
+import { getSession } from '@/features/auth/session.storage';
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -124,6 +125,23 @@ function logError(endpoint: string, status: number, message: string) {
   console.error(`[API ERROR] ${endpoint} (${status})`, message);
 }
 
+function resolveTenantId(): string {
+  const session = getSession();
+  const tenantId = session?.activeTenantId ?? session?.memberships?.[0]?.tenantId;
+
+  if (!tenantId || tenantId.trim() === '') {
+    throw new Error('[API] Missing tenantId - cannot call vendors endpoints');
+  }
+
+  return tenantId;
+}
+
+function getTenantHeaders(): Record<string, string> {
+  return {
+    'X-Tenant-Id': resolveTenantId(),
+  };
+}
+
 // ============================================
 // Vendors API Endpoints
 // ============================================
@@ -139,6 +157,7 @@ export async function listAllVendors(): Promise<Vendor[]> {
     return await apiClient<Vendor[]>({
       path: endpoint,
       method: 'GET',
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to list vendors: ${(error as Error).message}`;
@@ -159,6 +178,7 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
       path: endpoint,
       method: 'POST',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to create vendor: ${(error as Error).message}`;
@@ -182,6 +202,7 @@ export async function listBuildingVendors(buildingId: string): Promise<VendorAss
     return await apiClient<VendorAssignment[]>({
       path: endpoint,
       method: 'GET',
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to list vendor assignments: ${(error as Error).message}`;
@@ -205,6 +226,7 @@ export async function createVendorAssignment(
       path: endpoint,
       method: 'POST',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to create vendor assignment: ${(error as Error).message}`;
@@ -227,6 +249,7 @@ export async function deleteVendorAssignment(
     await apiClient<void>({
       path: endpoint,
       method: 'DELETE',
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to delete vendor assignment: ${(error as Error).message}`;
@@ -262,6 +285,7 @@ export async function listQuotes(
     return await apiClient<Quote[]>({
       path: endpoint,
       method: 'GET',
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to list quotes: ${(error as Error).message}`;
@@ -282,6 +306,7 @@ export async function createQuote(buildingId: string, input: CreateQuoteInput): 
       path: endpoint,
       method: 'POST',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to create quote: ${(error as Error).message}`;
@@ -306,6 +331,7 @@ export async function updateQuote(
       path: endpoint,
       method: 'PATCH',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to update quote: ${(error as Error).message}`;
@@ -339,6 +365,7 @@ export async function listWorkOrders(
     return await apiClient<WorkOrder[]>({
       path: endpoint,
       method: 'GET',
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to list work orders: ${(error as Error).message}`;
@@ -362,6 +389,7 @@ export async function createWorkOrder(
       path: endpoint,
       method: 'POST',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to create work order: ${(error as Error).message}`;
@@ -386,6 +414,7 @@ export async function updateWorkOrder(
       path: endpoint,
       method: 'PATCH',
       body: input,
+      headers: getTenantHeaders(),
     });
   } catch (error) {
     const message = `Failed to update work order: ${(error as Error).message}`;

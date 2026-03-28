@@ -8,6 +8,8 @@ import {
   Body,
   UseGuards,
   Request,
+  BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
@@ -69,9 +71,45 @@ export class VendorsController {
     private validators: VendorsValidators,
   ) {}
 
+  private getTenantIdFromHeader(req: AuthenticatedRequest): string | undefined {
+    const rawTenantHeader = req.headers['x-tenant-id'];
+
+    if (typeof rawTenantHeader === 'string' && rawTenantHeader.trim() !== '') {
+      return rawTenantHeader;
+    }
+
+    if (
+      Array.isArray(rawTenantHeader) &&
+      rawTenantHeader.length > 0 &&
+      typeof rawTenantHeader[0] === 'string' &&
+      rawTenantHeader[0].trim() !== ''
+    ) {
+      return rawTenantHeader[0];
+    }
+
+    return undefined;
+  }
+
   private getTenantId(req: AuthenticatedRequest): string {
-    const tenantId = req.tenantId ?? req.user?.tenantId;
-    if (!tenantId) throw new Error('TenantId not found in request context');
+    const tenantId = req.tenantId ?? req.user?.tenantId ?? this.getTenantIdFromHeader(req);
+
+    if (!tenantId) {
+      throw new BadRequestException('TenantId not found in request context');
+    }
+
+    const targetMembership = req.user.memberships?.find(
+      (membership) => membership.tenantId === tenantId,
+    );
+
+    if (!targetMembership) {
+      throw new ForbiddenException(`No tiene acceso al tenant ${tenantId}`);
+    }
+
+    // Ensure tenant-scoped roles are available for downstream RBAC checks
+    if (!req.user.roles || req.user.roles.length === 0) {
+      req.user.roles = targetMembership.roles;
+    }
+
     return tenantId;
   }
 
