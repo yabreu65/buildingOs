@@ -17,6 +17,10 @@ interface NotificationQueryResponse {
   readonly total: number;
 }
 
+interface MarkAllAsReadResponse {
+  readonly count: number;
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -94,9 +98,9 @@ export class NotificationsService {
       throw new NotFoundException('Notification not found');
     }
 
-    // Update with tenant isolation in where clause
+    // Update with tenant isolation in where clause (exclude soft-deleted)
     const updated = await this.prisma.notification.updateMany({
-      where: { id: notificationId, tenantId, userId },
+      where: { id: notificationId, tenantId, userId, deletedAt: null },
       data: {
         isRead: true,
         readAt: new Date(),
@@ -109,8 +113,12 @@ export class NotificationsService {
 
     // Re-fetch to return updated record
     const record = await this.prisma.notification.findFirst({
-      where: { id: notificationId, tenantId, userId },
+      where: { id: notificationId, tenantId, userId, deletedAt: null },
     });
+
+    if (!record) {
+      throw new NotFoundException('Notification not found');
+    }
 
     // Audit log
     await this.auditService.createLog({
@@ -121,7 +129,7 @@ export class NotificationsService {
       actorUserId: userId,
     });
 
-    return record!;
+    return record;
   }
 
   /**
@@ -130,7 +138,7 @@ export class NotificationsService {
   async markAllAsRead(
     tenantId: string,
     userId: string,
-  ): Promise<{ count: number }> {
+  ): Promise<MarkAllAsReadResponse> {
     const result = await this.prisma.notification.updateMany({
       where: {
         tenantId,
@@ -217,7 +225,7 @@ export class NotificationsService {
 
     // Soft delete with tenant isolation in where clause
     await this.prisma.notification.updateMany({
-      where: { id: notificationId, tenantId, userId },
+      where: { id: notificationId, tenantId, userId, deletedAt: null },
       data: { deletedAt: new Date() },
     });
 
