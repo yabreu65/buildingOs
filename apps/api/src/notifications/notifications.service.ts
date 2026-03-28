@@ -94,13 +94,22 @@ export class NotificationsService {
       throw new NotFoundException('Notification not found');
     }
 
-    // Update
-    const updated = await this.prisma.notification.update({
-      where: { id: notificationId },
+    // Update with tenant isolation in where clause
+    const updated = await this.prisma.notification.updateMany({
+      where: { id: notificationId, tenantId, userId },
       data: {
         isRead: true,
         readAt: new Date(),
       },
+    });
+
+    if (updated.count === 0) {
+      throw new NotFoundException('Notification not found');
+    }
+
+    // Re-fetch to return updated record
+    const record = await this.prisma.notification.findFirst({
+      where: { id: notificationId, tenantId, userId },
     });
 
     // Audit log
@@ -112,7 +121,7 @@ export class NotificationsService {
       actorUserId: userId,
     });
 
-    return updated;
+    return record!;
   }
 
   /**
@@ -206,9 +215,9 @@ export class NotificationsService {
       throw new NotFoundException('Notification not found');
     }
 
-    // Soft delete
-    await this.prisma.notification.update({
-      where: { id: notificationId },
+    // Soft delete with tenant isolation in where clause
+    await this.prisma.notification.updateMany({
+      where: { id: notificationId, tenantId, userId },
       data: { deletedAt: new Date() },
     });
 
@@ -234,14 +243,17 @@ export class NotificationsService {
         return; // No email needed for this type
       }
 
-      // Get user email
-      const user = await this.prisma.user.findUnique({
-        where: { id: input.userId },
+      // Get user email (verify user has membership in tenant)
+      const membership = await this.prisma.membership.findFirst({
+        where: { tenantId: input.tenantId, userId: input.userId },
+        include: { user: true },
       });
 
-      if (!user || !user.email) {
-        return; // No email address
+      if (!membership?.user?.email) {
+        return; // No user or email address
       }
+
+      const user = membership.user;
 
       // Get template
       const template = config.emailTemplates[input.type];
