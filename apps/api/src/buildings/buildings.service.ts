@@ -3,14 +3,19 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { AuditAction, Building, Unit } from '@prisma/client';
+import { AuditAction, Building, Member, Unit, UnitOccupant } from '@prisma/client';
+
+
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 
-interface BuildingWithUnits extends Building { units: Unit[] }
+export interface BuildingWithUnits extends Building { units: Unit[] }
+export interface BuildingWithUnitsDetail extends Building {
+  units: (Unit & { unitOccupants: (UnitOccupant & { member: Member })[] })[];
+}
 
 @Injectable()
 export class BuildingsService {
@@ -84,9 +89,7 @@ export class BuildingsService {
   /**
    * Get a single building by ID, scoped to tenant
    */
-  async findOne(tenantId: string, buildingId: string): Promise<
-    BuildingWithUnits
-  > {
+  async findOne(tenantId: string, buildingId: string): Promise<BuildingWithUnitsDetail> {
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
       include: { units: { include: { unitOccupants: { include: { member: true } } } } },

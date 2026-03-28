@@ -35,6 +35,7 @@
 
     "skipLibCheck": true,
     "incremental": false,
+    "noEmitOnError": false,
     "forceConsistentCasingInFileNames": true,
     "removeComments": true,
     "typeRoots": ["./node_modules/@types", "./src/types"]

@@ -1,4 +1,4 @@
-import { IsUUID, IsString } from 'class-validator';
+import { IsString } from 'class-validator';
 
 /**
  * Base parameter DTOs for common route patterns
@@ -6,7 +6,7 @@ import { IsUUID, IsString } from 'class-validator';
  */
 
 export class IdParamDto {
-  @IsUUID()
+  @IsString()
   id!: string;
 }
 
@@ -21,7 +21,7 @@ export class BuildingParamDto {
 }
 
 export class UnitParamDto {
-  @IsUUID()
+  @IsString()
   unitId!: string;
 }
 
@@ -34,90 +34,90 @@ export class TenantBuildingParamDto {
 }
 
 export class BuildingChargeParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   chargeId!: string;
 }
 
 export class BuildingPaymentParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   paymentId!: string;
 }
 
 export class BuildingAllocationParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   allocationId!: string;
 }
 
 export class BuildingTicketParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   ticketId!: string;
 }
 
 export class BuildingUnitParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   unitId!: string;
 }
 
 export class BuildingDocumentParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   documentId!: string;
 }
 
 export class BuildingVendorParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   vendorId!: string;
 }
 
 export class BuildingCommunicationParamDto {
-  @IsUUID()
+  @IsString()
   buildingId!: string;
 
-  @IsUUID()
+  @IsString()
   communicationId!: string;
 }
 
 export class TenantIdMembershipIdParamDto {
-  @IsUUID()
+  @IsString()
   tenantId!: string;
 
-  @IsUUID()
+  @IsString()
   membershipId!: string;
 }
 
 export class TicketCommentParamDto {
-  @IsUUID()
+  @IsString()
   ticketId!: string;
 
-  @IsUUID()
+  @IsString()
   commentId!: string;
 }
 
 export class CommunicationRecipientParamDto {
-  @IsUUID()
+  @IsString()
   communicationId!: string;
 
-  @IsUUID()
+  @IsString()
   recipientId!: string;
 }
 
