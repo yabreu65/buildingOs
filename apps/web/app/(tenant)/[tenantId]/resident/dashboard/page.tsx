@@ -56,6 +56,7 @@ interface KPICardProps {
   label: string;
   value: string;
   subValue?: string;
+  color: string;
   icon: React.ReactNode;
   cta?: string;
   onClick?: () => void;
@@ -63,19 +64,19 @@ interface KPICardProps {
 
 const KPICard = ({ label, value, subValue, color, icon, cta, onClick }: KPICardProps) => {
   return (
-    <Card className="p-4 bg-muted/50">
+    <Card className="p-4">
       <div className="flex items-start justify-between">
         <div className="space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
-          <p className="text-2xl font-bold text-foreground">{value}</p>
-          {subValue && <p className="text-xs text-muted-foreground mt-1">{subValue}</p>}
+          <p className="text-sm font-medium text-gray-600">{label}</p>
+          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+          {subValue && <p className="text-xs text-gray-500">{subValue}</p>}
         </div>
-        <div className="p-2 rounded-lg bg-muted">
+        <div className={`p-2 rounded-lg ${color.replace('text-', 'bg-').replace('600', '100').replace('700', '100')}`}>
           {icon}
         </div>
       </div>
       {cta && onClick && (
-        <button onClick={onClick} className="mt-3 text-xs font-medium text-primary hover:underline">
+        <button onClick={onClick} className="mt-2 text-sm text-blue-600 hover:underline">
           {cta}
         </button>
       )}
@@ -164,7 +165,7 @@ const ResidentDashboardPage = () => {
         <h1 className="text-3xl font-bold">
           {userName ? `Hola, ${userName.split(' ')[0]}` : 'Mi portal'}
         </h1>
-        <p className="text-muted-foreground text-sm mt-1">
+        <p className="text-gray-600">
           {tenantName}
           {buildingName && ` • ${buildingName}`}
           {unitLabel && ` • Unidad ${unitLabel}`}
@@ -173,12 +174,12 @@ const ResidentDashboardPage = () => {
 
       {/* Context alert if no unit */}
       {!hasContext && (
-        <Card className="p-4 border border-border bg-muted/50">
+        <Card className="p-4 border-yellow-300 bg-yellow-50">
           <div className="flex items-center gap-2">
-            <AlertCircle className="text-muted-foreground" size={20} />
+            <AlertCircle className="text-yellow-600" size={20} />
             <div>
-              <p className="font-medium text-foreground">Sin unidad asignada</p>
-              <p className="text-sm text-muted-foreground">Comunicate con la administración para que te asignen una unidad.</p>
+              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700">Comunicate con la administración para que te asignen una unidad.</p>
             </div>
           </div>
         </Card>
@@ -189,7 +190,8 @@ const ResidentDashboardPage = () => {
         <KPICard
           label="Saldo pendiente"
           value={balance > 0 ? formatCurrency(balance, currency) : '$0'}
-          icon={<DollarSign className="w-5 h-5 text-muted-foreground" />}
+          color={balance > 0 ? "text-orange-600" : "text-green-600"}
+          icon={<DollarSign className={`w-5 h-5 ${balance > 0 ? "text-orange-600" : "text-green-600"}`} />}
           cta={balance > 0 ? "Ver detalles" : undefined}
           onClick={balance > 0 ? () => window.location.href = `/${tenantId}/resident/payments` : undefined}
         />
@@ -197,46 +199,49 @@ const ResidentDashboardPage = () => {
           label="Último pago"
           value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency) : '—'}
           subValue={lastPayment ? formatDate(lastPayment.paidAt) : 'Sin pagos'}
-          icon={<DollarSign className="w-5 h-5 text-muted-foreground" />}
+          color="text-green-600"
+          icon={<DollarSign className="w-5 h-5 text-green-600" />}
         />
         <KPICard
           label="Próximo vencimiento"
           value={nextDueCharge ? formatDate(nextDueCharge.dueDate) : '—'}
           subValue={nextDueCharge ? formatCurrency(nextDueCharge.amount, currency) : 'Sin cargos'}
-          icon={<AlertCircle className="w-5 h-5 text-muted-foreground" />}
+          color="text-blue-600"
+          icon={<AlertCircle className="w-5 h-5 text-blue-600" />}
         />
         <KPICard
           label="Comunicados"
           value={communications.length.toString()}
           subValue="recientes"
-          icon={<Bell className="w-5 h-5 text-muted-foreground" />}
+          color="text-purple-600"
+          icon={<Bell className="w-5 h-5 text-purple-600" />}
         />
       </div>
 
       {/* Quick Actions */}
-      <Card className="p-4 bg-muted/50">
-        <h3 className="font-semibold mb-4 text-foreground">Acciones rápidas</h3>
+      <Card className="p-4">
+        <h3 className="font-semibold mb-4">Acciones rápidas</h3>
         <div className="flex flex-wrap gap-2">
           <Link
             href={`/${tenantId}/resident/payments`}
-            className="flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg hover:bg-muted/80 transition font-medium text-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
           >
             <CreditCard className="w-4 h-4" />
-            Pagar expensa
+            <span className="text-sm font-medium">Pagar expensa</span>
           </Link>
           <Link
             href={`/${tenantId}/resident/announcements`}
-            className="flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg hover:bg-muted/80 transition font-medium text-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
           >
             <Bell className="w-4 h-4" />
-            Ver comunicados
+            <span className="text-sm font-medium">Ver comunicados</span>
           </Link>
           <Link
             href={`/${tenantId}/resident/tickets`}
-            className="flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg hover:bg-muted/80 transition font-medium text-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
           >
             <MessageSquare className="w-4 h-4" />
-            Crear ticket
+            <span className="text-sm font-medium">Crear ticket</span>
           </Link>
         </div>
       </Card>
@@ -244,10 +249,10 @@ const ResidentDashboardPage = () => {
       {/* Lists */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Communications */}
-        <Card className="p-4 bg-muted/50">
+        <Card className="p-4">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-foreground">Comunicados recientes</h3>
-            <Link href={`/${tenantId}/resident/announcements`} className="text-sm text-primary hover:underline font-medium">
+            <h3 className="font-semibold">Comunicados recientes</h3>
+            <Link href={`/${tenantId}/resident/announcements`} className="text-sm text-blue-600 hover:underline">
               Ver todos
             </Link>
           </div>
@@ -269,10 +274,10 @@ const ResidentDashboardPage = () => {
         </Card>
 
         {/* Tickets */}
-        <Card className="p-4 bg-muted/50">
+        <Card className="p-4">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-foreground">Mis tickets</h3>
-            <Link href={`/${tenantId}/resident/tickets`} className="text-sm text-primary hover:underline font-medium">
+            <h3 className="font-semibold">Mis tickets</h3>
+            <Link href={`/${tenantId}/resident/tickets`} className="text-sm text-blue-600 hover:underline">
               Ver todos
             </Link>
           </div>
