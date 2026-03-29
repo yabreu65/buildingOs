@@ -6,18 +6,20 @@ import type { CommunicationsReport } from '../services/reports.api';
 // Simple table-like div layout
 function SimpleTable({ headers, rows }: { headers: string[], rows: React.ReactNode[][] }) {
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="bg-muted text-muted-foreground border-b">
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="min-w-[520px]">
+      <div className="border-b border-border bg-muted text-muted-foreground">
         <div className="grid gap-4 p-3" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
           {headers.map((h) => <div key={h} className="font-semibold text-sm">{h}</div>)}
         </div>
       </div>
       <div>
         {rows.map((row, i) => (
-          <div key={i} className="grid gap-4 p-3 border-b last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
+          <div key={i} className="grid gap-4 border-b border-border p-3 last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
             {row.map((cell, j) => <div key={j} className="text-sm">{cell}</div>)}
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -58,15 +60,15 @@ export function CommunicationsReportComponent({
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Total de Destinatarios</div>
+          <div className="text-sm text-muted-foreground">Total de Destinatarios</div>
           <div className="text-2xl font-bold">{data.totalRecipients}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Lecturas</div>
+          <div className="text-sm text-muted-foreground">Lecturas</div>
           <div className="text-2xl font-bold text-green-600">{data.totalRead}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Tasa de Lectura</div>
+          <div className="text-sm text-muted-foreground">Tasa de Lectura</div>
           <div className="text-2xl font-bold text-blue-600">{data.readRate}%</div>
         </Card>
       </div>

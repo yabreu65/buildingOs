@@ -13,18 +13,20 @@ interface SimpleTableProps {
 // Simple table-like div layout
 function SimpleTable({ headers, rows }: SimpleTableProps) {
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="bg-muted text-muted-foreground border-b">
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="min-w-[360px]">
+      <div className="border-b border-border bg-muted text-muted-foreground">
         <div className="grid gap-4 p-3" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
           {headers.map((h) => <div key={h} className="font-semibold text-sm">{h}</div>)}
         </div>
       </div>
       <div>
         {rows.map((row, i) => (
-          <div key={i} className="grid gap-4 p-3 border-b last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
+          <div key={i} className="grid gap-4 border-b border-border p-3 last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
             {row.map((cell, j) => <div key={j} className="text-sm">{cell}</div>)}
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -81,19 +83,19 @@ export function FinanceReportComponent({
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Total Facturado</div>
+          <div className="text-sm text-muted-foreground">Total Facturado</div>
           <div className="text-2xl font-bold">${formatAmount(data.totalCharges)}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Total Cobrado</div>
+          <div className="text-sm text-muted-foreground">Total Cobrado</div>
           <div className="text-2xl font-bold text-green-600">${formatAmount(data.totalPaid)}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Pendiente</div>
+          <div className="text-sm text-muted-foreground">Pendiente</div>
           <div className="text-2xl font-bold text-orange-600">${formatAmount(data.totalOutstanding)}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Tasa de Cobranza</div>
+          <div className="text-sm text-muted-foreground">Tasa de Cobranza</div>
           <div className="text-2xl font-bold text-blue-600">{data.collectionRate}%</div>
         </Card>
       </div>

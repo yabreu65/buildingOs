@@ -13,18 +13,20 @@ interface TicketsReportProps {
 // Simple table-like div layout
 function SimpleTable({ headers, rows }: { headers: string[], rows: React.ReactNode[][] }) {
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="bg-muted text-muted-foreground border-b">
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="min-w-[380px]">
+      <div className="border-b border-border bg-muted text-muted-foreground">
         <div className="grid gap-4 p-3" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
           {headers.map((h) => <div key={h} className="font-semibold text-sm">{h}</div>)}
         </div>
       </div>
       <div>
         {rows.map((row, i) => (
-          <div key={i} className="grid gap-4 p-3 border-b last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
+          <div key={i} className="grid gap-4 border-b border-border p-3 last:border-b-0" style={{ gridTemplateColumns: `repeat(${headers.length}, 1fr)` }}>
             {row.map((cell, j) => <div key={j} className="text-sm">{cell}</div>)}
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -58,11 +60,11 @@ export function TicketsReportComponent({
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Respuesta Promedio</div>
+          <div className="text-sm text-muted-foreground">Respuesta Promedio</div>
           <div className="text-2xl font-bold">{data.avgTimeToFirstResponseHours}h</div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm text-gray-600">Resolución Promedio</div>
+          <div className="text-sm text-muted-foreground">Resolución Promedio</div>
           <div className="text-2xl font-bold">{data.avgTimeToResolveHours}h</div>
         </Card>
       </div>
@@ -73,7 +75,7 @@ export function TicketsReportComponent({
         <SimpleTable
           headers={['Estado', 'Cantidad']}
           rows={data.byStatus.map((item) => [
-            <Badge key={item.status} className="border border-gray-300 bg-gray-50 text-gray-800">{item.status}</Badge>,
+            <Badge key={item.status} className="border border-border bg-muted text-foreground">{item.status}</Badge>,
             item.count,
           ])}
         />
@@ -85,7 +87,7 @@ export function TicketsReportComponent({
         <SimpleTable
           headers={['Prioridad', 'Cantidad']}
           rows={data.byPriority.map((item) => [
-            <Badge key={item.priority} className="border border-gray-300 bg-gray-50 text-gray-800">{item.priority}</Badge>,
+            <Badge key={item.priority} className="border border-border bg-muted text-foreground">{item.priority}</Badge>,
             item.count,
           ])}
         />
