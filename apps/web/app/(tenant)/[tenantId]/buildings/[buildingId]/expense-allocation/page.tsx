@@ -13,6 +13,7 @@ import {
   UnitCategory,
   ExpensePeriod,
 } from '@/features/expense-allocation';
+import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
 
 interface BuildingParams {
   tenantId: string;
@@ -35,6 +36,15 @@ export default function ExpenseAllocationPage() {
   const searchParams = useSearchParams();
   const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
   const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
+  const [buildingName, setBuildingName] = useState<string>('');
+
+  // Fetch building name
+  useEffect(() => {
+    if (!tenantIdStr || !buildingIdStr) return;
+    fetchBuildingById(tenantIdStr, buildingIdStr)
+      .then((b) => setBuildingName(b.name))
+      .catch(() => setBuildingName(''));
+  }, [tenantIdStr, buildingIdStr]);
 
   // Category form state
   const [showCategoryForm, setShowCategoryForm] = useState(false);
@@ -91,8 +101,9 @@ export default function ExpenseAllocationPage() {
     <div className="space-y-6">
       <BuildingBreadcrumb
         tenantId={tenantIdStr}
-        buildingName="Asignación de Gastos"
+        buildingName={buildingName}
         buildingId={buildingIdStr}
+        sectionName="Asignación de Gastos"
       />
 
       <BuildingSubnav tenantId={tenantIdStr} buildingId={buildingIdStr} />

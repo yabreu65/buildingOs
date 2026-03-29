@@ -118,8 +118,9 @@ const SettingsPage = () => {
     <div className="space-y-6">
       <BuildingBreadcrumb
         tenantId={tenantId}
-        buildingName="Settings"
+        buildingName={building.name}
         buildingId={buildingId}
+        sectionName="Configuración"
       />
 
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />

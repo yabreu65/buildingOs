@@ -89,6 +89,7 @@ const BuildingResidentsPage = () => {
         tenantId={tenantId}
         buildingName={building.name}
         buildingId={buildingId}
+        sectionName="Residentes"
       />
 
       <div className="flex justify-between items-center">

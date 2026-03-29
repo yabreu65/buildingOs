@@ -7,6 +7,7 @@ import EmptyState from '@/shared/components/ui/EmptyState';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { CreditCard } from 'lucide-react';
 import { StorageService } from '@/shared/lib/storage';
+import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
 
 interface BuildingParams {
   tenantId: string;
@@ -30,6 +31,7 @@ export default function PaymentsPage() {
   const buildingId = params?.buildingId;
 
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [buildingName, setBuildingName] = useState<string>('');
 
   // Load payments from localStorage
   useEffect(() => {
@@ -43,6 +45,13 @@ export default function PaymentsPage() {
     }
   }, [tenantId]);
 
+  useEffect(() => {
+    if (!tenantId || !buildingId) return;
+    fetchBuildingById(tenantId, buildingId)
+      .then((b) => setBuildingName(b.name))
+      .catch(() => setBuildingName(''));
+  }, [tenantId, buildingId]);
+
   if (!tenantId || !buildingId) {
     return <div>Invalid parameters</div>;
   }
@@ -51,8 +60,9 @@ export default function PaymentsPage() {
     <div className="space-y-6">
       <BuildingBreadcrumb
         tenantId={tenantId}
-        buildingName="Payments"
+        buildingName={buildingName}
         buildingId={buildingId}
+        sectionName="Pagos"
       />
 
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />

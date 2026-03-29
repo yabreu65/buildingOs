@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { useTicketsReport } from '@/features/reports/hooks/useTicketsReport';
@@ -12,6 +12,7 @@ import { TicketsReportComponent } from '@/features/reports/components/TicketsRep
 import { FinanceReportComponent } from '@/features/reports/components/FinanceReport';
 import { CommunicationsReportComponent } from '@/features/reports/components/CommunicationsReport';
 import { ActivityReportComponent } from '@/features/reports/components/ActivityReport';
+import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
 
 type TabType = 'tickets' | 'finance' | 'communications' | 'activity';
 
@@ -31,6 +32,14 @@ export default function BuildingReportsPage() {
   const { tenantId, buildingId } = useParams<BuildingParams>();
   const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
   const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
+  const [buildingName, setBuildingName] = useState<string>('');
+
+  useEffect(() => {
+    if (!tenantIdStr || !buildingIdStr) return;
+    fetchBuildingById(tenantIdStr, buildingIdStr)
+      .then((b) => setBuildingName(b.name))
+      .catch(() => setBuildingName(''));
+  }, [tenantIdStr, buildingIdStr]);
 
   if (!tenantIdStr || !buildingIdStr) {
     return <div>Invalid parameters</div>;
@@ -71,8 +80,9 @@ export default function BuildingReportsPage() {
     <div className="space-y-6">
       <BuildingBreadcrumb
         tenantId={tenantIdStr}
-        buildingName="Reportes"
+        buildingName={buildingName}
         buildingId={buildingIdStr}
+        sectionName="Reportes"
       />
 
       <BuildingSubnav tenantId={tenantIdStr} buildingId={buildingIdStr} />

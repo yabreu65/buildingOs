@@ -231,6 +231,7 @@ const UnitsPage = () => {
         tenantId={tenantId}
         buildingName={building.name}
         buildingId={buildingId}
+        sectionName="Unidades"
       />
 
       {/* Header */}

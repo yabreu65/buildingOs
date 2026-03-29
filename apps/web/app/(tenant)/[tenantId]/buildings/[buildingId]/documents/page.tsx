@@ -2,9 +2,10 @@
 
 import { useParams } from 'next/navigation';
 import { t } from '@/i18n';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BuildingBreadcrumb } from '@/features/buildings/components/BuildingBreadcrumb';
 import { BuildingSubnav } from '@/features/buildings/components/BuildingSubnav';
+import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
 import { DocumentList, DocumentUploadModal, DocumentFilters } from '@/features/buildings/components/documents';
 import { useDocumentsBuilding } from '@/features/buildings/hooks/useDocumentsBuilding';
 import { useAuth } from '@/features/auth/useAuth';
@@ -18,6 +19,14 @@ export default function DocumentsPage() {
   const buildingId = params.buildingId as string;
 
   const { currentUser } = useAuth();
+  const [buildingName, setBuildingName] = useState<string>('');
+
+  useEffect(() => {
+    if (!tenantId || !buildingId) return;
+    fetchBuildingById(tenantId, buildingId)
+      .then((b) => setBuildingName(b.name))
+      .catch(() => setBuildingName(''));
+  }, [tenantId, buildingId]);
   const { documents, loading, error, fetch, remove } = useDocumentsBuilding({
     tenantId,
     buildingId,
@@ -42,7 +51,7 @@ export default function DocumentsPage() {
   return (
     <div>
       {/* Breadcrumb */}
-      <BuildingBreadcrumb tenantId={tenantId} buildingId={buildingId} />
+      <BuildingBreadcrumb tenantId={tenantId} buildingName={buildingName} buildingId={buildingId} sectionName="Documentos" />
 
       {/* Subnav */}
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
