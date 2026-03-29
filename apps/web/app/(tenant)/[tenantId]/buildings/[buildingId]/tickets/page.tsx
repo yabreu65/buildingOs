@@ -31,6 +31,15 @@ export default function TicketsPage() {
         buildingId={buildingId}
       />
 
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Solicitudes</h1>
+          <p className="text-muted-foreground mt-1">
+            Gestión de solicitudes en {building?.name || 'este edificio'}
+          </p>
+        </div>
+      </div>
+
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
 
       <TicketsList buildingId={buildingId} tenantId={tenantId} />
