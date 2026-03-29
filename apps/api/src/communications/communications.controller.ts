@@ -28,6 +28,7 @@ import {
 } from './dto/create-communication.dto';
 import { UpdateCommunicationDto } from './dto/update-communication.dto';
 import { ScheduleCommunicationDto } from './dto/schedule-communication.dto';
+import { PublishCommunicationDto } from './dto/publish-communication.dto';
 import { CommunicationReceipt, CommunicationTargetType } from '@prisma/client';
 
 /**
@@ -291,6 +292,46 @@ export class CommunicationsController {
     } else {
       return await this.communicationsService.send(tenantId, params.communicationId);
     }
+  }
+
+  /**
+   * POST /buildings/:buildingId/communications/:communicationId/publish
+   * Publish a communication with optional web push
+   *
+   * Body:
+   * - sendWebPush: boolean (default false) - whether to send web push notification
+   *
+   * Anti-spam rule:
+   * - If sendWebPush=true and feature flag enforceUrgentForWebPush is enabled,
+   *   only allows priority=URGENT
+   *
+   * Returns: Published communication with SENT status
+   *
+   * Throws:
+   * - 400 if sendWebPush=true but priority!=URGENT (when flag enabled)
+   * - 404 if communication doesn't belong to tenant
+   *
+   * Admin only: communications.publish permission required
+   */
+  @Post(':communicationId/publish')
+  @UseGuards(AdminRoleGuard)
+  async publish(
+    @Param() params: SendCommunicationParamDto,
+    @Body() dto: PublishCommunicationDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<CommunicationWithDetails> {
+    const tenantId = req.tenantId!;
+
+    await this.validators.validateCommunicationBelongsToTenant(
+      tenantId,
+      params.communicationId,
+    );
+
+    return await this.communicationsService.publish(
+      tenantId,
+      params.communicationId,
+      dto.sendWebPush,
+    );
   }
 
   /**

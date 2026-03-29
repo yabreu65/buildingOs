@@ -11,7 +11,7 @@ const isDev = process.env.NODE_ENV === 'development';
 // Types
 // ============================================
 export type CommunicationStatus = 'DRAFT' | 'SCHEDULED' | 'SENT';
-export type CommunicationChannel = 'EMAIL' | 'WHATSAPP' | 'PUSH' | 'IN_APP';
+export type CommunicationChannel = 'IN_APP' | 'WHATSAPP' | 'PUSH';
 export type TargetType = 'ALL_TENANT' | 'BUILDING' | 'UNIT' | 'ROLE';
 
 export interface CommunicationTarget {
@@ -33,6 +33,8 @@ export interface CommunicationReceipt {
   };
 }
 
+export type CommunicationPriority = 'NORMAL' | 'URGENT';
+
 export interface Communication {
   id: string;
   tenantId: string;
@@ -40,6 +42,7 @@ export interface Communication {
   title: string;
   body: string;
   channel: CommunicationChannel;
+  priority: CommunicationPriority;
   status: CommunicationStatus;
   createdBy: {
     id: string;
@@ -57,6 +60,7 @@ export interface CreateCommunicationInput {
   title: string;
   body: string;
   channel: CommunicationChannel;
+  priority?: CommunicationPriority;
   targets: Array<{ targetType: TargetType; targetId?: string }>;
 }
 
@@ -64,6 +68,7 @@ export interface UpdateCommunicationInput {
   title?: string;
   body?: string;
   channel?: CommunicationChannel;
+  priority?: CommunicationPriority;
   targets?: Array<{ targetType: TargetType; targetId?: string }>;
 }
 
@@ -265,6 +270,34 @@ export async function deleteCommunication(
     });
   } catch (error) {
     const message = `Failed to delete communication: ${(error as Error).message}`;
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
+    throw error;
+  }
+}
+
+/**
+ * Publish a communication with optional web push
+ * This is the new MVP endpoint that replaces /send
+ */
+export async function publishCommunication(
+  buildingId: string,
+  communicationId: string,
+  tenantId: string,
+  sendWebPush: boolean = false
+): Promise<Communication> {
+  const endpoint = `/buildings/${buildingId}/communications/${communicationId}/publish`;
+  const body = { sendWebPush };
+  logRequest('POST', endpoint, body);
+
+  try {
+    return await apiClient<Communication, { sendWebPush: boolean }>({
+      path: endpoint,
+      method: 'POST',
+      body,
+      headers: getAdminHeaders(tenantId),
+    });
+  } catch (error) {
+    const message = `Failed to publish communication: ${(error as Error).message}`;
     logError(endpoint, (error as { status?: number }).status ?? 500, message);
     throw error;
   }

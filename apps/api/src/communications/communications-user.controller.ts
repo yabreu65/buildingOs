@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { CommunicationStatus } from '@prisma/client';
+import { ResidentCommunicationListResponse } from '@buildingos/contracts';
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -349,5 +350,75 @@ export class CommunicationsInboxController {
       communicationId,
       readAt: new Date(),
     };
+  }
+
+  /**
+   * GET /resident/communications
+   * Resident inbox with cursor pagination
+   *
+   * Query params:
+   * - limit: number (default 20, max 100)
+   * - cursor: opaque cursor string (base64 encoded)
+   *
+   * Returns: { items: [...], nextCursor?: string }
+   *
+   * No permission required (authenticated users only)
+   */
+  @Get('resident/communications')
+  async getResidentCommunications(
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+    @Request() req?: any,
+  ): Promise<ResidentCommunicationListResponse> {
+    const userMemberships = req.user?.memberships || [];
+    if (userMemberships.length === 0) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    const tenantId = userMemberships[0].tenantId;
+    const userId = req.user.id;
+
+    const parsedLimit = limit ? Math.min(parseInt(limit, 10), 100) : 20;
+
+    return await this.communicationsService.findForResident(
+      tenantId,
+      userId,
+      parsedLimit,
+      cursor,
+    );
+  }
+
+  /**
+   * POST /resident/communications/:communicationId/read
+   * Mark communication as read (idempotent)
+   *
+   * Returns: { readAt: Date | null }
+   *
+   * No permission required (authenticated users only)
+   */
+  @Post('resident/communications/:communicationId/read')
+  async markResidentAsRead(
+    @Param('communicationId') communicationId: string,
+    @Request() req: any,
+  ): Promise<{ readAt: Date | null }> {
+    const userMemberships = req.user?.memberships || [];
+    if (userMemberships.length === 0) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    const tenantId = userMemberships[0].tenantId;
+    const userId = req.user.id;
+
+    // Validate communication belongs to tenant
+    await this.validators.validateCommunicationBelongsToTenant(
+      tenantId,
+      communicationId,
+    );
+
+    return await this.communicationsService.markAsReadForResident(
+      tenantId,
+      userId,
+      communicationId,
+    );
   }
 }

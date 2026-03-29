@@ -86,10 +86,8 @@ export const CommunicationsList = ({ buildingId, tenantId }: CommunicationsListP
 
   const channelOptions: ChannelOption[] = [
     { value: 'all', label: t('communications.admin.filterAll') },
-    { value: 'EMAIL', label: t('communications.admin.channelEmail') },
-    { value: 'WHATSAPP', label: t('communications.admin.channelWhatsapp') },
-    { value: 'PUSH', label: t('communications.admin.channelPush') },
     { value: 'IN_APP', label: t('communications.admin.channelInApp') },
+    { value: 'WHATSAPP', label: t('communications.admin.channelWhatsapp') + ' (Próximamente)' },
   ];
 
   const handleSearchSubmit = () => {
@@ -286,7 +284,6 @@ export const CommunicationsList = ({ buildingId, tenantId }: CommunicationsListP
                   </p>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span className="font-medium">{
-                      comm.channel === 'EMAIL' ? t('communications.admin.channelEmail') :
                       comm.channel === 'WHATSAPP' ? t('communications.admin.channelWhatsapp') :
                       comm.channel === 'PUSH' ? t('communications.admin.channelPush') :
                       t('communications.admin.channelInApp')

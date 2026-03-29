@@ -7,23 +7,23 @@ import {
   CreditCard,
   Bell,
   MessageSquare,
-  CheckCircle2,
+  CheckCircle,
   AlertCircle,
-  ChevronRight,
-  Clock,
+  DollarSign,
+  Home,
 } from 'lucide-react';
 
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
 import { useResidentLedger } from '../../../../../features/resident/hooks/useResidentLedger';
 import { getResidentCommunications, getResidentTickets } from '../../../../../features/resident/api/resident-context.api';
+import { getContextOptions } from '../../../../../features/context/context.api';
+import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import type { InboxCommunication, Ticket } from '../../../../../features/resident/api/resident-context.api';
+import type { ContextOption } from '../../../../../features/context/context.types';
 import Card from '../../../../../shared/components/ui/Card';
-import Badge from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { ChargeStatus } from '../../../../../features/finance/services/finance.api';
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function formatCurrency(amount: number, currency = 'USD'): string {
   return new Intl.NumberFormat('es-AR', {
@@ -52,268 +52,37 @@ function ticketStatusLabel(status: Ticket['status']): string {
   return labels[status] ?? status;
 }
 
-function ticketStatusClassName(status: Ticket['status']): string {
-  const classes: Record<Ticket['status'], string> = {
-    OPEN: 'bg-blue-100 text-blue-700 border-blue-200',
-    IN_PROGRESS: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    RESOLVED: 'bg-green-100 text-green-700 border-green-200',
-    CLOSED: 'bg-muted text-muted-foreground border-border',
-  };
-  return classes[status] ?? '';
+interface KPICardProps {
+  label: string;
+  value: string;
+  subValue?: string;
+  color: string;
+  icon: React.ReactNode;
+  cta?: string;
+  onClick?: () => void;
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-const SkeletonCard = () => {
+const KPICard = ({ label, value, subValue, color, icon, cta, onClick }: KPICardProps) => {
   return (
-    <Card className="space-y-3">
-      <Skeleton height="20px" width="60%" />
-      <Skeleton height="14px" width="80%" />
-      <Skeleton height="14px" width="40%" />
-    </Card>
-  );
-}
-
-interface StatusCardProps {
-  balance: number;
-  currency: string;
-  lastPaymentDate: string | undefined;
-  nextDueDate: string | undefined;
-  nextDueAmount: number | undefined;
-}
-
-const StatusCard = ({ balance, currency, lastPaymentDate, nextDueDate, nextDueAmount }: StatusCardProps) => {
-  const hasDebt = balance > 0;
-
-  return (
-    <Card
-      className={[
-        'flex flex-col gap-3',
-        hasDebt
-          ? 'border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-800'
-          : 'border-green-300 bg-green-50 dark:bg-green-950/20 dark:border-green-800',
-      ].join(' ')}
-    >
-      <div className="flex items-start gap-3">
-        {hasDebt ? (
-          <AlertCircle className="text-red-500 mt-0.5 shrink-0" size={22} />
-        ) : (
-          <CheckCircle2 className="text-green-500 mt-0.5 shrink-0" size={22} />
-        )}
-        <div className="min-w-0">
-          {hasDebt ? (
-            <>
-              <p className="font-semibold text-red-700 dark:text-red-400 text-base leading-tight">
-                Tenés deuda pendiente
-              </p>
-              <p className="text-2xl font-bold text-red-700 dark:text-red-300 mt-0.5">
-                {formatCurrency(balance, currency)}
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="font-semibold text-green-700 dark:text-green-400 text-base leading-tight">
-                Al día ✓
-              </p>
-              <p className="text-sm text-green-600 dark:text-green-500 mt-0.5">
-                Sin saldo pendiente
-              </p>
-            </>
-          )}
+    <Card className="p-4">
+      <div className="flex items-start justify-between">
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-gray-600">{label}</p>
+          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+          {subValue && <p className="text-xs text-gray-500">{subValue}</p>}
+        </div>
+        <div className={`p-2 rounded-lg ${color.replace('text-', 'bg-').replace('600', '100').replace('700', '100')}`}>
+          {icon}
         </div>
       </div>
-
-      <div className="grid grid-cols-2 gap-3 pt-1 border-t border-current/10">
-        <div>
-          <p className="text-xs text-muted-foreground">Último pago</p>
-          <p className="text-sm font-medium">{formatDate(lastPaymentDate)}</p>
-        </div>
-        {nextDueDate && (
-          <div>
-            <p className="text-xs text-muted-foreground">Próx. vencimiento</p>
-            <p className="text-sm font-medium">
-              {formatDate(nextDueDate)}
-              {nextDueAmount !== undefined && (
-                <span className="text-muted-foreground ml-1 text-xs">
-                  ({formatCurrency(nextDueAmount, currency)})
-                </span>
-              )}
-            </p>
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-interface QuickActionsProps {
-  tenantId: string;
-}
-
-const QuickActions = ({ tenantId }: QuickActionsProps) => {
-  const actions = [
-    {
-      label: 'Pagar',
-      href: `/${tenantId}/resident/payments`,
-      icon: <CreditCard size={20} />,
-      className: 'bg-primary text-primary-foreground',
-    },
-    {
-      label: 'Comunicados',
-      href: `/${tenantId}/resident/announcements`,
-      icon: <Bell size={20} />,
-      className: 'bg-muted text-foreground border border-border',
-    },
-    {
-      label: 'Nuevo ticket',
-      href: `/${tenantId}/resident/tickets`,
-      icon: <MessageSquare size={20} />,
-      className: 'bg-muted text-foreground border border-border',
-    },
-  ];
-
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      {actions.map((action) => (
-        <Link
-          key={action.href}
-          href={action.href}
-          className={[
-            'flex flex-col items-center justify-center gap-1.5 py-3 px-2 rounded-xl',
-            'text-sm font-medium transition-opacity active:opacity-70',
-            action.className,
-          ].join(' ')}
-        >
-          {action.icon}
-          <span className="text-xs leading-tight text-center">{action.label}</span>
-        </Link>
-      ))}
-    </div>
-  );
-}
-
-interface CommunicationsListProps {
-  communications: InboxCommunication[];
-  tenantId: string;
-}
-
-const CommunicationsList = ({ communications, tenantId }: CommunicationsListProps) => {
-  return (
-    <Card className="p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-semibold">Comunicados recientes</h2>
-        <Link
-          href={`/${tenantId}/resident/announcements`}
-          className="text-xs text-primary flex items-center gap-0.5 hover:underline"
-        >
-          Ver todos
-          <ChevronRight size={14} />
-        </Link>
-      </div>
-
-      {communications.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-          Sin comunicados recientes
-        </p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {communications.map((comm) => (
-            <li key={comm.id} className="px-4 py-3 flex items-start gap-3">
-              <Bell size={16} className="text-muted-foreground mt-0.5 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{comm.title}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <Badge className="bg-muted text-muted-foreground border-border text-xs">
-                    {comm.channel}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    {formatDate(comm.sentAt ?? comm.createdAt)}
-                  </span>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+      {cta && onClick && (
+        <button onClick={onClick} className="mt-2 text-sm text-blue-600 hover:underline">
+          {cta}
+        </button>
       )}
     </Card>
   );
-}
-
-interface TicketsListProps {
-  tickets: Ticket[];
-  tenantId: string;
-}
-
-const TicketsList = ({ tickets, tenantId }: TicketsListProps) => {
-  return (
-    <Card className="p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-semibold">Mis tickets recientes</h2>
-        <Link
-          href={`/${tenantId}/resident/tickets`}
-          className="text-xs text-primary flex items-center gap-0.5 hover:underline"
-        >
-          Ver todos
-          <ChevronRight size={14} />
-        </Link>
-      </div>
-
-      {tickets.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-          Sin tickets recientes
-        </p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {tickets.map((ticket) => (
-            <li key={ticket.id} className="px-4 py-3 flex items-start gap-3">
-              <MessageSquare size={16} className="text-muted-foreground mt-0.5 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{ticket.title}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <Badge className={ticketStatusClassName(ticket.status)}>
-                    {ticketStatusLabel(ticket.status)}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground flex items-center gap-0.5">
-                    <Clock size={11} />
-                    {formatDate(ticket.createdAt)}
-                  </span>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-// ─── No-context State ────────────────────────────────────────────────────────
-
-interface NoContextCardProps {
-  tenantId: string;
-}
-
-const NoContextCard = ({ tenantId }: NoContextCardProps) => {
-  return (
-    <Card className="flex flex-col items-center gap-3 py-8 text-center">
-      <AlertCircle size={32} className="text-muted-foreground" />
-      <div>
-        <p className="font-semibold text-sm">No hay unidad asignada</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          Tu cuenta todavía no tiene una unidad activa. Comunicate con la administración.
-        </p>
-      </div>
-      <Link
-        href={`/${tenantId}/resident/unit`}
-        className="text-sm text-primary hover:underline"
-      >
-        Ver mi unidad
-      </Link>
-    </Card>
-  );
-}
-
-// ─── Page ────────────────────────────────────────────────────────────────────
+};
 
 const ResidentDashboardPage = () => {
   const params = useParams<{ tenantId: string }>();
@@ -321,16 +90,26 @@ const ResidentDashboardPage = () => {
   const session = useAuthSession();
   const userName = session?.user?.name ?? '';
 
-  // 1. Fetch context (to get buildingId + unitId)
-  const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
+  const { data: tenants } = useTenants();
+  const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
 
+  const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
   const buildingId = context?.activeBuildingId ?? null;
   const unitId = context?.activeUnitId ?? null;
+  const hasContext = !!buildingId && !!unitId;
 
-  // 2. Fetch ledger (requires unitId)
+  const { data: contextOptions } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
+    queryKey: ['contextOptions', tenantId],
+    queryFn: () => getContextOptions(tenantId!),
+    enabled: !!tenantId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
+  const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
+
   const { data: ledger, isLoading: ledgerLoading } = useResidentLedger(unitId);
 
-  // 3. Fetch last 3 communications
   const { data: communications = [], isLoading: commsLoading } = useQuery<InboxCommunication[]>({
     queryKey: ['residentCommunications'],
     queryFn: () => getResidentCommunications(3),
@@ -339,7 +118,6 @@ const ResidentDashboardPage = () => {
     retry: 1,
   });
 
-  // 4. Fetch last 3 tickets (requires buildingId + unitId)
   const { data: tickets = [], isLoading: ticketsLoading } = useQuery<Ticket[]>({
     queryKey: ['residentTickets', buildingId, unitId],
     queryFn: () => getResidentTickets(buildingId!, unitId!, 3),
@@ -349,60 +127,176 @@ const ResidentDashboardPage = () => {
     retry: 1,
   });
 
-  // ── Derived values from ledger ──────────────────────────────────────────
   const balance = ledger?.totals.balance ?? 0;
   const currency = ledger?.payments?.[0]?.currency ?? ledger?.charges?.[0]?.currency ?? 'USD';
 
   const lastPayment = ledger?.payments
     ?.slice()
-    .sort((a, b) => new Date(b.paidAt ?? b.createdAt).getTime() - new Date(a.paidAt ?? a.createdAt).getTime())[0];
+    .sort((a, b) => new Date(b.paidAt ?? b.createdAt).getTime() - new Date(a.paidAt ?? b.createdAt).getTime())[0];
 
   const nextDueCharge = ledger?.charges
     ?.filter((c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL)
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
 
-  const isLoading = contextLoading;
+  const isLoading = contextLoading || ledgerLoading;
+
+  if (isLoading || commsLoading || ticketsLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+        <Skeleton className="h-48" />
+        <Skeleton className="h-48" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Greeting */}
+      {/* Header */}
       <div>
-        <h1 className="text-xl font-semibold">
+        <h1 className="text-3xl font-bold">
           {userName ? `Hola, ${userName.split(' ')[0]}` : 'Mi portal'}
         </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Resumen de tu unidad</p>
+        <p className="text-gray-600">
+          {tenantName}
+          {buildingName && ` • ${buildingName}`}
+          {unitLabel && ` • Unidad ${unitLabel}`}
+        </p>
       </div>
 
-      {/* Top row: Status + Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {isLoading || ledgerLoading ? (
-          <SkeletonCard />
-        ) : !unitId ? (
-          <NoContextCard tenantId={tenantId} />
-        ) : (
-          <StatusCard
-            balance={balance}
-            currency={currency}
-            lastPaymentDate={lastPayment?.paidAt}
-            nextDueDate={nextDueCharge?.dueDate}
-            nextDueAmount={nextDueCharge?.amount}
-          />
-        )}
-        <QuickActions tenantId={tenantId} />
+      {/* Context alert if no unit */}
+      {!hasContext && (
+        <Card className="p-4 border-yellow-300 bg-yellow-50">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="text-yellow-600" size={20} />
+            <div>
+              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700">Comunicate con la administración para que te asignen una unidad.</p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* KPIs */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <KPICard
+          label="Saldo pendiente"
+          value={balance > 0 ? formatCurrency(balance, currency) : '$0'}
+          color={balance > 0 ? "text-orange-600" : "text-green-600"}
+          icon={<DollarSign className={`w-5 h-5 ${balance > 0 ? "text-orange-600" : "text-green-600"}`} />}
+          cta={balance > 0 ? "Ver detalles" : undefined}
+          onClick={balance > 0 ? () => window.location.href = `/${tenantId}/resident/payments` : undefined}
+        />
+        <KPICard
+          label="Último pago"
+          value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency) : '—'}
+          subValue={lastPayment ? formatDate(lastPayment.paidAt) : 'Sin pagos'}
+          color="text-green-600"
+          icon={<DollarSign className="w-5 h-5 text-green-600" />}
+        />
+        <KPICard
+          label="Próximo vencimiento"
+          value={nextDueCharge ? formatDate(nextDueCharge.dueDate) : '—'}
+          subValue={nextDueCharge ? formatCurrency(nextDueCharge.amount, currency) : 'Sin cargos'}
+          color="text-blue-600"
+          icon={<AlertCircle className="w-5 h-5 text-blue-600" />}
+        />
+        <KPICard
+          label="Comunicados"
+          value={communications.length.toString()}
+          subValue="recientes"
+          color="text-purple-600"
+          icon={<Bell className="w-5 h-5 text-purple-600" />}
+        />
       </div>
 
-      {/* Bottom row: Communications + Tickets */}
+      {/* Quick Actions */}
+      <Card className="p-4">
+        <h3 className="font-semibold mb-4">Acciones rápidas</h3>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/${tenantId}/resident/payments`}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span className="text-sm font-medium">Pagar expensa</span>
+          </Link>
+          <Link
+            href={`/${tenantId}/resident/announcements`}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
+          >
+            <Bell className="w-4 h-4" />
+            <span className="text-sm font-medium">Ver comunicados</span>
+          </Link>
+          <Link
+            href={`/${tenantId}/resident/tickets`}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span className="text-sm font-medium">Crear ticket</span>
+          </Link>
+        </div>
+      </Card>
+
+      {/* Lists */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {commsLoading ? (
-          <SkeletonCard />
-        ) : (
-          <CommunicationsList communications={communications.slice(0, 3)} tenantId={tenantId} />
-        )}
-        {ticketsLoading ? (
-          <SkeletonCard />
-        ) : (
-          <TicketsList tickets={tickets.slice(0, 3)} tenantId={tenantId} />
-        )}
+        {/* Communications */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold">Comunicados recientes</h3>
+            <Link href={`/${tenantId}/resident/announcements`} className="text-sm text-blue-600 hover:underline">
+              Ver todos
+            </Link>
+          </div>
+          {communications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-6">
+              <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
+              <p className="text-gray-500">Sin comunicados</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {communications.slice(0, 3).map((comm) => (
+                <div key={comm.id} className="flex justify-between text-sm">
+                  <span className="truncate flex-1">{comm.title}</span>
+                  <span className="text-gray-500 text-xs ml-2">{formatDate(comm.sentAt ?? comm.createdAt)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Tickets */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold">Mis tickets</h3>
+            <Link href={`/${tenantId}/resident/tickets`} className="text-sm text-blue-600 hover:underline">
+              Ver todos
+            </Link>
+          </div>
+          {tickets.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-6">
+              <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
+              <p className="text-gray-500">Sin tickets abiertos</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {tickets.slice(0, 3).map((ticket) => (
+                <div key={ticket.id} className="flex justify-between text-sm">
+                  <span className="truncate flex-1">{ticket.title}</span>
+                  <span className="text-gray-500 text-xs ml-2">{ticketStatusLabel(ticket.status)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   );

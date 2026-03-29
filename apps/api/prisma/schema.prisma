@@ -153,6 +153,7 @@ model Tenant {
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
   unitOccupants         UnitOccupant[]
+  pushSubscriptions    PushSubscription[]
 }
 
 model User {
@@ -175,6 +176,7 @@ model User {
   aiInteractionLogs     AiInteractionLog[]
   reviewedPlanRequests  PlanChangeRequest[]    @relation("PlanRequestReviewedBy")
   tenantMembers        TenantMember[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Membership {
@@ -879,6 +881,11 @@ enum CommunicationTargetType {
   ROLE
 }
 
+enum CommunicationPriority {
+  NORMAL
+  URGENT
+}
+
 model Communication {
   id         String  @id @default(cuid())
   tenantId   String
@@ -888,6 +895,7 @@ model Communication {
   body    String
   channel CommunicationChannel
   status  CommunicationStatus  @default(DRAFT)
+  priority CommunicationPriority @default(NORMAL)
 
   createdByMembershipId String
   scheduledAt           DateTime?
@@ -946,6 +954,25 @@ model CommunicationReceipt {
   @@unique([communicationId, userId])
   @@index([tenantId, userId, readAt])
   @@index([communicationId, readAt])
+}
+
+model PushSubscription {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  endpoint   String
+  p256dh     String
+  auth       String
+  createdAt  DateTime @default(now())
+  revokedAt  DateTime?
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, endpoint])
+  @@index([tenantId, userId])
+  @@index([tenantId, revokedAt])
 }
 
 // ============================================================================

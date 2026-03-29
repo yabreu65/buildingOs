@@ -13,7 +13,7 @@
   --muted-foreground: #55657a;   /* más legible que slate-500 */
 
   /* Brand */
-  --primary: #1e3a8a;            /* blue-800 */
+  --primary: #2563eb;            /* blue-600 - más visible */
   --primary-foreground: #ffffff;
 
   --accent: #14b8a6;             /* teal-500 */
@@ -72,7 +72,7 @@
     --muted-foreground: #a6b3c6;  /* mejor legibilidad secundaria */
 
     /* Brand (ok) */
-    --primary: #1d4ed8;
+    --primary: #3b82f6;          /* blue-500 - más vivo en dark */
     --primary-foreground: #ffffff;
 
     --accent: #14b8a6;

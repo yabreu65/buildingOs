@@ -52,12 +52,15 @@ export class ConfigService {
   /**
    * Check if feature is enabled
    */
-  isFeatureEnabled(feature: 'portalResident' | 'paymentsMvp'): boolean {
+  isFeatureEnabled(feature: 'portalResident' | 'paymentsMvp' | 'enforceUrgentForWebPush'): boolean {
     if (feature === 'portalResident') {
       return this.appConfig.featurePortalResident;
     }
     if (feature === 'paymentsMvp') {
       return this.appConfig.featurePaymentsMvp;
+    }
+    if (feature === 'enforceUrgentForWebPush') {
+      return this.appConfig.featureEnforceUrgentForWebPush;
     }
     return false;
   }

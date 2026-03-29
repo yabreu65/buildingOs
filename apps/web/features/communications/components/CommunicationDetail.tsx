@@ -113,8 +113,7 @@ export const CommunicationDetail = ({
               <div className="flex items-center gap-2 mt-1">
                 <StatusBadge status={communication.status} />
                 <span className="text-xs text-muted-foreground">
-                  {communication.channel === 'EMAIL' ? t('communications.admin.channelEmail') :
-                   communication.channel === 'WHATSAPP' ? t('communications.admin.channelWhatsapp') :
+                  {communication.channel === 'WHATSAPP' ? t('communications.admin.channelWhatsapp') :
                    communication.channel === 'PUSH' ? t('communications.admin.channelPush') :
                    t('communications.admin.channelInApp')}
                 </span>

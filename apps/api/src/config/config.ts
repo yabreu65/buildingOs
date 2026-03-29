@@ -160,6 +160,10 @@ export const createConfigSchema = (_nodeEnv: string) => {
     FEATURE_PAYMENTS_MVP: z
       .string()
       .transform((v) => parseBoolean(v, true)),
+    FEATURE_ENFORCE_URGENT_FOR_WEB_PUSH: z
+      .string()
+      .optional()
+      .transform((v) => parseBoolean(v, true)),
 
     // Development overrides (optional)
     INVITATION_EMAIL_OVERRIDE: z.preprocess(
@@ -259,6 +263,7 @@ export function loadConfig(): AppConfig {
       // Feature flags
       featurePortalResident: parsed.FEATURE_PORTAL_RESIDENT,
       featurePaymentsMvp: parsed.FEATURE_PAYMENTS_MVP,
+      featureEnforceUrgentForWebPush: parsed.FEATURE_ENFORCE_URGENT_FOR_WEB_PUSH,
 
       // Development overrides
       invitationEmailOverride: parsed.INVITATION_EMAIL_OVERRIDE,

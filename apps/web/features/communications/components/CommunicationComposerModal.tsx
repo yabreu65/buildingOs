@@ -57,6 +57,10 @@ export const CommunicationComposerModal = ({
     (communication?.channel as CommunicationChannel) ?? 'IN_APP'
   );
 
+  const [priority, setPriority] = useState<'NORMAL' | 'URGENT'>(
+    (communication?.priority as 'NORMAL' | 'URGENT') ?? 'NORMAL'
+  );
+
   // Default: first target option (BUILDING = todo el edificio)
   const [selectedTarget, setSelectedTarget] = useState<TargetOption>(
     TARGET_OPTIONS[0]!
@@ -121,6 +125,7 @@ export const CommunicationComposerModal = ({
         title: title.trim(),
         body: body.trim(),
         channel,
+        priority,
         targets,
       };
       await onSave(input, communication?.id);
@@ -249,9 +254,9 @@ export const CommunicationComposerModal = ({
             </div>
           )}
 
-          {/* Channel + Target row */}
+          {/* Channel + Priority row */}
           <div className="grid grid-cols-2 gap-3">
-            {/* Channel */}
+            {/* Channel - IN_APP only for MVP */}
             <div>
               <label className="text-sm font-medium block mb-1">
                 {t('communications.admin.channelLabel')}
@@ -262,39 +267,24 @@ export const CommunicationComposerModal = ({
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               >
                 <option value="IN_APP">{t('communications.admin.channelInApp')}</option>
-                <option value="EMAIL">{t('communications.admin.channelEmail')}</option>
-                <option value="PUSH">{t('communications.admin.channelPush')}</option>
-                <option value="WHATSAPP">{t('communications.admin.channelWhatsapp')}</option>
+                <option value="WHATSAPP" disabled>
+                  {t('communications.admin.channelWhatsapp')} (Próximamente)
+                </option>
               </select>
             </div>
 
-            {/* Target */}
+            {/* Priority */}
             <div>
               <label className="text-sm font-medium block mb-1">
-                {t('communications.admin.targetLabel')}
+                Prioridad
               </label>
               <select
-                value={getTargetKey(selectedTarget)}
-                onChange={(e) => {
-                  const found = TARGET_OPTIONS.find(
-                    (opt) => getTargetKey(opt) === e.target.value
-                  );
-                  if (found) {
-                    setSelectedTarget(found);
-                    // Reset building scope when target changes
-                    if (found.targetType === 'BUILDING') {
-                      setBuildingScope('THIS');
-                      setSelectedBuildingIds(new Set([buildingId]));
-                    }
-                  }
-                }}
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as 'NORMAL' | 'URGENT')}
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               >
-                {TARGET_OPTIONS.map((opt) => (
-                  <option key={getTargetKey(opt)} value={getTargetKey(opt)}>
-                    {t(opt.label)}
-                  </option>
-                ))}
+                <option value="NORMAL">Normal</option>
+                <option value="URGENT">Urgente</option>
               </select>
             </div>
           </div>

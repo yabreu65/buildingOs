@@ -34,6 +34,7 @@ import { AssistantModule } from './assistant/assistant.module';
 import { LeadsModule } from './leads/leads.module';
 import { TenantMembersModule } from './tenant-members/tenant-members.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { PushController } from './push/push.controller';
 
 @Module({
   imports: [
@@ -72,7 +73,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     TenantMembersModule,
     DashboardModule,
   ],
-  controllers: [],
+  controllers: [PushController],
   providers: [],
 })
 export class AppModule {}

@@ -5,9 +5,10 @@ import { CommunicationsInboxController } from './communications-user.controller'
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AppConfigModule } from '../config/config.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AppConfigModule],
   controllers: [
     CommunicationsController,
     CommunicationsUserController,

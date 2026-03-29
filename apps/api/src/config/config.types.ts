@@ -61,6 +61,7 @@ export interface AppConfig {
   // Feature flags
   featurePortalResident: boolean;
   featurePaymentsMvp: boolean;
+  featureEnforceUrgentForWebPush: boolean;
 
   // Development overrides (optional)
   invitationEmailOverride?: string;

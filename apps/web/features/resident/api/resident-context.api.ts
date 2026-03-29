@@ -64,8 +64,9 @@ export async function getResidentTickets(
   limit = 3,
 ): Promise<Ticket[]> {
   const params = new URLSearchParams({ unitId, limit: String(limit) });
-  return apiClient<Ticket[]>({
+  const response = await apiClient<{ tickets: Ticket[] }>({
     path: `/buildings/${buildingId}/tickets?${params.toString()}`,
     method: 'GET',
   });
+  return Array.isArray(response) ? response : response?.tickets ?? [];
 }

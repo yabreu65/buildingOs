@@ -19,6 +19,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunicationsValidators } from './communications.validators';
 import { ADMIN_ROLES } from './admin-role.guard';
+import { ConfigService } from '../config/config.service';
 
 /** Include spec shared by all queries that return full communication details */
 const COMMUNICATION_INCLUDE = {
@@ -84,6 +85,7 @@ export class CommunicationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly validators: CommunicationsValidators,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -351,8 +353,8 @@ export class CommunicationsService {
    * In production, this would integrate with notification channels
    * For MVP, just updates the status and sentAt timestamp
    *
-   * @throws NotFoundException if communication doesn't belong to tenant
-   */
+    * @throws NotFoundException if communication doesn't belong to tenant
+    */
   async send(tenantId: string, communicationId: string): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
@@ -369,6 +371,63 @@ export class CommunicationsService {
       },
       include: COMMUNICATION_INCLUDE,
     });
+  }
+
+  /**
+   * Publish a communication with optional web push
+   *
+   * Anti-spam rule:
+   * - If sendWebPush=true and feature flag enforceUrgentForWebPush is enabled,
+   *   only allows priority=URGENT
+   *
+   * @throws NotFoundException if communication doesn't belong to tenant
+   * @throws BadRequestException if sendWebPush=true but priority!=URGENT (when flag enabled)
+   */
+  async publish(
+    tenantId: string,
+    communicationId: string,
+    sendWebPush: boolean,
+  ): Promise<CommunicationWithDetails> {
+    // Validate scope
+    await this.validators.validateCommunicationBelongsToTenant(
+      tenantId,
+      communicationId,
+    );
+
+    // Fetch communication to check priority
+    const communication = await this.prisma.communication.findUnique({
+      where: { id: communicationId },
+      select: { priority: true, status: true },
+    });
+
+    if (!communication) {
+      throw new NotFoundException('Communication not found');
+    }
+
+    // Anti-spam: check if web push requires urgent priority
+    const enforceUrgent = this.configService.isFeatureEnabled('enforceUrgentForWebPush');
+    if (sendWebPush && enforceUrgent && communication.priority !== 'URGENT') {
+      throw new BadRequestException({
+        code: 'WEB_PUSH_REQUIRES_URGENT',
+        message: 'Web push can only be sent for URGENT communications',
+      });
+    }
+
+    // Mark as published (SENT in current schema)
+    const published = await this.prisma.communication.update({
+      where: { id: communicationId },
+      data: {
+        status: 'SENT',
+        sentAt: new Date(),
+        updatedAt: new Date(),
+      },
+      include: COMMUNICATION_INCLUDE,
+    });
+
+    // TODO: Send web push to subscribed users (best-effort, non-blocking)
+    // This would integrate with push subscriptions when implemented
+
+    return published;
   }
 
   /**
@@ -526,5 +585,184 @@ export class CommunicationsService {
         deliveredAt: new Date(),
       },
     });
+  }
+
+  /**
+   * Resident communication list item (for cursor pagination)
+   */
+  async findForResident(
+    tenantId: string,
+    userId: string,
+    limit: number = 20,
+    cursor?: string,
+  ): Promise<{
+    items: Array<{
+      id: string;
+      title: string;
+      body: string;
+      priority: string;
+      scopeType: string;
+      buildingIds: string[];
+      createdAt: Date;
+      publishedAt: Date | null;
+      deliveryStatus: 'UNREAD' | 'READ';
+      readAt: Date | null;
+    }>;
+    nextCursor?: string;
+  }> {
+    // Decode cursor if provided
+    let cursorDate: Date | undefined;
+    let cursorId: string | undefined;
+    if (cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
+        cursorDate = decoded.publishedAt ? new Date(decoded.publishedAt) : undefined;
+        cursorId = decoded.id;
+      } catch {
+        // Invalid cursor, ignore
+      }
+    }
+
+    // Build where clause for cursor pagination
+    const baseWhere: Prisma.CommunicationReceiptWhereInput = {
+      tenantId,
+      userId,
+      communication: {
+        status: 'SENT',
+        sentAt: { not: null },
+      },
+    };
+
+    // Apply cursor if provided
+    let receipts;
+    if (cursorDate && cursorId) {
+      receipts = await this.prisma.communicationReceipt.findMany({
+        where: {
+          ...baseWhere,
+          OR: [
+            { communication: { sentAt: { lt: cursorDate } } },
+            { AND: [
+              { communication: { sentAt: cursorDate } },
+              { communication: { id: { lt: cursorId } } },
+            ]},
+          ],
+        },
+        include: {
+          communication: {
+            include: {
+              targets: { select: { targetId: true, targetType: true } },
+            },
+          },
+        },
+        orderBy: [
+          { communication: { sentAt: 'desc' } },
+          { communication: { id: 'desc' } },
+        ],
+        take: limit + 1,
+      });
+    } else {
+      receipts = await this.prisma.communicationReceipt.findMany({
+        where: baseWhere,
+        include: {
+          communication: {
+            include: {
+              targets: { select: { targetId: true, targetType: true } },
+            },
+          },
+        },
+        orderBy: [
+          { communication: { sentAt: 'desc' } },
+          { communication: { id: 'desc' } },
+        ],
+        take: limit + 1,
+      });
+    }
+
+    const hasMore = receipts.length > limit;
+    const items = receipts.slice(0, limit);
+
+    // Map to response format
+    const mappedItems = items.map((receipt) => {
+      const comm = receipt.communication;
+      const buildingIds = comm.targets
+        .filter((t) => t.targetType === 'BUILDING' && t.targetId)
+        .map((t) => t.targetId!);
+      const scopeType: string =
+        buildingIds.length === 0
+          ? 'TENANT_ALL'
+          : buildingIds.length === 1
+            ? 'BUILDING'
+            : 'MULTI_BUILDING';
+
+      return {
+        id: comm.id,
+        title: comm.title,
+        body: comm.body,
+        priority: (comm.priority || 'NORMAL') as 'NORMAL' | 'URGENT',
+        scopeType: scopeType as 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL',
+        buildingIds,
+        createdAt: comm.createdAt.toISOString(),
+        publishedAt: comm.sentAt?.toISOString() ?? undefined,
+        deliveryStatus: (receipt.readAt ? 'READ' : 'UNREAD') as 'UNREAD' | 'READ',
+        readAt: receipt.readAt?.toISOString() ?? undefined,
+      };
+    });
+
+    // Generate next cursor
+    let nextCursor: string | undefined;
+    if (hasMore && mappedItems.length > 0) {
+      const lastItem = mappedItems[mappedItems.length - 1]!;
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          publishedAt: lastItem.publishedAt,
+          id: lastItem.id,
+        }),
+      ).toString('base64');
+    }
+
+    return { items: mappedItems as unknown as Array<{id: string; title: string; body: string; priority: string; scopeType: string; buildingIds: string[]; createdAt: Date; publishedAt: Date | null; deliveryStatus: 'UNREAD' | 'READ'; readAt: Date | null}>, nextCursor };
+  }
+
+  /**
+   * Mark as read idempotently for resident
+   * Returns current read status
+   */
+  async markAsReadForResident(
+    tenantId: string,
+    userId: string,
+    communicationId: string,
+  ): Promise<{ readAt: Date | null }> {
+    // First check if there's a receipt
+    const receipt = await this.prisma.communicationReceipt.findUnique({
+      where: {
+        communicationId_userId: {
+          communicationId,
+          userId,
+        },
+      },
+      select: { readAt: true },
+    });
+
+    if (!receipt) {
+      throw new NotFoundException('Receipt not found');
+    }
+
+    // If already read, return current status
+    if (receipt.readAt) {
+      return { readAt: receipt.readAt };
+    }
+
+    // Mark as read
+    await this.prisma.communicationReceipt.update({
+      where: {
+        communicationId_userId: {
+          communicationId,
+          userId,
+        },
+      },
+      data: { readAt: new Date() },
+    });
+
+    return { readAt: new Date() };
   }
 }

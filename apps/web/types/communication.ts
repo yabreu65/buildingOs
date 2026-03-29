@@ -5,6 +5,7 @@ import { CommunicationType } from './enums';
 import type {
   TargetType,
   CommunicationChannel as ApiCommunicationChannel,
+  CommunicationPriority,
 } from '@/features/communications/services/communications.api';
 
 export interface CommunicationTarget {
@@ -16,6 +17,7 @@ export interface CommunicationInput {
   title: string;
   body: string;
   channel: ApiCommunicationChannel;
+  priority?: CommunicationPriority;
   type?: CommunicationType;
   targets: CommunicationTarget[];
   scheduledFor?: string;
