@@ -39,7 +39,6 @@ export const Sidebar = () => {
   const tenantId = useTenantId();
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find(t => t.id === tenantId)?.name;
-  const canReview = useCan("payments.review");
   const isSuperAdmin = useIsSuperAdmin();
   const isResident = useHasRole("RESIDENT");
   const { isImpersonating } = useImpersonation();
@@ -75,14 +74,6 @@ export const Sidebar = () => {
             <NavItem href={`/${tenantId}/finanzas`} label={t('navigation.finanzas')} />
             <NavItem href={routes.tenantReports(tenantId)} label={t('navigation.reports')} />
 
-            {canReview && (
-              <>
-                <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  {t('sidebar.admin')}
-                </div>
-                <NavItem href={`/${tenantId}/payments/review`} label={t('payments.review')} />
-              </>
-            )}
 
             <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               {t('navigation.settings')}
