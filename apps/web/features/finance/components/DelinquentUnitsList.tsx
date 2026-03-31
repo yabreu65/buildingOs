@@ -8,6 +8,8 @@ import { AlertCircle } from 'lucide-react';
 
 interface DelinquentUnit {
   unitId: string;
+  unitLabel: string;
+  buildingName: string;
   outstanding: number;
 }
 
@@ -47,6 +49,7 @@ export function DelinquentUnitsList({
         <Table>
           <THead>
             <TR>
+              <TH>Edificio</TH>
               <TH>Unidad</TH>
               <TH className="text-right">Deuda Pendiente</TH>
             </TR>
@@ -54,7 +57,8 @@ export function DelinquentUnitsList({
           <TBody>
             {units.map((unit) => (
               <TR key={unit.unitId}>
-                <TD className="font-medium">{unit.unitId}</TD>
+                <TD className="font-medium text-sm">{unit.buildingName}</TD>
+                <TD className="font-medium">{unit.unitLabel}</TD>
                 <TD className="text-right font-semibold text-red-600">
                   {currency} {unit.outstanding.toFixed(2)}
                 </TD>
