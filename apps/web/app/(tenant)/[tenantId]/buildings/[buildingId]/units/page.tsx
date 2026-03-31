@@ -237,15 +237,15 @@ const UnitsPage = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Units</h1>
+          <h1 className="text-3xl font-bold">Unidades</h1>
           <p className="text-muted-foreground mt-1">
-            Manage units in {building.name}
+            Gestión de unidades en {building.name}
           </p>
         </div>
         {!showCreateForm && !editingUnit && (
           <Button onClick={() => setShowCreateForm(!showCreateForm)}>
             <Plus className="w-4 h-4 mr-2" />
-            New Unit
+            Nueva unidad
           </Button>
         )}
       </div>

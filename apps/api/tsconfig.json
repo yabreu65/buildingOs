@@ -38,7 +38,10 @@
     "noEmitOnError": false,
     "forceConsistentCasingInFileNames": true,
     "removeComments": true,
-    "typeRoots": ["./node_modules/@types", "./src/types"]
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "paths": {
+      "@prisma/client": ["../../node_modules/@prisma/client"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/*.test.ts"]

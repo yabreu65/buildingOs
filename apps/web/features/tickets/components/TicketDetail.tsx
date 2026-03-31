@@ -12,6 +12,7 @@ import { useQuotes, useWorkOrders, QuoteCreateModal, WorkOrderCreateModal } from
 import { useTenantMembers } from '@/features/tenant-members';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface TicketDetailProps {
   buildingId: string;
@@ -342,7 +343,7 @@ export default function TicketDetail({
                     <div key={quote.id} className="p-2 bg-muted rounded-md text-sm">
                       <p className="font-medium">{quote.vendor?.name}</p>
                       <p className="text-muted-foreground">
-                        {quote.currency} ${quote.amount.toFixed(2)} - {quote.status}
+                        {formatCurrency(quote.amount, quote.currency)} - {quote.status}
                       </p>
                     </div>
                   ))}

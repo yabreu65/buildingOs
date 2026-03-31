@@ -51,6 +51,7 @@ export interface Charge {
   createdAt: string;
   updatedAt: string;
   canceledAt?: string;
+  allocated?: number;
 }
 
 export interface Payment {
@@ -114,12 +115,17 @@ export interface FinancialSummary {
 
 export interface UnitLedger {
   unitId: string;
+  unitLabel?: string;
+  buildingId?: string;
+  buildingName?: string;
   charges: Charge[];
   payments: Payment[];
   totals: {
     totalCharges: number;
-    totalPaid: number;
+    totalAllocated?: number;
+    totalPaid?: number;
     balance: number;
+    currency?: string;
   };
 }
 
@@ -420,17 +426,19 @@ export async function getUnitLedger(
 
 /**
  * Get aggregated financial summary for entire tenant (all buildings)
+ * @param tenantId - Tenant ID for the request
  * @param period - Optional YYYY-MM format to filter by period
  * @returns Aggregated financial summary across all buildings
  */
-export async function getTenantFinancialSummary(period?: string): Promise<FinancialSummary> {
+export async function getTenantFinancialSummary(tenantId: string, period?: string): Promise<FinancialSummary> {
   const params = new URLSearchParams();
   if (period) params.append('period', period);
 
   const query = params.toString() ? `?${params.toString()}` : '';
   return apiClient<FinancialSummary>({
-    path: `/finance/summary${query}`,
+    path: `/tenants/${tenantId}/finance/summary${query}`,
     method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
   });
 }
 
@@ -517,7 +525,7 @@ export async function listPendingPayments(
 
   const queryString = params.toString();
   return apiClient<PendingPayment[]>({
-    path: `/finance/payments/pending${queryString ? `?${queryString}` : ''}`,
+    path: `/tenants/${tenantId}/finance/payments/pending${queryString ? `?${queryString}` : ''}`,
     method: 'GET',
     headers: { 'X-Tenant-Id': tenantId },
   });
@@ -529,7 +537,7 @@ export async function approvePaymentTenant(
   paidAt?: string
 ): Promise<PendingPayment> {
   return apiClient<PendingPayment, { paidAt?: string }>({
-    path: `/finance/payments/${paymentId}/approve`,
+    path: `/tenants/${tenantId}/finance/payments/${paymentId}/approve`,
     method: 'PATCH',
     headers: { 'X-Tenant-Id': tenantId },
     body: { paidAt },
@@ -544,7 +552,7 @@ export async function rejectPaymentTenant(
   notes?: string
 ): Promise<PendingPayment> {
   return apiClient<PendingPayment, { reason: string; comment?: string; notes?: string }>({
-    path: `/finance/payments/${paymentId}/reject`,
+    path: `/tenants/${tenantId}/finance/payments/${paymentId}/reject`,
     method: 'PATCH',
     headers: { 'X-Tenant-Id': tenantId },
     body: { reason, comment, notes },
@@ -591,7 +599,7 @@ export async function getPaymentMetrics(
 
   const queryString = params.toString();
   return apiClient<PaymentMetrics>({
-    path: `/finance/payments/metrics${queryString ? `?${queryString}` : ''}`,
+    path: `/tenants/${tenantId}/finance/payments/metrics${queryString ? `?${queryString}` : ''}`,
     method: 'GET',
     headers: { 'X-Tenant-Id': tenantId },
   });
@@ -622,7 +630,7 @@ export async function getPaymentAuditLog(
 ): Promise<PaymentAuditLogEntry[]> {
   const params = limit ? `?limit=${limit}` : '';
   return apiClient<PaymentAuditLogEntry[]>({
-    path: `/finance/payments/${paymentId}/audit${params}`,
+    path: `/tenants/${tenantId}/finance/payments/${paymentId}/audit${params}`,
     method: 'GET',
     headers: { 'X-Tenant-Id': tenantId },
   });
@@ -645,7 +653,7 @@ export async function checkPaymentDuplicate(
   paymentId: string
 ): Promise<PaymentDuplicateCheck> {
   return apiClient<PaymentDuplicateCheck>({
-    path: `/finance/payments/${paymentId}/duplicate-check`,
+    path: `/tenants/${tenantId}/finance/payments/${paymentId}/duplicate-check`,
     method: 'GET',
     headers: { 'X-Tenant-Id': tenantId },
   });

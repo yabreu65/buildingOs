@@ -9,17 +9,21 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   CommunicationChannel,
   CommunicationStatus,
   CommunicationTargetType,
+  CommunicationPriority,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunicationsValidators } from './communications.validators';
 import { ADMIN_ROLES } from './admin-role.guard';
 import { ConfigService } from '../config/config.service';
+import type { CommunicationScopeType } from '@buildingos/contracts';
+import type { ResidentCommunicationListResponse } from '@buildingos/contracts';
 
 /** Include spec shared by all queries that return full communication details */
 const COMMUNICATION_INCLUDE = {
@@ -78,6 +82,20 @@ export interface UpdateCommunicationInput {
 
 export interface ScheduleCommunicationInput {
   scheduledAt: Date;
+}
+
+export interface CreateCommunicationV2Input {
+  title: string;
+  body: string;
+  status: 'DRAFT' | 'PUBLISHED';
+  priority: CommunicationPriority;
+  scopeType: CommunicationScopeType;
+  buildingId?: string;
+  buildingIds?: string[];
+}
+
+export interface PublishV2Options {
+  sendWebPush: boolean;
 }
 
 @Injectable()
@@ -764,5 +782,345 @@ export class CommunicationsService {
     });
 
     return { readAt: new Date() };
+  }
+
+  /**
+   * Create a new communication V2 (with scopeType pattern)
+   *
+   * If status=PUBLISHED:
+   * - Sets publishedAt=now() (mapped to sentAt internally)
+   * - Creates communication_deliveries with UNREAD status
+   * - sendWebPush defaults to false (no push from this endpoint)
+   *
+   * @throws NotFoundException if building/target doesn't belong to tenant
+   * @throws BadRequestException if input is invalid
+   */
+  async createV2(
+    tenantId: string,
+    userId: string,
+    input: CreateCommunicationV2Input,
+    sendWebPush: boolean = false,
+  ): Promise<CommunicationWithDetails> {
+    const membership = await this.prisma.membership.findFirst({
+      where: { userId, tenantId },
+      select: { id: true },
+    });
+
+    if (!membership) {
+      throw new BadRequestException(
+        'User does not have a membership in this tenant',
+      );
+    }
+
+    const createdByMembershipId = membership.id;
+
+    let targets: Array<{ targetType: CommunicationTargetType; targetId?: string }> = [];
+
+    switch (input.scopeType) {
+      case 'TENANT_ALL':
+        targets = [{ targetType: 'ALL_TENANT' }];
+        break;
+      case 'BUILDING':
+        if (!input.buildingId) {
+          throw new BadRequestException('BUILDING scopeType requires buildingId');
+        }
+        await this.validators.validateBuildingBelongsToTenant(tenantId, input.buildingId);
+        targets = [{ targetType: 'BUILDING', targetId: input.buildingId }];
+        break;
+      case 'MULTI_BUILDING':
+        if (!input.buildingIds || input.buildingIds.length === 0) {
+          throw new BadRequestException('MULTI_BUILDING scopeType requires buildingIds array');
+        }
+        for (const buildingId of input.buildingIds) {
+          await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
+        }
+        targets = input.buildingIds.map((buildingId) => ({
+          targetType: 'BUILDING' as CommunicationTargetType,
+          targetId: buildingId,
+        }));
+        break;
+    }
+
+    const shouldPublish = input.status === 'PUBLISHED';
+
+    const communication = await this.prisma.communication.create({
+      data: {
+        tenantId,
+        buildingId: input.scopeType === 'BUILDING' ? input.buildingId || null : null,
+        title: input.title,
+        body: input.body,
+        channel: 'IN_APP',
+        status: shouldPublish ? 'SENT' as const : 'DRAFT' as const,
+        priority: input.priority || 'NORMAL',
+        sentAt: shouldPublish ? new Date() : null,
+        createdByMembershipId,
+        targets: {
+          createMany: {
+            data: targets.map((t) => ({
+              tenantId,
+              targetType: t.targetType,
+              targetId: t.targetId || null,
+            })),
+          },
+        },
+      },
+      include: {
+        targets: true,
+      },
+    });
+
+    const recipientIds = await this.validators.resolveRecipients(
+      tenantId,
+      communication.id,
+    );
+
+    if (recipientIds.length > 0) {
+      await this.prisma.communicationReceipt.createMany({
+        data: recipientIds.map((recipientUserId) => ({
+          tenantId,
+          communicationId: communication.id,
+          userId: recipientUserId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return this.findOne(tenantId, communication.id);
+  }
+
+  /**
+   * Publish a communication V2 with optional web push
+   *
+   * Anti-spam rule:
+   * - If sendWebPush=true and feature flag enforceUrgentForWebPush is enabled (default true),
+   *   only allows priority=URGENT
+   * - Returns 422 with code WEB_PUSH_REQUIRES_URGENT if violated
+   *
+   * If sendWebPush=true:
+   * - Sends WEB_PUSH only to users with active PushSubscription
+   * - If no subscriptions, does NOT fail (silent no-op)
+   *
+   * @throws NotFoundException if communication doesn't belong to tenant
+   * @throws UnprocessableEntityException if sendWebPush=true but priority!=URGENT (when flag enabled)
+   */
+  async publishV2(
+    tenantId: string,
+    communicationId: string,
+    sendWebPush: boolean,
+  ): Promise<CommunicationWithDetails> {
+    await this.validators.validateCommunicationBelongsToTenant(
+      tenantId,
+      communicationId,
+    );
+
+    const communication = await this.prisma.communication.findUnique({
+      where: { id: communicationId },
+      select: { priority: true, status: true },
+    });
+
+    if (!communication) {
+      throw new NotFoundException('Communication not found');
+    }
+
+    const enforceUrgent = this.configService.isFeatureEnabled('enforceUrgentForWebPush');
+    if (sendWebPush && enforceUrgent && communication.priority !== 'URGENT') {
+      throw new UnprocessableEntityException({
+        code: 'WEB_PUSH_REQUIRES_URGENT',
+        message: 'Web push can only be sent for URGENT communications',
+      });
+    }
+
+    const published = await this.prisma.communication.update({
+      where: { id: communicationId },
+      data: {
+        status: 'SENT',
+        sentAt: new Date(),
+        updatedAt: new Date(),
+      },
+      include: COMMUNICATION_INCLUDE,
+    });
+
+    if (sendWebPush) {
+      await this.sendWebPushIfApplicable(tenantId, communicationId);
+    }
+
+    return published;
+  }
+
+  /**
+   * Send web push to users with active subscriptions
+   * Best-effort: does NOT fail if no subscriptions exist
+   */
+  private async sendWebPushIfApplicable(
+    tenantId: string,
+    communicationId: string,
+  ): Promise<void> {
+    const subscriptions = await this.prisma.pushSubscription.findMany({
+      where: {
+        tenantId,
+        revokedAt: null,
+      },
+      select: {
+        userId: true,
+        endpoint: true,
+        p256dh: true,
+        auth: true,
+      },
+    });
+
+    if (subscriptions.length === 0) {
+      return;
+    }
+
+    const communication = await this.prisma.communication.findUnique({
+      where: { id: communicationId },
+      select: { title: true, body: true },
+    });
+
+    if (!communication) {
+      return;
+    }
+
+    // TODO: Integrate with actual push notification service (FCM, WebPush, etc.)
+    // For now, this is a placeholder that logs what would be sent
+    console.log(`[Push] Would send push to ${subscriptions.length} users:`, {
+      title: communication.title,
+      body: communication.body,
+      subscriptions: subscriptions.map((s) => s.endpoint),
+    });
+  }
+
+  /**
+   * Find communications for resident with cursor pagination V2
+   *
+   * Ordering: publishedAt DESC, id DESC (mapped to sentAt DESC, id DESC internally)
+   *
+   * @returns ResidentCommunicationListResponse with typed items
+   */
+  async findForResidentV2(
+    tenantId: string,
+    userId: string,
+    limit: number = 20,
+    cursor?: string,
+  ): Promise<ResidentCommunicationListResponse> {
+    let cursorDate: Date | undefined;
+    let cursorId: string | undefined;
+    if (cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
+        cursorDate = decoded.publishedAt ? new Date(decoded.publishedAt) : undefined;
+        cursorId = decoded.id;
+      } catch {
+        // Invalid cursor, ignore
+      }
+    }
+
+    const baseWhere: Prisma.CommunicationReceiptWhereInput = {
+      tenantId,
+      userId,
+      communication: {
+        status: 'SENT',
+        sentAt: { not: null },
+      },
+    };
+
+    let receipts;
+    if (cursorDate && cursorId) {
+      receipts = await this.prisma.communicationReceipt.findMany({
+        where: {
+          ...baseWhere,
+          OR: [
+            { communication: { sentAt: { lt: cursorDate } } },
+            {
+              AND: [
+                { communication: { sentAt: cursorDate } },
+                { communication: { id: { lt: cursorId } } },
+              ],
+            },
+          ],
+        },
+        include: {
+          communication: {
+            include: {
+              targets: { select: { targetId: true, targetType: true } },
+            },
+          },
+        },
+        orderBy: [
+          { communication: { sentAt: 'desc' } },
+          { communication: { id: 'desc' } },
+        ],
+        take: limit + 1,
+      });
+    } else {
+      receipts = await this.prisma.communicationReceipt.findMany({
+        where: baseWhere,
+        include: {
+          communication: {
+            include: {
+              targets: { select: { targetId: true, targetType: true } },
+            },
+          },
+        },
+        orderBy: [
+          { communication: { sentAt: 'desc' } },
+          { communication: { id: 'desc' } },
+        ],
+        take: limit + 1,
+      });
+    }
+
+    const hasMore = receipts.length > limit;
+    const items = receipts.slice(0, limit);
+
+    const mappedItems = items.map((receipt): {
+      id: string;
+      title: string;
+      body: string;
+      priority: 'NORMAL' | 'URGENT';
+      scopeType: 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL';
+      buildingIds: string[];
+      createdAt: string;
+      publishedAt: string | null;
+      deliveryStatus: 'UNREAD' | 'READ';
+      readAt: string | null;
+    } => {
+      const comm = receipt.communication;
+      const buildingIds = comm.targets
+        .filter((t) => t.targetType === 'BUILDING' && t.targetId)
+        .map((t) => t.targetId!);
+      const scopeType: 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL' =
+        buildingIds.length === 0
+          ? 'TENANT_ALL'
+          : buildingIds.length === 1
+            ? 'BUILDING'
+            : 'MULTI_BUILDING';
+
+      return {
+        id: comm.id,
+        title: comm.title,
+        body: comm.body,
+        priority: (comm.priority || 'NORMAL') as 'NORMAL' | 'URGENT',
+        scopeType,
+        buildingIds,
+        createdAt: comm.createdAt.toISOString(),
+        publishedAt: comm.sentAt?.toISOString() ?? null,
+        deliveryStatus: receipt.readAt ? 'READ' : 'UNREAD',
+        readAt: receipt.readAt?.toISOString() ?? null,
+      };
+    });
+
+    let nextCursor: string | undefined;
+    if (hasMore && mappedItems.length > 0) {
+      const lastItem = mappedItems[mappedItems.length - 1]!;
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          publishedAt: lastItem.publishedAt,
+          id: lastItem.id,
+        }),
+      ).toString('base64');
+    }
+
+    return { items: mappedItems, nextCursor };
   }
 }

@@ -34,7 +34,8 @@
     "createdAt": "Created At",
     "updatedAt": "Updated At",
     "status": "Status",
-    "actions": "Actions"
+    "actions": "Actions",
+    "condominium": "Condominium"
   },
 
   "auth": {

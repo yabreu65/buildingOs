@@ -10,6 +10,7 @@ import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
+import { formatCurrency } from '@/shared/lib/format/money';
 import { FileText, Plus } from 'lucide-react';
 import { QuoteCreateModal } from './QuoteCreateModal';
 import type { Quote } from '../services/vendors.api';
@@ -158,7 +159,7 @@ export default function QuotesList({ buildingId }: QuotesListProps) {
 
                 <div className="mb-3 text-sm text-gray-600">
                   <p className="font-medium">
-                    {quote.currency} ${quote.amount.toFixed(2)}
+                    {formatCurrency(quote.amount, quote.currency)}
                   </p>
                   {quote.notes && <p className="mt-1">{quote.notes}</p>}
                 </div>

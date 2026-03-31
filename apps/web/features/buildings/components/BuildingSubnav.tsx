@@ -77,8 +77,8 @@ export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) =>
   ];
 
   return (
-    <div className="border-b mb-6">
-      <nav className="flex gap-1">
+    <div className="border-b mb-6 overflow-x-auto">
+      <nav className="flex gap-1 min-w-max">
         {items.map((item) => {
           const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
           return (
@@ -86,9 +86,9 @@ export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) =>
               key={item.href}
               href={item.href}
               className={cn(
-                'px-4 py-2 border-b-2 transition -mb-px',
+                'px-3 py-2 border-b-2 transition -mb-px whitespace-nowrap text-sm',
                 isActive
-                  ? 'border-primary text-foreground'
+                  ? 'border-primary text-foreground font-medium'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               )}
             >

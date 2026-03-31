@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { ConfigService } from '../config/config.service';
 import * as Minio from 'minio';
 
 /**
@@ -19,11 +19,11 @@ export class MinioService {
   private readonly bucket: string;
 
   constructor(private configService: ConfigService) {
-    const endpoint = this.configService.get<string>('s3Endpoint') || 'http://localhost:9000';
-    const region = this.configService.get<string>('s3Region', 'us-east-1');
-    const accessKey = this.configService.get<string>('s3AccessKey');
-    const secretKey = this.configService.get<string>('s3SecretKey');
-    this.bucket = this.configService.get<string>('s3Bucket') || 'buildingos-local';
+    const endpoint = this.configService.getValue('s3Endpoint') || 'http://localhost:9000';
+    const region = this.configService.getValue('s3Region') || 'us-east-1';
+    const accessKey = this.configService.getValue('s3AccessKey');
+    const secretKey = this.configService.getValue('s3SecretKey');
+    this.bucket = this.configService.getValue('s3Bucket') || 'buildingos-local';
 
     // Parse endpoint to extract host and port
     const url = new URL(endpoint);

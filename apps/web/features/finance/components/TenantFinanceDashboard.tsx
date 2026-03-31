@@ -30,7 +30,7 @@ export const TenantFinanceDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [period, setPeriod] = useState<string>('');
 
-  const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(period);
+  const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(tenantId, period);
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
 
   const buildingIds = useMemo(() => buildings.map((b) => b.id), [buildings]);

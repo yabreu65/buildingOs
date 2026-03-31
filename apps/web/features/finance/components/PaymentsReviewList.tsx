@@ -12,10 +12,13 @@ import { useToast } from '@/shared/components/ui/Toast';
 import { Payment } from '../services/finance.api';
 import { useApprovePayment, useRejectPayment } from '../hooks/usePaymentsReview';
 import { PaymentApproveModal } from './PaymentApproveModal';
-import { CheckCircle, XCircle } from 'lucide-react';
+import { getDownloadUrl } from '@/features/buildings/services/documents.api';
+import { CheckCircle, XCircle, FileText, Loader2 } from 'lucide-react';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface PaymentsReviewListProps {
   buildingId: string;
+  tenantId: string;
   payments: Payment[];
   loading: boolean;
   error: string | null;
@@ -29,6 +32,7 @@ interface PaymentsReviewListProps {
  */
 export function PaymentsReviewList({
   buildingId,
+  tenantId,
   payments,
   loading,
   error,
@@ -40,6 +44,25 @@ export function PaymentsReviewList({
   const approveMutation = useApprovePayment(buildingId, 'SUBMITTED');
   const rejectMutation = useRejectPayment(buildingId, 'SUBMITTED');
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
+
+  const handleDownloadProof = async (paymentId: string, fileId: string) => {
+    if (downloadUrls[paymentId]) {
+      window.open(downloadUrls[paymentId], '_blank');
+      return;
+    }
+    setDownloadingId(paymentId);
+    try {
+      const response = await getDownloadUrl(tenantId, fileId);
+      setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
+      window.open(response.url, '_blank');
+    } catch {
+      toast('Error al descargar comprobante', 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   if (error) {
     return <ErrorState message={error} onRetry={onRefresh} />;
@@ -66,7 +89,7 @@ export function PaymentsReviewList({
       toast('Pago aprobado', 'success');
       await onPaymentApproved();
       setSelectedPaymentId(null);
-    } catch (err) {
+    } catch {
       toast('Error al aprobar pago', 'error');
     }
   };
@@ -76,7 +99,7 @@ export function PaymentsReviewList({
       await rejectMutation.mutateAsync({ paymentId });
       toast('Pago rechazado', 'success');
       await onPaymentRejected();
-    } catch (err) {
+    } catch {
       toast('Error al rechazar pago', 'error');
     }
   };
@@ -98,6 +121,7 @@ export function PaymentsReviewList({
                 <TH>Unidad</TH>
                 <TH>Monto</TH>
                 <TH>Método</TH>
+                <TH>Comprobante</TH>
                 <TH className="text-right">Acciones</TH>
               </TR>
             </THead>
@@ -107,12 +131,30 @@ export function PaymentsReviewList({
                   <TD>{new Date(payment.createdAt).toLocaleDateString()}</TD>
                   <TD className="font-medium">{payment.unitId || 'N/A'}</TD>
                   <TD>
-                    {payment.currency} {payment.amount.toFixed(2)}
+                    {formatCurrency(payment.amount, payment.currency)}
                   </TD>
                   <TD>
                     <Badge className="bg-blue-100 text-blue-800">
                       {payment.method}
                     </Badge>
+                  </TD>
+                  <TD>
+                    {payment.proofFileId ? (
+                      <button
+                        onClick={() => handleDownloadProof(payment.id, payment.proofFileId!)}
+                        disabled={downloadingId === payment.id}
+                        className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+                      >
+                        {downloadingId === payment.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <FileText className="w-4 h-4" />
+                        )}
+                        Ver comprobante
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">Sin comprobante</span>
+                    )}
                   </TD>
                   <TD className="text-right flex gap-2 justify-end">
                     <Button

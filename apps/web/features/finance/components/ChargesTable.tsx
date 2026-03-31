@@ -12,6 +12,7 @@ import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Charge, ChargeStatus } from '../services/finance.api';
 import { Plus, Trash2 } from 'lucide-react';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface ChargesTableProps {
   charges: Charge[];
@@ -105,7 +106,7 @@ export function ChargesTable({
                   <TR key={charge.id}>
                     <TD className="font-medium">{charge.unitId}</TD>
                     <TD>{charge.concept}</TD>
-                    <TD>{charge.currency} {charge.amount.toFixed(2)}</TD>
+                    <TD>{formatCurrency(charge.amount, charge.currency)}</TD>
                     <TD>{new Date(charge.dueDate).toLocaleDateString()}</TD>
                     <TD>
                       <Badge className={statusColors[charge.status]}>

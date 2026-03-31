@@ -10,7 +10,6 @@ import {
   CheckCircle,
   AlertCircle,
   DollarSign,
-  Home,
 } from 'lucide-react';
 
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
@@ -23,15 +22,7 @@ import type { InboxCommunication, Ticket } from '../../../../../features/residen
 import type { ContextOption } from '../../../../../features/context/context.types';
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
-import { ChargeStatus } from '../../../../../features/finance/services/finance.api';
-
-function formatCurrency(amount: number, currency = 'USD'): string {
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 2,
-  }).format(amount);
-}
+import { formatCurrency } from '../../../../../shared/lib/format/money';
 
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '—';
@@ -67,9 +58,9 @@ const KPICard = ({ label, value, subValue, color, icon, cta, onClick }: KPICardP
     <Card className="p-4">
       <div className="flex items-start justify-between">
         <div className="space-y-1">
-          <p className="text-sm font-medium text-gray-600">{label}</p>
+          <p className="text-sm font-medium text-muted-foreground">{label}</p>
           <p className={`text-2xl font-bold ${color}`}>{value}</p>
-          {subValue && <p className="text-xs text-gray-500">{subValue}</p>}
+          {subValue && <p className="text-xs text-muted-foreground">{subValue}</p>}
         </div>
         <div className={`p-2 rounded-lg ${color.replace('text-', 'bg-').replace('600', '100').replace('700', '100')}`}>
           {icon}
@@ -127,15 +118,15 @@ const ResidentDashboardPage = () => {
     retry: 1,
   });
 
-  const balance = ledger?.totals.balance ?? 0;
-  const currency = ledger?.payments?.[0]?.currency ?? ledger?.charges?.[0]?.currency ?? 'USD';
+  const balance = ledger?.totals?.balance ?? 0;
+  const currency = ledger?.totals?.currency ?? 'ARS';
 
   const lastPayment = ledger?.payments
     ?.slice()
-    .sort((a, b) => new Date(b.paidAt ?? b.createdAt).getTime() - new Date(a.paidAt ?? b.createdAt).getTime())[0];
+    .sort((a, b) => new Date(b.paidAt ?? b.createdAt).getTime() - new Date(a.paidAt ?? a.createdAt).getTime())[0];
 
   const nextDueCharge = ledger?.charges
-    ?.filter((c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL)
+    ?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0)
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
 
   const isLoading = contextLoading || ledgerLoading;
@@ -163,9 +154,9 @@ const ResidentDashboardPage = () => {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold">
-          {userName ? `Hola, ${userName.split(' ')[0]}` : 'Mi portal'}
+          {userName ? `Hola, ${userName}` : 'Mi portal'}
         </h1>
-        <p className="text-gray-600">
+        <p className="text-muted-foreground">
           {tenantName}
           {buildingName && ` • ${buildingName}`}
           {unitLabel && ` • Unidad ${unitLabel}`}
@@ -189,7 +180,7 @@ const ResidentDashboardPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KPICard
           label="Saldo pendiente"
-          value={balance > 0 ? formatCurrency(balance, currency) : '$0'}
+          value={balance > 0 ? formatCurrency(balance, currency) : formatCurrency(0, currency)}
           color={balance > 0 ? "text-orange-600" : "text-green-600"}
           icon={<DollarSign className={`w-5 h-5 ${balance > 0 ? "text-orange-600" : "text-green-600"}`} />}
           cta={balance > 0 ? "Ver detalles" : undefined}
@@ -197,7 +188,7 @@ const ResidentDashboardPage = () => {
         />
         <KPICard
           label="Último pago"
-          value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency) : '—'}
+          value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency ?? currency) : '—'}
           subValue={lastPayment ? formatDate(lastPayment.paidAt) : 'Sin pagos'}
           color="text-green-600"
           icon={<DollarSign className="w-5 h-5 text-green-600" />}
@@ -259,14 +250,14 @@ const ResidentDashboardPage = () => {
           {communications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6">
               <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
-              <p className="text-gray-500">Sin comunicados</p>
+              <p className="text-muted-foreground">Sin comunicados</p>
             </div>
           ) : (
             <div className="space-y-2">
               {communications.slice(0, 3).map((comm) => (
                 <div key={comm.id} className="flex justify-between text-sm">
                   <span className="truncate flex-1">{comm.title}</span>
-                  <span className="text-gray-500 text-xs ml-2">{formatDate(comm.sentAt ?? comm.createdAt)}</span>
+                  <span className="text-muted-foreground text-xs ml-2">{formatDate(comm.sentAt ?? comm.createdAt)}</span>
                 </div>
               ))}
             </div>
@@ -284,14 +275,14 @@ const ResidentDashboardPage = () => {
           {tickets.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6">
               <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
-              <p className="text-gray-500">Sin tickets abiertos</p>
+              <p className="text-muted-foreground">Sin tickets abiertos</p>
             </div>
           ) : (
             <div className="space-y-2">
               {tickets.slice(0, 3).map((ticket) => (
                 <div key={ticket.id} className="flex justify-between text-sm">
                   <span className="truncate flex-1">{ticket.title}</span>
-                  <span className="text-gray-500 text-xs ml-2">{ticketStatusLabel(ticket.status)}</span>
+                  <span className="text-muted-foreground text-xs ml-2">{ticketStatusLabel(ticket.status)}</span>
                 </div>
               ))}
             </div>

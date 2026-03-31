@@ -7,6 +7,7 @@ import { useTenantId } from "../../../features/tenancy/tenant.hooks";
 import { useCan } from "../../../features/rbac/rbac.hooks";
 import { useIsSuperAdmin, useHasRole } from "../../../features/auth/useAuthSession";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
+import { useTenants } from "../../../features/tenants/tenants.hooks";
 import { t } from "@/i18n";
 
 interface NavItemProps {
@@ -36,6 +37,8 @@ const NavItem = ({ href, label }: NavItemProps) => {
 
 export const Sidebar = () => {
   const tenantId = useTenantId();
+  const { data: tenants } = useTenants();
+  const tenantName = tenants?.find(t => t.id === tenantId)?.name;
   const canReview = useCan("payments.review");
   const isSuperAdmin = useIsSuperAdmin();
   const isResident = useHasRole("RESIDENT");
@@ -47,9 +50,11 @@ export const Sidebar = () => {
     <aside className="w-64 border-r border-border bg-card text-card-foreground">
       <div className="p-4">
         <div className="font-semibold text-base">BuildingOS</div>
-        <div className="mt-1 text-xs text-muted-foreground">
-          {t('common.tenant')}: <span className="font-medium text-foreground">{tenantId}</span>
-        </div>
+        {tenantName && (
+          <div className="mt-1 text-xs text-muted-foreground">
+            {t('common.condominium')}: <span className="font-medium text-foreground">{tenantName}</span>
+          </div>
+        )}
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-4">

@@ -535,4 +535,26 @@ export class DocumentsService {
       return v.toString(16);
     });
   }
+
+  /**
+   * Check if a resident has access to a specific unit
+   * Used to validate payment proof uploads
+   */
+  async checkResidentUnitAccess(
+    tenantId: string,
+    userId: string,
+    unitId: string,
+  ): Promise<boolean> {
+    const occupant = await this.prisma.unitOccupant.findFirst({
+      where: {
+        tenantId,
+        unitId,
+        member: {
+          userId,
+        },
+      },
+    });
+
+    return !!occupant;
+  }
 }

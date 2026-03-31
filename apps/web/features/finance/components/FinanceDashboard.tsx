@@ -89,7 +89,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
       {/* KPI Cards */}
       <FinanceSummaryCards
-        summary={summary}
+        summary={summary ?? null}
         loading={summaryLoading}
         error={summaryErrorMsg}
         onRetry={refetchSummary}
@@ -125,6 +125,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
         {activeTab === 'payments' && (
           <PaymentsReviewList
             buildingId={buildingId}
+            tenantId={tenantId}
             payments={payments || []}
             loading={paymentsLoading}
             error={paymentsErrorMsg}

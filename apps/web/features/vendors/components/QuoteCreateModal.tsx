@@ -10,6 +10,7 @@ import { useToast } from '@/shared/components/ui/Toast';
 import { X, Loader2 } from 'lucide-react';
 import { createQuote, type Vendor } from '../services/vendors.api';
 import { listTickets, type Ticket } from '@/features/tickets/services/tickets.api';
+import { toCents } from '@/shared/lib/format/money';
 
 const quoteSchema = z.object({
   vendorId: z.string().min(1, 'Vendor is required'),
@@ -74,7 +75,7 @@ export const QuoteCreateModal = ({
       await createQuote(buildingId, {
         vendorId: data.vendorId,
         ticketId: data.ticketId || undefined,
-        amount: data.amount,
+        amount: toCents(data.amount),
         currency: data.currency,
         notes: data.notes || undefined,
       });

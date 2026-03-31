@@ -2,18 +2,27 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Param,
   UseGuards,
   Request,
   Query,
+  Body,
   BadRequestException,
   HttpCode,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { CommunicationStatus } from '@prisma/client';
-import { ResidentCommunicationListResponse } from '@buildingos/contracts';
+import {
+  ResidentCommunicationListResponse,
+  CreateCommunicationRequestSchema,
+  PublishCommunicationRequestSchema,
+  ResidentCommunicationsQuerySchema,
+} from '@buildingos/contracts';
+import { AuthenticatedRequest } from '../common/types/request.types';
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -147,6 +156,132 @@ export class CommunicationsUserController {
     );
 
     return await this.communicationsService.findOne(tenantId, communicationId);
+  }
+
+  /**
+   * POST /communications
+   * Create a new communication (admin only)
+   *
+   * Body: CreateCommunicationRequest (discriminatedUnion by scopeType)
+   * - title, body, status, priority, scopeType
+   * - scopeType BUILDING: requires buildingId
+   * - scopeType MULTI_BUILDING: requires buildingIds array
+   * - scopeType TENANT_ALL: no additional fields
+   *
+   * If status=PUBLISHED:
+   * - Sets publishedAt=now() (mapped to sentAt internally)
+   * - Creates communication_deliveries with UNREAD status
+   * - sendWebPush defaults to false (no push from this endpoint)
+   *
+   * Requires: admin role + X-Tenant-Id header
+   */
+  @Post()
+  async createCommunication(
+    @Body() rawBody: unknown,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    const xTenantId = req.headers['x-tenant-id'];
+    if (!xTenantId) {
+      throw new BadRequestException('X-Tenant-Id header is required');
+    }
+
+    const userMemberships = req.user?.memberships || [];
+    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
+    if (!membership) {
+      throw new BadRequestException(
+        'User does not have membership in the specified tenant',
+      );
+    }
+
+    const tenantId = xTenantId;
+    const userRoles = membership.roles || [];
+    if (!this.isAdminRole(userRoles)) {
+      throw new BadRequestException('Only administrators can create communications');
+    }
+
+    const parsed = CreateCommunicationRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Invalid request body',
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const input = parsed.data;
+    const userId = req.user.id;
+
+    return await this.communicationsService.createV2(
+      tenantId as string,
+      userId,
+      {
+        title: input.title,
+        body: input.body,
+        status: input.status,
+        priority: input.priority,
+        scopeType: input.scopeType,
+        buildingId: input.scopeType === 'BUILDING' ? input.buildingId : undefined,
+        buildingIds: input.scopeType === 'MULTI_BUILDING' ? input.buildingIds : undefined,
+      },
+      false,
+    );
+  }
+
+  /**
+   * POST /communications/:communicationId/publish
+   * Publish a communication with optional web push
+   *
+   * Body: { sendWebPush: boolean }
+   *
+   * Anti-spam rule (behind feature flag enforceUrgentForWebPush, default true):
+   * - If sendWebPush=true, priority must be URGENT
+   * - Returns 422 with code WEB_PUSH_REQUIRES_URGENT if violated
+   *
+   * If sendWebPush=true:
+   * - Sends WEB_PUSH only to users with active PushSubscription
+   * - If no subscriptions, does NOT fail (silent no-op)
+   *
+   * Requires: admin role + X-Tenant-Id header
+   */
+  @Post(':communicationId/publish')
+  async publishCommunication(
+    @Param('communicationId') communicationId: string,
+    @Body() rawBody: unknown,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    const xTenantId = req.headers['x-tenant-id'];
+    if (!xTenantId) {
+      throw new BadRequestException('X-Tenant-Id header is required');
+    }
+
+    const userMemberships = req.user?.memberships || [];
+    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
+    if (!membership) {
+      throw new BadRequestException(
+        'User does not have membership in the specified tenant',
+      );
+    }
+
+    const tenantId = xTenantId;
+    const userRoles = membership.roles || [];
+    if (!this.isAdminRole(userRoles)) {
+      throw new BadRequestException('Only administrators can publish communications');
+    }
+
+    const parsed = PublishCommunicationRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Invalid request body',
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const { sendWebPush } = parsed.data;
+
+    return await this.communicationsService.publishV2(
+      tenantId as string,
+      communicationId,
+      sendWebPush,
+    );
   }
 }
 
@@ -353,42 +488,6 @@ export class CommunicationsInboxController {
   }
 
   /**
-   * GET /resident/communications
-   * Resident inbox with cursor pagination
-   *
-   * Query params:
-   * - limit: number (default 20, max 100)
-   * - cursor: opaque cursor string (base64 encoded)
-   *
-   * Returns: { items: [...], nextCursor?: string }
-   *
-   * No permission required (authenticated users only)
-   */
-  @Get('resident/communications')
-  async getResidentCommunications(
-    @Query('limit') limit?: string,
-    @Query('cursor') cursor?: string,
-    @Request() req?: any,
-  ): Promise<ResidentCommunicationListResponse> {
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0].tenantId;
-    const userId = req.user.id;
-
-    const parsedLimit = limit ? Math.min(parseInt(limit, 10), 100) : 20;
-
-    return await this.communicationsService.findForResident(
-      tenantId,
-      userId,
-      parsedLimit,
-      cursor,
-    );
-  }
-
-  /**
    * POST /resident/communications/:communicationId/read
    * Mark communication as read (idempotent)
    *
@@ -410,6 +509,103 @@ export class CommunicationsInboxController {
     const userId = req.user.id;
 
     // Validate communication belongs to tenant
+    await this.validators.validateCommunicationBelongsToTenant(
+      tenantId,
+      communicationId,
+    );
+
+    return await this.communicationsService.markAsReadForResident(
+      tenantId,
+      userId,
+      communicationId,
+    );
+  }
+}
+
+/**
+ * ResidentCommunicationsController: Public resident endpoints (/resident/communications)
+ *
+ * Routes:
+ * - GET /resident/communications - List communications for resident (inbox)
+ * - POST /resident/communications/:communicationId/read - Mark as read
+ *
+ * Security:
+ * 1. JwtAuthGuard: Requires valid JWT token
+ * 2. User can only see/interact with communications they received
+ */
+@Controller('resident')
+@UseGuards(JwtAuthGuard)
+export class ResidentCommunicationsController {
+  constructor(
+    private communicationsService: CommunicationsService,
+    private validators: CommunicationsValidators,
+  ) {}
+
+  /**
+   * GET /resident/communications
+   * Resident inbox with cursor pagination
+   *
+   * Query params:
+   * - limit: number (default 20, max 100)
+   * - cursor: opaque cursor string (base64 encoded)
+   *
+   * Returns: { items: [...], nextCursor?: string }
+   *
+   * Ordering: publishedAt DESC, id DESC (mapped to sentAt internally)
+   *
+   * No permission required (authenticated users only)
+   */
+  @Get('communications')
+  async getResidentCommunications(
+    @Query() rawQuery: Record<string, unknown>,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ResidentCommunicationListResponse> {
+    const userMemberships = req.user?.memberships;
+    if (!userMemberships || userMemberships.length === 0) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    const parsedQuery = ResidentCommunicationsQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
+      throw new BadRequestException({
+        message: 'Invalid query parameters',
+        errors: parsedQuery.error.flatten().fieldErrors,
+      });
+    }
+
+    const { limit, cursor } = parsedQuery.data;
+    const tenantId = userMemberships[0]!.tenantId;
+    const userId = req.user.id;
+
+    return await this.communicationsService.findForResidentV2(
+      tenantId,
+      userId,
+      limit,
+      cursor,
+    );
+  }
+
+  /**
+   * POST /resident/communications/:communicationId/read
+   * Mark communication as read (idempotent)
+   *
+   * Returns: { readAt: Date | null }
+   *
+   * No permission required (authenticated users only)
+   */
+  @Post('communications/:communicationId/read')
+  async markResidentAsRead(
+    @Param('communicationId') communicationId: string,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<{ readAt: Date | null }> {
+    const userMemberships = req.user?.memberships;
+    if (!userMemberships || userMemberships.length === 0) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    const tenantId = userMemberships[0]!.tenantId;
+    const userId = req.user.id;
+
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
       communicationId,

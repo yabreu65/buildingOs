@@ -23,7 +23,7 @@ import Badge from '../../shared/components/ui/Badge';
 import Input from '../../shared/components/ui/Input';
 import Select from '../../shared/components/ui/Select';
 import Card from '../../shared/components/ui/Card';
-import { formatMoney } from '../../shared/lib/format/money';
+import { formatCurrency } from '../../shared/lib/format/money';
 import { formatDate } from '../../shared/lib/format/date';
 import { useCan } from '../rbac/rbac.hooks';
 import { t } from '@/i18n';
@@ -66,6 +66,9 @@ export const PaymentsReviewUI = () => {
   const [rejectReason, setRejectReason] = useState('');
   const [rejectComment, setRejectComment] = useState('');
   const [rejectNotes, setRejectNotes] = useState('');
+
+  // Action states
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   // Metrics
   const [metrics, setMetrics] = useState<PaymentMetrics | null>(null);
@@ -162,6 +165,7 @@ export const PaymentsReviewUI = () => {
   // Approve payment
   const handleApprove = async (paymentId: string) => {
     if (!tenantId) return;
+    setApprovingId(paymentId);
     try {
       // Check for duplicates before approving
       const dupCheck = await checkPaymentDuplicate(tenantId, paymentId);
@@ -171,8 +175,10 @@ export const PaymentsReviewUI = () => {
       }
       await approvePaymentTenant(tenantId, paymentId);
       await loadPayments();
+      setApprovingId(null);
     } catch (err) {
       setError(t('payments.errorApproving'));
+      setApprovingId(null);
     }
   };
 
@@ -299,7 +305,7 @@ export const PaymentsReviewUI = () => {
           <Card className="p-4">
             <div className="text-xs text-muted-foreground">{t('payments.backlog')}</div>
             <div className="text-2xl font-bold">{metrics.backlogCount}</div>
-            <div className="text-xs text-muted-foreground">{formatMoney(metrics.backlogAmount)}</div>
+            <div className="text-xs text-muted-foreground">{formatCurrency(metrics.backlogAmount, 'ARS')}</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted-foreground">{t('payments.age')}</div>
@@ -453,7 +459,7 @@ export const PaymentsReviewUI = () => {
               <TR key={p.id}>
                 <TD>{p.unit?.label || p.unitId || '-'}</TD>
                 <TD>{p.building?.name || p.buildingId || '-'}</TD>
-                <TD>{formatMoney(p.amount)}</TD>
+                <TD>{formatCurrency(p.amount, p.currency)}</TD>
                 <TD>{p.method}</TD>
                 <TD className="text-xs">{p.reference || '-'}</TD>
                 <TD>
@@ -480,13 +486,15 @@ export const PaymentsReviewUI = () => {
                       <Button
                         size="sm"
                         onClick={() => handleApprove(p.id)}
+                        disabled={approvingId === p.id || loading}
                       >
-                        {t('payments.approve')}
+                        {approvingId === p.id ? t('payments.approving') : t('payments.approve')}
                       </Button>
                       <Button
                         size="sm"
                         variant="danger"
                         onClick={() => setRejectingId(p.id)}
+                        disabled={approvingId === p.id || loading}
                       >
                         {t('payments.reject')}
                       </Button>

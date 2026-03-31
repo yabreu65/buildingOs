@@ -12,8 +12,7 @@ export function useFinanceSummary(buildingId: string, period?: string) {
     queryKey: ['financeSummary', buildingId, period],
     queryFn: () => getFinancialSummary(buildingId, period),
     staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes (formerly cacheTime)
-    enabled: !!buildingId, // Only fetch if buildingId exists
-    initialData: null,
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    enabled: !!buildingId,
   });
 }

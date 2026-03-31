@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CommunicationsController } from './communications.controller';
-import { CommunicationsUserController } from './communications-user.controller';
+import { CommunicationsUserController, ResidentCommunicationsController } from './communications-user.controller';
 import { CommunicationsInboxController } from './communications-user.controller';
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
@@ -13,6 +13,7 @@ import { AppConfigModule } from '../config/config.module';
     CommunicationsController,
     CommunicationsUserController,
     CommunicationsInboxController,
+    ResidentCommunicationsController,
   ],
   providers: [CommunicationsService, CommunicationsValidators],
   exports: [CommunicationsService, CommunicationsValidators],

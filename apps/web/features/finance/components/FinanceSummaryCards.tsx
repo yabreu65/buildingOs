@@ -4,6 +4,7 @@ import Card from '@/shared/components/ui/Card';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import { FinancialSummary } from '../services/finance.api';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface FinanceSummaryCardsProps {
   summary: FinancialSummary | null;
@@ -37,32 +38,25 @@ export function FinanceSummaryCards({
     );
   }
 
-  // Format currency using Intl for consistency
-  const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency: summary.currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  };
+  // Format currency using the standardized helper (amounts are stored in cents)
+  const formatCurrencyValue = (cents: number): string => formatCurrency(cents, summary.currency);
 
   const cards = [
     {
       label: 'Total Cargos',
-      value: formatCurrency(summary.totalCharges),
+      value: formatCurrencyValue(summary.totalCharges),
       color: 'text-blue-600',
       bgColor: 'bg-blue-50',
     },
     {
       label: 'Total Pagado',
-      value: formatCurrency(summary.totalPaid),
+      value: formatCurrencyValue(summary.totalPaid),
       color: 'text-green-600',
       bgColor: 'bg-green-50',
     },
     {
       label: 'Saldo Pendiente',
-      value: formatCurrency(summary.totalOutstanding),
+      value: formatCurrencyValue(summary.totalOutstanding),
       color: 'text-orange-600',
       bgColor: 'bg-orange-50',
     },

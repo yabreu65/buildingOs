@@ -353,3 +353,120 @@ export async function markAsRead(communicationId: string): Promise<void> {
     throw error;
   }
 }
+
+// ============================================
+// V2 Endpoints (New Contract)
+// ============================================
+
+export type CommunicationScopeType = 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL';
+
+export interface ResidentCommunicationItem {
+  id: string;
+  title: string;
+  body: string;
+  priority: 'NORMAL' | 'URGENT';
+  scopeType: CommunicationScopeType;
+  buildingIds: string[];
+  createdAt: string;
+  publishedAt: string | null;
+  deliveryStatus: 'UNREAD' | 'READ';
+  readAt: string | null;
+}
+
+export interface ResidentCommunicationsResponse {
+  items: ResidentCommunicationItem[];
+  nextCursor?: string;
+}
+
+export interface CreateCommunicationV2Input {
+  title: string;
+  body: string;
+  status: 'DRAFT' | 'PUBLISHED';
+  priority: 'NORMAL' | 'URGENT';
+  scopeType: CommunicationScopeType;
+  buildingId?: string;
+  buildingIds?: string[];
+}
+
+export async function getResidentCommunications(
+  limit?: number,
+  cursor?: string,
+): Promise<ResidentCommunicationsResponse> {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', String(limit));
+  if (cursor) params.append('cursor', cursor);
+
+  const endpoint = `/resident/communications${params.toString() ? '?' + params.toString() : ''}`;
+  logRequest('GET', endpoint);
+
+  try {
+    return await apiClient<ResidentCommunicationsResponse>({
+      path: endpoint,
+      method: 'GET',
+    });
+  } catch (error) {
+    const message = `Failed to get resident communications: ${(error as Error).message}`;
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
+    throw error;
+  }
+}
+
+export async function markResidentAsRead(communicationId: string): Promise<{ readAt: string | null }> {
+  const endpoint = `/resident/communications/${communicationId}/read`;
+  logRequest('POST', endpoint);
+
+  try {
+    return await apiClient<{ readAt: string | null }>({
+      path: endpoint,
+      method: 'POST',
+    });
+  } catch (error) {
+    const message = `Failed to mark as read: ${(error as Error).message}`;
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
+    throw error;
+  }
+}
+
+export async function createCommunicationV2(
+  tenantId: string,
+  input: CreateCommunicationV2Input,
+): Promise<Communication> {
+  const endpoint = '/communications';
+  logRequest('POST', endpoint, input);
+
+  try {
+    return await apiClient<Communication, CreateCommunicationV2Input>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+      headers: { 'X-Tenant-Id': tenantId },
+    });
+  } catch (error) {
+    const message = `Failed to create communication: ${(error as Error).message}`;
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
+    throw error;
+  }
+}
+
+export async function publishCommunicationV2(
+  tenantId: string,
+  communicationId: string,
+  sendWebPush: boolean = false,
+): Promise<Communication> {
+  const endpoint = `/communications/${communicationId}/publish`;
+  const body = { sendWebPush };
+  logRequest('POST', endpoint, body);
+
+  try {
+    return await apiClient<Communication, { sendWebPush: boolean }>({
+      path: endpoint,
+      method: 'POST',
+      body,
+      headers: { 'X-Tenant-Id': tenantId },
+    });
+  } catch (error) {
+    const message = `Failed to publish communication: ${(error as Error).message}`;
+    logError(endpoint, (error as { status?: number }).status ?? 500, message);
+    throw error;
+  }
+}

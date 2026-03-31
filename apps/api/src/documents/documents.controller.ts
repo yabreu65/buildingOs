@@ -147,13 +147,16 @@ export class DocumentsController {
    * Body: CreateDocumentDto (includes objectKey from presign)
    * Returns: Document with file metadata
    *
-   * Requires: documents.upload permission (admin only, not RESIDENT)
+   * Permission rules:
+   * - Admins (TENANT_ADMIN, TENANT_OWNER, OPERATOR): can create any document
+   * - RESIDENT/OWNER: can only create RECEIPT documents (payment proofs)
    *
    * Validates:
    * - Scope constraint (buildingId/unitId/both null)
    * - Building belongs to tenant
    * - Unit belongs to building
    * - ObjectKey was uploaded
+   * - For residents: must have access to the unit
    */
   @Post()
   async create(
@@ -166,13 +169,27 @@ export class DocumentsController {
     const userMemberships = req.user.memberships || [];
     const isSuperAdmin = this.isSuperAdmin(userMemberships);
 
-    // Only admins and SUPER_ADMIN can create documents
     const isAdmin =
       userRoles.includes('TENANT_ADMIN') ||
       userRoles.includes('TENANT_OWNER') ||
       userRoles.includes('OPERATOR');
 
-    if (!isAdmin && !isSuperAdmin) {
+    const isResidentOrOwner =
+      userRoles.includes('RESIDENT') || userRoles.includes('OWNER');
+
+    // Check if this is a payment proof (RECEIPT category)
+    const isPaymentProof = dto.category === 'RECEIPT';
+
+    // Residents can only create RECEIPT documents (payment proofs)
+    if (!isAdmin && !isSuperAdmin && isResidentOrOwner) {
+      if (!isPaymentProof) {
+        throw new ForbiddenException('Residents can only create payment proof documents');
+      }
+      // For payment proofs, validate unit access
+      if (!dto.unitId) {
+        throw new BadRequestException('Payment proof must be associated with a unit');
+      }
+    } else if (!isAdmin && !isSuperAdmin) {
       throw new ForbiddenException('Only admins can create documents');
     }
 
@@ -180,6 +197,18 @@ export class DocumentsController {
     const userMembership = userMemberships.find((m: any) => m.tenantId === tenantId);
     if (!userMembership) {
       throw new BadRequestException('Invalid tenant context');
+    }
+
+    // For residents, validate they have access to the unit
+    if (isResidentOrOwner && isPaymentProof && dto.unitId) {
+      const hasAccess = await this.documentsService.checkResidentUnitAccess(
+        tenantId,
+        userId,
+        dto.unitId,
+      );
+      if (!hasAccess) {
+        throw new ForbiddenException('You do not have access to this unit');
+      }
     }
 
     return await this.documentsService.createDocument(

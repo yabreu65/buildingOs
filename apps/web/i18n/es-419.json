@@ -35,7 +35,8 @@
     "updatedAt": "Última actualización",
     "status": "Estado",
     "actions": "Acciones",
-    "comments": "comentarios"
+    "comments": "comentarios",
+    "condominium": "Condominio"
   },
 
   "auth": {
@@ -557,6 +558,7 @@
     "review": "Validar pagos",
     "reviewTitle": "Revisión de Pagos",
     "approve": "Aprobar",
+    "approving": "Aprobando...",
     "reject": "Rechazar",
     "pending": "Pagos Pendientes",
     "approved": "Aprobado",
