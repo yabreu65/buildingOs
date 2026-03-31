@@ -112,7 +112,8 @@ export const PaymentsReviewUI = () => {
       const data = await listPendingPayments(tenantId, filters);
       setPayments(data);
     } catch (err) {
-      setError(t('payments.errorLoading'));
+      const message = err instanceof Error ? err.message : t('payments.errorLoading');
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -135,7 +136,8 @@ export const PaymentsReviewUI = () => {
       const data = await getPaymentMetrics(tenantId);
       setMetrics(data);
     } catch (err) {
-      console.error(t('payments.errorLoading'), err);
+      const message = err instanceof Error ? err.message : t('payments.errorLoading');
+      console.error('Error loading metrics:', message, err);
     }
   };
 
@@ -157,7 +159,8 @@ export const PaymentsReviewUI = () => {
       setSelectedPaymentId(paymentId);
       setShowAudit(true);
     } catch (err) {
-      console.error('Error loading audit logs', err);
+      const message = err instanceof Error ? err.message : 'Error loading audit logs';
+      setError(message);
     } finally {
       setLoadingAudit(false);
     }
@@ -178,7 +181,8 @@ export const PaymentsReviewUI = () => {
       await loadPayments();
       setApprovingId(null);
     } catch (err) {
-      setError(t('payments.errorApproving'));
+      const message = err instanceof Error ? err.message : t('payments.errorApproving');
+      setError(message);
       setApprovingId(null);
     }
   };
@@ -200,7 +204,8 @@ export const PaymentsReviewUI = () => {
       setRejectOtherReason('');
       await loadPayments();
     } catch (err) {
-      setError(t('payments.errorRejecting'));
+      const message = err instanceof Error ? err.message : t('payments.errorRejecting');
+      setError(message);
     }
   };
 
