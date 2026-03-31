@@ -66,6 +66,7 @@ export const PaymentsReviewUI = () => {
   const [rejectReason, setRejectReason] = useState('');
   const [rejectComment, setRejectComment] = useState('');
   const [rejectNotes, setRejectNotes] = useState('');
+  const [rejectOtherReason, setRejectOtherReason] = useState('');
 
   // Action states
   const [approvingId, setApprovingId] = useState<string | null>(null);
@@ -186,11 +187,17 @@ export const PaymentsReviewUI = () => {
   const handleReject = async () => {
     if (!tenantId || !rejectingId || !rejectReason) return;
     try {
-      await rejectPaymentTenant(tenantId, rejectingId, rejectReason, rejectComment, rejectNotes);
+      const finalReason = rejectReason === 'OTRO' ? rejectOtherReason : rejectReason;
+      if (!finalReason.trim()) {
+        setError(t('payments.specifyReason'));
+        return;
+      }
+      await rejectPaymentTenant(tenantId, rejectingId, finalReason, rejectComment, rejectNotes);
       setRejectingId(null);
       setRejectReason('');
       setRejectComment('');
       setRejectNotes('');
+      setRejectOtherReason('');
       await loadPayments();
     } catch (err) {
       setError(t('payments.errorRejecting'));
@@ -563,8 +570,8 @@ export const PaymentsReviewUI = () => {
                     className="w-full border rounded p-2 text-sm"
                     rows={3}
                     placeholder={t('payments.specifyReason')}
-                    value={rejectReason}
-                    onChange={(e) => setRejectReason(e.target.value)}
+                    value={rejectOtherReason}
+                    onChange={(e) => setRejectOtherReason(e.target.value)}
                   />
                 </div>
               )}
@@ -587,6 +594,9 @@ export const PaymentsReviewUI = () => {
                 onClick={() => {
                   setRejectingId(null);
                   setRejectReason('');
+                  setRejectComment('');
+                  setRejectNotes('');
+                  setRejectOtherReason('');
                 }}
               >
                 {t('common.cancel')}
