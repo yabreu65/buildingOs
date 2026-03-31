@@ -1,7 +1,18 @@
 'use client';
 
-import PaymentsReviewUI from '@/features/payments/payments.review.ui';
+import { useEffect } from 'react';
+import { useRouter, useParams } from 'next/navigation';
 
 export default function PaymentsReviewPage() {
-  return <PaymentsReviewUI />;
+  const router = useRouter();
+  const params = useParams();
+  const tenantId = params?.tenantId as string;
+
+  useEffect(() => {
+    if (tenantId) {
+      router.replace(`/${tenantId}/finanzas?tab=pagos`);
+    }
+  }, [tenantId, router]);
+
+  return null;
 }

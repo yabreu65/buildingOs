@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
 import { FinanceSummaryCards } from './FinanceSummaryCards';
@@ -11,8 +12,10 @@ import { useTenantFinanceSummary } from '../hooks/useTenantFinanceSummary';
 import { useBuildings } from '@/features/buildings/hooks';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
+import { listPendingPayments, getPaymentMetrics, PaymentStatus } from '@/features/finance/services/finance.api';
+import { TenantChargesTab } from './TenantChargesTab';
 
-type Tab = 'overview' | 'delinquent';
+type Tab = 'overview' | 'payments' | 'charges' | 'delinquent';
 
 interface Params {
   tenantId: string;
@@ -32,6 +35,21 @@ export const TenantFinanceDashboard = () => {
 
   const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(tenantId, period);
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
+
+  // Tenant-level payments and metrics
+  const { data: payments = [], isLoading: paymentsLoading } = useQuery({
+    queryKey: ['tenantPayments', tenantId],
+    queryFn: () => listPendingPayments(tenantId!, { status: PaymentStatus.SUBMITTED }),
+    enabled: !!tenantId && activeTab === 'payments',
+    staleTime: 2 * 60 * 1000,
+  });
+
+  const { data: metrics, isLoading: metricsLoading } = useQuery({
+    queryKey: ['paymentMetrics', tenantId],
+    queryFn: () => getPaymentMetrics(tenantId!),
+    enabled: !!tenantId && activeTab === 'payments',
+    staleTime: 5 * 60 * 1000,
+  });
 
   const buildingIds = useMemo(() => buildings.map((b) => b.id), [buildings]);
   const buildingNames = useMemo(
@@ -60,13 +78,15 @@ export const TenantFinanceDashboard = () => {
          <div className="flex flex-wrap gap-2">
            {[
              { id: 'overview', label: 'Resumen' },
-             { id: 'delinquent', label: `Unidades Morosas (${summary?.delinquentUnitsCount || 0})` },
+             { id: 'payments', label: `Pagos (${payments.length})` },
+             { id: 'charges', label: 'Cargos' },
+             { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
            ].map((tab) => (
              <button
                key={tab.id}
                onClick={() => setActiveTab(tab.id as Tab)}
                className={cn(
-                 'flex-1 items-center justify-center px-3 py-2 rounded-md text-sm font-medium transition-all',
+                 'px-3 py-2 rounded-md text-sm font-medium transition-all',
                  activeTab === tab.id
                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                    : 'bg-muted text-muted-foreground hover:bg-muted/50 hover:text-foreground'
@@ -103,6 +123,43 @@ export const TenantFinanceDashboard = () => {
               />
             )}
           </>
+        )}
+        {activeTab === 'payments' && (
+          <>
+            {paymentsLoading ? (
+              <>
+                <Skeleton className="h-10" />
+                <Skeleton className="h-10" />
+              </>
+            ) : payments.length === 0 ? (
+              <Card>
+                <div className="p-6 text-center text-gray-600">
+                  <p className="text-sm">No hay pagos para aprobar</p>
+                  <p className="text-xs text-muted-foreground mt-2">Los pagos serán listados aquí cuando se registren</p>
+                </div>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {payments.map((payment) => (
+                  <Card key={payment.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">{buildingNames[payment.buildingId] || payment.buildingId}</p>
+                        <p className="text-xs text-muted-foreground">Unidad: {payment.unitId}</p>
+                      </div>
+                      <div className="text-right space-y-1">
+                        <p className="text-sm font-bold">${payment.amount}</p>
+                        <p className="text-xs text-muted-foreground">{payment.status}</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        {activeTab === 'charges' && (
+          <TenantChargesTab tenantId={tenantId || ''} buildingNames={buildingNames} />
         )}
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />

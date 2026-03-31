@@ -127,7 +127,8 @@ const ResidentDashboardPage = () => {
 
   const nextDueCharge = ledger?.charges
     ?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0)
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+    .filter((c) => !isNaN(new Date(String(c.dueDate)).getTime()))
+    .sort((a, b) => new Date(String(a.dueDate)).getTime() - new Date(String(b.dueDate)).getTime())[0];
 
   const isLoading = contextLoading || ledgerLoading;
 
