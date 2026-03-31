@@ -190,6 +190,12 @@ export class FinanzasService {
       take: limit,
       skip: offset,
       include: {
+        unit: {
+          select: { id: true, label: true },
+        },
+        building: {
+          select: { id: true, name: true },
+        },
         paymentAllocations: true,
       },
     });
@@ -505,6 +511,12 @@ export class FinanzasService {
       take: limit,
       skip: offset,
       include: {
+        unit: {
+          select: { id: true, label: true },
+        },
+        building: {
+          select: { id: true, name: true },
+        },
         paymentAllocations: true,
         createdByUser: {
           select: { id: true, name: true, email: true },

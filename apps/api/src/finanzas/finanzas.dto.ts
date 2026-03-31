@@ -275,7 +275,15 @@ export interface ChargeDetailDto {
   id: string;
   tenantId: string;
   buildingId: string;
+  building?: {
+    id: string;
+    name: string;
+  };
   unitId: string;
+  unit?: {
+    id: string;
+    label: string;
+  };
   period: string;
   type: ChargeType;
   concept: string;
@@ -293,7 +301,15 @@ export interface PaymentDetailDto {
   id: string;
   tenantId: string;
   buildingId: string;
+  building?: {
+    id: string;
+    name: string;
+  };
   unitId: string | null;
+  unit?: {
+    id: string;
+    label: string;
+  };
   amount: number;
   currency: string;
   method: PaymentMethod;
