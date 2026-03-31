@@ -41,6 +41,15 @@ export enum ChargeType {
 export interface Charge {
   id: string;
   unitId: string;
+  unit?: {
+    id: string;
+    label: string;
+  };
+  buildingId?: string;
+  building?: {
+    id: string;
+    name: string;
+  };
   period: string;
   type: ChargeType;
   concept: string;
@@ -57,6 +66,15 @@ export interface Charge {
 export interface Payment {
   id: string;
   unitId?: string;
+  unit?: {
+    id: string;
+    label: string;
+  };
+  buildingId?: string;
+  building?: {
+    id: string;
+    name: string;
+  };
   amount: number;
   currency: string;
   method: PaymentMethod;

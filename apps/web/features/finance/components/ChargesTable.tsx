@@ -104,7 +104,7 @@ export function ChargesTable({
               <TBody>
                 {charges.map((charge) => (
                   <TR key={charge.id}>
-                    <TD className="font-medium">{charge.unitId}</TD>
+                    <TD className="font-medium">{charge.unit?.label || charge.unitId}</TD>
                     <TD>{charge.concept}</TD>
                     <TD>{formatCurrency(charge.amount, charge.currency)}</TD>
                     <TD>{new Date(charge.dueDate).toLocaleDateString()}</TD>

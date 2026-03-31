@@ -129,7 +129,7 @@ export function PaymentsReviewList({
               {payments.map((payment) => (
                 <TR key={payment.id}>
                   <TD>{new Date(payment.createdAt).toLocaleDateString()}</TD>
-                  <TD className="font-medium">{payment.unitId || 'N/A'}</TD>
+                  <TD className="font-medium">{payment.unit?.label || payment.unitId || 'N/A'}</TD>
                   <TD>
                     {formatCurrency(payment.amount, payment.currency)}
                   </TD>

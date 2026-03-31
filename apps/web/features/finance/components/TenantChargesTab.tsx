@@ -8,7 +8,15 @@ import { cn } from '@/shared/lib/utils';
 interface Charge {
   id: string;
   buildingId: string;
+  building?: {
+    id: string;
+    name: string;
+  };
   unitId: string;
+  unit?: {
+    id: string;
+    label: string;
+  };
   amount: number;
   dueDate: string;
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELED';
@@ -74,8 +82,8 @@ export const TenantChargesTab = ({ tenantId, buildingNames }: TenantChargesTabPr
         <Card key={charge.id} className="p-4">
           <div className="flex items-start justify-between">
             <div className="space-y-1 flex-1">
-              <p className="text-sm font-medium">{buildingNames[charge.buildingId] || charge.buildingId}</p>
-              <p className="text-xs text-muted-foreground">Unidad: {charge.unitId}</p>
+              <p className="text-sm font-medium">{charge.building?.name || buildingNames[charge.buildingId] || charge.buildingId}</p>
+              <p className="text-xs text-muted-foreground">Unidad: {charge.unit?.label || charge.unitId}</p>
               <p className="text-xs text-muted-foreground">
                 Vencimiento: {new Date(charge.dueDate).toLocaleDateString('es-AR')}
               </p>

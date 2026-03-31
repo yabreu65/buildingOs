@@ -156,8 +156,8 @@ export const TenantFinanceDashboard = () => {
                   <Card key={payment.id} className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="space-y-1 flex-1">
-                        <p className="text-sm font-medium">{buildingNames[payment.buildingId] || payment.buildingId}</p>
-                        <p className="text-xs text-muted-foreground">Unidad: {payment.unitId}</p>
+                        <p className="text-sm font-medium">{payment.building?.name || buildingNames[payment.buildingId] || payment.buildingId}</p>
+                        <p className="text-xs text-muted-foreground">Unidad: {payment.unit?.label || payment.unitId}</p>
                         <p className="text-xs text-muted-foreground">Monto: ${payment.amount.toFixed(2)}</p>
                       </div>
                       <Button
