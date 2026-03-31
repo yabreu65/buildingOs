@@ -2,17 +2,18 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
 import { FinanceSummaryCards } from './FinanceSummaryCards';
 import { BuildingsFinanceSummary } from './BuildingsFinanceSummary';
 import { TenantDelinquentUnitsList } from './TenantDelinquentUnitsList';
+import { PaymentApproveModal } from './PaymentApproveModal';
 import { useTenantFinanceSummary } from '../hooks/useTenantFinanceSummary';
 import { useBuildings } from '@/features/buildings/hooks';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
-import { listPendingPayments, getPaymentMetrics, PaymentStatus } from '@/features/finance/services/finance.api';
+import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTenant } from '@/features/finance/services/finance.api';
 import { TenantChargesTab } from './TenantChargesTab';
 
 type Tab = 'overview' | 'payments' | 'charges' | 'delinquent';
@@ -32,6 +33,8 @@ export const TenantFinanceDashboard = () => {
   const tenantId = params?.tenantId;
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [period, setPeriod] = useState<string>('');
+  const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(tenantId, period);
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
@@ -49,6 +52,15 @@ export const TenantFinanceDashboard = () => {
     queryFn: () => getPaymentMetrics(tenantId!),
     enabled: !!tenantId && activeTab === 'payments',
     staleTime: 5 * 60 * 1000,
+  });
+
+  // Payment approval mutation
+  const { mutateAsync: approve, isPending: isApproving } = useMutation({
+    mutationFn: (paidAt?: string) => approvePaymentTenant(tenantId!, selectedPaymentId!, paidAt),
+    onSuccess: () => {
+      setSelectedPaymentId(null);
+      queryClient.invalidateQueries({ queryKey: ['tenantPayments', tenantId] });
+    },
   });
 
   const buildingIds = useMemo(() => buildings.map((b) => b.id), [buildings]);
@@ -142,15 +154,19 @@ export const TenantFinanceDashboard = () => {
               <div className="space-y-4">
                 {payments.map((payment) => (
                   <Card key={payment.id} className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1 flex-1">
                         <p className="text-sm font-medium">{buildingNames[payment.buildingId] || payment.buildingId}</p>
                         <p className="text-xs text-muted-foreground">Unidad: {payment.unitId}</p>
+                        <p className="text-xs text-muted-foreground">Monto: ${payment.amount.toFixed(2)}</p>
                       </div>
-                      <div className="text-right space-y-1">
-                        <p className="text-sm font-bold">${payment.amount}</p>
-                        <p className="text-xs text-muted-foreground">{payment.status}</p>
-                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => setSelectedPaymentId(payment.id)}
+                        className="ml-4"
+                      >
+                        Aprobar
+                      </Button>
                     </div>
                   </Card>
                 ))}
@@ -165,6 +181,16 @@ export const TenantFinanceDashboard = () => {
           <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />
         )}
       </div>
+
+      {/* Payment Approval Modal */}
+      {selectedPaymentId && (
+        <PaymentApproveModal
+          paymentId={selectedPaymentId}
+          onConfirm={(paidAt) => approve(paidAt).then(() => undefined)}
+          onCancel={() => setSelectedPaymentId(null)}
+          isSubmitting={isApproving}
+        />
+      )}
     </div>
   );
 };
