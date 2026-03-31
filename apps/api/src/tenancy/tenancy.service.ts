@@ -14,6 +14,7 @@ export class TenancyService {
     });
 
     return memberships.map((m) => ({
+      id: m.id,
       tenantId: m.tenantId,
       roles: m.roles
         .filter((r) => r.scopeType === 'TENANT')
