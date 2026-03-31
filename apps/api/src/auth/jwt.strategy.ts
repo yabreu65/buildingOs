@@ -9,6 +9,7 @@ interface JwtPayload {
   email: string;
   sub: string;
   isSuperAdmin: boolean;
+  roles?: string[];
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
@@ -30,6 +31,8 @@ interface ValidatedUser {
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
+  roles?: string[]; // Roles from first membership (active tenant)
+  membershipId?: string; // ID of first membership (active tenant)
   memberships: Array<{
     tenantId: string;
     roles: string[];
@@ -83,6 +86,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         isImpersonating: true,
         impersonatedTenantId: payload.impersonatedTenantId,
         actorSuperAdminUserId: payload.actorSuperAdminUserId,
+        roles: ['TENANT_ADMIN'], // Full tenant admin access
+        membershipId: '', // Synthetic, no real membership ID
         memberships: [
           {
             tenantId: payload.impersonatedTenantId,
@@ -108,11 +113,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       payload.isSuperAdmin ||
       memberships.some((m) => m.roles.includes('SUPER_ADMIN'));
 
+    // Get roles from first membership (active tenant)
+    const firstMembership = memberships[0];
+    const roles = firstMembership?.roles || [];
+    const membershipId = firstMembership?.id || '';
+
     return {
       id: user.id,
       email: user.email,
       name: user.name,
       isSuperAdmin,
+      roles,
+      membershipId,
       memberships,
     };
   }

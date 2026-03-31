@@ -109,6 +109,9 @@ export class AuthService {
       result.user.id,
     );
 
+    // Extract roles from the membership we just created
+    const roles = ['TENANT_OWNER']; // Newly created user is always TENANT_OWNER
+
     // Audit: USER_CREATE
     void this.auditService.createLog({
       tenantId: result.membership.tenantId,
@@ -128,6 +131,7 @@ export class AuthService {
         email: result.user.email,
         sub: result.user.id,
         isSuperAdmin: false,
+        roles,
       }),
       user: {
         id: result.user.id,
@@ -162,10 +166,18 @@ export class AuthService {
       m.roles.some((r) => r.role === 'SUPER_ADMIN'),
     );
 
+    // Extract roles from first membership (active tenant)
+    // User always has at least one membership after login
+    const firstMembership = user.memberships[0];
+    const roles = firstMembership
+      ? firstMembership.roles.map((r) => r.role)
+      : [];
+
     const payload = {
       email: user.email,
       sub: user.id,
       isSuperAdmin,
+      roles,
     };
 
     const memberships = await this.tenancyService.getMembershipsForUser(user.id);
