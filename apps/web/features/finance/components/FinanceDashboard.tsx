@@ -10,6 +10,10 @@ import { PaymentHistoryList } from './PaymentHistoryList';
 import { ChargesTab } from './ChargesTab';
 import { DelinquentUnitsList } from './DelinquentUnitsList';
 import { FinanceChartsPanel } from './FinanceChartsPanel';
+import { ExpensesList } from './ExpensesList';
+import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
+import { LiquidationsTab } from './LiquidationsTab';
+import { useExpenses } from '../hooks/useExpenseLedger';
 import { cn } from '@/shared/lib/utils';
 
 interface FinanceDashboardProps {
@@ -17,14 +21,14 @@ interface FinanceDashboardProps {
   tenantId: string;
 }
 
-type TabType = 'payments' | 'payments-history' | 'charges' | 'delinquent' | 'analysis';
+type TabType = 'rubros' | 'expenses' | 'liquidations' | 'payments' | 'payments-history' | 'charges' | 'delinquent' | 'analysis';
 
 /**
  * FinanceDashboard: Main orchestrator for finance management
  * Displays KPI cards and three tabs: Pending Payments, Charges, Delinquent Units
  */
 export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('payments');
+  const [activeTab, setActiveTab] = useState<TabType>('rubros');
   const [period, setPeriod] = useState<string>('');
 
   // Load data from hooks
@@ -32,6 +36,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const { data: charges, isPending: chargesLoading, error: chargesError, refetch: refetchChargesRaw } = useCharges(buildingId, period);
   const { data: payments, isPending: paymentsLoading, error: paymentsError, refetch: refetchPaymentsRaw } = usePaymentsReview(buildingId, 'SUBMITTED');
   const { data: paymentHistory, isPending: paymentHistoryLoading, error: paymentHistoryError, refetch: refetchPaymentHistoryRaw } = usePaymentHistory(buildingId);
+  const { data: expenses = [], isPending: expensesLoading, error: expensesError, refetch: refetchExpensesRaw } = useExpenses(tenantId, { buildingId, period: period || undefined });
 
   // Wrap refetch functions to match component prop signatures
   const refetchSummary = async () => {
@@ -48,6 +53,10 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
   const refetchPaymentHistory = async () => {
     await refetchPaymentHistoryRaw();
+  };
+
+  const refetchExpenses = async () => {
+    await refetchExpensesRaw();
   };
 
   const handlePaymentApproved = async () => {
@@ -71,8 +80,12 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const chargesErrorMsg = chargesError ? (chargesError instanceof Error ? chargesError.message : String(chargesError)) : null;
   const paymentsErrorMsg = paymentsError ? (paymentsError instanceof Error ? paymentsError.message : String(paymentsError)) : null;
   const paymentHistoryErrorMsg = paymentHistoryError ? (paymentHistoryError instanceof Error ? paymentHistoryError.message : String(paymentHistoryError)) : null;
+  const expensesErrorMsg = expensesError ? (expensesError instanceof Error ? expensesError.message : String(expensesError)) : null;
 
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
+    { id: 'rubros', label: 'Rubros' },
+    { id: 'expenses', label: 'Gastos', count: expenses?.length },
+    { id: 'liquidations', label: 'Liquidaciones' },
     { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
     { id: 'payments-history', label: 'Historial de Pagos', count: paymentHistory?.length },
     { id: 'charges', label: 'Cargos' },
@@ -131,6 +144,31 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
       {/* Tab Content */}
       <div>
+        {activeTab === 'rubros' && (
+          <ExpenseLedgerCategoriesManager tenantId={tenantId} />
+        )}
+
+        {activeTab === 'expenses' && (
+          <ExpensesList
+            tenantId={tenantId}
+            buildingId={buildingId}
+            period={period || new Date().toISOString().split('T')[0].slice(0, 7)}
+            expenses={expenses}
+            loading={expensesLoading}
+            error={expensesErrorMsg}
+            onRefresh={refetchExpenses}
+          />
+        )}
+
+        {activeTab === 'liquidations' && (
+          <LiquidationsTab
+            tenantId={tenantId}
+            buildingId={buildingId}
+            period={period}
+            currency={summary?.currency || 'ARS'}
+          />
+        )}
+
         {activeTab === 'payments' && (
           <PaymentsReviewList
             buildingId={buildingId}

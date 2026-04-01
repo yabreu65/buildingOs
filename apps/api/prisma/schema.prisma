@@ -88,6 +88,19 @@ enum ExpensePeriodStatus {
   CLOSED
 }
 
+enum ExpenseStatus {
+  DRAFT
+  VALIDATED
+  VOID
+}
+
+enum LiquidationStatus {
+  DRAFT
+  REVIEWED
+  PUBLISHED
+  CANCELED
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -152,8 +165,11 @@ model Tenant {
   aiTemplates           AiTemplate[]
   aiActionEvents        AiActionEvent[]
   planChangeRequests    PlanChangeRequest[]
-  unitCategories        UnitCategory[]
-  expensePeriods        ExpensePeriod[]
+  unitCategories           UnitCategory[]
+  expensePeriods           ExpensePeriod[]
+  expenseLedgerCategories  ExpenseLedgerCategory[]
+  expenses                 Expense[]
+  liquidations             Liquidation[]
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
   unitOccupants         UnitOccupant[]
@@ -294,8 +310,10 @@ model Building {
   payments              Payment[]
   membershipRoles       MembershipRole[]      @relation("BuildingMembershipRoles")
   userContexts          UserContext[]         @relation("UserContextBuilding")
-  unitCategories        UnitCategory[]
-  expensePeriods        ExpensePeriod[]
+  unitCategories  UnitCategory[]
+  expensePeriods  ExpensePeriod[]
+  expenses        Expense[]
+  liquidations    Liquidation[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -528,6 +546,18 @@ enum AuditAction {
   EXPENSE_PERIOD_GENERATE
   EXPENSE_PERIOD_PUBLISH
   EXPENSE_PERIOD_DELETE
+  // EXPENSE LEDGER (nuevo flujo Gastos → Liquidación)
+  EXPENSE_CREATE
+  EXPENSE_VALIDATE
+  EXPENSE_VOID
+  EXPENSE_UPDATE
+  EXPENSE_LEDGER_CATEGORY_CREATE
+  EXPENSE_LEDGER_CATEGORY_UPDATE
+  EXPENSE_LEDGER_CATEGORY_DELETE
+  LIQUIDATION_DRAFT
+  LIQUIDATION_REVIEW
+  LIQUIDATION_PUBLISH
+  LIQUIDATION_CANCEL
 }
 
 model AuditLog {
@@ -1111,6 +1141,7 @@ model Vendor {
   assignments   VendorAssignment[]
   quotes        Quote[]
   workOrders    WorkOrder[]
+  expenses      Expense[]
 
   // Unique constraint to prevent duplicate vendors in same tenant
   @@unique([tenantId, name])
@@ -1228,12 +1259,16 @@ model Charge {
   totalToAllocateSnapshot     BigInt?     // Total distribuido al momento del cálculo (BigInt para valores grandes)
   categorySnapshotId          String?     // ID de la categoría asignada al momento del cálculo
 
+  // Liquidation traceability (null si charge es manual o viene de ExpensePeriod)
+  liquidationId               String?     // FK a Liquidation (nuevo flujo Gastos → Liquidación)
+
   // Relations
   tenant                      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building                    Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unit                        Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
   createdByMembership         Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   expensePeriod               ExpensePeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  liquidation                 Liquidation?          @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
   paymentAllocations          PaymentAllocation[]
 
   @@unique([unitId, period, concept]) // One charge per unit/period/concept
@@ -1242,6 +1277,7 @@ model Charge {
   @@index([tenantId, buildingId, status])
   @@index([dueDate])
   @@index([periodId])
+  @@index([liquidationId])
 }
 
 // ============================================================================
@@ -1314,6 +1350,95 @@ model PaymentAllocation {
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
   @@index([tenantId, chargeId])
+}
+
+// ============================================================================
+// FINANZAS: ExpenseLedgerCategory (Rubro de gasto — tenant-scoped)
+// ============================================================================
+model ExpenseLedgerCategory {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String   // e.g. "Electricidad", "Agua", "Mantenimiento"
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, active])
+}
+
+// ============================================================================
+// FINANZAS: Expense (Gasto/Comprobante mensual)
+// ============================================================================
+model Expense {
+  id                       String        @id @default(cuid())
+  tenantId                 String
+  buildingId               String
+  period                   String        // YYYY-MM format
+  categoryId               String        // FK ExpenseLedgerCategory
+  vendorId                 String?       // FK Vendor (opcional)
+  amountMinor              Int           // En centavos, positivo
+  currencyCode             String        // ISO: ARS, VES, USD
+  invoiceDate              DateTime      // Fecha del comprobante
+  postedAt                 DateTime      @default(now())
+  description              String?
+  attachmentFileKey        String?       // Key en MinIO/S3
+  status                   ExpenseStatus @default(DRAFT)
+  createdByMembershipId    String
+  validatedByMembershipId  String?
+  validatedAt              DateTime?
+  voidedByMembershipId     String?
+  voidedAt                 DateTime?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  vendor   Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, buildingId, status])
+  @@index([tenantId, period, categoryId])
+}
+
+// ============================================================================
+// FINANZAS: Liquidation (Liquidación de expensas — genera Charges)
+// ============================================================================
+model Liquidation {
+  id                       String            @id @default(cuid())
+  tenantId                 String
+  buildingId               String
+  period                   String            // YYYY-MM format
+  status                   LiquidationStatus @default(DRAFT)
+  baseCurrency             String            // Moneda base de liquidación
+  totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
+  totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
+  expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode }
+  unitCount                Int               // Unidades billables al momento de draft
+  generatedByMembershipId  String
+  generatedAt              DateTime          @default(now())
+  reviewedByMembershipId   String?
+  reviewedAt               DateTime?
+  publishedByMembershipId  String?
+  publishedAt              DateTime?
+  canceledByMembershipId   String?
+  canceledAt               DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  charges  Charge[]
+
+  @@unique([tenantId, buildingId, period, status])
+  @@index([tenantId, buildingId])
+  @@index([tenantId, status])
 }
 
 // ============================================================================
