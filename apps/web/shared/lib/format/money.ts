@@ -8,6 +8,24 @@ const DEFAULT_LOCALE = 'es-AR';
 const DEFAULT_CURRENCY = 'ARS';
 
 /**
+ * Map currency codes to their appropriate locales
+ */
+const CURRENCY_LOCALE_MAP: Record<string, string> = {
+  'ARS': 'es-AR',  // Argentine Peso
+  'VES': 'es-VE',  // Venezuelan Bolívar
+  'USD': 'en-US',  // US Dollar
+};
+
+/**
+ * Get the appropriate locale for a given currency
+ * @param currency - Currency code (e.g., ARS, VES, USD)
+ * @returns Locale string for use with Intl.NumberFormat
+ */
+export function getLocaleForCurrency(currency: string): string {
+  return CURRENCY_LOCALE_MAP[currency] || DEFAULT_LOCALE;
+}
+
+/**
  * Format amount in cents to currency string
  * @param cents - Amount stored in cents (e.g., 3500000 = $35,000.00)
  * @param currency - Currency code (default: ARS)

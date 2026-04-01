@@ -115,6 +115,10 @@ model Tenant {
   theme                 String?                // "light" | "dark" | "system"
   emailFooter           String?                // For future email communications
 
+  // Localization & Currency
+  currency              String @default("ARS") // ARS (Argentina), VES (Venezuela), USD
+  locale                String @default("es-AR") // es-AR, es-VE, en-US
+
   // Relations
   memberships           Membership[]
   buildings             Building[]

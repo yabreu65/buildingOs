@@ -992,6 +992,12 @@ export class FinanzasService {
       buildingId,
     );
 
+    // Load tenant to get currency
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { currency: true },
+    });
+
     // Build filters
     const where: Prisma.ChargeWhereInput = {
       tenantId,
@@ -1076,7 +1082,7 @@ export class FinanzasService {
       totalOutstanding,
       delinquentUnitsCount,
       topDelinquentUnits,
-      currency: 'ARS', // Default, could be per-charge
+      currency: tenant.currency,
     };
   }
 
@@ -1093,6 +1099,12 @@ export class FinanzasService {
     userRoles?: string[],
     userId?: string,
   ): Promise<UnitLedgerDto> {
+    // Load tenant to get currency
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { currency: true },
+    });
+
     // 1. Validate unit belongs to tenant
     const unit = await this.prisma.unit.findFirst({
       where: {
@@ -1192,7 +1204,7 @@ export class FinanzasService {
         totalCharges,
         totalAllocated,
         balance,
-        currency: 'ARS',
+        currency: tenant.currency,
       },
     };
   }
@@ -1426,6 +1438,12 @@ export class FinanzasService {
     tenantId: string,
     period?: string,
   ): Promise<FinancialSummaryDto> {
+    // Load tenant to get currency
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { currency: true },
+    });
+
     // 1. Build where clause: ALL charges for this tenant (no buildingId filter)
     const chargeWhere: Prisma.ChargeWhereInput = {
       tenantId,
@@ -1507,7 +1525,7 @@ export class FinanzasService {
       totalOutstanding,
       delinquentUnitsCount,
       topDelinquentUnits,
-      currency: 'ARS',
+      currency: tenant.currency,
     };
   }
 

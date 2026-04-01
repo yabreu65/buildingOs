@@ -690,6 +690,7 @@
     "profile": "Perfil",
     "account": "Cuenta",
     "branding": "Marca",
+    "general": "General",
     "team": "Equipo",
     "members": "Miembros",
     "invitations": "Invitaciones",
@@ -706,7 +707,12 @@
     "twoFactorAuth": "Autenticación de dos factores",
     "sessions": "Sesiones activas",
     "logout": "Cerrar sesión",
-    "logoutAll": "Cerrar todas las sesiones"
+    "logoutAll": "Cerrar todas las sesiones",
+    "currency": "Moneda",
+    "currencyARS": "Peso Argentino (ARS)",
+    "currencyVES": "Bolívar Venezolano (VES)",
+    "currencyUSD": "Dólar (USD)",
+    "currencySaved": "Moneda actualizada correctamente"
   },
 
   "forms": {

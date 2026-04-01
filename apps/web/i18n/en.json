@@ -85,5 +85,15 @@
     "myTeam": "My Team",
     "myProperties": "My Properties",
     "admin": "Administration"
+  },
+
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "currency": "Currency",
+    "currencyARS": "Argentine Peso (ARS)",
+    "currencyVES": "Venezuelan Bolívar (VES)",
+    "currencyUSD": "US Dollar (USD)",
+    "currencySaved": "Currency updated successfully"
   }
 }
