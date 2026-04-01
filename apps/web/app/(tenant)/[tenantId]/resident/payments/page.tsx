@@ -10,6 +10,7 @@ import {
   DollarSign,
   Upload,
   Loader2,
+  FileText,
 } from 'lucide-react';
 
 import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
@@ -18,6 +19,7 @@ import { getContextOptions } from '@/features/context/context.api';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus } from '@/features/finance/services/finance.api';
 import { apiClient } from '@/shared/lib/http/client';
+import { getDownloadUrl } from '@/features/buildings/services/documents.api';
 import type { ContextOption } from '@/features/context/context.types';
 import Card from '@/shared/components/ui/Card';
 import Input from '@/shared/components/ui/Input';
@@ -126,6 +128,25 @@ const ResidentPaymentsPage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
+
+  const handleViewProof = async (paymentId: string, fileId: string) => {
+    if (downloadUrls[paymentId]) {
+      window.open(downloadUrls[paymentId], '_blank');
+      return;
+    }
+    setDownloadingId(paymentId);
+    try {
+      const response = await getDownloadUrl(tenantId, fileId);
+      setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
+      window.open(response.url, '_blank');
+    } catch (error) {
+      console.error('Error downloading proof:', error);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -389,17 +410,33 @@ const ResidentPaymentsPage = () => {
         ) : (
           <div className="space-y-2">
             {payments.map((payment) => (
-              <div key={payment.id} className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
-                <div>
+              <div key={payment.id} className="flex justify-between items-start gap-3 p-3 bg-muted/50 rounded-lg">
+                <div className="flex-1">
                   <p className="font-medium">{formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}</p>
                   <p className="text-sm text-muted-foreground">
                     {payment.method} • {formatDate(payment.paidAt ?? payment.createdAt)}
                     {payment.reference && ` • ${payment.reference}`}
                   </p>
                 </div>
-                <span className={`px-2 py-1 rounded text-xs font-medium border ${paymentStatusColor(payment.status)}`}>
-                  {paymentStatusLabel(payment.status)}
-                </span>
+                <div className="flex items-center gap-2">
+                  {payment.proofFileId && (
+                    <button
+                      onClick={() => handleViewProof(payment.id, payment.proofFileId!)}
+                      disabled={downloadingId === payment.id}
+                      className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+                    >
+                      {downloadingId === payment.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <FileText className="w-4 h-4" />
+                      )}
+                      Ver
+                    </button>
+                  )}
+                  <span className={`px-2 py-1 rounded text-xs font-medium border whitespace-nowrap ${paymentStatusColor(payment.status)}`}>
+                    {paymentStatusLabel(payment.status)}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

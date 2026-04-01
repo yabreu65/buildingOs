@@ -2,6 +2,7 @@ export { FinanceSummaryCards } from './FinanceSummaryCards';
 export { ChargesTable } from './ChargesTable';
 export { FinanceDashboard } from './FinanceDashboard';
 export { PaymentsReviewList } from './PaymentsReviewList';
+export { PaymentHistoryList } from './PaymentHistoryList';
 export { PaymentApproveModal } from './PaymentApproveModal';
 export { ChargeCreateModal } from './ChargeCreateModal';
 export { ChargesTab } from './ChargesTab';

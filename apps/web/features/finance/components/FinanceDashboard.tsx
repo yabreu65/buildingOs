@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { useFinanceSummary } from '../hooks/useFinanceSummary';
 import { useCharges } from '../hooks/useCharges';
-import { usePaymentsReview } from '../hooks/usePaymentsReview';
+import { usePaymentsReview, usePaymentHistory } from '../hooks/usePaymentsReview';
 import { FinanceSummaryCards } from './FinanceSummaryCards';
 import { PaymentsReviewList } from './PaymentsReviewList';
+import { PaymentHistoryList } from './PaymentHistoryList';
 import { ChargesTab } from './ChargesTab';
 import { DelinquentUnitsList } from './DelinquentUnitsList';
 import { FinanceChartsPanel } from './FinanceChartsPanel';
@@ -16,7 +17,7 @@ interface FinanceDashboardProps {
   tenantId: string;
 }
 
-type TabType = 'payments' | 'charges' | 'delinquent' | 'analysis';
+type TabType = 'payments' | 'payments-history' | 'charges' | 'delinquent' | 'analysis';
 
 /**
  * FinanceDashboard: Main orchestrator for finance management
@@ -30,6 +31,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const { data: summary, isPending: summaryLoading, error: summaryError, refetch: refetchSummaryRaw } = useFinanceSummary(buildingId, period);
   const { data: charges, isPending: chargesLoading, error: chargesError, refetch: refetchChargesRaw } = useCharges(buildingId, period);
   const { data: payments, isPending: paymentsLoading, error: paymentsError, refetch: refetchPaymentsRaw } = usePaymentsReview(buildingId, 'SUBMITTED');
+  const { data: paymentHistory, isPending: paymentHistoryLoading, error: paymentHistoryError, refetch: refetchPaymentHistoryRaw } = usePaymentHistory(buildingId);
 
   // Wrap refetch functions to match component prop signatures
   const refetchSummary = async () => {
@@ -44,8 +46,13 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
     await refetchPaymentsRaw();
   };
 
+  const refetchPaymentHistory = async () => {
+    await refetchPaymentHistoryRaw();
+  };
+
   const handlePaymentApproved = async () => {
     await refetchPayments();
+    await refetchPaymentHistory();
     await refetchSummary();
   };
 
@@ -63,9 +70,11 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const summaryErrorMsg = summaryError ? (summaryError instanceof Error ? summaryError.message : String(summaryError)) : null;
   const chargesErrorMsg = chargesError ? (chargesError instanceof Error ? chargesError.message : String(chargesError)) : null;
   const paymentsErrorMsg = paymentsError ? (paymentsError instanceof Error ? paymentsError.message : String(paymentsError)) : null;
+  const paymentHistoryErrorMsg = paymentHistoryError ? (paymentHistoryError instanceof Error ? paymentHistoryError.message : String(paymentHistoryError)) : null;
 
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
     { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
+    { id: 'payments-history', label: 'Historial de Pagos', count: paymentHistory?.length },
     { id: 'charges', label: 'Cargos' },
     { id: 'delinquent', label: 'Unidades Morosas', count: summary?.delinquentUnitsCount },
     { id: 'analysis', label: 'Análisis' },
@@ -132,6 +141,17 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             onPaymentApproved={handlePaymentApproved}
             onPaymentRejected={handlePaymentRejected}
             onRefresh={refetchPayments}
+          />
+        )}
+
+        {activeTab === 'payments-history' && (
+          <PaymentHistoryList
+            buildingId={buildingId}
+            tenantId={tenantId}
+            payments={paymentHistory || []}
+            loading={paymentHistoryLoading}
+            error={paymentHistoryErrorMsg}
+            onRefresh={refetchPaymentHistory}
           />
         )}
 

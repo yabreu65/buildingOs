@@ -51,3 +51,19 @@ export function useRejectPayment(buildingId: string, status?: string) {
     },
   });
 }
+
+/**
+ * Hook to fetch approved payments (payment history)
+ * @param buildingId - Building ID to fetch payments for
+ * @returns useQuery result with payments list
+ */
+export function usePaymentHistory(buildingId: string) {
+  return useQuery({
+    queryKey: ['payments', buildingId, 'APPROVED'],
+    queryFn: () => listPayments(buildingId, 'APPROVED'),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    enabled: !!buildingId,
+    placeholderData: (previousData) => previousData ?? [],
+  });
+}
