@@ -13,6 +13,8 @@ export class GetBrandingResponseDto {
   secondaryColor?: string;
   theme?: string;
   emailFooter?: string;
+  currency?: string; // ARS, VES, USD
+  locale?: string; // es-AR, es-VE, en-US
 }
 
 /**
@@ -44,4 +46,12 @@ export class UpdateBrandingDto {
   @IsString()
   @MaxLength(500)
   emailFooter?: string;
+
+  @IsOptional()
+  @IsIn(['ARS', 'VES', 'USD'])
+  currency?: string;
+
+  @IsOptional()
+  @IsIn(['es-AR', 'es-VE', 'en-US'])
+  locale?: string;
 }

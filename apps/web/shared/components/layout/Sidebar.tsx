@@ -78,6 +78,7 @@ export const Sidebar = () => {
             <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               {t('navigation.settings')}
             </div>
+            <NavItem href={`/${tenantId}/settings/general`} label={t('settings.general')} />
             <NavItem href={`/${tenantId}/settings/members`} label={t('sidebar.myTeam')} />
           </>
         )}

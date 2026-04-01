@@ -45,6 +45,8 @@ export class BrandingService {
       secondaryColor: tenant.secondaryColor || undefined,
       theme: tenant.theme || undefined,
       emailFooter: tenant.emailFooter || undefined,
+      currency: tenant.currency || undefined,
+      locale: tenant.locale || undefined,
     };
   }
 
@@ -92,6 +94,8 @@ export class BrandingService {
       secondaryColor: tenant.secondaryColor,
       theme: tenant.theme,
       emailFooter: tenant.emailFooter,
+      currency: tenant.currency,
+      locale: tenant.locale,
     };
 
     // Update tenant
@@ -104,6 +108,8 @@ export class BrandingService {
         secondaryColor: dto.secondaryColor ?? tenant.secondaryColor,
         theme: dto.theme ?? tenant.theme,
         emailFooter: dto.emailFooter ?? tenant.emailFooter,
+        currency: dto.currency ?? tenant.currency,
+        locale: dto.locale ?? tenant.locale,
       },
     });
 
@@ -138,6 +144,8 @@ export class BrandingService {
       secondaryColor: updated.secondaryColor || undefined,
       theme: updated.theme || undefined,
       emailFooter: updated.emailFooter || undefined,
+      currency: updated.currency || undefined,
+      locale: updated.locale || undefined,
     };
   }
 }
