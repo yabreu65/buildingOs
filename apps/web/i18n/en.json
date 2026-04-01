@@ -56,5 +56,34 @@
     "emailRequired": "Email is required",
     "passwordRequired": "Password is required",
     "invalidEmail": "Invalid email address"
+  },
+
+  "navigation": {
+    "dashboard": "Dashboard",
+    "buildings": "Buildings",
+    "units": "Units",
+    "residents": "Residents",
+    "tickets": "Tickets",
+    "communications": "Communications",
+    "documents": "Documents",
+    "payments": "Payments",
+    "finanzas": "Finance",
+    "vendors": "Vendors",
+    "quotes": "Quotes",
+    "workOrders": "Work Orders",
+    "settings": "Settings",
+    "support": "Support",
+    "inbox": "Inbox",
+    "reports": "Reports",
+    "myUnit": "My Unit"
+  },
+
+  "sidebar": {
+    "menu": "Menu",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "myTeam": "My Team",
+    "myProperties": "My Properties",
+    "admin": "Administration"
   }
 }
