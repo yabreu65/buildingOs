@@ -1116,10 +1116,14 @@ export class FinanzasService {
     }
 
     // 3. Build charge filters
+    // Only fetch PENDING and PARTIAL charges - PAID charges should not be shown as pending
     const chargeWhere: Prisma.ChargeWhereInput = {
       tenantId,
       unitId,
       canceledAt: null,
+      status: {
+        in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL],
+      },
     };
 
     if (periodFrom || periodTo) {
