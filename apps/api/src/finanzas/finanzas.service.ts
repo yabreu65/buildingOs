@@ -1187,6 +1187,7 @@ export class FinanzasService {
         period: c.period,
         concept: c.concept,
         amount: c.amount,
+        currency: c.currency,
         type: c.type,
         status: c.status,
         dueDate: c.dueDate,

@@ -348,6 +348,7 @@ export interface UnitLedgerDto {
     period: string;
     concept: string;
     amount: number;
+    currency: string;
     type: ChargeType;
     status: ChargeStatus;
     dueDate: Date;
