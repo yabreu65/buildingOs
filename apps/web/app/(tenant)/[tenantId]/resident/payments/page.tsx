@@ -413,14 +413,15 @@ const ResidentPaymentsPage = () => {
           <form onSubmit={handleSubmitPayment} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Monto ($)</label>
+                <label className="block text-sm font-medium mb-1">Monto ({currency})</label>
                 <Input
                   type="number"
                   step="0.01"
-                  min="0"
+                  min="0.01"
+                  max="999999.99"
                   value={formData.amount || ''}
                   onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-                  placeholder="0.00"
+                  placeholder="Ej: 350.00"
                   required
                 />
               </div>

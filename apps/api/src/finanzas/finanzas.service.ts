@@ -1195,6 +1195,7 @@ export class FinanzasService {
       payments: payments.map((p) => ({
         id: p.id,
         amount: p.amount,
+        currency: p.currency,
         method: p.method,
         status: p.status,
         createdAt: p.createdAt,

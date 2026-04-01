@@ -356,6 +356,7 @@ export interface UnitLedgerDto {
   payments: Array<{
     id: string;
     amount: number;
+    currency: string;
     method: PaymentMethod;
     status: PaymentStatus;
     createdAt: Date;
