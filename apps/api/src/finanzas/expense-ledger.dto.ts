@@ -40,8 +40,10 @@ export class UpdateExpenseLedgerCategoryDto {
 export interface ExpenseLedgerCategoryResponseDto {
   id: string;
   tenantId: string;
+  code: string | null;
   name: string;
   description: string | null;
+  sortOrder: number;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;

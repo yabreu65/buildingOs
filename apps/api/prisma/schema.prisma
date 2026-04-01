@@ -1358,8 +1358,10 @@ model PaymentAllocation {
 model ExpenseLedgerCategory {
   id          String   @id @default(cuid())
   tenantId    String
+  code        String?  // Stable identifier for seeded categories (e.g. "SERV_ELECTRICIDAD")
   name        String   // e.g. "Electricidad", "Agua", "Mantenimiento"
   description String?
+  sortOrder   Int      @default(0) // Controls UI ordering for seeded categories
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1368,6 +1370,7 @@ model ExpenseLedgerCategory {
   expenses Expense[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, code]) // Allows multiple null codes (manually created categories)
   @@index([tenantId])
   @@index([tenantId, active])
 }

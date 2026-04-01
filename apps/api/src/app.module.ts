@@ -29,6 +29,7 @@ import { InboxModule } from './inbox/inbox.module';
 import { SupportTicketsModule } from './support-tickets/support-tickets.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DemoSeedModule } from './demo-seed/demo-seed.module';
+import { ExpenseSeedModule } from './expense-seed/expense-seed.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { LeadsModule } from './leads/leads.module';
@@ -68,6 +69,7 @@ import { PushController } from './push/push.controller';
     SupportTicketsModule,
     NotificationsModule,
     DemoSeedModule,
+    ExpenseSeedModule,
     AssistantModule,
     LeadsModule,
     TenantMembersModule,

@@ -33,7 +33,11 @@ export class ExpenseLedgerCategoriesService {
 
     const categories = await this.prisma.expenseLedgerCategory.findMany({
       where: { tenantId },
-      orderBy: [{ active: 'desc' }, { name: 'asc' }],
+      orderBy: [
+        { active: 'desc' },
+        { sortOrder: 'asc' }, // nulls last (PostgreSQL default)
+        { name: 'asc' },
+      ],
     });
 
     return categories.map(this.toDto);
@@ -211,8 +215,10 @@ export class ExpenseLedgerCategoriesService {
   private toDto(category: {
     id: string;
     tenantId: string;
+    code?: string | null;
     name: string;
     description: string | null;
+    sortOrder?: number;
     active: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -220,8 +226,10 @@ export class ExpenseLedgerCategoriesService {
     return {
       id: category.id,
       tenantId: category.tenantId,
+      code: category.code ?? null,
       name: category.name,
       description: category.description,
+      sortOrder: category.sortOrder ?? 0,
       active: category.active,
       createdAt: category.createdAt,
       updatedAt: category.updatedAt,

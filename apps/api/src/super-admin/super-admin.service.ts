@@ -3,11 +3,13 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ExpenseLedgerSeedService } from '../expense-seed/expense-seed.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
@@ -51,10 +53,13 @@ export interface AuditLogResponse {
 
 @Injectable()
 export class SuperAdminService {
+  private readonly logger = new Logger(SuperAdminService.name);
+
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
     private jwtService: JwtService,
+    private expenseLedgerSeedService: ExpenseLedgerSeedService,
   ) {}
 
   /**
@@ -115,6 +120,16 @@ export class SuperAdminService {
       entityId: result.id,
       metadata: { name: result.name, type: result.type },
     });
+
+    // Seed default expense categories for the new tenant (fire-and-forget)
+    void this.expenseLedgerSeedService
+      .seedDefaultCategoriesForTenant(result.id)
+      .catch((err) =>
+        this.logger.error(
+          `[SuperAdminService] Expense seed failed for tenant ${result.id}`,
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
 
     return this.formatTenant(result);
   }

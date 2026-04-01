@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { BillingModule } from '../billing/billing.module';
+import { ExpenseSeedModule } from '../expense-seed/expense-seed.module';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
 import { AiCapsService } from './ai-caps.service';
@@ -13,6 +14,7 @@ import { AiCapsService } from './ai-caps.service';
     PrismaModule,
     TenancyModule,
     BillingModule,
+    ExpenseSeedModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
