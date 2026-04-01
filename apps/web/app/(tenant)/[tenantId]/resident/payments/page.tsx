@@ -24,7 +24,7 @@ import Input from '@/shared/components/ui/Input';
 import Select from '@/shared/components/ui/Select';
 import Button from '@/shared/components/ui/Button';
 import Skeleton from '@/shared/components/ui/Skeleton';
-import { formatCurrency, toCents } from '@/shared/lib/format/money';
+import { formatCurrency, toCents, getLocaleForCurrency } from '@/shared/lib/format/money';
 
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '—';
@@ -303,7 +303,7 @@ const ResidentPaymentsPage = () => {
             <div>
               <p className="text-sm font-medium text-muted-foreground">Saldo pendiente</p>
               <p className={`text-2xl font-bold ${balance > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                {formatCurrency(balance, currency)}
+                {formatCurrency(balance, currency, getLocaleForCurrency(currency))}
               </p>
             </div>
           </div>
@@ -319,7 +319,7 @@ const ResidentPaymentsPage = () => {
               </p>
               {nextDueCharge && (
                 <p className="text-xs text-muted-foreground">
-                  {formatCurrency(nextDueCharge.amount, currency)}
+                  {formatCurrency(nextDueCharge.amount, currency, getLocaleForCurrency(currency))}
                 </p>
               )}
             </div>
@@ -332,7 +332,7 @@ const ResidentPaymentsPage = () => {
             <div>
               <p className="text-sm font-medium text-muted-foreground">Último pago</p>
               <p className="text-2xl font-bold text-gray-900">
-                {lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency) : '—'}
+                {lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency, getLocaleForCurrency(lastPayment.currency)) : '—'}
               </p>
               {lastPayment && (
                 <p className="text-xs text-muted-foreground">
@@ -361,7 +361,7 @@ const ResidentPaymentsPage = () => {
                   <p className="text-sm text-muted-foreground">{charge.period} • Vence: {formatDate(charge.dueDate)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="font-bold">{formatCurrency(charge.amount - (charge.allocated ?? 0), charge.currency)}</p>
+                  <p className="font-bold">{formatCurrency(charge.amount - (charge.allocated ?? 0), charge.currency, getLocaleForCurrency(charge.currency))}</p>
                   <p className="text-xs text-muted-foreground">{getChargeStatusFromDebt(charge.amount, charge.allocated, charge.status)}</p>
                 </div>
               </div>
@@ -391,7 +391,7 @@ const ResidentPaymentsPage = () => {
             {payments.map((payment) => (
               <div key={payment.id} className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
                 <div>
-                  <p className="font-medium">{formatCurrency(payment.amount, payment.currency)}</p>
+                  <p className="font-medium">{formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}</p>
                   <p className="text-sm text-muted-foreground">
                     {payment.method} • {formatDate(payment.paidAt ?? payment.createdAt)}
                     {payment.reference && ` • ${payment.reference}`}
