@@ -10,6 +10,7 @@ import { IncomesController } from './incomes.controller';
 import { LiquidationsController } from './liquidations.controller';
 import { UnitGroupController } from './unit-group.controller';
 import { MovementAllocationController } from './movement-allocation.controller';
+import { LiquidationEngineController } from './liquidation-engine.controller';
 import { FinanzasService } from './finanzas.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { ExpenseCategoriesService } from './expense-categories.service';
@@ -20,6 +21,7 @@ import { IncomesService } from './incomes.service';
 import { LiquidationsService } from './liquidations.service';
 import { MovementAllocationService } from './movement-allocation.service';
 import { UnitGroupService } from './unit-group.service';
+import { LiquidationEngineService } from './liquidation-engine.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
@@ -36,6 +38,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     LiquidationsController,
     UnitGroupController,
     MovementAllocationController,
+    LiquidationEngineController,
   ],
   providers: [
     FinanzasService,
@@ -48,6 +51,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     LiquidationsService,
     MovementAllocationService,
     UnitGroupService,
+    LiquidationEngineService,
   ],
   exports: [
     FinanzasService,
@@ -60,6 +64,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     LiquidationsService,
     MovementAllocationService,
     UnitGroupService,
+    LiquidationEngineService,
   ],
 })
 export class FinanzasModule {}
