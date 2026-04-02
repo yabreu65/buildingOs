@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ExpenseLedgerSeedService, SeedResult } from './expense-seed.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { DEFAULT_EXPENSE_CATEGORIES } from './expense-seed.constants';
+import { DEFAULT_LEDGER_CATEGORIES } from './expense-seed.constants';
 
 describe('ExpenseLedgerSeedService', () => {
   let service: ExpenseLedgerSeedService;
@@ -10,7 +10,7 @@ describe('ExpenseLedgerSeedService', () => {
   let audit: AuditService;
 
   const mockTenantId = 'tenant-123';
-  const mockCreateManyResult = { count: DEFAULT_EXPENSE_CATEGORIES.length };
+  const mockCreateManyResult = { count: DEFAULT_LEDGER_CATEGORIES.length };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -40,17 +40,17 @@ describe('ExpenseLedgerSeedService', () => {
   });
 
   describe('seedDefaultCategoriesForTenant', () => {
-    it('should create exactly 19 categories for a new tenant (created=19, skipped=0)', async () => {
+    it('should create exactly 28 categories (21 EXPENSE + 7 INCOME) for a new tenant (created=28, skipped=0)', async () => {
       const result = await service.seedDefaultCategoriesForTenant(mockTenantId);
 
       expect(result).toEqual({
-        created: DEFAULT_EXPENSE_CATEGORIES.length,
+        created: DEFAULT_LEDGER_CATEGORIES.length,
         skipped: 0,
       });
 
       expect(prisma.expenseLedgerCategory.createMany).toHaveBeenCalledWith({
         data: expect.arrayContaining(
-          DEFAULT_EXPENSE_CATEGORIES.map((cat) =>
+          DEFAULT_LEDGER_CATEGORIES.map((cat) =>
             expect.objectContaining({
               tenantId: mockTenantId,
               code: cat.code,
@@ -62,23 +62,23 @@ describe('ExpenseLedgerSeedService', () => {
       });
     });
 
-    it('should be idempotent: second call returns created=0, skipped=19', async () => {
+    it('should be idempotent: second call returns created=0, skipped=28', async () => {
       // First call: all created
       jest
         .spyOn(prisma.expenseLedgerCategory, 'createMany')
-        .mockResolvedValueOnce({ count: 19 });
+        .mockResolvedValueOnce({ count: DEFAULT_LEDGER_CATEGORIES.length });
       const first = await service.seedDefaultCategoriesForTenant(mockTenantId);
-      expect(first).toEqual({ created: 19, skipped: 0 });
+      expect(first).toEqual({ created: DEFAULT_LEDGER_CATEGORIES.length, skipped: 0 });
 
       // Second call: all skipped (duplicate keys)
       jest
         .spyOn(prisma.expenseLedgerCategory, 'createMany')
         .mockResolvedValueOnce({ count: 0 });
       const second = await service.seedDefaultCategoriesForTenant(mockTenantId);
-      expect(second).toEqual({ created: 0, skipped: 19 });
+      expect(second).toEqual({ created: 0, skipped: DEFAULT_LEDGER_CATEGORIES.length });
     });
 
-    it('should seed optional categories with active=false', async () => {
+    it('should seed optional categories with isActive=false', async () => {
       const optionalCodes = ['SERV_GAS', 'PERS_SEGURIDAD', 'INF_ASCENSORES'];
 
       await service.seedDefaultCategoriesForTenant(mockTenantId);
@@ -90,14 +90,14 @@ describe('ExpenseLedgerSeedService', () => {
       optionalCodes.forEach((code) => {
         const optional = createdData.find((c: any) => c.code === code);
         expect(optional).toBeDefined();
-        expect(optional.active).toBe(false);
+        expect(optional.isActive).toBe(false);
       });
     });
 
     it('should fire audit log with source=DEFAULT_SEED and correct metadata', async () => {
       jest
         .spyOn(prisma.expenseLedgerCategory, 'createMany')
-        .mockResolvedValueOnce({ count: 15 });
+        .mockResolvedValueOnce({ count: 20 });
 
       await service.seedDefaultCategoriesForTenant(mockTenantId);
 
@@ -107,10 +107,10 @@ describe('ExpenseLedgerSeedService', () => {
         entityType: 'ExpenseLedgerCategory',
         entityId: mockTenantId,
         metadata: {
-          created: 15,
-          skipped: 4,
+          created: 20,
+          skipped: 8,
           source: 'DEFAULT_SEED',
-          totalCategories: 19,
+          totalCategories: DEFAULT_LEDGER_CATEGORIES.length,
         },
       });
     });
