@@ -12,6 +12,7 @@ import {
   ExpenseResponseDto,
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
+import { MovementAllocationService } from './movement-allocation.service';
 
 @Injectable()
 export class ExpensesService {
@@ -19,6 +20,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly validators: FinanzasValidators,
+    private readonly movementAllocationService: MovementAllocationService,
   ) {}
 
   async listExpenses(
@@ -95,10 +97,44 @@ export class ExpensesService {
       );
     }
 
-    await this.validators.validateBuildingBelongsToTenant(tenantId, dto.buildingId);
+    const scopeType = dto.scopeType ?? 'BUILDING';
+
+    // Validar scope-specific requirements
+    if (scopeType === 'BUILDING') {
+      if (!dto.buildingId) {
+        throw new BadRequestException(
+          'buildingId es requerido para scope BUILDING',
+        );
+      }
+      await this.validators.validateBuildingBelongsToTenant(tenantId, dto.buildingId);
+    } else if (scopeType === 'TENANT_SHARED') {
+      if (!dto.allocations || dto.allocations.length === 0) {
+        throw new BadRequestException(
+          'allocations es requerido para scope TENANT_SHARED',
+        );
+      }
+    } else if (scopeType === 'UNIT_GROUP') {
+      if (!dto.unitGroupId) {
+        throw new BadRequestException(
+          'unitGroupId es requerido para scope UNIT_GROUP',
+        );
+      }
+      if (!dto.allocations || dto.allocations.length === 0) {
+        throw new BadRequestException(
+          'allocations es requerido para scope UNIT_GROUP',
+        );
+      }
+      // Validar que unitGroup exista y pertenezca al tenant
+      const unitGroup = await this.prisma.unitGroup.findFirst({
+        where: { id: dto.unitGroupId, tenantId },
+      });
+      if (!unitGroup) {
+        throw new NotFoundException(`Grupo de unidades no encontrado: ${dto.unitGroupId}`);
+      }
+    }
 
     const category = await this.prisma.expenseLedgerCategory.findFirst({
-      where: { id: dto.categoryId, tenantId, active: true },
+      where: { id: dto.categoryId, tenantId, isActive: true },
     });
     if (!category) {
       throw new NotFoundException(`Rubro de gasto no encontrado: ${dto.categoryId}`);
@@ -116,7 +152,7 @@ export class ExpensesService {
     const expense = await this.prisma.expense.create({
       data: {
         tenantId,
-        buildingId: dto.buildingId,
+        buildingId: dto.buildingId ?? null,
         period: dto.period,
         categoryId: dto.categoryId,
         vendorId: dto.vendorId ?? null,
@@ -125,6 +161,8 @@ export class ExpensesService {
         invoiceDate: new Date(dto.invoiceDate),
         description: dto.description ?? null,
         attachmentFileKey: dto.attachmentFileKey ?? null,
+        scopeType,
+        unitGroupId: dto.unitGroupId ?? null,
         createdByMembershipId: membershipId,
       },
       include: {
@@ -132,6 +170,18 @@ export class ExpensesService {
         vendor: { select: { name: true } },
       },
     });
+
+    // Crear allocations si es TENANT_SHARED o UNIT_GROUP
+    if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+      await this.movementAllocationService.createForExpense(
+        tenantId,
+        expense.id,
+        dto.amountMinor,
+        dto.currencyCode,
+        dto.allocations,
+        membershipId,
+      );
+    }
 
     void this.auditService.createLog({
       tenantId,
@@ -141,7 +191,8 @@ export class ExpensesService {
       entityId: expense.id,
       metadata: {
         period: dto.period,
-        buildingId: dto.buildingId,
+        buildingId: dto.buildingId ?? null,
+        scopeType,
         amountMinor: dto.amountMinor,
         currencyCode: dto.currencyCode,
       },
@@ -177,7 +228,7 @@ export class ExpensesService {
 
     if (dto.categoryId && dto.categoryId !== expense.categoryId) {
       const category = await this.prisma.expenseLedgerCategory.findFirst({
-        where: { id: dto.categoryId, tenantId, active: true },
+        where: { id: dto.categoryId, tenantId, isActive: true },
       });
       if (!category) {
         throw new NotFoundException(`Rubro de gasto no encontrado: ${dto.categoryId}`);
@@ -336,7 +387,7 @@ export class ExpensesService {
     expense: {
       id: string;
       tenantId: string;
-      buildingId: string;
+      buildingId: string | null;
       period: string;
       categoryId: string;
       vendorId: string | null;
@@ -346,6 +397,8 @@ export class ExpensesService {
       description: string | null;
       attachmentFileKey: string | null;
       status: 'DRAFT' | 'VALIDATED' | 'VOID';
+      scopeType: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
+      unitGroupId: string | null;
       createdAt: Date;
       updatedAt: Date;
       category: { name: string };
@@ -367,6 +420,8 @@ export class ExpensesService {
       description: expense.description,
       attachmentFileKey: expense.attachmentFileKey,
       status: expense.status,
+      scopeType: expense.scopeType,
+      unitGroupId: expense.unitGroupId,
       createdAt: expense.createdAt,
       updatedAt: expense.updatedAt,
     };

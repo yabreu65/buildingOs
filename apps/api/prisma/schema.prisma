@@ -37,6 +37,10 @@ enum MemberStatus {
   DISABLED
 }
 
+enum MovementType {
+  EXPENSE
+  INCOME
+}
 
 // ============================================================================
 // FINANZAS (Charges, Payments, Allocations)
@@ -92,6 +96,24 @@ enum ExpenseStatus {
   DRAFT
   VALIDATED
   VOID
+}
+
+enum IncomeStatus {
+  DRAFT
+  RECORDED
+  VOID
+}
+
+enum MovementScope {
+  BUILDING        // Impacta directamente un edificio
+  TENANT_SHARED   // Se reparte entre N edificios via allocations
+  UNIT_GROUP      // Se reparte solo entre un grupo de unidades
+}
+
+enum IncomeDestination {
+  APPLY_TO_EXPENSES  // Baja el neto a prorratear
+  RESERVE_FUND       // Va a fondo de reserva (no afecta liquidación)
+  SPECIAL_FUND       // Fase 2
 }
 
 enum LiquidationStatus {
@@ -169,6 +191,9 @@ model Tenant {
   expensePeriods           ExpensePeriod[]
   expenseLedgerCategories  ExpenseLedgerCategory[]
   expenses                 Expense[]
+  incomes                  Income[]
+  movementAllocations      MovementAllocation[]
+  unitGroups               UnitGroup[]
   liquidations             Liquidation[]
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
@@ -310,10 +335,13 @@ model Building {
   payments              Payment[]
   membershipRoles       MembershipRole[]      @relation("BuildingMembershipRoles")
   userContexts          UserContext[]         @relation("UserContextBuilding")
-  unitCategories  UnitCategory[]
-  expensePeriods  ExpensePeriod[]
-  expenses        Expense[]
-  liquidations    Liquidation[]
+  unitCategories       UnitCategory[]
+  expensePeriods       ExpensePeriod[]
+  expenses             Expense[]
+  incomes              Income[]
+  movementAllocations  MovementAllocation[]
+  unitGroups           UnitGroup[]
+  liquidations         Liquidation[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -341,6 +369,7 @@ model Unit {
   payments        Payment[]
   membershipRoles MembershipRole[]  @relation("UnitMembershipRoles")
   userContexts    UserContext[]     @relation("UserContextUnit")
+  unitGroupMembers UnitGroupMember[]
 
   @@unique([buildingId, code])
   @@index([buildingId])
@@ -558,6 +587,18 @@ enum AuditAction {
   LIQUIDATION_REVIEW
   LIQUIDATION_PUBLISH
   LIQUIDATION_CANCEL
+  // INCOME
+  INCOME_CREATE
+  INCOME_UPDATE
+  INCOME_RECORD
+  INCOME_VOID
+  INCOME_ALLOCATION_CREATE
+  // UNIT GROUPS & ALLOCATIONS
+  UNIT_GROUP_CREATE
+  UNIT_GROUP_DELETE
+  UNIT_GROUP_MEMBER_ADD
+  UNIT_GROUP_MEMBER_REMOVE
+  EXPENSE_ALLOCATION_CREATE
 }
 
 model AuditLog {
@@ -1353,61 +1394,173 @@ model PaymentAllocation {
 }
 
 // ============================================================================
-// FINANZAS: ExpenseLedgerCategory (Rubro de gasto — tenant-scoped)
+// FINANZAS: ExpenseLedgerCategory (Rubro de gasto/ingreso — tenant-scoped)
 // ============================================================================
 model ExpenseLedgerCategory {
-  id          String   @id @default(cuid())
-  tenantId    String
-  code        String?  // Stable identifier for seeded categories (e.g. "SERV_ELECTRICIDAD")
-  name        String   // e.g. "Electricidad", "Agua", "Mantenimiento"
-  description String?
-  sortOrder   Int      @default(0) // Controls UI ordering for seeded categories
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String       @id @default(cuid())
+  tenantId     String
+  code         String?      // Stable identifier for seeded categories (e.g. "SERV_ELECTRICIDAD")
+  name         String       // e.g. "Electricidad", "Agua", "Mantenimiento"
+  description  String?
+  movementType MovementType @default(EXPENSE) // EXPENSE or INCOME
+  sortOrder    Int          @default(0) // Controls UI ordering for seeded categories
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   expenses Expense[]
+  incomes  Income[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, code]) // Allows multiple null codes (manually created categories)
   @@index([tenantId])
-  @@index([tenantId, active])
+  @@index([tenantId, movementType])
+  @@index([tenantId, isActive])
 }
 
 // ============================================================================
 // FINANZAS: Expense (Gasto/Comprobante mensual)
 // ============================================================================
 model Expense {
-  id                       String        @id @default(cuid())
+  id                       String         @id @default(cuid())
   tenantId                 String
-  buildingId               String
-  period                   String        // YYYY-MM format
-  categoryId               String        // FK ExpenseLedgerCategory
-  vendorId                 String?       // FK Vendor (opcional)
-  amountMinor              Int           // En centavos, positivo
-  currencyCode             String        // ISO: ARS, VES, USD
-  invoiceDate              DateTime      // Fecha del comprobante
-  postedAt                 DateTime      @default(now())
+  buildingId               String?        // nullable: null para TENANT_SHARED
+  period                   String         // YYYY-MM format
+  categoryId               String         // FK ExpenseLedgerCategory
+  vendorId                 String?        // FK Vendor (opcional)
+  scopeType                MovementScope  @default(BUILDING)
+  unitGroupId              String?        // FK UnitGroup (solo UNIT_GROUP)
+  amountMinor              Int            // En centavos, positivo
+  currencyCode             String         // ISO: ARS, VES, USD
+  invoiceDate              DateTime       // Fecha del comprobante
+  postedAt                 DateTime       @default(now())
   description              String?
-  attachmentFileKey        String?       // Key en MinIO/S3
-  status                   ExpenseStatus @default(DRAFT)
+  attachmentFileKey        String?        // Key en MinIO/S3
+  status                   ExpenseStatus  @default(DRAFT)
   createdByMembershipId    String
   validatedByMembershipId  String?
   validatedAt              DateTime?
   voidedByMembershipId     String?
   voidedAt                 DateTime?
-  createdAt                DateTime      @default(now())
-  updatedAt                DateTime      @updatedAt
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
 
-  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  vendor   Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building    Building?             @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  vendor      Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  unitGroup   UnitGroup?            @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
+  allocations MovementAllocation[]
 
   @@index([tenantId, buildingId, period])
   @@index([tenantId, buildingId, status])
   @@index([tenantId, period, categoryId])
+  @@index([tenantId, scopeType])
+}
+
+// ============================================================================
+// FINANZAS: Income (Movimientos de ingresos — cuotas, intereses, alquileres)
+// ============================================================================
+model Income {
+  id                       String              @id @default(cuid())
+  tenantId                 String
+  buildingId               String?             // Optional: null for tenant-level (interest, fees), set for building-specific (parking rent)
+  period                   String              // YYYY-MM format
+  categoryId               String              // FK ExpenseLedgerCategory (must be INCOME type)
+  scopeType                MovementScope       @default(BUILDING)
+  destination              IncomeDestination   @default(APPLY_TO_EXPENSES)
+  unitGroupId              String?             // FK UnitGroup (solo UNIT_GROUP)
+  amountMinor              Int                 // En centavos, positivo
+  currencyCode             String              // ISO: ARS, VES, USD
+  receivedDate             DateTime            // Fecha del ingreso
+  postedAt                 DateTime            @default(now())
+  description              String?
+  attachmentFileKey        String?             // Key en MinIO/S3
+  status                   IncomeStatus        @default(DRAFT)
+  createdByMembershipId    String
+  recordedByMembershipId   String?
+  recordedAt               DateTime?
+  voidedByMembershipId     String?
+  voidedAt                 DateTime?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building    Building?             @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  unitGroup   UnitGroup?            @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
+  allocations MovementAllocation[]
+
+  @@index([tenantId, period])
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, status])
+  @@index([tenantId, categoryId])
+  @@index([tenantId, scopeType])
+  @@index([tenantId, destination])
+}
+
+// ============================================================================
+// FINANZAS: MovementAllocation (Distribución de Expense/Income TENANT_SHARED)
+// ============================================================================
+model MovementAllocation {
+  id           String   @id @default(cuid())
+  tenantId     String
+  expenseId    String?  // XOR con incomeId
+  incomeId     String?  // XOR con expenseId
+  buildingId   String
+  percentage   Float?   // % del total (0–100), si se distribuye por %
+  amountMinor  Int?     // monto fijo en esa moneda
+  currencyCode String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expense  Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  income   Income?   @relation(fields: [incomeId], references: [id], onDelete: Cascade)
+  building Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, expenseId])
+  @@index([tenantId, incomeId])
+  @@index([tenantId, buildingId])
+  @@unique([tenantId, expenseId, buildingId]) // No duplicar allocation por building
+  @@unique([tenantId, incomeId, buildingId])
+}
+
+// ============================================================================
+// FINANZAS: UnitGroup (Grupos de unidades para prorrateo UNIT_GROUP)
+// ============================================================================
+model UnitGroup {
+  id          String @id @default(cuid())
+  tenantId    String
+  buildingId  String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building  Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  members   UnitGroupMember[]
+  expenses  Expense[]
+  incomes   Income[]
+
+  @@unique([tenantId, buildingId, name])
+  @@index([tenantId, buildingId])
+}
+
+model UnitGroupMember {
+  id          String @id @default(cuid())
+  unitGroupId String
+  unitId      String
+  createdAt   DateTime @default(now())
+
+  unitGroup UnitGroup @relation(fields: [unitGroupId], references: [id], onDelete: Cascade)
+  unit      Unit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitGroupId, unitId])
+  @@index([unitGroupId])
+  @@index([unitId])
 }
 
 // ============================================================================
