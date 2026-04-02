@@ -8,20 +8,34 @@ import {
   Query,
   UseGuards,
   Request,
+  BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { IsString, IsArray, IsOptional, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { UnitGroupService } from './unit-group.service';
 
-export interface CreateUnitGroupDto {
-  buildingId: string;
-  name: string;
+export class CreateUnitGroupDto {
+  @IsString()
+  buildingId!: string;
+
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @IsString()
+  @IsOptional()
   description?: string;
-  unitIds: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  unitIds!: string[];
 }
 
-export interface AddMemberDto {
-  unitId: string;
+export class AddMemberDto {
+  @IsString()
+  unitId!: string;
 }
 
 @Controller('tenants/:tenantId/unit-groups')
@@ -29,6 +43,12 @@ export interface AddMemberDto {
 export class UnitGroupController {
   constructor(private readonly unitGroupService: UnitGroupService) {}
 
+  /**
+   * Create a new unit group within a building
+   * @param req Authenticated request with tenantId and membershipId
+   * @param dto Unit group creation data (name, description, unitIds)
+   * @returns Created unit group with member count
+   */
   @Post()
   async createUnitGroup(
     @Request() req: AuthenticatedRequest,
@@ -39,7 +59,7 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
-      throw new Error('Missing tenantId or membershipId in request');
+      throw new UnauthorizedException('Missing tenantId or membershipId in request');
     }
 
     return this.unitGroupService.createUnitGroup(
@@ -53,6 +73,12 @@ export class UnitGroupController {
     );
   }
 
+  /**
+   * Retrieve a specific unit group with all members and their details
+   * @param req Authenticated request with tenantId
+   * @param groupId Unit group ID to retrieve
+   * @returns Unit group with members including unit details (code, label, area)
+   */
   @Get(':groupId')
   async getUnitGroup(
     @Request() req: AuthenticatedRequest,
@@ -62,12 +88,18 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId) {
-      throw new Error('Missing tenantId in request');
+      throw new UnauthorizedException('Missing tenantId in request');
     }
 
     return this.unitGroupService.getUnitGroup(tenantId, groupId, roles);
   }
 
+  /**
+   * List unit groups for a tenant, optionally filtered by building
+   * @param req Authenticated request with tenantId
+   * @param buildingId Optional building ID to filter groups
+   * @returns Array of unit groups with member counts
+   */
   @Get()
   async listUnitGroups(
     @Request() req: AuthenticatedRequest,
@@ -77,12 +109,19 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId) {
-      throw new Error('Missing tenantId in request');
+      throw new UnauthorizedException('Missing tenantId in request');
     }
 
     return this.unitGroupService.listUnitGroups(tenantId, buildingId, roles);
   }
 
+  /**
+   * Add a unit to an existing unit group
+   * @param req Authenticated request with tenantId and membershipId
+   * @param groupId Unit group ID to add member to
+   * @param dto Unit ID to add (unitId)
+   * @returns Success status
+   */
   @Post(':groupId/members')
   async addMember(
     @Request() req: AuthenticatedRequest,
@@ -94,7 +133,7 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
-      throw new Error('Missing tenantId or membershipId in request');
+      throw new UnauthorizedException('Missing tenantId or membershipId in request');
     }
 
     await this.unitGroupService.addMember(
@@ -107,6 +146,13 @@ export class UnitGroupController {
     return { success: true };
   }
 
+  /**
+   * Remove a unit from a unit group
+   * @param req Authenticated request with tenantId and membershipId
+   * @param groupId Unit group ID to remove member from
+   * @param unitId Unit ID to remove
+   * @returns Success status
+   */
   @Delete(':groupId/members/:unitId')
   async removeMember(
     @Request() req: AuthenticatedRequest,
@@ -118,7 +164,7 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
-      throw new Error('Missing tenantId or membershipId in request');
+      throw new UnauthorizedException('Missing tenantId or membershipId in request');
     }
 
     await this.unitGroupService.removeMember(
@@ -131,6 +177,13 @@ export class UnitGroupController {
     return { success: true };
   }
 
+  /**
+   * Delete a unit group (only if not used in active movements)
+   * @param req Authenticated request with tenantId and membershipId
+   * @param groupId Unit group ID to delete
+   * @returns Success status
+   * @throws BadRequestException if group is used in active expenses/incomes
+   */
   @Delete(':groupId')
   async deleteUnitGroup(
     @Request() req: AuthenticatedRequest,
@@ -141,7 +194,7 @@ export class UnitGroupController {
     const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
-      throw new Error('Missing tenantId or membershipId in request');
+      throw new UnauthorizedException('Missing tenantId or membershipId in request');
     }
 
     await this.unitGroupService.deleteUnitGroup(

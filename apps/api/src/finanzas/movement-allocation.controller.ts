@@ -4,11 +4,23 @@ import {
   Query,
   UseGuards,
   BadRequestException,
+  UnauthorizedException,
   Request,
 } from '@nestjs/common';
+import { IsString, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { MovementAllocationService } from './movement-allocation.service';
+
+export class GetAllocationsQueryDto {
+  @IsString()
+  @IsOptional()
+  expenseId?: string;
+
+  @IsString()
+  @IsOptional()
+  incomeId?: string;
+}
 
 @Controller('tenants/:tenantId/allocations')
 @UseGuards(JwtAuthGuard)
@@ -17,27 +29,28 @@ export class MovementAllocationController {
 
   /**
    * Get allocations for a specific expense or income
-   * Query: ?expenseId=... OR ?incomeId=...
+   * @param req Authenticated request with tenantId
+   * @param query Query parameters (expenseId OR incomeId, not both)
+   * @returns Array of movement allocations with building details
    */
   @Get()
   async getAllocations(
     @Request() req: AuthenticatedRequest,
-    @Query('expenseId') expenseId?: string,
-    @Query('incomeId') incomeId?: string,
+    @Query() query: GetAllocationsQueryDto,
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
 
     if (!tenantId) {
-      throw new Error('Missing tenantId in request');
+      throw new UnauthorizedException('Missing tenantId in request context');
     }
 
-    if (!expenseId && !incomeId) {
+    if (!query.expenseId && !query.incomeId) {
       throw new BadRequestException(
         'Se requiere expenseId o incomeId como parámetro de query',
       );
     }
 
-    if (expenseId && incomeId) {
+    if (query.expenseId && query.incomeId) {
       throw new BadRequestException(
         'No se pueden usar expenseId e incomeId al mismo tiempo',
       );
@@ -45,8 +58,8 @@ export class MovementAllocationController {
 
     return this.allocationService.getAllocations(
       tenantId,
-      expenseId,
-      incomeId,
+      query.expenseId,
+      query.incomeId,
     );
   }
 }
