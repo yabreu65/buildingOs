@@ -8,6 +8,8 @@ import { ExpenseLedgerCategoriesController } from './expense-ledger-categories.c
 import { ExpensesController } from './expenses.controller';
 import { IncomesController } from './incomes.controller';
 import { LiquidationsController } from './liquidations.controller';
+import { UnitGroupController } from './unit-group.controller';
+import { MovementAllocationController } from './movement-allocation.controller';
 import { FinanzasService } from './finanzas.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { ExpenseCategoriesService } from './expense-categories.service';
@@ -32,6 +34,8 @@ import { PrismaModule } from '../prisma/prisma.module';
     ExpensesController,
     IncomesController,
     LiquidationsController,
+    UnitGroupController,
+    MovementAllocationController,
   ],
   providers: [
     FinanzasService,
