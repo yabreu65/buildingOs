@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Trash2, Edit2, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Loader2, Eye, EyeOff } from 'lucide-react';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import { ExpenseLedgerCategory } from '../services/expense-ledger.api';
@@ -20,30 +20,45 @@ interface CategoryFormState {
   id?: string;
   name: string;
   description: string;
+  movementType: 'EXPENSE' | 'INCOME';
 }
+
+type Tab = 'EXPENSE' | 'INCOME';
 
 export function ExpenseLedgerCategoriesManager({
   tenantId,
 }: ExpenseLedgerCategoriesManagerProps) {
   const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState<Tab>('EXPENSE');
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState<CategoryFormState>({ name: '', description: '' });
+  const [form, setForm] = useState<CategoryFormState>({
+    name: '',
+    description: '',
+    movementType: 'EXPENSE',
+  });
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const { data: categories = [], isPending, refetch } = useExpenseLedgerCategories(tenantId);
+  const { data: allCategories = [], isPending } = useExpenseLedgerCategories(tenantId);
   const createMutation = useCreateExpenseLedgerCategory(tenantId);
   const updateMutation = useUpdateExpenseLedgerCategory(tenantId);
   const deleteMutation = useDeleteExpenseLedgerCategory(tenantId);
 
+  const categories = allCategories.filter((c) => c.movementType === activeTab);
+
   const handleOpenCreate = () => {
     setEditingId(null);
-    setForm({ name: '', description: '' });
+    setForm({ name: '', description: '', movementType: activeTab });
     setShowModal(true);
   };
 
   const handleOpenEdit = (category: ExpenseLedgerCategory) => {
     setEditingId(category.id);
-    setForm({ id: category.id, name: category.name, description: category.description || '' });
+    setForm({
+      id: category.id,
+      name: category.name,
+      description: category.description || '',
+      movementType: category.movementType,
+    });
     setShowModal(true);
   };
 
@@ -69,13 +84,29 @@ export function ExpenseLedgerCategoriesManager({
         await createMutation.mutateAsync({
           name: form.name.trim(),
           description: form.description.trim() || undefined,
+          movementType: form.movementType,
         });
         toast('Rubro creado', 'success');
       }
       setShowModal(false);
-      await refetch();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error al guardar el rubro';
+      toast(msg, 'error');
+    }
+  };
+
+  const handleToggleActive = async (category: ExpenseLedgerCategory) => {
+    try {
+      await updateMutation.mutateAsync({
+        categoryId: category.id,
+        data: { isActive: !category.isActive },
+      });
+      toast(
+        category.isActive ? 'Rubro desactivado' : 'Rubro activado',
+        'success',
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al actualizar el rubro';
       toast(msg, 'error');
     }
   };
@@ -86,7 +117,6 @@ export function ExpenseLedgerCategoriesManager({
     try {
       await deleteMutation.mutateAsync(categoryId);
       toast('Rubro eliminado', 'success');
-      await refetch();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error al eliminar el rubro';
       toast(msg, 'error');
@@ -101,16 +131,19 @@ export function ExpenseLedgerCategoriesManager({
     );
   }
 
+  const tabLabel = activeTab === 'EXPENSE' ? 'Gastos' : 'Ingresos';
+  const tabIcon = activeTab === 'EXPENSE' ? '💸' : '💰';
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium text-muted-foreground">
-            Rubros de Gastos
+            Catálogo de Rubros
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Crea los tipos de gastos que vas a registrar (Electricidad, Agua, Mantenimiento, etc.)
+            Gestiona los rubros de {activeTab === 'EXPENSE' ? 'gastos' : 'ingresos'}
           </p>
         </div>
         <Button
@@ -123,13 +156,30 @@ export function ExpenseLedgerCategoriesManager({
         </Button>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-2 border-b">
+        {(['EXPENSE', 'INCOME'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+              activeTab === tab
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab === 'EXPENSE' ? '💸 Gastos' : '💰 Ingresos'}
+          </button>
+        ))}
+      </div>
+
       {/* Lista */}
       {categories.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          No hay rubros creados todavía.
+          No hay rubros de {tabLabel.toLowerCase()} creados todavía.
           <br />
           <span className="text-xs">
-            Crea al menos un rubro antes de registrar gastos.
+            Crea rubros antes de registrar {tabLabel.toLowerCase()}.
           </span>
         </div>
       ) : (
@@ -137,7 +187,11 @@ export function ExpenseLedgerCategoriesManager({
           {categories.map((category) => (
             <div
               key={category.id}
-              className="flex items-center justify-between p-4 rounded-lg border bg-background hover:bg-muted/30 transition"
+              className={`flex items-center justify-between p-4 rounded-lg border transition ${
+                category.isActive
+                  ? 'bg-background hover:bg-muted/30'
+                  : 'bg-muted/40 opacity-75'
+              }`}
             >
               <div className="flex-1">
                 <h4 className="font-medium">{category.name}</h4>
@@ -146,8 +200,13 @@ export function ExpenseLedgerCategoriesManager({
                     {category.description}
                   </p>
                 )}
+                {category.code && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Código: {category.code}
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground mt-2">
-                  {category.active ? (
+                  {category.isActive ? (
                     <span className="text-green-600">✓ Activo</span>
                   ) : (
                     <span className="text-gray-500">Inactivo</span>
@@ -156,6 +215,18 @@ export function ExpenseLedgerCategoriesManager({
               </div>
 
               <div className="flex gap-2">
+                <button
+                  onClick={() => handleToggleActive(category)}
+                  title={category.isActive ? 'Desactivar' : 'Activar'}
+                  className="p-2 rounded hover:bg-amber-100 text-amber-700 disabled:opacity-50"
+                  disabled={updateMutation.isPending}
+                >
+                  {category.isActive ? (
+                    <Eye className="h-4 w-4" />
+                  ) : (
+                    <EyeOff className="h-4 w-4" />
+                  )}
+                </button>
                 <button
                   onClick={() => handleOpenEdit(category)}
                   title="Editar"
@@ -217,6 +288,27 @@ export function ExpenseLedgerCategoriesManager({
                   className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
+
+              {!editingId && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Tipo de Rubro
+                  </label>
+                  <select
+                    value={form.movementType}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        movementType: e.target.value as 'EXPENSE' | 'INCOME',
+                      }))
+                    }
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="EXPENSE">💸 Gasto</option>
+                    <option value="INCOME">💰 Ingreso</option>
+                  </select>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button

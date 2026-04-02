@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   Request,
   HttpCode,
@@ -34,11 +35,13 @@ export class ExpenseLedgerCategoriesController {
 
   @Get()
   async listCategories(
-    @Request() req: AuthenticatedRequest,
+    @Query('movementType') movementType?: 'EXPENSE' | 'INCOME',
+    @Request() req?: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto[]> {
     return this.categoriesService.listCategories(
-      req.tenantId!,
-      req.user.roles ?? [],
+      req!.tenantId!,
+      req!.user.roles ?? [],
+      movementType,
     );
   }
 

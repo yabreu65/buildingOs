@@ -3,14 +3,18 @@ import { apiClient } from '@/shared/lib/http/client';
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type ExpenseStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
+export type IncomeStatus = 'DRAFT' | 'RECORDED' | 'VOID';
 export type LiquidationStatus = 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
 
 export interface ExpenseLedgerCategory {
   id: string;
   tenantId: string;
+  code: string | null;
   name: string;
   description: string | null;
-  active: boolean;
+  movementType: 'EXPENSE' | 'INCOME';
+  sortOrder: number;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +34,23 @@ export interface Expense {
   description: string | null;
   attachmentFileKey: string | null;
   status: ExpenseStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Income {
+  id: string;
+  tenantId: string;
+  buildingId: string | null;
+  period: string;
+  categoryId: string;
+  categoryName: string;
+  amountMinor: number;
+  currencyCode: string;
+  receivedDate: string;
+  description: string | null;
+  attachmentFileKey: string | null;
+  status: IncomeStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -77,16 +98,21 @@ export interface LiquidationDetail extends Liquidation {
 
 export async function listExpenseLedgerCategories(
   tenantId: string,
+  movementType?: 'EXPENSE' | 'INCOME',
 ): Promise<ExpenseLedgerCategory[]> {
+  const qs = new URLSearchParams();
+  if (movementType) qs.append('movementType', movementType);
+
+  const queryStr = qs.toString();
   return apiClient<ExpenseLedgerCategory[]>({
-    path: `/tenants/${tenantId}/finance/expense-categories`,
+    path: `/tenants/${tenantId}/finance/expense-categories${queryStr ? '?' + queryStr : ''}`,
     method: 'GET',
   });
 }
 
 export async function createExpenseLedgerCategory(
   tenantId: string,
-  data: { name: string; description?: string },
+  data: { name: string; description?: string; movementType?: 'EXPENSE' | 'INCOME' },
 ): Promise<ExpenseLedgerCategory> {
   return apiClient<ExpenseLedgerCategory, typeof data>({
     path: `/tenants/${tenantId}/finance/expense-categories`,
@@ -98,7 +124,7 @@ export async function createExpenseLedgerCategory(
 export async function updateExpenseLedgerCategory(
   tenantId: string,
   categoryId: string,
-  data: { name?: string; description?: string; active?: boolean },
+  data: { name?: string; description?: string; isActive?: boolean },
 ): Promise<ExpenseLedgerCategory> {
   return apiClient<ExpenseLedgerCategory, typeof data>({
     path: `/tenants/${tenantId}/finance/expense-categories/${categoryId}`,
@@ -278,6 +304,91 @@ export async function cancelLiquidation(
 ): Promise<Liquidation> {
   return apiClient<Liquidation>({
     path: `/tenants/${tenantId}/finance/liquidations/${liquidationId}/cancel`,
+    method: 'POST',
+  });
+}
+
+// ── Incomes API ────────────────────────────────────────────────────────────
+
+export interface ListIncomesParams {
+  buildingId?: string;
+  period?: string;
+  categoryId?: string;
+}
+
+export async function listIncomes(
+  tenantId: string,
+  params: ListIncomesParams = {},
+): Promise<Income[]> {
+  const qs = new URLSearchParams();
+  if (params.buildingId) qs.append('buildingId', params.buildingId);
+  if (params.period) qs.append('period', params.period);
+  if (params.categoryId) qs.append('categoryId', params.categoryId);
+
+  const queryStr = qs.toString();
+  return apiClient<Income[]>({
+    path: `/tenants/${tenantId}/finance/incomes${queryStr ? '?' + queryStr : ''}`,
+    method: 'GET',
+  });
+}
+
+export async function getIncome(tenantId: string, incomeId: string): Promise<Income> {
+  return apiClient<Income>({
+    path: `/tenants/${tenantId}/finance/incomes/${incomeId}`,
+    method: 'GET',
+  });
+}
+
+export interface CreateIncomeData {
+  buildingId?: string;
+  period: string;
+  categoryId: string;
+  amountMinor: number;
+  currencyCode: string;
+  receivedDate: string;
+  description?: string;
+  attachmentFileKey?: string;
+}
+
+export async function createIncome(
+  tenantId: string,
+  data: CreateIncomeData,
+): Promise<Income> {
+  return apiClient<Income, CreateIncomeData>({
+    path: `/tenants/${tenantId}/finance/incomes`,
+    method: 'POST',
+    body: data,
+  });
+}
+
+export async function updateIncome(
+  tenantId: string,
+  incomeId: string,
+  data: Partial<CreateIncomeData>,
+): Promise<Income> {
+  return apiClient<Income, Partial<CreateIncomeData>>({
+    path: `/tenants/${tenantId}/finance/incomes/${incomeId}`,
+    method: 'PATCH',
+    body: data,
+  });
+}
+
+export async function recordIncome(
+  tenantId: string,
+  incomeId: string,
+): Promise<Income> {
+  return apiClient<Income>({
+    path: `/tenants/${tenantId}/finance/incomes/${incomeId}/record`,
+    method: 'POST',
+  });
+}
+
+export async function voidIncome(
+  tenantId: string,
+  incomeId: string,
+): Promise<Income> {
+  return apiClient<Income>({
+    path: `/tenants/${tenantId}/finance/incomes/${incomeId}/void`,
     method: 'POST',
   });
 }

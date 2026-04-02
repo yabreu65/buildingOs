@@ -5,13 +5,13 @@ import { X, Loader2 } from 'lucide-react';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import {
-  useCreateExpense,
+  useCreateIncome,
   useExpenseLedgerCategories,
 } from '../hooks/useExpenseLedger';
 
-interface ExpenseCreateModalProps {
+interface IncomeCreateModalProps {
   tenantId: string;
-  buildingId: string;
+  buildingId?: string;
   period: string;
   onClose: () => void;
   onCreated: () => void;
@@ -19,22 +19,25 @@ interface ExpenseCreateModalProps {
 
 const CURRENCIES = ['ARS', 'VES', 'USD'];
 
-export function ExpenseCreateModal({
+export function IncomeCreateModal({
   tenantId,
   buildingId,
   period,
   onClose,
   onCreated,
-}: ExpenseCreateModalProps) {
+}: IncomeCreateModalProps) {
   const { toast } = useToast();
-  const { data: categories = [] } = useExpenseLedgerCategories(tenantId);
-  const createMutation = useCreateExpense(tenantId);
+  const { data: allCategories = [] } = useExpenseLedgerCategories(tenantId);
+  const createMutation = useCreateIncome(tenantId);
+
+  // Filtrar solo categorías de INGRESOS
+  const categories = allCategories.filter((c) => c.movementType === 'INCOME');
 
   const [form, setForm] = useState({
     categoryId: '',
     amountMinor: '',
     currencyCode: 'ARS',
-    invoiceDate: new Date().toISOString().split('T')[0] ?? '',
+    receivedDate: new Date().toISOString().split('T')[0] ?? '',
     description: '',
   });
 
@@ -47,21 +50,27 @@ export function ExpenseCreateModal({
       return;
     }
 
+    if (!form.categoryId) {
+      toast('Debes seleccionar un rubro de ingreso', 'error');
+      return;
+    }
+
     try {
       await createMutation.mutateAsync({
-        buildingId,
+        buildingId: buildingId || undefined,
         period,
         categoryId: form.categoryId,
         amountMinor,
         currencyCode: form.currencyCode,
-        invoiceDate: form.invoiceDate,
+        receivedDate: form.receivedDate,
         description: form.description || undefined,
       });
-      toast('Gasto registrado en DRAFT', 'success');
+
+      toast('Ingreso registrado', 'success');
       onCreated();
+      onClose();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : 'Error al crear el gasto';
+      const msg = err instanceof Error ? err.message : 'Error al registrar el ingreso';
       toast(msg, 'error');
     }
   };
@@ -70,10 +79,10 @@ export function ExpenseCreateModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-background rounded-xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Registrar gasto</h2>
+          <h2 className="text-lg font-semibold">Registrar Ingreso</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-muted"
+            className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
           >
             <X className="h-5 w-5" />
           </button>
@@ -92,7 +101,7 @@ export function ExpenseCreateModal({
               }
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             >
-              <option value="">Seleccioná un rubro</option>
+              <option value="">Seleccioná un rubro de ingreso</option>
               {categories
                 .filter((c) => c.isActive)
                 .map((c) => (
@@ -111,8 +120,8 @@ export function ExpenseCreateModal({
               <input
                 type="number"
                 required
-                min="0.01"
                 step="0.01"
+                min="0.01"
                 placeholder="0.00"
                 value={form.amountMinor}
                 onChange={(e) =>
@@ -141,14 +150,14 @@ export function ExpenseCreateModal({
 
           <div>
             <label className="block text-sm font-medium mb-1">
-              Fecha del comprobante <span className="text-red-500">*</span>
+              Fecha de Recepción <span className="text-red-500">*</span>
             </label>
             <input
               type="date"
               required
-              value={form.invoiceDate}
+              value={form.receivedDate}
               onChange={(e) =>
-                setForm((f) => ({ ...f, invoiceDate: e.target.value }))
+                setForm((f) => ({ ...f, receivedDate: e.target.value }))
               }
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
@@ -156,23 +165,18 @@ export function ExpenseCreateModal({
 
           <div>
             <label className="block text-sm font-medium mb-1">
-              Descripción
+              Descripción (opcional)
             </label>
-            <input
-              type="text"
-              placeholder="Ej: Factura Edenor Marzo 2026"
+            <textarea
+              placeholder="Ej: Cuota extraordinaria pagada por..."
               value={form.description}
               onChange={(e) =>
                 setForm((f) => ({ ...f, description: e.target.value }))
               }
+              rows={3}
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            El gasto se crea en DRAFT. Validalo para que cuente en la
-            liquidación.
-          </p>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={onClose}>

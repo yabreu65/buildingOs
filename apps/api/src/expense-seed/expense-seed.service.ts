@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
-import { DEFAULT_EXPENSE_CATEGORIES } from './expense-seed.constants';
+import { DEFAULT_LEDGER_CATEGORIES } from './expense-seed.constants';
 
 export interface SeedResult {
   created: number;
@@ -32,18 +32,19 @@ export class ExpenseLedgerSeedService {
     try {
       // Use createMany with skipDuplicates for idempotence and atomicity
       const result = await this.prisma.expenseLedgerCategory.createMany({
-        data: DEFAULT_EXPENSE_CATEGORIES.map((category) => ({
+        data: DEFAULT_LEDGER_CATEGORIES.map((category) => ({
           tenantId,
           code: category.code,
           name: category.name,
           description: category.description,
+          movementType: category.movementType,
           sortOrder: category.sortOrder,
-          active: category.active,
+          isActive: category.isActive,
         })),
         skipDuplicates: true,
       });
 
-      const skipped = DEFAULT_EXPENSE_CATEGORIES.length - result.count;
+      const skipped = DEFAULT_LEDGER_CATEGORIES.length - result.count;
 
       this.logger.log(
         `[Seed] Completed for tenant ${tenantId}: created=${result.count}, skipped=${skipped}`,
@@ -59,7 +60,7 @@ export class ExpenseLedgerSeedService {
           created: result.count,
           skipped,
           source: 'DEFAULT_SEED',
-          totalCategories: DEFAULT_EXPENSE_CATEGORIES.length,
+          totalCategories: DEFAULT_LEDGER_CATEGORIES.length,
         },
       });
 

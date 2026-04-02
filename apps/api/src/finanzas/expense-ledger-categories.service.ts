@@ -24,17 +24,21 @@ export class ExpenseLedgerCategoriesService {
   async listCategories(
     tenantId: string,
     userRoles: string[],
+    movementType?: 'EXPENSE' | 'INCOME',
   ): Promise<ExpenseLedgerCategoryResponseDto[]> {
     if (!this.validators.isAdminOrOperator(userRoles)) {
       throw new ForbiddenException(
-        'Solo administradores pueden gestionar rubros de gastos',
+        'Solo administradores pueden gestionar rubros',
       );
     }
 
     const categories = await this.prisma.expenseLedgerCategory.findMany({
-      where: { tenantId },
+      where: {
+        tenantId,
+        ...(movementType && { movementType }),
+      },
       orderBy: [
-        { active: 'desc' },
+        { isActive: 'desc' },
         { sortOrder: 'asc' }, // nulls last (PostgreSQL default)
         { name: 'asc' },
       ],
@@ -75,7 +79,7 @@ export class ExpenseLedgerCategoriesService {
   ): Promise<ExpenseLedgerCategoryResponseDto> {
     if (!this.validators.isAdminOrOperator(userRoles)) {
       throw new ForbiddenException(
-        'Solo administradores pueden gestionar rubros de gastos',
+        'Solo administradores pueden gestionar rubros',
       );
     }
 
@@ -89,11 +93,16 @@ export class ExpenseLedgerCategoriesService {
       );
     }
 
+    const movementType = (dto.movementType ?? 'EXPENSE') as 'EXPENSE' | 'INCOME';
+    const code = this.generateCode(dto.name, movementType);
+
     const category = await this.prisma.expenseLedgerCategory.create({
       data: {
         tenantId,
+        code,
         name: dto.name,
         description: dto.description ?? null,
+        movementType,
       },
     });
 
@@ -103,7 +112,7 @@ export class ExpenseLedgerCategoriesService {
       action: 'EXPENSE_LEDGER_CATEGORY_CREATE',
       entityType: 'ExpenseLedgerCategory',
       entityId: category.id,
-      metadata: { name: dto.name },
+      metadata: { name: dto.name, movementType, code },
     });
 
     return this.toDto(category);
@@ -148,7 +157,7 @@ export class ExpenseLedgerCategoriesService {
       data: {
         name: dto.name ?? category.name,
         description: dto.description !== undefined ? dto.description : category.description,
-        active: dto.active !== undefined ? dto.active : category.active,
+        isActive: dto.isActive !== undefined ? dto.isActive : category.isActive,
       },
     });
 
@@ -194,7 +203,7 @@ export class ExpenseLedgerCategoriesService {
       // Soft delete: marcar inactivo en vez de borrar (hay gastos usando este rubro)
       await this.prisma.expenseLedgerCategory.update({
         where: { id: categoryId },
-        data: { active: false },
+        data: { isActive: false },
       });
     } else {
       await this.prisma.expenseLedgerCategory.delete({
@@ -218,8 +227,9 @@ export class ExpenseLedgerCategoriesService {
     code?: string | null;
     name: string;
     description: string | null;
+    movementType: 'EXPENSE' | 'INCOME';
     sortOrder?: number;
-    active: boolean;
+    isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
   }): ExpenseLedgerCategoryResponseDto {
@@ -229,10 +239,22 @@ export class ExpenseLedgerCategoriesService {
       code: category.code ?? null,
       name: category.name,
       description: category.description,
+      movementType: category.movementType,
       sortOrder: category.sortOrder ?? 0,
-      active: category.active,
+      isActive: category.isActive,
       createdAt: category.createdAt,
       updatedAt: category.updatedAt,
     };
+  }
+
+  private generateCode(name: string, movementType: 'EXPENSE' | 'INCOME'): string {
+    const prefix = movementType === 'EXPENSE' ? 'EXP' : 'INC';
+    // Convert name to slug: "Electricidad" → "ELECTRICIDAD"
+    const slug = name
+      .toUpperCase()
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Z0-9_]/g, '');
+    const timestamp = Date.now().toString().slice(-4); // last 4 digits of timestamp
+    return `${prefix}_${slug}_${timestamp}`;
   }
 }

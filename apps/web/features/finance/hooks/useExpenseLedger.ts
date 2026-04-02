@@ -9,6 +9,11 @@ import {
   updateExpense,
   validateExpense,
   voidExpense,
+  listIncomes,
+  createIncome,
+  updateIncome,
+  recordIncome,
+  voidIncome,
   listLiquidations,
   getLiquidation,
   createLiquidationDraft,
@@ -17,14 +22,19 @@ import {
   cancelLiquidation,
   ListExpensesParams,
   CreateExpenseData,
+  ListIncomesParams,
+  CreateIncomeData,
 } from '../services/expense-ledger.api';
 
 // ── ExpenseLedgerCategories hooks ──────────────────────────────────────────
 
-export function useExpenseLedgerCategories(tenantId: string) {
+export function useExpenseLedgerCategories(
+  tenantId: string,
+  movementType?: 'EXPENSE' | 'INCOME',
+) {
   return useQuery({
-    queryKey: ['expenseLedgerCategories', tenantId],
-    queryFn: () => listExpenseLedgerCategories(tenantId),
+    queryKey: ['expenseLedgerCategories', tenantId, movementType],
+    queryFn: () => listExpenseLedgerCategories(tenantId, movementType),
     staleTime: 10 * 60 * 1000,
     enabled: !!tenantId,
     placeholderData: (prev) => prev ?? [],
@@ -34,9 +44,13 @@ export function useExpenseLedgerCategories(tenantId: string) {
 export function useCreateExpenseLedgerCategory(tenantId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: { name: string; description?: string }) =>
-      createExpenseLedgerCategory(tenantId, data),
-    onSuccess: () => {
+    mutationFn: (data: {
+      name: string;
+      description?: string;
+      movementType?: 'EXPENSE' | 'INCOME';
+    }) => createExpenseLedgerCategory(tenantId, data),
+    onSuccess: (_, variables) => {
+      // Invalidate both all categories and the specific movement type
       void queryClient.invalidateQueries({
         queryKey: ['expenseLedgerCategories', tenantId],
       });
@@ -52,7 +66,7 @@ export function useUpdateExpenseLedgerCategory(tenantId: string) {
       data,
     }: {
       categoryId: string;
-      data: { name?: string; description?: string; active?: boolean };
+      data: { name?: string; description?: string; isActive?: boolean };
     }) => updateExpenseLedgerCategory(tenantId, categoryId, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -206,6 +220,64 @@ export function useCancelLiquidation(tenantId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
       void queryClient.invalidateQueries({ queryKey: ['charges'] });
+    },
+  });
+}
+
+// ── Incomes hooks ─────────────────────────────────────────────────────────
+
+export function useIncomes(tenantId: string, params: ListIncomesParams = {}) {
+  return useQuery({
+    queryKey: ['incomes', tenantId, params],
+    queryFn: () => listIncomes(tenantId, params),
+    staleTime: 2 * 60 * 1000,
+    enabled: !!tenantId,
+    placeholderData: (prev) => prev ?? [],
+  });
+}
+
+export function useCreateIncome(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateIncomeData) => createIncome(tenantId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+    },
+  });
+}
+
+export function useUpdateIncome(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      incomeId,
+      data,
+    }: {
+      incomeId: string;
+      data: Partial<CreateIncomeData>;
+    }) => updateIncome(tenantId, incomeId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+    },
+  });
+}
+
+export function useRecordIncome(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (incomeId: string) => recordIncome(tenantId, incomeId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+    },
+  });
+}
+
+export function useVoidIncome(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (incomeId: string) => voidIncome(tenantId, incomeId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
     },
   });
 }
