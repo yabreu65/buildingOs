@@ -30,21 +30,18 @@ export function useVendors(options: UseVendorsOptions) {
 
   // Fetch vendors and assignments
   const fetchVendors = useCallback(async () => {
-    if (!buildingId) {
-      setAssignments([]);
-      setAllVendors([]);
-      return;
-    }
-
     setLoading(true);
     setError(null);
     try {
-      const [assignmentsData, allVendorsData] = await Promise.all([
-        listBuildingVendors(buildingId),
-        listAllVendors(),
-      ]);
-      setAssignments(assignmentsData);
+      const allVendorsData = await listAllVendors();
       setAllVendors(allVendorsData);
+
+      if (buildingId) {
+        const assignmentsData = await listBuildingVendors(buildingId);
+        setAssignments(assignmentsData);
+      } else {
+        setAssignments([]);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch vendors';
       setError(message);

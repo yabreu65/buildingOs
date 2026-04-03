@@ -5,6 +5,7 @@ export { CreateQuoteDto } from './create-quote.dto';
 export { UpdateQuoteDto } from './update-quote.dto';
 export { CreateWorkOrderDto } from './create-work-order.dto';
 export { UpdateWorkOrderDto } from './update-work-order.dto';
+export { ImportCountryVendorDto } from './import-country-vendor.dto';
 export {
   VendorIdParamDto,
   BuildingVendorIdParamDto,

@@ -22,6 +22,12 @@ export class VendorsService {
     private validators: VendorsValidators,
   ) {}
 
+  private getCountryCode(locale?: string | null, currency?: string | null): 'VE' | 'AR' {
+    if (locale?.toLowerCase().includes('ve')) return 'VE';
+    if (currency === 'VES') return 'VE';
+    return 'AR';
+  }
+
   // ============================================================================
   // VENDORS CRUD
   // ============================================================================
@@ -116,6 +122,191 @@ export class VendorsService {
         notes: dto.notes,
       },
     });
+  }
+
+  async listCountryCatalogVendors(
+    tenantId: string,
+    search?: string,
+  ): Promise<
+    Array<{
+      sourceVendorId: string;
+      name: string;
+      taxId: string | null;
+      email: string | null;
+      phone: string | null;
+      countryCode: 'VE' | 'AR';
+      sourceTenantName: string;
+    }>
+  > {
+    const currentTenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, locale: true, currency: true },
+    });
+
+    if (!currentTenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    const currentCountry = this.getCountryCode(currentTenant.locale, currentTenant.currency);
+
+    const tenants = await this.prisma.tenant.findMany({
+      select: { id: true, name: true, locale: true, currency: true },
+    });
+
+    const allowedTenantIds = tenants
+      .filter((t) => this.getCountryCode(t.locale, t.currency) === currentCountry)
+      .map((t) => t.id);
+
+    const vendors = await this.prisma.vendor.findMany({
+      where: {
+        tenantId: { in: allowedTenantIds },
+        ...(search && search.trim().length > 0
+          ? {
+              name: {
+                contains: search.trim(),
+                mode: 'insensitive',
+              },
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        taxId: true,
+        email: true,
+        phone: true,
+        tenantId: true,
+      },
+      orderBy: { name: 'asc' },
+      take: 50,
+    });
+
+    const tenantNameById = new Map(tenants.map((t) => [t.id, t.name]));
+    const dedup = new Set<string>();
+    const result: Array<{
+      sourceVendorId: string;
+      name: string;
+      taxId: string | null;
+      email: string | null;
+      phone: string | null;
+      countryCode: 'VE' | 'AR';
+      sourceTenantName: string;
+    }> = [];
+
+    for (const vendor of vendors) {
+      const key = `${vendor.name.toLowerCase()}::${vendor.taxId ?? ''}`;
+      if (dedup.has(key)) continue;
+      dedup.add(key);
+
+      result.push({
+        sourceVendorId: vendor.id,
+        name: vendor.name,
+        taxId: vendor.taxId,
+        email: vendor.email,
+        phone: vendor.phone,
+        countryCode: currentCountry,
+        sourceTenantName: tenantNameById.get(vendor.tenantId) ?? 'Tenant',
+      });
+    }
+
+    return result;
+  }
+
+  async importCountryCatalogVendor(
+    tenantId: string,
+    sourceVendorId: string,
+    assignBuildingId?: string,
+    serviceType?: string,
+  ): Promise<Vendor> {
+    const [targetTenant, sourceVendor] = await Promise.all([
+      this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { id: true, locale: true, currency: true },
+      }),
+      this.prisma.vendor.findUnique({
+        where: { id: sourceVendorId },
+        select: {
+          id: true,
+          tenantId: true,
+          name: true,
+          taxId: true,
+          email: true,
+          phone: true,
+          notes: true,
+        },
+      }),
+    ]);
+
+    if (!targetTenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    if (!sourceVendor) {
+      throw new NotFoundException('Source vendor not found');
+    }
+
+    const sourceTenant = await this.prisma.tenant.findUnique({
+      where: { id: sourceVendor.tenantId },
+      select: { id: true, locale: true, currency: true },
+    });
+
+    if (!sourceTenant) {
+      throw new NotFoundException('Source tenant not found');
+    }
+
+    const targetCountry = this.getCountryCode(targetTenant.locale, targetTenant.currency);
+    const sourceCountry = this.getCountryCode(sourceTenant.locale, sourceTenant.currency);
+
+    if (targetCountry !== sourceCountry) {
+      throw new BadRequestException('Solo se pueden importar proveedores del mismo país');
+    }
+
+    let localVendor = await this.prisma.vendor.findFirst({
+      where: {
+        tenantId,
+        name: sourceVendor.name,
+      },
+    });
+
+    if (!localVendor) {
+      localVendor = await this.prisma.vendor.create({
+        data: {
+          tenantId,
+          name: sourceVendor.name,
+          taxId: sourceVendor.taxId,
+          email: sourceVendor.email,
+          phone: sourceVendor.phone,
+          notes: sourceVendor.notes,
+        },
+      });
+    }
+
+    if (assignBuildingId) {
+      await this.validators.validateBuildingBelongsToTenant(tenantId, assignBuildingId);
+      const effectiveServiceType = serviceType && serviceType.trim().length > 0 ? serviceType : 'GENERAL';
+
+      const existingAssignment = await this.prisma.vendorAssignment.findFirst({
+        where: {
+          tenantId,
+          buildingId: assignBuildingId,
+          vendorId: localVendor.id,
+          serviceType: effectiveServiceType,
+        },
+      });
+
+      if (!existingAssignment) {
+        await this.prisma.vendorAssignment.create({
+          data: {
+            tenantId,
+            buildingId: assignBuildingId,
+            vendorId: localVendor.id,
+            serviceType: effectiveServiceType,
+          },
+        });
+      }
+    }
+
+    return localVendor;
   }
 
   /**

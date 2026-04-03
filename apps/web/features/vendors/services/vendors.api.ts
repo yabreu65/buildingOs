@@ -83,6 +83,22 @@ export interface CreateVendorAssignmentInput {
   serviceType: string;
 }
 
+export interface CountryCatalogVendor {
+  sourceVendorId: string;
+  name: string;
+  taxId?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  countryCode: 'VE' | 'AR';
+  sourceTenantName: string;
+}
+
+export interface ImportCountryCatalogVendorInput {
+  sourceVendorId: string;
+  assignBuildingId?: string;
+  serviceType?: string;
+}
+
 export interface CreateQuoteInput {
   vendorId: string;
   ticketId?: string;
@@ -182,6 +198,54 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
     });
   } catch (error) {
     const message = `Failed to create vendor: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
+  }
+}
+
+/**
+ * List vendor candidates from same-country catalog
+ */
+export async function listCountryCatalogVendors(query?: string): Promise<CountryCatalogVendor[]> {
+  const params = new URLSearchParams();
+  if (query && query.trim().length > 0) {
+    params.append('query', query.trim());
+  }
+
+  const endpoint = `/vendors/country-catalog${params.toString() ? `?${params.toString()}` : ''}`;
+  logRequest('GET', endpoint);
+
+  try {
+    return await apiClient<CountryCatalogVendor[]>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(),
+    });
+  } catch (error) {
+    const message = `Failed to list country vendors: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
+  }
+}
+
+/**
+ * Import a same-country vendor into current tenant
+ */
+export async function importCountryCatalogVendor(
+  input: ImportCountryCatalogVendorInput,
+): Promise<Vendor> {
+  const endpoint = '/vendors/country-catalog/import';
+  logRequest('POST', endpoint, input);
+
+  try {
+    return await apiClient<Vendor, ImportCountryCatalogVendorInput>({
+      path: endpoint,
+      method: 'POST',
+      body: input,
+      headers: getTenantHeaders(),
+    });
+  } catch (error) {
+    const message = `Failed to import country vendor: ${(error as Error).message}`;
     logError(endpoint, 500, message);
     throw error;
   }

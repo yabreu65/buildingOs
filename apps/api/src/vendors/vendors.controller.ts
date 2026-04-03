@@ -10,6 +10,7 @@ import {
   Request,
   BadRequestException,
   ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
@@ -29,6 +30,7 @@ import {
   UpdateQuoteDto,
   CreateWorkOrderDto,
   UpdateWorkOrderDto,
+  ImportCountryVendorDto,
 } from './dto';
 
 /**
@@ -54,7 +56,7 @@ import {
  *
  * RBAC Rules:
  * - vendors.read: list/view vendors (TENANT_ADMIN, TENANT_OWNER)
- * - vendors.write: create/update/delete vendors (TENANT_ADMIN only)
+ * - vendors.write: create/update/delete vendors (TENANT_ADMIN, TENANT_OWNER)
  * - quotes.read: list/view quotes (TENANT_ADMIN, OPERATOR, TENANT_OWNER)
  * - quotes.write: create/update quotes (TENANT_ADMIN, OPERATOR)
  * - quotes.approve: approve/reject quotes (TENANT_ADMIN, TENANT_OWNER)
@@ -136,6 +138,51 @@ export class VendorsController {
   }
 
   /**
+   * GET /vendors/country-catalog
+   * List shared vendor candidates from tenants in the same country
+   * Permission: vendors.read
+   */
+  @Get('vendors/country-catalog')
+  async listCountryCatalogVendors(
+    @Request() req: AuthenticatedRequest,
+    @Query('query') query?: string,
+  ) {
+    const tenantId = this.getTenantId(req);
+    const userRoles = req.user.roles || [];
+
+    if (!this.validators.canAccessVendors(userRoles, 'read')) {
+      this.validators.throwForbidden('vendors', 'view');
+    }
+
+    return await this.vendorsService.listCountryCatalogVendors(tenantId, query);
+  }
+
+  /**
+   * POST /vendors/country-catalog/import
+   * Import a vendor from same-country catalog into current tenant
+   * Permission: vendors.write
+   */
+  @Post('vendors/country-catalog/import')
+  async importCountryCatalogVendor(
+    @Body() dto: ImportCountryVendorDto,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    const tenantId = this.getTenantId(req);
+    const userRoles = req.user.roles || [];
+
+    if (!this.validators.canAccessVendors(userRoles, 'write')) {
+      this.validators.throwForbidden('vendors', 'create');
+    }
+
+    return await this.vendorsService.importCountryCatalogVendor(
+      tenantId,
+      dto.sourceVendorId,
+      dto.assignBuildingId,
+      dto.serviceType,
+    );
+  }
+
+  /**
    * GET /vendors/:vendorId
    * Get a single vendor
    * Permission: vendors.read
@@ -156,7 +203,7 @@ export class VendorsController {
   /**
    * POST /vendors
    * Create a new vendor
-   * Permission: vendors.write (TENANT_ADMIN only)
+   * Permission: vendors.write (TENANT_ADMIN, TENANT_OWNER)
    */
   @Post('vendors')
   async createVendor(

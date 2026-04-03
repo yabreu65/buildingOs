@@ -306,8 +306,8 @@ export class VendorsValidators {
     // TENANT_ADMIN: full access (read + write)
     if (this.hasRole(userRoles, 'TENANT_ADMIN')) return true;
 
-    // TENANT_OWNER: read-only for vendors
-    if (permission === 'read' && this.hasRole(userRoles, 'TENANT_OWNER'))
+    // TENANT_OWNER: full access for vendors (required for finance expense flows)
+    if (this.hasRole(userRoles, 'TENANT_OWNER'))
       return true;
 
     // OPERATOR: no vendor management access

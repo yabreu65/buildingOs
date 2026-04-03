@@ -13,9 +13,8 @@ import {
 } from '../hooks/useExpenseLedger';
 import { ExpenseCreateModal } from './ExpenseCreateModal';
 
-interface ExpensesListProps {
+interface TenantExpensesListProps {
   tenantId: string;
-  buildingId: string;
   period: string;
   expenses: Expense[];
   loading: boolean;
@@ -35,15 +34,14 @@ const STATUS_COLORS: Record<ExpenseStatus, string> = {
   VOID: 'bg-gray-100 text-gray-500 line-through',
 };
 
-export function ExpensesList({
+export function TenantExpensesList({
   tenantId,
-  buildingId,
   period,
   expenses,
   loading,
   error,
   onRefresh,
-}: ExpensesListProps) {
+}: TenantExpensesListProps) {
   const { toast } = useToast();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
@@ -76,7 +74,6 @@ export function ExpensesList({
     }
   };
 
-  // Totales por moneda (solo VALIDATED)
   const totalsByCurrency: Record<string, number> = {};
   for (const e of expenses) {
     if (e.status === 'VALIDATED') {
@@ -107,7 +104,7 @@ export function ExpensesList({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium text-muted-foreground">
-            Gastos del período {period}
+            Gastos comunes del período {period}
           </h3>
           {Object.entries(totalsByCurrency).length > 0 && (
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -124,17 +121,17 @@ export function ExpensesList({
           onClick={() => setShowCreateModal(true)}
         >
           <Plus className="h-4 w-4 mr-1" />
-          Nuevo gasto
+          Nuevo gasto común
         </Button>
       </div>
 
       {/* Table */}
       {expenses.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          No hay gastos registrados para este período.
+          No hay gastos comunes registrados para este período.
           <br />
           <span className="text-xs">
-            Registrá los comprobantes antes de generar la liquidación.
+            Los gastos comunes del conjunto se prorratean entre los edificios.
           </span>
         </div>
       ) : (
@@ -215,7 +212,11 @@ export function ExpensesList({
                             title="Anular"
                             className="p-1.5 rounded hover:bg-red-100 text-red-700 disabled:opacity-50"
                           >
-                            <XCircle className="h-4 w-4" />
+                            {actioningId === expense.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <XCircle className="h-4 w-4" />
+                            )}
                           </button>
                         </>
                       )}
@@ -245,8 +246,9 @@ export function ExpensesList({
       {showCreateModal && (
         <ExpenseCreateModal
           tenantId={tenantId}
-          buildingId={buildingId}
+          buildingId=""
           period={period}
+          mode="tenant"
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
@@ -258,8 +260,9 @@ export function ExpensesList({
       {editingExpense && (
         <ExpenseCreateModal
           tenantId={tenantId}
-          buildingId={buildingId}
+          buildingId=""
           period={period}
+          mode="tenant"
           modeForm="edit"
           initialExpense={editingExpense}
           onClose={() => setEditingExpense(null)}
