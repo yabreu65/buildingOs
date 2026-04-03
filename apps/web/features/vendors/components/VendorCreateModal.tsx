@@ -22,8 +22,8 @@ const vendorSchema = z.object({
 type VendorFormData = z.infer<typeof vendorSchema>;
 
 interface VendorCreateModalProps {
-  buildingId: string;
-  onSave: () => Promise<void>;
+  buildingId?: string;
+  onSave: (createdVendorId?: string) => Promise<void> | void;
   onClose: () => void;
 }
 
@@ -49,15 +49,18 @@ export default function VendorCreateModal({ buildingId, onSave, onClose }: Vendo
       };
 
       const newVendor = await createVendor(vendorInput);
-      await createVendorAssignment(buildingId, {
-        vendorId: newVendor.id,
-        serviceType: data.serviceType,
-      });
+      if (buildingId) {
+        await createVendorAssignment(buildingId, {
+          vendorId: newVendor.id,
+          serviceType: data.serviceType,
+        });
+      }
 
-      toast('Vendor created and assigned', 'success');
-      await onSave();
+      toast(buildingId ? 'Vendor created and assigned' : 'Vendor created', 'success');
+      await onSave(newVendor.id);
     } catch (error) {
-      toast('Failed to create vendor', 'error');
+      const message = error instanceof Error ? error.message : 'Failed to create vendor';
+      toast(message, 'error');
     } finally {
       setIsSubmitting(false);
     }

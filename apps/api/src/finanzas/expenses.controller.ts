@@ -26,6 +26,7 @@ class ListExpensesQuery {
   period?: string;
   status?: string;
   categoryId?: string;
+  scopeType?: string;
   limit?: number;
   offset?: number;
 }
@@ -52,6 +53,7 @@ export class ExpensesController {
         period: query.period,
         status: query.status,
         categoryId: query.categoryId,
+        scopeType: query.scopeType as 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP' | undefined,
         limit: query.limit ? Number(query.limit) : undefined,
         offset: query.offset ? Number(query.offset) : undefined,
       },

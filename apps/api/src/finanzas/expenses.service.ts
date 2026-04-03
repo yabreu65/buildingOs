@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -31,6 +32,7 @@ export class ExpensesService {
       period?: string;
       status?: string;
       categoryId?: string;
+      scopeType?: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
       limit?: number;
       offset?: number;
     },
@@ -48,10 +50,13 @@ export class ExpensesService {
         period: query.period,
         status: query.status as 'DRAFT' | 'VALIDATED' | 'VOID' | undefined,
         categoryId: query.categoryId,
+        ...(query.scopeType && { scopeType: query.scopeType }),
+        ...(query.buildingId && !query.scopeType && { scopeType: 'BUILDING' }),
       },
       include: {
         category: { select: { name: true } },
         vendor: { select: { name: true } },
+        allocations: true,
       },
       orderBy: { invoiceDate: 'desc' },
       take: query.limit ?? 100,
@@ -138,6 +143,22 @@ export class ExpensesService {
     });
     if (!category) {
       throw new NotFoundException(`Rubro de gasto no encontrado: ${dto.categoryId}`);
+    }
+
+    // Validate scope compatibility: BUILDING scope requires BUILDING catalogScope, TENANT_SHARED requires CONDOMINIUM_COMMON
+    if (scopeType === 'BUILDING' && category.catalogScope !== 'BUILDING') {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'CATEGORY_SCOPE_MISMATCH',
+        message: `El rubro "${category.name}" es de scope CONDOMINIUM_COMMON y no puede usarse para gastos BUILDING.`,
+      });
+    }
+    if (scopeType === 'TENANT_SHARED' && category.catalogScope !== 'CONDOMINIUM_COMMON') {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'CATEGORY_SCOPE_MISMATCH',
+        message: `El rubro "${category.name}" es de scope BUILDING y no puede usarse para gastos TENANT_SHARED.`,
+      });
     }
 
     if (dto.vendorId) {
@@ -304,6 +325,13 @@ export class ExpensesService {
     if (!expense.amountMinor || !expense.currencyCode || !expense.categoryId || !expense.period || !expense.invoiceDate) {
       throw new BadRequestException(
         'Para validar un gasto se requiere: amountMinor, currencyCode, categoryId, period, invoiceDate',
+      );
+    }
+
+    // Verificar que tenga proveedor asignado (obligatorio desde ahora)
+    if (!expense.vendorId) {
+      throw new BadRequestException(
+        'Para validar un gasto debés asignar un proveedor. Seleccioná el proveedor en el gasto e intentá nuevamente.',
       );
     }
 

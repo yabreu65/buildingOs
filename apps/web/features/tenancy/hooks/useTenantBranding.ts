@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/shared/lib/http/client';
 import { useTenantId } from '../tenant.hooks';
+import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
 export interface TenantBranding {
   tenantId: string;
@@ -40,6 +41,25 @@ export function useTenantBranding() {
     error,
     currency: data?.currency ?? 'ARS',
     locale: data?.locale ?? 'es-AR',
+  };
+}
+
+/**
+ * Hook that returns the tenant's configured currency with a pre-bound format function.
+ * Use this anywhere you need to display monetary amounts consistently across the app.
+ *
+ * @example
+ * const { format } = useTenantCurrency();
+ * return <span>{format(charge.amount)}</span>;
+ */
+export function useTenantCurrency() {
+  const { currency, locale } = useTenantBranding();
+  const resolvedLocale = locale !== 'es-AR' ? locale : getLocaleForCurrency(currency);
+
+  return {
+    currency,
+    locale: resolvedLocale,
+    format: (cents: number) => formatCurrency(cents, currency, resolvedLocale),
   };
 }
 

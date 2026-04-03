@@ -36,7 +36,14 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const { data: charges, isPending: chargesLoading, error: chargesError, refetch: refetchChargesRaw } = useCharges(buildingId, period);
   const { data: payments, isPending: paymentsLoading, error: paymentsError, refetch: refetchPaymentsRaw } = usePaymentsReview(buildingId, 'SUBMITTED');
   const { data: paymentHistory, isPending: paymentHistoryLoading, error: paymentHistoryError, refetch: refetchPaymentHistoryRaw } = usePaymentHistory(buildingId);
-  const { data: expenses = [], isPending: expensesLoading, error: expensesError, refetch: refetchExpensesRaw } = useExpenses(tenantId, { buildingId, period: period || undefined });
+  const { data: expenses = [], isPending: expensesLoading, error: expensesError, refetch: refetchExpensesRaw } = useExpenses(tenantId, { buildingId, period: period || undefined, scopeType: 'BUILDING', status: undefined });
+
+  const buildingVisibleExpenses = expenses.filter(
+    (expense) =>
+      expense.scopeType === 'BUILDING' &&
+      expense.buildingId === buildingId &&
+      expense.status !== 'VOID',
+  );
 
   // Wrap refetch functions to match component prop signatures
   const refetchSummary = async () => {
@@ -84,7 +91,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
     { id: 'rubros', label: 'Rubros' },
-    { id: 'expenses', label: 'Gastos', count: expenses?.length },
+    { id: 'expenses', label: 'Gastos', count: buildingVisibleExpenses.length },
     { id: 'liquidations', label: 'Liquidaciones' },
     { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
     { id: 'payments-history', label: 'Historial de Pagos', count: paymentHistory?.length },
@@ -145,7 +152,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
       {/* Tab Content */}
       <div>
         {activeTab === 'rubros' && (
-          <ExpenseLedgerCategoriesManager tenantId={tenantId} />
+          <ExpenseLedgerCategoriesManager tenantId={tenantId} defaultScopeFilter="BUILDING" />
         )}
 
         {activeTab === 'expenses' && (
@@ -153,7 +160,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             tenantId={tenantId}
             buildingId={buildingId}
             period={period || new Date().toISOString().split('T')[0].slice(0, 7)}
-            expenses={expenses}
+            expenses={buildingVisibleExpenses}
             loading={expensesLoading}
             error={expensesErrorMsg}
             onRefresh={refetchExpenses}

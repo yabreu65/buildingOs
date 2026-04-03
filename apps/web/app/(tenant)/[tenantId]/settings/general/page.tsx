@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTenantId } from '@/features/tenancy/tenant.hooks';
 import { useTenantBranding, updateTenantBranding } from '@/features/tenancy/hooks/useTenantBranding';
 import Card from '@/shared/components/ui/Card';
@@ -19,7 +19,12 @@ export default function GeneralSettingsPage() {
   const queryClient = useQueryClient();
   const { branding, isLoading, currency } = useTenantBranding();
 
-  const [selectedCurrency, setSelectedCurrency] = useState(currency);
+  const [selectedCurrency, setSelectedCurrency] = useState<string>('ARS');
+
+  // Sync with value loaded from backend
+  useEffect(() => {
+    setSelectedCurrency(currency);
+  }, [currency]);
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 

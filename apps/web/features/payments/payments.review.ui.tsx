@@ -24,6 +24,7 @@ import Input from '../../shared/components/ui/Input';
 import Select from '../../shared/components/ui/Select';
 import Card from '../../shared/components/ui/Card';
 import { formatCurrency } from '../../shared/lib/format/money';
+import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 import { formatDate } from '../../shared/lib/format/date';
 import { useCan } from '../rbac/rbac.hooks';
 import { t } from '@/i18n';
@@ -49,6 +50,7 @@ export const PaymentsReviewUI = () => {
   const tenantId = params?.tenantId as string | undefined;
 
   const canReview = useCan('payments.review');
+  const { format } = useTenantCurrency();
 
   // State
   const [payments, setPayments] = useState<PendingPayment[]>([]);
@@ -317,7 +319,7 @@ export const PaymentsReviewUI = () => {
           <Card className="p-4">
             <div className="text-xs text-muted-foreground">{t('payments.backlog')}</div>
             <div className="text-2xl font-bold">{metrics.backlogCount}</div>
-            <div className="text-xs text-muted-foreground">{formatCurrency(metrics.backlogAmount, 'ARS')}</div>
+            <div className="text-xs text-muted-foreground">{format(metrics.backlogAmount)}</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted-foreground">{t('payments.age')}</div>

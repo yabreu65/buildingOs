@@ -5,6 +5,7 @@ import { apiClient } from '@/shared/lib/http/client';
 export type ExpenseStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
 export type IncomeStatus = 'DRAFT' | 'RECORDED' | 'VOID';
 export type LiquidationStatus = 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+export type CatalogScope = 'BUILDING' | 'CONDOMINIUM_COMMON';
 
 export interface ExpenseLedgerCategory {
   id: string;
@@ -13,6 +14,7 @@ export interface ExpenseLedgerCategory {
   name: string;
   description: string | null;
   movementType: 'EXPENSE' | 'INCOME';
+  catalogScope: CatalogScope;
   sortOrder: number;
   isActive: boolean;
   createdAt: string;
@@ -34,6 +36,7 @@ export interface Expense {
   description: string | null;
   attachmentFileKey: string | null;
   status: ExpenseStatus;
+  scopeType: ExpenseScopeType;
   createdAt: string;
   updatedAt: string;
 }
@@ -99,9 +102,11 @@ export interface LiquidationDetail extends Liquidation {
 export async function listExpenseLedgerCategories(
   tenantId: string,
   movementType?: 'EXPENSE' | 'INCOME',
+  catalogScope?: CatalogScope,
 ): Promise<ExpenseLedgerCategory[]> {
   const qs = new URLSearchParams();
   if (movementType) qs.append('movementType', movementType);
+  if (catalogScope) qs.append('catalogScope', catalogScope);
 
   const queryStr = qs.toString();
   return apiClient<ExpenseLedgerCategory[]>({
@@ -112,7 +117,7 @@ export async function listExpenseLedgerCategories(
 
 export async function createExpenseLedgerCategory(
   tenantId: string,
-  data: { name: string; description?: string; movementType?: 'EXPENSE' | 'INCOME' },
+  data: { name: string; description?: string; movementType?: 'EXPENSE' | 'INCOME'; catalogScope?: CatalogScope },
 ): Promise<ExpenseLedgerCategory> {
   return apiClient<ExpenseLedgerCategory, typeof data>({
     path: `/tenants/${tenantId}/finance/expense-categories`,
@@ -145,11 +150,14 @@ export async function deleteExpenseLedgerCategory(
 
 // ── Expenses API ───────────────────────────────────────────────────────────
 
+export type ExpenseScopeType = 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
+
 export interface ListExpensesParams {
   buildingId?: string;
   period?: string;
   status?: ExpenseStatus;
   categoryId?: string;
+  scopeType?: ExpenseScopeType;
   limit?: number;
   offset?: number;
 }
@@ -163,6 +171,7 @@ export async function listExpenses(
   if (params.period) qs.append('period', params.period);
   if (params.status) qs.append('status', params.status);
   if (params.categoryId) qs.append('categoryId', params.categoryId);
+  if (params.scopeType) qs.append('scopeType', params.scopeType);
   if (params.limit) qs.append('limit', String(params.limit));
   if (params.offset) qs.append('offset', String(params.offset));
 
@@ -183,8 +192,22 @@ export async function getExpense(
   });
 }
 
-export interface CreateExpenseData {
+export interface AllocationInput {
   buildingId: string;
+  percentage?: number;
+  amountMinor?: number;
+  currencyCode?: string;
+}
+
+export interface AllocationSuggestion {
+  buildingId: string;
+  buildingName: string;
+  totalM2: number;
+  percentage: number;
+}
+
+export interface CreateExpenseData {
+  buildingId?: string;
   period: string;
   categoryId: string;
   vendorId?: string;
@@ -193,6 +216,9 @@ export interface CreateExpenseData {
   invoiceDate: string;
   description?: string;
   attachmentFileKey?: string;
+  scopeType?: ExpenseScopeType;
+  unitGroupId?: string;
+  allocations?: AllocationInput[];
 }
 
 export async function createExpense(
@@ -390,5 +416,73 @@ export async function voidIncome(
   return apiClient<Income>({
     path: `/tenants/${tenantId}/finance/incomes/${incomeId}/void`,
     method: 'POST',
+  });
+}
+
+export async function getAllocationSuggestions(
+  tenantId: string,
+  mode: 'BUILDING_TOTAL_M2' | 'EQUAL_SHARE' = 'BUILDING_TOTAL_M2',
+): Promise<AllocationSuggestion[]> {
+  const qs = new URLSearchParams();
+  if (mode) qs.append('mode', mode);
+
+  return apiClient<AllocationSuggestion[]>({
+    path: `/tenants/${tenantId}/allocations/suggest?${qs.toString()}`,
+    method: 'GET',
+  });
+}
+
+// ── Vendor Preferences ───────────────────────────────────────────────────
+
+export interface VendorPreference {
+  id: string;
+  categoryId: string;
+  categoryName: string;
+  vendorId: string;
+  vendorName: string;
+}
+
+export interface VendorSuggestion {
+  vendorId: string | null;
+  vendorName: string | null;
+  source: 'PREFERENCE' | 'HISTORY' | 'NONE';
+}
+
+export async function listVendorPreferences(tenantId: string): Promise<VendorPreference[]> {
+  return apiClient<VendorPreference[]>({
+    path: `/tenants/${tenantId}/finance/vendor-preferences`,
+    method: 'GET',
+  });
+}
+
+export async function setVendorPreference(
+  tenantId: string,
+  categoryId: string,
+  vendorId: string,
+): Promise<VendorPreference> {
+  return apiClient<VendorPreference, { categoryId: string; vendorId: string }>({
+    path: `/tenants/${tenantId}/finance/vendor-preferences`,
+    method: 'POST',
+    body: { categoryId, vendorId },
+  });
+}
+
+export async function deleteVendorPreference(
+  tenantId: string,
+  categoryId: string,
+): Promise<{ success: boolean }> {
+  return apiClient<{ success: boolean }>({
+    path: `/tenants/${tenantId}/finance/vendor-preferences/${categoryId}`,
+    method: 'DELETE',
+  });
+}
+
+export async function getVendorSuggestion(
+  tenantId: string,
+  categoryId: string,
+): Promise<VendorSuggestion> {
+  return apiClient<VendorSuggestion>({
+    path: `/tenants/${tenantId}/finance/vendor-preferences/suggest/${categoryId}`,
+    method: 'GET',
   });
 }

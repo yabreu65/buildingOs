@@ -8,6 +8,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
+import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 
 interface PeriodDetailProps {
   buildingId: string;
@@ -25,6 +26,7 @@ export default function PeriodDetail({
   onSuccess,
 }: PeriodDetailProps) {
   const { toast } = useToast();
+  const { format } = useTenantCurrency();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: fullPeriod, isPending } = usePeriod(tenantId, buildingId, period.id);
@@ -95,9 +97,6 @@ export default function PeriodDetail({
     return date.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
   };
 
-  const formatCurrency = (amount: number) => {
-    return (amount / 100).toLocaleString('es-AR', { minimumFractionDigits: 2 });
-  };
 
   return (
     <div className="space-y-4">
@@ -125,7 +124,7 @@ export default function PeriodDetail({
           </div>
           <div className="flex justify-between">
             <span className="text-gray-600">Total a prorratear</span>
-            <span className="font-semibold">${formatCurrency(Number(period.totalToAllocate))}</span>
+            <span className="font-semibold">{format(Number(period.totalToAllocate))}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-600">Vencimiento</span>
@@ -151,7 +150,7 @@ export default function PeriodDetail({
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Total asignado</span>
-              <span className="font-medium">${formatCurrency(totalAllocated)}</span>
+              <span className="font-medium">{format(totalAllocated)}</span>
             </div>
           </div>
         </Card>
@@ -243,7 +242,7 @@ export default function PeriodDetail({
                   <p className="text-gray-500 text-xs">{charge.unitLabel || 'Sin etiqueta'}</p>
                 </div>
                 <p className="font-semibold text-gray-900">
-                  ${formatCurrency(charge.amount)}
+                  {format(charge.amount)}
                 </p>
               </div>
             ))}

@@ -25,6 +25,7 @@ export class ExpenseLedgerCategoriesService {
     tenantId: string,
     userRoles: string[],
     movementType?: 'EXPENSE' | 'INCOME',
+    catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON',
   ): Promise<ExpenseLedgerCategoryResponseDto[]> {
     if (!this.validators.isAdminOrOperator(userRoles)) {
       throw new ForbiddenException(
@@ -36,6 +37,7 @@ export class ExpenseLedgerCategoriesService {
       where: {
         tenantId,
         ...(movementType && { movementType }),
+        ...(catalogScope && { catalogScope }),
       },
       orderBy: [
         { isActive: 'desc' },
@@ -228,6 +230,7 @@ export class ExpenseLedgerCategoriesService {
     name: string;
     description: string | null;
     movementType: 'EXPENSE' | 'INCOME';
+    catalogScope: 'BUILDING' | 'CONDOMINIUM_COMMON';
     sortOrder?: number;
     isActive: boolean;
     createdAt: Date;
@@ -240,6 +243,7 @@ export class ExpenseLedgerCategoriesService {
       name: category.name,
       description: category.description,
       movementType: category.movementType,
+      catalogScope: category.catalogScope,
       sortOrder: category.sortOrder ?? 0,
       isActive: category.isActive,
       createdAt: category.createdAt,

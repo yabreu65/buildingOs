@@ -84,6 +84,20 @@ export function tenantReports(tenantId: string): string {
 }
 
 /**
+ * Tenant-level categories (Rubros) page
+ */
+export function tenantCategories(tenantId: string): string {
+  return `/${tenantId}/finance/categories`;
+}
+
+/**
+ * Building-level categories shortcut
+ */
+export function buildingCategories(tenantId: string, buildingId: string): string {
+  return `/${tenantId}/buildings/${buildingId}/finance/categories`;
+}
+
+/**
  * Building-level reports page
  */
 export function buildingReports(tenantId: string, buildingId: string): string {
@@ -113,6 +127,8 @@ export const routes = {
   tenantReports,
   buildingReports,
   superAdminDashboard,
+  tenantCategories,
+  buildingCategories,
 };
 
 export default routes;

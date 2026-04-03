@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { financeApi } from '../services/finance.api';
 import { Skeleton, ErrorState } from '@/shared/components/ui';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
+import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 
 interface BuildingFinanceSummary {
   buildingId: string;
@@ -20,14 +21,6 @@ interface BuildingsFinanceSummaryProps {
   buildingNames: Record<string, string>;
 }
 
-const formatCurrency = (cents: number, currency: string = 'ARS') =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(cents / 100);
-
 const formatPercentage = (val: number) => `${Math.round(val)}%`;
 
 export function BuildingsFinanceSummary({
@@ -35,6 +28,7 @@ export function BuildingsFinanceSummary({
   buildingIds,
   buildingNames,
 }: BuildingsFinanceSummaryProps) {
+  const { format } = useTenantCurrency();
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -149,13 +143,13 @@ export function BuildingsFinanceSummary({
                   {summary.buildingName}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-gray-900">
-                  {formatCurrency(summary.totalCharges)}
+                  {format(summary.totalCharges)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-green-600">
-                  {formatCurrency(summary.totalPaid)}
+                  {format(summary.totalPaid)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-red-600">
-                  {formatCurrency(summary.totalOutstanding)}
+                  {format(summary.totalOutstanding)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium">
                   <div className="flex items-center">

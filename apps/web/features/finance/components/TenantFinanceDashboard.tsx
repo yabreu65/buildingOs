@@ -15,8 +15,11 @@ import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
 import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTenant } from '@/features/finance/services/finance.api';
 import { TenantChargesTab } from './TenantChargesTab';
+import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
+import { TenantExpensesList } from './TenantExpensesList';
+import { useExpenses } from '../hooks/useExpenseLedger';
 
-type Tab = 'overview' | 'payments' | 'charges' | 'delinquent';
+type Tab = 'overview' | 'rubros' | 'expenses' | 'payments' | 'charges' | 'delinquent';
 
 interface Params {
   tenantId: string;
@@ -54,6 +57,17 @@ export const TenantFinanceDashboard = () => {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Tenant-level expenses (TENANT_SHARED scope - gastos comunes)
+  const { data: tenantExpenses = [], isLoading: tenantExpensesLoading, refetch: refetchTenantExpenses } = useExpenses(
+    tenantId || '',
+    { period: period || undefined, status: undefined, scopeType: 'TENANT_SHARED' }
+  );
+
+  // Filter: only TENANT_SHARED and not VOID
+  const visibleTenantExpenses = tenantExpenses.filter(
+    (e) => e.scopeType === 'TENANT_SHARED' && e.status !== 'VOID'
+  );
+
   // Payment approval mutation
   const { mutateAsync: approve, isPending: isApproving } = useMutation({
     mutationFn: (paidAt?: string) => approvePaymentTenant(tenantId!, selectedPaymentId!, paidAt),
@@ -85,15 +99,17 @@ export const TenantFinanceDashboard = () => {
       {/* KPI Cards */}
       <FinanceSummaryCards summary={summary ?? null} loading={loading} error={errorMsg} onRetry={refetch} />
 
-       {/* Tabs */}
-       <div className="space-y-4">
-         <div className="flex flex-wrap gap-2">
-           {[
-             { id: 'overview', label: 'Resumen' },
-             { id: 'payments', label: `Pagos (${payments.length})` },
-             { id: 'charges', label: 'Cargos' },
-             { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
-           ].map((tab) => (
+        {/* Tabs */}
+        <div className="space-y-4">
+           <div className="flex flex-wrap gap-2">
+             {[
+               { id: 'overview', label: 'Resumen' },
+               { id: 'expenses', label: `Gastos comunes (${visibleTenantExpenses.length})` },
+               { id: 'rubros', label: 'Rubros' },
+               { id: 'payments', label: `Pagos (${payments.length})` },
+               { id: 'charges', label: 'Cargos' },
+               { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
+             ].map((tab) => (
              <button
                key={tab.id}
                onClick={() => setActiveTab(tab.id as Tab)}
@@ -135,6 +151,22 @@ export const TenantFinanceDashboard = () => {
               />
             )}
           </>
+        )}
+        {activeTab === 'expenses' && (
+          <TenantExpensesList
+            tenantId={tenantId || ''}
+            period={period || new Date().toISOString().split('T')[0].slice(0, 7)}
+            expenses={visibleTenantExpenses}
+            loading={tenantExpensesLoading}
+            error={null}
+            onRefresh={() => void refetchTenantExpenses()}
+          />
+        )}
+        {activeTab === 'rubros' && (
+          <ExpenseLedgerCategoriesManager
+            tenantId={tenantId || ''}
+            defaultScopeFilter="CONDOMINIUM_COMMON"
+          />
         )}
         {activeTab === 'payments' && (
           <>

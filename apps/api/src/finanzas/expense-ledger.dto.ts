@@ -50,6 +50,10 @@ export class CreateExpenseLedgerCategoryDto {
   @IsString()
   @IsOptional()
   movementType?: 'EXPENSE' | 'INCOME'; // default EXPENSE if not provided
+
+  @IsEnum(['BUILDING', 'CONDOMINIUM_COMMON'])
+  @IsOptional()
+  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON'; // default BUILDING if not provided
 }
 
 export class UpdateExpenseLedgerCategoryDto {
@@ -65,6 +69,10 @@ export class UpdateExpenseLedgerCategoryDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsEnum(['BUILDING', 'CONDOMINIUM_COMMON'])
+  @IsOptional()
+  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON';
 }
 
 export interface ExpenseLedgerCategoryResponseDto {
@@ -74,6 +82,7 @@ export interface ExpenseLedgerCategoryResponseDto {
   name: string;
   description: string | null;
   movementType: 'EXPENSE' | 'INCOME';
+  catalogScope: 'BUILDING' | 'CONDOMINIUM_COMMON';
   sortOrder: number;
   isActive: boolean;
   createdAt: Date;

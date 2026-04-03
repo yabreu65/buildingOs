@@ -128,13 +128,14 @@ export class LiquidationsService {
       );
     }
 
-    // Cargar gastos VALIDATED del (building, period)
-    const expenses = await this.prisma.expense.findMany({
+    // Cargar gastos VALIDATED del (building, period) - solo BUILDING scope
+    const buildingExpenses = await this.prisma.expense.findMany({
       where: {
         tenantId,
         buildingId: dto.buildingId,
         period: dto.period,
         status: 'VALIDATED',
+        scopeType: 'BUILDING',
       },
       include: {
         category: { select: { name: true } },
@@ -142,20 +143,55 @@ export class LiquidationsService {
       },
     });
 
-    if (expenses.length === 0) {
+    // Cargar gastos VALIDATED TENANT_SHARED que tienen allocation a este edificio
+    const sharedExpenses = await this.prisma.expense.findMany({
+      where: {
+        tenantId,
+        period: dto.period,
+        status: 'VALIDATED',
+        scopeType: 'TENANT_SHARED',
+      },
+      include: {
+        category: { select: { name: true } },
+        vendor: { select: { name: true } },
+        allocations: {
+          where: { buildingId: dto.buildingId },
+        },
+      },
+    });
+
+    // Filtrar solo los que tienen allocation a este edificio
+    const allocatedSharedExpenses = sharedExpenses.filter(e => e.allocations.length > 0);
+
+    // Combinar: buildingExpenses (monto completo) + allocatedSharedExpenses (solo monto asignado)
+    const allExpenses = [...buildingExpenses];
+    for (const exp of allocatedSharedExpenses) {
+      const allocation = exp.allocations[0];
+      if (allocation && allocation.amountMinor !== null) {
+        allExpenses.push({
+          ...exp,
+          amountMinor: allocation.amountMinor,
+        });
+      }
+    }
+
+    if (allExpenses.length === 0) {
       throw new BadRequestException(
-        `No hay gastos VALIDADOS para el período ${dto.period} en este edificio`,
+        `No hay gastos VALIDADOS para el período ${dto.period} en este edificio. ` +
+        `Registrá gastos propios del edificio o verificá que los gastos comunes tengan asignación a este edificio.`,
       );
     }
 
     // Calcular totales por moneda
     const totalsByCurrency: Record<string, number> = {};
-    for (const expense of expenses) {
-      totalsByCurrency[expense.currencyCode] =
-        (totalsByCurrency[expense.currencyCode] ?? 0) + expense.amountMinor;
+    for (const expense of allExpenses) {
+      const expCurrency = expense.currencyCode as string;
+      const expAmount = expense.amountMinor as number;
+      totalsByCurrency[expCurrency] =
+        (totalsByCurrency[expCurrency] ?? 0) + expAmount;
     }
 
-    // Total en baseCurrency (solo gastos en esa moneda)
+    // Total en baseCurrency
     const totalAmountMinor = totalsByCurrency[dto.baseCurrency] ?? 0;
 
     // Contar unidades billables
@@ -165,15 +201,15 @@ export class LiquidationsService {
       orderBy: { code: 'asc' },
     });
 
-    // Snapshot de expenses para auditoría
-    const expenseSnapshot = expenses.map((e) => ({
+    // Snapshot de expenses para auditoría - incluye información de si es gasto común
+    const expenseSnapshot = allExpenses.map((e) => ({
       expenseId: e.id,
       categoryName: e.category.name,
       vendorName: e.vendor?.name ?? null,
-      amountMinor: e.amountMinor,
-      currencyCode: e.currencyCode,
-      invoiceDate: e.invoiceDate.toISOString(),
-      description: e.description,
+      amountMinor: e.amountMinor as number,
+      currencyCode: e.currencyCode as string,
+      invoiceDate: (e.invoiceDate as Date).toISOString(),
+      description: e.description as string | null,
     }));
 
     const liq = await this.prisma.liquidation.create({
@@ -201,7 +237,7 @@ export class LiquidationsService {
         buildingId: dto.buildingId,
         totalAmountMinor,
         baseCurrency: dto.baseCurrency,
-        expenseCount: expenses.length,
+        expenseCount: allExpenses.length,
       },
     });
 

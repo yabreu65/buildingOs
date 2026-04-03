@@ -36,12 +36,14 @@ export class ExpenseLedgerCategoriesController {
   @Get()
   async listCategories(
     @Query('movementType') movementType?: 'EXPENSE' | 'INCOME',
+    @Query('catalogScope') catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON',
     @Request() req?: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto[]> {
     return this.categoriesService.listCategories(
       req!.tenantId!,
       req!.user.roles ?? [],
       movementType,
+      catalogScope,
     );
   }
 

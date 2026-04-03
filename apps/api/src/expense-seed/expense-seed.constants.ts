@@ -9,6 +9,7 @@ export interface DefaultLedgerCategory {
   name: string;              // Display name (Spanish)
   description: string;       // User-visible description
   movementType: 'EXPENSE' | 'INCOME'; // Category type
+  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON'; // Scope - defaults to BUILDING
   sortOrder: number;         // UI ordering (10, 20, 30, ...)
   isActive: boolean;         // false = optional/hidden by default
 }
@@ -25,6 +26,14 @@ export const DEFAULT_LEDGER_CATEGORIES: DefaultLedgerCategory[] = [
     description: 'Electricidad áreas comunes (escaleras, pasillos, ascensores)',
     movementType: 'EXPENSE',
     sortOrder: 10,
+    isActive: true,
+  },
+  {
+    code: 'SERV_ELECTRICIDAD_EXTERNA',
+    name: 'Electricidad – Áreas comunes externas',
+    description: 'Medidor/cuenta de áreas comunes externas (salón de fiestas, cancha, luces perímetro)',
+    movementType: 'EXPENSE',
+    sortOrder: 11,
     isActive: true,
   },
   {
@@ -259,6 +268,140 @@ export const DEFAULT_LEDGER_CATEGORIES: DefaultLedgerCategory[] = [
     movementType: 'INCOME',
     sortOrder: 70,
     isActive: true,
+  },
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // CONDOMINIUM COMMON (EXPENSE) — 14 categories (shared expenses)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // Activos
+  {
+    code: 'CC_ELEC_EXTERNAS',
+    name: 'Electricidad – Áreas comunes externas (medidor común)',
+    description: 'Luces perimetrales, exteriores, cancha, fachada, etc.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1000,
+    isActive: true,
+  },
+  {
+    code: 'CC_ELEC_AMENIDADES',
+    name: 'Electricidad – Amenidades (salón de fiestas / club house)',
+    description: 'Electricidad de salón de fiestas/amenities (si aplica).',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1010,
+    isActive: true,
+  },
+  {
+    code: 'CC_AGUA_CONJUNTO',
+    name: 'Agua – Áreas comunes del conjunto',
+    description: 'Riego, limpieza exterior, áreas comunes compartidas.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1020,
+    isActive: true,
+  },
+  {
+    code: 'CC_ASEO_RESIDUOS',
+    name: 'Aseo urbano y residuos (conjunto)',
+    description: 'Recolección, contenedores, disposición final.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1030,
+    isActive: true,
+  },
+  {
+    code: 'CC_MANT_INFRA_COMUN',
+    name: 'Mantenimiento de infraestructura común',
+    description: 'Tanquillas externas, cableado común, portones comunes.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1040,
+    isActive: true,
+  },
+  {
+    code: 'CC_ADMIN_GENERAL',
+    name: 'Administración general del condominio',
+    description: 'Honorarios de administración del conjunto.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1050,
+    isActive: true,
+  },
+  {
+    code: 'CC_LEGAL_CONTAB',
+    name: 'Legales y contabilidad (conjunto)',
+    description: 'Honorarios globales (contador/gestoría).',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1060,
+    isActive: true,
+  },
+  {
+    code: 'CC_COMISIONES_BANCARIAS',
+    name: 'Comisiones bancarias (conjunto)',
+    description: 'Cuenta recaudadora común y costos asociados.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1070,
+    isActive: true,
+  },
+  {
+    code: 'CC_FONDO_RESERVA',
+    name: 'Fondo de reserva del conjunto',
+    description: 'Reserva central para obras mayores comunes.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1080,
+    isActive: true,
+  },
+
+  // Inactivos
+  {
+    code: 'CC_PLAGAS',
+    name: 'Control de plagas (conjunto)',
+    description: 'Fumigación general.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1090,
+    isActive: false,
+  },
+  {
+    code: 'CC_JARDINERIA',
+    name: 'Jardinería / áreas verdes (conjunto)',
+    description: 'Poda, abono, mantenimiento de jardines.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1100,
+    isActive: false,
+  },
+  {
+    code: 'CC_SEGURIDAD_PERIMETRAL',
+    name: 'Seguridad perimetral / vigilancia del conjunto',
+    description: 'Vigilancia del conjunto (si no es por torre).',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1110,
+    isActive: false,
+  },
+  {
+    code: 'CC_CCTV',
+    name: 'CCTV / cámaras del conjunto',
+    description: 'Mantenimiento de cámaras perimetrales/central.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1120,
+    isActive: false,
+  },
+  {
+    code: 'CC_INCENDIO_CONJUNTO',
+    name: 'Sistema contra incendios (conjunto)',
+    description: 'Extintores/alarma en áreas comunes compartidas.',
+    movementType: 'EXPENSE',
+    catalogScope: 'CONDOMINIUM_COMMON',
+    sortOrder: 1130,
+    isActive: false,
   },
 ];
 

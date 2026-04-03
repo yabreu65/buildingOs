@@ -30,24 +30,31 @@ export class ExpenseLedgerSeedService {
     this.logger.debug(`[Seed] Starting for tenant: ${tenantId}`);
 
     try {
-      // Use createMany with skipDuplicates for idempotence and atomicity
-      const result = await this.prisma.expenseLedgerCategory.createMany({
-        data: DEFAULT_LEDGER_CATEGORIES.map((category) => ({
-          tenantId,
-          code: category.code,
-          name: category.name,
-          description: category.description,
-          movementType: category.movementType,
-          sortOrder: category.sortOrder,
-          isActive: category.isActive,
-        })),
-        skipDuplicates: true,
-      });
+      // Use individual upserts to include catalogScope (not supported in createMany)
+      let created = 0;
+      let skipped = 0;
 
-      const skipped = DEFAULT_LEDGER_CATEGORIES.length - result.count;
+      for (const category of DEFAULT_LEDGER_CATEGORIES) {
+        const result = await this.prisma.expenseLedgerCategory.upsert({
+          where: { tenantId_code: { tenantId, code: category.code } },
+          create: {
+            tenantId,
+            code: category.code,
+            name: category.name,
+            description: category.description,
+            movementType: category.movementType,
+            catalogScope: category.catalogScope ?? 'BUILDING',
+            sortOrder: category.sortOrder,
+            isActive: category.isActive,
+          },
+          update: {},
+        });
+        if (result) created++;
+        else skipped++;
+      }
 
       this.logger.log(
-        `[Seed] Completed for tenant ${tenantId}: created=${result.count}, skipped=${skipped}`,
+        `[Seed] Completed for tenant ${tenantId}: created=${created}, skipped=${skipped}`,
       );
 
       // Fire-and-forget audit log
@@ -57,7 +64,7 @@ export class ExpenseLedgerSeedService {
         entityType: 'ExpenseLedgerCategory',
         entityId: tenantId,
         metadata: {
-          created: result.count,
+          created,
           skipped,
           source: 'DEFAULT_SEED',
           totalCategories: DEFAULT_LEDGER_CATEGORIES.length,
@@ -65,7 +72,7 @@ export class ExpenseLedgerSeedService {
       });
 
       return {
-        created: result.count,
+        created,
         skipped,
       };
     } catch (err) {

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Plus, Trash2, Edit2, Loader2, Eye, EyeOff } from 'lucide-react';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
-import { ExpenseLedgerCategory } from '../services/expense-ledger.api';
+import { ExpenseLedgerCategory, CatalogScope } from '../services/expense-ledger.api';
 import {
   useExpenseLedgerCategories,
   useCreateExpenseLedgerCategory,
@@ -14,6 +14,7 @@ import {
 
 interface ExpenseLedgerCategoriesManagerProps {
   tenantId: string;
+  defaultScopeFilter?: ScopeFilter;
 }
 
 interface CategoryFormState {
@@ -21,15 +22,19 @@ interface CategoryFormState {
   name: string;
   description: string;
   movementType: 'EXPENSE' | 'INCOME';
+  catalogScope?: CatalogScope;
 }
 
 type Tab = 'EXPENSE' | 'INCOME';
+type ScopeFilter = 'ALL' | 'BUILDING' | 'CONDOMINIUM_COMMON';
 
 export function ExpenseLedgerCategoriesManager({
   tenantId,
+  defaultScopeFilter = 'ALL',
 }: ExpenseLedgerCategoriesManagerProps) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<Tab>('EXPENSE');
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>(defaultScopeFilter);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState<CategoryFormState>({
     name: '',
@@ -43,11 +48,20 @@ export function ExpenseLedgerCategoriesManager({
   const updateMutation = useUpdateExpenseLedgerCategory(tenantId);
   const deleteMutation = useDeleteExpenseLedgerCategory(tenantId);
 
-  const categories = allCategories.filter((c) => c.movementType === activeTab);
+  const categories = allCategories.filter((c) => {
+    if (c.movementType !== activeTab) return false;
+    if (scopeFilter === 'ALL') return true;
+    return c.catalogScope === scopeFilter;
+  });
 
   const handleOpenCreate = () => {
     setEditingId(null);
-    setForm({ name: '', description: '', movementType: activeTab });
+    setForm({
+      name: '',
+      description: '',
+      movementType: activeTab,
+      catalogScope: activeTab === 'EXPENSE' ? 'BUILDING' : undefined,
+    });
     setShowModal(true);
   };
 
@@ -58,6 +72,7 @@ export function ExpenseLedgerCategoriesManager({
       name: category.name,
       description: category.description || '',
       movementType: category.movementType,
+      catalogScope: category.catalogScope,
     });
     setShowModal(true);
   };
@@ -85,6 +100,7 @@ export function ExpenseLedgerCategoriesManager({
           name: form.name.trim(),
           description: form.description.trim() || undefined,
           movementType: form.movementType,
+          catalogScope: form.movementType === 'EXPENSE' ? form.catalogScope : undefined,
         });
         toast('Rubro creado', 'success');
       }
@@ -205,6 +221,19 @@ export function ExpenseLedgerCategoriesManager({
                     Código: {category.code}
                   </p>
                 )}
+                {category.catalogScope && (
+                  <p className="text-xs mt-1">
+                    <span
+                      className={`px-2 py-0.5 rounded-full ${
+                        category.catalogScope === 'BUILDING'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-purple-100 text-purple-700'
+                      }`}
+                    >
+                      {category.catalogScope === 'BUILDING' ? 'Edificio' : 'Condominio'}
+                    </span>
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground mt-2">
                   {category.isActive ? (
                     <span className="text-green-600">✓ Activo</span>
@@ -306,6 +335,28 @@ export function ExpenseLedgerCategoriesManager({
                   >
                     <option value="EXPENSE">💸 Gasto</option>
                     <option value="INCOME">💰 Ingreso</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Catalog Scope - Only for EXPENSE */}
+              {form.movementType === 'EXPENSE' && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Ámbito
+                  </label>
+                  <select
+                    value={form.catalogScope || 'BUILDING'}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        catalogScope: e.target.value as CatalogScope,
+                      }))
+                    }
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="BUILDING">Edificio (gastos por torre/edificio)</option>
+                    <option value="CONDOMINIUM_COMMON">Condominio (gastos comunes compartidos)</option>
                   </select>
                 </div>
               )}

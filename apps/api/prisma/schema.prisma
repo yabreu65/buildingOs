@@ -42,6 +42,11 @@ enum MovementType {
   INCOME
 }
 
+enum CatalogScope {
+  BUILDING
+  CONDOMINIUM_COMMON
+}
+
 // ============================================================================
 // FINANZAS (Charges, Payments, Allocations)
 // ============================================================================
@@ -1403,6 +1408,7 @@ model ExpenseLedgerCategory {
   name         String       // e.g. "Electricidad", "Agua", "Mantenimiento"
   description  String?
   movementType MovementType @default(EXPENSE) // EXPENSE or INCOME
+  catalogScope CatalogScope @default(BUILDING) // BUILDING or CONDOMINIUM_COMMON
   sortOrder    Int          @default(0) // Controls UI ordering for seeded categories
   isActive     Boolean      @default(true)
   createdAt    DateTime     @default(now())
@@ -1417,6 +1423,23 @@ model ExpenseLedgerCategory {
   @@index([tenantId])
   @@index([tenantId, movementType])
   @@index([tenantId, isActive])
+  @@index([tenantId, movementType, catalogScope])
+}
+
+// ============================================================================
+// FINANZAS: Proveedor preferido por rubro (Expense)
+// ============================================================================
+model ExpenseCategoryVendorPreference {
+  id          String   @id @default(cuid())
+  tenantId    String
+  categoryId  String   // FK ExpenseLedgerCategory
+  vendorId    String   // FK Vendor
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, categoryId]) // Solo 1 preferido por rubro
+  @@index([tenantId])
+  @@index([tenantId, categoryId])
 }
 
 // ============================================================================

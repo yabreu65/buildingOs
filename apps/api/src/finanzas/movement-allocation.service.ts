@@ -214,4 +214,81 @@ export class MovementAllocationService {
       },
     });
   }
+
+  /**
+   * Sugiere allocations por modo:
+   * - BUILDING_TOTAL_M2: proporcional a los m² totales de cada edificio
+   * - EQUAL_SHARE: distribución igualitaria entre edificios
+   */
+  async suggestAllocationsByMode(
+    tenantId: string,
+    mode: 'BUILDING_TOTAL_M2' | 'EQUAL_SHARE',
+  ): Promise<Array<{ buildingId: string; buildingName: string; totalM2: number; percentage: number }>> {
+    const buildings = await this.prisma.building.findMany({
+      where: { tenantId },
+      select: { id: true, name: true },
+    });
+
+    if (buildings.length === 0) {
+      return [];
+    }
+
+    if (mode === 'EQUAL_SHARE') {
+      const percentage = Math.floor(10000 / buildings.length) / 100;
+      const remainder = 100 - percentage * (buildings.length - 1);
+      return buildings.map((b, i) => ({
+        buildingId: b.id,
+        buildingName: b.name,
+        totalM2: 0,
+        percentage: i === buildings.length - 1 ? remainder : percentage,
+      }));
+    }
+
+    // BUILDING_TOTAL_M2: fetch m² for each building
+    const buildingsWithM2 = await Promise.all(
+      buildings.map(async (b) => {
+        const result = await this.prisma.unit.aggregate({
+          where: { building: { id: b.id, tenantId }, m2: { not: null } },
+          _sum: { m2: true },
+        });
+        return {
+          buildingId: b.id,
+          buildingName: b.name,
+          totalM2: result._sum.m2 ?? 0,
+        };
+      })
+    );
+
+    const totalM2 = buildingsWithM2.reduce((sum, b) => sum + b.totalM2, 0);
+
+    if (totalM2 === 0) {
+      // Fallback to equal share if no m² data
+      return this.suggestAllocationsByMode(tenantId, 'EQUAL_SHARE');
+    }
+
+    // Calculate percentages with precision (4 decimal places)
+    const result: Array<{ buildingId: string; buildingName: string; totalM2: number; percentage: number }> = [];
+    let remainingPercentage = 100;
+
+    buildingsWithM2.forEach((buildingItem, i) => {
+      let percentage: number;
+
+      if (i === buildingsWithM2.length - 1) {
+        percentage = remainingPercentage;
+      } else {
+        percentage = Math.round((buildingItem.totalM2 / totalM2) * 10000) / 100;
+        percentage = Math.min(percentage, remainingPercentage);
+        remainingPercentage -= percentage;
+      }
+
+      result.push({
+        buildingId: buildingItem.buildingId,
+        buildingName: buildingItem.buildingName,
+        totalM2: buildingItem.totalM2,
+        percentage,
+      });
+    });
+
+    return result;
+  }
 }

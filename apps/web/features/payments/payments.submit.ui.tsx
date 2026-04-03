@@ -6,16 +6,17 @@ import Input from '@/shared/components/ui/Input';
 import Select from '@/shared/components/ui/Select';
 import Button from '@/shared/components/ui/Button';
 import { mockUnits } from '../units/units.mock';
-import { formatMoney } from '@/shared/lib/format/money';
 import { paymentSubmitSchema, type PaymentSubmitFormValues } from './payments.schema';
 import { toPayment } from './payments.adapter';
 import { submitPayment } from './payments.storage';
 import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
 import { getSession } from '../auth/session.storage';
+import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 
 export default function PaymentSubmitUI() {
   // Força re-render cuando cambie el storage
   useBoStorageTick();
+  const { format } = useTenantCurrency();
 
   const {
     register,
@@ -47,7 +48,7 @@ export default function PaymentSubmitUI() {
       const created = submitPayment(session.activeTenantId, paymentInput);
 
       // Feedback y reset
-      alert(`Pago enviado: ${created.unitId} - ${formatMoney(created.amount)}`);
+      alert(`Pago enviado: ${created.unitId} - ${format(created.amount)}`);
       reset();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';

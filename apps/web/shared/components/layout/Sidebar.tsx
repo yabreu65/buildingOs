@@ -72,6 +72,7 @@ export const Sidebar = () => {
             <NavItem href={routes.buildingsList(tenantId)} label={t('navigation.buildings')} />
             <NavItem href={`/${tenantId}/units`} label={t('navigation.units')} />
             <NavItem href={`/${tenantId}/finanzas`} label={t('navigation.finanzas')} />
+            <NavItem href={`/${tenantId}/finance/categories`} label={t('navigation.rubros')} />
             <NavItem href={routes.tenantReports(tenantId)} label={t('navigation.reports')} />
 
 

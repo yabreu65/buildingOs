@@ -31,10 +31,11 @@ import {
 export function useExpenseLedgerCategories(
   tenantId: string,
   movementType?: 'EXPENSE' | 'INCOME',
+  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON',
 ) {
   return useQuery({
-    queryKey: ['expenseLedgerCategories', tenantId, movementType],
-    queryFn: () => listExpenseLedgerCategories(tenantId, movementType),
+    queryKey: ['expenseLedgerCategories', tenantId, movementType, catalogScope],
+    queryFn: () => listExpenseLedgerCategories(tenantId, movementType, catalogScope),
     staleTime: 10 * 60 * 1000,
     enabled: !!tenantId,
     placeholderData: (prev) => prev ?? [],
@@ -48,6 +49,7 @@ export function useCreateExpenseLedgerCategory(tenantId: string) {
       name: string;
       description?: string;
       movementType?: 'EXPENSE' | 'INCOME';
+      catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON';
     }) => createExpenseLedgerCategory(tenantId, data),
     onSuccess: (_, variables) => {
       // Invalidate both all categories and the specific movement type

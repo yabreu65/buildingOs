@@ -1,14 +1,16 @@
 import {
   Controller,
   Get,
+  Post,
   Query,
   UseGuards,
   BadRequestException,
   UnauthorizedException,
   Request,
 } from '@nestjs/common';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsEnum } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { MovementAllocationService } from './movement-allocation.service';
 
@@ -22,8 +24,25 @@ export class GetAllocationsQueryDto {
   incomeId?: string;
 }
 
+export class SuggestAllocationsQueryDto {
+  @IsString()
+  @IsOptional()
+  period?: string;
+
+  @IsEnum(['BUILDING_TOTAL_M2', 'EQUAL_SHARE'])
+  @IsOptional()
+  mode?: 'BUILDING_TOTAL_M2' | 'EQUAL_SHARE';
+}
+
+interface BuildingM2Summary {
+  buildingId: string;
+  buildingName: string;
+  totalM2: number;
+  percentage: number;
+}
+
 @Controller('tenants/:tenantId/allocations')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class MovementAllocationController {
   constructor(private readonly allocationService: MovementAllocationService) {}
 
@@ -61,5 +80,28 @@ export class MovementAllocationController {
       query.expenseId,
       query.incomeId,
     );
+  }
+
+  /**
+   * Suggest allocations based on building total m²
+   * Returns suggested percentages for each building in the tenant
+   * @param req Authenticated request with tenantId
+   * @param query Query parameters (period, mode)
+   * @returns Array of building allocations with calculated percentages
+   */
+  @Get('suggest')
+  async suggestAllocations(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: SuggestAllocationsQueryDto,
+  ): Promise<BuildingM2Summary[]> {
+    const tenantId = req.tenantId || req.user?.tenantId;
+
+    if (!tenantId) {
+      throw new UnauthorizedException('Missing tenantId in request context');
+    }
+
+    const mode = query.mode || 'BUILDING_TOTAL_M2';
+
+    return this.allocationService.suggestAllocationsByMode(tenantId, mode);
   }
 }

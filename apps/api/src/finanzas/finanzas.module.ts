@@ -24,6 +24,9 @@ import { UnitGroupService } from './unit-group.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
+import { VendorPreferenceController } from './vendor-preference.controller';
+import { VendorPreferenceService } from './vendor-preference.service';
+
 @Module({
   imports: [PrismaModule],
   controllers: [
@@ -39,6 +42,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     UnitGroupController,
     MovementAllocationController,
     LiquidationEngineController,
+    VendorPreferenceController,
   ],
   providers: [
     FinanzasService,
@@ -52,6 +56,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
+    VendorPreferenceService,
   ],
   exports: [
     FinanzasService,
