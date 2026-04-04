@@ -21,6 +21,7 @@ import { InboxList } from '@/features/communications';
 import { t } from '@/i18n';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
+import { UnitFinanceTab } from '@/features/finance/components/UnitFinanceTab';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
@@ -66,7 +67,7 @@ const UnitDashboardPage = () => {
     occupantId: null,
   });
   const [isDeleting, setIsDeleting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'tickets' | 'messages' | 'documents'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'finance' | 'tickets' | 'messages' | 'documents'>('overview');
   const [showAssignModal, setShowAssignModal] = useState(false);
 
   const unit = units.find((u) => u.id === unitId);
@@ -291,15 +292,6 @@ const UnitDashboardPage = () => {
         )}
       </Card>
 
-      {/* Payments Section - Coming Soon */}
-      <Card>
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Payments & Ledger</h2>
-        </div>
-        <div className="p-6 text-center border-2 border-dashed rounded-lg">
-          <p className="text-muted-foreground">Payment ledger coming soon</p>
-        </div>
-      </Card>
 
       {/* Tabs for Tickets, Messages, Documents */}
       <Card>
@@ -314,6 +306,16 @@ const UnitDashboardPage = () => {
               }`}
             >
               Overview
+            </button>
+            <button
+              onClick={() => setActiveTab('finance')}
+              className={`px-4 py-2 font-medium border-b-2 transition ${
+                activeTab === 'finance'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Finanzas
             </button>
             <button
               onClick={() => setActiveTab('tickets')}
@@ -347,6 +349,11 @@ const UnitDashboardPage = () => {
             </button>
           </div>
         </div>
+
+        {/* Finance Tab */}
+        {activeTab === 'finance' && (
+          <UnitFinanceTab buildingId={buildingId} unitId={unitId} />
+        )}
 
         {/* Tickets Tab */}
         {activeTab === 'tickets' && (
