@@ -39,7 +39,7 @@ export default function LiquidationsPage({ tenantId }: LiquidationsPageProps) {
     queryKey: ['liquidations', tenantId, refreshTrigger],
     queryFn: async () => {
       return apiClient({
-        path: `/tenants/${tenantId}/liquidations`,
+        path: `/tenants/${tenantId}/finance/liquidations`,
         headers: { 'tenant-id': tenantId },
       });
     },

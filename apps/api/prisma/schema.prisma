@@ -1317,7 +1317,7 @@ model Charge {
   liquidation                 Liquidation?          @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
   paymentAllocations          PaymentAllocation[]
 
-  @@unique([unitId, period, concept]) // One charge per unit/period/concept
+  @@index([unitId, period, concept])
   @@index([tenantId, buildingId, period])
   @@index([tenantId, unitId, status])
   @@index([tenantId, buildingId, status])
@@ -1615,7 +1615,7 @@ model Liquidation {
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   charges  Charge[]
 
-  @@unique([tenantId, buildingId, period, status])
+  @@index([tenantId, buildingId, period, status])
   @@index([tenantId, buildingId])
   @@index([tenantId, status])
 }

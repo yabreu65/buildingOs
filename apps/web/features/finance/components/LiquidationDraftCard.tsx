@@ -97,9 +97,13 @@ export function LiquidationDraftCard({
   };
 
   const handleCancel = async () => {
-    if (confirm('¿Está seguro de cancelar esta liquidación?')) {
+    if (!confirm('¿Está seguro de cancelar esta liquidación?')) return;
+    try {
       await cancelMutation.mutateAsync(liquidation.id);
       onRefresh?.();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al cancelar la liquidación';
+      alert(msg);
     }
   };
 

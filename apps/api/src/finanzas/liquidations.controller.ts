@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
@@ -22,7 +23,12 @@ import {
 } from './expense-ledger.dto';
 
 class ListLiquidationsQuery {
+  @IsOptional()
+  @IsString()
   buildingId?: string;
+
+  @IsOptional()
+  @IsString()
   period?: string;
 }
 

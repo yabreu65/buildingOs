@@ -38,6 +38,7 @@ export class LiquidationsService {
         tenantId,
         buildingId: query.buildingId,
         period: query.period,
+        status: { not: 'CANCELED' },
       },
       orderBy: [{ period: 'desc' }, { createdAt: 'desc' }],
     });
@@ -125,6 +126,25 @@ export class LiquidationsService {
     if (existingPublished) {
       throw new ConflictException(
         `Ya existe una liquidación publicada para el período ${dto.period} en este edificio`,
+      );
+    }
+
+    // Prerequisito: no puede haber gastos de áreas comunes (TENANT_SHARED) sin validar para este período.
+    // Si los hay, el admin debe validarlos primero antes de liquidar cualquier edificio,
+    // para garantizar que el reparto esté completo y correcto.
+    const pendingSharedExpenses = await this.prisma.expense.count({
+      where: {
+        tenantId,
+        period: dto.period,
+        scopeType: 'TENANT_SHARED',
+        status: 'DRAFT',
+      },
+    });
+
+    if (pendingSharedExpenses > 0) {
+      throw new BadRequestException(
+        `Hay ${pendingSharedExpenses} gasto(s) de áreas comunes pendientes de validar para ${dto.period}. ` +
+        `Validalos desde Finanzas → Gastos comunes antes de generar la liquidación del edificio.`,
       );
     }
 
@@ -438,16 +458,12 @@ export class LiquidationsService {
       throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
     }
 
-    if (liq.status === 'CANCELED') {
-      throw new BadRequestException('La liquidación ya está cancelada');
-    }
-
     // Si está publicada, verificar que no haya pagos aprobados sobre sus charges
     if (liq.status === 'PUBLISHED') {
       const approvedAllocations = await this.prisma.paymentAllocation.count({
         where: {
           tenantId,
-          charge: { liquidationId, canceledAt: null },
+          charge: { liquidationId },
           payment: { status: 'APPROVED' },
         },
       });
@@ -458,21 +474,12 @@ export class LiquidationsService {
         );
       }
 
-      // Soft-delete de los charges generados
-      await this.prisma.charge.updateMany({
-        where: { liquidationId, tenantId, canceledAt: null },
-        data: { canceledAt: new Date() },
-      });
+      // Eliminar los charges generados
+      await this.prisma.charge.deleteMany({ where: { liquidationId, tenantId } });
     }
 
-    const updated = await this.prisma.liquidation.update({
-      where: { id: liquidationId },
-      data: {
-        status: 'CANCELED',
-        canceledByMembershipId: membershipId,
-        canceledAt: new Date(),
-      },
-    });
+    // Hard delete: el historial queda en AuditLog
+    await this.prisma.liquidation.delete({ where: { id: liquidationId } });
 
     void this.auditService.createLog({
       tenantId,
@@ -480,10 +487,10 @@ export class LiquidationsService {
       action: 'LIQUIDATION_CANCEL',
       entityType: 'Liquidation',
       entityId: liquidationId,
-      metadata: { period: liq.period, buildingId: liq.buildingId },
+      metadata: { period: liq.period, buildingId: liq.buildingId, previousStatus: liq.status },
     });
 
-    return this.toDto(updated);
+    return this.toDto(liq);
   }
 
   /**

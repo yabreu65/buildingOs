@@ -66,14 +66,9 @@ export class LiquidationEngineService {
       );
     }
 
-    // Obtener todos los VALIDATED expenses para este building/period
-    const expenses = await this.prisma.expense.findMany({
-      where: {
-        tenantId,
-        buildingId,
-        period,
-        status: 'VALIDATED',
-      },
+    // 1. Gastos propios del edificio (scopeType BUILDING)
+    const buildingExpenses = await this.prisma.expense.findMany({
+      where: { tenantId, buildingId, period, status: 'VALIDATED' },
       include: {
         category: { select: { name: true } },
         vendor: { select: { name: true } },
@@ -81,21 +76,50 @@ export class LiquidationEngineService {
       },
     });
 
-    if (expenses.length === 0) {
+    // 2. Gastos de condominio (TENANT_SHARED) con allocation para este edificio
+    const sharedExpenses = await this.prisma.expense.findMany({
+      where: {
+        tenantId,
+        period,
+        status: 'VALIDATED',
+        scopeType: 'TENANT_SHARED',
+        allocations: { some: { buildingId } },
+      },
+      include: {
+        category: { select: { name: true } },
+        vendor: { select: { name: true } },
+        allocations: { where: { buildingId } },
+      },
+    });
+
+    const allExpenses = [...buildingExpenses, ...sharedExpenses];
+
+    if (allExpenses.length === 0) {
       throw new BadRequestException(
         `No hay gastos validados para ${period} en este edificio`,
       );
     }
 
-    // Calcular totales
-    const totalAmountMinor = expenses.reduce(
-      (sum, exp) => sum + exp.amountMinor,
-      0,
-    );
+    // Calcular totales: BUILDING usa monto completo, TENANT_SHARED usa la porción de este edificio
+    const buildingTotal = buildingExpenses.reduce((s, e) => s + e.amountMinor, 0);
+    const sharedTotal = sharedExpenses.reduce((s, e) => {
+      const alloc = e.allocations[0];
+      if (!alloc) return s;
+      const amount = alloc.amountMinor ?? Math.floor(e.amountMinor * (alloc.percentage ?? 0) / 100);
+      return s + amount;
+    }, 0);
+    const totalAmountMinor = buildingTotal + sharedTotal;
+
     const totalsByCurrency: Record<string, number> = {};
-    expenses.forEach((exp) => {
+    buildingExpenses.forEach((exp) => {
       totalsByCurrency[exp.currencyCode] =
         (totalsByCurrency[exp.currencyCode] ?? 0) + exp.amountMinor;
+    });
+    sharedExpenses.forEach((exp) => {
+      const alloc = exp.allocations[0];
+      if (!alloc) return;
+      const amount = alloc.amountMinor ?? Math.floor(exp.amountMinor * (alloc.percentage ?? 0) / 100);
+      totalsByCurrency[exp.currencyCode] = (totalsByCurrency[exp.currencyCode] ?? 0) + amount;
     });
 
     // Obtener unidades del building (solo billables)
@@ -110,9 +134,9 @@ export class LiquidationEngineService {
       );
     }
 
-    // Calcular allocations: BUILDING scope → prorrateo por m2
+    // Calcular allocations: prorrateo por m2 del total combinado
     const chargesPreview = this.calculateCharges(
-      expenses,
+      allExpenses,
       units,
       totalAmountMinor,
     );
@@ -127,11 +151,19 @@ export class LiquidationEngineService {
         baseCurrency,
         totalAmountMinor,
         totalsByCurrency,
-        expenseSnapshot: expenses.map((e) => ({
-          expenseId: e.id,
-          amountMinor: e.amountMinor,
-          currencyCode: e.currencyCode,
-        })),
+        expenseSnapshot: allExpenses.map((e) => {
+          const isShared = e.scopeType === 'TENANT_SHARED';
+          const alloc = isShared ? e.allocations[0] : null;
+          const amount = isShared && alloc
+            ? (alloc.amountMinor ?? Math.floor(e.amountMinor * (alloc.percentage ?? 0) / 100))
+            : e.amountMinor;
+          return {
+            expenseId: e.id,
+            amountMinor: amount,
+            currencyCode: e.currencyCode,
+            scopeType: e.scopeType,
+          };
+        }),
         unitCount: units.length,
         generatedByMembershipId: membershipId,
       },
@@ -146,22 +178,32 @@ export class LiquidationEngineService {
       metadata: {
         period,
         buildingId,
-        expenseCount: expenses.length,
+        expenseCount: allExpenses.length,
+        buildingExpenseCount: buildingExpenses.length,
+        sharedExpenseCount: sharedExpenses.length,
         totalAmountMinor,
       },
     });
 
     return {
       liquidation,
-      expenses: expenses.map((e) => ({
-        id: e.id,
-        categoryName: e.category.name,
-        vendorName: e.vendor?.name ?? null,
-        amountMinor: e.amountMinor,
-        currencyCode: e.currencyCode,
-        invoiceDate: e.invoiceDate,
-        description: e.description,
-      })),
+      expenses: allExpenses.map((e) => {
+        const isShared = e.scopeType === 'TENANT_SHARED';
+        const alloc = isShared ? e.allocations[0] : null;
+        const amount = isShared && alloc
+          ? (alloc.amountMinor ?? Math.floor(e.amountMinor * (alloc.percentage ?? 0) / 100))
+          : e.amountMinor;
+        return {
+          id: e.id,
+          categoryName: e.category.name,
+          vendorName: e.vendor?.name ?? null,
+          amountMinor: amount,
+          currencyCode: e.currencyCode,
+          invoiceDate: e.invoiceDate,
+          description: e.description,
+          scopeType: e.scopeType,
+        };
+      }),
       chargesPreview,
     };
   }
@@ -281,7 +323,7 @@ export class LiquidationEngineService {
     }
 
     // Recalcular charges para crear registros de Charge
-    const expenses = await this.prisma.expense.findMany({
+    const buildingExpenses = await this.prisma.expense.findMany({
       where: {
         tenantId,
         buildingId: liquidation.buildingId,
@@ -290,16 +332,32 @@ export class LiquidationEngineService {
       },
     });
 
+    const sharedExpenses = await this.prisma.expense.findMany({
+      where: {
+        tenantId,
+        period: liquidation.period,
+        status: 'VALIDATED',
+        scopeType: 'TENANT_SHARED',
+        allocations: { some: { buildingId: liquidation.buildingId } },
+      },
+      include: { allocations: { where: { buildingId: liquidation.buildingId } } },
+    });
+
     const units = await this.prisma.unit.findMany({
       where: { buildingId: liquidation.buildingId, isBillable: true },
       select: { id: true, code: true, label: true, m2: true },
     });
 
-    const totalAmountMinor = expenses.reduce(
-      (sum, exp) => sum + exp.amountMinor,
-      0,
-    );
-    const charges = this.calculateCharges(expenses, units, totalAmountMinor);
+    const buildingTotal = buildingExpenses.reduce((s, e) => s + e.amountMinor, 0);
+    const sharedTotal = sharedExpenses.reduce((s, e) => {
+      const alloc = e.allocations[0];
+      if (!alloc) return s;
+      return s + (alloc.amountMinor ?? Math.floor(e.amountMinor * (alloc.percentage ?? 0) / 100));
+    }, 0);
+    const totalAmountMinor = buildingTotal + sharedTotal;
+
+    const allExpenses = [...buildingExpenses, ...sharedExpenses];
+    const charges = this.calculateCharges(allExpenses, units, totalAmountMinor);
 
     // Crear charges para cada unidad
     const chargeRecords = await this.prisma.charge.createMany({
@@ -366,28 +424,13 @@ export class LiquidationEngineService {
       throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
     }
 
-    if (liquidation.status === 'CANCELED') {
-      throw new BadRequestException('La liquidación ya está cancelada');
-    }
-
     // Si PUBLISHED, eliminar charges asociadas
     if (liquidation.status === 'PUBLISHED') {
-      await this.prisma.charge.deleteMany({
-        where: {
-          tenantId,
-          liquidationId,
-        },
-      });
+      await this.prisma.charge.deleteMany({ where: { tenantId, liquidationId } });
     }
 
-    const updated = await this.prisma.liquidation.update({
-      where: { id: liquidationId },
-      data: {
-        status: 'CANCELED',
-        canceledByMembershipId: membershipId,
-        canceledAt: new Date(),
-      },
-    });
+    // Hard delete: el historial queda en AuditLog
+    await this.prisma.liquidation.delete({ where: { id: liquidationId } });
 
     void this.auditService.createLog({
       tenantId,
@@ -401,7 +444,7 @@ export class LiquidationEngineService {
       },
     });
 
-    return updated;
+    return liquidation;
   }
 
   /**

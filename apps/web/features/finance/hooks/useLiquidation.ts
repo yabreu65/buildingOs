@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   liquidationApi,
   LiquidationDraft,
@@ -64,8 +64,14 @@ export function usePublishLiquidation(tenantId: string) {
  * Hook to cancel a liquidation
  */
 export function useCancelLiquidation(tenantId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (liquidationId: string) =>
       liquidationApi.cancel(tenantId, liquidationId),
+    onSuccess: () => {
+      // Invalidate liquidations list to refresh after deletion
+      void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: ['charges'] });
+    },
   });
 }
