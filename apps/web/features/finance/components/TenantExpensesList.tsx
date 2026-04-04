@@ -11,7 +11,11 @@ import {
   useValidateExpense,
   useVoidExpense,
 } from '../hooks/useExpenseLedger';
+import { useQuery } from '@tanstack/react-query';
 import { ExpenseCreateModal } from './ExpenseCreateModal';
+import { ExpenseImportModal } from './ExpenseImportModal';
+import { useExpenseLedgerCategories } from '../hooks/useExpenseLedger';
+import { useBuildings } from '@/features/buildings/hooks';
 
 interface TenantExpensesListProps {
   tenantId: string;
@@ -44,8 +48,17 @@ export function TenantExpensesList({
 }: TenantExpensesListProps) {
   const { toast } = useToast();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
+
+  // Load buildings and categories for import template
+  const { buildings = [] } = useBuildings(tenantId);
+  const { data: categories = [] } = useExpenseLedgerCategories(
+    tenantId,
+    'EXPENSE',
+    'CONDOMINIUM_COMMON',
+  );
 
   const validateMutation = useValidateExpense(tenantId);
   const voidMutation = useVoidExpense(tenantId);
@@ -115,14 +128,23 @@ export function TenantExpensesList({
             </p>
           )}
         </div>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => setShowCreateModal(true)}
-        >
-          <Plus className="h-4 w-4 mr-1" />
-          Nuevo gasto común
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowCreateModal(true)}
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Nuevo gasto común
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowImportModal(true)}
+          >
+            Importar Excel
+          </Button>
+        </div>
       </div>
 
       {/* Table */}
@@ -272,6 +294,18 @@ export function TenantExpensesList({
           }}
         />
       )}
+
+      <ExpenseImportModal
+        tenantId={tenantId}
+        period={period}
+        isOpen={showImportModal}
+        onClose={() => {
+          setShowImportModal(false);
+          onRefresh();
+        }}
+        buildingNames={buildings.map((b) => b.name)}
+        categoryNames={categories.map((c) => c.name)}
+      />
     </div>
   );
 }

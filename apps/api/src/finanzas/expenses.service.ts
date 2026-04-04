@@ -454,4 +454,140 @@ export class ExpensesService {
       updatedAt: expense.updatedAt,
     };
   }
+
+  // ── Import from Excel ──────────────────────────────────────────────────
+
+  async importExpensesFromExcel(
+    tenantId: string,
+    membershipId: string,
+    userRoles: string[],
+    period: string,
+    rows: Array<{
+      fecha: string;
+      descripcion: string;
+      monto: number;
+      moneda: string;
+      edificio: string;
+      categoria: string;
+      proveedor?: string;
+    }>,
+  ): Promise<{ successCount: number; failureCount: number; errors: { rowIndex: number; reason: string }[] }> {
+    if (!this.validators.isAdminOrOperator(userRoles)) {
+      throw new ForbiddenException('Solo administradores pueden importar gastos');
+    }
+
+    // Preload data
+    const [buildings, categories, vendors] = await Promise.all([
+      this.prisma.building.findMany({ where: { tenantId }, select: { id: true, name: true } }),
+      this.prisma.expenseLedgerCategory.findMany({
+        where: { tenantId, movementType: 'EXPENSE', isActive: true },
+        select: { id: true, name: true },
+      }),
+      this.prisma.vendor.findMany({ where: { tenantId }, select: { id: true, name: true } }),
+    ]);
+
+    const buildingsByName = new Map(buildings.map((b) => [b.name.toLowerCase(), b.id]));
+    const categoriesByName = new Map(categories.map((c) => [c.name.toLowerCase(), c.id]));
+    const vendorsByName = new Map(vendors.map((v) => [v.name.toLowerCase(), v.id]));
+
+    const errors: { rowIndex: number; reason: string }[] = [];
+    let successCount = 0;
+
+    // Process each row
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+
+      try {
+        // Validate required fields
+        if (!row.fecha || !row.descripcion || !row.monto || !row.moneda || !row.edificio || !row.categoria) {
+          throw new Error('Faltan campos requeridos (fecha, descripcion, monto, moneda, edificio, categoria)');
+        }
+
+        // Parse date
+        const invoiceDate = this.parseDate(row.fecha);
+        if (!invoiceDate) throw new Error(`Fecha inválida: ${row.fecha}`);
+
+        // Resolve building
+        const buildingKey = row.edificio.toLowerCase().trim();
+        let buildingId: string | null = null;
+        let scopeType: 'BUILDING' | 'TENANT_SHARED' = 'BUILDING';
+
+        if (buildingKey === 'comunes' || buildingKey === 'áreas comunes' || buildingKey === 'tenant_shared') {
+          buildingId = null;
+          scopeType = 'TENANT_SHARED';
+        } else {
+          buildingId = buildingsByName.get(buildingKey) ?? null;
+          if (!buildingId) throw new Error(`Edificio no encontrado: ${row.edificio}`);
+        }
+
+        // Resolve category
+        const categoryId = categoriesByName.get(row.categoria.toLowerCase().trim()) ?? null;
+        if (!categoryId) throw new Error(`Categoría no encontrada: ${row.categoria}`);
+
+        // Resolve vendor (optional)
+        const vendorId = row.proveedor ? (vendorsByName.get(row.proveedor.toLowerCase().trim()) ?? null) : null;
+
+        // Validate currency
+        const currencyCode = (row.moneda ?? 'USD').toUpperCase().trim();
+        if (!['USD', 'VES', 'ARS'].includes(currencyCode)) {
+          throw new Error(`Moneda inválida: ${row.moneda}`);
+        }
+
+        // Validate monto is a number
+        const monto = typeof row.monto === 'number' ? row.monto : parseFloat(String(row.monto));
+        if (isNaN(monto) || monto <= 0) {
+          throw new Error(`Monto inválido: ${row.monto}`);
+        }
+
+        // Create expense
+        await this.prisma.expense.create({
+          data: {
+            tenantId,
+            buildingId,
+            period,
+            categoryId,
+            vendorId,
+            scopeType,
+            amountMinor: Math.round(monto * 100),
+            currencyCode,
+            invoiceDate,
+            description: row.descripcion,
+            status: 'DRAFT',
+            createdByMembershipId: membershipId,
+          },
+        });
+
+        successCount++;
+      } catch (err) {
+        errors.push({
+          rowIndex: i + 1,
+          reason: err instanceof Error ? err.message : 'Error desconocido',
+        });
+      }
+    }
+
+    return { successCount, failureCount: errors.length, errors };
+  }
+
+  // ── Helper ────────────────────────────────────────────────────────────
+
+  private parseDate(dateStr: string): Date | null {
+    // Try DD/MM/YYYY
+    const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10);
+      const year = parseInt(match[3], 10);
+      const d = new Date(year, month - 1, day);
+      return d.getMonth() === month - 1 ? d : null;
+    }
+    // Try YYYY-MM-DD
+    try {
+      const d = new Date(dateStr);
+      return !isNaN(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
 }

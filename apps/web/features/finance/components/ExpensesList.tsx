@@ -11,7 +11,11 @@ import {
   useValidateExpense,
   useVoidExpense,
 } from '../hooks/useExpenseLedger';
+import { useQuery } from '@tanstack/react-query';
 import { ExpenseCreateModal } from './ExpenseCreateModal';
+import { ExpenseImportModal } from './ExpenseImportModal';
+import { useExpenseLedgerCategories } from '../hooks/useExpenseLedger';
+import { useBuildings } from '@/features/buildings/hooks';
 
 interface ExpensesListProps {
   tenantId: string;
@@ -46,8 +50,19 @@ export function ExpensesList({
 }: ExpensesListProps) {
   const { toast } = useToast();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
+
+  // Load buildings and categories for import template
+  const { buildings = [] } = useBuildings(tenantId);
+  const { data: categories = [] } = useExpenseLedgerCategories(
+    tenantId,
+    'EXPENSE',
+    'BUILDING',
+  );
+
+  const buildingName = buildings.find((b) => b.id === buildingId)?.name || buildingId;
 
   const validateMutation = useValidateExpense(tenantId);
   const voidMutation = useVoidExpense(tenantId);
@@ -118,14 +133,23 @@ export function ExpensesList({
             </p>
           )}
         </div>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => setShowCreateModal(true)}
-        >
-          <Plus className="h-4 w-4 mr-1" />
-          Nuevo gasto
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowCreateModal(true)}
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Nuevo gasto
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowImportModal(true)}
+          >
+            Importar Excel
+          </Button>
+        </div>
       </div>
 
       {/* Table */}
@@ -269,6 +293,18 @@ export function ExpensesList({
           }}
         />
       )}
+
+      <ExpenseImportModal
+        tenantId={tenantId}
+        period={period}
+        isOpen={showImportModal}
+        onClose={() => {
+          setShowImportModal(false);
+          onRefresh();
+        }}
+        buildingNames={[buildingName]}
+        categoryNames={categories.map((c) => c.name)}
+      />
     </div>
   );
 }

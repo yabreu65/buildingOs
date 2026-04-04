@@ -486,3 +486,103 @@ export async function getVendorSuggestion(
     method: 'GET',
   });
 }
+
+// ── Expense Reports ───────────────────────────────────────────────────────
+
+export interface BuildingPeriodSummary {
+  buildingId: string;
+  buildingName: string;
+  buildingExpenses: number;
+  sharedPortion: number;
+  total: number;
+}
+
+export interface ExpensePeriodReport {
+  period: string;
+  totalTenant: number;
+  sharedTotal: number;
+  byBuilding: BuildingPeriodSummary[];
+}
+
+export async function listExpenseReports(tenantId: string): Promise<ExpensePeriodReport[]> {
+  return apiClient<ExpensePeriodReport[]>({
+    path: `/tenants/${tenantId}/finance/reports/expenses`,
+    method: 'GET',
+  });
+}
+
+// ── Notas Revelatorias ────────────────────────────────────────────────────
+
+export interface IncomeEntry {
+  description: string;
+  currencyCode: string;
+  amountMinor: number;
+}
+
+export interface BuildingIncomeSection {
+  buildingId: string;
+  buildingName: string;
+  entries: IncomeEntry[];
+  totalUSD: number;
+  totalVES: number;
+  totalPesos: number;
+}
+
+export interface ExpenseLineItem {
+  itemNumber: number;
+  date: string;
+  description: string;
+  usdAmount: number;
+  vesAmount: number;
+  pesosAmount: number;
+}
+
+export interface BuildingExpenseSection {
+  buildingId: string;
+  buildingName: string;
+  items: ExpenseLineItem[];
+  totalUSD: number;
+  totalVES: number;
+  totalPesos: number;
+}
+
+export interface AlicuotaRow {
+  categoryName: string;
+  coefficient: number;
+  gastosComunesPerUnit: number;
+  gastosPropiosPerUnit: number;
+  reservaPerUnit: number;
+  totalPerUnit: number;
+  unitCount: number;
+  totalToRecaudar: number;
+}
+
+export interface BuildingAlicuota {
+  buildingId: string;
+  buildingName: string;
+  rows: AlicuotaRow[];
+  grandTotal: number;
+}
+
+export interface NotasRevelatoriasReport {
+  tenantId: string;
+  tenantName: string;
+  period: string;
+  periodLabel: string;
+  buildingIncomes: BuildingIncomeSection[];
+  commonExpenses: ExpenseLineItem[];
+  commonTotals: { usd: number; ves: number; pesos: number };
+  buildingExpenses: BuildingExpenseSection[];
+  reservaLegal: { buildingName: string; usd: number; ves: number }[];
+  alicuotas: BuildingAlicuota[];
+}
+
+export async function getNotasRevelatorias(
+  tenantId: string,
+  period: string,
+): Promise<NotasRevelatoriasReport> {
+  return apiClient<NotasRevelatoriasReport>({
+    path: `/tenants/${tenantId}/finance/reports/notas-revelatorias?period=${period}`,
+    method: 'GET',
+  });
+}

@@ -10,6 +10,7 @@ import {
   Request,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -20,6 +21,7 @@ import {
   UpdateExpenseDto,
   ExpenseResponseDto,
 } from './expense-ledger.dto';
+import { ImportExpensesDto, ExpenseImportResult } from './expense-import.dto';
 
 class ListExpensesQuery {
   buildingId?: string;
@@ -126,5 +128,44 @@ export class ExpensesController {
       req.user.membershipId ?? '',
       req.user.roles ?? [],
     );
+  }
+
+  @Post('import/from-excel')
+  @HttpCode(HttpStatus.OK)
+  async importFromExcel(
+    @Body()
+    body: {
+      period: string; // YYYY-MM
+      rows: Array<{
+        fecha: string;
+        descripcion: string;
+        monto: number;
+        moneda: string;
+        edificio: string;
+        categoria: string;
+        proveedor?: string;
+      }>;
+    },
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ExpenseImportResult> {
+    if (!body.period || !body.rows || !Array.isArray(body.rows)) {
+      throw new BadRequestException('period y rows (array) son requeridos');
+    }
+
+    const result = await this.expensesService.importExpensesFromExcel(
+      req.tenantId!,
+      req.user.membershipId ?? '',
+      req.user.roles ?? [],
+      body.period,
+      body.rows,
+    );
+
+    return {
+      totalRows: body.rows.length,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      createdExpenses: [],
+      errors: result.errors,
+    };
   }
 }

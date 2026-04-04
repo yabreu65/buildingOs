@@ -20,6 +20,8 @@ import {
   reviewLiquidation,
   publishLiquidation,
   cancelLiquidation,
+  listExpenseReports,
+  getNotasRevelatorias,
   ListExpensesParams,
   CreateExpenseData,
   ListIncomesParams,
@@ -281,5 +283,25 @@ export function useVoidIncome(tenantId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
     },
+  });
+}
+
+// ── Expense Reports hook ───────────────────────────────────────────────────
+
+export function useExpenseReports(tenantId: string) {
+  return useQuery({
+    queryKey: ['expense-reports', tenantId],
+    queryFn: () => listExpenseReports(tenantId),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!tenantId,
+  });
+}
+
+export function useNotasRevelatorias(tenantId: string, period: string) {
+  return useQuery({
+    queryKey: ['notas-revelatorias', tenantId, period],
+    queryFn: () => getNotasRevelatorias(tenantId, period),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!tenantId && !!period,
   });
 }

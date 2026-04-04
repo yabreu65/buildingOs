@@ -26,6 +26,8 @@ import { PrismaModule } from '../prisma/prisma.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
+import { ExpenseReportsController } from './expense-reports.controller';
+import { ExpenseReportsService } from './expense-reports.service';
 
 @Module({
   imports: [PrismaModule],
@@ -43,6 +45,7 @@ import { VendorPreferenceService } from './vendor-preference.service';
     MovementAllocationController,
     LiquidationEngineController,
     VendorPreferenceController,
+    ExpenseReportsController,
   ],
   providers: [
     FinanzasService,
@@ -57,6 +60,7 @@ import { VendorPreferenceService } from './vendor-preference.service';
     UnitGroupService,
     LiquidationEngineService,
     VendorPreferenceService,
+    ExpenseReportsService,
   ],
   exports: [
     FinanzasService,

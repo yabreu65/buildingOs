@@ -17,9 +17,11 @@ import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTe
 import { TenantChargesTab } from './TenantChargesTab';
 import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
 import { TenantExpensesList } from './TenantExpensesList';
+import { ExpenseHistoryReport } from './ExpenseHistoryReport';
+import { NotasRevelatoriasPanel } from './NotasRevelatoriasPanel';
 import { useExpenses } from '../hooks/useExpenseLedger';
 
-type Tab = 'overview' | 'rubros' | 'expenses' | 'payments' | 'charges' | 'delinquent';
+type Tab = 'overview' | 'rubros' | 'expenses' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas';
 
 interface Params {
   tenantId: string;
@@ -109,6 +111,8 @@ export const TenantFinanceDashboard = () => {
                { id: 'payments', label: `Pagos (${payments.length})` },
                { id: 'charges', label: 'Cargos' },
                { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
+               { id: 'reports', label: 'Historial de gastos' },
+               { id: 'notas', label: 'Notas Revelatorias' },
              ].map((tab) => (
              <button
                key={tab.id}
@@ -211,6 +215,12 @@ export const TenantFinanceDashboard = () => {
         )}
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />
+        )}
+        {activeTab === 'reports' && (
+          <ExpenseHistoryReport tenantId={tenantId || ''} />
+        )}
+        {activeTab === 'notas' && (
+          <NotasRevelatoriasPanel tenantId={tenantId || ''} />
         )}
       </div>
 
