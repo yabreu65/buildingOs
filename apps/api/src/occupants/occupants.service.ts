@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException 
 import { UnitOccupant, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
@@ -11,6 +12,7 @@ export class OccupantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly notificationsService: NotificationsService,
     private readonly planEntitlements: PlanEntitlementsService,
     private readonly authorizeService: AuthorizeService,
   ) {}
@@ -88,6 +90,9 @@ export class OccupantsService {
           },
         });
       }
+
+      // [PHASE 2 QUICK #5] Send OCCUPANT_ASSIGNED notification
+      void this.sendOccupantAssignedNotification(tenantId, occupant, unit);
 
       return occupant;
     } catch (error: unknown) {
@@ -192,5 +197,51 @@ export class OccupantsService {
     }
 
     return deleted;
+  }
+
+  /**
+   * [PHASE 2 QUICK #5] Send OCCUPANT_ASSIGNED notification
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendOccupantAssignedNotification(
+    tenantId: string,
+    occupant: UnitOccupant & { member?: any; unit?: any },
+    unit: any,
+  ): Promise<void> {
+    try {
+      // Load fresh member data to get user ID
+      const member = await this.prisma.tenantMember.findUnique({
+        where: { id: occupant.memberId },
+        include: { user: { select: { id: true } } },
+      });
+
+      if (!member?.user?.id) return;
+
+      const buildingName = unit?.building?.name || 'tu edificio';
+      const roleLabel = occupant.role === 'OWNER' ? 'Propietario' : 'Residente';
+
+      await this.notificationsService.createNotification({
+        tenantId,
+        userId: member.user.id,
+        type: 'OCCUPANT_ASSIGNED',
+        title: 'Has sido asignado a una unidad',
+        body: `Has sido asignado como ${roleLabel} a la unidad ${unit?.label} en ${buildingName}. Ahora puedes ver cargos y realizar pagos desde la app.`,
+        data: {
+          occupantId: occupant.id,
+          unitId: unit?.id,
+          unitLabel: unit?.label,
+          buildingId: unit?.buildingId,
+          buildingName: buildingName,
+          role: occupant.role,
+        },
+        deliveryMethods: ['IN_APP', 'EMAIL'],
+      });
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[OccupantsService] Failed to send occupant assigned notification for occupant ${occupant.id}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 }

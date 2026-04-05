@@ -4,9 +4,11 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Document } from '@prisma/client';
+import { Document, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { AuditService } from '../audit/audit.service';
 import { DocumentsValidators } from './documents.validators';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
@@ -53,6 +55,8 @@ export class DocumentsService {
     private readonly prisma: PrismaService,
     private readonly validators: DocumentsValidators,
     private readonly minio: MinioService,
+    private readonly notificationsService: NotificationsService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -162,6 +166,25 @@ export class DocumentsService {
         createdByMembership: {
           include: { user: true },
         },
+      },
+    });
+
+    // [PHASE 2 QUICK #6] Send DOCUMENT_SHARED notification if visibility=RESIDENTS
+    void this.sendDocumentSharedNotification(tenantId, document, dto);
+
+    // [PHASE 2 QUICK #7] Audit: DOCUMENT_CREATED
+    void this.auditService.createLog({
+      tenantId,
+      actorMembershipId: userMembershipId,
+      action: AuditAction.DOCUMENT_CREATED,
+      entityType: 'Document',
+      entityId: document.id,
+      metadata: {
+        title: document.title,
+        category: document.category,
+        visibility: document.visibility,
+        buildingId: document.buildingId || undefined,
+        unitId: document.unitId || undefined,
       },
     });
 
@@ -434,6 +457,19 @@ export class DocumentsService {
       where: { id: documentId },
     });
 
+    // [PHASE 2 QUICK #7] Audit: DOCUMENT_DELETED
+    void this.auditService.createLog({
+      tenantId,
+      actorUserId: userId,
+      action: AuditAction.DOCUMENT_DELETED,
+      entityType: 'Document',
+      entityId: documentId,
+      metadata: {
+        title: document.title,
+        category: document.category,
+      },
+    });
+
     // Delete file from MinIO asynchronously (fire-and-forget)
     // Don't await or throw if it fails - document is already deleted
     this.minio
@@ -556,5 +592,84 @@ export class DocumentsService {
     });
 
     return !!occupant;
+  }
+
+  /**
+   * [PHASE 2 QUICK #6] Send DOCUMENT_SHARED notification when document visibility=RESIDENTS
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendDocumentSharedNotification(
+    tenantId: string,
+    document: Document & { file?: any; createdByMembership?: any },
+    dto: CreateDocumentDto,
+  ): Promise<void> {
+    try {
+      // Only notify for RESIDENTS visibility
+      if (document.visibility !== 'RESIDENTS') return;
+
+      let recipientUnitOccupants: any[] = [];
+
+      if (document.unitId) {
+        // Unit-scoped: notify occupants of that unit
+        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
+          where: {
+            tenantId,
+            unitId: document.unitId,
+            endDate: null, // Active only
+          },
+          include: {
+            member: { select: { user: { select: { id: true } } } },
+          },
+        });
+      } else if (document.buildingId) {
+        // Building-scoped: notify all occupants in that building
+        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
+          where: {
+            tenantId,
+            unit: { buildingId: document.buildingId },
+            endDate: null, // Active only
+          },
+          include: {
+            member: { select: { user: { select: { id: true } } } },
+          },
+        });
+      } else {
+        // Tenant-wide: notify all occupants
+        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
+          where: {
+            tenantId,
+            endDate: null, // Active only
+          },
+          include: {
+            member: { select: { user: { select: { id: true } } } },
+          },
+        });
+      }
+
+      // Send notification to each occupant
+      for (const occupant of recipientUnitOccupants) {
+        if (occupant.member?.user?.id) {
+          await this.notificationsService.createNotification({
+            tenantId,
+            userId: occupant.member.user.id,
+            type: 'DOCUMENT_SHARED',
+            title: 'Documento compartido contigo',
+            body: `Se ha compartido el documento "${document.title}" (${document.category}). Puedes descargarlo desde la sección Documentos.`,
+            data: {
+              documentId: document.id,
+              documentTitle: document.title,
+              documentCategory: document.category,
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+        }
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[DocumentsService] Failed to send document shared notification for document ${document.id}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 }

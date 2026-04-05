@@ -2,6 +2,7 @@ import { Injectable, ConflictException, NotFoundException, BadRequestException }
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
 import {
   CreateChargeDto,
@@ -29,6 +30,7 @@ export class FinanzasService {
     private readonly prisma: PrismaService,
     private readonly validators: FinanzasValidators,
     private readonly auditService: AuditService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // ============================================================================
@@ -643,6 +645,9 @@ export class FinanzasService {
       },
     });
 
+    // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
+    void this.sendPaymentReceivedNotification(tenantId, payment);
+
     return result;
   }
 
@@ -701,6 +706,9 @@ export class FinanzasService {
         reason: dto.reason,
       },
     });
+
+    // [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
+    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
 
     return result;
   }
@@ -2122,5 +2130,114 @@ export class FinanzasService {
       duplicateReference: duplicate?.reference || undefined,
       duplicateCreatedAt: duplicate?.createdAt,
     };
+  }
+
+  /**
+   * [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendPaymentReceivedNotification(tenantId: string, payment: Payment): Promise<void> {
+    try {
+      // Load unit occupants if this payment is unit-scoped
+      if (!payment.unitId) return;
+
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: payment.unitId },
+        include: {
+          unitOccupants: {
+            where: { endDate: null }, // Active only
+            include: {
+              member: { select: { id: true, user: { select: { id: true } } } },
+            },
+          },
+        },
+      });
+
+      if (!unit) return;
+
+      // Send to all active residents
+      for (const occupant of unit.unitOccupants) {
+        if (occupant.member?.user?.id) {
+          const amount = (payment.amount / 100).toFixed(2);
+          await this.notificationsService.createNotification({
+            tenantId,
+            userId: occupant.member.user.id,
+            type: 'PAYMENT_RECEIVED',
+            title: 'Pago aprobado',
+            body: `Tu pago de ${amount} ${payment.currency} ha sido aprobado y procesado correctamente.`,
+            data: {
+              paymentId: payment.id,
+              paymentAmount: payment.amount / 100,
+              paymentCurrency: payment.currency,
+              reference: payment.reference || 'N/A',
+              paidAt: payment.paidAt?.toISOString(),
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+        }
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[FinanzasService] Failed to send payment received notification for payment ${payment.id}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  /**
+   * [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendPaymentRejectedNotification(
+    tenantId: string,
+    payment: Payment,
+    reason?: string,
+  ): Promise<void> {
+    try {
+      // Load unit occupants if this payment is unit-scoped
+      if (!payment.unitId) return;
+
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: payment.unitId },
+        include: {
+          unitOccupants: {
+            where: { endDate: null }, // Active only
+            include: {
+              member: { select: { id: true, user: { select: { id: true } } } },
+            },
+          },
+        },
+      });
+
+      if (!unit) return;
+
+      // Send to all active residents
+      for (const occupant of unit.unitOccupants) {
+        if (occupant.member?.user?.id) {
+          const amount = (payment.amount / 100).toFixed(2);
+          await this.notificationsService.createNotification({
+            tenantId,
+            userId: occupant.member.user.id,
+            type: 'PAYMENT_REJECTED',
+            title: 'Pago rechazado',
+            body: `Tu pago de ${amount} ${payment.currency} ha sido rechazado. Motivo: ${reason || 'No especificado'}. Por favor intenta nuevamente.`,
+            data: {
+              paymentId: payment.id,
+              paymentAmount: payment.amount / 100,
+              paymentCurrency: payment.currency,
+              rejectionReason: reason || 'No especificado',
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+        }
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[FinanzasService] Failed to send payment rejected notification for payment ${payment.id}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 }
