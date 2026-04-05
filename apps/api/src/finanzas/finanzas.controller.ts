@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Payment, PaymentAllocation } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -427,6 +428,45 @@ export class FinanzasController {
       tenantId,
       params.buildingId,
       params.paymentId,
+    );
+  }
+
+  // ============================================================================
+  // BULK OPERATIONS
+  // ============================================================================
+
+  /**
+   * PATCH /buildings/:buildingId/expenses/validate-all?periodId=
+   * Validate all DRAFT expenses for a building (optionally filtered by period)
+   * Only admins/operators can perform this action
+   *
+   * Returns: { validatedCount, errorCount }
+   */
+  @Patch('expenses/validate-all')
+  @UseGuards(JwtAuthGuard, BuildingAccessGuard)
+  async bulkValidateExpenses(
+    @Param('buildingId') buildingId: string,
+    @Query('periodId') periodId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
+    const tenantId = req!.tenantId!;
+    const userRoles = req!.user?.roles || [];
+
+    // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can validate
+    if (
+      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
+        userRoles.includes(role),
+      )
+    ) {
+      throw new ForbiddenException(
+        'Solo administradores pueden validar gastos en lote',
+      );
+    }
+
+    return this.finanzasService.bulkValidateExpenses(
+      tenantId,
+      buildingId,
+      periodId,
     );
   }
 

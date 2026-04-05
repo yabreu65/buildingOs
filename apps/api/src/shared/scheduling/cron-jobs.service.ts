@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CommunicationsService } from '../../communications/communications.service';
 import { FinanzasService } from '../../finanzas/finanzas.service';
+import { TicketsService } from '../../tickets/tickets.service';
 
 @Injectable()
 export class CronJobsService {
@@ -11,6 +12,7 @@ export class CronJobsService {
   constructor(
     private communicationsService: CommunicationsService,
     private finanzasService: FinanzasService,
+    private ticketsService: TicketsService,
   ) {}
 
   /**
@@ -88,7 +90,19 @@ export class CronJobsService {
     });
   }
 
-  // TODO: Add remaining 9 cron jobs here
-  // Phase 3 (Medium): 2 more cronjobs (bulk validate, escalate)
+  /**
+   * [PHASE 3 MEDIUM #12] Hourly: Escalate urgent unassigned tickets
+   * Finds OPEN tickets that are HIGH/URGENT, unassigned, and waiting >2 hours
+   * Notifies building admins and marks as escalated
+   */
+  @Cron('0 * * * *') // Every hour at :00
+  async escalateUrgentTickets() {
+    return this.runWithErrorHandling('escalateUrgentTickets', async () => {
+      return await this.ticketsService.escalateUrgentTickets();
+    });
+  }
+
+  // TODO: Add remaining 8 cron jobs here
   // Phase 4 (Hard): 3 features (import, recurring, email summaries)
+  // Future phases: more automations and reporting
 }

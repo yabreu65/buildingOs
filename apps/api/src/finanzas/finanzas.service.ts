@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -26,6 +26,8 @@ import {
 
 @Injectable()
 export class FinanzasService {
+  private readonly logger = new Logger(FinanzasService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly validators: FinanzasValidators,
@@ -2435,5 +2437,75 @@ export class FinanzasService {
     }
 
     return { count: reminderCount };
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #11] Bulk validate all DRAFT expenses for a building
+   * Allows admins to validate multiple expenses in a single API call
+   * Useful when importing batches of expenses or after review period
+   */
+  async bulkValidateExpenses(
+    tenantId: string,
+    buildingId: string,
+    periodId?: string,
+  ): Promise<{ validatedCount: number; errorCount: number }> {
+    // Build query for DRAFT expenses
+    const where: any = {
+      tenantId,
+      buildingId,
+      status: 'DRAFT',
+    };
+
+    if (periodId) {
+      where.period = periodId;
+    }
+
+    // Find all DRAFT expenses
+    const draftExpenses = await this.prisma.expense.findMany({
+      where,
+      select: { id: true },
+    });
+
+    let validatedCount = 0;
+    let errorCount = 0;
+
+    // Validate all in parallel using Promise.allSettled
+    const updatePromises = draftExpenses.map((exp) =>
+      this.prisma.expense.update({
+        where: { id: exp.id },
+        data: { status: 'VALIDATED' },
+      }),
+    );
+
+    const results = await Promise.allSettled(updatePromises);
+
+    // Count successes and failures
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        validatedCount++;
+      } else {
+        errorCount++;
+        this.logger.error(
+          'Failed to validate expense during bulk operation',
+          result.reason instanceof Error ? result.reason.stack : String(result.reason),
+        );
+      }
+    }
+
+    // Audit the bulk operation (fire-and-forget)
+    void this.auditService.createLog({
+      tenantId,
+      action: AuditAction.EXPENSE_VALIDATE,
+      entityType: 'EXPENSE',
+      entityId: buildingId,
+      metadata: {
+        validatedCount,
+        errorCount,
+        period: periodId || 'ALL',
+        bulkOperation: true,
+      },
+    });
+
+    return { validatedCount, errorCount };
   }
 }

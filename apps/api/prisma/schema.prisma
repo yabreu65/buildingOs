@@ -505,6 +505,7 @@ enum AuditAction {
   TICKET_ASSIGN
   TICKET_COMMENT_ADD
   TICKET_DELETE
+  TICKET_ESCALATED
   // COMMUNICATIONS
   COMMUNICATION_CREATE_DRAFT
   COMMUNICATION_EDIT_DRAFT
@@ -828,9 +829,10 @@ model Ticket {
   aiSuggestedCategory Boolean  @default(false) // Was this AI-suggested?
   aiCategorySuggestion String? // JSON: {category, priority, confidence, reasoning}
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  closedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  closedAt    DateTime?
+  escalatedAt DateTime? // Timestamp when ticket was escalated for urgency
 
   // Relations
   tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1712,6 +1714,7 @@ model EmailLog {
 enum NotificationType {
   TICKET_STATUS_CHANGED
   TICKET_COMMENT_ADDED
+  URGENT_TICKET_UNASSIGNED
   SUPPORT_TICKET_CREATED
   SUPPORT_TICKET_STATUS_CHANGED
   USER_INVITED

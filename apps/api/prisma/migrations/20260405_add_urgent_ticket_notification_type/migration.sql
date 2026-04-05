@@ -1,0 +1,2 @@
+-- Add URGENT_TICKET_UNASSIGNED notification type for escalation alerts
+ALTER TYPE "NotificationType" ADD VALUE 'URGENT_TICKET_UNASSIGNED' AFTER 'TICKET_COMMENT_ADDED';

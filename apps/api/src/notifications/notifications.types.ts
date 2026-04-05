@@ -41,6 +41,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
     'PAYMENT_REMINDER',
     'USER_INVITED',
     'TICKET_STATUS_CHANGED',
+    'URGENT_TICKET_UNASSIGNED',
   ]),
 
   emailTemplates: {
@@ -103,6 +104,10 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
     OCCUPANT_ASSIGNED: {
       subject: 'You have been assigned to a unit',
       bodyTemplate: 'You have been assigned to unit {{unitName}} in {{buildingName}}.',
+    },
+    URGENT_TICKET_UNASSIGNED: {
+      subject: '🚨 Ticket URGENTE sin asignar en {{buildingName}}',
+      bodyTemplate: 'El ticket "{{ticketTitle}}" está ABIERTO y SIN ASIGNAR desde hace {{hoursWaiting}} horas. Prioridad: {{ticketPriority}}. Reportado por: {{createdBy}}',
     },
     SYSTEM_ALERT: {
       subject: 'System alert',

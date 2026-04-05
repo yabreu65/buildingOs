@@ -7,6 +7,7 @@ import {
 import { Ticket, TicketComment, Prisma, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { TicketsValidators } from './tickets.validators';
 import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
@@ -41,6 +42,7 @@ export class TicketsService {
     private readonly validators: TicketsValidators,
     private readonly auditService: AuditService,
     private readonly aiCategoryService: AiTicketCategoryService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -623,5 +625,97 @@ export class TicketsService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #12] Escalate urgent unassigned tickets
+   * Runs hourly - finds OPEN tickets that are HIGH/URGENT, unassigned, and created >2 hours ago
+   * Marks them as escalated and notifies tenant admins
+   */
+  async escalateUrgentTickets(): Promise<{ escalatedCount: number }> {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+    // Find OPEN tickets that are HIGH/URGENT, unassigned, created >2 hours ago
+    const escalatable = await this.prisma.ticket.findMany({
+      where: {
+        status: 'OPEN',
+        priority: { in: ['HIGH', 'URGENT'] },
+        assignedToMembershipId: null,
+        createdAt: { lt: twoHoursAgo },
+        escalatedAt: null, // Only escalate once
+      },
+      include: {
+        building: true,
+        createdBy: true,
+      },
+    });
+
+    let escalatedCount = 0;
+
+    for (const ticket of escalatable) {
+      // Mark ticket as escalated
+      await this.prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { escalatedAt: new Date() },
+      });
+
+      // Calculate hours waiting
+      const hoursWaiting = Math.floor(
+        (Date.now() - ticket.createdAt.getTime()) / (1000 * 60 * 60),
+      );
+
+      // Get all tenant admins for this building
+      const tenantAdmins = await this.prisma.tenantMember.findMany({
+        where: {
+          tenantId: ticket.building.tenantId,
+          role: 'TENANT_ADMIN',
+          status: 'ACTIVE',
+          userId: { not: null }, // Only notify members linked to actual users
+        },
+        include: {
+          user: { select: { id: true, email: true } },
+        },
+      });
+
+      // Notify all tenant admins (fire-and-forget)
+      for (const admin of tenantAdmins) {
+        if (admin.user?.id) {
+          void this.notificationsService.createNotification({
+            tenantId: ticket.building.tenantId,
+            userId: admin.user.id,
+            type: 'URGENT_TICKET_UNASSIGNED',
+            title: `🚨 Ticket URGENTE sin asignar por ${hoursWaiting}h`,
+            body: `El ticket "${ticket.title}" está ABIERTO y SIN ASIGNAR desde hace ${hoursWaiting} horas. Prioridad: ${ticket.priority}. Edificio: ${ticket.building.name}`,
+            data: {
+              ticketId: ticket.id,
+              ticketTitle: ticket.title,
+              ticketPriority: ticket.priority,
+              buildingName: ticket.building.name,
+              hoursWaiting,
+              createdBy: ticket.createdBy.email,
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+        }
+      }
+
+      // Audit the escalation (fire-and-forget)
+      void this.auditService.createLog({
+        tenantId: ticket.building.tenantId,
+        actorUserId: 'system-cronjob', // Special marker for automated actions
+        action: AuditAction.TICKET_ESCALATED,
+        entityType: 'Ticket',
+        entityId: ticket.id,
+        metadata: {
+          hoursWaiting,
+          priority: ticket.priority,
+          buildingName: ticket.building.name,
+        },
+      });
+
+      escalatedCount++;
+    }
+
+    return { escalatedCount };
   }
 }
