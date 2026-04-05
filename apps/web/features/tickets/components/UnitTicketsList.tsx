@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useTickets } from '../hooks/useTickets';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { listTickets, addComment as addCommentApi, createTicket } from '../services/tickets.api';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
@@ -27,23 +28,37 @@ interface UnitTicketsListProps {
  */
 export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [commentBody, setCommentBody] = useState('');
   const [addingComment, setAddingComment] = useState(false);
 
-  // Filter tickets by this unit only
-  const { tickets, loading, error, create, addComment, refetch } = useTickets({
-    buildingId,
-    filters: {
-      unitId,
+  // Fetch tickets using React Query for better caching and no flash
+  const { data: ticketsData, isLoading: loading, error, refetch } = useQuery({
+    queryKey: ['unit-tickets', buildingId, unitId],
+    queryFn: () => listTickets(buildingId, { unitId, limit: 50 }),
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep in memory for 10 minutes
+    enabled: !!buildingId && !!unitId,
+  });
+
+  const tickets = ticketsData?.tickets || [];
+
+  // Mutation for adding comments
+  const addCommentMutation = useMutation({
+    mutationFn: ({ ticketId, body }: { ticketId: string; body: string }) =>
+      addCommentApi(buildingId, ticketId, { body }),
+    onSuccess: (_, { ticketId }) => {
+      queryClient.invalidateQueries({ queryKey: ['unit-tickets', buildingId, unitId] });
     },
   });
 
   const handleCreateSuccess = async (ticket: Ticket) => {
     setShowCreateForm(false);
     toast(t('tickets.created'), 'success');
-    await refetch();
+    // Invalidate and refetch with React Query
+    await queryClient.invalidateQueries({ queryKey: ['unit-tickets', buildingId, unitId] });
   };
 
   const handleAddComment = async () => {
@@ -54,12 +69,14 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
 
     setAddingComment(true);
     try {
-      await addComment(selectedTicket.id, { body: commentBody });
+      await addCommentMutation.mutateAsync({
+        ticketId: selectedTicket.id,
+        body: commentBody,
+      });
       toast(t('tickets.commentAdded'), 'success');
       setCommentBody('');
-      // Refresh to get updated ticket with new comment
+      // React Query automatically invalidates, but update selected ticket manually
       await refetch();
-      // Re-select the updated ticket
       const updated = tickets.find((t) => t.id === selectedTicket.id);
       if (updated) {
         setSelectedTicket(updated);
@@ -105,7 +122,12 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
       )}
 
       {/* Error State */}
-      {error && <ErrorState message={error} onRetry={refetch} />}
+      {error && (
+        <ErrorState
+          message={error instanceof Error ? error.message : String(error)}
+          onRetry={() => refetch()}
+        />
+      )}
 
       {/* Loading State */}
       {loading && (
@@ -314,7 +336,6 @@ function UnitTicketForm({
   onCancel: () => void;
 }) {
   const { toast } = useToast();
-  const { create } = useTickets({ buildingId });
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -347,7 +368,7 @@ function UnitTicketForm({
 
     setSubmitting(true);
     try {
-      const ticket = await create({
+      const ticket = await createTicket(buildingId, {
         title: title.trim(),
         description: description.trim(),
         category,
