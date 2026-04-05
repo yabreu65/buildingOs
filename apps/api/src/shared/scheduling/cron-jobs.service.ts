@@ -4,6 +4,7 @@ import { CommunicationsService } from '../../communications/communications.servi
 import { FinanzasService } from '../../finanzas/finanzas.service';
 import { TicketsService } from '../../tickets/tickets.service';
 import { RecurringExpenseService } from '../../finanzas/recurring-expense.service';
+import { FinanceSummaryService } from '../../finanzas/finance-summary.service';
 
 @Injectable()
 export class CronJobsService {
@@ -15,6 +16,7 @@ export class CronJobsService {
     private finanzasService: FinanzasService,
     private ticketsService: TicketsService,
     private recurringExpenseService: RecurringExpenseService,
+    private financeSummaryService: FinanceSummaryService,
   ) {}
 
   /**
@@ -115,7 +117,14 @@ export class CronJobsService {
     });
   }
 
-  // TODO: Add remaining 7 cron jobs here
-  // Phase 4 (Hard): 1 feature (email summaries)
-  // Future phases: more automations and reporting
+  /**
+   * [PHASE 4 HARD #15] Monthly on 1st at 1am: Send finance summaries
+   * Generates and emails monthly finance reports to all TENANT_ADMIN members
+   */
+  @Cron('0 1 1 * *')
+  async sendMonthlyFinanceSummaries() {
+    return this.runWithErrorHandling('sendMonthlyFinanceSummaries', async () => {
+      return await this.financeSummaryService.sendMonthlyFinanceSummaries();
+    });
+  }
 }

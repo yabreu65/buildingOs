@@ -1,0 +1,2 @@
+-- Add FINANCE_SUMMARY to EmailType enum
+ALTER TYPE "EmailType" ADD VALUE 'FINANCE_SUMMARY';

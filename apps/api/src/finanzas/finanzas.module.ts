@@ -23,6 +23,7 @@ import { MovementAllocationService } from './movement-allocation.service';
 import { UnitGroupService } from './unit-group.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { EmailModule } from '../email/email.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -31,9 +32,10 @@ import { ExpenseReportsService } from './expense-reports.service';
 import { ExpenseImportService } from './expense-import.service';
 import { RecurringExpenseController } from './recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
+import { FinanceSummaryService } from './finance-summary.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, EmailModule],
   controllers: [
     FinanzasController,
     FinanzasUnitsController,
@@ -67,6 +69,7 @@ import { RecurringExpenseService } from './recurring-expense.service';
     ExpenseReportsService,
     ExpenseImportService,
     RecurringExpenseService,
+    FinanceSummaryService,
   ],
   exports: [
     FinanzasService,
@@ -80,6 +83,8 @@ import { RecurringExpenseService } from './recurring-expense.service';
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
+    RecurringExpenseService,
+    FinanceSummaryService,
   ],
 })
 export class FinanzasModule {}
