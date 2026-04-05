@@ -34,7 +34,9 @@ export interface NotificationConfig {
 export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
   emailTriggers: new Set([
     'SUPPORT_TICKET_STATUS_CHANGED',
+    'CHARGE_PUBLISHED',
     'PAYMENT_RECEIVED',
+    'PAYMENT_REJECTED',
     'PAYMENT_OVERDUE',
     'USER_INVITED',
     'TICKET_STATUS_CHANGED',
@@ -65,9 +67,17 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
       subject: 'Invitation accepted',
       bodyTemplate: '{{userName}} has accepted your invitation.',
     },
+    CHARGE_PUBLISHED: {
+      subject: '{{buildingName}} - New charge for {{period}}',
+      bodyTemplate: 'A new charge has been registered in your unit {{unitLabel}}: {{amount}} {{currency}}. Due date: {{dueDate}}',
+    },
     PAYMENT_RECEIVED: {
       subject: 'Payment received',
-      bodyTemplate: 'Your payment of {{amount}} has been received.',
+      bodyTemplate: 'Your payment of {{amount}} {{currency}} has been received and approved.',
+    },
+    PAYMENT_REJECTED: {
+      subject: 'Payment rejected',
+      bodyTemplate: 'Your payment of {{amount}} {{currency}} has been rejected. Reason: {{rejectionReason}}',
     },
     PAYMENT_OVERDUE: {
       subject: 'Payment is overdue',

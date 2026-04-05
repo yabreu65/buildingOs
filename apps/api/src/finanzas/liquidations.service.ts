@@ -8,6 +8,7 @@ import {
 import { ChargeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreateLiquidationDraftDto,
   PublishLiquidationDto,
@@ -22,6 +23,7 @@ export class LiquidationsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly validators: FinanzasValidators,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async listLiquidations(
@@ -433,6 +435,13 @@ export class LiquidationsService {
       },
     });
 
+    // [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to all residents
+    void this.sendChargePublishedNotifications(tenantId, liquidationId, {
+      period: liq.period,
+      buildingId: liq.buildingId,
+      baseCurrency: liq.baseCurrency,
+    });
+
     const updated = await this.prisma.liquidation.findUniqueOrThrow({
       where: { id: liquidationId },
     });
@@ -601,5 +610,76 @@ export class LiquidationsService {
       canceledAt: liq.canceledAt,
       createdAt: liq.createdAt,
     };
+  }
+
+  /**
+   * [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to residents
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendChargePublishedNotifications(
+    tenantId: string,
+    liquidationId: string,
+    liquidation: {
+      period: string;
+      buildingId: string;
+      baseCurrency: string;
+    },
+  ): Promise<void> {
+    try {
+      // Load all charges for this liquidation
+      const charges = await this.prisma.charge.findMany({
+        where: { liquidationId },
+      });
+
+      // For each charge, load unit and occupants
+      for (const charge of charges) {
+        const unit = await this.prisma.unit.findUnique({
+          where: { id: charge.unitId },
+          include: {
+            unitOccupants: {
+              where: { endDate: null }, // Active occupants only
+              include: {
+                member: { select: { id: true, user: { select: { id: true } } } },
+              },
+            },
+          },
+        });
+
+        if (!unit) continue;
+
+        // Send notification to each active resident
+        for (const occupant of unit.unitOccupants) {
+          if (occupant.member?.user?.id) {
+            const dueDateStr = charge.dueDate
+              ? new Date(charge.dueDate).toLocaleDateString('es-AR')
+              : 'N/A';
+
+            await this.notificationsService.createNotification({
+              tenantId,
+              userId: occupant.member.user.id,
+              type: 'CHARGE_PUBLISHED',
+              title: `${liquidation.buildingId} - Nuevo cargo por ${liquidation.period}`,
+              body: `Se ha registrado un cargo de ${(charge.amount / 100).toFixed(2)} ${liquidation.baseCurrency} en la unidad ${unit.label}. Vencimiento: ${dueDateStr}`,
+              data: {
+                chargeId: charge.id,
+                unitLabel: unit.label,
+                unitId: unit.id,
+                amount: charge.amount / 100,
+                currency: charge.currency,
+                dueDate: charge.dueDate?.toISOString(),
+                period: liquidation.period,
+              },
+              deliveryMethods: ['IN_APP', 'EMAIL'],
+            });
+          }
+        }
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[LiquidationsService] Failed to send charge notifications for liquidation ${liquidationId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 }
