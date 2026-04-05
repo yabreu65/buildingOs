@@ -1123,4 +1123,49 @@ export class CommunicationsService {
 
     return { items: mappedItems, nextCursor };
   }
+
+  /**
+   * [PHASE 2] Dispatch all scheduled communications that are ready to send
+   * Called every 5 minutes by CronJobsService
+   *
+   * - Finds all communications with status=SCHEDULED and scheduledAt <= now
+   * - Calls send() for each one (which updates status to SENT)
+   * - Returns count of dispatched communications
+   * - Fire-and-forget: logs errors but never throws
+   */
+  async dispatchScheduledCommunications(): Promise<number> {
+    try {
+      const scheduled = await this.prisma.communication.findMany({
+        where: {
+          status: 'SCHEDULED',
+          scheduledAt: {
+            lte: new Date(), // scheduledAt <= now
+          },
+        },
+        select: { id: true, tenantId: true },
+      });
+
+      let dispatchedCount = 0;
+      for (const comm of scheduled) {
+        try {
+          await this.send(comm.tenantId, comm.id);
+          dispatchedCount++;
+        } catch (error) {
+          // Fire-and-forget: log but continue with next
+          console.error(
+            `Failed to dispatch scheduled communication ${comm.id}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+
+      return dispatchedCount;
+    } catch (error) {
+      console.error(
+        'Error in dispatchScheduledCommunications:',
+        error instanceof Error ? error.message : String(error),
+      );
+      return 0;
+    }
+  }
 }

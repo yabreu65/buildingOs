@@ -36,10 +36,12 @@ import { LeadsModule } from './leads/leads.module';
 import { TenantMembersModule } from './tenant-members/tenant-members.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PushController } from './push/push.controller';
+import { CronJobsModule } from './shared/scheduling/cron-jobs.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    CronJobsModule,
     AppConfigModule,
     ObservabilityModule,
     SecurityModule,

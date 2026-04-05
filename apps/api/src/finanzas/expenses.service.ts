@@ -576,9 +576,9 @@ export class ExpensesService {
     // Try DD/MM/YYYY
     const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (match) {
-      const day = parseInt(match[1], 10);
-      const month = parseInt(match[2], 10);
-      const year = parseInt(match[3], 10);
+      const day = parseInt(match[1]!, 10);
+      const month = parseInt(match[2]!, 10);
+      const year = parseInt(match[3]!, 10);
       const d = new Date(year, month - 1, day);
       return d.getMonth() === month - 1 ? d : null;
     }
