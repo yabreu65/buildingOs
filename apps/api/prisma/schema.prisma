@@ -196,6 +196,7 @@ model Tenant {
   expensePeriods           ExpensePeriod[]
   expenseLedgerCategories  ExpenseLedgerCategory[]
   expenses                 Expense[]
+  recurringExpenses        RecurringExpense[]
   incomes                  Income[]
   movementAllocations      MovementAllocation[]
   unitGroups               UnitGroup[]
@@ -343,6 +344,7 @@ model Building {
   unitCategories       UnitCategory[]
   expensePeriods       ExpensePeriod[]
   expenses             Expense[]
+  recurringExpenses    RecurringExpense[]
   incomes              Income[]
   movementAllocations  MovementAllocation[]
   unitGroups           UnitGroup[]
@@ -1419,9 +1421,10 @@ model ExpenseLedgerCategory {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  expenses Expense[]
-  incomes  Income[]
+  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses             Expense[]
+  incomes              Income[]
+  recurringExpenses    RecurringExpense[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, code]) // Allows multiple null codes (manually created categories)
@@ -1485,6 +1488,32 @@ model Expense {
   @@index([tenantId, buildingId, status])
   @@index([tenantId, period, categoryId])
   @@index([tenantId, scopeType])
+}
+
+// ============================================================================
+// FINANZAS: RecurringExpense (Templates for auto-generated DRAFT expenses)
+// ============================================================================
+model RecurringExpense {
+  id            String   @id @default(cuid())
+  tenantId      String
+  buildingId    String
+  categoryId    String
+  amount        Int      // En centavos
+  currency      String   // ISO: ARS, VES, USD
+  concept       String   // Descripción del gasto (ej: "Electricidad Base")
+  frequency     String   // MONTHLY, QUARTERLY, YEARLY
+  nextRunDate   DateTime // Próxima fecha de ejecución
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, buildingId, nextRunDate])
+  @@index([isActive, nextRunDate])
+  @@index([tenantId, isActive])
 }
 
 // ============================================================================

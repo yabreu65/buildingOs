@@ -11,3 +11,5 @@ import { CronJobsService } from './cron-jobs.service';
   exports: [CronJobsService],
 })
 export class CronJobsModule {}
+
+// Note: RecurringExpenseService is already available via FinanzasModule

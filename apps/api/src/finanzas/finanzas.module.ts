@@ -29,6 +29,8 @@ import { VendorPreferenceService } from './vendor-preference.service';
 import { ExpenseReportsController } from './expense-reports.controller';
 import { ExpenseReportsService } from './expense-reports.service';
 import { ExpenseImportService } from './expense-import.service';
+import { RecurringExpenseController } from './recurring-expense.controller';
+import { RecurringExpenseService } from './recurring-expense.service';
 
 @Module({
   imports: [PrismaModule],
@@ -47,6 +49,7 @@ import { ExpenseImportService } from './expense-import.service';
     LiquidationEngineController,
     VendorPreferenceController,
     ExpenseReportsController,
+    RecurringExpenseController,
   ],
   providers: [
     FinanzasService,
@@ -63,6 +66,7 @@ import { ExpenseImportService } from './expense-import.service';
     VendorPreferenceService,
     ExpenseReportsService,
     ExpenseImportService,
+    RecurringExpenseService,
   ],
   exports: [
     FinanzasService,

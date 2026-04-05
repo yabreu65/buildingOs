@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CommunicationsService } from '../../communications/communications.service';
 import { FinanzasService } from '../../finanzas/finanzas.service';
 import { TicketsService } from '../../tickets/tickets.service';
+import { RecurringExpenseService } from '../../finanzas/recurring-expense.service';
 
 @Injectable()
 export class CronJobsService {
@@ -13,6 +14,7 @@ export class CronJobsService {
     private communicationsService: CommunicationsService,
     private finanzasService: FinanzasService,
     private ticketsService: TicketsService,
+    private recurringExpenseService: RecurringExpenseService,
   ) {}
 
   /**
@@ -102,7 +104,18 @@ export class CronJobsService {
     });
   }
 
-  // TODO: Add remaining 8 cron jobs here
-  // Phase 4 (Hard): 3 features (import, recurring, email summaries)
+  /**
+   * [PHASE 4 HARD #14] Daily at 6am: Process recurring expenses
+   * Creates DRAFT expenses for all active recurring templates due today or past
+   */
+  @Cron('0 6 * * *')
+  async processRecurringExpenses() {
+    return this.runWithErrorHandling('processRecurringExpenses', async () => {
+      return await this.recurringExpenseService.processRecurringExpenses();
+    });
+  }
+
+  // TODO: Add remaining 7 cron jobs here
+  // Phase 4 (Hard): 1 feature (email summaries)
   // Future phases: more automations and reporting
 }
