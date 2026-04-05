@@ -28,6 +28,7 @@ import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
 import { ExpenseReportsController } from './expense-reports.controller';
 import { ExpenseReportsService } from './expense-reports.service';
+import { ExpenseImportService } from './expense-import.service';
 
 @Module({
   imports: [PrismaModule],
@@ -61,6 +62,7 @@ import { ExpenseReportsService } from './expense-reports.service';
     LiquidationEngineService,
     VendorPreferenceService,
     ExpenseReportsService,
+    ExpenseImportService,
   ],
   exports: [
     FinanzasService,

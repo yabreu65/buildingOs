@@ -10,11 +10,13 @@ import {
   UseGuards,
   Request,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { Payment, PaymentAllocation } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { FinanzasService } from './finanzas.service';
+import { ExpenseImportService } from './expense-import.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import {
   CreateChargeDto,
@@ -50,6 +52,11 @@ import {
   FinanceTrendQueryDto,
   MonthlyTrendDto,
 } from './finanzas.dto';
+import {
+  ImportExpensesDto,
+  ExpenseImportRow,
+  ExpenseImportResult,
+} from './expense-import.dto';
 
 /**
  * FinanzasController: Charges, Payments, and Allocations management
@@ -73,7 +80,10 @@ import {
 @Controller('buildings/:buildingId')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class FinanzasController {
-  constructor(private finanzasService: FinanzasService) {}
+  constructor(
+    private finanzasService: FinanzasService,
+    private expenseImportService: ExpenseImportService,
+  ) {}
 
   // ============================================================================
   // CHARGES ENDPOINTS
@@ -467,6 +477,47 @@ export class FinanzasController {
       tenantId,
       buildingId,
       periodId,
+    );
+  }
+
+  /**
+   * POST /buildings/:buildingId/expenses/import
+   * Import expenses from Excel/CSV file
+   * Expects parsed rows in request body with period
+   *
+   * Returns: { totalRows, successCount, failureCount, createdExpenses, errors }
+   */
+  @Post('expenses/import')
+  async importExpenses(
+    @Param('buildingId') buildingId: string,
+    @Body() importDto: ImportExpensesDto & { rows: ExpenseImportRow[] },
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ExpenseImportResult> {
+    const tenantId = req.tenantId!;
+    const userId = req.user.id;
+    const userRoles = req.user?.roles || [];
+
+    // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can import
+    if (
+      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
+        userRoles.includes(role),
+      )
+    ) {
+      throw new ForbiddenException(
+        'Solo administradores pueden importar gastos',
+      );
+    }
+
+    if (!importDto.rows || !Array.isArray(importDto.rows)) {
+      throw new BadRequestException('rows array is required');
+    }
+
+    return this.expenseImportService.importExpensesFromRows(
+      tenantId,
+      buildingId,
+      importDto.period,
+      importDto.rows,
+      userId,
     );
   }
 
