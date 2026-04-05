@@ -1297,6 +1297,8 @@ model Charge {
   createdAt                   DateTime     @default(now())
   updatedAt                   DateTime     @updatedAt
   canceledAt                  DateTime?
+  overdueSince                DateTime?    // When charge became overdue (null if not yet overdue)
+  reminderSentAt              DateTime?    // When 3-day reminder was sent (null if not sent)
 
   // Expense allocation snapshots (optional — null si charge es manual)
   periodId                    String?     // FK al ExpensePeriod (si viene de generación automática)
@@ -1718,9 +1720,11 @@ enum NotificationType {
   PAYMENT_RECEIVED
   PAYMENT_REJECTED
   PAYMENT_OVERDUE
+  PAYMENT_REMINDER
   DOCUMENT_SHARED
   BUILDING_ALERT
   OCCUPANT_ASSIGNED
+  EXPENSE_PERIOD_CREATED
   SYSTEM_ALERT
 }
 

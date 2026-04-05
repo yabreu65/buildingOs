@@ -1,13 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CommunicationsService } from '../../communications/communications.service';
+import { FinanzasService } from '../../finanzas/finanzas.service';
 
 @Injectable()
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
   private readonly maxRetries = 3;
 
-  constructor(private communicationsService: CommunicationsService) {}
+  constructor(
+    private communicationsService: CommunicationsService,
+    private finanzasService: FinanzasService,
+  ) {}
 
   /**
    * Safe wrapper for all cron jobs
@@ -54,8 +58,37 @@ export class CronJobsService {
     });
   }
 
-  // TODO: Add remaining 14 cron jobs here
-  // Phase 2 (Quick wins): 7 notification injections
-  // Phase 3 (Medium): 5 cronjobs (overdue, periods, reminders, bulk validate, escalate)
+  /**
+   * [PHASE 3 MEDIUM #8] Daily at 9am: Detect overdue charges and notify residents
+   */
+  @Cron('0 9 * * *')
+  async detectAndNotifyOverdueCharges() {
+    return this.runWithErrorHandling('detectAndNotifyOverdueCharges', async () => {
+      return await this.finanzasService.detectAndNotifyOverdueCharges();
+    });
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #9] Monthly at 8am on 1st: Auto-create next month's expense period
+   */
+  @Cron('0 8 1 * *')
+  async autoCreateMonthlyExpensePeriods() {
+    return this.runWithErrorHandling('autoCreateMonthlyExpensePeriods', async () => {
+      return await this.finanzasService.autoCreateMonthlyExpensePeriods();
+    });
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #10] Daily at 10am: Send payment reminders for charges due in 3 days
+   */
+  @Cron('0 10 * * *')
+  async sendPaymentReminders() {
+    return this.runWithErrorHandling('sendPaymentReminders', async () => {
+      return await this.finanzasService.sendPaymentReminders();
+    });
+  }
+
+  // TODO: Add remaining 9 cron jobs here
+  // Phase 3 (Medium): 2 more cronjobs (bulk validate, escalate)
   // Phase 4 (Hard): 3 features (import, recurring, email summaries)
 }

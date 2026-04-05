@@ -172,11 +172,11 @@ export class DocumentsService {
     // [PHASE 2 QUICK #6] Send DOCUMENT_SHARED notification if visibility=RESIDENTS
     void this.sendDocumentSharedNotification(tenantId, document, dto);
 
-    // [PHASE 2 QUICK #7] Audit: DOCUMENT_CREATED
+    // [PHASE 2 QUICK #7] Audit: DOCUMENT_CREATE
     void this.auditService.createLog({
       tenantId,
       actorMembershipId: userMembershipId,
-      action: AuditAction.DOCUMENT_CREATED,
+      action: AuditAction.DOCUMENT_CREATE,
       entityType: 'Document',
       entityId: document.id,
       metadata: {
@@ -457,11 +457,11 @@ export class DocumentsService {
       where: { id: documentId },
     });
 
-    // [PHASE 2 QUICK #7] Audit: DOCUMENT_DELETED
+    // [PHASE 2 QUICK #7] Audit: DOCUMENT_DELETE
     void this.auditService.createLog({
       tenantId,
       actorUserId: userId,
-      action: AuditAction.DOCUMENT_DELETED,
+      action: AuditAction.DOCUMENT_DELETE,
       entityType: 'Document',
       entityId: documentId,
       metadata: {

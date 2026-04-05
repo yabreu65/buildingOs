@@ -2240,4 +2240,200 @@ export class FinanzasService {
       );
     }
   }
+
+  /**
+   * [PHASE 3 MEDIUM #8] Detect and notify overdue charges
+   * Runs daily at 9am - marks charges as overdue and notifies residents
+   */
+  async detectAndNotifyOverdueCharges(): Promise<{ count: number }> {
+    const now = new Date();
+    const overdue = await this.prisma.charge.findMany({
+      where: {
+        status: { in: ['PENDING', 'PARTIAL'] },
+        dueDate: { lt: now },
+        overdueSince: null, // Only process once
+        canceledAt: null,
+      },
+      include: {
+        unit: {
+          include: {
+            unitOccupants: {
+              where: { endDate: null },
+              include: { member: { select: { user: { select: { id: true } } } } },
+            },
+            building: { select: { id: true, name: true, tenantId: true } },
+          },
+        },
+      },
+    });
+
+    let notifiedCount = 0;
+
+    for (const charge of overdue) {
+      // Mark as overdue
+      await this.prisma.charge.update({
+        where: { id: charge.id },
+        data: { overdueSince: now },
+      });
+
+      // Notify residents
+      const daysOverdue = Math.floor((now.getTime() - charge.dueDate.getTime()) / (1000 * 60 * 60 * 24));
+      for (const occupant of charge.unit.unitOccupants) {
+        if (occupant.member?.user?.id) {
+          const amount = (charge.amount / 100).toFixed(2);
+          await this.notificationsService.createNotification({
+            tenantId: charge.tenantId,
+            userId: occupant.member.user.id,
+            type: 'PAYMENT_OVERDUE',
+            title: `Pago vencido - ${charge.unit.building.name}`,
+            body: `El pago de ${amount} ${charge.currency} en la unidad ${charge.unit.label} vence hace ${daysOverdue} días. Por favor realiza el pago inmediatamente.`,
+            data: {
+              chargeAmount: charge.amount / 100,
+              chargeCurrency: charge.currency,
+              unitLabel: charge.unit.label,
+              buildingName: charge.unit.building.name,
+              daysOverdue,
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+          notifiedCount++;
+        }
+      }
+    }
+
+    return { count: notifiedCount };
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #9] Auto-create monthly expense periods
+   * Runs on 1st of each month at 8am - creates next month's period for buildings
+   */
+  async autoCreateMonthlyExpensePeriods(): Promise<{ created: number }> {
+    const now = new Date();
+    const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1);
+    const year = nextMonthDate.getFullYear();
+    const month = nextMonthDate.getMonth() + 1;
+
+    // Find all buildings with expensePeriods
+    const buildings = await this.prisma.building.findMany({
+      include: {
+        expensePeriods: {
+          where: { year, month },
+          take: 1,
+        },
+      },
+    });
+
+    let createdCount = 0;
+
+    for (const building of buildings) {
+      // Skip if period already exists for next month
+      if (building.expensePeriods.length > 0) {
+        continue;
+      }
+
+      // Get last period's total as baseline
+      const lastPeriod = await this.prisma.expensePeriod.findFirst({
+        where: { buildingId: building.id },
+        orderBy: [{ year: 'desc' }, { month: 'desc' }],
+      });
+
+      const defaultTotalBigInt = lastPeriod?.totalToAllocate || 0n;
+      const defaultTotal = typeof defaultTotalBigInt === 'bigint' ? Number(defaultTotalBigInt) : defaultTotalBigInt;
+
+      // Create new period (due 15th of next month)
+      const dueDate = new Date(year, month - 1, 15);
+
+      const period = await this.prisma.expensePeriod.create({
+        data: {
+          tenantId: building.tenantId,
+          buildingId: building.id,
+          year,
+          month,
+          totalToAllocate: defaultTotal,
+          dueDate,
+          status: 'DRAFT',
+          concept: `Expensas Comunes - ${String(month).padStart(2, '0')}/${year}`,
+          currency: 'ARS',
+        },
+      });
+
+      // Notify tenants (no specific admin contact in Building model, skip for now)
+      // TODO: Could query Memberships with TENANT_ADMIN role if needed
+
+      createdCount++;
+    }
+
+    return { created: createdCount };
+  }
+
+  /**
+   * [PHASE 3 MEDIUM #10] Send payment reminders for charges due in 3 days
+   * Runs daily at 10am - notifies residents of upcoming due dates
+   */
+  async sendPaymentReminders(): Promise<{ count: number }> {
+    const now = new Date();
+    const inThreeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const startOfDay = new Date(inThreeDays.getFullYear(), inThreeDays.getMonth(), inThreeDays.getDate());
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    // Find charges due in exactly 3 days
+    const remindableCharges = await this.prisma.charge.findMany({
+      where: {
+        status: { in: ['PENDING', 'PARTIAL'] },
+        dueDate: {
+          gte: startOfDay,
+          lt: endOfDay,
+        },
+        reminderSentAt: null, // Only once per charge
+        canceledAt: null,
+      },
+      include: {
+        unit: {
+          include: {
+            unitOccupants: {
+              where: { endDate: null },
+              include: { member: { select: { user: { select: { id: true } } } } },
+            },
+            building: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    let reminderCount = 0;
+
+    for (const charge of remindableCharges) {
+      // Mark reminder as sent
+      await this.prisma.charge.update({
+        where: { id: charge.id },
+        data: { reminderSentAt: now },
+      });
+
+      // Notify residents
+      const dueStr = charge.dueDate.toLocaleDateString('es-AR');
+      const amount = (charge.amount / 100).toFixed(2);
+      for (const occupant of charge.unit.unitOccupants) {
+        if (occupant.member?.user?.id) {
+          await this.notificationsService.createNotification({
+            tenantId: charge.tenantId,
+            userId: occupant.member.user.id,
+            type: 'PAYMENT_REMINDER',
+            title: 'Recordatorio: Pago vence en 3 días',
+            body: `Recordatorio: Tu pago de ${amount} ${charge.currency} para ${charge.unit.label} vence el ${dueStr}. Realiza el pago ahora para evitar demoras.`,
+            data: {
+              chargeAmount: charge.amount / 100,
+              chargeCurrency: charge.currency,
+              unitLabel: charge.unit.label,
+              dueDate: charge.dueDate.toISOString(),
+            },
+            deliveryMethods: ['IN_APP', 'EMAIL'],
+          });
+          reminderCount++;
+        }
+      }
+    }
+
+    return { count: reminderCount };
+  }
 }

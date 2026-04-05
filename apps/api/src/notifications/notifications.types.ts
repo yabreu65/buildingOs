@@ -38,6 +38,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
     'PAYMENT_RECEIVED',
     'PAYMENT_REJECTED',
     'PAYMENT_OVERDUE',
+    'PAYMENT_REMINDER',
     'USER_INVITED',
     'TICKET_STATUS_CHANGED',
   ]),
@@ -82,6 +83,14 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
     PAYMENT_OVERDUE: {
       subject: 'Payment is overdue',
       bodyTemplate: 'Your payment of {{amount}} is now overdue. Please pay immediately.',
+    },
+    PAYMENT_REMINDER: {
+      subject: 'Pago vence en 3 días',
+      bodyTemplate: 'Recordatorio: Tu pago de {{amount}} {{currency}} para {{unitLabel}} vence el {{dueDate}}. Realiza el pago ahora para evitar demoras.',
+    },
+    EXPENSE_PERIOD_CREATED: {
+      subject: 'Nuevo período de gastos - {{buildingName}}',
+      bodyTemplate: 'Se ha creado automáticamente el período {{period}} para {{buildingName}}. Monto sugerido: {{suggestedTotal}}. Revisa y ajusta en BuildingOS.',
     },
     DOCUMENT_SHARED: {
       subject: 'Document shared with you',
