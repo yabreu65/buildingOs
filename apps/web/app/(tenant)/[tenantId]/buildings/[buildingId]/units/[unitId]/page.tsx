@@ -22,7 +22,9 @@ import { t } from '@/i18n';
 import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
 import { UnitFinanceTab } from '@/features/finance/components/UnitFinanceTab';
-import { Users, Mail, Phone, User, Trash2, Plus, Lock } from 'lucide-react';
+import { useUnitLedger } from '@/features/finance/hooks/useUnitLedger';
+import { formatCurrency } from '@/shared/lib/format/money';
+import { Users, Mail, Phone, User, Trash2, Plus, Lock, AlertCircle, CheckCircle2 } from 'lucide-react';
 import type { Unit } from '@/features/units/units.types';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { AssignResidentModal } from './AssignResidentModal';
@@ -61,6 +63,8 @@ const UnitDashboardPage = () => {
     buildingId,
     unitId,
   });
+
+  const { data: ledger, isLoading: ledgerLoading } = useUnitLedger(buildingId, unitId);
 
   const [showDeleteDialog, setShowDeleteDialog] = useState<{ isOpen: boolean; occupantId: string | null }>({
     isOpen: false,
@@ -168,41 +172,82 @@ const UnitDashboardPage = () => {
       </div>
 
       {/* Unit Details Card */}
-      <Card>
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Unit Information</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {unit.unitCode && (
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Code</p>
-              <p className="text-lg">{unit.unitCode}</p>
-            </div>
-          )}
-          {unit.unitType && (
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Type</p>
-              <p className="text-lg">{unit.unitType}</p>
-            </div>
-          )}
-          {unit.occupancyStatus && (
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Status</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="md:col-span-2">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">Unit Information</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {unit.unitCode && (
               <div>
-                <span
-                  className={`text-xs font-medium px-2 py-1 rounded-full ${
-                    unit.occupancyStatus === 'OCCUPIED'
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-orange-100 text-orange-700'
-                  }`}
-                >
-                  {unit.occupancyStatus}
-                </span>
+                <p className="text-sm font-medium text-muted-foreground">Code</p>
+                <p className="text-lg">{unit.unitCode}</p>
+              </div>
+            )}
+            {unit.unitType && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Type</p>
+                <p className="text-lg">{unit.unitType}</p>
+              </div>
+            )}
+            {unit.occupancyStatus && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Status</p>
+                <div>
+                  <span
+                    className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      unit.occupancyStatus === 'OCCUPIED'
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-orange-100 text-orange-700'
+                    }`}
+                  >
+                    {unit.occupancyStatus}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Financial Status Card */}
+        <Card>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">Estado Financiero</h2>
+          </div>
+          {ledgerLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : ledger && ledger.totals.totalCharges > 0 ? (
+            <div className="space-y-3">
+              <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-orange-600" />
+                  <div>
+                    <p className="text-xs text-muted-foreground">Deuda Total</p>
+                    <p className="text-2xl font-bold text-orange-600">
+                      {formatCurrency(ledger.totals.totalCharges, ledger.totals.currency || 'USD')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {(ledger.totals.totalPaid ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Pagado: {formatCurrency(ledger.totals.totalPaid ?? 0, ledger.totals.currency || 'USD')}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Estado</p>
+                  <p className="font-semibold text-green-700">Al día</p>
+                </div>
               </div>
             </div>
           )}
-        </div>
-      </Card>
+        </Card>
+      </div>
 
       {/* Occupants Section */}
       <Card>
