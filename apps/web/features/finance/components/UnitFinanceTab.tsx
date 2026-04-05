@@ -10,9 +10,11 @@ import { DollarSign, TrendingUp, Calendar } from 'lucide-react';
 interface UnitFinanceTabProps {
   buildingId: string;
   unitId: string;
+  buildingName?: string;
+  unitLabel?: string;
 }
 
-export function UnitFinanceTab({ buildingId, unitId }: UnitFinanceTabProps) {
+export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: UnitFinanceTabProps) {
   const { data: ledger, isLoading, error, refetch } = useUnitLedger(buildingId, unitId);
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
@@ -29,8 +31,20 @@ export function UnitFinanceTab({ buildingId, unitId }: UnitFinanceTabProps) {
     return <ErrorState message={error instanceof Error ? error.message : 'Error loading finances'} onRetry={() => refetch()} />;
   }
 
-  if (!ledger) {
-    return <EmptyState title="Sin información" description="No hay datos financieros disponibles" />;
+  if (!ledger || (ledger.charges.length === 0 && ledger.payments.length === 0)) {
+    return (
+      <div className="space-y-6">
+        <div className="border-b pb-4">
+          <p className="text-sm text-muted-foreground">
+            {buildingName ? `${buildingName} / ` : ''}Unidad {unitLabel}
+          </p>
+        </div>
+        <EmptyState
+          title="Sin cargos registrados"
+          description="Esta unidad no tiene cargos ni pagos registrados en el sistema. Crea el primer cargo desde la pestaña de Finanzas del edificio."
+        />
+      </div>
+    );
   }
 
   // Group charges by period
@@ -51,6 +65,13 @@ export function UnitFinanceTab({ buildingId, unitId }: UnitFinanceTabProps) {
 
   return (
     <div className="space-y-6">
+      {/* Header with building and unit context */}
+      <div className="border-b pb-4">
+        <p className="text-sm text-muted-foreground">
+          {buildingName ? `${buildingName} / ` : ''}Unidad {unitLabel}
+        </p>
+      </div>
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4">

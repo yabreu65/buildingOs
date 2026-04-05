@@ -71,6 +71,7 @@ const UnitDashboardPage = () => {
   const [showAssignModal, setShowAssignModal] = useState(false);
 
   const unit = units.find((u) => u.id === unitId);
+  const building = buildings.find((b) => b.id === buildingId);
 
   // Check if current user is admin (can manage any unit)
   const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r));
@@ -352,7 +353,7 @@ const UnitDashboardPage = () => {
 
         {/* Finance Tab */}
         {activeTab === 'finance' && (
-          <UnitFinanceTab buildingId={buildingId} unitId={unitId} />
+          <UnitFinanceTab buildingId={buildingId} unitId={unitId} buildingName={building?.name} unitLabel={unit?.label} />
         )}
 
         {/* Tickets Tab */}
