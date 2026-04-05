@@ -580,13 +580,14 @@ export class FinanzasService {
       });
 
       // 3b. FIFO allocation: if unitId exists, auto-allocate to oldest charges
+      // Include all charges except PAID and CANCELED (some may be incorrectly marked PAID without allocations)
       if (payment.unitId) {
         const pendingCharges = await tx.charge.findMany({
           where: {
             tenantId,
             buildingId,
             unitId: payment.unitId,
-            status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+            status: { notIn: [ChargeStatus.PAID, ChargeStatus.CANCELED] },
             canceledAt: null,
           },
           include: { paymentAllocations: true },
