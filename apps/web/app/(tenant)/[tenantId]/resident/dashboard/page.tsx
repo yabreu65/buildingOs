@@ -99,7 +99,7 @@ const ResidentDashboardPage = () => {
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
   const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
 
-  const { data: ledger, isLoading: ledgerLoading } = useResidentLedger(unitId);
+  const { data: ledger, isLoading: ledgerLoading } = useResidentLedger(tenantId, unitId);
 
   const { data: communications = [], isLoading: commsLoading } = useQuery<InboxCommunication[]>({
     queryKey: ['residentCommunications'],

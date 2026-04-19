@@ -23,6 +23,7 @@
     "seed:pilot:staging": "NODE_ENV=staging ts-node prisma/seed-pilot.ts",
     "demo:tenants": "ts-node scripts/create_demo_tenants.ts",
     "reset:building:categories": "ts-node --project tsconfig.script.json scripts/reset_building_expense_categories.ts",
+    "repair:charge-status": "ts-node --project tsconfig.script.json scripts/recalculate_charge_statuses.ts",
     "studio": "prisma studio"
   },
   "dependencies": {

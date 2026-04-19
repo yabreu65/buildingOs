@@ -64,7 +64,7 @@ const UnitDashboardPage = () => {
     unitId,
   });
 
-  const { data: ledger, isLoading: ledgerLoading } = useUnitLedger(buildingId, unitId);
+  const { data: ledger, isLoading: ledgerLoading, error: ledgerError, refetch: refetchLedger } = useUnitLedger(tenantId, unitId);
 
   const [showDeleteDialog, setShowDeleteDialog] = useState<{ isOpen: boolean; occupantId: string | null }>({
     isOpen: false,
@@ -87,7 +87,7 @@ const UnitDashboardPage = () => {
   const hasAccess = isAdmin || isOccupantOfUnit;
 
   if (!tenantId || !buildingId || !unitId) {
-    return <div>Invalid parameters</div>;
+    return <div>{t('common.invalidParameters')}</div>;
   }
 
   if (buildingsError || unitsError) {
@@ -136,6 +136,21 @@ const UnitDashboardPage = () => {
     );
   }
 
+  // Helper to translate role
+  const translateRole = (role: string) => {
+    if (role === 'OWNER') return t('units.owner');
+    if (role === 'RESIDENT') return t('units.resident');
+    return role;
+  };
+
+  // Helper to translate occupancy status
+  const translateOccupancyStatus = (status: string) => {
+    if (status === 'OCCUPIED') return t('units.statuses.occupied');
+    if (status === 'VACANT') return t('units.statuses.vacant');
+    if (status === 'UNKNOWN') return t('units.statuses.unknown');
+    return status;
+  };
+
   const handleRemoveOccupant = async () => {
     if (!showDeleteDialog.occupantId) return;
 
@@ -168,31 +183,31 @@ const UnitDashboardPage = () => {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold">{unit.label}</h1>
-        {unit.unitCode && <p className="text-muted-foreground mt-1">Code: {unit.unitCode}</p>}
+        {unit.unitCode && <p className="text-muted-foreground mt-1">{t('units.code')}: {unit.unitCode}</p>}
       </div>
 
       {/* Unit Details Card */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="md:col-span-2">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold">Unit Information</h2>
+            <h2 className="text-lg font-semibold">{t('units.view')}</h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {unit.unitCode && (
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Code</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('units.code')}</p>
                 <p className="text-lg">{unit.unitCode}</p>
               </div>
             )}
             {unit.unitType && (
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Type</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('units.type')}</p>
                 <p className="text-lg">{unit.unitType}</p>
               </div>
             )}
             {unit.occupancyStatus && (
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Status</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('common.status')}</p>
                 <div>
                   <span
                     className={`text-xs font-medium px-2 py-1 rounded-full ${
@@ -201,7 +216,7 @@ const UnitDashboardPage = () => {
                         : 'bg-orange-100 text-orange-700'
                     }`}
                   >
-                    {unit.occupancyStatus}
+                    {translateOccupancyStatus(unit.occupancyStatus)}
                   </span>
                 </div>
               </div>
@@ -212,26 +227,54 @@ const UnitDashboardPage = () => {
         {/* Financial Status Card */}
         <Card>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold">Estado Financiero</h2>
+            <h2 className="text-lg font-semibold">{t('finanzas.financialStatus')}</h2>
           </div>
           {ledgerLoading ? (
             <Skeleton className="h-16 w-full" />
-          ) : ledger && ledger.totals.totalCharges > 0 ? (
+          ) : ledgerError ? (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('common.error')}</p>
+                  <p className="text-sm font-medium text-red-700">
+                    {t('finanzas.loadError')}
+                  </p>
+                  <button 
+                    onClick={() => refetchLedger()} 
+                    className="text-xs text-blue-600 hover:underline mt-1"
+                  >
+                    {t('common.retry')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : !ledger ? (
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-gray-500" />
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('common.noData')}</p>
+                  <p className="text-sm text-gray-600">{t('finanzas.noData')}</p>
+                </div>
+              </div>
+            </div>
+          ) : ledger.totals.balance > 0 ? (
             <div className="space-y-3">
               <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-5 h-5 text-orange-600" />
                   <div>
-                    <p className="text-xs text-muted-foreground">Deuda Total</p>
+                    <p className="text-xs text-muted-foreground">{t('finanzas.totalDebt')}</p>
                     <p className="text-2xl font-bold text-orange-600">
-                      {formatCurrency(ledger.totals.totalCharges, ledger.totals.currency || 'USD')}
+                      {formatCurrency(ledger.totals.balance, ledger.totals.currency || 'USD')}
                     </p>
                   </div>
                 </div>
               </div>
               {(ledger.totals.totalPaid ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Pagado: {formatCurrency(ledger.totals.totalPaid ?? 0, ledger.totals.currency || 'USD')}
+                  {t('finanzas.paid')}: {formatCurrency(ledger.totals.totalPaid ?? 0, ledger.totals.currency || 'USD')}
                 </p>
               )}
             </div>
@@ -240,8 +283,8 @@ const UnitDashboardPage = () => {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-green-600" />
                 <div>
-                  <p className="text-xs text-muted-foreground">Estado</p>
-                  <p className="font-semibold text-green-700">Al día</p>
+                  <p className="text-xs text-muted-foreground">{t('common.status')}</p>
+                  <p className="font-semibold text-green-700">{t('finanzas.upToDate')}</p>
                 </div>
               </div>
             </div>
@@ -252,7 +295,7 @@ const UnitDashboardPage = () => {
       {/* Occupants Section */}
       <Card>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Occupants</h2>
+          <h2 className="text-lg font-semibold">{t('units.residents')}</h2>
           {isAdmin && (
             <Button
               onClick={() => setShowAssignModal(true)}
@@ -260,7 +303,7 @@ const UnitDashboardPage = () => {
               size="sm"
             >
               <Plus className="w-4 h-4 mr-2" />
-              Assign Resident
+              {t('units.assignResident')}
             </Button>
           )}
         </div>
@@ -278,7 +321,7 @@ const UnitDashboardPage = () => {
         ) : occupants.length === 0 ? (
           <EmptyState
             icon={<Users className="w-12 h-12 text-muted-foreground" />}
-            title="No Occupants"
+            title={t('units.noOccupants')}
             description={t('units.noOccupants')}
             cta={
               isAdmin
@@ -297,9 +340,9 @@ const UnitDashboardPage = () => {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <User className="w-4 h-4 text-muted-foreground" />
-                      <p className="font-semibold">{occupant.user?.fullName || t('common.unknown')}</p>
+                      <p className="font-semibold">{occupant.user?.fullName || t('units.statuses.unknown')}</p>
                       <span className="text-xs font-medium px-2 py-1 rounded bg-blue-100 text-blue-700">
-                        {occupant.role}
+                        {translateRole(occupant.role)}
                       </span>
                     </div>
                     <div className="space-y-1">
@@ -351,7 +394,7 @@ const UnitDashboardPage = () => {
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              Overview
+              {t('dashboard.overview')}
             </button>
             <button
               onClick={() => setActiveTab('finance')}
@@ -361,7 +404,7 @@ const UnitDashboardPage = () => {
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              Finanzas
+              {t('navigation.finanzas')}
             </button>
             <button
               onClick={() => setActiveTab('tickets')}
@@ -371,7 +414,7 @@ const UnitDashboardPage = () => {
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              Tickets
+              {t('navigation.tickets')}
             </button>
             <button
               onClick={() => setActiveTab('messages')}
@@ -381,7 +424,7 @@ const UnitDashboardPage = () => {
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              Comunicados
+              {t('navigation.communications')}
             </button>
             <button
               onClick={() => setActiveTab('documents')}
@@ -391,14 +434,14 @@ const UnitDashboardPage = () => {
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              Documentos
+              {t('navigation.documents')}
             </button>
           </div>
         </div>
 
         {/* Finance Tab */}
         {activeTab === 'finance' && (
-          <UnitFinanceTab buildingId={buildingId} unitId={unitId} buildingName={building?.name} unitLabel={unit?.label} />
+          <UnitFinanceTab tenantId={tenantId} unitId={unitId} buildingName={building?.name} unitLabel={unit?.label} />
         )}
 
         {/* Tickets Tab */}
@@ -440,7 +483,7 @@ const UnitDashboardPage = () => {
           onSuccess={() => {
             setShowAssignModal(false);
             refetchOccupants();
-            toast('Resident assigned successfully', 'success');
+            toast(t('units.residentAssigned'), 'success');
           }}
         />
       )}
@@ -448,8 +491,8 @@ const UnitDashboardPage = () => {
       {/* Delete Occupant Dialog */}
       <DeleteConfirmDialog
         isOpen={showDeleteDialog.isOpen}
-        title="Remove Occupant"
-        description="This occupant will be unassigned from this unit. This action cannot be undone."
+        title={t('units.removeResident')}
+        description={t('units.removeOccupantConfirm')}
         onConfirm={handleRemoveOccupant}
         onCancel={() => setShowDeleteDialog({ isOpen: false, occupantId: null })}
         isLoading={isDeleting}

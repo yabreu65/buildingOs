@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Query, UseGuards, Request, Body, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Param, Query, UseGuards, Request, Body, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { FinanzasService } from './finanzas.service';
@@ -164,5 +164,19 @@ export class TenantFinanceController {
   ): Promise<PaymentDuplicateCheckResultDto> {
     const tenantId = req.tenantId!;
     return this.finanzasService.checkPaymentDuplicate(tenantId, paymentId);
+  }
+
+  /**
+   * POST /finance/payments/:paymentId/retry-receipt
+   * Retry generating a receipt for an approved payment (if previous attempt failed)
+   */
+  @Post('payments/:paymentId/retry-receipt')
+  async retryReceiptGeneration(
+    @Param('paymentId') paymentId: string,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    const tenantId = req.tenantId!;
+    const userRoles = req.user.roles || [];
+    return this.finanzasService.retryReceiptGeneration(tenantId, paymentId, userRoles);
   }
 }

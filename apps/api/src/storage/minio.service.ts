@@ -261,4 +261,47 @@ export class MinioService {
       throw error;
     }
   }
+
+  /**
+   * Upload a buffer directly to MinIO
+   *
+   * @param bucketName - Bucket name
+   * @param objectKey - Object path in bucket
+   * @param buffer - Buffer content to upload
+   * @param contentType - MIME type (default: application/octet-stream)
+   *
+   * @example
+   * await minioService.uploadBuffer('documents', 'tenant-123/receipt.pdf', buffer, 'application/pdf');
+   */
+  async uploadBuffer(
+    bucketName: string = this.bucket,
+    objectKey: string,
+    buffer: Buffer,
+    contentType: string = 'application/octet-stream',
+  ): Promise<void> {
+    try {
+      // Convert buffer to stream
+      const stream = require('stream');
+      const readable = new stream.Readable();
+      readable._read = () => {};
+      readable.push(buffer);
+      readable.push(null);
+      
+      await this.minioClient.putObject(
+        bucketName, 
+        objectKey, 
+        readable, 
+        buffer.length,
+        { 'Content-Type': contentType }
+      );
+      this.logger.debug(`Uploaded buffer to ${bucketName}/${objectKey} (${buffer.length} bytes)`);
+    } catch (error: unknown) {
+      const errorObj = error as any;
+      this.logger.error(
+        `Failed to upload buffer: ${errorObj?.message || String(error)}`,
+        errorObj?.stack,
+      );
+      throw error;
+    }
+  }
 }

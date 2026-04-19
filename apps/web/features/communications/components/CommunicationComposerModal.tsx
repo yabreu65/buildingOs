@@ -7,7 +7,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
 import { useBuildings } from '@/features/buildings/hooks';
-import { X } from 'lucide-react';
+import { X, Clock } from 'lucide-react';
 import type { Communication, CommunicationChannel, TargetType } from '../services/communications.api';
 import type { CommunicationInput } from '@/types/communication';
 
@@ -61,6 +61,17 @@ export const CommunicationComposerModal = ({
     (communication?.priority as 'NORMAL' | 'URGENT') ?? 'NORMAL'
   );
 
+  // Schedule option - only for new communications (not editing drafts)
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [enableSchedule, setEnableSchedule] = useState(false);
+
+  // Calculate safe min datetime (next minute + 60s buffer to avoid edge cases)
+  const getMinDateTime = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 1, 0, 0); // Next minute, round up
+    return now.toISOString().slice(0, 16);
+  };
+
   // Default: first target option (BUILDING = todo el edificio)
   const [selectedTarget, setSelectedTarget] = useState<TargetOption>(
     TARGET_OPTIONS[0]!
@@ -89,6 +100,18 @@ export const CommunicationComposerModal = ({
     if (buildingScope === 'MULTIPLE' && selectedBuildingIds.size === 0) {
       toast('Selecciona al menos un edificio', 'error');
       return;
+    }
+
+    // Validate schedule time if enabled
+    if (enableSchedule && scheduledAt) {
+      const scheduledDate = new Date(scheduledAt);
+      const now = new Date();
+      const minDate = new Date(now.getTime() + 60000); // 1 minute from now
+      
+      if (scheduledDate <= minDate) {
+        toast('La fecha debe ser futura (al menos 1 minuto desde ahora)', 'error');
+        return;
+      }
     }
 
     setIsSaving(true);
@@ -127,6 +150,7 @@ export const CommunicationComposerModal = ({
         channel,
         priority,
         targets,
+        ...(enableSchedule && scheduledAt ? { scheduledFor: new Date(scheduledAt).toISOString() } : {}),
       };
       await onSave(input, communication?.id);
     } catch (err) {
@@ -289,6 +313,41 @@ export const CommunicationComposerModal = ({
             </div>
           </div>
 
+          {/* Schedule Option */}
+          <div className="border-t pt-4 space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableSchedule}
+                onChange={(e) => {
+                  setEnableSchedule(e.target.checked);
+                  if (!e.target.checked) setScheduledAt('');
+                }}
+                className="w-4 h-4"
+              />
+              <Clock className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Programar envío</span>
+            </label>
+
+            {enableSchedule && (
+              <div>
+                <label className="text-sm text-muted-foreground block mb-1">
+                  Fecha y hora de envío
+                </label>
+                <input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(e) => setScheduledAt(e.target.value)}
+                  min={getMinDateTime()}
+                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  El comunicado se enviará a la hora programada
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Actions */}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="secondary" onClick={onClose} disabled={isSaving}>
@@ -297,6 +356,8 @@ export const CommunicationComposerModal = ({
             <Button onClick={handleSave} disabled={isSaving}>
               {isSaving
                 ? t('communications.admin.saving')
+                : enableSchedule
+                ? 'Programar'
                 : communication
                 ? t('communications.admin.updateDraft')
                 : t('communications.admin.saveDraft')}

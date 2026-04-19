@@ -11,6 +11,7 @@ import { LiquidationsController } from './liquidations.controller';
 import { UnitGroupController } from './unit-group.controller';
 import { MovementAllocationController } from './movement-allocation.controller';
 import { LiquidationEngineController } from './liquidation-engine.controller';
+import { AdjustmentsController } from './adjustments.controller';
 import { FinanzasService } from './finanzas.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { ExpenseCategoriesService } from './expense-categories.service';
@@ -22,8 +23,11 @@ import { LiquidationsService } from './liquidations.service';
 import { MovementAllocationService } from './movement-allocation.service';
 import { UnitGroupService } from './unit-group.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
+import { AdjustmentsService } from './adjustments.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EmailModule } from '../email/email.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { StorageModule } from '../storage/storage.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -33,9 +37,10 @@ import { ExpenseImportService } from './expense-import.service';
 import { RecurringExpenseController } from './recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
 import { FinanceSummaryService } from './finance-summary.service';
+import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 
 @Module({
-  imports: [PrismaModule, EmailModule],
+  imports: [PrismaModule, EmailModule, NotificationsModule, StorageModule],
   controllers: [
     FinanzasController,
     FinanzasUnitsController,
@@ -49,6 +54,7 @@ import { FinanceSummaryService } from './finance-summary.service';
     UnitGroupController,
     MovementAllocationController,
     LiquidationEngineController,
+    AdjustmentsController,
     VendorPreferenceController,
     ExpenseReportsController,
     RecurringExpenseController,
@@ -65,11 +71,13 @@ import { FinanceSummaryService } from './finance-summary.service';
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
+    AdjustmentsService,
     VendorPreferenceService,
     ExpenseReportsService,
     ExpenseImportService,
     RecurringExpenseService,
     FinanceSummaryService,
+    PaymentReceiptService,
   ],
   exports: [
     FinanzasService,
@@ -83,8 +91,10 @@ import { FinanceSummaryService } from './finance-summary.service';
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
+    AdjustmentsService,
     RecurringExpenseService,
     FinanceSummaryService,
+    PaymentReceiptService,
   ],
 })
 export class FinanzasModule {}

@@ -10,6 +10,7 @@ import { Expense, ExpenseStatus } from '../services/expense-ledger.api';
 import {
   useValidateExpense,
   useVoidExpense,
+  useBulkValidateExpenses,
 } from '../hooks/useExpenseLedger';
 import { useQuery } from '@tanstack/react-query';
 import { ExpenseCreateModal } from './ExpenseCreateModal';
@@ -66,6 +67,9 @@ export function ExpensesList({
 
   const validateMutation = useValidateExpense(tenantId);
   const voidMutation = useVoidExpense(tenantId);
+  const bulkValidateMutation = useBulkValidateExpenses(tenantId);
+
+  const hasDraftExpenses = expenses.some((expense) => expense.status === 'DRAFT');
 
   const handleValidate = async (expenseId: string) => {
     setActioningId(expenseId);
@@ -88,6 +92,32 @@ export function ExpensesList({
       toast('Error al anular el gasto', 'error');
     } finally {
       setActioningId(null);
+    }
+  };
+
+  const handleBulkValidate = async () => {
+    if (!hasDraftExpenses) {
+      toast('No hay gastos en borrador para validar', 'error');
+      return;
+    }
+
+    const shouldContinue = window.confirm(
+      'Se validaran todos los gastos en borrador del edificio visible. Deseas continuar?',
+    );
+
+    if (!shouldContinue) {
+      return;
+    }
+
+    try {
+      const result = await bulkValidateMutation.mutateAsync({ buildingId });
+      toast(
+        `Validacion masiva completada: ${result.validatedCount} validados, ${result.errorCount} con error`,
+        'success',
+      );
+      onRefresh();
+    } catch {
+      toast('Error al validar gastos en lote', 'error');
     }
   };
 
@@ -134,6 +164,19 @@ export function ExpensesList({
           )}
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleBulkValidate()}
+            disabled={bulkValidateMutation.isPending || !hasDraftExpenses}
+          >
+            {bulkValidateMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            ) : (
+              <CheckCircle className="h-4 w-4 mr-1" />
+            )}
+            Validar todos
+          </Button>
           <Button
             variant="primary"
             size="sm"

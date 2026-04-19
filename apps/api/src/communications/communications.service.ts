@@ -72,6 +72,7 @@ export interface CreateCommunicationInput {
     targetType: CommunicationTargetType;
     targetId?: string;
   }>;
+  scheduledFor?: string; // ISO date string for scheduling
 }
 
 export interface UpdateCommunicationInput {
@@ -161,6 +162,17 @@ export class CommunicationsService {
     }
 
     // 3. Create communication in transaction
+    const scheduledFor = input.scheduledFor ? new Date(input.scheduledFor) : null;
+    
+    // Strict validation: if scheduledFor is provided but is in the past, reject with clear error
+    if (scheduledFor && scheduledFor <= new Date()) {
+      throw new BadRequestException(
+        'La fecha de programación debe ser futura. No se puede programar en el pasado.',
+      );
+    }
+    
+    const isScheduled = scheduledFor && scheduledFor > new Date();
+    
     const communication = await this.prisma.communication.create({
       data: {
         tenantId,
@@ -168,7 +180,8 @@ export class CommunicationsService {
         title: input.title,
         body: input.body,
         channel: input.channel,
-        status: 'DRAFT',
+        status: isScheduled ? 'SCHEDULED' : 'DRAFT',
+        scheduledAt: isScheduled ? scheduledFor : null,
         createdByMembershipId,
 
         // Create targets

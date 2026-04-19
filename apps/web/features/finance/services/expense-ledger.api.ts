@@ -26,6 +26,7 @@ export interface Expense {
   tenantId: string;
   buildingId: string;
   period: string;
+  liquidationPeriod?: string; // Nuevo: período de devengo derivado de invoiceDate
   categoryId: string;
   categoryName: string;
   vendorId: string | null;
@@ -95,6 +96,40 @@ export interface Liquidation {
 export interface LiquidationDetail extends Liquidation {
   expenses: LiquidationExpenseItem[];
   chargesPreview: LiquidationChargePreview[];
+}
+
+export interface BulkValidateExpensesResult {
+  validatedCount: number;
+  errorCount: number;
+}
+
+export interface RecurringExpense {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  categoryId: string;
+  amount: number;
+  currency: string;
+  concept: string;
+  frequency: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+  nextRunDate: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRecurringExpenseData {
+  categoryId: string;
+  amount: number;
+  currency: string;
+  concept: string;
+  frequency: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+}
+
+export interface UpdateRecurringExpenseData {
+  isActive?: boolean;
+  amount?: number;
+  concept?: string;
 }
 
 // ── ExpenseLedgerCategories API ────────────────────────────────────────────
@@ -261,6 +296,52 @@ export async function voidExpense(
   return apiClient<Expense>({
     path: `/tenants/${tenantId}/finance/expenses/${expenseId}/void`,
     method: 'POST',
+  });
+}
+
+export async function bulkValidateExpenses(
+  buildingId: string,
+  periodId?: string,
+): Promise<BulkValidateExpensesResult> {
+  const qs = new URLSearchParams();
+  if (periodId) qs.append('periodId', periodId);
+
+  const queryStr = qs.toString();
+  return apiClient<BulkValidateExpensesResult>({
+    path: `/buildings/${buildingId}/expenses/validate-all${queryStr ? '?' + queryStr : ''}`,
+    method: 'PATCH',
+  });
+}
+
+export async function listRecurringExpenses(
+  buildingId: string,
+): Promise<RecurringExpense[]> {
+  return apiClient<RecurringExpense[]>({
+    path: `/buildings/${buildingId}/recurring-expenses`,
+    method: 'GET',
+  });
+}
+
+export async function createRecurringExpense(
+  buildingId: string,
+  data: CreateRecurringExpenseData,
+): Promise<RecurringExpense> {
+  return apiClient<RecurringExpense, CreateRecurringExpenseData>({
+    path: `/buildings/${buildingId}/recurring-expenses`,
+    method: 'POST',
+    body: data,
+  });
+}
+
+export async function updateRecurringExpense(
+  buildingId: string,
+  recurringExpenseId: string,
+  data: UpdateRecurringExpenseData,
+): Promise<RecurringExpense> {
+  return apiClient<RecurringExpense, UpdateRecurringExpenseData>({
+    path: `/buildings/${buildingId}/recurring-expenses/${recurringExpenseId}`,
+    method: 'PATCH',
+    body: data,
   });
 }
 
@@ -583,6 +664,82 @@ export async function getNotasRevelatorias(
 ): Promise<NotasRevelatoriasReport> {
   return apiClient<NotasRevelatoriasReport>({
     path: `/tenants/${tenantId}/finance/reports/notas-revelatorias?period=${period}`,
+    method: 'GET',
+  });
+}
+
+// ── Adjustments / Retroactivos ─────────────────────────────────────────────
+
+export type AdjustmentStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
+
+export interface Adjustment {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  buildingName: string;
+  sourceInvoiceDate: string;
+  sourcePeriod: string;
+  targetPeriod: string;
+  categoryId: string;
+  amountMinor: number;
+  currencyCode: string;
+  reason: string;
+  status: AdjustmentStatus;
+  createdByMembershipId: string;
+  validatedByMembershipId: string | null;
+  validatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAdjustmentData {
+  buildingId: string;
+  sourceInvoiceDate: string;
+  sourcePeriod: string;
+  targetPeriod: string;
+  categoryId: string;
+  amountMinor: number;
+  currencyCode: string;
+  reason: string;
+}
+
+export async function createAdjustment(
+  tenantId: string,
+  data: CreateAdjustmentData,
+): Promise<Adjustment> {
+  return apiClient<Adjustment, CreateAdjustmentData>({
+    path: `/tenants/${tenantId}/finance/adjustments`,
+    method: 'POST',
+    body: data,
+  });
+}
+
+export async function validateAdjustment(
+  tenantId: string,
+  adjustmentId: string,
+): Promise<Adjustment> {
+  return apiClient<Adjustment>({
+    path: `/tenants/${tenantId}/finance/adjustments/${adjustmentId}/validate`,
+    method: 'POST',
+  });
+}
+
+export interface ListAdjustmentsParams {
+  buildingId?: string;
+  targetPeriod?: string;
+  status?: AdjustmentStatus;
+}
+
+export async function listAdjustments(
+  tenantId: string,
+  params?: ListAdjustmentsParams,
+): Promise<Adjustment[]> {
+  const query = new URLSearchParams();
+  if (params?.buildingId) query.set('buildingId', params.buildingId);
+  if (params?.targetPeriod) query.set('targetPeriod', params.targetPeriod);
+  if (params?.status) query.set('status', params.status);
+  return apiClient<Adjustment[]>({
+    path: `/tenants/${tenantId}/finance/adjustments?${query.toString()}`,
     method: 'GET',
   });
 }

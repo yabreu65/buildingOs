@@ -43,7 +43,11 @@ export class FinanzasUnitsController {
     @Query('periodTo') periodTo: string = '',
     @Request() req: any,
   ) {
-    const tenantId = req.user.tenantId || req.user.memberships?.[0]?.tenantId;
+    const tenantIdFromHeader = (req as any).tenantId || req.headers?.['x-tenant-id'];
+    const tenantId =
+      (typeof tenantIdFromHeader === 'string' && tenantIdFromHeader) ||
+      req.user.tenantId ||
+      req.user.memberships?.[0]?.tenantId;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
 

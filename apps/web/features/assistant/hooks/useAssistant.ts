@@ -20,7 +20,7 @@ export interface UseAssistantState {
 }
 
 export interface UseAssistantActions {
-  sendMessage: (message: string, context: Omit<ChatRequest, 'message'>) => Promise<void>;
+  sendMessage: (message: string, context: Omit<ChatRequest, 'message'>, messageId?: string) => Promise<void>;
   clearError: () => void;
   reset: () => void;
 }
@@ -34,7 +34,7 @@ export function useAssistant(
   const [suggestedActions, setSuggestedActions] = useState<SuggestedAction[]>([]);
 
   const sendMessage = useCallback(
-    async (message: string, context: Omit<ChatRequest, 'message'>) => {
+    async (message: string, context: Omit<ChatRequest, 'message'>, messageId?: string) => {
       if (!message.trim()) {
         setError('Message cannot be empty');
         return;

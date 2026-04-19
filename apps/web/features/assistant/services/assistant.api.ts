@@ -20,6 +20,7 @@ export interface SuggestedAction {
 
 export interface ChatResponse {
   answer: string;
+  actions?: ActionDefinition[];
   suggestedActions: SuggestedAction[];
 }
 
@@ -28,6 +29,12 @@ export interface ChatRequest {
   page: string;
   buildingId?: string;
   unitId?: string;
+}
+
+export interface ActionDefinition {
+  key: string;
+  label: string;
+  description?: string;
 }
 
 export class AssistantApi {
@@ -41,7 +48,10 @@ export class AssistantApi {
    */
   async chat(tenantId: string, request: ChatRequest): Promise<ChatResponse> {
     try {
-      return await apiClient<ChatResponse, ChatRequest>({
+      const response = await apiClient<{
+        answer: string;
+        actions?: ActionDefinition[];
+      }, ChatRequest>({
         path: `/tenants/${tenantId}/assistant/${tenantId}/chat`,
         method: 'POST',
         body: request,
@@ -49,6 +59,19 @@ export class AssistantApi {
           'X-Tenant-Id': tenantId,
         },
       });
+
+      // Map backend actions to frontend suggestedActions format
+      const suggestedActions: SuggestedAction[] = (response.actions || []).map((action) => {
+        return {
+          type: this.mapActionKeyToType(action.key),
+          payload: { actionKey: action.key },
+        };
+      });
+
+      return {
+        answer: response.answer,
+        suggestedActions,
+      };
     } catch (error) {
       const httpError = error as HttpError;
 
@@ -76,6 +99,41 @@ export class AssistantApi {
         status: httpError.status,
       };
     }
+  }
+
+  private mapActionKeyToType(actionKey: string): SuggestedAction['type'] {
+    const mapping: Record<string, SuggestedAction['type']> = {
+      // Tickets
+      'open-tickets': 'VIEW_TICKETS',
+      'view-my-tickets': 'VIEW_TICKETS',
+      'review-open-tickets': 'VIEW_TICKETS',
+      'view-all-tickets': 'VIEW_TICKETS',
+      'create-ticket': 'CREATE_TICKET',
+      // Payments
+      'open-payments': 'VIEW_PAYMENTS',
+      'open-payments-review': 'VIEW_PAYMENTS',
+      'view-payment-history': 'VIEW_PAYMENTS',
+      'view-all-payments': 'VIEW_PAYMENTS',
+      'view-my-balance': 'VIEW_PAYMENTS',
+      'view-pending-charges': 'VIEW_PAYMENTS',
+      'report-payment': 'VIEW_PAYMENTS',
+      'upload-payment-proof': 'VIEW_PAYMENTS',
+      // Charges
+      'open-charges': 'VIEW_REPORTS',
+      'review-pending-payments': 'VIEW_REPORTS',
+      // Communications
+      'open-communications': 'DRAFT_COMMUNICATION',
+      'create-communication': 'DRAFT_COMMUNICATION',
+      'view-all-communications': 'DRAFT_COMMUNICATION',
+      'view-my-inbox': 'DRAFT_COMMUNICATION',
+      'view-notices': 'DRAFT_COMMUNICATION',
+      // Documents
+      'open-documents': 'SEARCH_DOCS',
+      'upload-document': 'SEARCH_DOCS',
+      'view-building-documents': 'SEARCH_DOCS',
+      'view-rules': 'SEARCH_DOCS',
+    };
+    return mapping[actionKey] || 'VIEW_REPORTS';
   }
 }
 

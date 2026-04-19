@@ -4,6 +4,12 @@ import { ReactNode } from "react";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import { ImpersonationBanner } from "../../../features/impersonation/ImpersonationBanner";
+import { AssistantWidget, useAssistantContext } from "@/shared/components/assistant";
+
+function AssistantWrapper() {
+  const context = useAssistantContext();
+  return <AssistantWidget context={context} defaultUseLlm={false} />;
+}
 
 export default function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -20,6 +26,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </div>
         </main>
       </div>
+      <AssistantWrapper />
     </div>
   );
 }

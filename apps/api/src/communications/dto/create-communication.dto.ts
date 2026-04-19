@@ -42,6 +42,10 @@ export class CreateCommunicationDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCommunicationTargetDto)
   targets!: CreateCommunicationTargetDto[];
+
+  @IsOptional()
+  @IsString()
+  scheduledFor?: string;
 }
 
 // ============================================================================

@@ -178,6 +178,7 @@ export interface ExpenseResponseDto {
   tenantId: string;
   buildingId: string | null;
   period: string;
+  liquidationPeriod?: string | null;
   categoryId: string;
   categoryName: string;
   vendorId: string | null;
@@ -219,6 +220,7 @@ export interface LiquidationResponseDto {
   tenantId: string;
   buildingId: string;
   period: string;
+  chargePeriod?: string | null;
   status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
   baseCurrency: string;
   totalAmountMinor: number;
@@ -347,4 +349,64 @@ export interface IncomeResponseDto {
   unitGroupId: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// ── Adjustment (Retroactive adjustments) ──────────────────────────────────────
+
+export class CreateAdjustmentDto {
+  @IsString()
+  buildingId!: string;
+
+  @IsISO8601()
+  sourceInvoiceDate!: string;
+
+  @IsString()
+  categoryId!: string;
+
+  @IsInt()
+  @Min(1)
+  amountMinor!: number;
+
+  @IsString()
+  @Length(3, 3)
+  currencyCode!: string;
+
+  @IsString()
+  @MinLength(5)
+  reason!: string;
+
+  @IsString()
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}$/, { message: 'targetPeriod must be in YYYY-MM format' })
+  targetPeriod?: string;
+}
+
+export interface AdjustmentResponseDto {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  sourceInvoiceDate: Date;
+  sourcePeriod: string;
+  targetPeriod: string;
+  categoryId: string;
+  categoryName: string;
+  amountMinor: number;
+  currencyCode: string;
+  reason: string;
+  status: 'DRAFT' | 'VALIDATED' | 'VOIDED';
+  createdByMembershipId: string;
+  validatedByMembershipId: string | null;
+  validatedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ── Error with suggestion for retroactivos ────────────────────────────────────
+
+export class PeriodPublishedErrorDto {
+  code: 'PERIOD_PUBLISHED' = 'PERIOD_PUBLISHED';
+  message!: string;
+  publishedPeriod!: string;
+  suggestedTargetPeriod!: string;
+  canCreateAdjustment!: boolean;
 }

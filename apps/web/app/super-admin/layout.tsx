@@ -87,6 +87,12 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
               AI Analytics
             </Link>
             <Link
+              href="/super-admin/assistant-analytics"
+              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+            >
+              Assistant Actions
+            </Link>
+            <Link
               href="/super-admin/users"
               className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
             >

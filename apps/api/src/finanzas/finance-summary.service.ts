@@ -98,43 +98,40 @@ export class FinanceSummaryService {
     tenantId: string,
     period: string,
   ): Promise<FinanceReport> {
-    // Get all charges for period
+    // Get all charges for period with allocations
     const charges = await this.prisma.charge.findMany({
       where: {
         tenantId,
         liquidationId: { not: null }, // Only published charges
         canceledAt: null,
       },
-      select: {
-        id: true,
-        amount: true,
-        status: true,
-        dueDate: true,
+      include: {
+        paymentAllocations: {
+          include: { payment: true },
+        },
       },
     });
 
-    // Get all payments for period
-    const payments = await this.prisma.payment.findMany({
-      where: {
-        tenantId,
-        status: 'APPROVED',
-        paidAt: { not: null },
-      },
-      select: { id: true, amount: true },
-    });
-
-    // Calculate totals
+    // Calculate totals using REAL outstanding from allocations
     const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
-    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    const totalPaid = charges.reduce((sum, c) => {
+      const allocated = c.paymentAllocations.reduce((aSum, pa) => {
+        const status = pa.payment?.status;
+        if (status === 'APPROVED' || status === 'RECONCILED') {
+          return aSum + pa.amount;
+        }
+        return aSum;
+      }, 0);
+      return sum + allocated;
+    }, 0);
     const totalOutstanding = Math.max(0, totalCharges - totalPaid);
     const collectionRate =
       totalCharges > 0 ? Math.round((totalPaid / totalCharges) * 100) : 0;
 
-    // Get delinquent units (charges overdue)
-    const delinquentCharges = await this.prisma.charge.findMany({
+    // Get delinquent units (calculate from real allocations, not Charge.status)
+    const allCharges = await this.prisma.charge.findMany({
       where: {
         tenantId,
-        status: { in: ['PENDING', 'PARTIAL'] },
         dueDate: { lt: new Date() },
         canceledAt: null,
       },
@@ -146,17 +143,50 @@ export class FinanceSummaryService {
             building: { select: { name: true } },
           },
         },
+        paymentAllocations: {
+          include: { payment: true },
+        },
       },
       orderBy: { amount: 'desc' },
-      take: 10, // Top 10 delinquent
+      take: 100,
     });
 
-    const delinquentUnits = delinquentCharges.map((c) => ({
-      unitId: c.unit.id,
-      unitLabel: c.unit.label || 'N/A',
-      buildingName: c.unit.building.name,
-      outstanding: c.amount,
-    }));
+    // Calculate real outstanding from APPROVED/RECONCILED payments only
+    const unitDebtMap = new Map<string, { unit: any; buildingName: string; outstanding: number }>();
+    for (const charge of allCharges) {
+      const allocatedApproved = charge.paymentAllocations.reduce((sum, pa) => {
+        const status = pa.payment?.status;
+        if (status === 'APPROVED' || status === 'RECONCILED') {
+          return sum + pa.amount;
+        }
+        return sum;
+      }, 0);
+      const outstanding = charge.amount - allocatedApproved;
+
+      if (outstanding > 0) {
+        const existing = unitDebtMap.get(charge.unitId);
+        if (existing) {
+          existing.outstanding += outstanding;
+        } else {
+          unitDebtMap.set(charge.unitId, {
+            unit: charge.unit,
+            buildingName: charge.unit.building.name,
+            outstanding,
+          });
+        }
+      }
+    }
+
+    // Sort by outstanding and take top 10
+    const delinquentUnits = Array.from(unitDebtMap.values())
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 10)
+      .map((item) => ({
+        unitId: item.unit.id,
+        unitLabel: item.unit.label || 'N/A',
+        buildingName: item.buildingName,
+        outstanding: item.outstanding,
+      }));
 
     return {
       totalCharges,

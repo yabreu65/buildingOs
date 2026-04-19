@@ -150,17 +150,24 @@ export class DashboardService {
       },
     });
 
-    // Calculate outstanding amount (pending + partial)
-    const pendingCharges = charges.filter(
-      (c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL,
-    );
-
-    const outstandingAmount = pendingCharges.reduce((sum, charge) => {
-      const allocated = charge.paymentAllocations.reduce((aSum, a) => {
-        return aSum + (a.payment?.status === PaymentStatus.APPROVED ? a.amount : 0);
+    // Calculate outstanding amount using REAL allocations from APPROVED/RECONCILED payments
+    // Debt is determined by actual paid allocations, NOT by Charge.status
+    const chargesWithOutstanding = charges.map((charge) => {
+      const approvedAllocated = charge.paymentAllocations.reduce((aSum, a) => {
+        const status = a.payment?.status;
+        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+          return aSum + a.amount;
+        }
+        return aSum;
       }, 0);
-      return sum + (charge.amount - allocated);
-    }, 0);
+      return {
+        charge,
+        allocated: approvedAllocated,
+        outstanding: Math.max(0, charge.amount - approvedAllocated),
+      };
+    }).filter((item) => item.outstanding > 0);
+
+    const outstandingAmount = chargesWithOutstanding.reduce((sum, item) => sum + item.outstanding, 0);
 
     // Calculate collected amount (from APPROVED payments in period)
     const collectedAmount = await this.prisma.payment.aggregate({
@@ -180,19 +187,13 @@ export class DashboardService {
     const collected = collectedAmount._sum.amount || 0;
     const collectionRate = totalChargesEmitted > 0 ? collected / totalChargesEmitted : 0;
 
-    // Delinquent units (units with outstanding > 0)
+    // Delinquent units (units with outstanding > 0) - use precalculated chargesWithOutstanding
     const delinquentUnitsMap = new Map<string, number>();
-    for (const charge of pendingCharges) {
-      const allocated = charge.paymentAllocations.reduce((aSum, a) => {
-        return aSum + (a.payment?.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      const outstanding = charge.amount - allocated;
-      if (outstanding > 0) {
-        delinquentUnitsMap.set(
-          charge.unitId,
-          (delinquentUnitsMap.get(charge.unitId) || 0) + outstanding,
-        );
-      }
+    for (const item of chargesWithOutstanding) {
+      delinquentUnitsMap.set(
+        item.charge.unitId,
+        (delinquentUnitsMap.get(item.charge.unitId) || 0) + item.outstanding,
+      );
     }
 
     return {
@@ -337,8 +338,8 @@ export class DashboardService {
         where: {
           tenantId,
           buildingId: { in: buildingIds },
-          status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
           canceledAt: null,
+          // Don't filter by status - calculate real outstanding from allocations
         },
         include: { paymentAllocations: { include: { payment: true } } },
       }),
@@ -382,7 +383,8 @@ export class DashboardService {
       const charges = chargesByBuilding.get(buildingId) || [];
       const outstandingAmount = charges.reduce((sum, charge) => {
         const allocated = charge.paymentAllocations.reduce((aSum, a) => {
-          return aSum + (a.payment?.status === PaymentStatus.APPROVED ? a.amount : 0);
+          const status = a.payment?.status;
+          return aSum + ((status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) ? a.amount : 0);
         }, 0);
         return sum + (charge.amount - allocated);
       }, 0);

@@ -18,6 +18,7 @@ import { useAssistant } from '../hooks/useAssistant';
 import { SuggestedActionsList } from './SuggestedActionsList';
 import { useAiNudges } from '../hooks/useAiNudges';
 import { useCanAccessAi } from '@/features/auth/useUserRoles';
+import { feedbackApi, FeedbackRequest } from '../services/feedback.api';
 
 interface AssistantWidgetProps {
   tenantId: string;
@@ -65,6 +66,90 @@ function ResponseSkeleton() {
 }
 
 /**
+ * Feedback controls for rating response
+ */
+function FeedbackControls({
+  messageId,
+  sessionId,
+  tenantId,
+}: {
+  messageId: string;
+  sessionId: string;
+  tenantId: string;
+}) {
+  const [rating, setRating] = useState<'useful' | 'not_useful' | null>(null);
+  const [comment, setComment] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [showComment, setShowComment] = useState(false);
+
+  const handleRate = async (r: 'useful' | 'not_useful') => {
+    if (r === 'not_useful') {
+      setShowComment(true);
+    }
+    setRating(r);
+
+    await feedbackApi.submit(tenantId, {
+      messageId,
+      sessionId,
+      rating: r,
+    });
+    setSubmitted(true);
+  };
+
+  const handleCommentSubmit = async () => {
+    if (!comment.trim()) return;
+    await feedbackApi.submit(tenantId, {
+      messageId,
+      sessionId,
+      rating: 'not_useful',
+      comment: comment.trim(),
+    });
+    setSubmitted(true);
+  };
+
+  if (submitted || !messageId) return null;
+
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="text-gray-500">Was this helpful?</span>
+        <button
+          onClick={() => handleRate('useful')}
+          disabled={rating !== null}
+          className="px-2 py-1 rounded border border-gray-300 hover:bg-green-50 disabled:opacity-50"
+        >
+          👍 Yes
+        </button>
+        <button
+          onClick={() => handleRate('not_useful')}
+          disabled={rating !== null}
+          className="px-2 py-1 rounded border border-gray-300 hover:bg-red-50 disabled:opacity-50"
+        >
+          👎 No
+        </button>
+      </div>
+      {showComment && !submitted && (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Why not? (optional)"
+            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs"
+          />
+          <button
+            onClick={handleCommentSubmit}
+            className="px-2 py-1 bg-gray-600 text-white rounded text-xs"
+          >
+            Send
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Main widget component
  */
 export function AssistantWidget({
@@ -86,6 +171,18 @@ export function AssistantWidget({
   const [message, setMessage] = useState('');
   const [expanded, setExpanded] = useState(isOpen);
   const inputRef = useRef<HTMLInputElement>(null);
+  const getSessionId = () => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('ai_session_id');
+      if (stored) return stored;
+      const newId = `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem('ai_session_id', newId);
+      return newId;
+    }
+    return `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  };
+  const [sessionId] = useState(getSessionId);
+  const lastMessageId = useRef<string>('');
   const { loading, error, answer, suggestedActions, sendMessage, clearError, reset } =
     useAssistant(tenantId);
   const { nudges, submitting, requestUpgrade } = useAiNudges(tenantId);
@@ -105,11 +202,14 @@ export function AssistantWidget({
     const msg = message;
     setMessage('');
 
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    lastMessageId.current = messageId;
+
     await sendMessage(msg, {
       page: currentPage,
       buildingId,
       unitId,
-    });
+    }, messageId);
   };
 
   const handleClose = () => {
@@ -192,8 +292,15 @@ export function AssistantWidget({
 
             {/* Answer */}
             {answer && !loading && (
-              <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded">
-                <p>{answer}</p>
+              <div className="space-y-3">
+                <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded">
+                  <p>{answer}</p>
+                </div>
+                <FeedbackControls
+                  messageId={lastMessageId.current}
+                  sessionId={sessionId}
+                  tenantId={tenantId}
+                />
               </div>
             )}
 

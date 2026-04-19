@@ -1,12 +1,16 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import Card from '@/shared/components/ui/Card';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import Skeleton from '@/shared/components/ui/Skeleton';
-import { AlertCircle, TrendingUp, TrendingDown } from 'lucide-react';
+import { AlertCircle, TrendingUp } from 'lucide-react';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface TenantDelinquentUnitsListProps {
+  tenantId: string;
+  currency?: string;
   delinquent: Array<{
     unitId: string;
     unitLabel: string;
@@ -17,7 +21,17 @@ interface TenantDelinquentUnitsListProps {
   loading: boolean;
 }
 
-export const TenantDelinquentUnitsList = ({ delinquent, loading }: TenantDelinquentUnitsListProps) => {
+/**
+ * TenantDelinquentUnitsList: Display tenant-level delinquent units
+ * NOTE: outstanding is in minor units (cents), formatCurrency handles conversion
+ */
+export const TenantDelinquentUnitsList = ({ 
+  tenantId, 
+  currency = 'USD', 
+  delinquent, 
+  loading 
+}: TenantDelinquentUnitsListProps) => {
+  const router = useRouter();
   if (!loading && delinquent.length === 0) {
     return (
       <div className="bg-green-50 border-l-4 border-green-500 p-6">
@@ -58,19 +72,19 @@ export const TenantDelinquentUnitsList = ({ delinquent, loading }: TenantDelinqu
           ))}
         </div>
       ) : (
-        <Table className="min-w-full divide-y divide-gray-200">
+        <Table className="min-w-full divide-y divide-gray-200 table-fixed">
           <THead className="bg-gray-50">
             <TR>
-              <TH className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <TH className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4 !text-center">
                 Unidad
               </TH>
-              <TH className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <TH className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4 !text-center">
                 Edificio
               </TH>
-              <TH className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <TH className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4 !text-center">
                 Deuda Pendiente
               </TH>
-              <TH className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <TH className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4 !text-center">
                 Acción
               </TH>
             </TR>
@@ -78,30 +92,24 @@ export const TenantDelinquentUnitsList = ({ delinquent, loading }: TenantDelinqu
           <TBody className="bg-white divide-y divide-gray-200">
             {sortedDelinquent.map((item, index) => (
               <TR key={item.unitId} className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-gray-100`}>
-                <TD className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                <TD className="px-4 py-4 text-center text-sm font-medium text-gray-900 truncate" title={item.unitLabel || item.unitId}>
                   {item.unitLabel || item.unitId}
                 </TD>
-                <TD className="px-6 py-4 text-left text-sm font-medium text-gray-700">
+                <TD className="px-4 py-4 text-center text-sm font-medium text-gray-700">
                   {item.buildingName || '-'}
                 </TD>
-                <TD className="px-6 py-4 text-right text-sm font-medium">
-                  <div className="flex items-center">
-                    <div className="w-8 h-8 mr-2">
-                      <TrendingUp className="text-red-600" />
-                    </div>
+                <TD className="px-4 py-4 text-center text-sm font-medium">
+                  <div className="inline-flex items-center gap-1">
                     <span className="font-semibold text-red-600">
-                      {new Intl.NumberFormat('es-AR', {
-                        style: 'currency',
-                        currency: 'ARS',
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      }).format(item.outstanding)}
+                      {formatCurrency(item.outstanding, currency)}
                     </span>
+                    <TrendingUp className="w-4 h-4 text-red-600" />
                   </div>
                 </TD>
-                <TD className="px-6 py-4 text-center text-sm space-x-2">
+                <TD className="px-4 py-4 text-center text-sm">
                   <button
                     className="px-3 py-1.5 text-xs font-medium bg-red-50 text-red-600 rounded hover:bg-red-100"
+                    onClick={() => router.push(`/${tenantId}/buildings/${item.buildingId}/units/${item.unitId}`)}
                   >
                     Ver detalle
                   </button>

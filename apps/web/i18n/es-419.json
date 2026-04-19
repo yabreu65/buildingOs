@@ -36,7 +36,13 @@
     "status": "Estado",
     "actions": "Acciones",
     "comments": "comentarios",
-    "condominium": "Condominio"
+    "condominium": "Condominio",
+    "unknown": "Desconocido",
+    "invalidParameters": "Parámetros inválidos",
+    "noData": "Sin datos",
+    "retry": "Reintentar",
+    "accessDenied": "Acceso denegado",
+    "goBack": "Volver atrás"
   },
 
   "auth": {
@@ -287,6 +293,11 @@
     "emptyDescription": "Agrega tu primera unidad para comenzar",
     "assignResident": "Asignar residente",
     "removeResident": "Remover residente",
+    "removeOccupantError": "Error al remover residente",
+    "removeOccupantConfirm": "Este residente será desasignado de esta unidad. Esta acción no se puede deshacer.",
+    "residentAssigned": "Residente asignado exitosamente",
+    "residentRemoved": "Residente removido exitosamente",
+    "noOccupants": "Sin residentes asignados",
     "addResident": "Agregar residente",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar esta unidad?",
     "accessDenied": "No tienes acceso a esta unidad",
@@ -624,10 +635,16 @@
     "overdue": "Vencidas",
     "pending": "Pendientes",
     "paid": "Pagadas",
-    "totalCollected": "Total recaudado",
+    "totalCollected": "Total reca",
     "totalPending": "Total pendiente",
     "totalOverdue": "Total vencido",
-    "collectionRate": "Tasa de cobranza"
+    "collectionRate": "Tasa de cobranza",
+    "financialStatus": "Estado Financiero",
+    "loadError": "No se pudo cargar el estado financiero",
+    "noData": "No hay información financiera disponible",
+    "totalDebt": "Deuda Total",
+    "paidAmount": "Pagado",
+    "upToDate": "Al día"
   },
 
   "vendors": {

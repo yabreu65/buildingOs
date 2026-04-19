@@ -17,3 +17,5 @@ export { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager
 export { LiquidationsTab } from './LiquidationsTab';
 export { LiquidationCard } from './LiquidationCard';
 export { LiquidationPublishModal } from './LiquidationPublishModal';
+export { RecurringExpensesTab } from './RecurringExpensesTab';
+export { RecurringExpenseModal } from './RecurringExpenseModal';

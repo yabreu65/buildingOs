@@ -66,6 +66,21 @@ export interface NotasRevelatoriasReport {
   buildingExpenses: BuildingExpenseSection[];
   reservaLegal: { buildingName: string; usd: number; ves: number }[];
   alicuotas: BuildingAlicuota[];
+  // NEW: Ajustes retroactivos
+  adjustments: AdjustmentLineItem[];
+  adjustmentTotals: { usd: number; ves: number; pesos: number };
+}
+
+export interface AdjustmentLineItem {
+  itemNumber: number;
+  buildingName: string;
+  sourcePeriod: string;
+  date: string;
+  description: string;
+  reason: string;
+  usdAmount: number;
+  vesAmount: number;
+  pesosAmount: number;
 }
 
 export interface BuildingPeriodSummary {
@@ -190,7 +205,7 @@ export class ExpenseReportsService {
       throw new ForbiddenException('Solo administradores pueden ver reportes');
     }
 
-    const [tenant, buildings, incomes, commonExps, buildingExps, unitCategories, liquidations] =
+    const [tenant, buildings, incomes, commonExps, buildingExps, unitCategories, liquidations, adjustments] =
       await Promise.all([
         this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
 
@@ -229,6 +244,12 @@ export class ExpenseReportsService {
         this.prisma.liquidation.findMany({
           where: { tenantId, period, status: 'PUBLISHED' },
           select: { buildingId: true, totalAmountMinor: true, baseCurrency: true },
+        }),
+
+        this.prisma.adjustment.findMany({
+          where: { tenantId, status: 'VALIDATED', targetPeriod: period },
+          include: { building: { select: { name: true } } },
+          orderBy: { createdAt: 'asc' },
         }),
       ]);
 
@@ -354,6 +375,25 @@ export class ExpenseReportsService {
       return { buildingId: b.id, buildingName: b.name, rows, grandTotal };
     });
 
+    // ── Ajustes / Retroactivos ───────────────────────────────────────────────
+    let adjCounter = 1;
+    const adjustmentItems: AdjustmentLineItem[] = adjustments.map((adj) => ({
+      itemNumber: adjCounter++,
+      buildingName: adj.building.name,
+      sourcePeriod: adj.sourcePeriod,
+      date: this.formatDate(adj.sourceInvoiceDate),
+      description: `${adj.categoryId} - Ajuste por ${adj.sourcePeriod}`,
+      reason: adj.reason,
+      usdAmount: adj.currencyCode === 'USD' ? adj.amountMinor : 0,
+      vesAmount: adj.currencyCode === 'VES' ? adj.amountMinor : 0,
+      pesosAmount: !['USD', 'VES'].includes(adj.currencyCode) ? adj.amountMinor : 0,
+    }));
+    const adjustmentTotals = {
+      usd: adjustments.filter((a) => a.currencyCode === 'USD').reduce((s, a) => s + a.amountMinor, 0),
+      ves: adjustments.filter((a) => a.currencyCode === 'VES').reduce((s, a) => s + a.amountMinor, 0),
+      pesos: adjustments.filter((a) => !['USD', 'VES'].includes(a.currencyCode)).reduce((s, a) => s + a.amountMinor, 0),
+    };
+
     return {
       tenantId,
       tenantName: tenant?.name ?? tenantId,
@@ -365,6 +405,8 @@ export class ExpenseReportsService {
       buildingExpenses: buildingExpenses.filter((b) => b.items.length > 0),
       reservaLegal,
       alicuotas,
+      adjustments: adjustmentItems,
+      adjustmentTotals,
     };
   }
 

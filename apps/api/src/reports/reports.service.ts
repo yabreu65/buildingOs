@@ -208,7 +208,7 @@ export class ReportsService {
       },
     });
 
-    // Calculate totals
+    // Calculate totals using REAL allocations from APPROVED payments
     const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
 
     const totalPaid = charges.reduce((sum, c) => {
@@ -221,24 +221,25 @@ export class ReportsService {
 
     const totalOutstanding = totalCharges - totalPaid;
 
-    // Find delinquent units
+    // Find delinquent units (filter by dueDate, not Charge.status)
     const now = new Date();
-    const delinquentCharges = charges.filter(
-      (c) =>
-        (c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL) &&
-        c.dueDate < now
-    );
+    const overdueCharges = charges.filter((c) => c.dueDate < now);
 
     const delinquentByUnit = new Map<string, number>();
-    for (const charge of delinquentCharges) {
-      const allocated = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment ? a.amount : 0);
+    for (const charge of overdueCharges) {
+      // Calculate real outstanding from APPROVED payments only
+      const allocatedApproved = charge.paymentAllocations.reduce((sum, a) => {
+        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
       }, 0);
-      const outstanding = charge.amount - allocated;
-      delinquentByUnit.set(
-        charge.unitId,
-        (delinquentByUnit.get(charge.unitId) || 0) + outstanding
-      );
+      const outstanding = charge.amount - allocatedApproved;
+
+      // Only count if there's actual outstanding
+      if (outstanding > 0) {
+        delinquentByUnit.set(
+          charge.unitId,
+          (delinquentByUnit.get(charge.unitId) || 0) + outstanding
+        );
+      }
     }
 
     const delinquentUnitsCount = delinquentByUnit.size;

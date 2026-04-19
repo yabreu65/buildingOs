@@ -33,10 +33,14 @@ export async function getResidentContext(tenantId: string): Promise<ResidentCont
  * Get ledger for a unit (charges, payments, balance).
  * Re-exports from finance.api to keep imports local to this feature.
  */
-export async function getResidentLedger(unitId: string): Promise<UnitLedger> {
+export async function getResidentLedger(
+  tenantId: string,
+  unitId: string,
+): Promise<UnitLedger> {
   return apiClient<UnitLedger>({
     path: `/units/${unitId}/ledger`,
     method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
   });
 }
 

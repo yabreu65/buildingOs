@@ -131,6 +131,7 @@ export class CommunicationsController {
           targetType: CommunicationTargetType;
           targetId?: string;
         }>,
+        scheduledFor: dto.scheduledFor,
       },
     );
   }

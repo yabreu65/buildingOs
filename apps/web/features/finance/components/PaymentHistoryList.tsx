@@ -36,14 +36,14 @@ export function PaymentHistoryList({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
 
-  const handleDownloadProof = async (paymentId: string, fileId: string) => {
+  const handleDownloadProof = async (paymentId: string, documentId: string) => {
     if (downloadUrls[paymentId]) {
       window.open(downloadUrls[paymentId], '_blank');
       return;
     }
     setDownloadingId(paymentId);
     try {
-      const response = await getDownloadUrl(tenantId, fileId);
+      const response = await getDownloadUrl(tenantId, documentId);
       setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
       window.open(response.url, '_blank');
     } catch {
@@ -106,9 +106,9 @@ export function PaymentHistoryList({
                 </Badge>
               </TD>
               <TD>
-                {payment.proofFileId ? (
+                {payment.proofDocumentId ? (
                   <button
-                    onClick={() => handleDownloadProof(payment.id, payment.proofFileId!)}
+                    onClick={() => handleDownloadProof(payment.id, payment.proofDocumentId!)}
                     disabled={downloadingId === payment.id}
                     className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
                   >
@@ -119,6 +119,8 @@ export function PaymentHistoryList({
                     )}
                     Ver comprobante
                   </button>
+                ) : payment.proofFileId ? (
+                  <span className="text-muted-foreground text-sm">Comprobante sin procesar</span>
                 ) : (
                   <span className="text-muted-foreground text-sm">Sin comprobante</span>
                 )}

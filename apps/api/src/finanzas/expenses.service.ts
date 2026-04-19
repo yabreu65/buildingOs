@@ -170,16 +170,51 @@ export class ExpensesService {
       }
     }
 
+    // Derivar liquidationPeriod desde invoiceDate (nueva semántica)
+    const invoiceDate = new Date(dto.invoiceDate);
+    const year = invoiceDate.getFullYear();
+    const month = String(invoiceDate.getMonth() + 1).padStart(2, '0');
+    const liquidationPeriod = `${year}-${month}`;
+
+    // Verificar si el período de devengo está publicado para este edificio (solo para BUILDING scope)
+    if (scopeType === 'BUILDING' && dto.buildingId) {
+      const publishedLiq = await this.prisma.liquidation.findFirst({
+        where: {
+          tenantId,
+          buildingId: dto.buildingId,
+          period: liquidationPeriod,
+          status: 'PUBLISHED',
+        },
+        select: { id: true, period: true },
+      });
+
+      if (publishedLiq) {
+        // Calcular período objetivo (próximo mes abierto o actual)
+        const currentYear = new Date().getFullYear();
+        const currentMonth = new Date().getMonth() + 1;
+        const targetPeriod = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+        throw new BadRequestException({
+          code: 'PERIOD_PUBLISHED',
+          message: `El período ${liquidationPeriod} ya está liquidado y publicado. Registre este gasto como Ajuste para cobrarse en ${targetPeriod}.`,
+          publishedPeriod: liquidationPeriod,
+          suggestedTargetPeriod: targetPeriod,
+          canCreateAdjustment: true,
+        });
+      }
+    }
+
     const expense = await this.prisma.expense.create({
       data: {
         tenantId,
         buildingId: dto.buildingId ?? null,
-        period: dto.period,
+        period: dto.period, // LEGACY: mantener por compatibilidad
+        liquidationPeriod, // NUEVO: período de devengo derivado de invoiceDate
         categoryId: dto.categoryId,
         vendorId: dto.vendorId ?? null,
         amountMinor: dto.amountMinor,
         currencyCode: dto.currencyCode,
-        invoiceDate: new Date(dto.invoiceDate),
+        invoiceDate,
         description: dto.description ?? null,
         attachmentFileKey: dto.attachmentFileKey ?? null,
         scopeType,
@@ -212,6 +247,7 @@ export class ExpensesService {
       entityId: expense.id,
       metadata: {
         period: dto.period,
+        liquidationPeriod,
         buildingId: dto.buildingId ?? null,
         scopeType,
         amountMinor: dto.amountMinor,
@@ -417,6 +453,7 @@ export class ExpensesService {
       tenantId: string;
       buildingId: string | null;
       period: string;
+      liquidationPeriod: string | null;
       categoryId: string;
       vendorId: string | null;
       amountMinor: number;
@@ -438,6 +475,7 @@ export class ExpensesService {
       tenantId: expense.tenantId,
       buildingId: expense.buildingId,
       period: expense.period,
+      liquidationPeriod: expense.liquidationPeriod,
       categoryId: expense.categoryId,
       categoryName: expense.category.name,
       vendorId: expense.vendorId,

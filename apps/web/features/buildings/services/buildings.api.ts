@@ -342,6 +342,16 @@ export type Occupant = {
   role: 'OWNER' | 'RESIDENT';
   user?: User;
   unit?: Unit;
+  member?: {
+    name?: string;
+    email?: string;
+    user?: {
+      id: string;
+      fullName?: string;
+      email?: string;
+      phone?: string;
+    };
+  };
   createdAt?: string;
   updatedAt?: string;
 };
@@ -365,7 +375,19 @@ export async function fetchOccupants(
       headers: getTenantHeaders(tenantId),
     });
     logResponse(endpoint, 200, data);
-    return data;
+    // Map member.user to user for frontend compatibility
+    return data.map((occupant) => ({
+      ...occupant,
+      user: occupant.member?.user
+        ? {
+            id: occupant.member.user.id,
+            tenantId,
+            fullName: occupant.member.name || occupant.member.user.fullName || 'Unknown',
+            email: occupant.member.user.email,
+            phone: occupant.member.user.phone,
+          }
+        : undefined,
+    }));
   } catch (error) {
     const err = error as Error;
     logError(endpoint, 500, err);

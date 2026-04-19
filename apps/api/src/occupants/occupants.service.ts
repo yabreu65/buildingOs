@@ -127,7 +127,11 @@ export class OccupantsService {
 
     return await this.prisma.unitOccupant.findMany({
       where: { unitId },
-      include: { member: true },
+      include: { 
+        member: {
+          include: { user: true }
+        } 
+      },
       orderBy: { createdAt: 'desc' },
     });
   }

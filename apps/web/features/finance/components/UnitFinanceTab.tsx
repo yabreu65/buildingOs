@@ -8,14 +8,14 @@ import { formatCurrency } from '@/shared/lib/format/money';
 import { DollarSign, TrendingUp, Calendar } from 'lucide-react';
 
 interface UnitFinanceTabProps {
-  buildingId: string;
+  tenantId: string;
   unitId: string;
   buildingName?: string;
   unitLabel?: string;
 }
 
-export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: UnitFinanceTabProps) {
-  const { data: ledger, isLoading, error, refetch } = useUnitLedger(buildingId, unitId);
+export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: UnitFinanceTabProps) {
+  const { data: ledger, isLoading, error, refetch } = useUnitLedger(tenantId, unitId);
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
   if (isLoading) {
@@ -60,7 +60,9 @@ export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: 
     {} as Record<string, typeof ledger.charges>
   );
 
-  const pendingCharges = ledger.charges.filter((c) => c.status !== 'PAID');
+  // Pending charges = charges with real outstanding (amount - allocated > 0)
+  // This matches the ledger's balance calculation, not the legacy status field
+  const pendingCharges = ledger.charges.filter((c) => (c.amount - (c.allocated ?? 0)) > 0);
   const lastPayment = ledger.payments && ledger.payments.length > 0 ? ledger.payments[0] : null;
 
   return (
@@ -79,7 +81,7 @@ export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: 
             <div>
               <p className="text-sm text-muted-foreground">Deuda Total</p>
               <p className="text-2xl font-bold text-orange-600">
-                {ledger.totals?.totalCharges ? formatCurrency(ledger.totals.totalCharges, ledger.totals.currency || 'USD') : '$0.00'}
+                {ledger.totals?.balance ? formatCurrency(ledger.totals.balance, ledger.totals.currency || 'USD') : '$0.00'}
               </p>
             </div>
             <DollarSign className="w-5 h-5 text-orange-600" />
@@ -126,10 +128,11 @@ export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: 
           <h3 className="text-lg font-semibold mb-4">Cargos Pendientes ({pendingCharges.length})</h3>
           <div className="space-y-3">
             {Object.entries(chargesByPeriod).map(([period, charges]) => {
-              const periodPending = charges.filter((c) => c.status !== 'PAID');
+              // Filter by real outstanding, not legacy status
+              const periodPending = charges.filter((c) => (c.amount - (c.allocated ?? 0)) > 0);
               if (periodPending.length === 0) return null;
 
-              const periodTotal = periodPending.reduce((sum, c) => sum + (c.amount || 0), 0);
+              const periodTotal = periodPending.reduce((sum, c) => sum + (c.amount - (c.allocated ?? 0)), 0);
               const isExpanded = expandedMonth === period;
 
               return (
@@ -149,17 +152,22 @@ export function UnitFinanceTab({ buildingId, unitId, buildingName, unitLabel }: 
 
                   {isExpanded && (
                     <div className="bg-muted/30 border-t divide-y">
-                      {periodPending.map((charge) => (
-                        <div key={charge.id} className="p-4 flex items-center justify-between">
-                          <div className="flex-1">
-                            <p className="font-medium">{charge.concept || 'Cargo'}</p>
-                            <p className="text-sm text-muted-foreground">Status: {charge.status}</p>
+                      {periodPending.map((charge) => {
+                        const outstanding = charge.amount - (charge.allocated ?? 0);
+                        return (
+                          <div key={charge.id} className="p-4 flex items-center justify-between">
+                            <div className="flex-1">
+                              <p className="font-medium">{charge.concept || 'Cargo'}</p>
+                              <p className="text-sm text-muted-foreground">
+                                Pendiente: {formatCurrency(outstanding, charge.currency || 'USD')}
+                              </p>
+                            </div>
+                            <p className="font-semibold">
+                              {formatCurrency(outstanding, charge.currency || 'USD')}
+                            </p>
                           </div>
-                          <p className="font-semibold">
-                            {formatCurrency(charge.amount || 0, charge.currency || 'USD')}
-                          </p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

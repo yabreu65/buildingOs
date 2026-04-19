@@ -5,6 +5,7 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { AlertCircle } from 'lucide-react';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface DelinquentUnit {
   unitId: string;
@@ -21,6 +22,7 @@ interface DelinquentUnitsListProps {
 
 /**
  * DelinquentUnitsList: Display units with outstanding payments
+ * NOTE: outstanding is in minor units (cents), formatCurrency handles conversion
  */
 export function DelinquentUnitsList({
   units,
@@ -60,7 +62,7 @@ export function DelinquentUnitsList({
                 <TD className="font-medium text-sm">{unit.buildingName}</TD>
                 <TD className="font-medium">{unit.unitLabel}</TD>
                 <TD className="text-right font-semibold text-red-600">
-                  {currency} {unit.outstanding.toFixed(2)}
+                  {formatCurrency(unit.outstanding, currency)}
                 </TD>
               </TR>
             ))}

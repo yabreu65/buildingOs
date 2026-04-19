@@ -1,14 +1,15 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, Loader2, Plus, Trash2, Calculator, Users } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { X, Loader2, Plus, Trash2, Calculator, Users, AlertTriangle } from 'lucide-react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import {
   useCreateExpense,
   useExpenseLedgerCategories,
   useUpdateExpense,
+  useCreateAdjustment,
 } from '../hooks/useExpenseLedger';
 import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 import { useBuildings } from '@/features/buildings/hooks';
@@ -96,6 +97,20 @@ export function ExpenseCreateModal({
     loading: vendorsLoading,
     refetch: refetchVendors,
   } = useVendors({ buildingId: effectiveBuildingId || undefined });
+
+  // Derivar liquidationPeriod desde invoiceDate
+  const derivedPeriod = useMemo(() => {
+    const d = new Date(form.invoiceDate);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }, [form.invoiceDate]);
+
+  // Estado para modo ajuste (cuando período está cerrado)
+  const [isAdjustmentMode, setIsAdjustmentMode] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState('');
+  const createAdjustmentMutation = useCreateAdjustment(tenantId);
 
   // Determine catalogScope based on scopeType
   const catalogScope = form.scopeType === 'TENANT_SHARED' ? 'CONDOMINIUM_COMMON' : 'BUILDING';
@@ -308,6 +323,31 @@ export function ExpenseCreateModal({
     }
 
     try {
+      // Si está en modo ajuste, crear ajuste en lugar de gasto
+      if (isAdjustmentMode) {
+        if (!adjustmentReason.trim()) {
+          toast('Debés especificar el motivo del ajuste', 'error');
+          return;
+        }
+        const currentYear = new Date().getFullYear();
+        const currentMonth = new Date().getMonth() + 1;
+        const targetPeriod = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+        
+        await createAdjustmentMutation.mutateAsync({
+          buildingId: form.buildingId,
+          sourceInvoiceDate: form.invoiceDate,
+          sourcePeriod: derivedPeriod,
+          targetPeriod,
+          categoryId: form.categoryId,
+          amountMinor,
+          currencyCode: form.currencyCode,
+          reason: adjustmentReason,
+        });
+        toast('Ajuste registrado. Validalo para que se cobre en la próxima liquidación.', 'success');
+        onCreated();
+        return;
+      }
+
       const expenseData: CreateExpenseData = {
         buildingId: form.scopeType === 'BUILDING' ? form.buildingId : undefined,
         period,
@@ -341,6 +381,16 @@ export function ExpenseCreateModal({
 
       onCreated();
     } catch (err: unknown) {
+      // Detectar error de período publicado y ofrecer crear ajuste
+      if (
+        err instanceof Error &&
+        err.message.includes('PERIOD_PUBLISHED')
+      ) {
+        toast('El período ya está liquidado. ¿Querés registrarlo como ajuste?', 'error');
+        setIsAdjustmentMode(true);
+        return;
+      }
+      
       const msg =
         err instanceof Error
           ? err.message
@@ -355,9 +405,16 @@ export function ExpenseCreateModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-background rounded-xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">
-            {isEditMode ? 'Editar gasto en borrador' : 'Registrar gasto'}
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold">
+              {isEditMode ? 'Editar gasto en borrador' : 'Registrar gasto'}
+            </h2>
+            {derivedPeriod && !isEditMode && (
+              <p className="text-xs text-muted-foreground">
+                Período de devengo: <span className="font-medium">{derivedPeriod}</span>
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-muted"
@@ -591,6 +648,42 @@ export function ExpenseCreateModal({
             />
           </div>
 
+          {/* Ajuste / Retroactivo UI */}
+          {isAdjustmentMode && (
+            <div className="border-2 border-amber-500 bg-amber-50 rounded-lg p-4 space-y-3">
+              <div className="flex items-center gap-2 text-amber-800">
+                <AlertTriangle className="h-5 w-5" />
+                <span className="font-medium">Registro como Ajuste</span>
+              </div>
+              <p className="text-sm text-amber-700">
+                El período {derivedPeriod} ya está liquidado. Este gasto se cobrará en el período actual.
+              </p>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-amber-800">
+                  Motivo del ajuste <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  value={adjustmentReason}
+                  onChange={(e) => setAdjustmentReason(e.target.value)}
+                  placeholder="Ej: Gasto de período anterior no registrado a tiempo"
+                  rows={2}
+                  className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdjustmentMode(false);
+                  setAdjustmentReason('');
+                }}
+                className="text-sm text-amber-700 hover:underline"
+              >
+                ← Volver a registrar como gasto normal
+              </button>
+            </div>
+          )}
+
           {/* Allocations section - only for TENANT_SHARED create mode */}
           {form.scopeType === 'TENANT_SHARED' && !isEditMode && (
             <div className="border rounded-lg p-4 space-y-3">
@@ -763,12 +856,12 @@ export function ExpenseCreateModal({
             </Button>
             <Button
               type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending}
+              disabled={createMutation.isPending || updateMutation.isPending || createAdjustmentMutation.isPending}
             >
-              {createMutation.isPending || updateMutation.isPending ? (
+              {(createMutation.isPending || updateMutation.isPending || createAdjustmentMutation.isPending) && (
                 <Loader2 className="h-4 w-4 animate-spin mr-1" />
-              ) : null}
-              {isEditMode ? 'Guardar cambios' : 'Registrar'}
+              )}
+              {isEditMode ? 'Guardar cambios' : isAdjustmentMode ? 'Registrar Ajuste' : 'Registrar'}
             </Button>
           </div>
         </form>

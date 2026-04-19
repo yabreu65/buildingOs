@@ -71,8 +71,11 @@ export const CommunicationDetail = ({
   const handleSchedule = async () => {
     if (!onSend || !scheduledAt) return;
     const date = new Date(scheduledAt);
-    if (date <= new Date()) {
-      toast(t('communications.admin.pastDateError'), 'error');
+    const now = new Date();
+    const minDate = new Date(now.getTime() + 60000); // 1 minute buffer
+    
+    if (date <= minDate) {
+      toast('La fecha debe ser futura (al menos 1 minuto desde ahora)', 'error');
       return;
     }
     setIsSending(true);

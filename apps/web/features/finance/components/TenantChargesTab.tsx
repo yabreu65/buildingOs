@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 interface Charge {
   id: string;
@@ -18,6 +19,7 @@ interface Charge {
     label: string;
   };
   amount: number;
+  currency?: string;
   dueDate: string;
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELED';
   createdAt: string;
@@ -89,7 +91,7 @@ export const TenantChargesTab = ({ tenantId, buildingNames }: TenantChargesTabPr
               </p>
             </div>
             <div className="text-right space-y-2">
-              <p className="text-sm font-bold">${charge.amount.toFixed(2)}</p>
+              <p className="text-sm font-bold">{formatCurrency(charge.amount, charge.currency || 'USD')}</p>
               <span className={cn('text-xs font-medium px-2 py-1 rounded', statusColors[charge.status])}>
                 {statusLabels[charge.status]}
               </span>

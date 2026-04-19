@@ -71,6 +71,10 @@ export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) =>
       href: `/${tenantId}/buildings/${buildingId}/expense-allocation`,
     },
     {
+      label: 'Automation QA',
+      href: `/${tenantId}/buildings/${buildingId}/automation-qa`,
+    },
+    {
       label: 'Reportes',
       href: `/${tenantId}/buildings/${buildingId}/reports`,
     },

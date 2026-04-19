@@ -81,6 +81,7 @@ export interface Payment {
   status: PaymentStatus;
   reference?: string;
   proofFileId?: string;
+  proofDocumentId?: string; // Document ID for download endpoint
   paidAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -92,6 +93,16 @@ export interface Payment {
     id: string;
     user: { name: string };
   };
+  // Receipt fields
+  receiptDocumentId?: string;
+  receiptNumber?: string;
+  receiptStatus?: 'PENDING' | 'READY' | 'FAILED';
+  receiptError?: string;
+  receiptGeneratedAt?: string;
+  approvedByUserId?: string;
+  approvedAt?: string;
+  rejectedByUserId?: string;
+  rejectedAt?: string;
 }
 
 export interface PaymentAllocation {
@@ -423,6 +434,7 @@ export async function getFinancialSummary(
  * @returns Unit ledger with charges, payments, and balance
  */
 export async function getUnitLedger(
+  tenantId: string,
   unitId: string,
   periodFrom?: string,
   periodTo?: string
@@ -435,6 +447,7 @@ export async function getUnitLedger(
   return apiClient<UnitLedger>({
     path: `/units/${unitId}/ledger${query}`,
     method: 'GET',
+    headers: { 'X-Tenant-Id': tenantId },
   });
 }
 
@@ -504,6 +517,7 @@ export interface PendingPayment {
   status: PaymentStatus;
   reference?: string;
   proofFileId?: string;
+  proofDocumentId?: string; // Document ID for download endpoint
   paidAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -516,6 +530,16 @@ export interface PendingPayment {
     id: string;
     user: { name: string };
   };
+  // Receipt fields
+  receiptDocumentId?: string;
+  receiptNumber?: string;
+  receiptStatus?: 'PENDING' | 'READY' | 'FAILED';
+  receiptError?: string;
+  receiptGeneratedAt?: string;
+  approvedByUserId?: string;
+  approvedAt?: string;
+  rejectedByUserId?: string;
+  rejectedAt?: string;
 }
 
 export interface PendingPaymentQuery {

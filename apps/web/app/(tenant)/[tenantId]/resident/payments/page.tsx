@@ -102,13 +102,13 @@ const ResidentPaymentsPage = () => {
   const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
 
   const { data: ledger, isLoading: ledgerLoading, refetch: refetchLedger } = useQuery<UnitLedger>({
-    queryKey: ['residentLedger', unitId],
-    queryFn: () => getResidentLedger(unitId!),
-    enabled: !!unitId,
+    queryKey: ['residentLedger', tenantId, unitId],
+    queryFn: () => getResidentLedger(tenantId, unitId!),
+    enabled: !!tenantId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: payments = [], isLoading: paymentsLoading } = useQuery<Payment[]>({
+  const { data: payments = [], isLoading: paymentsLoading, refetch: refetchPayments } = useQuery<Payment[]>({
     queryKey: ['residentPayments', buildingId, unitId],
     queryFn: () => listPayments(buildingId!, undefined, unitId ?? undefined, 20),
     enabled: !!buildingId && !!unitId,
@@ -131,14 +131,14 @@ const ResidentPaymentsPage = () => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
 
-  const handleViewProof = async (paymentId: string, fileId: string) => {
+  const handleViewProof = async (paymentId: string, documentId: string) => {
     if (downloadUrls[paymentId]) {
       window.open(downloadUrls[paymentId], '_blank');
       return;
     }
     setDownloadingId(paymentId);
     try {
-      const response = await getDownloadUrl(tenantId, fileId);
+      const response = await getDownloadUrl(tenantId, documentId);
       setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
       window.open(response.url, '_blank');
     } catch (error) {
@@ -170,30 +170,40 @@ const ResidentPaymentsPage = () => {
         },
       });
 
-      await fetch(presignRes.url, {
+      console.log('[DEBUG] Presign URL:', presignRes.url);
+      console.log('[DEBUG] ObjectKey:', presignRes.objectKey);
+      console.log('[DEBUG] Bucket:', presignRes.bucket);
+
+      const uploadResponse = await fetch(presignRes.url, {
         method: 'PUT',
         body: file,
         headers: { 'Content-Type': file.type },
       });
 
-      const createRes = await apiClient<{ fileId: string }, { title: string; category: string; visibility: string; objectKey: string; size: number; unitId?: string }>({
+      if (!uploadResponse.ok) {
+        throw new Error(`Error al subir archivo: ${uploadResponse.status} ${uploadResponse.statusText}`);
+      }
+
+      const createRes = await apiClient<{ fileId: string }, { title: string; category: string; visibility: string; objectKey: string; size: number; buildingId?: string; unitId?: string }>({
         path: `/tenants/${tenantId}/documents`,
         method: 'POST',
         body: {
           title: `Comprobante pago - ${file.name}`,
           category: 'RECEIPT',
-          visibility: 'TENANT_ADMIN',
+          visibility: 'RESIDENTS',
           objectKey: presignRes.objectKey,
           size: file.size,
+          buildingId: buildingId ?? undefined,
           unitId: unitId ?? undefined,
         },
       });
 
       setProofFile(file);
       setProofFileId(createRes.fileId);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error uploading proof:', error);
-      setSubmitError('Error al subir el comprobante. Podés enviar sin comprobante.');
+      const errorMessage = error?.response?.data?.message || error?.message || '';
+      setSubmitError(`Error al subir el comprobante: ${errorMessage || 'Intentalo de nuevo'}`);
     } finally {
       setUploadingProof(false);
     }
@@ -217,8 +227,11 @@ const ResidentPaymentsPage = () => {
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
 
+  const canSubmit = formData.method !== PaymentMethod.TRANSFER || !!proofFileId;
+
+  // Next due charge: use real outstanding, not legacy status
   const nextDueCharge = ledger?.charges
-    ?.filter((c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL)
+    ?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0)
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
 
   const lastPayment = ledger?.payments
@@ -246,11 +259,8 @@ const ResidentPaymentsPage = () => {
 
       setSubmitSuccess(true);
       resetForm();
-      setTimeout(() => {
-        setShowForm(false);
-        setSubmitSuccess(false);
-      }, 2000);
       refetchLedger();
+      refetchPayments();
       setTimeout(() => {
         setShowForm(false);
         setSubmitSuccess(false);
@@ -419,9 +429,9 @@ const ResidentPaymentsPage = () => {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {payment.proofFileId && (
+                  {payment.proofDocumentId ? (
                     <button
-                      onClick={() => handleViewProof(payment.id, payment.proofFileId!)}
+                      onClick={() => handleViewProof(payment.id, payment.proofDocumentId!)}
                       disabled={downloadingId === payment.id}
                       className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
                     >
@@ -432,7 +442,9 @@ const ResidentPaymentsPage = () => {
                       )}
                       Ver
                     </button>
-                  )}
+                  ) : payment.proofFileId ? (
+                    <span className="text-xs text-amber-600">Subiendo...</span>
+                  ) : null}
                   <span className={`px-2 py-1 rounded text-xs font-medium border whitespace-nowrap ${paymentStatusColor(payment.status)}`}>
                     {paymentStatusLabel(payment.status)}
                   </span>
@@ -464,9 +476,16 @@ const ResidentPaymentsPage = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Método de pago</label>
-                <Select
+                  <Select
                   value={formData.method}
-                  onChange={(e) => setFormData({ ...formData, method: e.target.value as PaymentMethod })}
+                  onChange={(e) => {
+                    const newMethod = e.target.value as PaymentMethod;
+                    setFormData({ ...formData, method: newMethod });
+                    if (newMethod !== PaymentMethod.TRANSFER) {
+                      setProofFile(null);
+                      setProofFileId(null);
+                    }
+                  }}
                 >
                   <option value={PaymentMethod.TRANSFER}>Transferencia</option>
                   <option value={PaymentMethod.CASH}>Efectivo</option>
@@ -496,7 +515,12 @@ const ResidentPaymentsPage = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Comprobante de pago (opcional)</label>
+              <label className="block text-sm font-medium mb-1">
+                Comprobante de pago {formData.method === PaymentMethod.TRANSFER && <span className="text-red-500">*</span>}
+              </label>
+              {formData.method === PaymentMethod.TRANSFER && !proofFile && (
+                <p className="text-xs text-amber-600 mb-2">Los pagos por transferencia requieren comprobante</p>
+              )}
               <input
                 type="file"
                 accept="image/*,.pdf"
@@ -509,8 +533,18 @@ const ResidentPaymentsPage = () => {
                   hover:file:bg-blue-100"
               />
               {proofFile && (
-                <p className="text-sm text-green-600 mt-1">
+                <p className="text-sm text-green-600 mt-1 flex items-center gap-2">
                   ✓ {proofFile.name} subido correctamente
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProofFile(null);
+                      setProofFileId(null);
+                    }}
+                    className="text-red-500 hover:text-red-700 font-medium"
+                  >
+                    (Quitar)
+                  </button>
                 </p>
               )}
               {uploadingProof && (
@@ -534,9 +568,13 @@ const ResidentPaymentsPage = () => {
             )}
 
             <div className="flex gap-2">
-              <Button type="submit" disabled={submitting} className="gap-2">
+              <Button 
+                type="submit" 
+                disabled={submitting || !canSubmit} 
+                className="gap-2"
+              >
                 {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                {submitting ? 'Enviando...' : 'Enviar pago'}
+                {submitting ? 'Enviando...' : !canSubmit ? 'Subí el comprobante' : 'Enviar pago'}
               </Button>
               <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
                 Cancelar

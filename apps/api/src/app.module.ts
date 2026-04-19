@@ -37,6 +37,7 @@ import { TenantMembersModule } from './tenant-members/tenant-members.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PushController } from './push/push.controller';
 import { CronJobsModule } from './shared/scheduling/cron-jobs.module';
+import { ReceiptsModule } from './receipts/receipts.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { CronJobsModule } from './shared/scheduling/cron-jobs.module';
     LeadsModule,
     TenantMembersModule,
     DashboardModule,
+    ReceiptsModule,
   ],
   controllers: [PushController],
   providers: [],

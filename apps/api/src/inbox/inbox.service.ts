@@ -254,40 +254,52 @@ export class InboxService {
     tenantId: string,
     buildingIds: string[],
   ): Promise<DelinquentUnit[]> {
-    // Find charges that are past due and not fully paid
+    // Find charges that are past due (not by status, but by actual outstanding)
     const now = new Date();
 
-    const delinquentCharges = await this.prisma.charge.findMany({
+    // Get all non-canceled charges with their allocations
+    const chargesWithAllocations = await this.prisma.charge.findMany({
       where: {
         tenantId,
         building: { id: { in: buildingIds } },
         dueDate: { lt: now },
-        status: { in: ['PENDING', 'PARTIAL'] },
+        canceledAt: null,
       },
       include: {
         unit: true,
         building: true,
-        paymentAllocations: true,
+        paymentAllocations: {
+          include: { payment: true },
+        },
       },
     });
 
-    // Calculate outstanding per unit
+    // Calculate real outstanding per unit (only from APPROVED/RECONCILED payments)
     const unitOutstanding: Record<string, { unit: any; building: any; amount: number }> = {};
 
-    for (const charge of delinquentCharges) {
+    for (const charge of chargesWithAllocations) {
       const key = charge.unitId;
-      const allocatedAmount = charge.paymentAllocations.reduce((sum, pa) => sum + pa.amount, 0);
-      const outstanding = charge.amount - allocatedAmount;
+      // Only count allocations from APPROVED or RECONCILED payments
+      const allocatedApproved = charge.paymentAllocations.reduce((sum, pa) => {
+        const paymentStatus = pa.payment?.status;
+        if (paymentStatus === 'APPROVED' || paymentStatus === 'RECONCILED') {
+          return sum + pa.amount;
+        }
+        return sum;
+      }, 0);
+      const outstanding = charge.amount - allocatedApproved;
 
-      if (!unitOutstanding[key]) {
-        unitOutstanding[key] = {
-          unit: charge.unit,
-          building: charge.building,
-          amount: 0,
-        };
+      // Only include charges with actual outstanding
+      if (outstanding > 0) {
+        if (!unitOutstanding[key]) {
+          unitOutstanding[key] = {
+            unit: charge.unit,
+            building: charge.building,
+            amount: 0,
+          };
+        }
+        unitOutstanding[key].amount += outstanding;
       }
-
-      unitOutstanding[key].amount += outstanding;
     }
 
     // Sort by amount descending and return top 5

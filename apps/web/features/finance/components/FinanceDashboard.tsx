@@ -13,6 +13,7 @@ import { FinanceChartsPanel } from './FinanceChartsPanel';
 import { ExpensesList } from './ExpensesList';
 import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
 import { LiquidationsTab } from './LiquidationsTab';
+import { RecurringExpensesTab } from './RecurringExpensesTab';
 import { useExpenses } from '../hooks/useExpenseLedger';
 import { cn } from '@/shared/lib/utils';
 
@@ -21,7 +22,16 @@ interface FinanceDashboardProps {
   tenantId: string;
 }
 
-type TabType = 'rubros' | 'expenses' | 'liquidations' | 'payments' | 'payments-history' | 'charges' | 'delinquent' | 'analysis';
+type TabType =
+  | 'rubros'
+  | 'expenses'
+  | 'recurring'
+  | 'liquidations'
+  | 'payments'
+  | 'payments-history'
+  | 'charges'
+  | 'delinquent'
+  | 'analysis';
 
 /**
  * FinanceDashboard: Main orchestrator for finance management
@@ -92,6 +102,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
     { id: 'rubros', label: 'Rubros' },
     { id: 'expenses', label: 'Gastos', count: buildingVisibleExpenses.length },
+    { id: 'recurring', label: 'Recurrentes' },
     { id: 'liquidations', label: 'Liquidaciones' },
     { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
     { id: 'payments-history', label: 'Historial de Pagos', count: paymentHistory?.length },
@@ -174,6 +185,10 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             period={period}
             currency={summary?.currency || 'ARS'}
           />
+        )}
+
+        {activeTab === 'recurring' && (
+          <RecurringExpensesTab tenantId={tenantId} buildingId={buildingId} />
         )}
 
         {activeTab === 'payments' && (

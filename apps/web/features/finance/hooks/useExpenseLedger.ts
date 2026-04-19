@@ -9,6 +9,10 @@ import {
   updateExpense,
   validateExpense,
   voidExpense,
+  bulkValidateExpenses,
+  listRecurringExpenses,
+  createRecurringExpense,
+  updateRecurringExpense,
   listIncomes,
   createIncome,
   updateIncome,
@@ -24,8 +28,15 @@ import {
   getNotasRevelatorias,
   ListExpensesParams,
   CreateExpenseData,
+  CreateRecurringExpenseData,
+  UpdateRecurringExpenseData,
   ListIncomesParams,
   CreateIncomeData,
+  createAdjustment,
+  validateAdjustment,
+  listAdjustments,
+  ListAdjustmentsParams,
+  Adjustment,
 } from '../services/expense-ledger.api';
 
 // ── ExpenseLedgerCategories hooks ──────────────────────────────────────────
@@ -147,6 +158,61 @@ export function useVoidExpense(tenantId: string) {
     mutationFn: (expenseId: string) => voidExpense(tenantId, expenseId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['expenses', tenantId] });
+    },
+  });
+}
+
+export function useBulkValidateExpenses(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      buildingId,
+      periodId,
+    }: {
+      buildingId: string;
+      periodId?: string;
+    }) => bulkValidateExpenses(buildingId, periodId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['expenses', tenantId] });
+    },
+  });
+}
+
+export function useRecurringExpenses(buildingId: string) {
+  return useQuery({
+    queryKey: ['recurring-expenses', buildingId],
+    queryFn: () => listRecurringExpenses(buildingId),
+    enabled: !!buildingId,
+    staleTime: 2 * 60 * 1000,
+    placeholderData: (prev) => prev ?? [],
+  });
+}
+
+export function useCreateRecurringExpense(buildingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateRecurringExpenseData) =>
+      createRecurringExpense(buildingId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['recurring-expenses', buildingId] });
+      void queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    },
+  });
+}
+
+export function useUpdateRecurringExpense(buildingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      recurringExpenseId,
+      data,
+    }: {
+      recurringExpenseId: string;
+      data: UpdateRecurringExpenseData;
+    }) => updateRecurringExpense(buildingId, recurringExpenseId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['recurring-expenses', buildingId] });
+      void queryClient.invalidateQueries({ queryKey: ['expenses'] });
     },
   });
 }
@@ -303,5 +369,37 @@ export function useNotasRevelatorias(tenantId: string, period: string) {
     queryFn: () => getNotasRevelatorias(tenantId, period),
     staleTime: 5 * 60 * 1000,
     enabled: !!tenantId && !!period,
+  });
+}
+
+// ── Adjustments / Retroativos hooks ─────────────────────────────────────────
+
+export function useCreateAdjustment(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Parameters<typeof createAdjustment>[1]) =>
+      createAdjustment(tenantId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adjustments', tenantId] });
+    },
+  });
+}
+
+export function useValidateAdjustment(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (adjustmentId: string) => validateAdjustment(tenantId, adjustmentId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adjustments', tenantId] });
+    },
+  });
+}
+
+export function useAdjustments(tenantId: string, params?: ListAdjustmentsParams) {
+  return useQuery({
+    queryKey: ['adjustments', tenantId, params],
+    queryFn: () => listAdjustments(tenantId, params),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!tenantId,
   });
 }

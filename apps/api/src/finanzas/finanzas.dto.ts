@@ -321,6 +321,16 @@ export interface PaymentDetailDto {
   proofFileId: string | null;
   createdByUserId: string;
   reviewedByMembershipId: string | null;
+  // Receipt fields
+  receiptDocumentId?: string | null;
+  receiptNumber?: string | null;
+  receiptStatus?: 'PENDING' | 'READY' | 'FAILED';
+  receiptError?: string | null;
+  receiptGeneratedAt?: Date | null;
+  approvedByUserId?: string | null;
+  approvedAt?: Date | null;
+  rejectedByUserId?: string | null;
+  rejectedAt?: Date | null;
 }
 
 export interface FinancialSummaryDto {

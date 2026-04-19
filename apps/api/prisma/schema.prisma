@@ -65,6 +65,13 @@ enum PaymentStatus {
   RECONCILED
 }
 
+// Receipt generation status for approved payments
+enum ReceiptStatus {
+  PENDING   // Receipt generation queued
+  READY     // Receipt generated successfully
+  FAILED    // Receipt generation failed
+}
+
 enum PaymentMethod {
   TRANSFER
   CASH
@@ -180,6 +187,7 @@ model Tenant {
   payments              Payment[]
   paymentAllocations    PaymentAllocation[]
   paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
+  receiptSequences      ReceiptSequence[]    // Receipt numbering per year
   invitations           Invitation[]
   onboardingState       OnboardingState?
   emailLogs             EmailLog[]
@@ -201,6 +209,7 @@ model Tenant {
   movementAllocations      MovementAllocation[]
   unitGroups               UnitGroup[]
   liquidations             Liquidation[]
+  adjustments              Adjustment[]
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
   unitOccupants         UnitOccupant[]
@@ -349,6 +358,7 @@ model Building {
   movementAllocations  MovementAllocation[]
   unitGroups           UnitGroup[]
   liquidations         Liquidation[]
+  adjustments          Adjustment[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -359,7 +369,7 @@ model Unit {
   buildingId      String
   code            String
   label           String?
-  unitType        String   @default("APARTMENT") // APARTMENT, HOUSE, OFFICE, STORAGE, PARKING
+  unitType        String   @default("APARTAMENTO") // APARTAMENTO, CASA, OFICINA, DEPOSITO, ESTACIONAMIENTO
   occupancyStatus String   @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
   m2              Float?   // Metros cuadrados (nullable — no todos los edificios los tienen)
   isBillable      Boolean  @default(true) // false = pasillos, depósitos, excluir del prorrateo
@@ -1365,6 +1375,19 @@ model Payment {
   reviewedAt               DateTime?         // Cuándo se revisó (aprobó/rechazó)
   notes                    String?           // Notas internas del revisor
   
+  // Receipt (non-fiscal payment receipt)
+  receiptDocumentId        String?           // Link to receipt Document (generated when payment is approved)
+  receiptNumber            String?           // Sequential receipt number: R-{TENANT}-{YYYY}-{000001}
+  receiptStatus            ReceiptStatus     @default(PENDING)
+  receiptError             String?           // Error message if receipt generation failed
+  receiptGeneratedAt       DateTime?         // When receipt was successfully generated
+  
+  // Who approved/rejected (track by user, not membership, for audit)
+  approvedByUserId         String?            // User ID who approved the payment
+  approvedAt               DateTime?          // When the payment was approved
+  rejectedByUserId         String?            // User ID who rejected the payment
+  rejectedAt               DateTime?          // When the payment was rejected
+  
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 
@@ -1382,6 +1405,23 @@ model Payment {
   @@index([tenantId, unitId, status])
   @@index([tenantId, createdByUserId])
   @@index([status])
+  @@index([tenantId, receiptStatus])
+  @@unique([tenantId, receiptNumber])
+}
+
+// Receipt sequence for sequential numbering per tenant per year
+model ReceiptSequence {
+  id         String   @id @default(cuid())
+  tenantId   String
+  year       Int      // YYYY
+  lastNumber Int      @default(0) // Last used number
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, year])
+  @@index([tenantId])
 }
 
 // ============================================================================
@@ -1425,6 +1465,7 @@ model ExpenseLedgerCategory {
   expenses             Expense[]
   incomes              Income[]
   recurringExpenses    RecurringExpense[]
+  adjustments          Adjustment[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, code]) // Allows multiple null codes (manually created categories)
@@ -1457,7 +1498,8 @@ model Expense {
   id                       String         @id @default(cuid())
   tenantId                 String
   buildingId               String?        // nullable: null para TENANT_SHARED
-  period                   String         // YYYY-MM format
+  period                   String         // YYYY-MM format (LEGACY - usar liquidationPeriod)
+  liquidationPeriod        String?        // YYYY-MM - período de devengo derivado de invoiceDate
   categoryId               String         // FK ExpenseLedgerCategory
   vendorId                 String?        // FK Vendor (opcional)
   scopeType                MovementScope  @default(BUILDING)
@@ -1481,13 +1523,14 @@ model Expense {
   building    Building?             @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   vendor      Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  unitGroup   UnitGroup?            @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
+  unitGroup   UnitGroup?           @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
   allocations MovementAllocation[]
 
   @@index([tenantId, buildingId, period])
   @@index([tenantId, buildingId, status])
   @@index([tenantId, period, categoryId])
   @@index([tenantId, scopeType])
+  @@index([tenantId, buildingId, liquidationPeriod, status])
 }
 
 // ============================================================================
@@ -1627,12 +1670,13 @@ model Liquidation {
   id                       String            @id @default(cuid())
   tenantId                 String
   buildingId               String
-  period                   String            // YYYY-MM format
+  period                   String            // YYYY-MM format - período de devengo
+  chargePeriod             String?           // YYYY-MM - período de cobro (default: period + 1 mes)
   status                   LiquidationStatus @default(DRAFT)
   baseCurrency             String            // Moneda base de liquidación
   totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
   totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
-  expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode }
+  expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
   unitCount                Int               // Unidades billables al momento de draft
   generatedByMembershipId  String
   generatedAt              DateTime          @default(now())
@@ -1652,6 +1696,46 @@ model Liquidation {
   @@index([tenantId, buildingId, period, status])
   @@index([tenantId, buildingId])
   @@index([tenantId, status])
+  @@index([tenantId, buildingId, chargePeriod, status])
+}
+
+// ============================================================================
+// FINANZAS: Adjustment (Ajuste retroactivo para cobrarse en período abierto)
+// ============================================================================
+
+enum AdjustmentStatus {
+  DRAFT     @map("DRAFT")
+  VALIDATED @map("VALIDATED")
+  VOIDED    @map("VOIDED")
+}
+
+model Adjustment {
+  id                       String            @id @default(cuid())
+  tenantId                 String
+  buildingId               String
+  sourceInvoiceDate        DateTime          // Fecha original del comprobante
+  sourcePeriod             String            // YYYY-MM - período de devengo original
+  targetPeriod             String            // YYYY-MM - período donde se cobrará el ajuste
+  categoryId               String            // FK ExpenseLedgerCategory
+  amountMinor              Int               // En centavos, positivo
+  currencyCode             String            // ISO: ARS, VES, USD
+  reason                   String            // Motivo obligatorio del ajuste
+  status                   AdjustmentStatus  @default(DRAFT)
+  createdByMembershipId    String
+  validatedByMembershipId  String?
+  validatedAt              DateTime?
+  voidedByMembershipId     String?
+  voidedAt                 DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, buildingId, targetPeriod, status])
+  @@index([tenantId, buildingId, sourcePeriod])
+  @@index([tenantId, status])
 }
 
 // ============================================================================
@@ -1659,12 +1743,13 @@ model Liquidation {
 // ============================================================================
 
 enum PaymentAuditAction {
-  SUBMITTED   // Usuario resident creó el pago
-  APPROVED   // Admin aprobó el pago
-  REJECTED   // Admin rechazó el pago
-  RECONCILED // Sistema Concilió (asignaciones completadas)
-  CANCELLED  // Admin/anfitrión canceló el pago
-  VIEWED     // Admin visualizó el pago para revisión
+  SUBMITTED       // Usuario resident creó el pago
+  APPROVED        // Admin aprobó el pago
+  REJECTED        // Admin rechazó el pago
+  RECONCILED      // Sistema Concilió (asignaciones completadas)
+  CANCELLED       // Admin/anfitrión canceló el pago
+  VIEWED          // Admin visualizó el pago para revisión
+  RECEIPT_GENERATED // Sistema generó recibo no fiscal
 }
 
 model PaymentAuditLog {

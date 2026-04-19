@@ -2,6 +2,18 @@
  * Currency formatting utilities
  * All financial amounts in the system are stored in cents (e.g., 10000 = $100.00)
  * Use these helpers to properly display amounts
+ * 
+ * CONTRACT: All amounts from API are in minor units (cents)
+ * - Never use toFixed() or Intl.NumberFormat directly on money fields
+ * - Always use formatCurrency() for display
+ * - Fields from API should be named with *Minor suffix when ambiguous
+ * 
+ * @example
+ * // BAD (causes bugs like 3309.00 instead of 33.09)
+ * <td>{amount.toFixed(2)}</td>
+ * 
+ * // GOOD
+ * <td>{formatCurrency(amount, currency)}</td>
  */
 
 const DEFAULT_LOCALE = 'es-AR';

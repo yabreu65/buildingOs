@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useMemo, useEffect } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
@@ -13,13 +13,17 @@ import { useTenantFinanceSummary } from '../hooks/useTenantFinanceSummary';
 import { useBuildings } from '@/features/buildings/hooks';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
-import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTenant } from '@/features/finance/services/finance.api';
+import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTenant } from '../services/finance.api';
 import { TenantChargesTab } from './TenantChargesTab';
 import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
 import { TenantExpensesList } from './TenantExpensesList';
 import { ExpenseHistoryReport } from './ExpenseHistoryReport';
 import { NotasRevelatoriasPanel } from './NotasRevelatoriasPanel';
 import { useExpenses } from '../hooks/useExpenseLedger';
+import { formatCurrency } from '@/shared/lib/format/money';
+import { getDownloadUrl } from '@/features/buildings/services/documents.api';
+import { FileText, Loader2 } from 'lucide-react';
+import { useToast } from '@/shared/components/ui/Toast';
 
 type Tab = 'overview' | 'rubros' | 'expenses' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas';
 
@@ -31,32 +35,47 @@ interface Params {
 /**
  * Dashboard component for tenant-level finance overview.
  * Displays aggregated financial data across all buildings with tabs for overview and delinquent units.
- * @returns Dashboard with summary cards, buildings overview, and delinquent units list
  */
 export const TenantFinanceDashboard = () => {
   const params = useParams<Params>();
+  const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
+  
+  // Initialize tab from URL query param
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  
+  // Set initial tab from URL after mount
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam && ['overview', 'rubros', 'expenses', 'payments', 'charges', 'delinquent', 'reports', 'notas'].includes(tabParam)) {
+      setActiveTab(tabParam as Tab);
+    }
+  }, [searchParams]);
+
   const [period, setPeriod] = useState<string>('');
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
+  const [downloadingProof, setDownloadingProof] = useState<string | null>(null);
+  const [proofUrls, setProofUrls] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: summary, isPending: loading, error, refetch } = useTenantFinanceSummary(tenantId, period);
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
 
-  // Tenant-level payments and metrics
+  // Tenant-level payments and metrics - always enabled for badge count
   const { data: payments = [], isLoading: paymentsLoading } = useQuery({
     queryKey: ['tenantPayments', tenantId],
     queryFn: () => listPendingPayments(tenantId!, { status: PaymentStatus.SUBMITTED }),
-    enabled: !!tenantId && activeTab === 'payments',
-    staleTime: 2 * 60 * 1000,
+    enabled: !!tenantId,
+    staleTime: 30 * 1000, // 30 seconds for near real-time updates
+    refetchInterval: 30000, // Auto-refresh every 30s
   });
 
   const { data: metrics, isLoading: metricsLoading } = useQuery({
     queryKey: ['paymentMetrics', tenantId],
     queryFn: () => getPaymentMetrics(tenantId!),
-    enabled: !!tenantId && activeTab === 'payments',
-    staleTime: 5 * 60 * 1000,
+    enabled: !!tenantId,
+    staleTime: 60 * 1000,
   });
 
   // Tenant-level expenses (TENANT_SHARED scope - gastos comunes)
@@ -87,6 +106,24 @@ export const TenantFinanceDashboard = () => {
 
   // Convert React Query error to string message
   const errorMsg = error ? (error instanceof Error ? error.message : String(error)) : null;
+
+  // Handle proof download
+  const handleDownloadProof = async (paymentId: string, documentId: string) => {
+    if (proofUrls[paymentId]) {
+      window.open(proofUrls[paymentId], '_blank');
+      return;
+    }
+    setDownloadingProof(paymentId);
+    try {
+      const response = await getDownloadUrl(tenantId!, documentId);
+      setProofUrls((prev) => ({ ...prev, [paymentId]: response.url }));
+      window.open(response.url, '_blank');
+    } catch {
+      toast('Error al descargar comprobante', 'error');
+    } finally {
+      setDownloadingProof(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -194,15 +231,35 @@ export const TenantFinanceDashboard = () => {
                       <div className="space-y-1 flex-1">
                         <p className="text-sm font-medium">{payment.building?.name || buildingNames[payment.buildingId] || payment.buildingId}</p>
                         <p className="text-xs text-muted-foreground">Unidad: {payment.unit?.label || payment.unitId}</p>
-                        <p className="text-xs text-muted-foreground">Monto: ${payment.amount.toFixed(2)}</p>
+                        <p className="text-xs text-muted-foreground">Monto: {formatCurrency(payment.amount, payment.currency || 'USD')}</p>
+                        <p className="text-xs text-muted-foreground">Método: {payment.method} • {payment.reference || 'Sin referencia'}</p>
                       </div>
-                      <Button
-                        size="sm"
-                        onClick={() => setSelectedPaymentId(payment.id)}
-                        className="ml-4"
-                      >
-                        Aprobar
-                      </Button>
+                      <div className="flex flex-col items-end gap-2">
+                        {payment.proofDocumentId ? (
+                          <button
+                            onClick={() => handleDownloadProof(payment.id, payment.proofDocumentId!)}
+                            disabled={downloadingProof === payment.id}
+                            className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+                          >
+                            {downloadingProof === payment.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <FileText className="w-4 h-4" />
+                            )}
+                            Ver comprobante
+                          </button>
+                        ) : payment.proofFileId ? (
+                          <span className="text-xs text-amber-600">Comprobante sin procesar</span>
+                        ) : (
+                          <span className="text-xs text-amber-600">Sin comprobante</span>
+                        )}
+                        <Button
+                          size="sm"
+                          onClick={() => setSelectedPaymentId(payment.id)}
+                        >
+                          Aprobar
+                        </Button>
+                      </div>
                     </div>
                   </Card>
                 ))}
@@ -214,7 +271,12 @@ export const TenantFinanceDashboard = () => {
           <TenantChargesTab tenantId={tenantId || ''} buildingNames={buildingNames} />
         )}
         {activeTab === 'delinquent' && (
-          <TenantDelinquentUnitsList delinquent={summary?.topDelinquentUnits || []} loading={loading} />
+          <TenantDelinquentUnitsList 
+            tenantId={tenantId || ''} 
+            currency={summary?.currency || 'USD'}
+            delinquent={summary?.topDelinquentUnits || []} 
+            loading={loading} 
+          />
         )}
         {activeTab === 'reports' && (
           <ExpenseHistoryReport tenantId={tenantId || ''} />

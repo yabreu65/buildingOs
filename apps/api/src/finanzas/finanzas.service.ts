@@ -1,9 +1,10 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
-import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason } from '@prisma/client';
+import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -33,6 +34,7 @@ export class FinanzasService {
     private readonly validators: FinanzasValidators,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
+    private readonly receiptService: PaymentReceiptService,
   ) {}
 
   // ============================================================================
@@ -431,8 +433,15 @@ export class FinanzasService {
       );
     }
 
-    // 6. Create payment with SUBMITTED status
-    return this.prisma.payment.create({
+    // 7. Validate: TRANSFER method requires proofFileId
+    if (dto.method === 'TRANSFER' && !dto.proofFileId) {
+      throw new BadRequestException(
+        'Los pagos por transferencia requieren subir el comprobante de pago',
+      );
+    }
+
+    // 8. Create payment with SUBMITTED status
+    const payment = await this.prisma.payment.create({
       data: {
         tenantId,
         buildingId,
@@ -446,6 +455,11 @@ export class FinanzasService {
         createdByUserId: userId,
       },
     });
+
+    // 9. Notify admins about new payment submitted
+    void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
+
+    return payment;
   }
 
   /**
@@ -509,7 +523,7 @@ export class FinanzasService {
     const limit = Math.min(query.limit || 50, 500);
     const offset = query.offset || 0;
 
-    return this.prisma.payment.findMany({
+    const payments = await this.prisma.payment.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -528,8 +542,31 @@ export class FinanzasService {
         reviewedByMembership: {
           select: { id: true, user: { select: { name: true } } },
         },
+        proofFile: {
+          select: { id: true },
+        },
       },
     });
+
+    // Resolve proofDocumentId for each payment
+    const paymentsWithProofDoc = payments.map((p) => ({
+      ...p,
+      proofDocumentId: p.proofFile?.id
+        ? this.prisma.document.findUnique({
+            where: { fileId: p.proofFile.id },
+            select: { id: true },
+          }).then((d) => d?.id)
+        : null,
+    }));
+
+    const resolvedPayments = await Promise.all(
+      paymentsWithProofDoc.map(async (p) => ({
+        ...p,
+        proofDocumentId: await p.proofDocumentId,
+      }))
+    );
+
+    return resolvedPayments as Payment[];
   }
 
   /**
@@ -563,6 +600,13 @@ export class FinanzasService {
     if (!payment) {
       throw new NotFoundException(
         `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // Validate payment is in SUBMITTED status (can only approve submitted payments)
+    if (payment.status !== PaymentStatus.SUBMITTED) {
+      throw new ConflictException(
+        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
       );
     }
 
@@ -650,6 +694,11 @@ export class FinanzasService {
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
     void this.sendPaymentReceivedNotification(tenantId, payment);
+
+    // Generate receipt for approved payment (async, non-blocking)
+    void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
+      this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+    });
 
     return result;
   }
@@ -762,6 +811,16 @@ export class FinanzasService {
     if (!payment) {
       throw new NotFoundException(
         `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    // 3.5. Validate payment is in valid status for allocation
+    if (
+      payment.status !== PaymentStatus.APPROVED &&
+      payment.status !== PaymentStatus.RECONCILED
+    ) {
+      throw new ConflictException(
+        `Cannot allocate payment in status ${payment.status}. Payment must be APPROVED or RECONCILED.`,
       );
     }
 
@@ -947,14 +1006,27 @@ export class FinanzasService {
     const charge = await client.charge.findUnique({
       where: { id: chargeId },
       include: {
-        paymentAllocations: true,
+        paymentAllocations: {
+          include: {
+            payment: true,
+          },
+        },
       },
     });
 
     if (!charge) return;
 
     const allocationsSum = charge.paymentAllocations.reduce(
-      (sum, a) => sum + a.amount,
+      (sum, a) => {
+        const status = a.payment?.status;
+        if (
+          status === PaymentStatus.APPROVED ||
+          status === PaymentStatus.RECONCILED
+        ) {
+          return sum + a.amount;
+        }
+        return sum;
+      },
       0,
     );
 
@@ -1032,32 +1104,48 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals (only pending/partial charges)
-    const pendingCharges = charges.filter(
-      (c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL,
+    // 3. Calculate totals by REAL outstanding using approved/reconciled payments
+    const chargesWithOutstanding = charges
+      .map((c) => {
+        const allocated = c.paymentAllocations.reduce((asum, a) => {
+          return asum +
+            (a.payment &&
+            (a.payment.status === PaymentStatus.APPROVED ||
+              a.payment.status === PaymentStatus.RECONCILED)
+              ? a.amount
+              : 0);
+        }, 0);
+
+        return {
+          charge: c,
+          allocated,
+          outstanding: Math.max(0, c.amount - allocated),
+        };
+      })
+      .filter((item) => item.outstanding > 0);
+
+    const totalCharges = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.charge.amount,
+      0,
     );
 
-    const totalCharges = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
+    const totalPaid = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.allocated,
+      0,
+    );
 
-    const totalPaid = pendingCharges.reduce((sum, c) => {
-      const allocated = c.paymentAllocations.reduce((asum, a) => {
-        // Only count allocations from APPROVED payments
-        return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      return sum + allocated;
-    }, 0);
+    const totalOutstanding = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.outstanding,
+      0,
+    );
 
-    const totalOutstanding = totalCharges - totalPaid;
-
-    // 4. Find delinquent units (all units with pending charges - regardless of due date)
-    const delinquentCharges = pendingCharges;
+    // 4. Find delinquent units by real outstanding
+    const delinquentCharges = chargesWithOutstanding;
 
     const delinquentByUnit = new Map<string, number>();
-    for (const charge of delinquentCharges) {
-      const allocated = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      const outstanding = charge.amount - allocated;
+    for (const item of delinquentCharges) {
+      const charge = item.charge;
+      const outstanding = item.outstanding;
       delinquentByUnit.set(
         charge.unitId,
         (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
@@ -1139,15 +1227,13 @@ export class FinanzasService {
     }
 
     // 3. Build charge filters
-    // Fetch all charges except PAID and CANCELED
-    // Include published charges (with liquidationId), pending charges, and partial payments
+    // IMPORTANT: debt must be calculated from approved/reconciled allocations,
+    // not from Charge.status alone (status can be stale/inconsistent).
+    // Therefore, we fetch all active (non-canceled) charges for the unit.
     const chargeWhere: Prisma.ChargeWhereInput = {
       tenantId,
       unitId,
       canceledAt: null,
-      status: {
-        notIn: [ChargeStatus.PAID, ChargeStatus.CANCELED],
-      },
     };
 
     if (periodFrom || periodTo) {
@@ -1182,11 +1268,36 @@ export class FinanzasService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // 6. Calculate balance
-    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
-    const totalAllocated = charges.reduce((sum, c) => {
-      return sum + c.paymentAllocations.reduce((asum, a) => asum + a.amount, 0);
-    }, 0);
+    // 6. Calculate balance based on approved/reconciled allocations only
+    // and only for charges with real outstanding > 0.
+    const chargesWithApprovedAllocated = charges.map((charge) => {
+      const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
+        const status = allocation.payment?.status;
+        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+          return sum + allocation.amount;
+        }
+        return sum;
+      }, 0);
+
+      return {
+        charge,
+        approvedAllocated,
+        outstanding: Math.max(0, charge.amount - approvedAllocated),
+      };
+    });
+
+    const chargesWithOutstanding = chargesWithApprovedAllocated.filter(
+      (item) => item.outstanding > 0,
+    );
+
+    const totalCharges = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.charge.amount,
+      0,
+    );
+    const totalAllocated = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.approvedAllocated,
+      0,
+    );
     const balance = totalCharges - totalAllocated;
 
     return {
@@ -1194,16 +1305,16 @@ export class FinanzasService {
       unitLabel: unit.label ?? '',
       buildingId: unit.buildingId,
       buildingName: unit.building.name,
-      charges: charges.map((c) => ({
-        id: c.id,
-        period: c.period,
-        concept: c.concept,
-        amount: c.amount,
-        currency: c.currency,
-        type: c.type,
-        status: c.status,
-        dueDate: c.dueDate,
-        allocated: c.paymentAllocations.reduce((sum, a) => sum + a.amount, 0),
+      charges: chargesWithApprovedAllocated.map(({ charge, approvedAllocated }) => ({
+        id: charge.id,
+        period: charge.period,
+        concept: charge.concept,
+        amount: charge.amount,
+        currency: charge.currency,
+        type: charge.type,
+        status: charge.status,
+        dueDate: charge.dueDate,
+        allocated: approvedAllocated,
       })),
       payments: payments.map((p) => ({
         id: p.id,
@@ -1479,31 +1590,48 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals (only pending/partial charges)
-    const pendingCharges = charges.filter(
-      (c) => c.status === ChargeStatus.PENDING || c.status === ChargeStatus.PARTIAL,
+    // 3. Calculate totals by REAL outstanding using approved/reconciled payments
+    const chargesWithOutstanding = charges
+      .map((c) => {
+        const allocated = c.paymentAllocations.reduce((asum, a) => {
+          return asum +
+            (a.payment &&
+            (a.payment.status === PaymentStatus.APPROVED ||
+              a.payment.status === PaymentStatus.RECONCILED)
+              ? a.amount
+              : 0);
+        }, 0);
+
+        return {
+          charge: c,
+          allocated,
+          outstanding: Math.max(0, c.amount - allocated),
+        };
+      })
+      .filter((item) => item.outstanding > 0);
+
+    const totalCharges = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.charge.amount,
+      0,
     );
 
-    const totalCharges = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
+    const totalPaid = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.allocated,
+      0,
+    );
 
-    const totalPaid = pendingCharges.reduce((sum, c) => {
-      const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      return sum + allocated;
-    }, 0);
+    const totalOutstanding = chargesWithOutstanding.reduce(
+      (sum, item) => sum + item.outstanding,
+      0,
+    );
 
-    const totalOutstanding = totalCharges - totalPaid;
-
-    // 4. Find delinquent units (all units with pending charges - regardless of due date)
-    const delinquentCharges = pendingCharges;
+    // 4. Find delinquent units by real outstanding
+    const delinquentCharges = chargesWithOutstanding;
 
     const delinquentByUnit = new Map<string, number>();
-    for (const charge of delinquentCharges) {
-      const allocated = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      const outstanding = charge.amount - allocated;
+    for (const item of delinquentCharges) {
+      const charge = item.charge;
+      const outstanding = item.outstanding;
       delinquentByUnit.set(
         charge.unitId,
         (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
@@ -1697,7 +1825,7 @@ export class FinanzasService {
     const limit = Math.min(query.limit || 50, 100);
     const offset = query.offset || 0;
 
-    return this.prisma.payment.findMany({
+    const payments = await this.prisma.payment.findMany({
       where,
       orderBy: { createdAt: 'asc' }, // Oldest first for review priority
       take: limit,
@@ -1715,8 +1843,32 @@ export class FinanzasService {
         reviewedByMembership: {
           select: { id: true, user: { select: { name: true } } },
         },
+        proofFile: {
+          select: { id: true },
+        },
       },
     });
+
+    // Map payments to include proofDocumentId (for download endpoint)
+    const paymentsWithProofDoc = payments.map((p) => ({
+      ...p,
+      proofDocumentId: p.proofFile?.id
+        ? this.prisma.document.findUnique({
+            where: { fileId: p.proofFile.id },
+            select: { id: true },
+          }).then((d) => d?.id)
+        : null,
+    }));
+
+    // Resolve all proofDocumentIds
+    const resolvedPayments = await Promise.all(
+      paymentsWithProofDoc.map(async (p) => ({
+        ...p,
+        proofDocumentId: await p.proofDocumentId,
+      }))
+    );
+
+    return resolvedPayments as Payment[];
   }
 
   /**
@@ -1761,7 +1913,9 @@ export class FinanzasService {
     }
 
     // Execute approval with auto-allocation
-    return this.prisma.$transaction(async (tx) => {
+    let approvedPaymentResult: Payment | null = null;
+    
+    await this.prisma.$transaction(async (tx) => {
       // Update payment status
       const approvedPayment = await tx.payment.update({
         where: { id: paymentId },
@@ -1773,6 +1927,8 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
+      
+      approvedPaymentResult = approvedPayment;
 
       // Auto-allocation: find pending charges for the unit and allocate
       if (payment.unitId) {
@@ -1847,6 +2003,18 @@ export class FinanzasService {
 
       return approvedPayment;
     });
+
+    // Send notification to resident about approval (outside transaction, using returned payment)
+    if (approvedPaymentResult) {
+      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult);
+      
+      // Generate receipt for approved payment (async, non-blocking)
+      void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
+        this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+      });
+    }
+
+    return approvedPaymentResult!;
   }
 
   /**
@@ -1923,6 +2091,9 @@ export class FinanzasService {
         },
       },
     });
+
+    // Send notification to resident
+    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
 
     return rejectedPayment;
   }
@@ -2246,6 +2417,108 @@ export class FinanzasService {
   }
 
   /**
+   * Notify admins when a new payment is submitted by a resident
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async notifyAdminsOfPaymentSubmitted(tenantId: string, payment: Payment): Promise<void> {
+    try {
+      // Get all admin/operator memberships for this tenant via MembershipRole
+      const adminMemberships = await this.prisma.membership.findMany({
+        where: {
+          tenantId,
+          roles: {
+            some: {
+              role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
+            },
+          },
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+
+      // Also check TenantMember for admins (fallback if MembershipRole is empty)
+      const adminTenantMembers = await this.prisma.tenantMember.findMany({
+        where: {
+          tenantId,
+          status: 'ACTIVE',
+          role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+
+      // Merge unique users from both sources
+      const adminUserIds = new Set<string>();
+      const adminsToNotify: Array<{ id: string; name: string | null; email: string | null }> = [];
+
+      for (const m of adminMemberships) {
+        if (m.user && !adminUserIds.has(m.user.id)) {
+          adminUserIds.add(m.user.id);
+          adminsToNotify.push({ id: m.user.id, name: m.user.name, email: m.user.email });
+        }
+      }
+
+      for (const tm of adminTenantMembers) {
+        if (tm.user && !adminUserIds.has(tm.user.id)) {
+          adminUserIds.add(tm.user.id);
+          adminsToNotify.push({ id: tm.user.id, name: tm.user.name, email: tm.user.email });
+        }
+      }
+
+      if (adminsToNotify.length === 0) {
+        console.log(`[FinanzasService] No admins found for tenant ${tenantId}, skipping notification`);
+        return;
+      }
+
+      // Get the resident who submitted the payment
+      const submittedByUser = await this.prisma.user.findUnique({
+        where: { id: payment.createdByUserId },
+        select: { name: true, email: true },
+      });
+
+      const unitLabel = payment.unitId 
+        ? (await this.prisma.unit.findUnique({ where: { id: payment.unitId }, select: { label: true } }))?.label 
+        : null;
+      const buildingName = payment.buildingId 
+        ? (await this.prisma.building.findUnique({ where: { id: payment.buildingId }, select: { name: true } }))?.name 
+        : null;
+      const amount = (payment.amount / 100).toFixed(2);
+
+      console.log(`[FinanzasService] Notifying ${adminsToNotify.length} admins about payment ${payment.id}`);
+
+      for (const admin of adminsToNotify) {
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId: admin.id,
+          type: 'BUILDING_ALERT',
+          title: '💰 Nuevo pago pendiente de revisión',
+          body: `El residente ${submittedByUser?.name || submittedByUser?.email || 'unknown'} envió un pago de ${amount} ${payment.currency} para la unidad ${unitLabel || payment.unitId || 'N/A'}${buildingName ? ` en ${buildingName}` : ''}. Método: ${payment.method}. ${payment.proofFileId ? '✅ Tiene comprobante.' : '⚠️ Sin comprobante.'}`,
+          data: {
+            event: 'PAYMENT_SUBMITTED',
+            paymentId: payment.id,
+            paymentAmount: payment.amount / 100,
+            paymentCurrency: payment.currency,
+            paymentMethod: payment.method,
+            unitLabel: unitLabel || payment.unitId,
+            buildingName: buildingName,
+            hasProof: !!payment.proofFileId,
+            submittedBy: submittedByUser?.name || submittedByUser?.email,
+          },
+          deliveryMethods: ['IN_APP', 'EMAIL'],
+        });
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      console.error(
+        `[FinanzasService] Failed to notify admins of payment submitted ${payment.id}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  /**
    * [PHASE 3 MEDIUM #8] Detect and notify overdue charges
    * Runs daily at 9am - marks charges as overdue and notifies residents
    */
@@ -2509,5 +2782,68 @@ export class FinanzasService {
     });
 
     return { validatedCount, errorCount };
+  }
+
+  /**
+   * Retry generating receipt for an approved payment (if previous attempt failed)
+   */
+  async retryReceiptGeneration(
+    tenantId: string,
+    paymentId: string,
+    userRoles: string[],
+  ): Promise<{ success: boolean; receiptNumber?: string; error?: string }> {
+    if (!this.validators.canReviewPayments(userRoles)) {
+      this.validators.throwForbidden('payments', 'retry receipt');
+    }
+
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    if (payment.status !== PaymentStatus.APPROVED) {
+      throw new BadRequestException('Can only retry receipt generation for approved payments');
+    }
+
+    // Only retry if failed or no receipt exists
+    if (payment.receiptStatus !== ReceiptStatus.FAILED && payment.receiptNumber) {
+      return {
+        success: true,
+        receiptNumber: payment.receiptNumber,
+      };
+    }
+
+    // Reset to PENDING before retry
+    await this.prisma.payment.update({
+      where: { id: paymentId },
+      data: {
+        receiptStatus: ReceiptStatus.PENDING,
+        receiptError: null,
+      },
+    });
+
+    // Try to generate receipt
+    const result = await this.receiptService.ensureReceiptForPayment(paymentId);
+
+    if (result) {
+      return {
+        success: true,
+        receiptNumber: result.receiptNumber,
+      };
+    }
+
+    // Check for error
+    const updatedPayment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      select: { receiptError: true },
+    });
+
+    return {
+      success: false,
+      error: updatedPayment?.receiptError || 'Unknown error during receipt generation',
+    };
   }
 }

@@ -197,20 +197,61 @@ export class LiquidationsService {
       }
     }
 
-    if (allExpenses.length === 0) {
-      throw new BadRequestException(
-        `No hay gastos VALIDADOS para el período ${dto.period} en este edificio. ` +
-        `Registrá gastos propios del edificio o verificá que los gastos comunes tengan asignación a este edificio.`,
-      );
-    }
-
-    // Calcular totales por moneda
+    // Calcular totales por moneda - inicializar antes de usar
     const totalsByCurrency: Record<string, number> = {};
     for (const expense of allExpenses) {
       const expCurrency = expense.currencyCode as string;
       const expAmount = expense.amountMinor as number;
       totalsByCurrency[expCurrency] =
         (totalsByCurrency[expCurrency] ?? 0) + expAmount;
+    }
+
+    // NUEVO: Cargar ajustes VALIDATED para este edificio y período target
+    const adjustments = await this.prisma.adjustment.findMany({
+      where: {
+        tenantId,
+        buildingId: dto.buildingId,
+        targetPeriod: dto.period,
+        status: 'VALIDATED',
+      },
+      include: {
+        category: { select: { name: true } },
+      },
+    });
+
+    // Si hay ajustes, agregarlos al snapshot y a los totales
+    const expenseSnapshot: any[] = allExpenses.map((e) => ({
+      expenseId: e.id,
+      categoryName: e.category.name,
+      vendorName: e.vendor?.name ?? null,
+      amountMinor: e.amountMinor,
+      currencyCode: e.currencyCode,
+      invoiceDate: e.invoiceDate,
+      description: e.description,
+      type: 'EXPENSE' as const,
+    }));
+
+    for (const adj of adjustments) {
+      expenseSnapshot.push({
+        expenseId: `ADJ-${adj.id}`,
+        categoryName: adj.category.name,
+        vendorName: null,
+        amountMinor: adj.amountMinor,
+        currencyCode: adj.currencyCode,
+        invoiceDate: adj.sourceInvoiceDate,
+        description: `Ajuste retroactivo: ${adj.reason}`,
+        type: 'ADJUSTMENT' as const,
+        sourcePeriod: adj.sourcePeriod,
+      });
+      const adjCurrency = adj.currencyCode;
+      totalsByCurrency[adjCurrency] = (totalsByCurrency[adjCurrency] ?? 0) + adj.amountMinor;
+    }
+
+    if (allExpenses.length === 0 && adjustments.length === 0) {
+      throw new BadRequestException(
+        `No hay gastos VALIDADOS ni ajustes para el período ${dto.period} en este edificio. ` +
+        `Registrá gastos propios del edificio o verificá que los gastos comunes tengan asignación a este edificio.`,
+      );
     }
 
     // Total en baseCurrency
@@ -223,16 +264,7 @@ export class LiquidationsService {
       orderBy: { code: 'asc' },
     });
 
-    // Snapshot de expenses para auditoría - incluye información de si es gasto común
-    const expenseSnapshot = allExpenses.map((e) => ({
-      expenseId: e.id,
-      categoryName: e.category.name,
-      vendorName: e.vendor?.name ?? null,
-      amountMinor: e.amountMinor as number,
-      currencyCode: e.currencyCode as string,
-      invoiceDate: (e.invoiceDate as Date).toISOString(),
-      description: e.description as string | null,
-    }));
+    // Snapshot ya calculado arriba con tipo EXPENSE/ADJUSTMENT
 
     const liq = await this.prisma.liquidation.create({
       data: {
@@ -260,6 +292,7 @@ export class LiquidationsService {
         totalAmountMinor,
         baseCurrency: dto.baseCurrency,
         expenseCount: allExpenses.length,
+        adjustmentCount: adjustments.length,
       },
     });
 
@@ -272,7 +305,7 @@ export class LiquidationsService {
 
     return {
       ...this.toDto(liq),
-      expenses: expenseSnapshot.map((e) => ({
+      expenses: expenseSnapshot.map((e: any) => ({
         id: e.expenseId,
         categoryName: e.categoryName,
         vendorName: e.vendorName,
