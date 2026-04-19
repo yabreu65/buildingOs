@@ -37,6 +37,16 @@ interface ContextValidation {
   unitScope?: string; // For UNIT-scoped roles
 }
 
+interface YoryiAssistantAction {
+  key?: string;
+}
+
+interface YoryiAssistantChatResponse {
+  answer?: string;
+  answerSource?: string;
+  actions?: YoryiAssistantAction[];
+}
+
 // MOCK Provider - always works, good for development
 @Injectable()
 export class MockAiProvider implements AiProvider {
@@ -231,6 +241,7 @@ export class AssistantService {
     // Step 3: Check budget (and enforce hard stop or soft degrade)
     const budgetCheck = await this.budget.checkBudget(tenantId);
     let response: ChatResponse;
+    let resolvedModelForLog = modelName;
 
     if (!budgetCheck.allowed) {
       // Budget exceeded and soft degrade disabled
@@ -255,30 +266,44 @@ export class AssistantService {
 
       // Log degraded response
       void this.budget.logDegradedResponse(tenantId, 'Monthly budget exceeded');
+      resolvedModelForLog = 'DEGRADED_MOCK';
     } else {
-      // Budget OK - get response from provider with routed model
-      response = await this.provider.chat(
-        request.message,
-        {
-          buildingId: request.buildingId,
-          unitId: request.unitId,
-          page: request.page,
-          tenantId,
-          contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
-        },
-        { model: modelName, maxTokens }
-      );
-
-      // Track usage (fire-and-forget)
-      void this.budget.trackUsage(tenantId, {
-        model: modelName,
-        inputTokens: 0, // MOCK provider doesn't return tokens yet
-        outputTokens: 0,
+      const yoryiResponse = await this.tryYoryiReadOnlyResponse({
+        tenantId,
+        userId,
+        membershipId,
+        userRoles,
+        request,
       });
+
+      if (yoryiResponse) {
+        response = yoryiResponse;
+        resolvedModelForLog = 'YORYI_CORE';
+      } else {
+        // Budget OK - get response from provider with routed model
+        response = await this.provider.chat(
+          request.message,
+          {
+            buildingId: request.buildingId,
+            unitId: request.unitId,
+            page: request.page,
+            tenantId,
+            contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
+          },
+          { model: modelName, maxTokens }
+        );
+
+        // Track usage (fire-and-forget)
+        void this.budget.trackUsage(tenantId, {
+          model: modelName,
+          inputTokens: 0, // MOCK provider doesn't return tokens yet
+          outputTokens: 0,
+        });
+      }
     }
 
     // Step 4: Cache the response for future similar requests
-    this.cache.set(cacheKey, response, modelName);
+    this.cache.set(cacheKey, response, resolvedModelForLog);
 
     // Filter suggested actions based on RBAC
     response.suggestedActions = this.filterSuggestedActions(
@@ -289,7 +314,9 @@ export class AssistantService {
 
     // Store interaction log (fire-and-forget)
     // Determine modelSize from router decision
-    const modelSizeStr = routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK');
+    const modelSizeStr = resolvedModelForLog === 'YORYI_CORE'
+      ? 'YORYI_CORE'
+      : (routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK'));
     const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, response, false, modelSizeStr);
 
     // Audit the interaction (fire-and-forget)
@@ -316,6 +343,216 @@ export class AssistantService {
       ...response,
       interactionId: interactionId ?? undefined,
     };
+  }
+
+  private async tryYoryiReadOnlyResponse(params: {
+    tenantId: string;
+    userId: string;
+    membershipId: string;
+    userRoles: string[];
+    request: ChatRequest;
+  }): Promise<ChatResponse | null> {
+    if (!this.shouldUseYoryiEngine(params.tenantId, params.userRoles)) {
+      return null;
+    }
+
+    const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL;
+    if (!baseUrl) {
+      return null;
+    }
+
+    const role = this.resolvePrimaryAdminRole(params.userRoles);
+    if (!role) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(new URL('/assistant/chat', baseUrl).toString(), {
+        method: 'POST',
+        headers: this.buildYoryiHeaders({
+          tenantId: params.tenantId,
+          userId: params.userId,
+          role,
+        }),
+        body: JSON.stringify({
+          message: params.request.message,
+          sessionId: `buildingos:${params.tenantId}:${params.membershipId}`,
+          context: {
+            appId: 'buildingos',
+            tenantId: params.tenantId,
+            userId: params.userId,
+            role,
+            route: this.resolveRouteFromPage(params.request.page),
+            currentModule: this.resolveModuleFromPage(params.request.page),
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const payload = (await response.json()) as YoryiAssistantChatResponse;
+      if (!payload || payload.answerSource !== 'live_data' || !payload.answer) {
+        return null;
+      }
+
+      const suggestedActions = this.mapYoryiActionsToBuildingOsActions(
+        payload.actions,
+        params.request,
+      );
+
+      return {
+        answer: payload.answer,
+        suggestedActions,
+      };
+    } catch (error) {
+      this.logger.warn(`Yoryi read-only fallback to local provider: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private shouldUseYoryiEngine(tenantId: string, userRoles: string[]): boolean {
+    const enabled = process.env.ASSISTANT_YORYI_ENGINE_ENABLED === 'true';
+    if (!enabled) {
+      return false;
+    }
+
+    const role = this.resolvePrimaryAdminRole(userRoles);
+    if (!role) {
+      return false;
+    }
+
+    const canaryTenants = this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS);
+    if (canaryTenants.length === 0) {
+      return true;
+    }
+
+    return canaryTenants.includes(tenantId);
+  }
+
+  private resolvePrimaryAdminRole(userRoles: string[]): string | null {
+    if (userRoles.includes('SUPER_ADMIN')) {
+      return 'SUPER_ADMIN';
+    }
+    if (userRoles.includes('TENANT_OWNER')) {
+      return 'TENANT_OWNER';
+    }
+    if (userRoles.includes('TENANT_ADMIN')) {
+      return 'TENANT_ADMIN';
+    }
+    return null;
+  }
+
+  private buildYoryiHeaders(context: {
+    tenantId: string;
+    userId: string;
+    role: string;
+  }): Record<string, string> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-app-id': 'buildingos',
+      'x-tenant-id': context.tenantId,
+      'x-user-id': context.userId,
+      'x-user-role': context.role,
+    };
+
+    const apiKey = process.env.YORYI_ASSISTANT_API_KEY;
+    if (apiKey) {
+      headers['x-api-key'] = apiKey;
+    }
+
+    return headers;
+  }
+
+  private mapYoryiActionsToBuildingOsActions(
+    actions: YoryiAssistantAction[] | undefined,
+    request: ChatRequest,
+  ): SuggestedAction[] {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return [];
+    }
+
+    const mapped: SuggestedAction[] = [];
+    const seen = new Set<SuggestedActionType>();
+
+    for (const action of actions) {
+      const key = (action.key ?? '').trim().toLowerCase();
+      const type = this.mapActionKeyToSuggestedActionType(key);
+      if (!type || seen.has(type)) {
+        continue;
+      }
+
+      seen.add(type);
+      mapped.push({
+        type,
+        payload: {
+          buildingId: request.buildingId,
+          unitId: request.unitId,
+        },
+      });
+    }
+
+    return mapped;
+  }
+
+  private mapActionKeyToSuggestedActionType(actionKey: string): SuggestedActionType | null {
+    if (!actionKey) {
+      return null;
+    }
+
+    if (['open-tickets', 'review-open-tickets', 'view-my-tickets'].includes(actionKey)) {
+      return 'VIEW_TICKETS';
+    }
+    if (['open-payments', 'review-pending-payments', 'view-all-payments'].includes(actionKey)) {
+      return 'VIEW_PAYMENTS';
+    }
+    if (['open-charges', 'open-units', 'open-buildings'].includes(actionKey)) {
+      return 'VIEW_REPORTS';
+    }
+    if (['open-documents', 'open-communications', 'view-notices', 'view-my-inbox'].includes(actionKey)) {
+      return 'SEARCH_DOCS';
+    }
+    if (actionKey === 'create-communication') {
+      return 'DRAFT_COMMUNICATION';
+    }
+    if (actionKey === 'create-ticket') {
+      return 'CREATE_TICKET';
+    }
+
+    return null;
+  }
+
+  private resolveRouteFromPage(page: string): string {
+    const normalized = (page ?? '').trim().toLowerCase();
+    if (!normalized) {
+      return '/tenant/dashboard';
+    }
+    if (normalized.startsWith('/')) {
+      return normalized;
+    }
+    return `/tenant/${normalized}`;
+  }
+
+  private resolveModuleFromPage(page: string): string {
+    const normalized = (page ?? '').trim().toLowerCase();
+    if (normalized.includes('payment')) return 'payments';
+    if (normalized.includes('charge') || normalized.includes('finanza')) return 'charges';
+    if (normalized.includes('ticket') || normalized.includes('support')) return 'tickets';
+    if (normalized.includes('unit')) return 'units';
+    if (normalized.includes('building')) return 'buildings';
+    return 'general';
+  }
+
+  private parseCsvEnv(value?: string): string[] {
+    if (!value) {
+      return [];
+    }
+
+    return value
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
   }
 
   /**

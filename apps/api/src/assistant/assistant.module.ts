@@ -19,6 +19,8 @@ import { AiNudgesService } from './ai-nudges.service';
 import { AiNudgesController } from './ai-nudges.controller';
 import { AiTicketCategoryService } from './ai-ticket-category.service';
 import { OllamaProvider } from './ollama.provider';
+import { AssistantReadOnlyQueryController } from './read-only-query.controller';
+import { AssistantReadOnlyQueryService } from './read-only-query.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -79,9 +81,11 @@ import { OllamaProvider } from './ollama.provider';
     SuperAdminAiController,
     AiNudgesController,
     AiUnitsController,
+    AssistantReadOnlyQueryController,
   ],
   providers: [
     AssistantService,
+    AssistantReadOnlyQueryService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
@@ -96,6 +100,7 @@ import { OllamaProvider } from './ollama.provider';
   ],
   exports: [
     AssistantService,
+    AssistantReadOnlyQueryService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
