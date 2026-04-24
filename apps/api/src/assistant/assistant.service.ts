@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction, Prisma } from '@prisma/client';
+import { AuditAction, PaymentStatus, Prisma, UnitOccupantRole } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
@@ -43,7 +43,7 @@ interface YoryiAssistantAction {
 
 interface YoryiAssistantChatResponse {
   answer?: string;
-  answerSource?: string;
+  answerSource?: 'live_data' | 'knowledge' | 'fallback' | string;
   actions?: YoryiAssistantAction[];
 }
 
@@ -108,7 +108,7 @@ export class AssistantService {
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
-    const providerName = process.env.AI_PROVIDER || 'OLLAMA';
+    const providerName = process.env.AI_PROVIDER || 'MOCK';
     if (providerName === 'OLLAMA') {
       this.provider = this.ollamaProvider;
     } else if (providerName === 'OPENAI') {
@@ -238,35 +238,18 @@ export class AssistantService {
       this.logger.error('Failed to enrich context', error);
     }
 
-    // Step 3: Check budget (and enforce hard stop or soft degrade)
-    const budgetCheck = await this.budget.checkBudget(tenantId);
     let response: ChatResponse;
     let resolvedModelForLog = modelName;
 
-    if (!budgetCheck.allowed) {
-      // Budget exceeded and soft degrade disabled
-      throw new ConflictException(
-        `AI budget exceeded. Used: $${(budgetCheck.usedCents / 100).toFixed(2)} of $${(budgetCheck.budgetCents / 100).toFixed(2)} monthly budget`,
-      );
-    }
+    const strictOperationalResponse = await this.tryResolveStrictOperationalQuestion(
+      tenantId,
+      request.message,
+      userRoles,
+    );
 
-    if (budgetCheck.blockedAt || (budgetCheck.percentUsed >= 100)) {
-      // Budget exceeded but soft degrade enabled - use mock response
-      response = await this.provider.chat(
-        request.message,
-        {
-          buildingId: request.buildingId,
-          unitId: request.unitId,
-          page: request.page,
-          tenantId,
-          contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
-        },
-        { model: 'gpt-4.1-nano', maxTokens: 150 } // Use small model for degraded
-      );
-
-      // Log degraded response
-      void this.budget.logDegradedResponse(tenantId, 'Monthly budget exceeded');
-      resolvedModelForLog = 'DEGRADED_MOCK';
+    if (strictOperationalResponse) {
+      response = strictOperationalResponse;
+      resolvedModelForLog = 'LIVE_DATA_STRICT';
     } else {
       const yoryiResponse = await this.tryYoryiReadOnlyResponse({
         tenantId,
@@ -280,25 +263,52 @@ export class AssistantService {
         response = yoryiResponse;
         resolvedModelForLog = 'YORYI_CORE';
       } else {
-        // Budget OK - get response from provider with routed model
-        response = await this.provider.chat(
-          request.message,
-          {
-            buildingId: request.buildingId,
-            unitId: request.unitId,
-            page: request.page,
-            tenantId,
-            contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
-          },
-          { model: modelName, maxTokens }
-        );
+        // Step 3: Check budget (and enforce hard stop or soft degrade)
+        const budgetCheck = await this.budget.checkBudget(tenantId);
 
-        // Track usage (fire-and-forget)
-        void this.budget.trackUsage(tenantId, {
-          model: modelName,
-          inputTokens: 0, // MOCK provider doesn't return tokens yet
-          outputTokens: 0,
-        });
+        if (!budgetCheck.allowed) {
+          // Budget exceeded and soft degrade disabled
+          throw new ConflictException(
+            `AI budget exceeded. Used: $${(budgetCheck.usedCents / 100).toFixed(2)} of $${(budgetCheck.budgetCents / 100).toFixed(2)} monthly budget`,
+          );
+        }
+
+        if (budgetCheck.blockedAt || (budgetCheck.percentUsed >= 100)) {
+          // Budget exceeded but soft degrade enabled - use mock response
+          response = await this.provider.chat(
+            request.message,
+            {
+              buildingId: request.buildingId,
+              unitId: request.unitId,
+              page: request.page,
+              tenantId,
+              contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
+            },
+            { model: 'gpt-4.1-nano', maxTokens: 150 }
+          );
+
+          void this.budget.logDegradedResponse(tenantId, 'Monthly budget exceeded');
+          resolvedModelForLog = 'DEGRADED_MOCK';
+        } else {
+          // Local fallback only when yoryi is disabled/unavailable.
+          response = await this.provider.chat(
+            request.message,
+            {
+              buildingId: request.buildingId,
+              unitId: request.unitId,
+              page: request.page,
+              tenantId,
+              contextSnapshot: contextSummary?.snapshot as unknown as Record<string, unknown> | undefined,
+            },
+            { model: modelName, maxTokens }
+          );
+
+          void this.budget.trackUsage(tenantId, {
+            model: modelName,
+            inputTokens: 0,
+            outputTokens: 0,
+          });
+        }
       }
     }
 
@@ -316,7 +326,9 @@ export class AssistantService {
     // Determine modelSize from router decision
     const modelSizeStr = resolvedModelForLog === 'YORYI_CORE'
       ? 'YORYI_CORE'
-      : (routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK'));
+      : resolvedModelForLog === 'LIVE_DATA_STRICT'
+        ? 'LIVE_DATA_STRICT'
+        : (routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK'));
     const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, response, false, modelSizeStr);
 
     // Audit the interaction (fire-and-forget)
@@ -383,7 +395,10 @@ export class AssistantService {
             userId: params.userId,
             role,
             route: this.resolveRouteFromPage(params.request.page),
-            currentModule: this.resolveModuleFromPage(params.request.page),
+            currentModule: this.resolveModuleFromPage(
+              params.request.page,
+              params.request.message,
+            ),
           },
         }),
       });
@@ -393,7 +408,7 @@ export class AssistantService {
       }
 
       const payload = (await response.json()) as YoryiAssistantChatResponse;
-      if (!payload || payload.answerSource !== 'live_data' || !payload.answer) {
+      if (!payload || !this.isAllowedYoryiAnswerSource(payload.answerSource) || !payload.answer) {
         return null;
       }
 
@@ -442,6 +457,15 @@ export class AssistantService {
       return 'TENANT_ADMIN';
     }
     return null;
+  }
+
+  private isAllowedYoryiAnswerSource(answerSource?: string): boolean {
+    const p0Enforced = process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED !== 'false';
+    if (p0Enforced) {
+      return answerSource === 'live_data';
+    }
+
+    return answerSource === 'live_data' || answerSource === 'knowledge';
   }
 
   private buildYoryiHeaders(context: {
@@ -534,14 +558,378 @@ export class AssistantService {
     return `/tenant/${normalized}`;
   }
 
-  private resolveModuleFromPage(page: string): string {
-    const normalized = (page ?? '').trim().toLowerCase();
-    if (normalized.includes('payment')) return 'payments';
-    if (normalized.includes('charge') || normalized.includes('finanza')) return 'charges';
-    if (normalized.includes('ticket') || normalized.includes('support')) return 'tickets';
-    if (normalized.includes('unit')) return 'units';
-    if (normalized.includes('building')) return 'buildings';
+  private resolveModuleFromPage(page: string, message: string = ''): string {
+    const normalizedPage = this.normalizeText(page);
+    const normalizedMessage = this.normalizeText(message);
+
+    if (
+      normalizedPage.includes('payment') ||
+      normalizedMessage.includes('pago') ||
+      normalizedMessage.includes('pagos') ||
+      normalizedMessage.includes('deuda') ||
+      normalizedMessage.includes('saldo') ||
+      normalizedMessage.includes('moros')
+    ) {
+      return 'payments';
+    }
+
+    if (normalizedPage.includes('charge') || normalizedPage.includes('finanza')) return 'charges';
+    if (normalizedPage.includes('ticket') || normalizedPage.includes('support')) return 'tickets';
+    if (normalizedPage.includes('unit')) return 'units';
+    if (normalizedPage.includes('building')) return 'buildings';
     return 'general';
+  }
+
+  private async tryResolveStrictOperationalQuestion(
+    tenantId: string,
+    message: string,
+    userRoles: string[],
+  ): Promise<ChatResponse | null> {
+    const residentResponse = await this.tryResolveStrictResidentNameQuestion(
+      tenantId,
+      message,
+      userRoles,
+    );
+    if (residentResponse) {
+      return residentResponse;
+    }
+
+    return this.tryResolveStrictUnitDebtQuestion(tenantId, message, userRoles);
+  }
+
+  private async tryResolveStrictResidentNameQuestion(
+    tenantId: string,
+    message: string,
+    userRoles: string[],
+  ): Promise<ChatResponse | null> {
+    if (!this.canAccessOperationalData(userRoles)) {
+      return null;
+    }
+
+    const normalizedMessage = this.normalizeText(message);
+    const isResidentQuery =
+      normalizedMessage.includes('residente') &&
+      (normalizedMessage.includes('como se llama') ||
+        normalizedMessage.includes('quien vive') ||
+        normalizedMessage.includes('quien es') ||
+        normalizedMessage.includes('nombre'));
+
+    if (!isResidentQuery) {
+      return null;
+    }
+
+    const unitToken = this.extractUnitToken(normalizedMessage);
+    const towerToken = this.extractTowerToken(normalizedMessage);
+
+    if (!unitToken || !towerToken) {
+      return {
+        answer:
+          'Para responder con precision necesito unidad y torre exactas. Ejemplo: "Como se llama el residente del apartamento 12-8 Torre A".',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
+    const strictMatch = await this.resolveStrictUnitMatch(tenantId, unitToken, towerToken);
+    if (strictMatch.errorResponse) {
+      return strictMatch.errorResponse;
+    }
+
+    const { building, unit } = strictMatch;
+    if (!building || !unit) {
+      return null;
+    }
+
+    const occupants = await this.prisma.unitOccupant.findMany({
+      where: {
+        unitId: unit.id,
+        endDate: null,
+      },
+      include: {
+        member: {
+          select: { id: true, name: true, role: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (occupants.length === 0) {
+      return {
+        answer: `La ${building.name} unidad ${unit.label || unit.code} no tiene ocupantes activos asignados.`,
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
+      };
+    }
+
+    const primaryOccupants = occupants.filter((o) => o.isPrimary);
+    if (primaryOccupants.length > 1) {
+      return {
+        answer: `Hay mas de un ocupante primario en ${building.name} unidad ${unit.label || unit.code}. Necesito que revises la asignacion antes de confirmar un nombre.`,
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
+      };
+    }
+
+    const selected =
+      primaryOccupants[0] ||
+      occupants.find((o) => o.role === UnitOccupantRole.OWNER) ||
+      occupants[0];
+
+    if (!selected?.member?.name) {
+      return {
+        answer: `La ${building.name} unidad ${unit.label || unit.code} tiene ocupante activo, pero sin nombre cargado en TenantMember.`,
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
+      };
+    }
+
+    const roleLabel =
+      selected.role === UnitOccupantRole.OWNER ? 'propietario/a' : 'residente';
+
+    return {
+      answer: `En ${building.name}, la unidad ${unit.label || unit.code} tiene como ${roleLabel} principal a ${selected.member.name}.`,
+      suggestedActions: [
+        {
+          type: 'VIEW_REPORTS',
+          payload: {
+            buildingId: building.id,
+            unitId: unit.id,
+          },
+        },
+      ],
+    };
+  }
+
+  private async tryResolveStrictUnitDebtQuestion(
+    tenantId: string,
+    message: string,
+    userRoles: string[],
+  ): Promise<ChatResponse | null> {
+    if (!this.canAccessOperationalData(userRoles)) {
+      return null;
+    }
+
+    const normalizedMessage = this.normalizeText(message);
+    const isDebtQuery =
+      normalizedMessage.includes('debe') ||
+      normalizedMessage.includes('cuanto debe') ||
+      normalizedMessage.includes('deuda') ||
+      normalizedMessage.includes('saldo pendiente') ||
+      normalizedMessage.includes('adeuda');
+
+    if (!isDebtQuery) {
+      return null;
+    }
+
+    const unitToken = this.extractUnitToken(normalizedMessage);
+    const towerToken = this.extractTowerToken(normalizedMessage);
+
+    if (!unitToken || !towerToken) {
+      return {
+        answer:
+          'Para responder con precision necesito ambos datos exactos: unidad y torre. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+      };
+    }
+
+    const strictMatch = await this.resolveStrictUnitMatch(tenantId, unitToken, towerToken);
+    if (strictMatch.errorResponse) {
+      return strictMatch.errorResponse;
+    }
+
+    const { building, unit } = strictMatch;
+    if (!building || !unit) {
+      return null;
+    }
+
+    const [tenant, charges] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      this.prisma.charge.findMany({
+        where: {
+          tenantId,
+          unitId: unit.id,
+          canceledAt: null,
+        },
+        include: {
+          paymentAllocations: {
+            include: {
+              payment: {
+                select: { status: true },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const outstanding = charges.reduce((sum, charge) => {
+      const approvedAllocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
+        const status = allocation.payment?.status;
+        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+          return allocSum + allocation.amount;
+        }
+        return allocSum;
+      }, 0);
+
+      return sum + Math.max(0, charge.amount - approvedAllocated);
+    }, 0);
+
+    const unitLabel = unit.label || unit.code;
+    const amountText = this.formatMoney(outstanding, tenant.currency);
+    const answer = outstanding > 0
+      ? `La ${building.name} unidad ${unitLabel} tiene una deuda pendiente de ${amountText}.`
+      : `La ${building.name} unidad ${unitLabel} no tiene deuda pendiente. Saldo actual: ${amountText}.`;
+
+    return {
+      answer,
+      suggestedActions: [
+        {
+          type: 'VIEW_PAYMENTS',
+          payload: {
+            buildingId: building.id,
+            unitId: unit.id,
+          },
+        },
+      ],
+    };
+  }
+
+  private extractUnitToken(message: string): string | null {
+    const match = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto)\s+([a-z0-9-]+)/i);
+    return match?.[1] || null;
+  }
+
+  private extractTowerToken(message: string): string | null {
+    const match = message.match(/torre\s+([a-z0-9]+)/i);
+    return match?.[1] || null;
+  }
+
+  private matchesTowerToken(buildingName: string, towerToken: string): boolean {
+    const normalizedName = this.normalizeText(buildingName);
+    const token = this.normalizeText(towerToken);
+    return normalizedName === `torre ${token}` || normalizedName.includes(`torre ${token}`);
+  }
+
+  private matchesUnitToken(unit: { code: string; label: string | null }, unitToken: string): boolean {
+    const token = this.normalizeText(unitToken);
+    const compactToken = token.replace(/[^a-z0-9]/g, '');
+    const code = this.normalizeText(unit.code);
+    const compactCode = code.replace(/[^a-z0-9]/g, '');
+    const label = this.normalizeText(unit.label || '');
+    const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
+    const derivedCode = floorDeptMatch
+      ? `${floorDeptMatch[1]}${floorDeptMatch[2]}`
+      : null;
+    return (
+      code === token ||
+      label === token ||
+      compactCode === compactToken ||
+      (derivedCode !== null && compactCode === derivedCode)
+    );
+  }
+
+  private canAccessOperationalData(userRoles: string[]): boolean {
+    return (
+      userRoles.includes('SUPER_ADMIN') ||
+      userRoles.includes('TENANT_OWNER') ||
+      userRoles.includes('TENANT_ADMIN') ||
+      userRoles.includes('OPERATOR')
+    );
+  }
+
+  private async resolveStrictUnitMatch(
+    tenantId: string,
+    unitToken: string,
+    towerToken: string,
+  ): Promise<{
+    building: { id: string; name: string } | null;
+    unit: { id: string; code: string; label: string | null } | null;
+    errorResponse: ChatResponse | null;
+  }> {
+    const buildings = await this.prisma.building.findMany({
+      where: { tenantId },
+      select: { id: true, name: true },
+    });
+
+    const matchedBuildings = buildings.filter((building) =>
+      this.matchesTowerToken(building.name, towerToken),
+    );
+
+    if (matchedBuildings.length === 0) {
+      return {
+        building: null,
+        unit: null,
+        errorResponse: {
+          answer: `No encontre la torre "${towerToken.toUpperCase()}" en este tenant. Verifica el nombre exacto y volve a intentar.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+        },
+      };
+    }
+
+    if (matchedBuildings.length > 1) {
+      return {
+        building: null,
+        unit: null,
+        errorResponse: {
+          answer: `Hay mas de una torre coincidente (${matchedBuildings.map((b) => b.name).join(', ')}). Necesito el nombre exacto para responder de forma estricta.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+        },
+      };
+    }
+
+    const building = matchedBuildings[0]!;
+    const units = await this.prisma.unit.findMany({
+      where: { buildingId: building.id },
+      select: { id: true, code: true, label: true },
+    });
+
+    const matchedUnits = units.filter((unit) => this.matchesUnitToken(unit, unitToken));
+    if (matchedUnits.length === 0) {
+      return {
+        building,
+        unit: null,
+        errorResponse: {
+          answer: `No encontre la unidad "${unitToken}" en ${building.name}. Verifica el codigo/label exacto y volve a intentar.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id } }],
+        },
+      };
+    }
+
+    if (matchedUnits.length > 1) {
+      return {
+        building,
+        unit: null,
+        errorResponse: {
+          answer: `La unidad es ambigua. Coincide con: ${matchedUnits.map((u) => u.label || u.code).join(', ')}. Indica el identificador exacto para responder con precision.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id } }],
+        },
+      };
+    }
+
+    return {
+      building,
+      unit: matchedUnits[0]!,
+      errorResponse: null,
+    };
+  }
+
+  private normalizeText(value: string): string {
+    return (value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  private formatMoney(amountCents: number, currency: string): string {
+    const amount = amountCents / 100;
+    try {
+      return new Intl.NumberFormat('es-VE', {
+        style: 'currency',
+        currency,
+      }).format(amount);
+    } catch {
+      return `${amount.toFixed(2)} ${currency}`;
+    }
   }
 
   private parseCsvEnv(value?: string): string[] {
@@ -665,7 +1053,8 @@ export class AssistantService {
       userRoles.includes('TENANT_OWNER') ||
       userRoles.includes('OPERATOR');
     const canViewPayments = userRoles.includes('TENANT_ADMIN') ||
-      userRoles.includes('TENANT_OWNER');
+      userRoles.includes('TENANT_OWNER') ||
+      userRoles.includes('OPERATOR');
     const canPublishComm = userRoles.includes('TENANT_ADMIN') ||
       userRoles.includes('TENANT_OWNER');
     const canCreateTicket = userRoles.includes('TENANT_ADMIN') ||
