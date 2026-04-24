@@ -2,7 +2,11 @@ export type AssistantToolName =
   | 'resolve_unit_ref'
   | 'get_unit_balance'
   | 'get_unit_profile'
+  | 'get_unit_payments'
+  | 'get_unit_balance_by_period'
   | 'search_payments'
+  | 'analytics_debt_aging'
+  | 'analytics_debt_by_tower'
   | 'search_tickets';
 
 export interface AssistantToolContext {
@@ -44,8 +48,14 @@ export const ASSISTANT_TOOLS_ALLOWLIST: AssistantToolName[] = [
   'resolve_unit_ref',
   'get_unit_balance',
   'get_unit_profile',
+  'get_unit_payments',
+  'get_unit_balance_by_period',
   'search_payments',
+  'analytics_debt_aging',
+  'analytics_debt_by_tower',
   'search_tickets',
 ];
 
 export const ASSISTANT_RESPONSE_SCHEMA_VERSION = '2026-04-p0-response-v1';
+
+export const ASSISTANT_TOOL_REQUEST_CONTRACT_VERSION = '2026-04-readonly-v1';
