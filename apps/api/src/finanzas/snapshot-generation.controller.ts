@@ -1,20 +1,38 @@
-import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SnapshotGenerationService, BackfillRangeOptions } from './snapshot-generation.service';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../rbac/roles.guard';
 import { Roles } from '../rbac/roles.decorator';
+import { IsOptional, IsString, Matches } from 'class-validator';
 
 class BackfillRangeDto {
+  @IsString()
   tenantId!: string;
+
+  @IsOptional()
+  @IsString()
   buildingId?: string;
+
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   fromPeriod!: string;
+
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   toPeriod!: string;
 }
 
 class RecomputePeriodDto {
+  @IsString()
   tenantId!: string;
+
+  @IsOptional()
+  @IsString()
   buildingId?: string;
+
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period!: string;
 }
 

@@ -99,6 +99,7 @@ import { SnapshotGenerationController } from './snapshot-generation.controller';
     RecurringExpenseService,
     FinanceSummaryService,
     PaymentReceiptService,
+    SnapshotGenerationService,
   ],
 })
 export class FinanzasModule {}
