@@ -17,6 +17,7 @@ import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { VendorsService } from './vendors.service';
 import { VendorsValidators } from './vendors.validators';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 import {
   CreateVendorDto,
   UpdateVendorDto,
@@ -73,31 +74,12 @@ export class VendorsController {
     private validators: VendorsValidators,
   ) {}
 
-  private getTenantIdFromHeader(req: AuthenticatedRequest): string | undefined {
-    const rawTenantHeader = req.headers['x-tenant-id'];
-
-    if (typeof rawTenantHeader === 'string' && rawTenantHeader.trim() !== '') {
-      return rawTenantHeader;
-    }
-
-    if (
-      Array.isArray(rawTenantHeader) &&
-      rawTenantHeader.length > 0 &&
-      typeof rawTenantHeader[0] === 'string' &&
-      rawTenantHeader[0].trim() !== ''
-    ) {
-      return rawTenantHeader[0];
-    }
-
-    return undefined;
-  }
-
   private getTenantId(req: AuthenticatedRequest): string {
-    const tenantId = req.tenantId ?? req.user?.tenantId ?? this.getTenantIdFromHeader(req);
-
-    if (!tenantId) {
-      throw new BadRequestException('TenantId not found in request context');
-    }
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     const targetMembership = req.user.memberships?.find(
       (membership) => membership.tenantId === tenantId,

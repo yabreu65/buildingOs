@@ -289,7 +289,7 @@ export class AiContextSummaryService {
       // Build base where clause
       const where: Prisma.ChargeWhereInput = {
         tenantId: request.tenantId,
-        status: ChargeStatus.PENDING,
+        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
         ...(request.buildingId ? { buildingId: request.buildingId } : {}),
         ...(request.unitId ? { unitId: request.unitId } : {}),
       };
@@ -319,7 +319,7 @@ export class AiContextSummaryService {
         JOIN "Building" b ON c."buildingId" = b.id
         LEFT JOIN "Unit" u ON c."unitId" = u.id
         WHERE c."tenantId" = ${request.tenantId}
-          AND c.status = ${ChargeStatus.PENDING}
+          AND c.status::text IN (${Prisma.join([ChargeStatus.PENDING, ChargeStatus.PARTIAL])})
           ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
           ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
         GROUP BY b.id, b.name, u.id, u.label

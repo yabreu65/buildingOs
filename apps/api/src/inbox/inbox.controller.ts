@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { InboxService } from './inbox.service';
 import { InboxSummaryResponse } from './inbox.types';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 interface RequestWithUser extends Request {
   user: {
@@ -46,11 +47,11 @@ export class InboxController {
     @Query('limit') limitStr?: string,
   ): Promise<InboxSummaryResponse> {
     const userId = req.user.id;
-    const tenantId = req.tenantId || req.headers['x-tenant-id'];
-
-    if (!tenantId || typeof tenantId !== 'string') {
-      throw new BadRequestException('Tenant ID is required');
-    }
+    const tenantId = resolveTenantId(req as any, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     // Parse and validate limit
     let limit = 20;

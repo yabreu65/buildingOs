@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PlanFeaturesService } from './plan-features.service';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 /**
  * Decorator to mark an endpoint as requiring a specific feature
@@ -39,11 +40,11 @@ export class RequireFeatureGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const tenantId = request.user?.tenantId || request.headers['x-tenant-id'];
-
-    if (!tenantId) {
-      throw new ForbiddenException('Tenant ID required');
-    }
+    const tenantId = resolveTenantId(request, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     // Check if tenant has the feature
     const hasFeature = await this.planFeatures.hasFeature(

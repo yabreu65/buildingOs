@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 import {
   TenantStepsResponseDto,
   BuildingStepsResponseDto,
@@ -43,11 +44,11 @@ export class OnboardingController {
   async getTenantSteps(
     @Request() req: AuthenticatedRequest,
   ): Promise<TenantStepsResponseDto> {
-    const tenantId = req.tenantId;
-
-    if (!tenantId) {
-      throw new BadRequestException('Tenant context required');
-    }
+    const tenantId = resolveTenantId(req, {
+      tenantIdParam: 'tenantId',
+      allowHeaderFallback: false,
+      requireMembership: true,
+    });
 
     const steps = await this.onboardingService.calculateTenantSteps(tenantId);
     const isDismissed = await this.onboardingService.isOnboardingDismissed(tenantId);
@@ -77,11 +78,11 @@ export class OnboardingController {
     @Request() req: AuthenticatedRequest,
   ): Promise<BuildingStepsResponseDto> {
     const { buildingId } = params;
-    const tenantId = req.tenantId;
-
-    if (!tenantId) {
-      throw new BadRequestException('Tenant context required (X-Tenant-Id header)');
-    }
+    const tenantId = resolveTenantId(req, {
+      tenantIdParam: 'tenantId',
+      allowHeaderFallback: false,
+      requireMembership: true,
+    });
 
     // Verify tenant exists and user has access
     const membership = await this.prisma.membership.findUnique({
@@ -123,11 +124,11 @@ export class OnboardingController {
    */
   @Patch('dismiss')
   async dismissOnboarding(@Request() req: AuthenticatedRequest): Promise<{ success: boolean }> {
-    const tenantId = req.tenantId;
-
-    if (!tenantId) {
-      throw new BadRequestException('Tenant context required (X-Tenant-Id header)');
-    }
+    const tenantId = resolveTenantId(req, {
+      tenantIdParam: 'tenantId',
+      allowHeaderFallback: false,
+      requireMembership: true,
+    });
 
     // Verify tenant exists and user has access
     const membership = await this.prisma.membership.findUnique({
@@ -151,11 +152,11 @@ export class OnboardingController {
    */
   @Patch('restore')
   async restoreOnboarding(@Request() req: AuthenticatedRequest): Promise<{ success: boolean }> {
-    const tenantId = req.tenantId;
-
-    if (!tenantId) {
-      throw new BadRequestException('Tenant context required (X-Tenant-Id header)');
-    }
+    const tenantId = resolveTenantId(req, {
+      tenantIdParam: 'tenantId',
+      allowHeaderFallback: false,
+      requireMembership: true,
+    });
 
     // Verify tenant exists and user has access
     const membership = await this.prisma.membership.findUnique({

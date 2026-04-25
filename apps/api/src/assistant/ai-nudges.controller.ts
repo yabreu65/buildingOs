@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   Post,
   Request,
@@ -11,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AiNudge, AiNudgesService } from './ai-nudges.service';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 @Controller('me/ai')
 @UseGuards(JwtAuthGuard)
@@ -18,14 +18,12 @@ export class AiNudgesController {
   constructor(private readonly aiNudgesService: AiNudgesService) {}
 
   @Get('nudges')
-  async getNudges(
-    @Request() req: any,
-    @Headers('x-tenant-id') tenantHeader?: string,
-  ): Promise<AiNudge[]> {
-    const tenantId = this.aiNudgesService.resolveTenantId(
-      req.user,
-      this.normalizeTenantId(tenantHeader),
-    );
+  async getNudges(@Request() req: any): Promise<AiNudge[]> {
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     return this.aiNudgesService.getActiveNudges(req.user, tenantId);
   }
@@ -34,12 +32,12 @@ export class AiNudgesController {
   async dismissNudge(
     @Request() req: any,
     @Param('key') key: AiNudge['key'],
-    @Headers('x-tenant-id') tenantHeader?: string,
   ) {
-    const tenantId = this.aiNudgesService.resolveTenantId(
-      req.user,
-      this.normalizeTenantId(tenantHeader),
-    );
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     return this.aiNudgesService.dismissNudge(req.user, tenantId, key);
   }
@@ -47,13 +45,19 @@ export class AiNudgesController {
   @Post('upgrade-request/recommended')
   async createRecommendedUpgradeRequest(
     @Request() req: any,
-    @Headers('x-tenant-id') tenantHeader?: string,
     @Body() body?: { tenantId?: string },
   ) {
-    const tenantId = this.aiNudgesService.resolveTenantId(
-      req.user,
-      this.normalizeTenantId(tenantHeader) ?? this.normalizeTenantId(body?.tenantId),
-    );
+    const requestedTenantId = this.normalizeTenantId(body?.tenantId);
+
+    if (requestedTenantId) {
+      req.tenantId = requestedTenantId;
+    }
+
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
 
     return this.aiNudgesService.createRecommendedUpgradeRequest(req.user, tenantId);
   }

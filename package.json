@@ -19,7 +19,9 @@
     "infra:reset": "docker compose -f infra/docker/docker-compose.yml down -v && npm run infra:up",
     "infra:logs": "docker compose -f infra/docker/docker-compose.yml logs -f",
     "stack:up": "docker compose -f infra/docker/docker-compose.full.yml up -d",
-    "stack:down": "docker compose -f infra/docker/docker-compose.full.yml down"
+    "stack:down": "docker compose -f infra/docker/docker-compose.full.yml down",
+    "docs:check-core-path": "node scripts/check-doctrine-paths.mjs",
+    "arch:check-tenant-header": "node scripts/check-tenant-header-usage.mjs"
   },
   "prisma": {
   "seed": "ts-node prisma/seed.ts"

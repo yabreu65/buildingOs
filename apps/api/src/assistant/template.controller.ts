@@ -20,11 +20,35 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireFeature, RequireFeatureGuard } from '../billing/require-feature.guard';
 import { AiTemplateService, TemplateRunRequest, TemplateRunResponse } from './template.service';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 @Controller('assistant')
 @UseGuards(JwtAuthGuard, RequireFeatureGuard)
 export class AiTemplateController {
   constructor(private readonly templateService: AiTemplateService) {}
+
+  private getTenantMembershipContext(req: any): {
+    tenantId: string;
+    membership: any;
+    userRoles: string[];
+  } {
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
+
+    const membership = req.user?.memberships?.find((m: any) => m.tenantId === tenantId);
+    if (!membership) {
+      throw new ForbiddenException('No access to tenant');
+    }
+
+    return {
+      tenantId,
+      membership,
+      userRoles: membership.roles || [],
+    };
+  }
 
   /**
    * GET /assistant/templates?scope=TENANT|BUILDING|UNIT
@@ -45,16 +69,7 @@ export class AiTemplateController {
     @Query('scope') scope?: string,
     @Request() req?: any,
   ) {
-    const tenantId = req.user?.activeTenantId || req.headers['x-tenant-id'];
-    const membership = req.user?.memberships?.find((m: any) => m.tenantId === tenantId);
-    const userRoles = membership?.roles || [];
-
-    if (!tenantId) {
-      throw new BadRequestException('tenantId is required (via X-Tenant-Id or session)');
-    }
-    if (!membership) {
-      throw new ForbiddenException('No access to tenant');
-    }
+    const { tenantId, userRoles } = this.getTenantMembershipContext(req);
 
     const scopeType = scope || undefined;
 
@@ -108,25 +123,15 @@ export class AiTemplateController {
     @Body() request: TemplateRunRequest,
     @Request() req?: any,
   ): Promise<TemplateRunResponse> {
-    const tenantId = req.user?.activeTenantId || req.headers['x-tenant-id'];
-    const membershipId = req.user?.activeMembershipId;
+    const { tenantId, membership } = this.getTenantMembershipContext(req);
+    const membershipId = req.user?.activeMembershipId || membership.id;
     const userId = req.user?.id;
-    const memberships = req.user?.memberships || [];
-
-    if (!tenantId) {
-      throw new BadRequestException('tenantId is required');
-    }
 
     if (!membershipId || !userId) {
       throw new BadRequestException('User context is required');
     }
 
-    // Get user roles for this tenant
-    const membership = memberships.find((m: any) => m.tenantId === tenantId);
-    const userRoles = membership?.roles || [];
-    if (!membership) {
-      throw new ForbiddenException('No access to tenant');
-    }
+    const userRoles = membership.roles || [];
 
     return this.templateService.runTemplate(
       tenantId,

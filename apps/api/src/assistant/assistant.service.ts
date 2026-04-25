@@ -47,6 +47,11 @@ interface YoryiAssistantChatResponse {
   actions?: YoryiAssistantAction[];
 }
 
+type YoryiReadOnlyResolution =
+  | { kind: 'response'; response: ChatResponse }
+  | { kind: 'fallback_allowed' }
+  | { kind: 'blocked'; response: ChatResponse };
+
 // MOCK Provider - always works, good for development
 @Injectable()
 export class MockAiProvider implements AiProvider {
@@ -107,6 +112,24 @@ export class AssistantService {
     private readonly mockAiProvider: MockAiProvider,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
+
+    const nodeEnv = process.env.NODE_ENV || 'development';
+    const envEnabled = process.env.ASSISTANT_YORYI_ENGINE_ENABLED;
+    const effectiveEnabled = envEnabled !== undefined
+      ? envEnabled === 'true'
+      : nodeEnv !== 'production';
+
+    const canaryTenants = this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS);
+    const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL || '';
+
+    this.logger.log({
+      msg: '[ASSISTANT] Startup config',
+      NODE_ENV: nodeEnv,
+      ASSISTANT_YORYI_ENGINE_ENABLED_SET: envEnabled ?? '(not set)',
+      ASSISTANT_YORYI_ENGINE_ENABLED_EFFECTIVE: effectiveEnabled,
+      ASSISTANT_YORYI_CANARY_TENANTS: canaryTenants,
+      YORYI_ASSISTANT_API_BASE_URL: baseUrl ? baseUrl.replace(/\/\/.+@/, '//***@') : '(not set)',
+    });
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'MOCK';
     if (providerName === 'OLLAMA') {
@@ -251,7 +274,7 @@ export class AssistantService {
       response = strictOperationalResponse;
       resolvedModelForLog = 'LIVE_DATA_STRICT';
     } else {
-      const yoryiResponse = await this.tryYoryiReadOnlyResponse({
+      const yoryiResolution = await this.tryYoryiReadOnlyResponse({
         tenantId,
         userId,
         membershipId,
@@ -259,10 +282,14 @@ export class AssistantService {
         request,
       });
 
-      if (yoryiResponse) {
-        response = yoryiResponse;
+      if (yoryiResolution.kind === 'response') {
+        response = yoryiResolution.response;
         resolvedModelForLog = 'YORYI_CORE';
+      } else if (yoryiResolution.kind === 'blocked') {
+        response = yoryiResolution.response;
+        resolvedModelForLog = 'YORYI_CORE_BLOCKED';
       } else {
+        // Local fallback only when yoryi is disabled/unavailable/timeout.
         // Step 3: Check budget (and enforce hard stop or soft degrade)
         const budgetCheck = await this.budget.checkBudget(tenantId);
 
@@ -363,24 +390,32 @@ export class AssistantService {
     membershipId: string;
     userRoles: string[];
     request: ChatRequest;
-  }): Promise<ChatResponse | null> {
+  }): Promise<YoryiReadOnlyResolution> {
     if (!this.shouldUseYoryiEngine(params.tenantId, params.userRoles)) {
-      return null;
+      return { kind: 'fallback_allowed' };
     }
 
     const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL;
     if (!baseUrl) {
-      return null;
+      this.logger.warn({ msg: '[BRIDGE] routing=FALLBACK (no baseUrl)', tenantId: params.tenantId });
+      return { kind: 'fallback_allowed' };
     }
 
     const role = this.resolvePrimaryAdminRole(params.userRoles);
     if (!role) {
-      return null;
+      return { kind: 'fallback_allowed' };
     }
+
+    const configuredTimeout = Number(process.env.ASSISTANT_YORYI_TIMEOUT_MS ?? '1800');
+    const timeoutMs =
+      Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 1800;
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(new URL('/assistant/chat', baseUrl).toString(), {
         method: 'POST',
+        signal: controller.signal,
         headers: this.buildYoryiHeaders({
           tenantId: params.tenantId,
           userId: params.userId,
@@ -403,13 +438,23 @@ export class AssistantService {
         }),
       });
 
+      clearTimeout(timeoutHandle);
+
       if (!response.ok) {
-        return null;
+        const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        return {
+          kind: 'blocked',
+          response: this.buildYoryiP0ControlledResponse('upstream_error', requestId),
+        };
       }
 
       const payload = (await response.json()) as YoryiAssistantChatResponse;
       if (!payload || !this.isAllowedYoryiAnswerSource(payload.answerSource) || !payload.answer) {
-        return null;
+        const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        return {
+          kind: 'blocked',
+          response: this.buildYoryiP0ControlledResponse('invalid_or_disallowed_payload', requestId),
+        };
       }
 
       const suggestedActions = this.mapYoryiActionsToBuildingOsActions(
@@ -418,32 +463,96 @@ export class AssistantService {
       );
 
       return {
-        answer: payload.answer,
-        suggestedActions,
+        kind: 'response',
+        response: {
+          answer: payload.answer,
+          suggestedActions,
+        },
       };
     } catch (error) {
+      clearTimeout(timeoutHandle);
       this.logger.warn(`Yoryi read-only fallback to local provider: ${String(error)}`);
-      return null;
+      return { kind: 'fallback_allowed' };
+    }
+  }
+
+  private buildYoryiP0ControlledResponse(
+    reason: 'upstream_error' | 'invalid_or_disallowed_payload',
+    requestId?: string,
+  ): ChatResponse {
+    const traceId = requestId ?? this.generateTraceId();
+    const detail =
+      reason === 'upstream_error'
+        ? 'El engine primario respondió con error.'
+        : 'El engine primario devolvió un payload no válido para P0.';
+    return {
+      answer: `${detail} No puedo confirmar una respuesta operativa segura en este momento. Referencia: ${traceId}. Intentá reformular la consulta o reintentá en unos minutos.`,
+      suggestedActions: [],
+    };
+  }
+
+  private generateTraceId(): string {
+    try {
+      return crypto.randomUUID().slice(0, 8).toUpperCase();
+    } catch {
+      return `T${Date.now().toString(36).toUpperCase()}`;
     }
   }
 
   private shouldUseYoryiEngine(tenantId: string, userRoles: string[]): boolean {
-    const enabled = process.env.ASSISTANT_YORYI_ENGINE_ENABLED === 'true';
-    if (!enabled) {
-      return false;
-    }
+    const nodeEnv = process.env.NODE_ENV || 'development';
+    const envEnabledRaw = process.env.ASSISTANT_YORYI_ENGINE_ENABLED;
+    const enabled = envEnabledRaw !== undefined
+      ? envEnabledRaw === 'true'
+      : nodeEnv !== 'production';
 
+    const canaryTenantsList = this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS);
     const role = this.resolvePrimaryAdminRole(userRoles);
-    if (!role) {
+    const hasWildcard = canaryTenantsList.includes('*');
+
+    if (!enabled) {
+      this.logger.warn({
+        msg: '[BRIDGE] routing=FALLBACK (yoryi disabled)',
+        ASSISTANT_YORYI_ENGINE_ENABLED: envEnabledRaw ?? '(not set)',
+        NODE_ENV: nodeEnv,
+        defaultEnableApplied: envEnabledRaw === undefined,
+      });
       return false;
     }
 
-    const canaryTenants = this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS);
-    if (canaryTenants.length === 0) {
+    if (!role) {
+      this.logger.warn({ msg: '[BRIDGE] routing=FALLBACK (no admin role)', userRoles, tenantId });
+      return false;
+    }
+
+    const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL || '';
+    if (!baseUrl) {
+      this.logger.warn({ msg: '[BRIDGE] routing=FALLBACK (no baseUrl)', tenantId });
+      return false;
+    }
+
+    if (hasWildcard) {
+      this.logger.debug({ msg: '[BRIDGE] routing=YORYI_CORE (canary wildcard)', tenantId, role, canaryTenantsList });
       return true;
     }
 
-    return canaryTenants.includes(tenantId);
+    if (canaryTenantsList.length === 0) {
+      this.logger.debug({ msg: '[BRIDGE] routing=YORYI_CORE (no canary filter)', tenantId, role });
+      return true;
+    }
+
+    if (!canaryTenantsList.includes(tenantId)) {
+      this.logger.warn({
+        msg: '[BRIDGE] routing=FALLBACK (canary miss)',
+        tenantId,
+        canaryTenants: canaryTenantsList,
+        reason: 'tenant_not_in_canary_list',
+      });
+      return false;
+    }
+
+    this.logger.debug({ msg: '[BRIDGE] routing=YORYI_CORE', tenantId, role, canaryMatch: true });
+    return true;
   }
 
   private resolvePrimaryAdminRole(userRoles: string[]): string | null {

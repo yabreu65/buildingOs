@@ -11,7 +11,8 @@ import {
   UnitWithoutResponsibleSummary,
   BuildingAlert,
 } from './dashboard.dto';
-import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
+import { PaymentStatus, TicketStatus, Prisma } from '@prisma/client';
+import { getPeriodsBetweenDates } from '../shared/finance/period.utils';
 
 interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
@@ -39,9 +40,9 @@ export class DashboardService {
     query: DashboardQueryDto,
   ): Promise<DashboardSummaryDto> {
     const startTime = Date.now();
-    const { period, buildingId } = query;
+    const { period, periodMonth, buildingId } = query;
     const now = new Date();
-    const { startDate, endDate } = this.getPeriodDates(period, now);
+    const resolvedPeriod = this.resolvePeriodWindow(period, periodMonth, now);
 
     try {
       // Build building filter
@@ -58,10 +59,21 @@ export class DashboardService {
       const buildingMap = new Map(buildings.map((b) => [b.id, b.name]));
 
       // Calculate KPIs
-      const kpis = await this.calculateKpis(tenantId, buildingIds, startDate, endDate);
+      const kpis = await this.calculateKpis(
+        tenantId,
+        buildingIds,
+        resolvedPeriod.businessPeriods,
+        resolvedPeriod.startDate,
+        resolvedPeriod.endDate,
+      );
 
       // Calculate queues
-      const queues = await this.calculateQueues(tenantId, buildingIds, startDate, endDate);
+      const queues = await this.calculateQueues(
+        tenantId,
+        buildingIds,
+        resolvedPeriod.startDate,
+        resolvedPeriod.endDate,
+      );
 
       // Calculate building alerts
       const buildingAlerts = await this.calculateBuildingAlerts(
@@ -82,7 +94,8 @@ export class DashboardService {
         buildingAlerts,
         quickActions,
         metadata: {
-          period: period || DashboardPeriod.CURRENT_MONTH,
+          period: resolvedPeriod.metadataPeriod,
+          periodMonth: resolvedPeriod.periodMonth,
           buildingId: buildingId || null,
           generatedAt: new Date().toISOString(),
         },
@@ -129,18 +142,71 @@ export class DashboardService {
     }
   }
 
+  /**
+   * Resolve period window from legacy enum or explicit periodMonth.
+   */
+  private resolvePeriodWindow(
+    period: DashboardPeriod | undefined,
+    periodMonth: string | undefined,
+    now: Date,
+  ): {
+    startDate: Date;
+    endDate: Date;
+    businessPeriods: string[];
+    metadataPeriod: string;
+    periodMonth: string | null;
+  } {
+    if (periodMonth) {
+      const [yearRaw, monthRaw] = periodMonth.split('-');
+      const year = Number(yearRaw);
+      const month = Number(monthRaw);
+
+      const startDate = new Date(year, month - 1, 1, 0, 0, 0);
+      const endDate = new Date(year, month, 0, 23, 59, 59);
+
+      return {
+        startDate,
+        endDate,
+        businessPeriods: [periodMonth],
+        metadataPeriod: periodMonth,
+        periodMonth,
+      };
+    }
+
+    const selectedPeriod = period || DashboardPeriod.CURRENT_MONTH;
+    const { startDate, endDate } = this.getPeriodDates(selectedPeriod, now);
+
+    return {
+      startDate,
+      endDate,
+      businessPeriods: getPeriodsBetweenDates(startDate, endDate),
+      metadataPeriod: selectedPeriod,
+      periodMonth: null,
+    };
+  }
+
   private async calculateKpis(
     tenantId: string,
     buildingIds: string[],
+    periods: string[],
     startDate: Date,
     endDate: Date,
   ): Promise<DashboardKpis> {
+    if (buildingIds.length === 0) {
+      return {
+        outstandingAmount: 0,
+        collectedAmount: 0,
+        collectionRate: 0,
+        delinquentUnits: 0,
+      };
+    }
+
     // Get charges for the period
     const charges = await this.prisma.charge.findMany({
       where: {
         tenantId,
         buildingId: { in: buildingIds },
-        createdAt: { gte: startDate, lte: endDate },
+        period: periods.length === 1 ? periods[0] : { in: periods },
         canceledAt: null,
       },
       include: {
@@ -174,8 +240,10 @@ export class DashboardService {
       where: {
         tenantId,
         buildingId: { in: buildingIds },
-        status: PaymentStatus.APPROVED,
-        updatedAt: { gte: startDate, lte: endDate },
+        status: {
+          in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED],
+        },
+        paidAt: { gte: startDate, lte: endDate },
       },
       _sum: { amount: true },
     });
@@ -226,6 +294,14 @@ export class DashboardService {
         buildingId: { in: buildingIds },
         status: TicketStatus.IN_PROGRESS,
         createdAt: { gte: startDate, lte: endDate },
+      },
+    });
+
+    const closedTickets = await this.prisma.ticket.count({
+      where: {
+        tenantId,
+        buildingId: { in: buildingIds },
+        closedAt: { gte: startDate, lte: endDate },
       },
     });
 
@@ -314,6 +390,7 @@ export class DashboardService {
       tickets: {
         open: openTickets,
         inProgress: inProgressTickets,
+        closed: closedTickets,
         overdue: 0,
         top: ticketSummaries,
       },

@@ -23,6 +23,7 @@ export function useAssistantContext(options: UseAssistantContextOptions = {}) {
 
   const tenantId = params.tenantId as string | undefined;
   const buildingId = params.buildingId as string | undefined;
+  const unitId = params.unitId as string | undefined;
   
   const userId = session?.user?.id || 'unknown';
   const role = session?.memberships?.[0]?.roles?.[0] || 'UNKNOWN';
@@ -38,6 +39,8 @@ export function useAssistantContext(options: UseAssistantContextOptions = {}) {
     userId,
     role,
     route,
+    buildingId,
+    unitId,
     currentModule,
     permissions,
     unitOccupantRole: undefined,

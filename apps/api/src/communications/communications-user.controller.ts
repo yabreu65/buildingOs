@@ -23,6 +23,7 @@ import {
   ResidentCommunicationsQuerySchema,
 } from '@buildingos/contracts';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -59,6 +60,28 @@ export class CommunicationsUserController {
     return userRoles?.some((r) => adminRoles.includes(r)) || false;
   }
 
+  private getTenantMembershipContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    roles: string[];
+  } {
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: false,
+      requireMembership: true,
+    });
+
+    const membership = req.user.memberships?.find((m) => m.tenantId === tenantId);
+
+    if (!membership) {
+      throw new BadRequestException('User does not have membership in the specified tenant');
+    }
+
+    return {
+      tenantId,
+      roles: membership.roles || [],
+    };
+  }
+
   /**
    * GET /communications
    * List all communications in tenant (admin only)
@@ -74,27 +97,11 @@ export class CommunicationsUserController {
    */
   @Get()
   async listCommunications(
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('status') status?: CommunicationStatus,
-    @Request() req?: any,
   ) {
-    // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    // Get user's memberships to find matching tenant
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
-    const userRoles = membership.roles || [];
+    const { tenantId, roles: userRoles } = this.getTenantMembershipContext(req);
     if (!this.isAdminRole(userRoles)) {
       throw new BadRequestException('Only administrators can list communications');
     }
@@ -126,25 +133,9 @@ export class CommunicationsUserController {
   @Get(':communicationId')
   async getCommunication(
     @Param('communicationId') communicationId: string,
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ) {
-    // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    // Get user's memberships to find matching tenant
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
-    const userRoles = membership.roles || [];
+    const { tenantId, roles: userRoles } = this.getTenantMembershipContext(req);
     if (!this.isAdminRole(userRoles)) {
       throw new BadRequestException('Only administrators can view communications');
     }
@@ -180,21 +171,7 @@ export class CommunicationsUserController {
     @Body() rawBody: unknown,
     @Request() req: AuthenticatedRequest,
   ) {
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
-    const userRoles = membership.roles || [];
+    const { tenantId, roles: userRoles } = this.getTenantMembershipContext(req);
     if (!this.isAdminRole(userRoles)) {
       throw new BadRequestException('Only administrators can create communications');
     }
@@ -248,21 +225,7 @@ export class CommunicationsUserController {
     @Body() rawBody: unknown,
     @Request() req: AuthenticatedRequest,
   ) {
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
-    const userRoles = membership.roles || [];
+    const { tenantId, roles: userRoles } = this.getTenantMembershipContext(req);
     if (!this.isAdminRole(userRoles)) {
       throw new BadRequestException('Only administrators can publish communications');
     }
@@ -310,6 +273,29 @@ export class CommunicationsInboxController {
     private validators: CommunicationsValidators,
   ) {}
 
+  private getUserTenantContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    userId: string;
+    userRoles: string[];
+  } {
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
+
+    const membership = req.user.memberships?.find((m) => m.tenantId === tenantId);
+    if (!membership) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    return {
+      tenantId,
+      userId: req.user.id,
+      userRoles: membership.roles || [],
+    };
+  }
+
   /**
    * GET /me/communications
    * List communications in user's inbox
@@ -327,20 +313,12 @@ export class CommunicationsInboxController {
    */
   @Get()
   async getInbox(
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('unitId') unitId?: string,
     @Query('readOnly') readOnly?: string,
-    @Request() req?: any,
   ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0].tenantId;
-    const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const { tenantId, userId, userRoles } = this.getUserTenantContext(req);
 
     // Validate building if provided
     const filters: any = {};
@@ -387,17 +365,9 @@ export class CommunicationsInboxController {
   @Get(':communicationId')
   async getCommunicationDetail(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0].tenantId;
-    const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const { tenantId, userId, userRoles } = this.getUserTenantContext(req);
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -441,17 +411,9 @@ export class CommunicationsInboxController {
   @HttpCode(200)
   async markAsRead(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0].tenantId;
-    const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const { tenantId, userId, userRoles } = this.getUserTenantContext(req);
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -498,15 +460,9 @@ export class CommunicationsInboxController {
   @Post('resident/communications/:communicationId/read')
   async markResidentAsRead(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<{ readAt: Date | null }> {
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0].tenantId;
-    const userId = req.user.id;
+    const { tenantId, userId } = this.getUserTenantContext(req);
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -541,6 +497,22 @@ export class ResidentCommunicationsController {
     private validators: CommunicationsValidators,
   ) {}
 
+  private getResidentTenantContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    userId: string;
+  } {
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      allowSingleMembershipFallback: true,
+      requireMembership: true,
+    });
+
+    return {
+      tenantId,
+      userId: req.user.id,
+    };
+  }
+
   /**
    * GET /resident/communications
    * Resident inbox with cursor pagination
@@ -574,8 +546,7 @@ export class ResidentCommunicationsController {
     }
 
     const { limit, cursor } = parsedQuery.data;
-    const tenantId = userMemberships[0]!.tenantId;
-    const userId = req.user.id;
+    const { tenantId, userId } = this.getResidentTenantContext(req);
 
     return await this.communicationsService.findForResidentV2(
       tenantId,
@@ -603,8 +574,7 @@ export class ResidentCommunicationsController {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0]!.tenantId;
-    const userId = req.user.id;
+    const { tenantId, userId } = this.getResidentTenantContext(req);
 
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,

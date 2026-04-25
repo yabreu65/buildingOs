@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-5",
+  "small_model": "anthropic/claude-haiku-4-5",
+  "permission": { "bash": "allow", "edit": "allow" },
+  "instructions": [
+    "AGENTS.md",
+    "/Users/yoryi/core/yoryi-core-architecture/AGENTS.md",
+    "/Users/yoryi/core/yoryi-core-architecture/catalog/knowledge-map.md",
+    "/Users/yoryi/core/yoryi-core-architecture/constitution/architecture-principles.md",
+    "/Users/yoryi/core/yoryi-core-architecture/constitution/decision-policy.md",
+    "docs/architecture/current-state.md",
+    "docs/architecture/constraints.md",
+    "docs/overlays/core-overlay.md",
+    "docs/overlays/product-exceptions.md"
+  ]
+}

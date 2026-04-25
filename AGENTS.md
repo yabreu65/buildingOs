@@ -1,62 +1,113 @@
-# Code Review Standards for BuildingOS
+# AGENTS.md — BuildingOS (Fase 1)
 
-## TypeScript/Node.js
+Contrato operativo unico para OpenCode en BuildingOS.
+Este archivo reemplaza cualquier contrato legacy para planificacion/implementacion diaria.
 
-- Use `const`/`let`, never `var`
-- Prefer `interface` over `type` for object definitions
-- Avoid `any` types - use proper typing
-- Use readonly for immutable properties
-- Always include JSDoc comments for public methods
+## Canonical Core Path
 
-## NestJS
+`/Users/yoryiabreu/proyectos/yoryi-core-architecture`
 
-- Use `@Injectable()` decorator for services
-- Implement proper error handling with typed exceptions
-- Use dependency injection via constructor
-- Use `@Global()` for shared modules
-- Use guards and interceptors for cross-cutting concerns
+## Scope de Fase 1 (activo)
 
-## React/Next.js
+Objetivo: integrar BuildingOS con el core doctrinal sin duplicacion.
 
-- Use functional components only
-- Prefer named exports
-- Use TypeScript for all components
-- Use proper prop typing with interfaces/types
-- Use `const` for component definitions
+Incluye:
+- Carga de doctrina global
+- Overlays locales
+- Current-state local
+- Planning/review/implementation doctrine-first
 
-## API/REST
+No incluye:
+- MCP
+- Semantic retrieval
+- Multi-agent runtime
+- Automatizaciones pesadas
 
-- Follow REST conventions: GET, POST, PATCH, DELETE
-- Return proper HTTP status codes
-- Use DTOs (Data Transfer Objects) for request/response
-- Validate all inputs with Zod/validators
-- Document endpoints with JSDoc
+## Mandatory Context Load (orden obligatorio)
 
-## Testing
+1. `/Users/yoryiabreu/proyectos/yoryi-core-architecture/AGENTS.md`
+2. `/Users/yoryiabreu/proyectos/yoryi-core-architecture/catalog/knowledge-map.md`
+3. `/Users/yoryiabreu/proyectos/yoryi-core-architecture/constitution/architecture-principles.md`
+4. `/Users/yoryiabreu/proyectos/yoryi-core-architecture/constitution/decision-policy.md`
+5. `docs/architecture/current-state.md`
+6. `docs/architecture/constraints.md`
+7. `docs/overlays/core-overlay.md`
+8. `docs/overlays/product-exceptions.md`
 
-- Write tests for critical business logic
-- Use `describe` and `it` blocks
-- Test error scenarios, not just happy paths
-- Use meaningful test descriptions
+Luego cargar doctrina de dominio segun tarea.
 
-## Security
+## Dynamic Domain Load Rules
 
-- Never hardcode secrets - use environment variables
-- Validate all user input
-- Implement multi-tenant isolation checks
-- Use RBAC for authorization
-- Hash sensitive data (passwords, tokens)
+- Billing/finanzas:
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/saas/tenancy-models.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/backend/postgres/multi-tenancy-data-isolation.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/backend/security/identity-tenant-context.md`
+- API/backend module:
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/backend/nestjs/module-boundaries.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/backend/nestjs/clean-hexagonal.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/backend/nestjs/api-versioning.md`
+- Frontend:
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/frontend/architecture/frontend-boundaries.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/frontend/architecture/state-strategy.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/frontend/quality/testing-strategy.md`
+- AI feature:
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/ai/rag/multi-tenant-rag.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/ai/agents/tool-contracts.md`
+  - `/Users/yoryiabreu/proyectos/yoryi-core-architecture/domains/ai/runtime/ai-ops-observability.md`
 
-## Database
+## Hard Rules
 
-- Use Prisma migrations for schema changes
-- Always include `tenantId` for multi-tenant isolation
-- Use soft deletes where appropriate (`deletedAt` field)
-- Create indexes for frequently queried columns
+- No plan without context.
+- No decision without traceability.
+- No unsupported claim: toda afirmacion arquitectonica debe citar al menos un path real.
+- No fabricated artifacts: no inventar archivos, servicios, contratos o metricas.
+- Si falta contexto, marcar `GAP` explicito antes de proponer implementacion.
+- Respetar aislamiento multi-tenant en todo cambio.
+- Respetar overlays locales; excepcion solo con ADR.
 
-## Commits
+## Planning Output Contract
 
-- Use conventional commits: feat, fix, refactor, test, docs, etc.
-- Write clear, actionable commit messages
-- Keep commits atomic (one feature per commit)
-- Include context about WHY not just WHAT
+Toda planificacion debe incluir:
+
+- Context docs consultados
+- Evidencia (`path -> regla usada`)
+- Opciones y trade-offs
+- Checklists aplicados
+- Riesgos y mitigaciones
+- `GAP` (si aplica)
+- ADR requerida (`yes/no` + motivo)
+
+## Review Contract
+
+Toda review debe validar:
+
+- Constitucion global + overlay local
+- Current-state y constraints locales
+- Anti-patterns aplicables
+- Checklists/gates del core
+- Hallazgos clasificados: blocker / warning / advisory
+
+## Implementation Contract
+
+Antes de implementar:
+
+1. Plan aprobado con evidencia.
+2. Validar necesidad de ADR.
+3. Aplicar templates/checklists del core.
+4. Respetar layering, tenancy y contracts.
+
+Despues de implementar:
+
+- Actualizar `docs/architecture/current-state.md` si cambio arquitectura real.
+- Actualizar `docs/architecture/local-decisions.md` si se tomo nueva decision.
+- Actualizar `docs/overlays/product-exceptions.md` si hubo excepcion temporal.
+
+## Planning Quality Gate
+
+Aplicar scorecard:
+`/Users/yoryiabreu/proyectos/yoryi-core-architecture/checks/architecture/planning-quality-scorecard.md`
+
+No pasar a implementacion si:
+- score total < 10, o
+- traceability < 2, o
+- anti-hallucination discipline < 2.

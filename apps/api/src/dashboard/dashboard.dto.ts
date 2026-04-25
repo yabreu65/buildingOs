@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEnum } from 'class-validator';
+import { IsOptional, IsString, IsEnum, Matches } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum DashboardPeriod {
@@ -6,6 +6,8 @@ export enum DashboardPeriod {
   PREVIOUS_MONTH = 'PREVIOUS_MONTH',
   LAST_30_DAYS = 'LAST_30_DAYS',
 }
+
+export const PERIOD_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export class DashboardQueryDto {
   @ApiPropertyOptional({
@@ -15,6 +17,15 @@ export class DashboardQueryDto {
   @IsOptional()
   @IsEnum(DashboardPeriod)
   period?: DashboardPeriod = DashboardPeriod.CURRENT_MONTH;
+
+  @ApiPropertyOptional({
+    description: 'Accounting month in YYYY-MM format',
+    example: '2026-04',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(PERIOD_MONTH_REGEX)
+  periodMonth?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -66,6 +77,7 @@ export interface DashboardQueues {
   tickets: {
     open: number;
     inProgress: number;
+    closed: number;
     overdue: number;
     top: TicketSummary[];
   };
@@ -86,6 +98,7 @@ export interface DashboardSummaryDto {
   quickActions: string[];
   metadata: {
     period: string;
+    periodMonth?: string | null;
     buildingId: string | null;
     generatedAt: string;
     moduleStatus?: 'FINANCIAL_MODULE_OK' | 'FINANCIAL_MODULE_DISABLED';

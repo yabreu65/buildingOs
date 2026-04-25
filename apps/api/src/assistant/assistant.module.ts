@@ -3,6 +3,8 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
+import { ProcessModule } from '../process/process.module';
+import { CrossQueryModule } from './cross-query.module';
 import { AssistantService, MockAiProvider } from './assistant.service';
 import { AssistantController, SuperAdminAiController } from './assistant.controller';
 import { AiUnitsController } from './ai-units.controller';
@@ -21,6 +23,8 @@ import { AiTicketCategoryService } from './ai-ticket-category.service';
 import { OllamaProvider } from './ollama.provider';
 import { AssistantReadOnlyQueryController } from './read-only-query.controller';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
+import { AssistantToolsController } from './tools.controller';
+import { AssistantToolsService } from './tools.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -73,7 +77,7 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
  * - AuditModule: Audit logging
  */
 @Module({
-  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
+  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule, ProcessModule, CrossQueryModule],
   controllers: [
     AssistantController,
     AiBudgetController,
@@ -82,10 +86,12 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiNudgesController,
     AiUnitsController,
     AssistantReadOnlyQueryController,
+    AssistantToolsController,
   ],
   providers: [
     AssistantService,
     AssistantReadOnlyQueryService,
+    AssistantToolsService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
@@ -101,6 +107,7 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
   exports: [
     AssistantService,
     AssistantReadOnlyQueryService,
+    AssistantToolsService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,

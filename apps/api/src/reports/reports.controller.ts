@@ -12,8 +12,19 @@ import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { RequireFeatureGuard, RequireFeature } from '../billing/require-feature.guard';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
+import { ApiResponse } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
-import { ReportsValidators } from './reports.validators';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
+import {
+  ReportsValidators,
+  ReportsMembershipClaim,
+} from './reports.validators';
+import {
+  DebtAgingApiResponseDto,
+  DebtAgingQueryDto,
+  DebtByPeriodApiResponseDto,
+  DebtByPeriodQueryDto,
+} from './reports.dto';
 
 /**
  * ReportsController: Reports endpoints for admins
@@ -39,14 +50,59 @@ export class ReportsController {
   ) {}
 
   /**
-   * Extract user roles for the given tenant from JWT memberships
+   * Extract membership claims for tenant from authenticated user context.
    */
-  private getUserRoles(req: any, tenantId: string): string[] {
-    // memberships is array [{tenantId, roles[]}] from JwtStrategy.validate()
-    const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId
+  private getMembershipClaims(req: any, tenantId: string): ReportsMembershipClaim | null {
+    const membership = req.user?.memberships?.find((m: any) => m.tenantId === tenantId);
+    if (!membership) {
+      return null;
+    }
+
+    return {
+      roles: membership.roles || [],
+      scopedRoles: membership.scopedRoles || [],
+    };
+  }
+
+  /**
+   * Resolve building scope (tenant/building scoped roles) for reports endpoints.
+   */
+  private async resolveAccessScope(
+    req: any,
+    tenantId: string,
+    requestedBuildingId?: string,
+  ): Promise<{ tenantId: string; buildingIds: string[]; buildingId?: string }> {
+    const resolvedTenantId = resolveTenantId(req, {
+      tenantIdParam: 'tenantId',
+      allowHeaderFallback: false,
+      requireMembership: true,
+    });
+
+    if (resolvedTenantId !== tenantId) {
+      this.validators.throwForbidden();
+    }
+
+    const membership = this.getMembershipClaims(req, tenantId);
+
+    if (!this.validators.canReadReports(membership)) {
+      this.validators.throwForbidden();
+    }
+
+    const accessibleBuildingIds = await this.validators.resolveAccessibleBuildingIds(
+      tenantId,
+      membership,
     );
-    return membership?.roles || [];
+    const resolvedBuildingIds = await this.validators.resolveBuildingScope(
+      tenantId,
+      requestedBuildingId,
+      accessibleBuildingIds,
+    );
+
+    return {
+      tenantId: resolvedTenantId,
+      buildingId: requestedBuildingId,
+      buildingIds: resolvedBuildingIds,
+    };
   }
 
   /**
@@ -67,15 +123,11 @@ export class ReportsController {
     @Query('to') to?: string,
     @Request() req?: any
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    return this.reportsService.getTicketsReport(tenantId, {
-      buildingId,
+    return this.reportsService.getTicketsReport(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
     });
@@ -100,16 +152,100 @@ export class ReportsController {
     @Query('period') period?: string,
     @Request() req?: any
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    return this.reportsService.getFinanceReport(tenantId, {
-      buildingId,
+    return this.reportsService.getFinanceReport(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       period,
+    });
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/debt/summary?lastMonths=3&excludeCurrent=true
+   *
+   * Returns debt grouped by business periods (YYYY-MM), excluding current by default.
+   * MVP (cash basis): debt(period) = charges(period) - payments(paidAt inside period).
+   */
+  @Get(':tenantId/reports/debt/summary')
+  async getDebtSummaryReport(
+    @Param('tenantId') tenantId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('lastMonths') lastMonthsRaw?: string,
+    @Query('excludeCurrent') excludeCurrentRaw?: string,
+    @Request() req?: any,
+  ) {
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
+
+    const parsedMonths =
+      lastMonthsRaw && !Number.isNaN(Number(lastMonthsRaw))
+        ? Number.parseInt(lastMonthsRaw, 10)
+        : undefined;
+
+    const parsedExcludeCurrent =
+      excludeCurrentRaw == null
+        ? true
+        : ['true', '1', 'yes', 'y'].includes(excludeCurrentRaw.toLowerCase());
+
+    return this.reportsService.getDebtSummary(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
+      lastMonths: parsedMonths,
+      excludeCurrent: parsedExcludeCurrent,
+    });
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/debt/aging?asOf=YYYY-MM-DD&buildingId=...
+   *
+   * Returns overdue snapshot using charge dueDate and real payment allocations.
+   */
+  @Get(':tenantId/reports/debt/aging')
+  @ApiResponse({
+    status: 200,
+    description: 'Debt aging report generated',
+    type: DebtAgingApiResponseDto,
+  })
+  async getDebtAgingReport(
+    @Param('tenantId') tenantId: string,
+    @Query() query: DebtAgingQueryDto,
+    @Request() req?: any,
+  ) {
+    const scope = await this.resolveAccessScope(req, tenantId, query.buildingId);
+    const asOf = this.validators.parseAsOfDate(query.asOf);
+
+    return this.reportsService.getDebtAgingReport(scope.tenantId, {
+      asOf,
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
+      timezone: 'America/Argentina/Buenos_Aires',
+    });
+  }
+
+  /**
+   * GET /tenants/:tenantId/reports/debt/by-period?asOf=YYYY-MM-DD&buildingId=...
+   *
+   * Returns overdue snapshot grouped by unit and periods using payment allocations.
+   */
+  @Get(':tenantId/reports/debt/by-period')
+  @ApiResponse({
+    status: 200,
+    description: 'Debt by-period report generated',
+    type: DebtByPeriodApiResponseDto,
+  })
+  async getDebtByPeriodReport(
+    @Param('tenantId') tenantId: string,
+    @Query() query: DebtByPeriodQueryDto,
+    @Request() req?: any,
+  ) {
+    const scope = await this.resolveAccessScope(req, tenantId, query.buildingId);
+    const asOf = this.validators.parseAsOfDate(query.asOf);
+
+    return this.reportsService.getDebtByPeriodReport(scope.tenantId, {
+      asOf,
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
+      timezone: 'America/Argentina/Buenos_Aires',
     });
   }
 
@@ -130,15 +266,11 @@ export class ReportsController {
     @Query('to') to?: string,
     @Request() req?: any
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    return this.reportsService.getCommunicationsReport(tenantId, {
-      buildingId,
+    return this.reportsService.getCommunicationsReport(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
     });
@@ -161,15 +293,11 @@ export class ReportsController {
     @Query('to') to?: string,
     @Request() req?: any
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    return this.reportsService.getActivityReport(tenantId, {
-      buildingId,
+    return this.reportsService.getActivityReport(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
     });
@@ -201,22 +329,18 @@ export class ReportsController {
     @Response() res?: any,
     @Request() req?: any,
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    const result = await this.reportsService.exportTickets(tenantId, {
-      buildingId,
+    const result = await this.reportsService.exportTickets(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
     });
 
     // Audit log
     void this.auditService.createLog({
-      tenantId,
+      tenantId: scope.tenantId,
       actorUserId: req.user.id,
       action: AuditAction.REPORT_EXPORTED,
       entityType: 'Report',
@@ -257,21 +381,17 @@ export class ReportsController {
     @Response() res?: any,
     @Request() req?: any,
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    const result = await this.reportsService.exportFinance(tenantId, {
-      buildingId,
+    const result = await this.reportsService.exportFinance(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       period,
     });
 
     // Audit log
     void this.auditService.createLog({
-      tenantId,
+      tenantId: scope.tenantId,
       actorUserId: req.user.id,
       action: AuditAction.REPORT_EXPORTED,
       entityType: 'Report',
@@ -313,15 +433,11 @@ export class ReportsController {
     @Response() res?: any,
     @Request() req?: any,
   ) {
-    const userRoles = this.getUserRoles(req, tenantId);
-    if (!this.validators.canReadReports(userRoles)) {
-      this.validators.throwForbidden();
-    }
+    const scope = await this.resolveAccessScope(req, tenantId, buildingId);
 
-    await this.validators.validateBuildingScope(tenantId, buildingId);
-
-    const result = await this.reportsService.exportPayments(tenantId, {
-      buildingId,
+    const result = await this.reportsService.exportPayments(scope.tenantId, {
+      buildingId: scope.buildingId,
+      buildingIds: scope.buildingIds,
       from: this.validators.parseDate(from),
       to: this.validators.parseDate(to),
       status,
@@ -329,7 +445,7 @@ export class ReportsController {
 
     // Audit log
     void this.auditService.createLog({
-      tenantId,
+      tenantId: scope.tenantId,
       actorUserId: req.user.id,
       action: AuditAction.REPORT_EXPORTED,
       entityType: 'Report',

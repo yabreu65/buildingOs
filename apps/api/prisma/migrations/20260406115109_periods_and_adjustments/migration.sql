@@ -198,67 +198,67 @@ CREATE TABLE "PaymentAuditLog" (
 );
 
 -- CreateIndex
-CREATE INDEX "PushSubscription_tenantId_userId_idx" ON "PushSubscription"("tenantId", "userId");
+CREATE INDEX IF NOT EXISTS "PushSubscription_tenantId_userId_idx" ON "PushSubscription"("tenantId", "userId");
 
 -- CreateIndex
-CREATE INDEX "PushSubscription_tenantId_revokedAt_idx" ON "PushSubscription"("tenantId", "revokedAt");
+CREATE INDEX IF NOT EXISTS "PushSubscription_tenantId_revokedAt_idx" ON "PushSubscription"("tenantId", "revokedAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "PushSubscription_tenantId_userId_endpoint_key" ON "PushSubscription"("tenantId", "userId", "endpoint");
+CREATE UNIQUE INDEX IF NOT EXISTS "PushSubscription_tenantId_userId_endpoint_key" ON "PushSubscription"("tenantId", "userId", "endpoint");
 
 -- CreateIndex
-CREATE INDEX "ExpenseCategoryVendorPreference_tenantId_idx" ON "ExpenseCategoryVendorPreference"("tenantId");
+CREATE INDEX IF NOT EXISTS "ExpenseCategoryVendorPreference_tenantId_idx" ON "ExpenseCategoryVendorPreference"("tenantId");
 
 -- CreateIndex
-CREATE INDEX "ExpenseCategoryVendorPreference_tenantId_categoryId_idx" ON "ExpenseCategoryVendorPreference"("tenantId", "categoryId");
+CREATE INDEX IF NOT EXISTS "ExpenseCategoryVendorPreference_tenantId_categoryId_idx" ON "ExpenseCategoryVendorPreference"("tenantId", "categoryId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ExpenseCategoryVendorPreference_tenantId_categoryId_key" ON "ExpenseCategoryVendorPreference"("tenantId", "categoryId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ExpenseCategoryVendorPreference_tenantId_categoryId_key" ON "ExpenseCategoryVendorPreference"("tenantId", "categoryId");
 
 -- CreateIndex
-CREATE INDEX "Adjustment_tenantId_buildingId_targetPeriod_status_idx" ON "Adjustment"("tenantId", "buildingId", "targetPeriod", "status");
+CREATE INDEX IF NOT EXISTS "Adjustment_tenantId_buildingId_targetPeriod_status_idx" ON "Adjustment"("tenantId", "buildingId", "targetPeriod", "status");
 
 -- CreateIndex
-CREATE INDEX "Adjustment_tenantId_buildingId_sourcePeriod_idx" ON "Adjustment"("tenantId", "buildingId", "sourcePeriod");
+CREATE INDEX IF NOT EXISTS "Adjustment_tenantId_buildingId_sourcePeriod_idx" ON "Adjustment"("tenantId", "buildingId", "sourcePeriod");
 
 -- CreateIndex
-CREATE INDEX "Adjustment_tenantId_status_idx" ON "Adjustment"("tenantId", "status");
+CREATE INDEX IF NOT EXISTS "Adjustment_tenantId_status_idx" ON "Adjustment"("tenantId", "status");
 
 -- CreateIndex
-CREATE INDEX "PaymentAuditLog_paymentId_createdAt_idx" ON "PaymentAuditLog"("paymentId", "createdAt");
+CREATE INDEX IF NOT EXISTS "PaymentAuditLog_paymentId_createdAt_idx" ON "PaymentAuditLog"("paymentId", "createdAt");
 
 -- CreateIndex
-CREATE INDEX "PaymentAuditLog_tenantId_action_createdAt_idx" ON "PaymentAuditLog"("tenantId", "action", "createdAt");
+CREATE INDEX IF NOT EXISTS "PaymentAuditLog_tenantId_action_createdAt_idx" ON "PaymentAuditLog"("tenantId", "action", "createdAt");
 
 -- CreateIndex
-CREATE INDEX "PaymentAuditLog_membershipId_createdAt_idx" ON "PaymentAuditLog"("membershipId", "createdAt");
+CREATE INDEX IF NOT EXISTS "PaymentAuditLog_membershipId_createdAt_idx" ON "PaymentAuditLog"("membershipId", "createdAt");
 
 -- CreateIndex
-CREATE INDEX "Expense_tenantId_buildingId_liquidationPeriod_status_idx" ON "Expense"("tenantId", "buildingId", "liquidationPeriod", "status");
+CREATE INDEX IF NOT EXISTS "Expense_tenantId_buildingId_liquidationPeriod_status_idx" ON "Expense"("tenantId", "buildingId", "liquidationPeriod", "status");
 
 -- CreateIndex
-CREATE INDEX "ExpenseLedgerCategory_tenantId_movementType_catalogScope_idx" ON "ExpenseLedgerCategory"("tenantId", "movementType", "catalogScope");
+CREATE INDEX IF NOT EXISTS "ExpenseLedgerCategory_tenantId_movementType_catalogScope_idx" ON "ExpenseLedgerCategory"("tenantId", "movementType", "catalogScope");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ExpenseLedgerCategory_tenantId_code_key" ON "ExpenseLedgerCategory"("tenantId", "code");
+CREATE UNIQUE INDEX IF NOT EXISTS "ExpenseLedgerCategory_tenantId_code_key" ON "ExpenseLedgerCategory"("tenantId", "code");
 
 -- CreateIndex
-CREATE INDEX "Liquidation_tenantId_buildingId_chargePeriod_status_idx" ON "Liquidation"("tenantId", "buildingId", "chargePeriod", "status");
+CREATE INDEX IF NOT EXISTS "Liquidation_tenantId_buildingId_chargePeriod_status_idx" ON "Liquidation"("tenantId", "buildingId", "chargePeriod", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "MovementAllocation_tenantId_expenseId_buildingId_key" ON "MovementAllocation"("tenantId", "expenseId", "buildingId");
+CREATE UNIQUE INDEX IF NOT EXISTS "MovementAllocation_tenantId_expenseId_buildingId_key" ON "MovementAllocation"("tenantId", "expenseId", "buildingId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "MovementAllocation_tenantId_incomeId_buildingId_key" ON "MovementAllocation"("tenantId", "incomeId", "buildingId");
+CREATE UNIQUE INDEX IF NOT EXISTS "MovementAllocation_tenantId_incomeId_buildingId_key" ON "MovementAllocation"("tenantId", "incomeId", "buildingId");
 
 -- CreateIndex
-CREATE INDEX "UnitOccupant_tenantId_memberId_idx" ON "UnitOccupant"("tenantId", "memberId");
+CREATE INDEX IF NOT EXISTS "UnitOccupant_tenantId_memberId_idx" ON "UnitOccupant"("tenantId", "memberId");
 
 -- CreateIndex
-CREATE INDEX "UnitOccupant_unitId_isPrimary_idx" ON "UnitOccupant"("unitId", "isPrimary");
+CREATE INDEX IF NOT EXISTS "UnitOccupant_unitId_isPrimary_idx" ON "UnitOccupant"("unitId", "isPrimary");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "UnitOccupant_unitId_memberId_key" ON "UnitOccupant"("unitId", "memberId");
+CREATE UNIQUE INDEX IF NOT EXISTS "UnitOccupant_unitId_memberId_key" ON "UnitOccupant"("unitId", "memberId");
 
 -- AddForeignKey
 ALTER TABLE "PushSubscription" ADD CONSTRAINT "PushSubscription_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

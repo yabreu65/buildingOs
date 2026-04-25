@@ -214,6 +214,10 @@ model Tenant {
   tenantInvitations     TenantInvitation[]
   unitOccupants         UnitOccupant[]
   pushSubscriptions    PushSubscription[]
+  unitBalanceSnapshots    UnitBalanceMonthlySnapshot[]
+  buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
+  processInstances        ProcessInstance[]
+  processAudits           ProcessAudit[]
 }
 
 model User {
@@ -360,6 +364,13 @@ model Building {
   liquidations         Liquidation[]
   adjustments          Adjustment[]
 
+  // P2-A snapshots
+  balanceSnapshots   BuildingBalanceMonthlySnapshot[]
+  unitBalanceSnapshots UnitBalanceMonthlySnapshot[]
+
+  // P2-B processes
+  processInstances ProcessInstance[]
+
   @@unique([tenantId, name])
   @@index([tenantId])
 }
@@ -387,6 +398,12 @@ model Unit {
   membershipRoles MembershipRole[]  @relation("UnitMembershipRoles")
   userContexts    UserContext[]     @relation("UserContextUnit")
   unitGroupMembers UnitGroupMember[]
+
+  // P2-A snapshots
+  balanceSnapshots UnitBalanceMonthlySnapshot[]
+
+  // P2-B processes
+  processInstances ProcessInstance[]
 
   @@unique([buildingId, code])
   @@index([buildingId])
@@ -1338,6 +1355,7 @@ model Charge {
   @@index([tenantId, buildingId, period])
   @@index([tenantId, unitId, status])
   @@index([tenantId, buildingId, status])
+  @@index([tenantId, dueDate, canceledAt])
   @@index([dueDate])
   @@index([periodId])
   @@index([liquidationId])
@@ -1403,6 +1421,7 @@ model Payment {
 
   @@index([tenantId, buildingId, status])
   @@index([tenantId, unitId, status])
+  @@index([tenantId, paidAt])
   @@index([tenantId, createdByUserId])
   @@index([status])
   @@index([tenantId, receiptStatus])
@@ -1443,6 +1462,65 @@ model PaymentAllocation {
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
   @@index([tenantId, chargeId])
+}
+
+// ============================================================================
+// P2-A: MONTHLY SNAPSHOTS (Read-model for historical trends)
+// ============================================================================
+
+model UnitBalanceMonthlySnapshot {
+  id               String    @id @default(cuid())
+  tenantId         String
+  buildingId       String
+  unitId           String
+  period          String    // YYYY-MM format (e.g., "2026-03")
+  asOf            DateTime  // Snapshot date (end of period in tenant TZ)
+  currency        String    @default("ARS")
+  chargedMinor   Int       // Total charged in period (cents)
+  collectedMinor Int       // Total collected in period (cents)
+  outstandingMinor Int     // charged - collected (cents)
+  overdueMinor   Int?      // Overdue amount at asOf (cents, nullable)
+  collectionRateBp Int?    // Collection rate in basis points (null if charged=0)
+  snapshotVersion String   @default("p2a-v1")
+  generatedAt    DateTime  @default(now())
+  recomputedAt   DateTime? // If recomputed (correction)
+
+  // Relations
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit     Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, unitId, period, currency])
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, period])
+  @@index([tenantId, asOf])
+}
+
+model BuildingBalanceMonthlySnapshot {
+  id               String    @id @default(cuid())
+  tenantId         String
+  buildingId      String
+  period          String    // YYYY-MM
+  asOf            DateTime
+  currency        String    @default("ARS")
+  unitCount       Int       // Number of units in building
+  chargedMinor    Int
+  collectedMinor  Int
+  outstandingMinor Int
+  overdueMinor    Int?
+  collectionRateBp Int?
+  snapshotVersion String    @default("p2a-v1")
+  generatedAt     DateTime  @default(now())
+  recomputedAt    DateTime?
+
+  // Relations
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, buildingId, period, currency])
+  @@index([tenantId, period])
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, asOf])
 }
 
 // ============================================================================
@@ -2092,3 +2170,86 @@ model TenantInvitation {
   @@index([tenantId, expiresAt])
 }
 
+// ============================================================================
+// P2-B: PROCESS TRACKING (READ-ONLY queries for P2-B.1)
+// ============================================================================
+
+enum ProcessType {
+  LIQUIDATION
+  EXPENSE_VALIDATION
+  CLAIM
+}
+
+enum ProcessStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+model ProcessInstance {
+  id           String       @id @default(cuid())
+  tenantId     String
+  buildingId   String?
+  unitId       String?
+
+  processType  ProcessType
+  referenceId  String?
+  title       String
+
+  status       ProcessStatus      @default(PENDING)
+
+  assignedToUserId String?
+  assignedAt       DateTime?
+  createdByUserId  String
+
+  priority    Int            @default(0)  // 0=normal, 1=high, 2=urgent
+  period      String?        // YYYY-MM (optional, for filtering)
+
+  dueAt        DateTime?
+  slaMinutes  Int?
+  overdueSla  Boolean       @default(false)
+
+  metadata    Json?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  completedAt DateTime?
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building     Building?   @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  unit         Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  audits       ProcessAudit[]
+
+  @@unique([tenantId, referenceId, processType])
+  @@index([tenantId, processType, status])
+  @@index([tenantId, buildingId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, slaMinutes, overdueSla])
+  @@index([assignedToUserId, status])
+}
+
+model ProcessAudit {
+  id               String   @id @default(cuid())
+  tenantId         String
+  processInstanceId String
+
+  eventType       String
+  actorUserId     String?
+
+  fromStatus      ProcessStatus?
+  toStatus        ProcessStatus?
+
+  details         Json?
+
+  createdAt       DateTime @default(now())
+
+  processInstance ProcessInstance @relation(fields: [processInstanceId], references: [id], onDelete: Cascade)
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, processInstanceId])
+  @@index([tenantId, createdAt])
+}

@@ -56,6 +56,12 @@ Para OpenCode diario, la fuente operativa prioritaria es:
 - Respuestas operativas P0 rechazan `answerSource=knowledge`; fallback local solo por indisponibilidad/disable del engine primario.
 - Endpoint interno tools-based disponible en `apps/api/src/assistant/tools.controller.ts` con allowlist y auditoria por tenant.
 
+## Modulos operativos (Phase 2)
+
+- **P2-A**: Debt & Collections (read-only, months-based) — DONE
+- **P2-B**: Process Tracking (read-only, filters) — DONE
+- **P2-C**: (pendiente)
+
 ## Regla de actualizacion
 
 Actualizar este archivo cuando cambie:
