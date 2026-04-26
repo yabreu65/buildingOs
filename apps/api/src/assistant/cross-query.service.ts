@@ -27,7 +27,7 @@ export interface CrossQueryInput {
 export interface CrossQueryOutput {
   templateId: string;
   templateName: string;
-  answerSource: 'snapshot' | 'live_data';
+  answerSource: 'snapshot' | 'live_data' | 'clarification' | 'no_data' | 'error';
   asOf: string;
   scope: { tenantId: string; buildingId: string | null; currency: string; role: string };
   responseType: 'list' | 'kpi' | 'dashboard' | 'clarification' | 'no_data' | 'error' | 'timeseries' | 'distribution';
@@ -47,6 +47,18 @@ type WorkqueueItem = {
   createdAt: string;
   buildingId: string | null;
   unitId: string | null;
+  linkRef: string;
+};
+
+type WorkqueueSectionItem = {
+  type: 'process' | 'ticket' | 'payment';
+  id: string;
+  title: string;
+  priority: number;
+  createdAt: string;
+  linkRef: string;
+  status: string;
+  overdueSla: boolean;
 };
 
 function getLastClosedMonth(): string {
@@ -65,6 +77,26 @@ function clamp(value: number, min: number, max: number): number {
 function calculateCollectionRateBp(chargedMinor: number, collectedMinor: number): number | null {
   if (chargedMinor === 0) return null;
   return Math.round((collectedMinor * 10000) / chargedMinor);
+}
+
+function toIso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function shiftPeriod(period: string, months: number): string {
+  const [yearRaw, monthRaw] = period.split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  date.setUTCMonth(date.getUTCMonth() + months);
+  const shiftedYear = date.getUTCFullYear();
+  const shiftedMonth = date.getUTCMonth() + 1;
+  return `${shiftedYear}-${String(shiftedMonth).padStart(2, '0')}`;
+}
+
+function maxIsoDate(values: string[]): string {
+  if (values.length === 0) return new Date().toISOString();
+  return values.reduce((latest, current) => (current > latest ? current : latest));
 }
 
 @Injectable()
@@ -111,7 +143,7 @@ export class CrossQueryService {
     return {
       templateId: 'UNKNOWN',
       templateName: 'Unknown Template',
-      answerSource: 'live_data',
+      answerSource: 'error',
       asOf: new Date().toISOString(),
       scope: { tenantId, buildingId: null, currency: 'ARS', role },
       responseType: 'error',
@@ -160,105 +192,223 @@ export class CrossQueryService {
     return count > 1;
   }
 
-  private buildClarification(templateId: TemplateId, templateName: string, tenantId: string, role: string, message: string): CrossQueryOutput {
+  private getClarificationCount(params: Record<string, unknown>): number {
+    const raw = Number(params.clarificationCount ?? 0);
+    if (!Number.isFinite(raw)) return 0;
+    return clamp(Math.trunc(raw), 0, 10);
+  }
+
+  private buildClarification(
+    templateId: TemplateId,
+    templateName: string,
+    tenantId: string,
+    role: string,
+    message: string,
+    clarificationCount = 0,
+  ): CrossQueryOutput {
+    const capReached = clarificationCount >= 2;
     return {
       templateId,
       templateName,
-      answerSource: templateId === 'TPL-01' || templateId === 'TPL-03' || templateId === 'TPL-06' || templateId === 'TPL-09' || templateId === 'TPL-10'
-        ? 'snapshot'
-        : 'live_data',
+      answerSource: 'clarification',
       asOf: new Date().toISOString(),
       scope: this.buildScope(tenantId, null, role),
       responseType: 'clarification',
-      sections: [{ title: 'Clarification', type: 'text', data: { message } }],
+      sections: [{
+        title: 'clarification',
+        type: 'text',
+        data: {
+          message,
+          clarificationCount,
+          maxClarifications: 2,
+          capReached,
+        },
+      }],
     };
   }
 
   private async executeTPL01(_tenantId: string, role: string, params: Record<string, unknown>): Promise<CrossQueryOutput> {
     const period = (params.period as string) || this.getDefaultPeriod();
-    const topN = clamp((params.topN as number) ?? 5, 1, 50);
-    const limit = clamp((params.limit as number) ?? 20, 1, 50);
+    const topN = clamp(Number(params.topN ?? 5), 1, 50);
+    const limit = clamp(Number(params.limit ?? 20), 1, 50);
     const buildingId = (params.buildingId as string) || null;
+    const clarificationCount = this.getClarificationCount(params);
 
     if (await this.needsBuildingClarification(_tenantId, buildingId)) {
-      return this.buildClarification('TPL-01', 'UNIT_DEBT_OCCUPANCY', _tenantId, role, 'Tenant tiene múltiples edificios; indicá buildingId.');
+      return this.buildClarification(
+        'TPL-01',
+        'UNIT_DEBT_OCCUPANCY',
+        _tenantId,
+        role,
+        'Tenant tiene múltiples edificios; indicá buildingId.',
+        clarificationCount,
+      );
     }
 
-    const snapshots = await this.prisma.unitBalanceMonthlySnapshot.findMany({
-      where: {
-        tenantId: _tenantId,
-        period,
-        ...(buildingId ? { buildingId } : {}),
-      },
-      include: {
-        unit: {
-          include: {
-            building: true,
-            unitOccupants: {
-              where: { endDate: null },
-              include: { member: true },
-              take: 1,
+    const trendFrom = shiftPeriod(period, -5);
+    const [currentSnapshots, trendSnapshots, totalUnits, activeOccupants] = await Promise.all([
+      this.prisma.unitBalanceMonthlySnapshot.findMany({
+        where: {
+          tenantId: _tenantId,
+          period,
+          ...(buildingId ? { buildingId } : {}),
+        },
+        include: {
+          unit: {
+            include: {
+              building: { select: { name: true } },
+              unitOccupants: {
+                where: { endDate: null },
+                include: { member: { select: { name: true } } },
+              },
             },
           },
         },
-      },
-      orderBy: [{ outstandingMinor: 'desc' }, { id: 'asc' }],
-      take: limit,
-    });
+        orderBy: [{ outstandingMinor: 'desc' }, { id: 'asc' }],
+        take: limit,
+      }),
+      this.prisma.buildingBalanceMonthlySnapshot.findMany({
+        where: {
+          tenantId: _tenantId,
+          ...(buildingId ? { buildingId } : {}),
+          period: { gte: trendFrom, lte: period },
+        },
+        orderBy: [{ period: 'asc' }, { buildingId: 'asc' }],
+      }),
+      this.prisma.unit.count({
+        where: buildingId ? { buildingId } : { building: { tenantId: _tenantId } },
+      }),
+      this.prisma.unitOccupant.findMany({
+        where: {
+          tenantId: _tenantId,
+          endDate: null,
+          ...(buildingId ? { unit: { buildingId } } : {}),
+        },
+        select: { role: true, unitId: true, memberId: true },
+      }),
+    ]);
 
-    const totalDebt = snapshots.reduce((acc, s) => acc + s.outstandingMinor, 0);
-    const totalOverdue = snapshots.reduce((acc, s) => acc + (s.overdueMinor ?? 0), 0);
-    const occupiedCount = snapshots.filter((s) => s.unit.unitOccupants.length > 0).length;
-    const vacantCount = snapshots.length - occupiedCount;
-
-    const rows = snapshots.map((s) => ({
-      unitId: s.unitId,
-      unitLabel: s.unit.label ?? s.unit.code,
-      buildingName: s.unit.building.name,
-      currentOccupant: s.unit.unitOccupants[0]
-        ? {
-            name: s.unit.unitOccupants[0].member.name,
-            role: s.unit.unitOccupants[0].role,
-          }
-        : null,
-      chargedMinor: s.chargedMinor,
-      collectedMinor: s.collectedMinor,
-      outstandingMinor: s.outstandingMinor,
-      overdueMinor: s.overdueMinor ?? 0,
-      collectionRateBp: s.collectionRateBp,
-    }));
-
-    const asOfDate = snapshots[0]?.asOf ?? new Date();
-
-    if (rows.length === 0) {
+    if (currentSnapshots.length === 0) {
       return {
         templateId: 'TPL-01',
         templateName: 'UNIT_DEBT_OCCUPANCY',
         answerSource: 'snapshot',
-        asOf: asOfDate.toISOString(),
+        asOf: new Date().toISOString(),
         scope: this.buildScope(_tenantId, buildingId, role),
         responseType: 'no_data',
-        sections: [{ title: 'No Data', type: 'text', data: { message: 'No hay snapshots para el período solicitado.' } }],
+        sections: [{ title: 'no_data', type: 'text', data: { message: 'No hay snapshots para el período solicitado.' } }],
         coverage: { from: period, to: period, completeness: 0 },
       };
     }
+
+    const asOf = currentSnapshots[0]?.asOf.toISOString() ?? new Date().toISOString();
+    const totalDebt = currentSnapshots.reduce((acc, s) => acc + s.outstandingMinor, 0);
+    const totalOverdue = currentSnapshots.reduce((acc, s) => acc + (s.overdueMinor ?? 0), 0);
+    const totalCharged = currentSnapshots.reduce((acc, s) => acc + s.chargedMinor, 0);
+    const totalCollected = currentSnapshots.reduce((acc, s) => acc + s.collectedMinor, 0);
+
+    const trendByPeriod = new Map<string, { chargedMinor: number; collectedMinor: number; outstandingMinor: number; overdueMinor: number; asOf: string }>();
+    for (const snapshot of trendSnapshots) {
+      const current = trendByPeriod.get(snapshot.period) ?? {
+        chargedMinor: 0,
+        collectedMinor: 0,
+        outstandingMinor: 0,
+        overdueMinor: 0,
+        asOf: snapshot.asOf.toISOString(),
+      };
+      current.chargedMinor += snapshot.chargedMinor;
+      current.collectedMinor += snapshot.collectedMinor;
+      current.outstandingMinor += snapshot.outstandingMinor;
+      current.overdueMinor += snapshot.overdueMinor ?? 0;
+      current.asOf = snapshot.asOf.toISOString() > current.asOf ? snapshot.asOf.toISOString() : current.asOf;
+      trendByPeriod.set(snapshot.period, current);
+    }
+
+    const trendSeries = [...trendByPeriod.entries()].map(([seriesPeriod, data]) => ({
+      period: seriesPeriod,
+      asOf: data.asOf,
+      chargedMinor: data.chargedMinor,
+      collectedMinor: data.collectedMinor,
+      outstandingMinor: data.outstandingMinor,
+      overdueMinor: data.overdueMinor,
+      collectionRateBp: calculateCollectionRateBp(data.chargedMinor, data.collectedMinor),
+    }));
+
+    const topUnits = currentSnapshots.slice(0, topN).map((snapshot) => ({
+      unitId: snapshot.unitId,
+      unitLabel: snapshot.unit.label ?? snapshot.unit.code,
+      buildingName: snapshot.unit.building.name,
+      occupants: snapshot.unit.unitOccupants.map((occupant) => ({
+        memberName: occupant.member.name,
+        role: occupant.role,
+      })),
+      chargedMinor: snapshot.chargedMinor,
+      collectedMinor: snapshot.collectedMinor,
+      outstandingMinor: snapshot.outstandingMinor,
+      overdueMinor: snapshot.overdueMinor ?? 0,
+      collectionRateBp: snapshot.collectionRateBp,
+    }));
+
+    const occupiedUnits = new Set(activeOccupants.map((o) => o.unitId)).size;
+    const residents = activeOccupants.filter((o) => o.role === 'RESIDENT').length;
+    const owners = activeOccupants.filter((o) => o.role === 'OWNER').length;
+    const uniqueOccupants = new Set(activeOccupants.map((o) => o.memberId)).size;
 
     return {
       templateId: 'TPL-01',
       templateName: 'UNIT_DEBT_OCCUPANCY',
       answerSource: 'snapshot',
-      asOf: asOfDate.toISOString(),
+      asOf,
       scope: this.buildScope(_tenantId, buildingId, role),
       responseType: 'list',
       sections: [
-        { title: 'Resumen', type: 'kpi', data: { totalDebt, totalOverdue, occupiedCount, vacantCount } },
-        { title: 'Deuda por Unidad', type: 'table', data: rows.slice(0, topN) },
+        {
+          title: 'debt_snapshot',
+          type: 'snapshot',
+          data: {
+            period,
+            asOf,
+            coverage: { from: trendFrom, to: period, points: trendSeries.length },
+            kpis: {
+              totalDebt,
+              totalOverdue,
+              totalCharged,
+              totalCollected,
+              collectionRateBp: calculateCollectionRateBp(totalCharged, totalCollected),
+            },
+            series: trendSeries,
+            topUnits,
+          },
+          notes: ['source:snapshot'],
+        },
+        {
+          title: 'occupancy',
+          type: 'live_data',
+          data: {
+            asOf: new Date().toISOString(),
+            totalUnits,
+            occupiedUnits,
+            vacantUnits: Math.max(totalUnits - occupiedUnits, 0),
+            occupancyRateBp: totalUnits === 0 ? null : Math.round((occupiedUnits * 10000) / totalUnits),
+            occupantsSummary: {
+              residents,
+              owners,
+              assignments: activeOccupants.length,
+              uniqueOccupants,
+            },
+          },
+          notes: ['source:live_data'],
+        },
       ],
-      coverage: { from: period, to: period, completeness: 1.0 },
+      coverage: {
+        from: trendFrom,
+        to: period,
+        completeness: Math.min(1, trendSeries.length / 6),
+      },
       pagination: {
         limit,
-        nextCursor: rows.length === limit ? rows[rows.length - 1]?.unitId ?? null : null,
-        hasMore: rows.length === limit,
+        nextCursor: currentSnapshots.length === limit ? currentSnapshots[currentSnapshots.length - 1]?.id ?? null : null,
+        hasMore: currentSnapshots.length === limit,
       },
     };
   }
@@ -320,38 +470,57 @@ export class CrossQueryService {
   }
 
   private async executeTPL05(_tenantId: string, role: string, params: Record<string, unknown>): Promise<CrossQueryOutput> {
-    const limit = clamp((params.limit as number) ?? 20, 1, 50);
-    const topN = clamp((params.topN as number) ?? 5, 1, 50);
+    const limit = clamp(Number(params.limit ?? 20), 1, 50);
+    const topN = clamp(Number(params.topN ?? 5), 1, 50);
+    const monthsBack = clamp(Number(params.monthsBack ?? 1), 1, 24);
+    const assignedToUserId = (params.assignedToUserId as string) || undefined;
     const buildingId = (params.buildingId as string) || null;
     const cursor = this.decodeCursor(params.cursor as string | undefined);
+    const clarificationCount = this.getClarificationCount(params);
+
+    const createdAfter = new Date();
+    createdAfter.setUTCMonth(createdAfter.getUTCMonth() - monthsBack);
 
     if (await this.needsBuildingClarification(_tenantId, buildingId)) {
-      return this.buildClarification('TPL-05', 'OPEN_WORKQUEUE_CROSS_MODULE', _tenantId, role, 'Tenant tiene múltiples edificios; indicá buildingId.');
+      return this.buildClarification(
+        'TPL-05',
+        'OPEN_WORKQUEUE_CROSS_MODULE',
+        _tenantId,
+        role,
+        'Tenant tiene múltiples edificios; indicá buildingId.',
+        clarificationCount,
+      );
     }
 
     const [processes, tickets, pendingPayments] = await Promise.all([
       this.processSearch.searchProcesses(_tenantId, {
         statuses: ['PENDING', 'IN_PROGRESS'],
         buildingId: buildingId ?? undefined,
-        limit: 200,
+        assignedToUserId,
+        createdAfter: createdAfter.toISOString(),
+        sortBy: 'createdAt',
+        sortDir: 'asc',
+        limit: 500,
       }),
       this.prisma.ticket.findMany({
         where: {
           tenantId: _tenantId,
           status: { in: ['OPEN', 'IN_PROGRESS'] },
+          createdAt: { gte: createdAfter },
           ...(buildingId ? { buildingId } : {}),
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        take: 200,
+        take: 500,
       }),
       this.prisma.payment.findMany({
         where: {
           tenantId: _tenantId,
           status: 'SUBMITTED',
+          createdAt: { gte: createdAfter },
           ...(buildingId ? { buildingId } : {}),
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        take: 200,
+        take: 500,
       }),
     ]);
 
@@ -373,6 +542,7 @@ export class CrossQueryService {
         createdAt: p.createdAt,
         buildingId: p.buildingId ?? null,
         unitId: p.unitId ?? null,
+        linkRef: `process:${p.id}`,
       })),
       ...tickets.map((t) => ({
         sourceType: 'ticket' as const,
@@ -384,6 +554,7 @@ export class CrossQueryService {
         createdAt: t.createdAt.toISOString(),
         buildingId: t.buildingId,
         unitId: t.unitId,
+        linkRef: `ticket:${t.id}`,
       })),
       ...pendingPayments.map((p) => ({
         sourceType: 'payment' as const,
@@ -395,6 +566,7 @@ export class CrossQueryService {
         createdAt: p.createdAt.toISOString(),
         buildingId: p.buildingId,
         unitId: p.unitId,
+        linkRef: `payment:${p.id}`,
       })),
     ];
 
@@ -410,6 +582,17 @@ export class CrossQueryService {
       payment: pageItems.filter((i) => i.sourceType === 'payment').length,
     };
 
+    const normalizedItems: WorkqueueSectionItem[] = pageItems.map((item) => ({
+      type: item.sourceType,
+      id: item.id,
+      title: item.title,
+      priority: item.priority,
+      createdAt: item.createdAt,
+      linkRef: item.linkRef,
+      status: item.status,
+      overdueSla: item.overdueSla,
+    }));
+
     if (pageItems.length === 0) {
       return {
         templateId: 'TPL-05',
@@ -418,7 +601,7 @@ export class CrossQueryService {
         asOf: new Date().toISOString(),
         scope: this.buildScope(_tenantId, buildingId, role),
         responseType: 'no_data',
-        sections: [{ title: 'No Data', type: 'text', data: { message: 'No hay pendientes en la cola de trabajo.' } }],
+        sections: [{ title: 'no_data', type: 'text', data: { message: 'No hay pendientes en la cola de trabajo.' } }],
         pagination: { limit, nextCursor: null, hasMore: false },
       };
     }
@@ -431,8 +614,23 @@ export class CrossQueryService {
       scope: this.buildScope(_tenantId, buildingId, role),
       responseType: 'list',
       sections: [
-        { title: 'Totales', type: 'kpi', data: byType },
-        { title: 'Cola de Trabajo', type: 'list', data: pageItems.slice(0, topN) },
+        {
+          title: 'workqueue_summary',
+          type: 'kpi',
+          data: {
+            byType,
+            topN,
+            monthsBack,
+            asOf: new Date().toISOString(),
+          },
+          notes: ['source:live_data'],
+        },
+        {
+          title: 'workqueue',
+          type: 'list',
+          data: normalizedItems,
+          notes: ['source:live_data', 'sort:priority_desc,overdueSla_desc,createdAt_asc,sourceType_asc,id_asc'],
+        },
       ],
       pagination: { limit, nextCursor, hasMore },
     };
@@ -513,64 +711,99 @@ export class CrossQueryService {
 
   private async executeTPL10(_tenantId: string, role: string, params: Record<string, unknown>): Promise<CrossQueryOutput> {
     const period = (params.period as string) || this.getDefaultPeriod();
-    const monthsBack = clamp((params.monthsBack as number) ?? this.getDefaultMonthsBack(), 1, 24);
+    const monthsBack = clamp(Number(params.monthsBack ?? this.getDefaultMonthsBack()), 1, 24);
     const buildingId = (params.buildingId as string) || null;
+    const clarificationCount = this.getClarificationCount(params);
 
     if (await this.needsBuildingClarification(_tenantId, buildingId)) {
-      return this.buildClarification('TPL-10', 'EXECUTIVE_DASHBOARD_CROSS_MODULE', _tenantId, role, 'Tenant tiene múltiples edificios; indicá buildingId.');
+      return this.buildClarification(
+        'TPL-10',
+        'EXECUTIVE_DASHBOARD_CROSS_MODULE',
+        _tenantId,
+        role,
+        'Tenant tiene múltiples edificios; indicá buildingId.',
+        clarificationCount,
+      );
     }
 
-    const [snapshot, processSummary, openTickets] = await Promise.all([
-      this.prisma.buildingBalanceMonthlySnapshot.findFirst({
+    const [snapshots, processSummary, openTickets, pendingPayments] = await Promise.all([
+      this.prisma.buildingBalanceMonthlySnapshot.findMany({
         where: {
           tenantId: _tenantId,
           period,
           ...(buildingId ? { buildingId } : {}),
         },
-        orderBy: { generatedAt: 'desc' },
+        orderBy: [{ asOf: 'desc' }, { buildingId: 'asc' }],
       }),
       this.processSearch.searchProcesses(_tenantId, {
+        statuses: ['PENDING', 'IN_PROGRESS'],
         buildingId: buildingId ?? undefined,
-        limit: 200,
+        limit: 500,
       }),
-      this.prisma.ticket.count({
+      this.prisma.ticket.findMany({
         where: {
           tenantId: _tenantId,
           status: { in: ['OPEN', 'IN_PROGRESS'] },
           ...(buildingId ? { buildingId } : {}),
         },
+        select: { id: true, priority: true, status: true, createdAt: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
-    ]);
-
-    const [totalUnits, occupiedUnits] = await Promise.all([
-      this.prisma.unit.count({ where: { buildingId: buildingId ?? undefined, ...(buildingId ? {} : { building: { tenantId: _tenantId } }) } }),
-      this.prisma.unitOccupant.count({
+      this.prisma.payment.findMany({
         where: {
           tenantId: _tenantId,
-          endDate: null,
-          ...(buildingId ? { unit: { buildingId } } : {}),
+          status: 'SUBMITTED',
+          ...(buildingId ? { buildingId } : {}),
         },
+        select: { id: true, amount: true, status: true, createdAt: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
     ]);
 
-    const occupancyRateBp = totalUnits === 0 ? null : Math.round((occupiedUnits * 10000) / totalUnits);
-    const pendingProcesses = processSummary.processes.filter((p) => p.status === 'PENDING' || p.status === 'IN_PROGRESS').length;
-    const overdueProcesses = processSummary.processes.filter((p) => p.overdueSla).length;
-
-    const asOf = snapshot?.asOf?.toISOString() ?? new Date().toISOString();
-
-    if (!snapshot) {
+    if (snapshots.length === 0) {
       return {
         templateId: 'TPL-10',
         templateName: 'EXECUTIVE_DASHBOARD_CROSS_MODULE',
-        answerSource: 'snapshot',
-        asOf,
+        answerSource: 'no_data',
+        asOf: new Date().toISOString(),
         scope: this.buildScope(_tenantId, buildingId, role),
         responseType: 'no_data',
-        sections: [{ title: 'No Data', type: 'text', data: { message: 'No hay snapshot financiero para el período.' } }],
+        sections: [{ title: 'no_data', type: 'text', data: { message: 'No hay snapshot financiero para el período.' } }],
         coverage: { from: period, to: period, completeness: 0 },
       };
     }
+
+    const snapshotAsOf = snapshots[0]?.asOf.toISOString() ?? new Date().toISOString();
+    const debt = snapshots.reduce(
+      (acc, snapshot) => {
+        acc.chargedMinor += snapshot.chargedMinor;
+        acc.collectedMinor += snapshot.collectedMinor;
+        acc.outstandingMinor += snapshot.outstandingMinor;
+        acc.overdueMinor += snapshot.overdueMinor ?? 0;
+        return acc;
+      },
+      { chargedMinor: 0, collectedMinor: 0, outstandingMinor: 0, overdueMinor: 0 },
+    );
+    const collectionRateBp = calculateCollectionRateBp(debt.chargedMinor, debt.collectedMinor);
+
+    const processesAsOf = processSummary.asOf;
+    const processesOpen = processSummary.processes.length;
+    const overdueProcesses = processSummary.processes.filter((p) => p.overdueSla).length;
+
+    const ticketsByPriority = {
+      urgent: openTickets.filter((t) => t.priority === 'URGENT').length,
+      high: openTickets.filter((t) => t.priority === 'HIGH').length,
+      medium: openTickets.filter((t) => t.priority === 'MEDIUM').length,
+      low: openTickets.filter((t) => t.priority === 'LOW').length,
+    };
+    const ticketsAsOf = openTickets.length > 0 ? toIso(openTickets[openTickets.length - 1].createdAt) : new Date().toISOString();
+
+    const pendingPaymentsAmountMinor = pendingPayments.reduce((acc, payment) => acc + payment.amount, 0);
+    const pendingPaymentsAsOf = pendingPayments.length > 0
+      ? toIso(pendingPayments[pendingPayments.length - 1].createdAt)
+      : new Date().toISOString();
+
+    const asOf = maxIsoDate([snapshotAsOf, processesAsOf, ticketsAsOf, pendingPaymentsAsOf]);
 
     return {
       templateId: 'TPL-10',
@@ -581,31 +814,62 @@ export class CrossQueryService {
       responseType: 'dashboard',
       sections: [
         {
-          title: 'Financiero',
+          title: 'debt',
           type: 'kpi',
           data: {
-            chargedMinor: snapshot.chargedMinor,
-            collectedMinor: snapshot.collectedMinor,
-            outstandingMinor: snapshot.outstandingMinor,
-            overdueMinor: snapshot.overdueMinor ?? 0,
-            collectionRateBp: snapshot.collectionRateBp,
+            asOf: snapshotAsOf,
+            outstandingMinor: debt.outstandingMinor,
+            overdueMinor: debt.overdueMinor,
           },
           notes: ['source:snapshot'],
         },
         {
-          title: 'Ocupación',
+          title: 'collections',
           type: 'kpi',
-          data: { totalUnits, occupiedUnits, occupancyRateBp },
+          data: {
+            asOf: snapshotAsOf,
+            chargedMinor: debt.chargedMinor,
+            collectedMinor: debt.collectedMinor,
+            collectionRateBp,
+          },
+          notes: ['source:snapshot'],
+        },
+        {
+          title: 'processes',
+          type: 'kpi',
+          data: {
+            asOf: processesAsOf,
+            open: processesOpen,
+            overdueSla: overdueProcesses,
+          },
           notes: ['source:live_data'],
         },
         {
-          title: 'Operaciones',
+          title: 'tickets',
           type: 'kpi',
-          data: { openTickets, pendingProcesses, overdueProcesses },
+          data: {
+            asOf: ticketsAsOf,
+            open: openTickets.length,
+            byPriority: ticketsByPriority,
+          },
+          notes: ['source:live_data'],
+        },
+        {
+          title: 'pendingPayments',
+          type: 'kpi',
+          data: {
+            asOf: pendingPaymentsAsOf,
+            submittedCount: pendingPayments.length,
+            submittedAmountMinor: pendingPaymentsAmountMinor,
+          },
           notes: ['source:live_data'],
         },
       ],
-      coverage: { from: period, to: period, completeness: monthsBack > 0 ? 1.0 : 0 },
+      coverage: {
+        from: shiftPeriod(period, -(monthsBack - 1)),
+        to: period,
+        completeness: 1,
+      },
     };
   }
 }
