@@ -38,6 +38,7 @@ export class AssistantReadOnlyQueryService {
       tenantId?: string;
       userId?: string;
       role?: string;
+      context?: AssistantReadOnlyQueryContext;
     },
   ): Promise<AssistantReadOnlyQueryResponse> {
     this.assertApiKey(headers.apiKey);
@@ -790,19 +791,47 @@ export class AssistantReadOnlyQueryService {
   }
 
   private extractUnitToken(message: string): string | null {
-    const match = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto)\s+([a-z0-9-]+)/i);
-    return match?.[1] || null;
+    const pisoDeptoMatch = message.match(/(?:depto|departamento)\s+(\d{1,2})\s+piso\s+(\d{1,2})/i);
+    if (pisoDeptoMatch?.[1] && pisoDeptoMatch?.[2]) {
+      const depto = pisoDeptoMatch[1].padStart(2, '0');
+      const piso = pisoDeptoMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    const explicitMatch = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto|uf)\s+([a-z0-9-]+)/i);
+    if (explicitMatch?.[1]) {
+      const token = explicitMatch[1].toLowerCase();
+      const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
+      if (floorDeptMatch?.[1] && floorDeptMatch?.[2]) {
+        const floor = floorDeptMatch[1].padStart(2, '0');
+        const dept = floorDeptMatch[2].padStart(2, '0');
+        return `${floor}-${dept}`;
+      }
+      return token;
+    }
+
+    const pisoDeptoInverseMatch = message.match(/piso\s+(\d{1,2})\s+(?:depto|departamento)\s+(\d{1,2})/i);
+    if (pisoDeptoInverseMatch?.[1] && pisoDeptoInverseMatch?.[2]) {
+      const piso = pisoDeptoInverseMatch[1].padStart(2, '0');
+      const depto = pisoDeptoInverseMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    return null;
   }
 
   private extractTowerToken(message: string): string | null {
-    const match = message.match(/torre\s+([a-z0-9]+)/i);
+    const match = message.match(/(?:torre|edificio|bloque)\s+([a-z0-9]+)/i);
     return match?.[1] || null;
   }
 
   private matchesTowerToken(buildingName: string, towerToken: string): boolean {
     const normalizedName = this.normalizeText(buildingName);
     const token = this.normalizeText(towerToken);
-    return normalizedName === `torre ${token}` || normalizedName.includes(`torre ${token}`);
+    const candidates = [`torre ${token}`, `edificio ${token}`, `bloque ${token}`];
+    return candidates.some(
+      (candidate) => normalizedName === candidate || normalizedName.includes(candidate),
+    );
   }
 
   private matchesUnitToken(unit: { code: string; label: string | null }, unitToken: string): boolean {
@@ -812,14 +841,23 @@ export class AssistantReadOnlyQueryService {
     const compactCode = code.replace(/[^a-z0-9]/g, '');
     const label = this.normalizeText(unit.label || '');
     const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
-    const derivedCode = floorDeptMatch
-      ? `${floorDeptMatch[1]}${floorDeptMatch[2]}`
-      : null;
+    const floorPart = floorDeptMatch?.[1];
+    const deptPart = floorDeptMatch?.[2];
+    const derivedCode =
+      floorPart && deptPart
+        ? `${floorPart.padStart(2, '0')}${deptPart.padStart(2, '0')}`
+        : null;
+    const derivedCodeV2 =
+      floorPart && deptPart
+        ? `${String(parseInt(floorPart, 10))}${deptPart.padStart(2, '0')}`
+        : null;
     return (
       code === token ||
       label === token ||
       compactCode === compactToken ||
-      (derivedCode !== null && compactCode === derivedCode)
+      (/^\d{3,4}$/.test(compactToken) && compactCode.endsWith(compactToken)) ||
+      (derivedCode !== null && compactCode.endsWith(derivedCode)) ||
+      (derivedCodeV2 !== null && compactCode.endsWith(derivedCodeV2))
     );
   }
 }

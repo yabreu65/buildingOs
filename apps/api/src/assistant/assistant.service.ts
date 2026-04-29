@@ -14,6 +14,10 @@ import {
   AiProvider,
   AiProviderContext,
 } from './ai.types';
+import {
+  mapYoryiToCanonical,
+  type GatewayOutcome,
+} from './yoryi-bridge.mapper';
 
 // Re-export types for backward compatibility
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
@@ -23,6 +27,13 @@ export interface ChatRequest {
   page: string;
   buildingId?: string;
   unitId?: string;
+  context?: {
+    extra?: {
+      sessionId?: string;
+      choiceId?: string;
+      [key: string]: unknown;
+    };
+  };
 }
 
 interface ContextValidation {
@@ -45,12 +56,32 @@ interface YoryiAssistantChatResponse {
   answer?: string;
   answerSource?: 'live_data' | 'knowledge' | 'fallback' | string;
   actions?: YoryiAssistantAction[];
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
 }
 
 type YoryiReadOnlyResolution =
   | { kind: 'response'; response: ChatResponse }
   | { kind: 'fallback_allowed' }
-  | { kind: 'blocked'; response: ChatResponse };
+  | { kind: 'blocked'; response: ChatResponse; family?: 'P0' | 'P2' | 'P3' };
+
+type RouteFamily = 'P0' | 'P2' | 'P3';
+
+interface YoryiAssistantChatResponse {
+  answer?: string;
+  answerSource?: 'live_data' | 'knowledge' | 'fallback' | string;
+  actions?: YoryiAssistantAction[];
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
+  toolName?: string;
+  routeFamily?: RouteFamily;
+  auditId?: string;
+  provenance?: {
+    sources?: Array<{
+      metadata?: Record<string, unknown>;
+    }>;
+  };
+}
 
 // MOCK Provider - always works, good for development
 @Injectable()
@@ -67,15 +98,16 @@ export class MockAiProvider implements AiProvider {
     const delayMs = options?.model === 'gpt-4.1-nano' ? 50 : 100;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-    let answer: string = `I understand you're asking about "${message.substring(0, 50)}...". Let me help you find the right information.`;
-    if (message.toLowerCase().includes('ticket'))
-      answer = 'You have 3 open tickets. View them to manage maintenance requests.';
-    else if (message.toLowerCase().includes('payment'))
-      answer =
-        'Current balance is $1,250. Outstanding payments are due by end of month.';
-    else if (message.toLowerCase().includes('occupant'))
-      answer =
-        "You have 8 occupants assigned. Recent activity shows good compliance.";
+    let answer: string = `Entiendo que me preguntás sobre "${message.substring(0, 50)}...". Para obtener información precisa sobre cobranzas, necesitas acceso al sistema de facturación. ¿Querés que te muestre las opciones disponibles?`;
+    if (message.toLowerCase().includes('cobranza') || message.toLowerCase().includes('deuda')) {
+      answer = 'Para consultar cobranzas y deuda, necesito acceso al sistema deBilling. ¿Tenés acceso habilitado?';
+    } else if (message.toLowerCase().includes('ticket')) {
+      answer = 'Tenés 3 tickets abiertos. ¿Querés que los liste para gestionar las solicitudes de mantenimiento?';
+    } else if (message.toLowerCase().includes('payment') || message.toLowerCase().includes('pago')) {
+      answer = 'El saldo actual es $1,250. Los pagos pendientes vencen a fin de mes.';
+    } else if (message.toLowerCase().includes('occupant') || message.toLowerCase().includes('residente')) {
+      answer = 'Tenés 8 ocupantes asignados. ¿Querés ver el listado completo?';
+    }
 
     const suggestedActions: SuggestedAction[] = [
       {
@@ -129,6 +161,8 @@ export class AssistantService {
       ASSISTANT_YORYI_ENGINE_ENABLED_EFFECTIVE: effectiveEnabled,
       ASSISTANT_YORYI_CANARY_TENANTS: canaryTenants,
       YORYI_ASSISTANT_API_BASE_URL: baseUrl ? baseUrl.replace(/\/\/.+@/, '//***@') : '(not set)',
+      ASSISTANT_YORYI_TIMEOUT_MS: process.env.ASSISTANT_YORYI_TIMEOUT_MS ?? '(default 1800)',
+      ASSISTANT_P0_ENFORCEMENT_ENABLED: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED ?? '(not set)',
     });
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'MOCK';
@@ -169,7 +203,7 @@ export class AssistantService {
       throw new BadRequestException('Message cannot exceed 2000 characters');
     }
 
-    // Validate context (buildingId, unitId ownership)
+    console.log('[DEBUG] about to validate context');
     const context = await this.validateContext(
       tenantId,
       userId,
@@ -201,27 +235,36 @@ export class AssistantService {
 
     const cachedResponse = this.cache.get(cacheKey);
     if (cachedResponse) {
+      const normalizedCachedResponse = this.normalizeResponseContract(cachedResponse);
       // Cache hit! Log interaction and return cached response
-      const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, cachedResponse, true, 'CACHE');
+      const interactionId = await this.logInteraction(
+        tenantId,
+        userId,
+        membershipId,
+        request,
+        normalizedCachedResponse,
+        true,
+        'CACHE',
+      );
       void this.audit.createLog({
         tenantId,
         actorUserId: userId,
         actorMembershipId: membershipId,
-        action: AuditAction.AI_INTERACTION,
-        entityType: 'AiInteraction',
-        entityId: tenantId,
-        metadata: {
-          page: request.page,
+          action: AuditAction.AI_INTERACTION,
+          entityType: 'AiInteraction',
+          entityId: tenantId,
+          metadata: {
+            page: request.page,
           buildingId: request.buildingId,
-          unitId: request.unitId,
-          provider: 'CACHE',
-          cacheHit: true,
-          actionCount: cachedResponse.suggestedActions.length,
-        },
-      });
+            unitId: request.unitId,
+            provider: 'CACHE',
+            cacheHit: true,
+            actionCount: normalizedCachedResponse.suggestedActions.length,
+          },
+        });
 
       return {
-        ...cachedResponse,
+        ...normalizedCachedResponse,
         interactionId: interactionId ?? undefined,
       };
     }
@@ -339,6 +382,8 @@ export class AssistantService {
       }
     }
 
+    response = this.normalizeResponseContract(response);
+
     // Step 4: Cache the response for future similar requests
     this.cache.set(cacheKey, response, resolvedModelForLog);
 
@@ -392,17 +437,19 @@ export class AssistantService {
     request: ChatRequest;
   }): Promise<YoryiReadOnlyResolution> {
     if (!this.shouldUseYoryiEngine(params.tenantId, params.userRoles)) {
+      this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (yoryi disabled or not allowed)', tenantId: params.tenantId });
       return { kind: 'fallback_allowed' };
     }
 
     const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL;
     if (!baseUrl) {
-      this.logger.warn({ msg: '[BRIDGE] routing=FALLBACK (no baseUrl)', tenantId: params.tenantId });
+      this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (no baseUrl)', tenantId: params.tenantId });
       return { kind: 'fallback_allowed' };
     }
 
     const role = this.resolvePrimaryAdminRole(params.userRoles);
     if (!role) {
+      this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (no admin role)', tenantId: params.tenantId, userRoles: params.userRoles });
       return { kind: 'fallback_allowed' };
     }
 
@@ -413,6 +460,15 @@ export class AssistantService {
     const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      const currentModule = this.resolveModuleFromPage(params.request.page, params.request.message);
+      // this.logger.log({
+      //   msg: '[FLOW] operational-first: sending to yoryi',
+      //   tenantId: params.tenantId,
+      //   page: params.request.page,
+      //   currentModule,
+      //   uiPage: params.request.context?.extra?.uiPage,
+      // });
+
       const response = await fetch(new URL('/assistant/chat', baseUrl).toString(), {
         method: 'POST',
         signal: controller.signal,
@@ -423,7 +479,9 @@ export class AssistantService {
         }),
         body: JSON.stringify({
           message: params.request.message,
-          sessionId: `buildingos:${params.tenantId}:${params.membershipId}`,
+          sessionId: params.request.context?.extra?.sessionId 
+            ?? `buildingos:${params.tenantId}:${params.membershipId}`,
+          choiceId: params.request.context?.extra?.choiceId,
           context: {
             appId: 'buildingos',
             tenantId: params.tenantId,
@@ -434,6 +492,7 @@ export class AssistantService {
               params.request.page,
               params.request.message,
             ),
+            extra: params.request.context?.extra,
           },
         }),
       });
@@ -442,53 +501,150 @@ export class AssistantService {
 
       if (!response.ok) {
         const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        this.logger.warn({
+          msg: '[BRIDGE] YORYI response not OK',
+          tenantId: params.tenantId,
+          status: response.status,
+          statusText: response.statusText,
+        });
         return {
           kind: 'blocked',
-          response: this.buildYoryiP0ControlledResponse('upstream_error', requestId),
+          response: this.buildYoryiControlledResponse('unavailable', 'P0', requestId),
+          family: 'P0',
         };
       }
 
       const payload = (await response.json()) as YoryiAssistantChatResponse;
-      if (!payload || !this.isAllowedYoryiAnswerSource(payload.answerSource) || !payload.answer) {
+      const canonical = mapYoryiToCanonical(payload);
+      const routeFamily = this.detectRouteFamily(payload.toolName);
+      const uiPage = params.request.context?.extra?.uiPage;
+      this.logger.debug({
+        msg: '[BRIDGE] routing response diagnostics',
+        tenantId: params.tenantId,
+        answerSource: payload.answerSource,
+        responseType: payload.responseType,
+        toolName: payload.toolName,
+        routeFamily,
+        uiPage,
+      });
+
+      if (!canonical) {
+        this.logger.warn({
+          msg: '[BRIDGE] routing response INVALID',
+          tenantId: params.tenantId,
+          answerSource: payload?.answerSource,
+          responseType: payload?.responseType,
+          routeFamily,
+          hasAnswer: !!payload?.answer,
+        });
         const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        this.logger.warn({
+          msg: `[BRIDGE] routeMatched family=${routeFamily}, blocking fallback to knowledge`,
+          tenantId: params.tenantId,
+          answerSource: payload?.answerSource,
+          reason: 'invalid_payload',
+        });
         return {
           kind: 'blocked',
-          response: this.buildYoryiP0ControlledResponse('invalid_or_disallowed_payload', requestId),
+          response: this.buildYoryiControlledResponse('invalid_payload', routeFamily, requestId),
+          family: routeFamily,
         };
       }
 
-      const suggestedActions = this.mapYoryiActionsToBuildingOsActions(
-        payload.actions,
-        params.request,
-      );
+      const operational = this.isOperationalQuery(params.request.page, params.request.message);
+      if ((operational && canonical.answerSource !== 'live_data') || !this.isAllowedYoryiAnswerSource(canonical.answerSource, routeFamily)) {
+        const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        const reason = operational && canonical.answerSource !== 'live_data'
+          ? 'denied'
+          : 'contract_mismatch';
+        return {
+          kind: 'blocked',
+          response: this.buildYoryiControlledResponse(reason, routeFamily, requestId),
+          family: routeFamily,
+        };
+      }
+
+      this.logger.debug({
+        msg: '[BRIDGE] routing response OK',
+        tenantId: params.tenantId,
+        answerSource: payload.answerSource,
+        responseType: payload.responseType,
+        routeFamily,
+      });
+
+      //       this.logger.log({
+      //   msg: '[FLOW] operational-first: yoryi result',
+      //   tenantId: params.tenantId,
+      //   routeFamily,
+      //   answerSource: payload.answerSource,
+      //   responseType: payload.responseType,
+      //   toolName: payload.toolName,
+      // });
+
+      const finalAnswer = this.shouldOverrideGenericUnitLookupMenu(
+        params.request.message,
+        canonical.answer,
+      )
+        ? 'No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.'
+        : canonical.answer;
+
+      const suggestedActions = canonical.suggestedActions.length > 0
+        ? canonical.suggestedActions.map((action) => ({
+            ...action,
+            payload: {
+              ...(action.payload ?? {}),
+              buildingId: params.request.buildingId,
+              unitId: params.request.unitId,
+            },
+          }))
+        : this.mapYoryiActionsToBuildingOsActions(payload.actions, params.request);
 
       return {
         kind: 'response',
         response: {
-          answer: payload.answer,
+          answer: finalAnswer,
+          answerSource: canonical.answerSource,
           suggestedActions,
+          responseType: canonical.responseType,
+          options: payload.options,
+          metadata: {
+            gatewayOutcome: 'success',
+            rawAnswerSource: canonical.metadata.rawAnswerSource,
+            auditId: canonical.metadata.auditId,
+            intentCode: canonical.metadata.intentCode,
+            traceId: canonical.metadata.traceId,
+          },
         },
       };
     } catch (error) {
       clearTimeout(timeoutHandle);
-      this.logger.warn(`Yoryi read-only fallback to local provider: ${String(error)}`);
-      return { kind: 'fallback_allowed' };
+      const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+      const outcome: GatewayOutcome =
+        error instanceof Error && error.name === 'AbortError'
+          ? 'timeout'
+          : 'unavailable';
+      this.logger.warn({
+        msg: `[BRIDGE] Yoryi error, routeMatched family=${this.detectRouteFamily(undefined)}: ${String(error)}`,
+        tenantId: params.tenantId,
+        gatewayOutcome: outcome,
+      });
+      return {
+        kind: 'blocked',
+        response: this.buildYoryiControlledResponse(outcome, 'P0', requestId),
+        family: 'P0',
+      };
     }
   }
 
-  private buildYoryiP0ControlledResponse(
-    reason: 'upstream_error' | 'invalid_or_disallowed_payload',
-    requestId?: string,
-  ): ChatResponse {
-    const traceId = requestId ?? this.generateTraceId();
-    const detail =
-      reason === 'upstream_error'
-        ? 'El engine primario respondió con error.'
-        : 'El engine primario devolvió un payload no válido para P0.';
-    return {
-      answer: `${detail} No puedo confirmar una respuesta operativa segura en este momento. Referencia: ${traceId}. Intentá reformular la consulta o reintentá en unos minutos.`,
-      suggestedActions: [],
-    };
+  private detectRouteFamily(toolName?: string): RouteFamily {
+    if (!toolName) return 'P0';
+    if (toolName.includes('trend') || toolName.includes('snapshot') || toolName.includes('debt') || toolName.includes('collection')) {
+      return 'P2';
+    }
+    if (toolName.includes('dashboard') || toolName.includes('TPL') || toolName.includes('executive') || toolName.includes('cross_query')) {
+      return 'P3';
+    }
+    return 'P0';
   }
 
   private generateTraceId(): string {
@@ -568,13 +724,72 @@ export class AssistantService {
     return null;
   }
 
-  private isAllowedYoryiAnswerSource(answerSource?: string): boolean {
-    const p0Enforced = process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED !== 'false';
+  private isAllowedYoryiAnswerSource(answerSource?: string, family: RouteFamily = 'P0'): boolean {
+    const p0Enforced = process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true';
     if (p0Enforced) {
-      return answerSource === 'live_data';
+      if (family === 'P0') {
+        return answerSource === 'live_data';
+      }
+      return answerSource === 'live_data' || answerSource === 'snapshot';
     }
+    return answerSource === 'live_data' || answerSource === 'snapshot' || answerSource === 'knowledge';
+  }
 
-    return answerSource === 'live_data' || answerSource === 'knowledge';
+  private buildYoryiControlledResponse(
+    reason: GatewayOutcome,
+    family: RouteFamily,
+    requestId?: string,
+  ): ChatResponse {
+    const traceId = requestId ?? this.generateTraceId();
+    const familyMessages: Record<RouteFamily, { detail: string; hint: string }> = {
+      P0: {
+        detail: 'El engine primario respondió con error o payload inválido para consultas P0.',
+        hint: 'No puedo confirmar una respuesta operativa segura en este momento.',
+      },
+      P2: {
+        detail: 'El engine primario respondió con error o payload inválido para snapshots P2.',
+        hint: 'No pude obtener datos de tendencias y métricas en este momento.',
+      },
+      P3: {
+        detail: 'El engine primario respondió con error o payload inválido para dashboard P3.',
+        hint: 'No pude obtener el dashboard ejecutivo en este momento.',
+      },
+    };
+    const { detail, hint } = familyMessages[family];
+    const reasonHint: Record<GatewayOutcome, string> = {
+      success: hint,
+      timeout: 'El engine primario excedio el tiempo de respuesta.',
+      unavailable: 'El engine primario no esta disponible temporalmente.',
+      invalid_payload: 'El engine primario respondio con payload invalido.',
+      contract_mismatch: 'La respuesta no cumple el contrato esperado por el bridge.',
+      denied:
+        'Para confirmar un dato operativo necesito respuesta live_data. Reformula con unidad y torre exactas o revisa Pagos.',
+    };
+    const finalHint = reasonHint[reason] ?? hint;
+    return {
+      answer: `${detail} ${finalHint} Referencia: ${traceId}. Intenta reformular la consulta o reintenta en unos minutos.`,
+      answerSource: 'fallback',
+      responseType: 'clarification',
+      suggestedActions: [],
+      metadata: { traceId, gatewayOutcome: reason, routeFamily: family },
+    };
+  }
+
+  private isOperationalQuery(page: string, message: string): boolean {
+    const normalizedPage = this.normalizeText(page);
+    const normalizedMessage = this.normalizeText(message);
+    const pageSuggestsOperational =
+      normalizedPage.includes('payment') ||
+      normalizedPage.includes('charge') ||
+      normalizedPage.includes('unit') ||
+      normalizedPage.includes('finanza');
+    const messageSuggestsOperational =
+      normalizedMessage.includes('deuda') ||
+      normalizedMessage.includes('cuanto debe') ||
+      normalizedMessage.includes('saldo') ||
+      normalizedMessage.includes('expensa') ||
+      normalizedMessage.includes('adeuda');
+    return pageSuggestsOperational || messageSuggestsOperational;
   }
 
   private buildYoryiHeaders(context: {
@@ -656,6 +871,23 @@ export class AssistantService {
     return null;
   }
 
+  private resolveModuleFromMessage(message: string): string {
+    const normalized = this.normalizeText(message);
+
+    if (normalized.includes('cobranza') || normalized.includes('deuda') ||
+        normalized.includes('pago') || normalized.includes('moros')) {
+      return 'payments';
+    }
+    if (normalized.includes('charge') || normalized.includes('expensa') ||
+        normalized.includes('gasto')) {
+      return 'charges';
+    }
+    if (normalized.includes('ticket') || normalized.includes('mantenimiento')) {
+      return 'tickets';
+    }
+    return 'general';
+  }
+
   private resolveRouteFromPage(page: string): string {
     const normalized = (page ?? '').trim().toLowerCase();
     if (!normalized) {
@@ -734,6 +966,8 @@ export class AssistantService {
       return {
         answer:
           'Para responder con precision necesito unidad y torre exactas. Ejemplo: "Como se llama el residente del apartamento 12-8 Torre A".',
+        answerSource: 'live_data',
+        responseType: 'clarification',
         suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
       };
     }
@@ -764,6 +998,8 @@ export class AssistantService {
     if (occupants.length === 0) {
       return {
         answer: `La ${building.name} unidad ${unit.label || unit.code} no tiene ocupantes activos asignados.`,
+        answerSource: 'live_data',
+        responseType: 'summary',
         suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
       };
     }
@@ -772,6 +1008,8 @@ export class AssistantService {
     if (primaryOccupants.length > 1) {
       return {
         answer: `Hay mas de un ocupante primario en ${building.name} unidad ${unit.label || unit.code}. Necesito que revises la asignacion antes de confirmar un nombre.`,
+        answerSource: 'live_data',
+        responseType: 'clarification',
         suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
       };
     }
@@ -784,6 +1022,8 @@ export class AssistantService {
     if (!selected?.member?.name) {
       return {
         answer: `La ${building.name} unidad ${unit.label || unit.code} tiene ocupante activo, pero sin nombre cargado en TenantMember.`,
+        answerSource: 'live_data',
+        responseType: 'summary',
         suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
       };
     }
@@ -793,6 +1033,8 @@ export class AssistantService {
 
     return {
       answer: `En ${building.name}, la unidad ${unit.label || unit.code} tiene como ${roleLabel} principal a ${selected.member.name}.`,
+      answerSource: 'live_data',
+      responseType: 'exact',
       suggestedActions: [
         {
           type: 'VIEW_REPORTS',
@@ -815,12 +1057,32 @@ export class AssistantService {
     }
 
     const normalizedMessage = this.normalizeText(message);
+
+    if (this.isMutationLikeStrictQuery(normalizedMessage)) {
+      return {
+        answer:
+          'Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).',
+        answerSource: 'live_data',
+        responseType: 'clarification',
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+      };
+    }
+
+    if (this.isAggregateDebtQuery(normalizedMessage)) {
+      return this.tryResolveAggregateDebtQuestion(tenantId, normalizedMessage);
+    }
+
     const isDebtQuery =
       normalizedMessage.includes('debe') ||
       normalizedMessage.includes('cuanto debe') ||
       normalizedMessage.includes('deuda') ||
+      normalizedMessage.includes('saldo') ||
+      normalizedMessage.includes('uf') ||
+      normalizedMessage.includes('expensa') ||
+      normalizedMessage.includes('moros') ||
       normalizedMessage.includes('saldo pendiente') ||
-      normalizedMessage.includes('adeuda');
+      normalizedMessage.includes('adeuda') ||
+      normalizedMessage.includes('al dia');
 
     if (!isDebtQuery) {
       return null;
@@ -830,9 +1092,29 @@ export class AssistantService {
     const towerToken = this.extractTowerToken(normalizedMessage);
 
     if (!unitToken || !towerToken) {
+      if (unitToken && !towerToken) {
+        return {
+          answer:
+            'Para responder con precision necesito la torre/edificio exacto. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
+          answerSource: 'live_data',
+          responseType: 'clarification',
+          suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+        };
+      }
+      if (!unitToken && towerToken) {
+        return {
+          answer:
+            'Para responder con precision necesito la unidad exacta dentro de la torre/edificio. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
+          answerSource: 'live_data',
+          responseType: 'clarification',
+          suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+        };
+      }
       return {
         answer:
           'Para responder con precision necesito ambos datos exactos: unidad y torre. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
+        answerSource: 'live_data',
+        responseType: 'clarification',
         suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
       };
     }
@@ -890,6 +1172,8 @@ export class AssistantService {
 
     return {
       answer,
+      answerSource: 'live_data',
+      responseType: 'exact',
       suggestedActions: [
         {
           type: 'VIEW_PAYMENTS',
@@ -903,19 +1187,47 @@ export class AssistantService {
   }
 
   private extractUnitToken(message: string): string | null {
-    const match = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto)\s+([a-z0-9-]+)/i);
-    return match?.[1] || null;
+    const pisoDeptoMatch = message.match(/(?:depto|departamento)\s+(\d{1,2})\s+piso\s+(\d{1,2})/i);
+    if (pisoDeptoMatch?.[1] && pisoDeptoMatch?.[2]) {
+      const depto = pisoDeptoMatch[1].padStart(2, '0');
+      const piso = pisoDeptoMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    const pisoDeptoInverseMatch = message.match(/piso\s+(\d{1,2})\s+(?:depto|departamento)\s+(\d{1,2})/i);
+    if (pisoDeptoInverseMatch?.[1] && pisoDeptoInverseMatch?.[2]) {
+      const piso = pisoDeptoInverseMatch[1].padStart(2, '0');
+      const depto = pisoDeptoInverseMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    const explicitMatch = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto|uf)\s+([a-z0-9-]+)/i);
+    if (explicitMatch?.[1]) {
+      const token = explicitMatch[1].toLowerCase();
+      const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
+      if (floorDeptMatch?.[1] && floorDeptMatch?.[2]) {
+        const floor = floorDeptMatch[1].padStart(2, '0');
+        const dept = floorDeptMatch[2].padStart(2, '0');
+        return `${floor}-${dept}`;
+      }
+      return token;
+    }
+
+    return null;
   }
 
   private extractTowerToken(message: string): string | null {
-    const match = message.match(/torre\s+([a-z0-9]+)/i);
+    const match = message.match(/(?:torre|edificio|bloque)\s+([a-z0-9]+)/i);
     return match?.[1] || null;
   }
 
   private matchesTowerToken(buildingName: string, towerToken: string): boolean {
     const normalizedName = this.normalizeText(buildingName);
     const token = this.normalizeText(towerToken);
-    return normalizedName === `torre ${token}` || normalizedName.includes(`torre ${token}`);
+    const candidates = [`torre ${token}`, `edificio ${token}`, `bloque ${token}`];
+    return candidates.some(
+      (candidate) => normalizedName === candidate || normalizedName.includes(candidate),
+    );
   }
 
   private matchesUnitToken(unit: { code: string; label: string | null }, unitToken: string): boolean {
@@ -925,15 +1237,191 @@ export class AssistantService {
     const compactCode = code.replace(/[^a-z0-9]/g, '');
     const label = this.normalizeText(unit.label || '');
     const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
-    const derivedCode = floorDeptMatch
-      ? `${floorDeptMatch[1]}${floorDeptMatch[2]}`
-      : null;
+    const floorPart = floorDeptMatch?.[1];
+    const deptPart = floorDeptMatch?.[2];
+    const derivedCode =
+      floorPart && deptPart
+        ? `${floorPart.padStart(2, '0')}${deptPart.padStart(2, '0')}`
+        : null;
+    const derivedCodeV2 =
+      floorPart && deptPart
+        ? `${String(parseInt(floorPart, 10))}${deptPart.padStart(2, '0')}`
+        : null;
     return (
       code === token ||
       label === token ||
       compactCode === compactToken ||
-      (derivedCode !== null && compactCode === derivedCode)
+      (/^\d{3,4}$/.test(compactToken) && compactCode.endsWith(compactToken)) ||
+      (derivedCode !== null && compactCode.endsWith(derivedCode)) ||
+      (derivedCodeV2 !== null && compactCode.endsWith(derivedCodeV2))
     );
+  }
+
+  private isAggregateDebtQuery(normalizedMessage: string): boolean {
+    const aggregateKeywords = [
+      'top',
+      'ranking',
+      'morosos',
+      'morosidad',
+      'aging',
+      'antiguedad',
+      'por torre',
+      'que torres',
+      'resumen',
+      'unidades con deuda',
+      'listame',
+    ];
+    return aggregateKeywords.some((keyword) => normalizedMessage.includes(keyword));
+  }
+
+  private shouldOverrideGenericUnitLookupMenu(message: string, answer: string): boolean {
+    const normalizedMessage = this.normalizeText(message);
+    const normalizedAnswer = this.normalizeText(answer);
+    const looksGenericMenu =
+      normalizedAnswer.includes('elegi una opcion') ||
+      normalizedAnswer.includes('decime si queres');
+    if (!looksGenericMenu) {
+      return false;
+    }
+
+    const hasUnitAndBuilding =
+      /(?:unidad|apartamento|depto|departamento|apto|uf)\s+[a-z0-9-]+/.test(normalizedMessage) &&
+      /(?:torre|edificio|bloque)\s+[a-z0-9]+/.test(normalizedMessage);
+    const isResidentLookup =
+      normalizedMessage.includes('residente') ||
+      normalizedMessage.includes('telefono');
+
+    return hasUnitAndBuilding && isResidentLookup;
+  }
+
+  private isMutationLikeStrictQuery(normalizedMessage: string): boolean {
+    return (
+      normalizedMessage.includes('crea un cargo') ||
+      normalizedMessage.includes('crear cargo') ||
+      normalizedMessage.includes('registra un pago') ||
+      normalizedMessage.includes('registrar pago') ||
+      normalizedMessage.includes('cambia el residente') ||
+      normalizedMessage.includes('cambiar residente') ||
+      normalizedMessage.includes('modifica residente')
+    );
+  }
+
+  private async tryResolveAggregateDebtQuestion(
+    tenantId: string,
+    normalizedMessage: string,
+  ): Promise<ChatResponse> {
+    const towerToken = this.extractTowerToken(normalizedMessage);
+
+    const buildings = await this.prisma.building.findMany({
+      where: { tenantId },
+      select: { id: true, name: true },
+    });
+
+    const scopedBuildings = towerToken
+      ? buildings.filter((building) => this.matchesTowerToken(building.name, towerToken))
+      : buildings;
+
+    if (towerToken && scopedBuildings.length === 0) {
+      return {
+        answer: `No encontré la torre "${towerToken.toUpperCase()}". Indicame otra torre/edificio o querés el resumen general del tenant.`,
+        answerSource: 'live_data',
+        responseType: 'clarification',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
+    if (scopedBuildings.length === 0) {
+      return {
+        answer:
+          'Necesito scope mínimo para el agregado: indicame torre/edificio o si querés el resumen general del tenant (con período opcional).',
+        answerSource: 'live_data',
+        responseType: 'clarification',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
+    const buildingIds = scopedBuildings.map((building) => building.id);
+    const [tenant, charges] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      this.prisma.charge.findMany({
+        where: {
+          tenantId,
+          buildingId: { in: buildingIds },
+          canceledAt: null,
+        },
+        select: {
+          amount: true,
+          buildingId: true,
+          paymentAllocations: {
+            select: {
+              amount: true,
+              payment: { select: { status: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const outstandingByBuilding = new Map<string, number>();
+    for (const building of scopedBuildings) {
+      outstandingByBuilding.set(building.id, 0);
+    }
+
+    for (const charge of charges) {
+      const approvedAllocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
+        const status = allocation.payment?.status;
+        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+          return allocSum + allocation.amount;
+        }
+        return allocSum;
+      }, 0);
+      const outstanding = Math.max(0, charge.amount - approvedAllocated);
+      outstandingByBuilding.set(
+        charge.buildingId,
+        (outstandingByBuilding.get(charge.buildingId) || 0) + outstanding,
+      );
+    }
+
+    const ranking = scopedBuildings
+      .map((building) => ({
+        building,
+        outstanding: outstandingByBuilding.get(building.id) || 0,
+      }))
+      .sort((a, b) => b.outstanding - a.outstanding);
+
+    const asksRanking =
+      normalizedMessage.includes('top') ||
+      normalizedMessage.includes('ranking') ||
+      normalizedMessage.includes('morosos') ||
+      normalizedMessage.includes('que torres') ||
+      normalizedMessage.includes('por torre');
+
+    if (asksRanking) {
+      const top = ranking.slice(0, 3);
+      const lines = top.map((item, index) =>
+        `${index + 1}. ${item.building.name}: ${this.formatMoney(item.outstanding, tenant.currency)}`,
+      );
+      return {
+        answer:
+          lines.length > 0
+            ? `Top deuda por torre/edificio:\n${lines.join('\n')}`
+            : 'No hay deuda pendiente para el scope consultado.',
+        answerSource: 'live_data',
+        responseType: 'list',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
+    const totalOutstanding = ranking.reduce((sum, item) => sum + item.outstanding, 0);
+    return {
+      answer: `Resumen de deuda agregada (${towerToken ? `scope: ${towerToken.toUpperCase()}` : 'scope: tenant'}): total pendiente ${this.formatMoney(totalOutstanding, tenant.currency)} en ${ranking.length} torre(s)/edificio(s).`,
+      answerSource: 'live_data',
+      responseType: 'summary',
+      suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+    };
   }
 
   private canAccessOperationalData(userRoles: string[]): boolean {
@@ -969,6 +1457,8 @@ export class AssistantService {
         unit: null,
         errorResponse: {
           answer: `No encontre la torre "${towerToken.toUpperCase()}" en este tenant. Verifica el nombre exacto y volve a intentar.`,
+          answerSource: 'live_data',
+          responseType: 'clarification',
           suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
         },
       };
@@ -980,6 +1470,8 @@ export class AssistantService {
         unit: null,
         errorResponse: {
           answer: `Hay mas de una torre coincidente (${matchedBuildings.map((b) => b.name).join(', ')}). Necesito el nombre exacto para responder de forma estricta.`,
+          answerSource: 'live_data',
+          responseType: 'clarification',
           suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
         },
       };
@@ -998,6 +1490,8 @@ export class AssistantService {
         unit: null,
         errorResponse: {
           answer: `No encontre la unidad "${unitToken}" en ${building.name}. Verifica el codigo/label exacto y volve a intentar.`,
+          answerSource: 'live_data',
+          responseType: 'clarification',
           suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id } }],
         },
       };
@@ -1009,6 +1503,8 @@ export class AssistantService {
         unit: null,
         errorResponse: {
           answer: `La unidad es ambigua. Coincide con: ${matchedUnits.map((u) => u.label || u.code).join(', ')}. Indica el identificador exacto para responder con precision.`,
+          answerSource: 'live_data',
+          responseType: 'clarification',
           suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id } }],
         },
       };
@@ -1050,6 +1546,57 @@ export class AssistantService {
       .split(',')
       .map((item) => item.trim())
       .filter((item) => item.length > 0);
+  }
+
+  private normalizeResponseContract(response: ChatResponse): ChatResponse {
+    const answerSource = this.normalizeAnswerSource(response.answerSource);
+    const responseType = this.normalizeResponseType(response.responseType, response.answer);
+    return {
+      ...response,
+      answerSource,
+      responseType,
+    };
+  }
+
+  private normalizeAnswerSource(answerSource?: string): 'live_data' | 'knowledge' | 'fallback' {
+    if (answerSource === 'live_data' || answerSource === 'knowledge' || answerSource === 'fallback') {
+      return answerSource;
+    }
+    return 'fallback';
+  }
+
+  private normalizeResponseType(
+    responseType: string | undefined,
+    answer: string,
+  ): 'exact' | 'summary' | 'list' | 'clarification' {
+    switch ((responseType || '').toLowerCase()) {
+      case 'exact':
+      case 'summary':
+      case 'list':
+      case 'clarification':
+        return responseType!.toLowerCase() as 'exact' | 'summary' | 'list' | 'clarification';
+      case 'metric':
+        return 'exact';
+      case 'answer':
+        return 'summary';
+      case 'error':
+      case 'no_data':
+        return 'clarification';
+      default:
+        return this.looksLikeClarification(answer) ? 'clarification' : 'summary';
+    }
+  }
+
+  private looksLikeClarification(answer: string): boolean {
+    const normalized = this.normalizeText(answer || '');
+    return (
+      normalized.includes('necesito') ||
+      normalized.includes('aclaracion') ||
+      normalized.includes('aclara') ||
+      normalized.includes('reformula') ||
+      normalized.includes('modo solo consulta') ||
+      normalized.includes('no puedo ejecutar cambios')
+    );
   }
 
   /**
