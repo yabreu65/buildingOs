@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
 
 export type AssistantAction = {
   key: string;
@@ -26,6 +27,8 @@ export type AssistantContext = {
   userId: string;
   role: string;
   route: string;
+  buildingId?: string;
+  unitId?: string;
   currentModule?: string;
   permissions?: string[];
   unitOccupantRole?: 'OWNER' | 'RESIDENT';
@@ -78,15 +81,86 @@ export type AssistantResponse = {
   };
 };
 
-const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL || 'http://localhost:4001';
+type BuildingOsSuggestedActionType =
+  | 'VIEW_TICKETS'
+  | 'VIEW_PAYMENTS'
+  | 'VIEW_REPORTS'
+  | 'SEARCH_DOCS'
+  | 'DRAFT_COMMUNICATION'
+  | 'CREATE_TICKET';
+
+type BuildingOsSuggestedAction = {
+  type: BuildingOsSuggestedActionType;
+  payload?: Record<string, unknown>;
+};
+
+type BuildingOsChatRequest = {
+  message: string;
+  page: string;
+  buildingId?: string;
+  unitId?: string;
+};
+
+type BuildingOsChatResponse = {
+  answer: string;
+  suggestedActions?: BuildingOsSuggestedAction[];
+};
+
+const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
+  VIEW_TICKETS: {
+    key: 'open-tickets',
+    label: 'Ver tickets',
+    description: 'Abrir la gestión de tickets.',
+  },
+  VIEW_PAYMENTS: {
+    key: 'open-payments',
+    label: 'Ver pagos',
+    description: 'Abrir la gestión de pagos.',
+  },
+  VIEW_REPORTS: {
+    key: 'open-charges',
+    label: 'Ver finanzas',
+    description: 'Abrir el módulo financiero.',
+  },
+  SEARCH_DOCS: {
+    key: 'open-documents',
+    label: 'Ver documentos',
+    description: 'Abrir la biblioteca de documentos.',
+  },
+  DRAFT_COMMUNICATION: {
+    key: 'create-communication',
+    label: 'Crear comunicación',
+    description: 'Abrir el flujo de comunicación.',
+  },
+  CREATE_TICKET: {
+    key: 'create-ticket',
+    label: 'Crear ticket',
+    description: 'Abrir el flujo de creación de tickets.',
+  },
+};
+
+function mapSuggestedAction(action: BuildingOsSuggestedAction): AssistantAction {
+  return SUGGESTED_ACTION_MAP[action.type];
+}
+
+function formatAssistantError(error: unknown): string {
+  if (error instanceof HttpError) {
+    return error.message || `Error del asistente AI (${error.status}).`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown error';
+}
 
 interface UseAssistantOptions {
   initialContext?: AssistantContext;
-  defaultUseLlm?: boolean;
 }
 
 export function useAssistant(options: UseAssistantOptions = {}) {
-  const { initialContext, defaultUseLlm = false } = options;
+  const { initialContext } = options;
   
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -110,37 +184,30 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     setError(null);
 
     try {
-      const request: AssistantRequest = {
-        message: content,
-        context,
-        useLlm: defaultUseLlm,
-      };
-
-      const response = await fetch(`${ASSISTANT_API_URL}/assistant/chat`, {
+      const data = await apiClient<BuildingOsChatResponse, BuildingOsChatRequest>({
+        path: `/tenants/${context.tenantId}/assistant/chat`,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+        body: {
+          message: content,
+          page: context.currentModule || context.route || 'assistant',
+          buildingId: context.buildingId,
+          unitId: context.unitId,
         },
-        body: JSON.stringify(request),
+        headers: {
+          'X-Tenant-Id': context.tenantId,
+        },
       });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status} ${response.statusText}`);
-      }
-
-      const data: AssistantResponse = await response.json();
 
       const assistantMessage: AssistantMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: data.answer,
-        llmUsed: data.llmUsed,
-        sources: data.knowledgeUsed?.sources,
+        actions: (data.suggestedActions || []).map(mapSuggestedAction),
       };
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      const errorMessage = formatAssistantError(err);
       setError(errorMessage);
       
       const errorMsg: AssistantMessage = {
@@ -152,7 +219,7 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [context, defaultUseLlm]);
+  }, [context]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);

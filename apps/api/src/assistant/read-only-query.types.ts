@@ -3,14 +3,16 @@ export type AssistantReadOnlyIntentCode =
   | 'GET_PENDING_PAYMENTS'
   | 'GET_OPEN_TICKETS'
   | 'GET_VACANT_UNITS'
-  | 'GET_COLLECTIONS_SUMMARY';
+  | 'GET_COLLECTIONS_SUMMARY'
+  | 'GET_UNIT_PRIMARY_RESIDENT';
 
 export type AssistantReadOnlyLegacyIntent =
   | 'admin_arrears_by_building'
   | 'admin_pending_payments_month'
   | 'admin_open_tickets_by_building'
   | 'admin_vacant_units'
-  | 'admin_collections_summary_month';
+  | 'admin_collections_summary_month'
+  | 'admin_unit_primary_resident';
 
 export type AssistantReadOnlyResponseType =
   | 'metric'
@@ -61,7 +63,8 @@ export type AssistantReadOnlyIntentDefinition = {
     | 'pendingPaymentsResolver'
     | 'openTicketsResolver'
     | 'vacantUnitsResolver'
-    | 'collectionsSummaryResolver';
+    | 'collectionsSummaryResolver'
+    | 'unitPrimaryResidentResolver';
   rolesAllowed: string[];
   responseType: 'list' | 'summary';
   answerSource: 'live_data';
@@ -75,7 +78,7 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
   GET_OVERDUE_UNITS: {
     code: 'GET_OVERDUE_UNITS',
     resolverKey: 'overdueUnitsResolver',
-    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
     responseType: 'list',
     answerSource: 'live_data',
     legacyAliases: ['admin_arrears_by_building'],
@@ -83,7 +86,7 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
   GET_PENDING_PAYMENTS: {
     code: 'GET_PENDING_PAYMENTS',
     resolverKey: 'pendingPaymentsResolver',
-    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
     responseType: 'list',
     answerSource: 'live_data',
     legacyAliases: ['admin_pending_payments_month'],
@@ -91,7 +94,7 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
   GET_OPEN_TICKETS: {
     code: 'GET_OPEN_TICKETS',
     resolverKey: 'openTicketsResolver',
-    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
     responseType: 'list',
     answerSource: 'live_data',
     legacyAliases: ['admin_open_tickets_by_building'],
@@ -99,7 +102,7 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
   GET_VACANT_UNITS: {
     code: 'GET_VACANT_UNITS',
     resolverKey: 'vacantUnitsResolver',
-    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
     responseType: 'list',
     answerSource: 'live_data',
     legacyAliases: ['admin_vacant_units'],
@@ -107,10 +110,18 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
   GET_COLLECTIONS_SUMMARY: {
     code: 'GET_COLLECTIONS_SUMMARY',
     resolverKey: 'collectionsSummaryResolver',
-    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
     responseType: 'summary',
     answerSource: 'live_data',
     legacyAliases: ['admin_collections_summary_month'],
+  },
+  GET_UNIT_PRIMARY_RESIDENT: {
+    code: 'GET_UNIT_PRIMARY_RESIDENT',
+    resolverKey: 'unitPrimaryResidentResolver',
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'],
+    responseType: 'summary',
+    answerSource: 'live_data',
+    legacyAliases: ['admin_unit_primary_resident'],
   },
 };
 
@@ -120,6 +131,7 @@ const ALIAS_MAP: Record<AssistantReadOnlyLegacyIntent, AssistantReadOnlyIntentCo
   admin_open_tickets_by_building: 'GET_OPEN_TICKETS',
   admin_vacant_units: 'GET_VACANT_UNITS',
   admin_collections_summary_month: 'GET_COLLECTIONS_SUMMARY',
+  admin_unit_primary_resident: 'GET_UNIT_PRIMARY_RESIDENT',
 };
 
 export function resolveReadOnlyIntentCode(

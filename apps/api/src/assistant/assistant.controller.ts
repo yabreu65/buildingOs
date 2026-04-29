@@ -49,7 +49,7 @@ export class AssistantController {
    * - 403: Feature not available (canUseAI flag) or monthly consultation limit reached
    * - 429: Rate limit exceeded (100 per day)
    */
-  @Post(':tenantId/chat')
+  @Post('chat')
   @UseGuards(RequireFeatureGuard)
   @RequireFeature('canUseAI')
   async chat(
@@ -120,7 +120,7 @@ export class AssistantController {
    *
    * Only admins can use this endpoint (checked via role validation)
    */
-  @Post(':tenantId/ticket-replies')
+  @Post('ticket-replies')
   @UseGuards(RequireFeatureGuard)
   @RequireFeature('canUseAI')
   async getTicketReplySuggestions(

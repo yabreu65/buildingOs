@@ -3,7 +3,15 @@ module.exports = {
   rootDir: 'src',
   testRegex: '.*\\.spec\\.ts$',
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.ts$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          jsx: 'react',
+          types: ['jest', 'node'],
+        },
+      },
+    ],
   },
   collectCoverageFrom: [
     '**/*.(t|j)s',
@@ -18,13 +26,4 @@ module.exports = {
     '^src/(.*)$': '<rootDir>/$1',
   },
   testTimeout: 10000,
-  globals: {
-    'ts-jest': {
-      isolatedModules: true,
-      tsconfig: {
-        jsx: 'react',
-        types: ['jest', 'node'],
-      },
-    },
-  },
 };

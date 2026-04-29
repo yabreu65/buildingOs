@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards, Request, ForbiddenException } from '
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuditService, AuditLogQueryFilters } from './audit.service';
 import { AuditAction } from '@prisma/client';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -67,16 +68,30 @@ export class AuditController {
       // SUPER_ADMIN: use provided tenantId or undefined (no filter)
       effectiveTenantId = queryTenantId;
     } else {
-      // TENANT_ADMIN/OWNER/OPERATOR: must use their tenantId
-      const firstTenantId = req.user.memberships[0]?.tenantId;
-      if (!firstTenantId) {
+      // TENANT_ADMIN/OWNER/OPERATOR: resolve tenant context with membership enforcement
+      const membershipTenantIds = req.user.memberships.map((m) => m.tenantId);
+      const requestedTenantId = queryTenantId && membershipTenantIds.includes(queryTenantId)
+        ? queryTenantId
+        : undefined;
+
+      if (requestedTenantId) {
+        (req as RequestWithUser & { tenantId?: string }).tenantId = requestedTenantId;
+      }
+
+      const resolvedTenantId = resolveTenantId(req as any, {
+        allowHeaderFallback: false,
+        allowSingleMembershipFallback: true,
+        requireMembership: true,
+      });
+
+      if (!resolvedTenantId) {
         return {
           data: [],
           total: 0,
           message: 'No active tenant',
         };
       }
-      effectiveTenantId = firstTenantId;
+      effectiveTenantId = resolvedTenantId;
       // Ignore queryTenantId if provided (security: force own tenant)
     }
 

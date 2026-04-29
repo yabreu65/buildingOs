@@ -60,7 +60,7 @@ period: 'CURRENT_MONTH' | 'PREVIOUS_MONTH' | 'LAST_30_DAYS'
 
 ### Endpoint
 ```
-GET /api/v1/dashboard/admin/summary
+GET /tenants/:tenantId/dashboard/admin
 ```
 
 ### Query Params
@@ -72,7 +72,6 @@ GET /api/v1/dashboard/admin/summary
 ### Headers Requeridos
 ```
 Authorization: Bearer <jwt>
-X-Tenant-Id: <tenant_id> (del JWT)
 ```
 
 ### Response Schema

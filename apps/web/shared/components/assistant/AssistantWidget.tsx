@@ -6,16 +6,99 @@ import { Send, Bot, Sparkles, X, Minimize2, ArrowRight, ExternalLink } from 'luc
 import type { AssistantMessage, AssistantAction, AssistantContext } from './useAssistant';
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
+import { apiClient, HttpError } from '@/shared/lib/http/client';
+
+type BuildingOsSuggestedActionType =
+  | 'VIEW_TICKETS'
+  | 'VIEW_PAYMENTS'
+  | 'VIEW_REPORTS'
+  | 'SEARCH_DOCS'
+  | 'DRAFT_COMMUNICATION'
+  | 'CREATE_TICKET';
+
+interface BuildingOsSuggestedAction {
+  type: BuildingOsSuggestedActionType;
+  payload?: Record<string, unknown>;
+}
+
+interface BuildingOsChatRequest {
+  message: string;
+  page: string;
+  buildingId?: string;
+  unitId?: string;
+}
+
+interface BuildingOsChatResponse {
+  answer: string;
+  suggestedActions?: BuildingOsSuggestedAction[];
+  interactionId?: string;
+}
+
+const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
+  VIEW_TICKETS: {
+    key: 'open-tickets',
+    label: 'Ver tickets',
+    description: 'Abrir la gestión de tickets.',
+  },
+  VIEW_PAYMENTS: {
+    key: 'open-payments',
+    label: 'Ver pagos',
+    description: 'Abrir la gestión de pagos.',
+  },
+  VIEW_REPORTS: {
+    key: 'open-charges',
+    label: 'Ver finanzas',
+    description: 'Abrir el módulo financiero.',
+  },
+  SEARCH_DOCS: {
+    key: 'open-documents',
+    label: 'Ver documentos',
+    description: 'Abrir la biblioteca de documentos.',
+  },
+  DRAFT_COMMUNICATION: {
+    key: 'create-communication',
+    label: 'Crear comunicación',
+    description: 'Abrir el flujo de comunicación.',
+  },
+  CREATE_TICKET: {
+    key: 'create-ticket',
+    label: 'Crear ticket',
+    description: 'Abrir el flujo de creación de tickets.',
+  },
+};
+
+function mapSuggestedActionToAssistantAction(action: BuildingOsSuggestedAction): AssistantAction {
+  return SUGGESTED_ACTION_MAP[action.type];
+}
+
+function formatAssistantError(error: unknown): string {
+  if (error instanceof HttpError) {
+    if (error.status === 401) {
+      return 'Sesión expirada. Volvé a iniciar sesión.';
+    }
+    if (error.status === 403) {
+      return error.message || 'El asistente AI no está disponible para tu plan o usuario.';
+    }
+    if (error.status === 409) {
+      return error.message || 'El límite del asistente AI fue alcanzado.';
+    }
+    return error.message || `Error del asistente AI (${error.status}).`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Error desconocido del asistente AI.';
+}
 
 export interface AssistantWidgetProps {
   context: AssistantContext;
-  defaultUseLlm?: boolean;
   className?: string;
 }
 
 export function AssistantWidget({ 
   context, 
-  defaultUseLlm = false,
   className = '' 
 }: AssistantWidgetProps) {
   const router = useRouter();
@@ -25,7 +108,6 @@ export function AssistantWidget({
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [useLlm, setUseLlm] = useState(defaultUseLlm);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -57,38 +139,30 @@ export function AssistantWidget({
     setError(null);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL || 'http://localhost:4001';
-      
-      const response = await fetch(`${API_URL}/assistant/chat`, {
+      const data = await apiClient<BuildingOsChatResponse, BuildingOsChatRequest>({
+        path: `/tenants/${tenantId}/assistant/chat`,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+        body: {
           message: userMessage.content,
-          context,
-          useLlm,
-        }),
+          page: context.currentModule || context.route || 'assistant',
+          buildingId: context.buildingId,
+          unitId: context.unitId,
+        },
+        headers: {
+          'X-Tenant-Id': tenantId,
+        },
       });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      const data = await response.json();
 
       const assistantMessage: AssistantMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: data.answer,
-        llmUsed: data.llmUsed,
-        sources: data.knowledgeUsed?.sources,
-        actions: data.actions || [],
+        actions: (data.suggestedActions || []).map(mapSuggestedActionToAssistantAction),
       };
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Error desconocido';
+      const errorMsg = formatAssistantError(err);
       setError(errorMsg);
       
       const errorMessage: AssistantMessage = {
@@ -179,20 +253,6 @@ export function AssistantWidget({
                 <Minimize2 size={18} />
               </button>
             </div>
-          </div>
-
-          {/* LLM Toggle */}
-          <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useLlm}
-                onChange={(e) => setUseLlm(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <Sparkles size={16} className={useLlm ? 'text-purple-500' : 'text-gray-400'} />
-              <span>Usar generación avanzada (LLM)</span>
-            </label>
           </div>
 
           {/* Messages */}

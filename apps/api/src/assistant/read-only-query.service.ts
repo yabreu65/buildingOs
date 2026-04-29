@@ -4,7 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, TicketStatus, UnitOccupantRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ASSISTANT_READ_ONLY_INTENTS,
@@ -38,6 +38,7 @@ export class AssistantReadOnlyQueryService {
       tenantId?: string;
       userId?: string;
       role?: string;
+      context?: AssistantReadOnlyQueryContext;
     },
   ): Promise<AssistantReadOnlyQueryResponse> {
     this.assertApiKey(headers.apiKey);
@@ -72,7 +73,7 @@ export class AssistantReadOnlyQueryService {
     await this.assertMembershipAndRole(context, definition.rolesAllowed);
 
     const startedAt = Date.now();
-    const result = await this.routeIntent(intentCode, context);
+    const result = await this.routeIntent(intentCode, context, request.question);
 
     return this.buildControlledResponse({
       ...result,
@@ -90,6 +91,7 @@ export class AssistantReadOnlyQueryService {
   private async routeIntent(
     intentCode: AssistantReadOnlyIntentCode,
     context: AssistantReadOnlyQueryContext,
+    question: string,
   ): Promise<ResolverResult> {
     switch (intentCode) {
       case 'GET_OVERDUE_UNITS':
@@ -102,6 +104,8 @@ export class AssistantReadOnlyQueryService {
         return this.vacantUnitsResolver(context);
       case 'GET_COLLECTIONS_SUMMARY':
         return this.collectionsSummaryResolver(context);
+      case 'GET_UNIT_PRIMARY_RESIDENT':
+        return this.unitPrimaryResidentResolver(context, question);
       default:
         return {
           answer: 'Intención no soportada en modo read-only.',
@@ -518,6 +522,132 @@ export class AssistantReadOnlyQueryService {
     };
   }
 
+  private async unitPrimaryResidentResolver(
+    context: AssistantReadOnlyQueryContext,
+    question: string,
+  ): Promise<ResolverResult> {
+    const normalizedQuestion = this.normalizeText(question);
+    const unitToken = this.extractUnitToken(normalizedQuestion);
+    const towerToken = this.extractTowerToken(normalizedQuestion);
+
+    if (!unitToken || !towerToken) {
+      return {
+        answer:
+          'Necesito unidad y torre exactas para responder. Ejemplo: "Como se llama el residente del apartamento 12-8 Torre A".',
+        responseType: 'clarification',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { needsClarification: true },
+      };
+    }
+
+    const buildings = await this.prisma.building.findMany({
+      where: { tenantId: context.tenantId },
+      select: { id: true, name: true },
+    });
+
+    const matchedBuildings = buildings.filter((building) =>
+      this.matchesTowerToken(building.name, towerToken),
+    );
+
+    if (matchedBuildings.length === 0) {
+      return {
+        answer: `No encontre la torre "${towerToken.toUpperCase()}" en este tenant.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-buildings', label: 'Open Buildings' }],
+        metadata: { noTowerMatch: true },
+      };
+    }
+
+    if (matchedBuildings.length > 1) {
+      return {
+        answer: `Hay mas de una torre coincidente (${matchedBuildings.map((b) => b.name).join(', ')}). Necesito el nombre exacto.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-buildings', label: 'Open Buildings' }],
+        metadata: { ambiguousTower: true, matches: matchedBuildings.map((b) => b.name) },
+      };
+    }
+
+    const building = matchedBuildings[0]!;
+    const units = await this.prisma.unit.findMany({
+      where: { buildingId: building.id },
+      select: { id: true, code: true, label: true },
+    });
+
+    const matchedUnits = units.filter((unit) => this.matchesUnitToken(unit, unitToken));
+    if (matchedUnits.length === 0) {
+      return {
+        answer: `No encontre la unidad "${unitToken}" en ${building.name}.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { noUnitMatch: true },
+      };
+    }
+
+    if (matchedUnits.length > 1) {
+      return {
+        answer: `La unidad es ambigua. Coincide con: ${matchedUnits.map((u) => u.label || u.code).join(', ')}.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { ambiguousUnit: true, matches: matchedUnits.map((u) => u.label || u.code) },
+      };
+    }
+
+    const unit = matchedUnits[0]!;
+    const occupants = await this.prisma.unitOccupant.findMany({
+      where: { unitId: unit.id, endDate: null },
+      include: {
+        member: {
+          select: { id: true, name: true, role: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (occupants.length === 0) {
+      return {
+        answer: `La unidad ${unit.label || unit.code} de ${building.name} no tiene ocupantes activos.`,
+        responseType: 'no_data',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { noOccupants: true },
+      };
+    }
+
+    const primaryOccupants = occupants.filter((o) => o.isPrimary);
+    if (primaryOccupants.length > 1) {
+      return {
+        answer: `Hay mas de un ocupante primario en ${building.name} unidad ${unit.label || unit.code}.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { multiplePrimary: true },
+      };
+    }
+
+    const selected =
+      primaryOccupants[0] ??
+      occupants.find((o) => o.role === UnitOccupantRole.OWNER) ??
+      occupants[0];
+
+    if (!selected) {
+      return {
+        answer: `No pude determinar un ocupante activo para ${building.name} unidad ${unit.label || unit.code}.`,
+        responseType: 'clarification',
+        actions: [{ key: 'open-units', label: 'Open Units' }],
+        metadata: { noSelectedOccupant: true },
+      };
+    }
+
+    return {
+      answer: `En ${building.name}, la unidad ${unit.label || unit.code} tiene como ocupante principal a ${selected.member?.name || 'N/A'}.`,
+      responseType: 'summary',
+      actions: [{ key: 'open-units', label: 'Open Units' }],
+      metadata: {
+        buildingId: building.id,
+        unitId: unit.id,
+        occupantId: selected.id,
+      },
+    };
+  }
+
   private normalizeContext(context: AssistantReadOnlyQueryContext): AssistantReadOnlyQueryContext {
     const tenantId = (context.tenantId ?? '').trim();
     const userId = (context.userId ?? '').trim();
@@ -650,5 +780,84 @@ export class AssistantReadOnlyQueryService {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
+  }
+
+  private normalizeText(value: string): string {
+    return (value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  private extractUnitToken(message: string): string | null {
+    const pisoDeptoMatch = message.match(/(?:depto|departamento)\s+(\d{1,2})\s+piso\s+(\d{1,2})/i);
+    if (pisoDeptoMatch?.[1] && pisoDeptoMatch?.[2]) {
+      const depto = pisoDeptoMatch[1].padStart(2, '0');
+      const piso = pisoDeptoMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    const explicitMatch = message.match(/(?:unidad|apartamento|depto|depar?tamento|apto|uf)\s+([a-z0-9-]+)/i);
+    if (explicitMatch?.[1]) {
+      const token = explicitMatch[1].toLowerCase();
+      const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
+      if (floorDeptMatch?.[1] && floorDeptMatch?.[2]) {
+        const floor = floorDeptMatch[1].padStart(2, '0');
+        const dept = floorDeptMatch[2].padStart(2, '0');
+        return `${floor}-${dept}`;
+      }
+      return token;
+    }
+
+    const pisoDeptoInverseMatch = message.match(/piso\s+(\d{1,2})\s+(?:depto|departamento)\s+(\d{1,2})/i);
+    if (pisoDeptoInverseMatch?.[1] && pisoDeptoInverseMatch?.[2]) {
+      const piso = pisoDeptoInverseMatch[1].padStart(2, '0');
+      const depto = pisoDeptoInverseMatch[2].padStart(2, '0');
+      return `${piso}-${depto}`;
+    }
+
+    return null;
+  }
+
+  private extractTowerToken(message: string): string | null {
+    const match = message.match(/(?:torre|edificio|bloque)\s+([a-z0-9]+)/i);
+    return match?.[1] || null;
+  }
+
+  private matchesTowerToken(buildingName: string, towerToken: string): boolean {
+    const normalizedName = this.normalizeText(buildingName);
+    const token = this.normalizeText(towerToken);
+    const candidates = [`torre ${token}`, `edificio ${token}`, `bloque ${token}`];
+    return candidates.some(
+      (candidate) => normalizedName === candidate || normalizedName.includes(candidate),
+    );
+  }
+
+  private matchesUnitToken(unit: { code: string; label: string | null }, unitToken: string): boolean {
+    const token = this.normalizeText(unitToken);
+    const compactToken = token.replace(/[^a-z0-9]/g, '');
+    const code = this.normalizeText(unit.code);
+    const compactCode = code.replace(/[^a-z0-9]/g, '');
+    const label = this.normalizeText(unit.label || '');
+    const floorDeptMatch = token.match(/^(\d{1,2})-(\d{1,2})$/);
+    const floorPart = floorDeptMatch?.[1];
+    const deptPart = floorDeptMatch?.[2];
+    const derivedCode =
+      floorPart && deptPart
+        ? `${floorPart.padStart(2, '0')}${deptPart.padStart(2, '0')}`
+        : null;
+    const derivedCodeV2 =
+      floorPart && deptPart
+        ? `${String(parseInt(floorPart, 10))}${deptPart.padStart(2, '0')}`
+        : null;
+    return (
+      code === token ||
+      label === token ||
+      compactCode === compactToken ||
+      (/^\d{3,4}$/.test(compactToken) && compactCode.endsWith(compactToken)) ||
+      (derivedCode !== null && compactCode.endsWith(derivedCode)) ||
+      (derivedCodeV2 !== null && compactCode.endsWith(derivedCodeV2))
+    );
   }
 }

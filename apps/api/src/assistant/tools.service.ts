@@ -7,8 +7,12 @@ import {
 import { AuditAction, ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ProcessSearchService, ProcessSummaryInput, SearchProcessesInput } from '../process/process-search.service';
+import { CrossQueryService } from './cross-query.service';
 import {
+  ASSISTANT_TOOL_REQUEST_CONTRACT_VERSION,
   ASSISTANT_RESPONSE_SCHEMA_VERSION,
+  ASSISTANT_RESPONSE_SCHEMA_VERSION_V2,
   AssistantToolName,
   AssistantToolRequest,
   AssistantToolResponse,
@@ -18,8 +22,19 @@ const TOOL_PERMISSION = {
   resolve_unit_ref: 'tools.resolve_unit_ref',
   get_unit_balance: 'tools.get_unit_balance',
   get_unit_profile: 'tools.get_unit_profile',
+  get_unit_payments: 'tools.get_unit_payments',
+  get_unit_balance_by_period: 'tools.get_unit_balance_by_period',
   search_payments: 'tools.search_payments',
+  analytics_debt_aging: 'tools.analytics_debt_aging',
+  analytics_debt_by_tower: 'tools.analytics_debt_by_tower',
   search_tickets: 'tools.search_tickets',
+  get_unit_debt_trend: 'tools.get_unit_debt_trend',
+  get_building_debt_trend: 'tools.get_building_debt_trend',
+  get_collections_trend: 'tools.get_collections_trend',
+  search_processes: 'tools.search_processes',
+  get_process_summary: 'tools.get_process_summary',
+  search_claims: 'tools.search_claims',
+  cross_query: 'tools.cross_query',
 } as const;
 
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
@@ -35,6 +50,8 @@ export class AssistantToolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly processSearch: ProcessSearchService,
+    private readonly crossQuery: CrossQueryService,
   ) {}
 
   async executeTool(
@@ -58,11 +75,44 @@ export class AssistantToolsService {
       case 'get_unit_profile':
         response = await this.getUnitProfile(context.tenantId, request.question, request.toolInput);
         break;
+      case 'get_unit_payments':
+        response = await this.getUnitPayments(context.tenantId, request.question, request.toolInput);
+        break;
+      case 'get_unit_balance_by_period':
+        response = await this.getUnitBalanceByPeriod(context.tenantId, request.question, request.toolInput);
+        break;
       case 'search_payments':
         response = await this.searchPayments(context.tenantId, request.question, request.toolInput);
         break;
+      case 'analytics_debt_aging':
+        response = await this.analyticsDebtAging(context.tenantId, request.toolInput);
+        break;
+      case 'analytics_debt_by_tower':
+        response = await this.analyticsDebtByTower(context.tenantId, request.toolInput);
+        break;
       case 'search_tickets':
         response = await this.searchTickets(context.tenantId, request.question, request.toolInput);
+        break;
+      case 'get_unit_debt_trend':
+        response = await this.getUnitDebtTrend(context.tenantId, request.question ?? '', request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+        break;
+      case 'get_building_debt_trend':
+        response = await this.getBuildingDebtTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+        break;
+      case 'get_collections_trend':
+        response = await this.getCollectionsTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+        break;
+      case 'search_processes':
+        response = await this.searchProcesses(context.tenantId, request.toolInput);
+        break;
+      case 'get_process_summary':
+        response = await this.getProcessSummary(context.tenantId, request.toolInput);
+        break;
+      case 'search_claims':
+        response = await this.searchClaims(context.tenantId, request.toolInput);
+        break;
+      case 'cross_query':
+        response = await this.executeCrossQuery(context.tenantId, context.role, request.toolInput);
         break;
       default:
         throw new BadRequestException(`Unsupported tool: ${toolName}`);
@@ -564,5 +614,557 @@ export class AssistantToolsService {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(cents / 100);
+  }
+
+  private async getUnitPayments(
+    tenantId: string,
+    question?: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const unitResolution = await this.resolveUnitRef(tenantId, question, input);
+    const unitId = this.pickString(unitResolution.metadata, 'unitId');
+    if (!unitId) {
+      return unitResolution;
+    }
+
+    const ranking = this.pickRanking(input);
+    const orderByField = this.pickString(input, 'orderBy') ?? 'paidAt';
+    const orderDirection = orderByField === 'createdAt' ? 'desc' : 'desc';
+
+    const rows = await this.prisma.payment.findMany({
+      where: { tenantId, unitId, canceledAt: null },
+      include: { unit: { select: { label: true, code: true, building: { select: { name: true } } } } },
+      orderBy: { [orderByField]: orderDirection },
+      take: ranking,
+    });
+
+    const answer = rows.length === 0
+      ? 'No hay pagos para esa unidad.'
+      : `Últimos ${rows.length} pagos: ${rows.map((r) => `${this.formatMoney(r.amount)} (${r.status.toLowerCase()})`).join(' | ')}.`;
+    return this.buildResponse(answer, rows.length === 0 ? 'no_data' : 'list', { unitId, ranking, count: rows.length });
+  }
+
+  private async getUnitBalanceByPeriod(
+    tenantId: string,
+    question?: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const unitResolution = await this.resolveUnitRef(tenantId, question, input);
+    const unitId = this.pickString(unitResolution.metadata, 'unitId');
+    if (!unitId) {
+      return unitResolution;
+    }
+
+    const periodsBack = this.pickNumeric(input, 'periodsBack', 3, 12);
+    const includeCurrent = this.pickBool(input, 'includeCurrent', false);
+    const debtStatus = this.pickString(input, 'debtStatus') ?? 'OVERDUE';
+    const asOf = this.pickString(input, 'asOf') ?? new Date().toISOString().split('T')[0];
+
+    const periods = this.getLastCompletePeriods(periodsBack, includeCurrent);
+    const balances: Record<string, number> = {};
+
+    for (const period of periods) {
+      const { from } = this.getPeriodDateRange(period);
+      const charges = await this.prisma.charge.aggregate({
+        where: { tenantId, unitId, period, canceledAt: null, ...(debtStatus === 'OVERDUE' ? { dueDate: { lt: new Date(from) } } : {}) },
+        _sum: { amount: true },
+      });
+      const paid = await this.prisma.payment.aggregate({
+        where: { tenantId, unitId, status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] }, canceledAt: null },
+        _sum: { amount: true },
+      });
+      balances[period] = (charges._sum.amount ?? 0) - (paid._sum.amount ?? 0);
+    }
+
+    const answer = `Evolución de deuda (${periods.join(', ')}): ${Object.entries(balances).map(([p, a]) => `${p}: ${this.formatMoney(a)}`).join(' | ')}.`;
+    return this.buildResponse(answer, 'list', { unitId, periods, balances, asOf });
+  }
+
+  private async analyticsDebtAging(
+    tenantId: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const asOfInput = this.pickString(input, 'asOf');
+    const asOf = asOfInput ? asOfInput : new Date().toISOString().split('T')[0] ?? '2026-04-24';
+    const buildingIds = this.pickStringArray(input?.buildingIds);
+    const now = new Date(asOf);
+
+    const whereClause: Record<string, unknown> = { tenantId, canceledAt: null, dueDate: { lt: now }, status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] } };
+    if (buildingIds && buildingIds.length > 0) {
+      (whereClause as Record<string, unknown>).buildingId = { in: buildingIds };
+    }
+
+    const charges = await this.prisma.charge.findMany({
+      where: whereClause as never,
+      include: { unit: { select: { id: true, label: true, code: true, building: { select: { name: true } } } }, paymentAllocations: { include: { payment: { select: { status: true, amount: true } } } } },
+    });
+
+    const buckets = { current: 0, '1_30': 0, '31_60': 0, '61_90': 0, '90_plus': 0 };
+    for (const charge of charges) {
+      const allocated = charge.paymentAllocations.reduce((sum, alloc) => {
+        const status = alloc.payment?.status;
+        return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED ? sum + alloc.amount : sum;
+      }, 0);
+      const outstanding = Math.max(0, charge.amount - allocated);
+      if (outstanding <= 0) continue;
+      const daysOverdue = Math.floor((now.getTime() - charge.dueDate.getTime()) / (24 * 60 * 60 * 1000));
+      let bucket: keyof typeof buckets = 'current';
+      if (daysOverdue <= 30) bucket = '1_30';
+      else if (daysOverdue <= 60) bucket = '31_60';
+      else if (daysOverdue <= 90) bucket = '61_90';
+      else bucket = '90_plus';
+      buckets[bucket] += outstanding;
+    }
+
+    const answer = `Antigüedad: ${Object.entries(buckets).map(([b, a]) => `${b}: ${this.formatMoney(a)}`).join(' | ')}.`;
+    return this.buildResponse(answer, 'metric', { asOf, buckets });
+  }
+
+  private async analyticsDebtByTower(
+    tenantId: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const asOfInput = this.pickString(input, 'asOf');
+    const asOf = asOfInput ? asOfInput : new Date().toISOString().split('T')[0] ?? '2026-04-24';
+    const buildingIds = this.pickStringArray(input?.buildingIds);
+    const now = new Date(asOf);
+
+    const whereClause: Record<string, unknown> = { tenantId, canceledAt: null, dueDate: { lt: now }, status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] } };
+    if (buildingIds && buildingIds.length > 0) {
+      (whereClause as Record<string, unknown>).buildingId = { in: buildingIds };
+    }
+
+    const charges = await this.prisma.charge.findMany({
+      where: whereClause as never,
+      include: { unit: { select: { buildingId: true, label: true, building: { select: { name: true } } } }, paymentAllocations: { include: { payment: { select: { status: true, amount: true } } } } },
+    });
+
+    const debtByBuilding = new Map<string, { name: string; totalDebt: number; unitCount: number }>();
+    for (const charge of charges) {
+      const allocated = charge.paymentAllocations.reduce((sum, alloc) => {
+        const status = alloc.payment?.status;
+        return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED ? sum + alloc.amount : sum;
+      }, 0);
+      const outstanding = Math.max(0, charge.amount - allocated);
+      if (outstanding <= 0) continue;
+      const name = charge.unit?.building?.name ?? 'N/A';
+      const id = charge.unit?.buildingId ?? 'unknown';
+      const current = debtByBuilding.get(id) ?? { name, totalDebt: 0, unitCount: 0 };
+      current.totalDebt += outstanding;
+      current.unitCount += 1;
+      debtByBuilding.set(id, current);
+    }
+
+    const sorted = [...debtByBuilding.values()].sort((a, b) => b.totalDebt - a.totalDebt);
+    const answer = sorted.length === 0 ? 'No hay deuda por edificio.' : `Deuda por edificio: ${sorted.map((b) => `${b.name}: ${this.formatMoney(b.totalDebt)} (${b.unitCount} uni)`).join(' | ')}.`;
+    return this.buildResponse(answer, sorted.length === 0 ? 'no_data' : 'list', { asOf, buildings: sorted });
+  }
+
+  private pickNumeric(input: Record<string, unknown> | undefined, key: string, min: number, max: number): number {
+    const raw = input?.[key];
+    const value = typeof raw === 'number' ? raw : Number(raw ?? min);
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : min;
+  }
+
+  private pickBool(input: Record<string, unknown> | undefined, key: string, defaultValue: boolean): boolean {
+    const raw = input?.[key];
+    if (typeof raw === 'boolean') return raw;
+    if (typeof raw === 'string') return raw.toLowerCase() === 'true';
+    return defaultValue;
+  }
+
+  private getLastCompletePeriods(count: number, includeCurrent: boolean): string[] {
+    const now = new Date();
+    const periods: string[] = [];
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    for (let i = 0; i < count + (includeCurrent ? 1 : 0); i++) {
+      const monthOffset = includeCurrent ? i : i + 1;
+      const targetMonth = currentMonth - monthOffset;
+      const year = currentYear + Math.floor(targetMonth / 12);
+      const month = ((targetMonth % 12) + 12) % 12 + 1;
+      periods.push(`${year}-${String(month).padStart(2, '0')}`);
+    }
+    return periods.reverse();
+  }
+
+  private getPeriodDateRange(period: string): { from: string; to: string } {
+    const parts = period.split('-').map(Number);
+    const year = parts[0] ?? 2026;
+    const month = parts[1] ?? 1;
+    const from = new Date(year, month - 1, 1);
+    const to = new Date(year, month, 0);
+    const fromStr = from.toISOString().split('T')[0] ?? '2026-01-01';
+    const toStr = to.toISOString().split('T')[0] ?? '2026-01-31';
+    return { from: fromStr, to: toStr };
+  }
+
+  private buildResponseV2(
+    answer: string,
+    responseType: AssistantToolResponse['responseType'],
+    metadata: Record<string, unknown>,
+    answerSource: 'snapshot' | 'clarification' = 'snapshot',
+  ): AssistantToolResponse {
+    return {
+      contractVersion: ASSISTANT_RESPONSE_SCHEMA_VERSION_V2,
+      answer,
+      answerSource,
+      responseType,
+      dataScope: 'tenant',
+      actions: [],
+      metadata,
+    };
+  }
+
+  private getTrendPeriods(months: number): string[] {
+    const now = new Date();
+    const periods: string[] = [];
+    for (let i = 0; i < months; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      periods.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    return periods.reverse();
+  }
+
+  private async getUnitDebtTrend(
+    tenantId: string,
+    _question: string,
+    input: Record<string, unknown> | undefined,
+    responseContractVersion?: string,
+  ): Promise<AssistantToolResponse> {
+    const responseVersion = responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION;
+    if (responseVersion !== ASSISTANT_RESPONSE_SCHEMA_VERSION_V2) {
+      throw new BadRequestException(`Unsupported responseContractVersion: ${responseContractVersion}. Use ${ASSISTANT_RESPONSE_SCHEMA_VERSION_V2} for snapshot tools.`);
+    }
+
+    const unitId = this.pickString(input, 'unitId');
+    if (!unitId) {
+      return this.buildResponse('Se requiere unitId para consultar tendencias.', 'clarification', { missingUnitId: true });
+    }
+
+    const buildingId = this.pickString(input, 'buildingId');
+    const months = this.pickNumeric(input, 'months', 1, 24);
+    const clampedMonths = Math.min(24, Math.max(1, months));
+    const metric = this.pickString(input, 'metric') ?? 'outstanding';
+
+    const periods = this.getTrendPeriods(clampedMonths);
+
+    const snapshots = await this.prisma.unitBalanceMonthlySnapshot.findMany({
+      where: {
+        tenantId,
+        unitId,
+        ...(buildingId ? { buildingId } : {}),
+        period: { in: periods },
+      },
+      orderBy: { period: 'asc' },
+      select: { period: true, chargedMinor: true, collectedMinor: true, outstandingMinor: true, overdueMinor: true, collectionRateBp: true, asOf: true },
+    });
+
+    if (snapshots.length === 0) {
+      return this.buildResponseV2('No hay datos de tendencias para esa unidad en el período solicitado.', 'no_data', {
+        unitId,
+        buildingId,
+        months: clampedMonths,
+        requestedMonths: clampedMonths,
+        returnedMonths: 0,
+      });
+    }
+
+    const series = snapshots.map((s) => {
+      const value = metric === 'charged' ? s.chargedMinor
+        : metric === 'collected' ? s.collectedMinor
+        : metric === 'outstanding' ? s.outstandingMinor
+        : metric === 'overdue' ? (s.overdueMinor ?? 0)
+        : s.collectionRateBp ?? 0;
+      return { period: s.period, value };
+    });
+
+    const latestAsOf = snapshots[snapshots.length - 1]?.asOf?.toISOString();
+    const trendStr = series.map((s) => `${s.period}: ${metric === 'collection_rate' ? s.value + 'bp' : this.formatMoney(Number(s.value))}`).join(' | ');
+    const answer = `Tendencia de ${metric} para unidad (últimos ${snapshots.length} meses): ${trendStr}.`;
+
+    return this.buildResponseV2(answer, 'list', {
+      unitId,
+      buildingId,
+      metric,
+      series,
+      coverage: { requestedMonths: clampedMonths, returnedMonths: snapshots.length },
+      dataFreshnessAsOf: latestAsOf,
+      asOf: latestAsOf,
+    });
+  }
+
+  private async getBuildingDebtTrend(
+    tenantId: string,
+    input: Record<string, unknown> | undefined,
+    responseContractVersion?: string,
+  ): Promise<AssistantToolResponse> {
+    const responseVersion = responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION;
+    if (responseVersion !== ASSISTANT_RESPONSE_SCHEMA_VERSION_V2) {
+      throw new BadRequestException(`Unsupported responseContractVersion: ${responseContractVersion}. Use ${ASSISTANT_RESPONSE_SCHEMA_VERSION_V2} for snapshot tools.`);
+    }
+
+    const buildingId = this.pickString(input, 'buildingId');
+    if (!buildingId) {
+      return this.buildResponse('Se requiere buildingId para consultar tendencias por edificio.', 'clarification', { missingBuildingId: true });
+    }
+
+    const months = this.pickNumeric(input, 'months', 1, 24);
+    const clampedMonths = Math.min(24, Math.max(1, months));
+    const metric = this.pickString(input, 'metric') ?? 'outstanding';
+
+    const periods = this.getTrendPeriods(clampedMonths);
+
+    const snapshots = await this.prisma.buildingBalanceMonthlySnapshot.findMany({
+      where: { tenantId, buildingId, period: { in: periods } },
+      orderBy: { period: 'asc' },
+      select: { period: true, chargedMinor: true, collectedMinor: true, outstandingMinor: true, overdueMinor: true, collectionRateBp: true, asOf: true },
+    });
+
+    if (snapshots.length === 0) {
+      return this.buildResponseV2('No hay datos de tendencias para ese edificio en el período solicitado.', 'no_data', {
+        buildingId,
+        months: clampedMonths,
+        requestedMonths: clampedMonths,
+        returnedMonths: 0,
+      });
+    }
+
+    const series = snapshots.map((s) => {
+      const value = metric === 'charged' ? s.chargedMinor
+        : metric === 'collected' ? s.collectedMinor
+        : metric === 'outstanding' ? s.outstandingMinor
+        : metric === 'overdue' ? (s.overdueMinor ?? 0)
+        : s.collectionRateBp ?? 0;
+      return { period: s.period, value };
+    });
+
+    const latestAsOf = snapshots[snapshots.length - 1]?.asOf?.toISOString();
+    const trendStr = series.map((s) => `${s.period}: ${metric === 'collection_rate' ? s.value + 'bp' : this.formatMoney(Number(s.value))}`).join(' | ');
+    const answer = `Tendencia de ${metric} para edificio (últimos ${snapshots.length} meses): ${trendStr}.`;
+
+    return this.buildResponseV2(answer, 'list', {
+      buildingId,
+      metric,
+      series,
+      coverage: { requestedMonths: clampedMonths, returnedMonths: snapshots.length },
+      dataFreshnessAsOf: latestAsOf,
+      asOf: latestAsOf,
+    });
+  }
+
+  private async getCollectionsTrend(
+    tenantId: string,
+    input: Record<string, unknown> | undefined,
+    responseContractVersion?: string,
+  ): Promise<AssistantToolResponse> {
+    const responseVersion = responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION;
+    if (responseVersion !== ASSISTANT_RESPONSE_SCHEMA_VERSION_V2) {
+      throw new BadRequestException(`Unsupported responseContractVersion: ${responseContractVersion}. Use ${ASSISTANT_RESPONSE_SCHEMA_VERSION_V2} for snapshot tools.`);
+    }
+
+    const buildingId = this.pickString(input, 'buildingId');
+    const months = this.pickNumeric(input, 'months', 1, 24);
+    const clampedMonths = Math.min(24, Math.max(1, months));
+
+    const periods = this.getTrendPeriods(clampedMonths);
+
+    const where: Record<string, unknown> = { tenantId, period: { in: periods } };
+    if (buildingId) (where as Record<string, unknown>).buildingId = buildingId;
+
+    const snapshots = await this.prisma.buildingBalanceMonthlySnapshot.findMany({
+      where,
+      orderBy: { period: 'asc' },
+      select: { period: true, chargedMinor: true, collectedMinor: true, collectionRateBp: true, asOf: true },
+    });
+
+    if (snapshots.length === 0) {
+      return this.buildResponseV2('No hay datos de cobros para el período solicitado.', 'no_data', {
+        buildingId,
+        months: clampedMonths,
+        requestedMonths: clampedMonths,
+        returnedMonths: 0,
+      });
+    }
+
+    const series = snapshots.map((s) => ({
+      period: s.period,
+      chargedMinor: s.chargedMinor,
+      collectedMinor: s.collectedMinor,
+      collectionRateBp: s.collectionRateBp ?? 0,
+    }));
+
+    const latestAsOf = snapshots[snapshots.length - 1]?.asOf?.toISOString();
+    const answer = `Tendencia de cobros (últimos ${snapshots.length} meses): ${series.map((s) => `${s.period}: ${this.formatMoney(s.collectedMinor)}/${this.formatMoney(s.chargedMinor)} (${Math.round(s.collectionRateBp / 100)}%)`).join(' | ')}.`;
+
+    return this.buildResponseV2(answer, 'list', {
+      buildingId,
+      series,
+      coverage: { requestedMonths: clampedMonths, returnedMonths: snapshots.length },
+      dataFreshnessAsOf: latestAsOf,
+      asOf: latestAsOf,
+    });
+  }
+
+  private async searchProcesses(
+    tenantId: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const filters = this.parseProcessFilters(input);
+    const result = await this.processSearch.searchProcesses(tenantId, filters);
+
+    if (result.processes.length === 0) {
+      return this.buildResponse('No se encontraron procesos con los filtros aplicados.', 'no_data', {
+        filters,
+        ...result,
+      });
+    }
+
+    const summary = result.processes
+      .slice(0, 5)
+      .map((p) => `${p.title} (${p.status})`)
+      .join(' | ');
+
+    return this.buildResponse(
+      `Procesos encontrados (${result.pagination.total} total): ${summary}`,
+      'list',
+      {
+        ...result,
+        filters,
+      },
+    );
+  }
+
+  private async getProcessSummary(
+    tenantId: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const groupBy = this.pickString(input, 'groupBy') as 'processType' | 'status' | 'priority' ?? 'status';
+    const processTypes = this.parseProcessTypes(input?.processTypes);
+    const overdueSla = this.pickBool(input, 'overdueSla', false);
+    const buildingId = this.pickString(input, 'buildingId');
+
+    const result = await this.processSearch.getProcessSummary(tenantId, {
+      groupBy,
+      processTypes: (processTypes?.length ? processTypes : undefined) as ProcessSummaryInput['processTypes'],
+      overdueSla,
+      buildingId: buildingId ?? undefined,
+    });
+
+    const summary = result.groups
+      .map((g) => `${g.key}: ${g.count}`)
+      .join(', ');
+
+    return this.buildResponse(
+      `Resumen de procesos (agrupado por ${groupBy}): ${summary}`,
+      'metric',
+      {
+        ...result,
+        groupBy,
+      },
+    );
+  }
+
+  private async searchClaims(
+    tenantId: string,
+    input?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const filters = this.parseProcessFilters(input);
+    const result = await this.processSearch.searchClaims(tenantId, filters);
+
+    if (result.processes.length === 0) {
+      return this.buildResponse('No se encontraron reclamos con los filtros aplicados.', 'no_data', {
+        filters,
+        ...result,
+      });
+    }
+
+    const summary = result.processes
+      .slice(0, 5)
+      .map((p) => `${p.title} (${p.status})`)
+      .join(' | ');
+
+    return this.buildResponse(
+      `Reclamos encontrados (${result.pagination.total} total): ${summary}`,
+      'list',
+      {
+        ...result,
+        filters,
+      },
+    );
+  }
+
+  private parseProcessFilters(input?: Record<string, unknown>): SearchProcessesInput {
+    return {
+      processTypes: this.parseProcessTypes(input?.processTypes) as SearchProcessesInput['processTypes'],
+      statuses: this.parseProcessStatuses(input?.statuses) as SearchProcessesInput['statuses'],
+      buildingId: this.pickString(input, 'buildingId') ?? undefined,
+      unitId: this.pickString(input, 'unitId') ?? undefined,
+      assigned: this.pickBool(input, 'assigned', false),
+      assignedToUserId: this.pickString(input, 'assignedToUserId') ?? undefined,
+      priority: this.pickNumericValue(input?.priority),
+      period: this.pickString(input, 'period') ?? undefined,
+      createdAfter: this.pickString(input, 'createdAfter') ?? undefined,
+      createdBefore: this.pickString(input, 'createdBefore') ?? undefined,
+      overdueSla: this.pickBool(input, 'overdueSla', false),
+      limit: this.pickNumericValue(input?.limit) ?? 20,
+      cursor: this.pickString(input, 'cursor') ?? undefined,
+      sortBy: (this.pickString(input, 'sortBy') ?? 'createdAt') as 'createdAt' | 'dueAt' | 'priority',
+      sortDir: (this.pickString(input, 'sortDir') ?? 'desc') as 'asc' | 'desc',
+    };
+  }
+
+  private parseProcessTypes(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const valid = ['LIQUIDATION', 'EXPENSE_VALIDATION', 'CLAIM'];
+    const parsed = value.map((v) => String(v)).filter((v) => valid.includes(v));
+    return parsed.length ? parsed : undefined;
+  }
+
+  private parseProcessStatuses(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const valid = ['PENDING', 'IN_PROGRESS', 'APPROVED', 'REJECTED', 'COMPLETED', 'CANCELLED'];
+    const parsed = value.map((v) => String(v)).filter((v) => valid.includes(v));
+    return parsed.length ? parsed : undefined;
+  }
+
+  private pickNumericValue(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private async executeCrossQuery(
+    tenantId: string,
+    role: string,
+    toolInput?: Record<string, unknown>,
+  ): Promise<AssistantToolResponse> {
+    const templateId = this.pickString(toolInput, 'templateId') as 'TPL-01' | 'TPL-02' | 'TPL-03' | 'TPL-04' | 'TPL-05' | 'TPL-06' | 'TPL-07' | 'TPL-08' | 'TPL-09' | 'TPL-10' | undefined;
+    if (!templateId) {
+      return this.buildResponse('Template ID requerido', 'no_data', {});
+    }
+
+    const params = toolInput?.params as Record<string, unknown> | undefined;
+    const result = await this.crossQuery.execute(tenantId, role, { templateId, params: params || {} });
+
+    if (result.responseType === 'error') {
+      return this.buildResponse(
+        `Error: ${result.errorCode}`,
+        'no_data',
+        { templateId: result.templateId, errorCode: result.errorCode },
+      );
+    }
+
+    const normalizedType = (result.responseType === 'timeseries' || result.responseType === 'distribution' || result.responseType === 'dashboard')
+      ? 'list' as const
+      : result.responseType === 'kpi'
+        ? 'metric' as const
+        : result.responseType;
+
+    return this.buildResponse(
+      `${result.templateName} - ${result.responseType}`,
+      normalizedType,
+      result as unknown as Record<string, unknown>,
+    );
   }
 }

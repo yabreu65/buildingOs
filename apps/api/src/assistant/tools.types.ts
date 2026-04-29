@@ -2,8 +2,19 @@ export type AssistantToolName =
   | 'resolve_unit_ref'
   | 'get_unit_balance'
   | 'get_unit_profile'
+  | 'get_unit_payments'
+  | 'get_unit_balance_by_period'
   | 'search_payments'
-  | 'search_tickets';
+  | 'analytics_debt_aging'
+  | 'analytics_debt_by_tower'
+  | 'search_tickets'
+  | 'get_unit_debt_trend'
+  | 'get_building_debt_trend'
+  | 'get_collections_trend'
+  | 'search_processes'
+  | 'get_process_summary'
+  | 'search_claims'
+  | 'cross_query';
 
 export interface AssistantToolContext {
   appId?: string;
@@ -33,7 +44,7 @@ export type AssistantToolAction = {
 export interface AssistantToolResponse {
   contractVersion: string;
   answer: string;
-  answerSource: 'live_data' | 'fallback';
+  answerSource: 'live_data' | 'fallback' | 'snapshot' | 'clarification';
   responseType: 'metric' | 'list' | 'summary' | 'no_data' | 'clarification';
   dataScope: 'tenant' | 'self' | 'module' | 'unknown';
   actions: AssistantToolAction[];
@@ -44,8 +55,22 @@ export const ASSISTANT_TOOLS_ALLOWLIST: AssistantToolName[] = [
   'resolve_unit_ref',
   'get_unit_balance',
   'get_unit_profile',
+  'get_unit_payments',
+  'get_unit_balance_by_period',
   'search_payments',
+  'analytics_debt_aging',
+  'analytics_debt_by_tower',
   'search_tickets',
+  'get_unit_debt_trend',
+  'get_building_debt_trend',
+  'get_collections_trend',
+  'search_processes',
+  'get_process_summary',
+  'search_claims',
+  'cross_query',
 ];
 
 export const ASSISTANT_RESPONSE_SCHEMA_VERSION = '2026-04-p0-response-v1';
+export const ASSISTANT_RESPONSE_SCHEMA_VERSION_V2 = '2026-05-p2-response-v2';
+
+export const ASSISTANT_TOOL_REQUEST_CONTRACT_VERSION = '2026-04-readonly-v1';

@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FinanzasService } from './finanzas.service';
+import { AuthenticatedRequest } from '../common/types/request.types';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 /**
  * FinanzasUnitsController: Unit-level finance endpoints
@@ -41,19 +43,14 @@ export class FinanzasUnitsController {
     @Param('unitId') unitId: string,
     @Query('periodFrom') periodFrom: string = '',
     @Query('periodTo') periodTo: string = '',
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
-    const tenantIdFromHeader = (req as any).tenantId || req.headers?.['x-tenant-id'];
-    const tenantId =
-      (typeof tenantIdFromHeader === 'string' && tenantIdFromHeader) ||
-      req.user.tenantId ||
-      req.user.memberships?.[0]?.tenantId;
+    const tenantId = resolveTenantId(req, {
+      allowHeaderFallback: true,
+      requireMembership: true,
+    });
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
-
-    if (!tenantId) {
-      throw new Error('Tenant ID not found in user context');
-    }
 
     return this.finanzasService.getUnitLedger(
       tenantId,

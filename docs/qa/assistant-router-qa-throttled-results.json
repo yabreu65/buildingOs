@@ -1,0 +1,1226 @@
+{
+  "generatedAt": "2026-04-29T14:53:22.134Z",
+  "buildingosBase": "http://localhost:4000",
+  "yoryiBase": "http://localhost:4001",
+  "requestDelayMs": 900,
+  "batchSize": 8,
+  "batchPauseMs": 5000,
+  "retryDelaysMs": [
+    2000,
+    5000,
+    10000
+  ],
+  "rows": [
+    {
+      "id": "1",
+      "type": "deuda_exacta",
+      "input": "cuanto debe la unidad A-1203 de la torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "2",
+      "type": "deuda_exacta",
+      "input": "cuanto debe la unidad A-1203 del edificio A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "3",
+      "type": "deuda_exacta",
+      "input": "cuanto debe la unidad A-1203 del bloque A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "4",
+      "type": "deuda_exacta",
+      "input": "deuda unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "5",
+      "type": "deuda_exacta",
+      "input": "saldo pendiente unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "6",
+      "type": "deuda_exacta",
+      "input": "adeuda la unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "7",
+      "type": "deuda_exacta",
+      "input": "esta al dia la unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "8",
+      "type": "deuda_exacta",
+      "input": "expensas adeudadas unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "La unidad Torre A - Piso 12 - Depto 03 (Torre A) no tiene deuda pendiente.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "9",
+      "type": "formato_unidad",
+      "input": "cuanto debe la unidad 1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré unidad para esa referencia.",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "10",
+      "type": "formato_unidad",
+      "input": "cuanto debe la unidad 12-03 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré unidad para esa referencia.",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "11",
+      "type": "formato_unidad",
+      "input": "cuanto debe la unidad 12-3 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré unidad para esa referencia.",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "12",
+      "type": "formato_unidad",
+      "input": "saldo UF 1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré unidad para esa referencia.",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "13",
+      "type": "formato_unidad",
+      "input": "cuanto debe depto 03 piso 12 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré unidad para esa referencia.",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "14",
+      "type": "p3",
+      "input": "como viene la morosidad este mes?",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OVERDUE_UNITS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "15",
+      "type": "p3",
+      "input": "resumen de deuda del edificio",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_BY_TOWER",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "16",
+      "type": "p3",
+      "input": "top morosos",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Top deuda por torre/edificio: 1. Torre B: ARS 1.298.203,86 2. Torre A: ARS 220.158,21",
+        "answerSource": "live_data",
+        "responseType": "list",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_BY_TOWER",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "17",
+      "type": "p3",
+      "input": "que torres deben mas?",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Top deuda por torre/edificio: 1. Torre B: ARS 1.298.203,86 2. Torre A: ARS 220.158,21",
+        "answerSource": "live_data",
+        "responseType": "list",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_BY_TOWER",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "18",
+      "type": "p3",
+      "input": "comparame deuda de este mes vs mes pasado",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Para responder con precision necesito ambos datos exactos: unidad y torre. Ejemplo: \"Cuanto debe la unidad 123 de Torre A\".",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver unidades con deuda vencida 2) Ver pagos rechazados hoy",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OVERDUE_UNITS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "19",
+      "type": "p1",
+      "input": "quien es el residente principal de la unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "En Torre A, la unidad Torre A - Piso 12 - Depto 03 tiene como propietario/a principal a Owner 91.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_UNIT_PRIMARY_RESIDENT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "20",
+      "type": "p1",
+      "input": "telefono del residente de la unidad A-1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_UNIT_PRIMARY_RESIDENT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "21",
+      "type": "p1",
+      "input": "listame unidades con deuda",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OVERDUE_UNITS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "22",
+      "type": "p1",
+      "input": "unidades con deuda en torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: A): total pendiente ARS 220.158,21 en 1 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OVERDUE_UNITS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "23",
+      "type": "p1",
+      "input": "pagos de la unidad A-1203",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Para buscar pagos de una unidad necesito el dato faltante: torre/edificio.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Para buscar pagos de una unidad necesito el dato faltante: torre/edificio.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_LAST_PAYMENT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "24",
+      "type": "p1",
+      "input": "ultimo pago de la unidad A-1203",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver ultimo pago de unidad 2) Ver unidades con deuda vencida",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver ultimo pago de unidad 2) Ver unidades con deuda vencida",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_LAST_PAYMENT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "25",
+      "type": "p2b",
+      "input": "busca pagos de abril torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Puedo ayudarte con pagos en modo operativo. Indicá alcance mínimo (torre/edificio y período exacto) para ejecutar la consulta.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Puedo ayudarte con pagos en modo operativo. Indicá alcance mínimo (torre/edificio y período exacto) para ejecutar la consulta.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_PENDING_PAYMENTS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "26",
+      "type": "p2b",
+      "input": "filtra cargos pendientes por torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Top deuda por torre/edificio: 1. Torre A: ARS 220.158,21",
+        "answerSource": "live_data",
+        "responseType": "list",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_PENDING_PAYMENTS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "27",
+      "type": "p2b",
+      "input": "mostrame reclamos abiertos del edificio A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Tickets activos: MAINTENANCE - Issue 1 (Torre A) | MAINTENANCE - Issue 50 (Torre A) | PARKING - Issue 53 (Torre B) | NOISE - Issue 3 (Torre...",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Tickets activos: MAINTENANCE - Issue 1 (Torre A) | MAINTENANCE - Issue 50 (Torre A) | PARKING - Issue 53 (Torre B) | NOISE - Issue 3 (Torre...",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "intentCode": "GET_OPEN_TICKETS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "28",
+      "type": "p2b",
+      "input": "buscar unidad 1203",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "P0",
+        "output": "El engine primario respondió con error o payload inválido para consultas P0. Para confirmar un dato operativo necesito respuesta live_data....",
+        "answerSource": "fallback",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "(Unidades) Basado en el contexto del módulo units, esta es la guía que solicitaste: Units Module Purpose The Units module is responsible fo...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "29",
+      "type": "p2",
+      "input": "deuda aging",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P2/P3",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_AGING",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "30",
+      "type": "p2",
+      "input": "deuda por antiguedad",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P2/P3",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_AGING",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "31",
+      "type": "p2",
+      "input": "evolucion de morosidad ultimos 6 meses",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Resumen de deuda agregada (scope: tenant): total pendiente ARS 1.518.362,07 en 2 torre(s)/edificio(s).",
+        "answerSource": "live_data",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P2/P3",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_BUILDING_DEBT_TREND",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "32",
+      "type": "p2",
+      "input": "deuda por torre ultimos 3 meses",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "No encontré la torre \"ULTIMOS\". Indicame otra torre/edificio o querés el resumen general del tenant.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Para responder en forma operativa necesito acotar el alcance mínimo: indicá torre/edificio o período (por ejemplo: Torre A, últimos 3 meses...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_DEBT_BY_TOWER",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "33",
+      "type": "p2",
+      "input": "cobranzas del mes",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "34",
+      "type": "p2",
+      "input": "tendencia de pagos vs cargos",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "35",
+      "type": "p0",
+      "input": "necesito ver pagos",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Puedo ayudarte con pagos en modo operativo. Indicá alcance mínimo (torre/edificio y período exacto) para ejecutar la consulta.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Puedo ayudarte con pagos en modo operativo. Indicá alcance mínimo (torre/edificio y período exacto) para ejecutar la consulta.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_PENDING_PAYMENTS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "36",
+      "type": "p0",
+      "input": "abrir dashboard de finanzas",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "37",
+      "type": "p0",
+      "input": "quiero ver reportes",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "Basado en el contexto del módulo general, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is the main operati...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "38",
+      "type": "p0",
+      "input": "necesito ver reclamos",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver tickets abiertos o en progreso 2) Ver unidades con deuda...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver tickets abiertos o en progreso 2) Ver unidades con deuda...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OPEN_TICKETS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "39",
+      "type": "p0",
+      "input": "buscar documentos del edificio",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "(Documentos) Basado en el contexto del módulo documents, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is t...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "(Documentos) Basado en el contexto del módulo documents, esta es la guía que solicitaste: Role — Tenant Admin Purpose The Tenant Admin is t...",
+        "answerSource": "knowledge",
+        "responseType": "summary",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "40",
+      "type": "ambiguo",
+      "input": "cuanto debe la unidad 1203",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Para responder con precision necesito la torre/edificio exacto. Ejemplo: \"Cuanto debe la unidad 123 de Torre A\".",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Consultar saldo de una unidad especifica 2) Ver unidades con...",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "41",
+      "type": "ambiguo",
+      "input": "cuanto debe la unidad 1203 torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "La Torre A unidad Torre A - Piso 12 - Depto 03 no tiene deuda pendiente. Saldo actual: ARS 0,00.",
+        "answerSource": "live_data",
+        "responseType": "exact",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P1",
+        "output": "No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_UNIT_DEBT",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "42",
+      "type": "ambiguo",
+      "input": "deuda torre A",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Para responder con precision necesito la unidad exacta dentro de la torre/edificio. Ejemplo: \"Cuanto debe la unidad 123 de Torre A\".",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Necesito una aclaracion para responder en modo operativo. Elegi una opcion: 1) Ver unidades con deuda vencida 2) Ver pagos rechazados hoy",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "GET_OVERDUE_UNITS",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "43",
+      "type": "ambiguo",
+      "input": "unidad A-1203 edificio",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "YORYI_BRIDGE",
+        "output": "Necesito una aclaracion para responder en modo operativo. Decime si queres saldo, pagos, residente o busqueda de la unidad.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Necesito una aclaracion para responder en modo operativo. Decime si queres saldo, pagos, residente o busqueda de la unidad.",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "UNKNOWN",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "44",
+      "type": "mutation",
+      "input": "crea un cargo a la unidad A-1203",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "unknown",
+        "output": "Actualmente solo puedo consultar información; no puedo crear, editar, eliminar, aprobar, rechazar, publicar, asignar ni marcar datos como p...",
+        "answerSource": "fallback",
+        "responseType": "clarification",
+        "intentCode": null,
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "45",
+      "type": "mutation",
+      "input": "registra un pago de 10000",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "UNKNOWN",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    },
+    {
+      "id": "46",
+      "type": "mutation",
+      "input": "cambia el residente de la unidad",
+      "buildingos": {
+        "httpStatus": 201,
+        "route": "LIVE_DATA_STRICT_OR_LOCAL",
+        "output": "Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      },
+      "yoryi": {
+        "httpStatus": 200,
+        "route": "P0",
+        "output": "Estoy en modo solo consulta. No puedo ejecutar cambios (crear cargos, registrar pagos o modificar residentes).",
+        "answerSource": "live_data",
+        "responseType": "clarification",
+        "intentCode": "UNKNOWN",
+        "status": "PASS",
+        "cause": "OK",
+        "attempts": 1
+      }
+    }
+  ],
+  "summary": {
+    "total": 92,
+    "pass": 92,
+    "fail": 0,
+    "skip": 0
+  },
+  "expectedCases": 46,
+  "observedCases": 46,
+  "missingCases": [],
+  "categorySummary": {
+    "noEvaluable": 0,
+    "agregadasMal": 0,
+    "menuGenerico": 0,
+    "needsContract": 0
+  }
+}

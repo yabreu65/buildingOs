@@ -38,6 +38,8 @@ import { RecurringExpenseController } from './recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
 import { FinanceSummaryService } from './finance-summary.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { SnapshotGenerationService } from './snapshot-generation.service';
+import { SnapshotGenerationController } from './snapshot-generation.controller';
 
 @Module({
   imports: [PrismaModule, EmailModule, NotificationsModule, StorageModule],
@@ -58,6 +60,7 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
     VendorPreferenceController,
     ExpenseReportsController,
     RecurringExpenseController,
+    SnapshotGenerationController,
   ],
   providers: [
     FinanzasService,
@@ -78,6 +81,7 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
     RecurringExpenseService,
     FinanceSummaryService,
     PaymentReceiptService,
+    SnapshotGenerationService,
   ],
   exports: [
     FinanzasService,
@@ -95,6 +99,7 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
     RecurringExpenseService,
     FinanceSummaryService,
     PaymentReceiptService,
+    SnapshotGenerationService,
   ],
 })
 export class FinanzasModule {}

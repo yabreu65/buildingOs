@@ -8,7 +8,7 @@ import { AssistantWidget, useAssistantContext } from "@/shared/components/assist
 
 function AssistantWrapper() {
   const context = useAssistantContext();
-  return <AssistantWidget context={context} defaultUseLlm={false} />;
+  return <AssistantWidget context={context} />;
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {

@@ -1,7 +1,16 @@
-import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  Req,
+  BadRequestException,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ContextService, UserContextData, ContextOptions } from './context.service';
+import { resolveTenantId } from '../common/tenant-context/tenant-context.resolver';
 
 export interface SetContextDto {
   activeBuildingId?: string | null;
@@ -37,13 +46,13 @@ export class ContextController {
   async getContext(@Req() req: RequestWithUser): Promise<UserContextData> {
     const userId = req.user.id;
 
-    // Get active tenant from session/request
-    // For now, we need to get it from request headers or session
-    // The frontend should send X-Active-Tenant-Id header
-    const tenantId = (req as any).tenantId || req.headers['x-tenant-id'];
+    const tenantId = resolveTenantId(req as any, {
+      allowHeaderFallback: true,
+      requireMembership: true,
+    });
 
-    if (!tenantId || typeof tenantId !== 'string') {
-      throw new Error('Tenant ID is required (X-Tenant-Id header)');
+    if (!tenantId) {
+      throw new BadRequestException('Tenant context required (X-Tenant-Id header)');
     }
 
     return this.contextService.getContext(userId, tenantId);
@@ -65,11 +74,10 @@ export class ContextController {
     @Body() dto: SetContextDto,
   ): Promise<UserContextData> {
     const userId = req.user.id;
-    const tenantId = (req as any).tenantId || req.headers['x-tenant-id'];
-
-    if (!tenantId || typeof tenantId !== 'string') {
-      throw new Error('Tenant ID is required (X-Tenant-Id header)');
-    }
+    const tenantId = resolveTenantId(req as any, {
+      allowHeaderFallback: true,
+      requireMembership: true,
+    });
 
     return this.contextService.setContext(
       userId,
@@ -92,11 +100,10 @@ export class ContextController {
   @Get('options')
   async getContextOptions(@Req() req: RequestWithUser): Promise<ContextOptions> {
     const userId = req.user.id;
-    const tenantId = (req as any).tenantId || req.headers['x-tenant-id'];
-
-    if (!tenantId || typeof tenantId !== 'string') {
-      throw new Error('Tenant ID is required (X-Tenant-Id header)');
-    }
+    const tenantId = resolveTenantId(req as any, {
+      allowHeaderFallback: true,
+      requireMembership: true,
+    });
 
     return this.contextService.getContextOptions(userId, tenantId);
   }

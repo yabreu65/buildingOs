@@ -11,6 +11,86 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  p0-smoke:
+    name: P0 Smoke (Assistant)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos?schema=public
+      NODE_ENV: test
+      ASSISTANT_READONLY_API_KEYS: test-key
+      ASSISTANT_YORYI_ENGINE_ENABLED: 'false'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: buildingos
+          POSTGRES_PASSWORD: buildingos
+          POSTGRES_DB: buildingos
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🗂️ Setup database
+        run: npm run db:migrate
+
+      - name: 🔥 P0 Smoke - Bridge Lock Tests (PR-1)
+        run: npm run test -w apps/api -- --testPathPattern="assistant.service.spec.ts" --no-coverage
+        continue-on-error: false
+
+      - name: 🔥 P0 Smoke - Contract & Audit Tests (PR-2)
+        run: npm run test -w apps/api -- --testPathPattern="tools.service.spec.ts" --no-coverage
+        continue-on-error: false
+
+      - name: 🔥 P3.1 Smoke - Cross Query Templates
+        run: npm run test -w apps/api -- --runInBand --testPathPattern="cross-query.service.spec.ts" --no-coverage
+        continue-on-error: false
+
+  doctrine-checks:
+    name: Doctrine & Architecture Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 📚 Check Core Doctrine Paths
+        run: npm run docs:check-core-path
+        continue-on-error: false
+
+      - name: 🏗️ Check Tenant Header Usage
+        run: npm run arch:check-tenant-header
+        continue-on-error: false
+
   ci:
     name: Build, Lint, Test, E2E
     runs-on: ubuntu-latest

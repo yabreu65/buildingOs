@@ -4,6 +4,8 @@
  * Instrumentación de eventos para el assistant.
  * Currently logs to console (debug), but structured for easy swap to real analytics.
  */
+import { apiClient } from '@/shared/lib/http/client';
+
 
 const STORAGE_KEY = 'assistant_session_id';
 
@@ -32,9 +34,6 @@ export type AssistantAnalyticsConfig = {
 let analyticsConfig: AssistantAnalyticsConfig = {
   debug: process.env.NODE_ENV !== 'production',
   sendToBackend: true,
-  backendUrl: process.env.NEXT_PUBLIC_ASSISTANT_API_URL 
-    ? `${process.env.NEXT_PUBLIC_ASSISTANT_API_URL}/api/analytics/events`
-    : 'http://localhost:4001/api/analytics/events',
 };
 
 export function configureAssistantAnalytics(config: Partial<AssistantAnalyticsConfig>): void {
@@ -109,17 +108,24 @@ export async function trackAssistantActionClick(
 
   if (analyticsConfig.sendToBackend) {
     try {
-      const response = await fetch(analyticsConfig.backendUrl!, {
+      await apiClient<unknown, {
+        actionType: string;
+        source: string;
+        page: string;
+        interactionId: string;
+      }>({
+        path: `/tenants/${event.tenantId}/assistant/action-events`,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+        body: {
+          actionType: event.actionKey,
+          source: 'CHAT',
+          page: event.currentRoute,
+          interactionId: event.messageId,
         },
-        body: JSON.stringify(event),
+        headers: {
+          'X-Tenant-Id': event.tenantId,
+        },
       });
-
-      if (!response.ok) {
-        console.warn('[AssistantAnalytics] Failed to send to backend:', response.status);
-      }
     } catch (error) {
       console.warn('[AssistantAnalytics] Error sending to backend:', error);
     }

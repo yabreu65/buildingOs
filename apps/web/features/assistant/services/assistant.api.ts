@@ -51,8 +51,9 @@ export class AssistantApi {
       const response = await apiClient<{
         answer: string;
         actions?: ActionDefinition[];
+        suggestedActions?: SuggestedAction[];
       }, ChatRequest>({
-        path: `/tenants/${tenantId}/assistant/${tenantId}/chat`,
+        path: `/tenants/${tenantId}/assistant/chat`,
         method: 'POST',
         body: request,
         headers: {
@@ -61,12 +62,14 @@ export class AssistantApi {
       });
 
       // Map backend actions to frontend suggestedActions format
-      const suggestedActions: SuggestedAction[] = (response.actions || []).map((action) => {
-        return {
-          type: this.mapActionKeyToType(action.key),
-          payload: { actionKey: action.key },
-        };
-      });
+      const suggestedActions: SuggestedAction[] =
+        response.suggestedActions ??
+        (response.actions || []).map((action) => {
+          return {
+            type: this.mapActionKeyToType(action.key),
+            payload: { actionKey: action.key },
+          };
+        });
 
       return {
         answer: response.answer,
