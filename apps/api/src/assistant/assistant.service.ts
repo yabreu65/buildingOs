@@ -163,6 +163,7 @@ export class AssistantService {
       YORYI_ASSISTANT_API_BASE_URL: baseUrl ? baseUrl.replace(/\/\/.+@/, '//***@') : '(not set)',
       ASSISTANT_YORYI_TIMEOUT_MS: process.env.ASSISTANT_YORYI_TIMEOUT_MS ?? '(default 1800)',
       ASSISTANT_P0_ENFORCEMENT_ENABLED: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED ?? '(not set)',
+      ASSISTANT_P3_ENABLED: process.env.ASSISTANT_P3_ENABLED ?? '(default false)',
     });
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'MOCK';
@@ -476,6 +477,7 @@ export class AssistantService {
           tenantId: params.tenantId,
           userId: params.userId,
           role,
+          p3Enabled: this.isP3EnabledForTenant(params.tenantId),
         }),
         body: JSON.stringify({
           message: params.request.message,
@@ -517,6 +519,7 @@ export class AssistantService {
       const payload = (await response.json()) as YoryiAssistantChatResponse;
       const canonical = mapYoryiToCanonical(payload);
       const routeFamily = this.detectRouteFamily(payload.toolName);
+      const p3EnabledForTenant = this.isP3EnabledForTenant(params.tenantId);
       const uiPage = params.request.context?.extra?.uiPage;
       this.logger.debug({
         msg: '[BRIDGE] routing response diagnostics',
@@ -525,8 +528,25 @@ export class AssistantService {
         responseType: payload.responseType,
         toolName: payload.toolName,
         routeFamily,
+        p3EnabledForTenant,
         uiPage,
       });
+
+      if (routeFamily === 'P3' && !p3EnabledForTenant) {
+        const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
+        this.logger.warn({
+          msg: '[BRIDGE] P3 blocked by feature flag/canary policy',
+          tenantId: params.tenantId,
+          routeFamily,
+          ASSISTANT_P3_ENABLED: process.env.ASSISTANT_P3_ENABLED ?? '(not set)',
+          canaryTenants: this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS),
+        });
+        return {
+          kind: 'blocked',
+          response: this.buildYoryiControlledResponse('unavailable', 'P3', requestId),
+          family: 'P3',
+        };
+      }
 
       if (!canonical) {
         this.logger.warn({
@@ -796,6 +816,7 @@ export class AssistantService {
     tenantId: string;
     userId: string;
     role: string;
+    p3Enabled: boolean;
   }): Record<string, string> {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
@@ -803,6 +824,7 @@ export class AssistantService {
       'x-tenant-id': context.tenantId,
       'x-user-id': context.userId,
       'x-user-role': context.role,
+      'x-assistant-p3-enabled': context.p3Enabled ? 'true' : 'false',
     };
 
     const apiKey = process.env.YORYI_ASSISTANT_API_KEY;
@@ -1546,6 +1568,21 @@ export class AssistantService {
       .split(',')
       .map((item) => item.trim())
       .filter((item) => item.length > 0);
+  }
+
+  private isP3EnabledForTenant(tenantId: string): boolean {
+    if (process.env.ASSISTANT_P3_ENABLED !== 'true') {
+      return false;
+    }
+
+    const canaryTenants = this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS);
+    if (canaryTenants.includes('*')) {
+      return true;
+    }
+    if (canaryTenants.length === 0) {
+      return true;
+    }
+    return canaryTenants.includes(tenantId);
   }
 
   private normalizeResponseContract(response: ChatResponse): ChatResponse {

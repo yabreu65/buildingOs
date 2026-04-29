@@ -1,7 +1,21 @@
 # Diseño P3 — Cross-module Plantillas Oficiales (BuildingOS + yoryi-ai-core)
 
 ## Estado
-NO IMPLEMENTADO (diseño listo para P3.1/P3.2/P3.3)
+EXPERIMENTAL (feature-flagged). Implementación disponible pero deshabilitada por defecto.
+
+### Habilitación controlada (canary)
+
+P3 solo se evalúa si:
+
+- `ASSISTANT_P3_ENABLED=true`
+- y el tenant está habilitado por canary (`ASSISTANT_YORYI_CANARY_TENANTS`), cuando esa lista está configurada.
+
+Ejemplo:
+
+```bash
+ASSISTANT_P3_ENABLED=true
+ASSISTANT_YORYI_CANARY_TENANTS=tenant-alpha,tenant-beta
+```
 
 ## Objetivo
 Definir consultas cross-module READ-ONLY v1 usando plantillas oficiales deterministas, auditables y sin joins libres.
