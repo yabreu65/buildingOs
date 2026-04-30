@@ -30,6 +30,7 @@ enum UnitOccupantRole {
   OWNER
   RESIDENT
 }
+
 enum MemberStatus {
   DRAFT
   PENDING_INVITE
@@ -67,9 +68,9 @@ enum PaymentStatus {
 
 // Receipt generation status for approved payments
 enum ReceiptStatus {
-  PENDING   // Receipt generation queued
-  READY     // Receipt generated successfully
-  FAILED    // Receipt generation failed
+  PENDING // Receipt generation queued
+  READY // Receipt generated successfully
+  FAILED // Receipt generation failed
 }
 
 enum PaymentMethod {
@@ -117,15 +118,15 @@ enum IncomeStatus {
 }
 
 enum MovementScope {
-  BUILDING        // Impacta directamente un edificio
-  TENANT_SHARED   // Se reparte entre N edificios via allocations
-  UNIT_GROUP      // Se reparte solo entre un grupo de unidades
+  BUILDING // Impacta directamente un edificio
+  TENANT_SHARED // Se reparte entre N edificios via allocations
+  UNIT_GROUP // Se reparte solo entre un grupo de unidades
 }
 
 enum IncomeDestination {
-  APPLY_TO_EXPENSES  // Baja el neto a prorratear
-  RESERVE_FUND       // Va a fondo de reserva (no afecta liquidación)
-  SPECIAL_FUND       // Fase 2
+  APPLY_TO_EXPENSES // Baja el neto a prorratear
+  RESERVE_FUND // Va a fondo de reserva (no afecta liquidación)
+  SPECIAL_FUND // Fase 2
 }
 
 enum LiquidationStatus {
@@ -143,64 +144,64 @@ enum LeadStatus {
 }
 
 enum LeadIntent {
-  DEMO      // "Solicitar demo" from landing page
-  CONTACT   // "Get started" from contact/signup flow
+  DEMO // "Solicitar demo" from landing page
+  CONTACT // "Get started" from contact/signup flow
 }
 
 model Tenant {
-  id                    String                 @id @default(cuid())
-  name                  String                 @unique
-  type                  TenantType
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
+  id        String     @id @default(cuid())
+  name      String     @unique
+  type      TenantType
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
   // Branding
-  brandName             String?                // Commercial name (different from tenant name)
-  logoFileId            String?                // FK to File, if uploaded
-  primaryColor          String?                // Hex color: #123456
-  secondaryColor        String?                // Optional secondary color
-  theme                 String?                // "light" | "dark" | "system"
-  emailFooter           String?                // For future email communications
+  brandName      String? // Commercial name (different from tenant name)
+  logoFileId     String? // FK to File, if uploaded
+  primaryColor   String? // Hex color: #123456
+  secondaryColor String? // Optional secondary color
+  theme          String? // "light" | "dark" | "system"
+  emailFooter    String? // For future email communications
 
   // Localization & Currency
-  currency              String @default("ARS") // ARS (Argentina), VES (Venezuela), USD
-  locale                String @default("es-AR") // es-AR, es-VE, en-US
+  currency              String  @default("ARS") // ARS (Argentina), VES (Venezuela), USD
+  locale                String  @default("es-AR") // es-AR, es-VE, en-US
   managedServiceEnabled Boolean @default(false)
 
   // Relations
-  memberships           Membership[]
-  buildings             Building[]
-  auditLogs             AuditLog[]
-  subscription          Subscription?
-  paymentVerifications  PaymentVerification[]
-  tickets               Ticket[]
-  ticketComments        TicketComment[]
-  communications        Communication[]
-  communicationTargets  CommunicationTarget[]
-  communicationReceipts CommunicationReceipt[]
-  files                 File[]
-  documents             Document[]
-  vendors               Vendor[]
-  vendorAssignments     VendorAssignment[]
-  quotes                Quote[]
-  workOrders            WorkOrder[]
-  charges               Charge[]
-  payments              Payment[]
-  paymentAllocations    PaymentAllocation[]
-  paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
-  receiptSequences      ReceiptSequence[]    // Receipt numbering per year
-  invitations           Invitation[]
-  onboardingState       OnboardingState?
-  emailLogs             EmailLog[]
-  supportTickets        SupportTicket[]
-  notifications         Notification[]
-  aiInteractionLogs     AiInteractionLog[]
-  dailyAiUsage          TenantDailyAiUsage[]
-  aiBudget              TenantAiBudget?
-  monthlyAiUsage        TenantMonthlyAiUsage[]
-  aiTemplates           AiTemplate[]
-  aiActionEvents        AiActionEvent[]
-  planChangeRequests    PlanChangeRequest[]
+  memberships              Membership[]
+  buildings                Building[]
+  auditLogs                AuditLog[]
+  subscription             Subscription?
+  paymentVerifications     PaymentVerification[]
+  tickets                  Ticket[]
+  ticketComments           TicketComment[]
+  communications           Communication[]
+  communicationTargets     CommunicationTarget[]
+  communicationReceipts    CommunicationReceipt[]
+  files                    File[]
+  documents                Document[]
+  vendors                  Vendor[]
+  vendorAssignments        VendorAssignment[]
+  quotes                   Quote[]
+  workOrders               WorkOrder[]
+  charges                  Charge[]
+  payments                 Payment[]
+  paymentAllocations       PaymentAllocation[]
+  paymentAuditLogs         PaymentAuditLog[] // Auditoría de pagos
+  receiptSequences         ReceiptSequence[] // Receipt numbering per year
+  invitations              Invitation[]
+  onboardingState          OnboardingState?
+  emailLogs                EmailLog[]
+  supportTickets           SupportTicket[]
+  notifications            Notification[]
+  aiInteractionLogs        AiInteractionLog[]
+  dailyAiUsage             TenantDailyAiUsage[]
+  aiBudget                 TenantAiBudget?
+  monthlyAiUsage           TenantMonthlyAiUsage[]
+  aiTemplates              AiTemplate[]
+  aiActionEvents           AiActionEvent[]
+  planChangeRequests       PlanChangeRequest[]
   unitCategories           UnitCategory[]
   expensePeriods           ExpensePeriod[]
   expenseLedgerCategories  ExpenseLedgerCategory[]
@@ -211,59 +212,131 @@ model Tenant {
   unitGroups               UnitGroup[]
   liquidations             Liquidation[]
   adjustments              Adjustment[]
-  tenantMembers         TenantMember[]
-  tenantInvitations     TenantInvitation[]
-  unitOccupants         UnitOccupant[]
-  pushSubscriptions    PushSubscription[]
-  unitBalanceSnapshots    UnitBalanceMonthlySnapshot[]
+  tenantMembers            TenantMember[]
+  tenantInvitations        TenantInvitation[]
+  unitOccupants            UnitOccupant[]
+  pushSubscriptions        PushSubscription[]
+  unitBalanceSnapshots     UnitBalanceMonthlySnapshot[]
   buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
-  processInstances        ProcessInstance[]
-  processAudits           ProcessAudit[]
-  assistantHandoffs       AssistantHandoff[]
+  processInstances         ProcessInstance[]
+  processAudits            ProcessAudit[]
+  assistantHandoffs        AssistantHandoff[]
+  assistantMessages        AssistantMessage[]
+  opsAlerts                OpsAlert[]
+}
+
+model OpsAlert {
+  id          String           @id @default(cuid())
+  tenantId    String?
+  severity    OpsAlertSeverity
+  code        String
+  message     String
+  metricsJson Json
+  window      String
+  status      OpsAlertStatus   @default(OPEN)
+  dedupeKey   String           @unique
+  createdAt   DateTime         @default(now())
+  ackAt       DateTime?
+  resolvedAt  DateTime?
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, createdAt])
+  @@index([code, status, createdAt])
 }
 
 model AssistantHandoff {
-  id             String                 @id @default(cuid())
-  tenantId       String
-  userId         String
-  role           String
-  question       String
-  traceId        String
-  resolvedLevel  String
-  fallbackPath   String
-  gatewayOutcome String
-  contextJson    Json
-  createdAt      DateTime               @default(now())
-  status         AssistantHandoffStatus @default(PENDING)
+  id               String                 @id @default(cuid())
+  tenantId         String
+  userId           String
+  assignedToUserId String?
+  role             String
+  question         String
+  traceId          String
+  resolvedLevel    String
+  fallbackPath     String
+  gatewayOutcome   String
+  contextJson      Json
+  createdAt        DateTime               @default(now())
+  assignedAt       DateTime?
+  resolvedAt       DateTime?
+  resolutionNote   String?
+  status           AssistantHandoffStatus @default(OPEN)
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedToUser User?                   @relation("AssistantHandoffAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  audits         AssistantHandoffAudit[]
+  messages       AssistantMessage[]
 
   @@index([tenantId, createdAt])
   @@index([status, createdAt])
   @@index([traceId])
+  @@index([assignedToUserId, status, createdAt])
+}
+
+model AssistantHandoffAudit {
+  id          String   @id @default(cuid())
+  handoffId   String
+  actorUserId String
+  action      String
+  createdAt   DateTime @default(now())
+
+  handoff   AssistantHandoff @relation(fields: [handoffId], references: [id], onDelete: Cascade)
+  actorUser User             @relation("AssistantHandoffAuditActor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([handoffId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+model AssistantMessage {
+  id              String                         @id @default(cuid())
+  tenantId        String
+  userId          String
+  handoffId       String
+  traceId         String
+  direction       AssistantMessageDirection
+  content         String
+  createdAt       DateTime                       @default(now())
+  createdByUserId String
+  channel         AssistantMessageChannel        @default(IN_APP)
+  deliveryStatus  AssistantMessageDeliveryStatus @default(DELIVERED)
+
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User             @relation("AssistantMessageUser", fields: [userId], references: [id], onDelete: Cascade)
+  handoff       AssistantHandoff @relation(fields: [handoffId], references: [id], onDelete: Cascade)
+  createdByUser User             @relation("AssistantMessageCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, handoffId])
+  @@index([traceId])
 }
 
 model User {
-  id                    String                 @id @default(cuid())
-  email                 String                 @unique
-  name                  String
-  passwordHash          String
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  memberships           Membership[]
-  auditLogs             AuditLog[]
-  ticketsCreated        Ticket[]               @relation("TicketCreatedBy")
-  ticketComments        TicketComment[]        @relation("TicketCommentAuthor")
-  communicationReceipts CommunicationReceipt[]
-  paymentsCreated       Payment[]              @relation("PaymentCreatedBy")
-  supportTicketsCreated SupportTicket[]        @relation("SupportTicketCreatedBy")
-  supportTicketsAssigned SupportTicket[]       @relation("SupportTicketAssignedTo")
-  supportTicketComments SupportTicketComment[] @relation("SupportTicketCommentAuthor")
-  notifications         Notification[]         @relation("UserNotifications")
-  aiInteractionLogs     AiInteractionLog[]
-  reviewedPlanRequests  PlanChangeRequest[]    @relation("PlanRequestReviewedBy")
-  tenantMembers        TenantMember[]
-  pushSubscriptions PushSubscription[]
+  id                        String                  @id @default(cuid())
+  email                     String                  @unique
+  name                      String
+  passwordHash              String
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+  memberships               Membership[]
+  auditLogs                 AuditLog[]
+  ticketsCreated            Ticket[]                @relation("TicketCreatedBy")
+  ticketComments            TicketComment[]         @relation("TicketCommentAuthor")
+  communicationReceipts     CommunicationReceipt[]
+  paymentsCreated           Payment[]               @relation("PaymentCreatedBy")
+  supportTicketsCreated     SupportTicket[]         @relation("SupportTicketCreatedBy")
+  supportTicketsAssigned    SupportTicket[]         @relation("SupportTicketAssignedTo")
+  supportTicketComments     SupportTicketComment[]  @relation("SupportTicketCommentAuthor")
+  notifications             Notification[]          @relation("UserNotifications")
+  aiInteractionLogs         AiInteractionLog[]
+  reviewedPlanRequests      PlanChangeRequest[]     @relation("PlanRequestReviewedBy")
+  tenantMembers             TenantMember[]
+  pushSubscriptions         PushSubscription[]
+  assignedAssistantHandoffs AssistantHandoff[]      @relation("AssistantHandoffAssignee")
+  assistantHandoffAudits    AssistantHandoffAudit[] @relation("AssistantHandoffAuditActor")
+  assistantMessages         AssistantMessage[]      @relation("AssistantMessageUser")
+  assistantMessagesCreated  AssistantMessage[]      @relation("AssistantMessageCreatedBy")
 }
 
 model Membership {
@@ -273,34 +346,34 @@ model Membership {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   roles                 MembershipRole[]
   assignedTickets       Ticket[]
   communicationsCreated Communication[]
   filesCreated          File[]
   documentsCreated      Document[]
-  assignedWorkOrders    WorkOrder[]           @relation("WorkOrderAssignedTo")
+  assignedWorkOrders    WorkOrder[]         @relation("WorkOrderAssignedTo")
   chargesCreatedBy      Charge[]
   paymentsReviewedBy    Payment[]
-  paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
-  invitationsSent       Invitation[]          @relation("InvitationsSent")
+  paymentAuditLogs      PaymentAuditLog[] // Auditoría de pagos
+  invitationsSent       Invitation[]        @relation("InvitationsSent")
   aiInteractionLogs     AiInteractionLog[]
   aiActionEvents        AiActionEvent[]
-  planChangeRequests    PlanChangeRequest[]   @relation("PlanRequestRequestedBy")
+  planChangeRequests    PlanChangeRequest[] @relation("PlanRequestRequestedBy")
+  userContext           UserContext?
 
   @@unique([userId, tenantId])
   @@index([tenantId])
   @@index([userId])
-  userContext      UserContext?
 }
 
 model UserContext {
-  id                String   @id @default(cuid())
-  membershipId      String   @unique
-  activeBuildingId  String?
-  activeUnitId      String?
-  updatedAt         DateTime @updatedAt
+  id               String   @id @default(cuid())
+  membershipId     String   @unique
+  activeBuildingId String?
+  activeUnitId     String?
+  updatedAt        DateTime @updatedAt
 
   membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   building   Building?  @relation("UserContextBuilding", fields: [activeBuildingId], references: [id], onDelete: SetNull)
@@ -312,10 +385,10 @@ model UserContext {
 }
 
 model MembershipRole {
-  id              String     @id @default(cuid())
+  id              String    @id @default(cuid())
   membershipId    String
   role            Role
-  scopeType       ScopeType  @default(TENANT)
+  scopeType       ScopeType @default(TENANT)
   scopeBuildingId String?
   scopeUnitId     String?
 
@@ -365,30 +438,30 @@ model Building {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  units                 Unit[]
-  tickets               Ticket[]
-  communications        Communication[]
-  documents             Document[]
-  vendorAssignments     VendorAssignment[]
-  quotes                Quote[]
-  workOrders            WorkOrder[]
-  charges               Charge[]
-  payments              Payment[]
-  membershipRoles       MembershipRole[]      @relation("BuildingMembershipRoles")
-  userContexts          UserContext[]         @relation("UserContextBuilding")
-  unitCategories       UnitCategory[]
-  expensePeriods       ExpensePeriod[]
-  expenses             Expense[]
-  recurringExpenses    RecurringExpense[]
-  incomes              Income[]
-  movementAllocations  MovementAllocation[]
-  unitGroups           UnitGroup[]
-  liquidations         Liquidation[]
-  adjustments          Adjustment[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units               Unit[]
+  tickets             Ticket[]
+  communications      Communication[]
+  documents           Document[]
+  vendorAssignments   VendorAssignment[]
+  quotes              Quote[]
+  workOrders          WorkOrder[]
+  charges             Charge[]
+  payments            Payment[]
+  membershipRoles     MembershipRole[]     @relation("BuildingMembershipRoles")
+  userContexts        UserContext[]        @relation("UserContextBuilding")
+  unitCategories      UnitCategory[]
+  expensePeriods      ExpensePeriod[]
+  expenses            Expense[]
+  recurringExpenses   RecurringExpense[]
+  incomes             Income[]
+  movementAllocations MovementAllocation[]
+  unitGroups          UnitGroup[]
+  liquidations        Liquidation[]
+  adjustments         Adjustment[]
 
   // P2-A snapshots
-  balanceSnapshots   BuildingBalanceMonthlySnapshot[]
+  balanceSnapshots     BuildingBalanceMonthlySnapshot[]
   unitBalanceSnapshots UnitBalanceMonthlySnapshot[]
 
   // P2-B processes
@@ -405,21 +478,21 @@ model Unit {
   label           String?
   unitType        String   @default("APARTAMENTO") // APARTAMENTO, CASA, OFICINA, DEPOSITO, ESTACIONAMIENTO
   occupancyStatus String   @default("UNKNOWN") // UNKNOWN, VACANT, OCCUPIED
-  m2              Float?   // Metros cuadrados (nullable — no todos los edificios los tienen)
+  m2              Float? // Metros cuadrados (nullable — no todos los edificios los tienen)
   isBillable      Boolean  @default(true) // false = pasillos, depósitos, excluir del prorrateo
-  unitCategoryId  String?  // FK a UnitCategory (auto-asignado por el motor)
+  unitCategoryId  String? // FK a UnitCategory (auto-asignado por el motor)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  building        Building          @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitCategory    UnitCategory?     @relation("UnitCategoryUnits", fields: [unitCategoryId], references: [id], onDelete: SetNull)
-  unitOccupants   UnitOccupant[]
-  tickets         Ticket[]
-  documents       Document[]
-  charges         Charge[]
-  payments        Payment[]
-  membershipRoles MembershipRole[]  @relation("UnitMembershipRoles")
-  userContexts    UserContext[]     @relation("UserContextUnit")
+  building         Building          @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitCategory     UnitCategory?     @relation("UnitCategoryUnits", fields: [unitCategoryId], references: [id], onDelete: SetNull)
+  unitOccupants    UnitOccupant[]
+  tickets          Ticket[]
+  documents        Document[]
+  charges          Charge[]
+  payments         Payment[]
+  membershipRoles  MembershipRole[]  @relation("UnitMembershipRoles")
+  userContexts     UserContext[]     @relation("UserContextUnit")
   unitGroupMembers UnitGroupMember[]
 
   // P2-A snapshots
@@ -434,20 +507,20 @@ model Unit {
 }
 
 model UnitOccupant {
-  id            String           @id @default(cuid())
-  tenantId      String
-  unitId        String
-  memberId      String
-  role          UnitOccupantRole
-  isPrimary     Boolean          @default(false)
-  startDate     DateTime         @default(now())
-  endDate       DateTime?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id        String           @id @default(cuid())
+  tenantId  String
+  unitId    String
+  memberId  String
+  role      UnitOccupantRole
+  isPrimary Boolean          @default(false)
+  startDate DateTime         @default(now())
+  endDate   DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
-  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  unit     Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  member   TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit   Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  member TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@unique([unitId, memberId])
   @@index([tenantId, memberId])
@@ -465,8 +538,8 @@ model UnitCategory {
   buildingId  String
   name        String
   minM2       Float
-  maxM2       Float?   // null = sin límite superior (catch-all)
-  coefficient Float    // Factor de prorrateo. Debe ser > 0
+  maxM2       Float? // null = sin límite superior (catch-all)
+  coefficient Float // Factor de prorrateo. Debe ser > 0
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -481,19 +554,19 @@ model UnitCategory {
 }
 
 model ExpensePeriod {
-  id              String                @id @default(cuid())
+  id              String              @id @default(cuid())
   tenantId        String
   buildingId      String
   year            Int
   month           Int
-  totalToAllocate BigInt                // En centavos (ej: 1500000 = $15,000)
-  currency        String                @default("ARS")
+  totalToAllocate BigInt // En centavos (ej: 1500000 = $15,000)
+  currency        String              @default("ARS")
   dueDate         DateTime
-  concept         String                // Ej: "Expensas Comunes - Enero 2026"
-  status          ExpensePeriodStatus   @default(DRAFT)
+  concept         String // Ej: "Expensas Comunes - Enero 2026"
+  status          ExpensePeriodStatus @default(DRAFT)
   publishedAt     DateTime?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
@@ -611,10 +684,10 @@ enum AuditAction {
   AI_DEGRADED_BUDGET
   AI_ACTION_CLICKED
   // Phase 13: AI Packaging by Plan
-  AI_LIMIT_WARNED       // 80% threshold crossed (budget or calls)
-  AI_LIMIT_BLOCKED      // 100% exceeded (budget or calls)
+  AI_LIMIT_WARNED // 80% threshold crossed (budget or calls)
+  AI_LIMIT_BLOCKED // 100% exceeded (budget or calls)
   AI_TENANT_OVERRIDE_UPDATED // super-admin changed a tenant override
-  AI_PLAN_CAPS_CHANGED  // plan was changed (AI caps part of plan change)
+  AI_PLAN_CAPS_CHANGED // plan was changed (AI caps part of plan change)
   PLAN_CHANGE_REQUESTED
   PLAN_CHANGE_REQUEST_CANCELED
   PLAN_CHANGE_APPROVED
@@ -661,15 +734,15 @@ enum AuditAction {
 }
 
 model AuditLog {
-  id                  String      @id @default(cuid())
-  tenantId            String? // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
-  actorUserId         String? // Nullable: system actions may have no actor
-  actorMembershipId   String? // NEW: Link to Membership for tenant-scoped actions
-  action              AuditAction
-  entity              String // "Tenant", "Subscription", "User", "Ticket", "Building", etc.
-  entityId            String // ID of the resource affected
-  metadata            Json? // before/after values, details, request ID
-  createdAt           DateTime    @default(now())
+  id                String      @id @default(cuid())
+  tenantId          String? // Nullable: SUPER_ADMIN actions are tenant-scoped, global actions are null
+  actorUserId       String? // Nullable: system actions may have no actor
+  actorMembershipId String? // NEW: Link to Membership for tenant-scoped actions
+  action            AuditAction
+  entity            String // "Tenant", "Subscription", "User", "Ticket", "Building", etc.
+  entityId          String // ID of the resource affected
+  metadata          Json? // before/after values, details, request ID
+  createdAt         DateTime    @default(now())
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
@@ -707,9 +780,43 @@ enum PaymentVerificationStatus {
 }
 
 enum AssistantHandoffStatus {
+  OPEN
+  IN_PROGRESS
   PENDING
   NOTIFIED
   FAILED
+  RESOLVED
+  DISMISSED
+}
+
+enum AssistantMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum AssistantMessageChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+  PUSH
+}
+
+enum AssistantMessageDeliveryStatus {
+  PENDING
+  QUEUED
+  DELIVERED
+  FAILED
+}
+
+enum OpsAlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum OpsAlertStatus {
+  OPEN
+  ACK
   RESOLVED
 }
 
@@ -733,15 +840,15 @@ model BillingPlan {
   supportLevel      String  @default("COMMUNITY") // COMMUNITY, EMAIL, PRIORITY
 
   // AI Plan Packaging (Phase 13)
-  aiBudgetCents         Int @default(0)    // $0 = no AI, 200 = $2, 800 = $8, 10000 = $100
-  aiCallsMonthlyLimit   Int @default(0)    // 0 = no AI, 100, 600, 9999 (unlimited)
-  aiAllowBigModel       Boolean @default(false)
-  aiConsultationsLimit  Int @default(0)    // FASE 1: Monthly consultation limit (0=disabled, 10=BASIC, 50=PRO, 999999=ENTERPRISE)
+  aiBudgetCents        Int     @default(0) // $0 = no AI, 200 = $2, 800 = $8, 10000 = $100
+  aiCallsMonthlyLimit  Int     @default(0) // 0 = no AI, 100, 600, 9999 (unlimited)
+  aiAllowBigModel      Boolean @default(false)
+  aiConsultationsLimit Int     @default(0) // FASE 1: Monthly consultation limit (0=disabled, 10=BASIC, 50=PRO, 999999=ENTERPRISE)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  subscriptions Subscription[]
+  subscriptions      Subscription[]
   planChangeRequests PlanChangeRequest[] @relation("PlanChangeRequestedPlan")
 
   @@index([planId])
@@ -759,16 +866,16 @@ model Subscription {
   trialEndDate       DateTime? // Null if not in trial
 
   // FASE 1: AI Consultation tracking
-  aiConsultationsUsed Int @default(0) // Track monthly usage
+  aiConsultationsUsed    Int       @default(0) // Track monthly usage
   aiConsultationsResetAt DateTime? // Timestamp of last reset (monthly)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan      BillingPlan             @relation(fields: [planId], references: [id], onDelete: Restrict)
-  events    SubscriptionEvent[]
-  payments  PaymentVerification[]
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan     BillingPlan           @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events   SubscriptionEvent[]
+  payments PaymentVerification[]
 
   @@index([tenantId])
   @@index([planId])
@@ -776,21 +883,21 @@ model Subscription {
 }
 
 model PlanChangeRequest {
-  id                    String   @id @default(cuid())
-  tenantId              String
-  requestedPlanId       String
-  status                String   @default("PENDING")
+  id                      String    @id @default(cuid())
+  tenantId                String
+  requestedPlanId         String
+  status                  String    @default("PENDING")
   requestedByMembershipId String
-  reviewedByUserId      String?
-  note                  String?
-  reviewReason          String?
-  createdAt             DateTime @default(now())
-  reviewedAt            DateTime?
+  reviewedByUserId        String?
+  note                    String?
+  reviewReason            String?
+  createdAt               DateTime  @default(now())
+  reviewedAt              DateTime?
 
-  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  requestedPlan       BillingPlan @relation("PlanChangeRequestedPlan", fields: [requestedPlanId], references: [id], onDelete: Restrict)
-  requestedByMembership Membership @relation("PlanRequestRequestedBy", fields: [requestedByMembershipId], references: [id], onDelete: Restrict)
-  reviewedByUser      User?       @relation("PlanRequestReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  tenant                Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedPlan         BillingPlan @relation("PlanChangeRequestedPlan", fields: [requestedPlanId], references: [id], onDelete: Restrict)
+  requestedByMembership Membership  @relation("PlanRequestRequestedBy", fields: [requestedByMembershipId], references: [id], onDelete: Restrict)
+  reviewedByUser        User?       @relation("PlanRequestReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status])
 }
@@ -812,16 +919,16 @@ model SubscriptionEvent {
 }
 
 model PaymentVerification {
-  id               String                      @id @default(cuid())
-  tenantId         String
-  subscriptionId   String
-  amount           Decimal                     @db.Decimal(10, 2) // Amount to pay
-  currency         String                      @default("USD") // USD, ARS, COP, etc.
-  status           PaymentVerificationStatus   @default(PENDING)
+  id             String                    @id @default(cuid())
+  tenantId       String
+  subscriptionId String
+  amount         Decimal                   @db.Decimal(10, 2) // Amount to pay
+  currency       String                    @default("USD") // USD, ARS, COP, etc.
+  status         PaymentVerificationStatus @default(PENDING)
 
   // Payment reference (for manual verification)
-  reference        String? // User provides this in transfer: "BUILDINGOS-[TENANT_ID]"
-  bankDetails      String? // Which account they should send to
+  reference   String? // User provides this in transfer: "BUILDINGOS-[TENANT_ID]"
+  bankDetails String? // Which account they should send to
 
   // Admin approval
   approvedByUserId String? // SUPER_ADMIN who approved
@@ -830,9 +937,9 @@ model PaymentVerification {
   rejectedAt       DateTime?
 
   // Metadata
-  metadata         Json? // Extra data (receipt link, notes, etc.)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  metadata  Json? // Extra data (receipt link, notes, etc.)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
@@ -886,7 +993,7 @@ model Ticket {
   status      TicketStatus   @default(OPEN)
 
   // FASE 2: AI categorization fields
-  aiSuggestedCategory Boolean  @default(false) // Was this AI-suggested?
+  aiSuggestedCategory  Boolean @default(false) // Was this AI-suggested?
   aiCategorySuggestion String? // JSON: {category, priority, confidence, reasoning}
 
   createdAt   DateTime  @default(now())
@@ -955,27 +1062,27 @@ enum SupportTicketPriority {
 }
 
 model SupportTicket {
-  id              String                  @id @default(cuid())
-  tenantId        String
-  createdByUserId String
+  id               String  @id @default(cuid())
+  tenantId         String
+  createdByUserId  String
   assignedToUserId String?
 
-  title           String
-  description     String
-  category        SupportTicketCategory   @default(OTHER)
-  priority        SupportTicketPriority   @default(MEDIUM)
-  status          SupportTicketStatus     @default(OPEN)
+  title       String
+  description String
+  category    SupportTicketCategory @default(OTHER)
+  priority    SupportTicketPriority @default(MEDIUM)
+  status      SupportTicketStatus   @default(OPEN)
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
   resolvedAt DateTime?
-  closedAt DateTime?
+  closedAt   DateTime?
 
   // Relations
-  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User    @relation("SupportTicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
-  assignedTo User?  @relation("SupportTicketAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
-  comments  SupportTicketComment[]
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User                   @relation("SupportTicketCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  assignedTo User?                  @relation("SupportTicketAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  comments   SupportTicketComment[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -1033,10 +1140,10 @@ model Communication {
   tenantId   String
   buildingId String? // Nullable: comunicado puede ser cross-building o de un edificio específico
 
-  title   String
-  body    String
-  channel CommunicationChannel
-  status  CommunicationStatus  @default(DRAFT)
+  title    String
+  body     String
+  channel  CommunicationChannel
+  status   CommunicationStatus   @default(DRAFT)
   priority CommunicationPriority @default(NORMAL)
 
   createdByMembershipId String
@@ -1099,14 +1206,14 @@ model CommunicationReceipt {
 }
 
 model PushSubscription {
-  id         String    @id @default(cuid())
-  tenantId   String
-  userId     String
-  endpoint   String
-  p256dh     String
-  auth       String
-  createdAt  DateTime @default(now())
-  revokedAt  DateTime?
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  endpoint  String
+  p256dh    String
+  auth      String
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
 
   // Relations
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1245,11 +1352,11 @@ model Vendor {
   updatedAt DateTime @updatedAt
 
   // Relations
-  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  assignments   VendorAssignment[]
-  quotes        Quote[]
-  workOrders    WorkOrder[]
-  expenses      Expense[]
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments VendorAssignment[]
+  quotes      Quote[]
+  workOrders  WorkOrder[]
+  expenses    Expense[]
 
   // Unique constraint to prevent duplicate vendors in same tenant
   @@unique([tenantId, name])
@@ -1269,8 +1376,8 @@ model VendorAssignment {
   createdAt   DateTime @default(now())
 
   // Relations
-  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if assigned
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if assigned
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
 
   // Unique: one vendor per building per service type
@@ -1284,25 +1391,25 @@ model VendorAssignment {
 // Puede estar asociado opcionalmente a un ticket (reclamo)
 // ============================================================================
 model Quote {
-  id        String      @id @default(cuid())
-  tenantId  String
+  id         String      @id @default(cuid())
+  tenantId   String
   buildingId String
-  vendorId  String
-  ticketId  String? // Optional: quote may not be tied to a specific ticket
-  fileId    String? // Optional: PDF del presupuesto
-  amount    Int // Amount in cents (e.g., 10000 = $100.00)
-  currency  String      @default("ARS") // ARS, USD, etc.
-  status    QuoteStatus @default(REQUESTED)
-  notes     String?
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  vendorId   String
+  ticketId   String? // Optional: quote may not be tied to a specific ticket
+  fileId     String? // Optional: PDF del presupuesto
+  amount     Int // Amount in cents (e.g., 10000 = $100.00)
+  currency   String      @default("ARS") // ARS, USD, etc.
+  status     QuoteStatus @default(REQUESTED)
+  notes      String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
 
   // Relations
-  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  vendor  Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if has quotes
-  ticket  Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep quote if ticket deleted
-  file    File?    @relation(fields: [fileId], references: [id], onDelete: SetNull) // Keep quote if file deleted
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict) // Can't delete vendor if has quotes
+  ticket   Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep quote if ticket deleted
+  file     File?    @relation(fields: [fileId], references: [id], onDelete: SetNull) // Keep quote if file deleted
 
   @@index([tenantId, buildingId, status])
   @@index([tenantId, ticketId])
@@ -1315,25 +1422,25 @@ model Quote {
 // Puede estar asignada a un operador interno (Membership) o a un proveedor externo (Vendor)
 // ============================================================================
 model WorkOrder {
-  id                     String           @id @default(cuid())
+  id                     String          @id @default(cuid())
   tenantId               String
   buildingId             String
   ticketId               String? // Optional: work order may not be tied to a specific ticket
   vendorId               String? // Optional: external vendor (if null, assigned to operator)
   assignedToMembershipId String? // Optional: internal operator
   status                 WorkOrderStatus @default(OPEN)
-  description           String?
-  scheduledFor          DateTime? // When the work is scheduled to happen
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
-  closedAt              DateTime? // When the work was completed
+  description            String?
+  scheduledFor           DateTime? // When the work is scheduled to happen
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  closedAt               DateTime? // When the work was completed
 
   // Relations
-  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building       Building    @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  ticket         Ticket?     @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep work order if ticket deleted
-  vendor         Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull) // Keep work order if vendor deleted
-  assignedTo     Membership? @relation("WorkOrderAssignedTo", fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building   Building    @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  ticket     Ticket?     @relation(fields: [ticketId], references: [id], onDelete: SetNull) // Keep work order if ticket deleted
+  vendor     Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull) // Keep work order if vendor deleted
+  assignedTo Membership? @relation("WorkOrderAssignedTo", fields: [assignedToMembershipId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, buildingId, status])
   @@index([tenantId, ticketId])
@@ -1344,42 +1451,42 @@ model WorkOrder {
 // FINANZAS: Charge (Cargo/Expensa por unidad)
 // ============================================================================
 model Charge {
-  id                          String      @id @default(cuid())
-  tenantId                    String
-  buildingId                  String
-  unitId                      String
-  period                      String      // YYYY-MM format (e.g., "2026-02")
-  type                        ChargeType  @default(COMMON_EXPENSE)
-  concept                     String      // e.g., "Expensas Comunes Febrero 2026"
-  amount                      Int         // Amount in cents (e.g., 10000 = $100.00)
-  currency                    String      @default("ARS")
-  dueDate                     DateTime
-  status                      ChargeStatus @default(PENDING)
-  createdByMembershipId       String?     // Who created this charge (admin)
-  createdAt                   DateTime     @default(now())
-  updatedAt                   DateTime     @updatedAt
-  canceledAt                  DateTime?
-  overdueSince                DateTime?    // When charge became overdue (null if not yet overdue)
-  reminderSentAt              DateTime?    // When 3-day reminder was sent (null if not sent)
+  id                    String       @id @default(cuid())
+  tenantId              String
+  buildingId            String
+  unitId                String
+  period                String // YYYY-MM format (e.g., "2026-02")
+  type                  ChargeType   @default(COMMON_EXPENSE)
+  concept               String // e.g., "Expensas Comunes Febrero 2026"
+  amount                Int // Amount in cents (e.g., 10000 = $100.00)
+  currency              String       @default("ARS")
+  dueDate               DateTime
+  status                ChargeStatus @default(PENDING)
+  createdByMembershipId String? // Who created this charge (admin)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  canceledAt            DateTime?
+  overdueSince          DateTime? // When charge became overdue (null if not yet overdue)
+  reminderSentAt        DateTime? // When 3-day reminder was sent (null if not sent)
 
   // Expense allocation snapshots (optional — null si charge es manual)
-  periodId                    String?     // FK al ExpensePeriod (si viene de generación automática)
-  coefficientSnapshot         Float?      // Coeficiente al momento del cálculo
-  sumCoefSnapshot             Float?      // Suma total de coeficientes al momento del cálculo
-  totalToAllocateSnapshot     BigInt?     // Total distribuido al momento del cálculo (BigInt para valores grandes)
-  categorySnapshotId          String?     // ID de la categoría asignada al momento del cálculo
+  periodId                String? // FK al ExpensePeriod (si viene de generación automática)
+  coefficientSnapshot     Float? // Coeficiente al momento del cálculo
+  sumCoefSnapshot         Float? // Suma total de coeficientes al momento del cálculo
+  totalToAllocateSnapshot BigInt? // Total distribuido al momento del cálculo (BigInt para valores grandes)
+  categorySnapshotId      String? // ID de la categoría asignada al momento del cálculo
 
   // Liquidation traceability (null si charge es manual o viene de ExpensePeriod)
-  liquidationId               String?     // FK a Liquidation (nuevo flujo Gastos → Liquidación)
+  liquidationId String? // FK a Liquidation (nuevo flujo Gastos → Liquidación)
 
   // Relations
-  tenant                      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building                    Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unit                        Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  createdByMembership         Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
-  expensePeriod               ExpensePeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
-  liquidation                 Liquidation?          @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
-  paymentAllocations          PaymentAllocation[]
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building            Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                Unit                @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdByMembership Membership?         @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  expensePeriod       ExpensePeriod?      @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  liquidation         Liquidation?        @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
+  paymentAllocations  PaymentAllocation[]
 
   @@index([unitId, period, concept])
   @@index([tenantId, buildingId, period])
@@ -1395,74 +1502,74 @@ model Charge {
 // FINANZAS: Payment (Pago de residente)
 // ============================================================================
 model Payment {
-  id                       String         @id @default(cuid())
-  tenantId                 String
-  buildingId               String
-  unitId                   String?        // Optional: payment may be for building (not unit-specific)
-  amount                   Int            // Amount in cents
-  currency                 String         @default("ARS")
-  method                   PaymentMethod
-  status                   PaymentStatus  @default(SUBMITTED)
-  paidAt                   DateTime?      // When the payment was actually received
-  reference                String?        // Payment reference (operation number, receipt)
-  proofFileId              String?        // Link to proof document
-  createdByUserId          String         // Who submitted the payment (resident)
-  reviewedByMembershipId  String?        // Who approved the payment (admin)
-  canceledAt               DateTime?      // Soft delete: NULL = active, timestamp = canceled
-  
+  id                     String        @id @default(cuid())
+  tenantId               String
+  buildingId             String
+  unitId                 String? // Optional: payment may be for building (not unit-specific)
+  amount                 Int // Amount in cents
+  currency               String        @default("ARS")
+  method                 PaymentMethod
+  status                 PaymentStatus @default(SUBMITTED)
+  paidAt                 DateTime? // When the payment was actually received
+  reference              String? // Payment reference (operation number, receipt)
+  proofFileId            String? // Link to proof document
+  createdByUserId        String // Who submitted the payment (resident)
+  reviewedByMembershipId String? // Who approved the payment (admin)
+  canceledAt             DateTime? // Soft delete: NULL = active, timestamp = canceled
+
   // Datos de transferencia bancaria
-  transferDate             DateTime?      // Fecha en que se realizó la transferencia
-  sourceBank               String?        // Banco/emisor de la transferencia
-  sourceAccount            String?        // Cuenta de origen (CBU/CVU/alia)
-  sourceHolder             String?        // Nombre del titular de la cuenta origen
-  destinationAccount       String?        // Cuenta destino (CBU/CVU/alias)
-  
+  transferDate       DateTime? // Fecha en que se realizó la transferencia
+  sourceBank         String? // Banco/emisor de la transferencia
+  sourceAccount      String? // Cuenta de origen (CBU/CVU/alia)
+  sourceHolder       String? // Nombre del titular de la cuenta origen
+  destinationAccount String? // Cuenta destino (CBU/CVU/alias)
+
   // Auditoría completa
-  rejectionReason          RejectionReason?  // Motivo de rechazo (catálogo estructurado)
-  rejectionComment         String?           // Comentario adicional opcional del revisor
-  reviewedAt               DateTime?         // Cuándo se revisó (aprobó/rechazó)
-  notes                    String?           // Notas internas del revisor
-  
+  rejectionReason  RejectionReason? // Motivo de rechazo (catálogo estructurado)
+  rejectionComment String? // Comentario adicional opcional del revisor
+  reviewedAt       DateTime? // Cuándo se revisó (aprobó/rechazó)
+  notes            String? // Notas internas del revisor
+
   // Receipt (non-fiscal payment receipt)
-  receiptDocumentId        String?           // Link to receipt Document (generated when payment is approved)
-  receiptNumber            String?           // Sequential receipt number: R-{TENANT}-{YYYY}-{000001}
-  receiptStatus            ReceiptStatus     @default(PENDING)
-  receiptError             String?           // Error message if receipt generation failed
-  receiptGeneratedAt       DateTime?         // When receipt was successfully generated
-  
+  receiptDocumentId  String? // Link to receipt Document (generated when payment is approved)
+  receiptNumber      String? // Sequential receipt number: R-{TENANT}-{YYYY}-{000001}
+  receiptStatus      ReceiptStatus @default(PENDING)
+  receiptError       String? // Error message if receipt generation failed
+  receiptGeneratedAt DateTime? // When receipt was successfully generated
+
   // Who approved/rejected (track by user, not membership, for audit)
-  approvedByUserId         String?            // User ID who approved the payment
-  approvedAt               DateTime?          // When the payment was approved
-  rejectedByUserId         String?            // User ID who rejected the payment
-  rejectedAt               DateTime?          // When the payment was rejected
-  
-  createdAt                DateTime        @default(now())
-  updatedAt                DateTime        @updatedAt
+  approvedByUserId String? // User ID who approved the payment
+  approvedAt       DateTime? // When the payment was approved
+  rejectedByUserId String? // User ID who rejected the payment
+  rejectedAt       DateTime? // When the payment was rejected
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  tenant                  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building                Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unit                    Unit?               @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  createdByUser           User                @relation("PaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  reviewedByMembership    Membership?         @relation(fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
-  proofFile               File?               @relation(fields: [proofFileId], references: [id], onDelete: SetNull)
-  paymentAllocations      PaymentAllocation[]
-  auditLogs               PaymentAuditLog[]
+  tenant               Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building             Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit                 Unit?               @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  createdByUser        User                @relation("PaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reviewedByMembership Membership?         @relation(fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  proofFile            File?               @relation(fields: [proofFileId], references: [id], onDelete: SetNull)
+  paymentAllocations   PaymentAllocation[]
+  auditLogs            PaymentAuditLog[]
 
+  @@unique([tenantId, receiptNumber])
   @@index([tenantId, buildingId, status])
   @@index([tenantId, unitId, status])
   @@index([tenantId, paidAt])
   @@index([tenantId, createdByUserId])
   @@index([status])
   @@index([tenantId, receiptStatus])
-  @@unique([tenantId, receiptNumber])
 }
 
 // Receipt sequence for sequential numbering per tenant per year
 model ReceiptSequence {
   id         String   @id @default(cuid())
   tenantId   String
-  year       Int      // YYYY
+  year       Int // YYYY
   lastNumber Int      @default(0) // Last used number
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -1481,13 +1588,13 @@ model PaymentAllocation {
   tenantId  String
   paymentId String
   chargeId  String
-  amount    Int      // Amount allocated (in cents, must be <= Payment.amount)
+  amount    Int // Amount allocated (in cents, must be <= Payment.amount)
   createdAt DateTime @default(now())
 
   // Relations
-  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  charge    Charge  @relation(fields: [chargeId], references: [id], onDelete: Restrict) // Protect charge history
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  charge  Charge  @relation(fields: [chargeId], references: [id], onDelete: Restrict) // Protect charge history
 
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
@@ -1503,17 +1610,17 @@ model UnitBalanceMonthlySnapshot {
   tenantId         String
   buildingId       String
   unitId           String
-  period          String    // YYYY-MM format (e.g., "2026-03")
-  asOf            DateTime  // Snapshot date (end of period in tenant TZ)
-  currency        String    @default("ARS")
-  chargedMinor   Int       // Total charged in period (cents)
-  collectedMinor Int       // Total collected in period (cents)
-  outstandingMinor Int     // charged - collected (cents)
-  overdueMinor   Int?      // Overdue amount at asOf (cents, nullable)
-  collectionRateBp Int?    // Collection rate in basis points (null if charged=0)
-  snapshotVersion String   @default("p2a-v1")
-  generatedAt    DateTime  @default(now())
-  recomputedAt   DateTime? // If recomputed (correction)
+  period           String // YYYY-MM format (e.g., "2026-03")
+  asOf             DateTime // Snapshot date (end of period in tenant TZ)
+  currency         String    @default("ARS")
+  chargedMinor     Int // Total charged in period (cents)
+  collectedMinor   Int // Total collected in period (cents)
+  outstandingMinor Int // charged - collected (cents)
+  overdueMinor     Int? // Overdue amount at asOf (cents, nullable)
+  collectionRateBp Int? // Collection rate in basis points (null if charged=0)
+  snapshotVersion  String    @default("p2a-v1")
+  generatedAt      DateTime  @default(now())
+  recomputedAt     DateTime? // If recomputed (correction)
 
   // Relations
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1529,19 +1636,19 @@ model UnitBalanceMonthlySnapshot {
 model BuildingBalanceMonthlySnapshot {
   id               String    @id @default(cuid())
   tenantId         String
-  buildingId      String
-  period          String    // YYYY-MM
-  asOf            DateTime
-  currency        String    @default("ARS")
-  unitCount       Int       // Number of units in building
-  chargedMinor    Int
-  collectedMinor  Int
+  buildingId       String
+  period           String // YYYY-MM
+  asOf             DateTime
+  currency         String    @default("ARS")
+  unitCount        Int // Number of units in building
+  chargedMinor     Int
+  collectedMinor   Int
   outstandingMinor Int
-  overdueMinor    Int?
+  overdueMinor     Int?
   collectionRateBp Int?
-  snapshotVersion String    @default("p2a-v1")
-  generatedAt     DateTime  @default(now())
-  recomputedAt    DateTime?
+  snapshotVersion  String    @default("p2a-v1")
+  generatedAt      DateTime  @default(now())
+  recomputedAt     DateTime?
 
   // Relations
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1559,8 +1666,8 @@ model BuildingBalanceMonthlySnapshot {
 model ExpenseLedgerCategory {
   id           String       @id @default(cuid())
   tenantId     String
-  code         String?      // Stable identifier for seeded categories (e.g. "SERV_ELECTRICIDAD")
-  name         String       // e.g. "Electricidad", "Agua", "Mantenimiento"
+  code         String? // Stable identifier for seeded categories (e.g. "SERV_ELECTRICIDAD")
+  name         String // e.g. "Electricidad", "Agua", "Mantenimiento"
   description  String?
   movementType MovementType @default(EXPENSE) // EXPENSE or INCOME
   catalogScope CatalogScope @default(BUILDING) // BUILDING or CONDOMINIUM_COMMON
@@ -1569,11 +1676,11 @@ model ExpenseLedgerCategory {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  expenses             Expense[]
-  incomes              Income[]
-  recurringExpenses    RecurringExpense[]
-  adjustments          Adjustment[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses          Expense[]
+  incomes           Income[]
+  recurringExpenses RecurringExpense[]
+  adjustments       Adjustment[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, code]) // Allows multiple null codes (manually created categories)
@@ -1587,12 +1694,12 @@ model ExpenseLedgerCategory {
 // FINANZAS: Proveedor preferido por rubro (Expense)
 // ============================================================================
 model ExpenseCategoryVendorPreference {
-  id          String   @id @default(cuid())
-  tenantId    String
-  categoryId  String   // FK ExpenseLedgerCategory
-  vendorId    String   // FK Vendor
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  tenantId   String
+  categoryId String // FK ExpenseLedgerCategory
+  vendorId   String // FK Vendor
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@unique([tenantId, categoryId]) // Solo 1 preferido por rubro
   @@index([tenantId])
@@ -1603,35 +1710,35 @@ model ExpenseCategoryVendorPreference {
 // FINANZAS: Expense (Gasto/Comprobante mensual)
 // ============================================================================
 model Expense {
-  id                       String         @id @default(cuid())
-  tenantId                 String
-  buildingId               String?        // nullable: null para TENANT_SHARED
-  period                   String         // YYYY-MM format (LEGACY - usar liquidationPeriod)
-  liquidationPeriod        String?        // YYYY-MM - período de devengo derivado de invoiceDate
-  categoryId               String         // FK ExpenseLedgerCategory
-  vendorId                 String?        // FK Vendor (opcional)
-  scopeType                MovementScope  @default(BUILDING)
-  unitGroupId              String?        // FK UnitGroup (solo UNIT_GROUP)
-  amountMinor              Int            // En centavos, positivo
-  currencyCode             String         // ISO: ARS, VES, USD
-  invoiceDate              DateTime       // Fecha del comprobante
-  postedAt                 DateTime       @default(now())
-  description              String?
-  attachmentFileKey        String?        // Key en MinIO/S3
-  status                   ExpenseStatus  @default(DRAFT)
-  createdByMembershipId    String
-  validatedByMembershipId  String?
-  validatedAt              DateTime?
-  voidedByMembershipId     String?
-  voidedAt                 DateTime?
-  createdAt                DateTime       @default(now())
-  updatedAt                DateTime       @updatedAt
+  id                      String        @id @default(cuid())
+  tenantId                String
+  buildingId              String? // nullable: null para TENANT_SHARED
+  period                  String // YYYY-MM format (LEGACY - usar liquidationPeriod)
+  liquidationPeriod       String? // YYYY-MM - período de devengo derivado de invoiceDate
+  categoryId              String // FK ExpenseLedgerCategory
+  vendorId                String? // FK Vendor (opcional)
+  scopeType               MovementScope @default(BUILDING)
+  unitGroupId             String? // FK UnitGroup (solo UNIT_GROUP)
+  amountMinor             Int // En centavos, positivo
+  currencyCode            String // ISO: ARS, VES, USD
+  invoiceDate             DateTime // Fecha del comprobante
+  postedAt                DateTime      @default(now())
+  description             String?
+  attachmentFileKey       String? // Key en MinIO/S3
+  status                  ExpenseStatus @default(DRAFT)
+  createdByMembershipId   String
+  validatedByMembershipId String?
+  validatedAt             DateTime?
+  voidedByMembershipId    String?
+  voidedAt                DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
 
   tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building    Building?             @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   vendor      Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  unitGroup   UnitGroup?           @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
+  unitGroup   UnitGroup?            @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
   allocations MovementAllocation[]
 
   @@index([tenantId, buildingId, period])
@@ -1645,18 +1752,18 @@ model Expense {
 // FINANZAS: RecurringExpense (Templates for auto-generated DRAFT expenses)
 // ============================================================================
 model RecurringExpense {
-  id            String   @id @default(cuid())
-  tenantId      String
-  buildingId    String
-  categoryId    String
-  amount        Int      // En centavos
-  currency      String   // ISO: ARS, VES, USD
-  concept       String   // Descripción del gasto (ej: "Electricidad Base")
-  frequency     String   // MONTHLY, QUARTERLY, YEARLY
-  nextRunDate   DateTime // Próxima fecha de ejecución
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String   @id @default(cuid())
+  tenantId    String
+  buildingId  String
+  categoryId  String
+  amount      Int // En centavos
+  currency    String // ISO: ARS, VES, USD
+  concept     String // Descripción del gasto (ej: "Electricidad Base")
+  frequency   String // MONTHLY, QUARTERLY, YEARLY
+  nextRunDate DateTime // Próxima fecha de ejecución
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
@@ -1671,28 +1778,28 @@ model RecurringExpense {
 // FINANZAS: Income (Movimientos de ingresos — cuotas, intereses, alquileres)
 // ============================================================================
 model Income {
-  id                       String              @id @default(cuid())
-  tenantId                 String
-  buildingId               String?             // Optional: null for tenant-level (interest, fees), set for building-specific (parking rent)
-  period                   String              // YYYY-MM format
-  categoryId               String              // FK ExpenseLedgerCategory (must be INCOME type)
-  scopeType                MovementScope       @default(BUILDING)
-  destination              IncomeDestination   @default(APPLY_TO_EXPENSES)
-  unitGroupId              String?             // FK UnitGroup (solo UNIT_GROUP)
-  amountMinor              Int                 // En centavos, positivo
-  currencyCode             String              // ISO: ARS, VES, USD
-  receivedDate             DateTime            // Fecha del ingreso
-  postedAt                 DateTime            @default(now())
-  description              String?
-  attachmentFileKey        String?             // Key en MinIO/S3
-  status                   IncomeStatus        @default(DRAFT)
-  createdByMembershipId    String
-  recordedByMembershipId   String?
-  recordedAt               DateTime?
-  voidedByMembershipId     String?
-  voidedAt                 DateTime?
-  createdAt                DateTime            @default(now())
-  updatedAt                DateTime            @updatedAt
+  id                     String            @id @default(cuid())
+  tenantId               String
+  buildingId             String? // Optional: null for tenant-level (interest, fees), set for building-specific (parking rent)
+  period                 String // YYYY-MM format
+  categoryId             String // FK ExpenseLedgerCategory (must be INCOME type)
+  scopeType              MovementScope     @default(BUILDING)
+  destination            IncomeDestination @default(APPLY_TO_EXPENSES)
+  unitGroupId            String? // FK UnitGroup (solo UNIT_GROUP)
+  amountMinor            Int // En centavos, positivo
+  currencyCode           String // ISO: ARS, VES, USD
+  receivedDate           DateTime // Fecha del ingreso
+  postedAt               DateTime          @default(now())
+  description            String?
+  attachmentFileKey      String? // Key en MinIO/S3
+  status                 IncomeStatus      @default(DRAFT)
+  createdByMembershipId  String
+  recordedByMembershipId String?
+  recordedAt             DateTime?
+  voidedByMembershipId   String?
+  voidedAt               DateTime?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
 
   tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building    Building?             @relation(fields: [buildingId], references: [id], onDelete: SetNull)
@@ -1714,32 +1821,32 @@ model Income {
 model MovementAllocation {
   id           String   @id @default(cuid())
   tenantId     String
-  expenseId    String?  // XOR con incomeId
-  incomeId     String?  // XOR con expenseId
+  expenseId    String? // XOR con incomeId
+  incomeId     String? // XOR con expenseId
   buildingId   String
-  percentage   Float?   // % del total (0–100), si se distribuye por %
-  amountMinor  Int?     // monto fijo en esa moneda
+  percentage   Float? // % del total (0–100), si se distribuye por %
+  amountMinor  Int? // monto fijo en esa moneda
   currencyCode String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  expense  Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  income   Income?   @relation(fields: [incomeId], references: [id], onDelete: Cascade)
-  building Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expense  Expense? @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  income   Income?  @relation(fields: [incomeId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, expenseId, buildingId]) // No duplicar allocation por building
+  @@unique([tenantId, incomeId, buildingId])
   @@index([tenantId, expenseId])
   @@index([tenantId, incomeId])
   @@index([tenantId, buildingId])
-  @@unique([tenantId, expenseId, buildingId]) // No duplicar allocation por building
-  @@unique([tenantId, incomeId, buildingId])
 }
 
 // ============================================================================
 // FINANZAS: UnitGroup (Grupos de unidades para prorrateo UNIT_GROUP)
 // ============================================================================
 model UnitGroup {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   tenantId    String
   buildingId  String
   name        String
@@ -1747,18 +1854,18 @@ model UnitGroup {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building  Building            @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  members   UnitGroupMember[]
-  expenses  Expense[]
-  incomes   Income[]
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building          @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  members  UnitGroupMember[]
+  expenses Expense[]
+  incomes  Income[]
 
   @@unique([tenantId, buildingId, name])
   @@index([tenantId, buildingId])
 }
 
 model UnitGroupMember {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   unitGroupId String
   unitId      String
   createdAt   DateTime @default(now())
@@ -1775,27 +1882,27 @@ model UnitGroupMember {
 // FINANZAS: Liquidation (Liquidación de expensas — genera Charges)
 // ============================================================================
 model Liquidation {
-  id                       String            @id @default(cuid())
-  tenantId                 String
-  buildingId               String
-  period                   String            // YYYY-MM format - período de devengo
-  chargePeriod             String?           // YYYY-MM - período de cobro (default: period + 1 mes)
-  status                   LiquidationStatus @default(DRAFT)
-  baseCurrency             String            // Moneda base de liquidación
-  totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
-  totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
-  expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
-  unitCount                Int               // Unidades billables al momento de draft
-  generatedByMembershipId  String
-  generatedAt              DateTime          @default(now())
-  reviewedByMembershipId   String?
-  reviewedAt               DateTime?
-  publishedByMembershipId  String?
-  publishedAt              DateTime?
-  canceledByMembershipId   String?
-  canceledAt               DateTime?
-  createdAt                DateTime          @default(now())
-  updatedAt                DateTime          @updatedAt
+  id                      String            @id @default(cuid())
+  tenantId                String
+  buildingId              String
+  period                  String // YYYY-MM format - período de devengo
+  chargePeriod            String? // YYYY-MM - período de cobro (default: period + 1 mes)
+  status                  LiquidationStatus @default(DRAFT)
+  baseCurrency            String // Moneda base de liquidación
+  totalAmountMinor        Int // Total en centavos derivado de gastos VALIDATED
+  totalsByCurrency        Json // Snapshot: { "ARS": 150000, "USD": 5000 }
+  expenseSnapshot         Json // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
+  unitCount               Int // Unidades billables al momento de draft
+  generatedByMembershipId String
+  generatedAt             DateTime          @default(now())
+  reviewedByMembershipId  String?
+  reviewedAt              DateTime?
+  publishedByMembershipId String?
+  publishedAt             DateTime?
+  canceledByMembershipId  String?
+  canceledAt              DateTime?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
@@ -1818,24 +1925,24 @@ enum AdjustmentStatus {
 }
 
 model Adjustment {
-  id                       String            @id @default(cuid())
-  tenantId                 String
-  buildingId               String
-  sourceInvoiceDate        DateTime          // Fecha original del comprobante
-  sourcePeriod             String            // YYYY-MM - período de devengo original
-  targetPeriod             String            // YYYY-MM - período donde se cobrará el ajuste
-  categoryId               String            // FK ExpenseLedgerCategory
-  amountMinor              Int               // En centavos, positivo
-  currencyCode             String            // ISO: ARS, VES, USD
-  reason                   String            // Motivo obligatorio del ajuste
-  status                   AdjustmentStatus  @default(DRAFT)
-  createdByMembershipId    String
-  validatedByMembershipId  String?
-  validatedAt              DateTime?
-  voidedByMembershipId     String?
-  voidedAt                 DateTime?
-  createdAt                DateTime          @default(now())
-  updatedAt                DateTime          @updatedAt
+  id                      String           @id @default(cuid())
+  tenantId                String
+  buildingId              String
+  sourceInvoiceDate       DateTime // Fecha original del comprobante
+  sourcePeriod            String // YYYY-MM - período de devengo original
+  targetPeriod            String // YYYY-MM - período donde se cobrará el ajuste
+  categoryId              String // FK ExpenseLedgerCategory
+  amountMinor             Int // En centavos, positivo
+  currencyCode            String // ISO: ARS, VES, USD
+  reason                  String // Motivo obligatorio del ajuste
+  status                  AdjustmentStatus @default(DRAFT)
+  createdByMembershipId   String
+  validatedByMembershipId String?
+  validatedAt             DateTime?
+  voidedByMembershipId    String?
+  voidedAt                DateTime?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
 
   tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
@@ -1851,32 +1958,32 @@ model Adjustment {
 // ============================================================================
 
 enum PaymentAuditAction {
-  SUBMITTED       // Usuario resident creó el pago
-  APPROVED        // Admin aprobó el pago
-  REJECTED        // Admin rechazó el pago
-  RECONCILED      // Sistema Concilió (asignaciones completadas)
-  CANCELLED       // Admin/anfitrión canceló el pago
-  VIEWED          // Admin visualizó el pago para revisión
+  SUBMITTED // Usuario resident creó el pago
+  APPROVED // Admin aprobó el pago
+  REJECTED // Admin rechazó el pago
+  RECONCILED // Sistema Concilió (asignaciones completadas)
+  CANCELLED // Admin/anfitrión canceló el pago
+  VIEWED // Admin visualizó el pago para revisión
   RECEIPT_GENERATED // Sistema generó recibo no fiscal
 }
 
 model PaymentAuditLog {
-  id            String              @id @default(cuid())
-  tenantId      String
-  paymentId     String
-  action        PaymentAuditAction
-  membershipId  String?             // Quién ejecutó la acción
-  reason        String?             // Motivo (para reject)
-  comment       String?             // Comentario adicional
-  metadata      Json?               // Datos adicionales en formato libre
-  ipAddress     String?             // IP desde donde se ejecutó
-  userAgent     String?             // Navegador/dispositivo
-  createdAt     DateTime            @default(now())
+  id           String             @id @default(cuid())
+  tenantId     String
+  paymentId    String
+  action       PaymentAuditAction
+  membershipId String? // Quién ejecutó la acción
+  reason       String? // Motivo (para reject)
+  comment      String? // Comentario adicional
+  metadata     Json? // Datos adicionales en formato libre
+  ipAddress    String? // IP desde donde se ejecutó
+  userAgent    String? // Navegador/dispositivo
+  createdAt    DateTime           @default(now())
 
   // Relations
-  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  payment       Payment            @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  membership    Membership?        @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment    Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
 
   @@index([paymentId, createdAt])
   @@index([tenantId, action, createdAt])
@@ -1912,17 +2019,17 @@ enum EmailType {
 }
 
 model EmailLog {
-  id           String    @id @default(cuid())
-  tenantId     String?   // Optional if email not tenant-scoped
-  type         EmailType
-  to           String    // Recipient email
-  subject      String
-  status       String    // SENT | FAILED | BOUNCED
-  error        String?   // Error message if failed
-  provider     String    // SMTP, SENDGRID, MAILGUN
-  externalId   String?   // Provider's message ID
-  createdAt    DateTime  @default(now())
-  sentAt       DateTime? // When email was actually sent
+  id         String    @id @default(cuid())
+  tenantId   String? // Optional if email not tenant-scoped
+  type       EmailType
+  to         String // Recipient email
+  subject    String
+  status     String // SENT | FAILED | BOUNCED
+  error      String? // Error message if failed
+  provider   String // SMTP, SENDGRID, MAILGUN
+  externalId String? // Provider's message ID
+  createdAt  DateTime  @default(now())
+  sentAt     DateTime? // When email was actually sent
 
   // Relations
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1961,18 +2068,18 @@ enum DeliveryMethod {
 }
 
 model Notification {
-  id              String            @id @default(cuid())
+  id              String           @id @default(cuid())
   tenantId        String
   userId          String
   type            NotificationType
   title           String
   body            String
-  data            Json?             // Additional context (ticketId, etc)
-  deliveryMethods DeliveryMethod[]  // Default: [IN_APP]
-  isRead          Boolean           @default(false)
+  data            Json? // Additional context (ticketId, etc)
+  deliveryMethods DeliveryMethod[] // Default: [IN_APP]
+  isRead          Boolean          @default(false)
   readAt          DateTime?
-  createdAt       DateTime          @default(now())
-  deletedAt       DateTime?         // Soft delete
+  createdAt       DateTime         @default(now())
+  deletedAt       DateTime? // Soft delete
 
   // Relations
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1988,29 +2095,29 @@ model Notification {
 // ============================================================================
 
 model AiInteractionLog {
-  id           String   @id @default(cuid())
+  id           String @id @default(cuid())
   tenantId     String
   userId       String
   membershipId String
 
-  context      Json     // { buildingId?, unitId?, page }
-  prompt       String
-  response     Json     // { answer, suggestedActions }
-  provider     String   // "MOCK", "OPENAI"
-  tokensIn     Int?
-  tokensOut    Int?
+  context   Json // { buildingId?, unitId?, page }
+  prompt    String
+  response  Json // { answer, suggestedActions }
+  provider  String // "MOCK", "OPENAI"
+  tokensIn  Int?
+  tokensOut Int?
 
   // PHASE 12: Analytics
-  cacheHit     Boolean  @default(false)  // true if response came from cache
-  modelSize    String?                    // "SMALL" | "BIG" | "MOCK" | "CACHE"
-  page         String?                    // extracted from context.page at save time
+  cacheHit  Boolean @default(false) // true if response came from cache
+  modelSize String? // "SMALL" | "BIG" | "MOCK" | "CACHE"
+  page      String? // extracted from context.page at save time
 
-  createdAt    DateTime @default(now())
+  createdAt DateTime @default(now())
 
   // Relations
-  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership   Membership      @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   actionEvents AiActionEvent[]
 
   @@index([tenantId, createdAt])
@@ -2019,22 +2126,22 @@ model AiInteractionLog {
 }
 
 model AiActionEvent {
-  id            String    @id @default(cuid())
+  id            String  @id @default(cuid())
   tenantId      String
   membershipId  String
-  interactionId String?   // FK nullable → AiInteractionLog
+  interactionId String? // FK nullable → AiInteractionLog
 
-  actionType    String    // VIEW_TICKETS | CREATE_TICKET | VIEW_PAYMENTS | etc.
-  source        String    // "CHAT" | "TEMPLATE" | "TEMPLATE_INSERT"
-  page          String
-  buildingId    String?
-  unitId        String?
-  clickedAt     DateTime  @default(now())
+  actionType String // VIEW_TICKETS | CREATE_TICKET | VIEW_PAYMENTS | etc.
+  source     String // "CHAT" | "TEMPLATE" | "TEMPLATE_INSERT"
+  page       String
+  buildingId String?
+  unitId     String?
+  clickedAt  DateTime @default(now())
 
   // Relations
-  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  membership    Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
-  interaction   AiInteractionLog? @relation(fields: [interactionId], references: [id], onDelete: SetNull)
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership  Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  interaction AiInteractionLog? @relation(fields: [interactionId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, clickedAt])
   @@index([tenantId, actionType])
@@ -2042,24 +2149,24 @@ model AiActionEvent {
 }
 
 model AiTemplate {
-  id                     String   @id @default(cuid())
-  tenantId               String?  // null = global template
-  key                    String   @unique
-  name                   String
-  description            String?
-  scopeType              ScopeType @default(TENANT) // TENANT, BUILDING, UNIT
-  requiredPermissions    Json     // ["tickets.write", "communications.publish"]
-  enabledByDefault       Boolean  @default(true)
-  promptSystem           String?  // System prompt (or use global default)
-  promptUser             String   // User prompt template with variables
-  maxOutputTokens        Int      @default(350)
-  category               String   @default("general") // "tickets", "communications", "finance", "inbox"
-  isActive               Boolean  @default(true)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                  String    @id @default(cuid())
+  tenantId            String? // null = global template
+  key                 String    @unique
+  name                String
+  description         String?
+  scopeType           ScopeType @default(TENANT) // TENANT, BUILDING, UNIT
+  requiredPermissions Json // ["tickets.write", "communications.publish"]
+  enabledByDefault    Boolean   @default(true)
+  promptSystem        String? // System prompt (or use global default)
+  promptUser          String // User prompt template with variables
+  maxOutputTokens     Int       @default(350)
+  category            String    @default("general") // "tickets", "communications", "finance", "inbox"
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   // Relations (if tenant-specific)
-  tenant                 Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
@@ -2069,53 +2176,53 @@ model AiTemplate {
 model TenantDailyAiUsage {
   id        String   @id @default(cuid())
   tenantId  String
-  day       String   // "YYYY-MM-DD"
+  day       String // "YYYY-MM-DD"
   count     Int      @default(0)
   updatedAt DateTime @updatedAt
 
   // Relations
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, day])
   @@index([tenantId])
 }
 
 model TenantAiBudget {
-  id                    String   @id @default(cuid())
-  tenantId              String   @unique
-  monthlyBudgetCents    Int      @default(500) // $5/month default
+  id                 String @id @default(cuid())
+  tenantId           String @unique
+  monthlyBudgetCents Int    @default(500) // $5/month default
 
   // Phase 13: Plan overrides (null = inherit from plan)
-  monthlyCallsLimit     Int?     // null = inherit from plan
+  monthlyCallsLimit     Int? // null = inherit from plan
   allowBigModelOverride Boolean? // null = inherit from plan
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  monthlyUsage          TenantMonthlyAiUsage[]
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  monthlyUsage TenantMonthlyAiUsage[]
 
   @@index([tenantId])
 }
 
 model TenantMonthlyAiUsage {
-  id                    String    @id @default(cuid())
-  tenantId              String
-  budgetId              String
-  month                 String    // "YYYY-MM"
-  calls                 Int       @default(0)
-  inputTokens           Int       @default(0)
-  outputTokens          Int       @default(0)
-  estimatedCostCents    Int       @default(0)
-  warnedAt              DateTime? // Budget warning (80% threshold)
-  blockedAt             DateTime? // Budget blocked (100% exceeded)
-  callsWarnedAt         DateTime? // Calls limit warning (80% threshold) — Phase 13
-  updatedAt             DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  tenantId           String
+  budgetId           String
+  month              String // "YYYY-MM"
+  calls              Int       @default(0)
+  inputTokens        Int       @default(0)
+  outputTokens       Int       @default(0)
+  estimatedCostCents Int       @default(0)
+  warnedAt           DateTime? // Budget warning (80% threshold)
+  blockedAt          DateTime? // Budget blocked (100% exceeded)
+  callsWarnedAt      DateTime? // Calls limit warning (80% threshold) — Phase 13
+  updatedAt          DateTime  @updatedAt
 
   // Relations
-  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  budget                TenantAiBudget      @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  budget TenantAiBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, month])
   @@index([tenantId, month])
@@ -2127,25 +2234,25 @@ model TenantMonthlyAiUsage {
 // ============================================================================
 
 model Lead {
-  id                    String    @id @default(cuid())
-  fullName              String
-  email                 String    @unique
-  phone                 String?
-  tenantType            TenantType
-  buildingsCount        Int?
-  unitsEstimate         Int
-  location              String?   // "Country, City"
-  message               String?
-  source                String?   // "landing", "contact-form", etc.
-  intent                LeadIntent @default(CONTACT) // DEMO or CONTACT
-  status                LeadStatus @default(NEW)
-  contactedAt           DateTime?
-  notes                 String?   // Internal notes from sales
+  id                String     @id @default(cuid())
+  fullName          String
+  email             String     @unique
+  phone             String?
+  tenantType        TenantType
+  buildingsCount    Int?
+  unitsEstimate     Int
+  location          String? // "Country, City"
+  message           String?
+  source            String? // "landing", "contact-form", etc.
+  intent            LeadIntent @default(CONTACT) // DEMO or CONTACT
+  status            LeadStatus @default(NEW)
+  contactedAt       DateTime?
+  notes             String? // Internal notes from sales
   // Conversion tracking
-  convertedTenantId     String?   // Tenant ID if lead converted to customer
-  convertedAt           DateTime? // When conversion happened
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  convertedTenantId String? // Tenant ID if lead converted to customer
+  convertedAt       DateTime? // When conversion happened
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
   @@index([email])
   @@index([status])
@@ -2159,23 +2266,23 @@ model Lead {
 // ============================================================================
 
 model TenantMember {
-  id            String   @id @default(cuid())
-  tenantId      String
-  userId        String?
-  name          String
-  email         String?
-  phone         String?
-  role          Role     @default(RESIDENT)
-  status        MemberStatus @default(DRAFT)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  disabledAt    DateTime?
-  notes         String?
+  id         String       @id @default(cuid())
+  tenantId   String
+  userId     String?
+  name       String
+  email      String?
+  phone      String?
+  role       Role         @default(RESIDENT)
+  status     MemberStatus @default(DRAFT)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  disabledAt DateTime?
+  notes      String?
 
-  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
-  occupancies   UnitOccupant[]
-  invitations   TenantInvitation[]
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  occupancies UnitOccupant[]
+  invitations TenantInvitation[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -2184,17 +2291,17 @@ model TenantMember {
 }
 
 model TenantInvitation {
-  id            String   @id @default(cuid())
-  tenantId      String
-  memberId      String
-  tokenHash     String   @unique
-  expiresAt     DateTime
-  attempts      Int      @default(0)
-  acceptedAt    DateTime?
-  createdAt     DateTime @default(now())
+  id         String    @id @default(cuid())
+  tenantId   String
+  memberId   String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
 
-  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  member        TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  member TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, tokenHash])
   @@index([tenantId, expiresAt])
@@ -2220,39 +2327,39 @@ enum ProcessStatus {
 }
 
 model ProcessInstance {
-  id           String       @id @default(cuid())
-  tenantId     String
-  buildingId   String?
-  unitId       String?
+  id         String  @id @default(cuid())
+  tenantId   String
+  buildingId String?
+  unitId     String?
 
-  processType  ProcessType
-  referenceId  String?
+  processType ProcessType
+  referenceId String?
   title       String
 
-  status       ProcessStatus      @default(PENDING)
+  status ProcessStatus @default(PENDING)
 
   assignedToUserId String?
   assignedAt       DateTime?
   createdByUserId  String
 
-  priority    Int            @default(0)  // 0=normal, 1=high, 2=urgent
-  period      String?        // YYYY-MM (optional, for filtering)
+  priority Int     @default(0) // 0=normal, 1=high, 2=urgent
+  period   String? // YYYY-MM (optional, for filtering)
 
-  dueAt        DateTime?
-  slaMinutes  Int?
-  overdueSla  Boolean       @default(false)
+  dueAt      DateTime?
+  slaMinutes Int?
+  overdueSla Boolean   @default(false)
 
-  metadata    Json?
+  metadata Json?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   completedAt DateTime?
 
-  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building     Building?   @relation(fields: [buildingId], references: [id], onDelete: SetNull)
-  unit         Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  unit     Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
 
-  audits       ProcessAudit[]
+  audits ProcessAudit[]
 
   @@unique([tenantId, referenceId, processType])
   @@index([tenantId, processType, status])
@@ -2263,22 +2370,22 @@ model ProcessInstance {
 }
 
 model ProcessAudit {
-  id               String   @id @default(cuid())
-  tenantId         String
+  id                String @id @default(cuid())
+  tenantId          String
   processInstanceId String
 
-  eventType       String
-  actorUserId     String?
+  eventType   String
+  actorUserId String?
 
-  fromStatus      ProcessStatus?
-  toStatus        ProcessStatus?
+  fromStatus ProcessStatus?
+  toStatus   ProcessStatus?
 
-  details         Json?
+  details Json?
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
   processInstance ProcessInstance @relation(fields: [processInstanceId], references: [id], onDelete: Cascade)
-  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, processInstanceId])
   @@index([tenantId, createdAt])

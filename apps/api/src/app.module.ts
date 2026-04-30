@@ -38,6 +38,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { PushController } from './push/push.controller';
 import { CronJobsModule } from './shared/scheduling/cron-jobs.module';
 import { ReceiptsModule } from './receipts/receipts.module';
+import { HitlModule } from './ops/hitl/hitl.module';
+import { OpsModule } from './ops/metrics/ops.module';
 
 @Module({
   imports: [
@@ -78,6 +80,8 @@ import { ReceiptsModule } from './receipts/receipts.module';
     TenantMembersModule,
     DashboardModule,
     ReceiptsModule,
+    HitlModule,
+    OpsModule,
   ],
   controllers: [PushController],
   providers: [],
