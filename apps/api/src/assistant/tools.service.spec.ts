@@ -41,16 +41,17 @@ describe('AssistantToolsService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('denies role without tool permission', async () => {
+  it('denies role without tool permission (returns controlled error)', async () => {
     const { service, prisma } = makeService();
     prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'RESIDENT' }] });
-    await expect(
-      service.executeTool(
-        'search_payments',
-        { question: 'pagos', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' } },
-        { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' },
-      ),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    const result = await service.executeTool(
+      'search_payments',
+      { question: 'pagos', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' },
+    );
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('forbidden');
   });
 
   it('asks for building when multi-building unit resolution is ambiguous', async () => {
@@ -113,13 +114,18 @@ describe('AssistantToolsService P1', () => {
     expect(result.responseType).toBe('list');
   });
 
-  it('denies role without get_unit_payments permission', async () => {
+  it('denies role without get_unit_payments permission (returns controlled error)', async () => {
     process.env.ASSISTANT_TOOLS_ROLE_PERMISSIONS_JSON = JSON.stringify({ TENANT_ADMIN: ['tools.search_payments'] });
     const { service, prisma } = makeService();
     prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
-    await expect(
-      service.executeTool('get_unit_payments', { question: 'pago', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } }, { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' }),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    const result = await service.executeTool(
+      'get_unit_payments',
+      { question: 'pago', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('forbidden');
   });
 
   it('getUnitBalanceByPeriod returns period evolution', async () => {
@@ -188,5 +194,154 @@ describe('AssistantToolsService P1', () => {
 
     expect(result.metadata.status).toContain('SUBMITTED');
     expect(result.metadata).not.toHaveProperty('mode');
+  });
+});
+
+describe('AssistantToolsService - Anti-Knowledge-Fallback Guard', () => {
+  const previousApiKeys = process.env.ASSISTANT_READONLY_API_KEYS;
+
+  beforeEach(() => {
+    process.env.ASSISTANT_READONLY_API_KEYS = 'test-readonly-key';
+  });
+
+  afterEach(() => {
+    process.env.ASSISTANT_READONLY_API_KEYS = previousApiKeys;
+  });
+
+  const makeService = () => {
+    const prisma = {
+      membership: { findUnique: jest.fn() },
+      building: { findMany: jest.fn() },
+      unit: { findMany: jest.fn(), findUniqueOrThrow: jest.fn() },
+      charge: { findMany: jest.fn(), aggregate: jest.fn() },
+      payment: { findMany: jest.fn(), aggregate: jest.fn() },
+      ticket: { findMany: jest.fn() },
+      unitOccupant: { findMany: jest.fn() },
+    } as any;
+    const audit = { createLog: jest.fn() } as any;
+    const processSearch = {} as any;
+    const crossQuery = {} as any;
+    const service = new AssistantToolsService(prisma, audit, processSearch, crossQuery);
+    return { service, prisma, audit };
+  };
+
+  it('returns controlled error when tool throws ForbiddenException (gateway 403)', async () => {
+    const { service, prisma } = makeService();
+    const ForbiddenException = require('@nestjs/common').ForbiddenException;
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new ForbiddenException('Access denied'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('forbidden');
+    expect(result.metadata.traceId).toBeDefined();
+    expect(result.answer).toContain('No pude obtener datos operativos');
+  });
+
+  it('returns controlled error when tool throws BadRequestException (invalid payload)', async () => {
+    const { service, prisma } = makeService();
+    const BadRequestException = require('@nestjs/common').BadRequestException;
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new BadRequestException('Invalid input'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('invalid_request');
+  });
+
+  it('returns controlled error when tool throws timeout error', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new Error('Query timeout exceeded'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('timeout');
+  });
+
+  it('returns controlled error when tool throws unavailable error', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new Error('Service unavailable'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('unavailable');
+  });
+
+  it('returns live_data when tool succeeds (snapshot/live_data)', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockResolvedValue([{ id: 'b1', name: 'Torre A' }]);
+    prisma.unit.findMany.mockResolvedValue([{ id: 'u1', code: '101', label: '101', buildingId: 'b1', building: { name: 'Torre A' } }]);
+    prisma.ticket.findMany.mockResolvedValue([
+      { id: 't1', title: 'Leak in apartment 5B', building: { name: 'Torre A' }, status: 'OPEN', createdAt: new Date() },
+    ]);
+
+    const result = await service.executeTool(
+      'search_tickets',
+      { question: 'tickets abiertos', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).toBe('live_data');
+    expect(result.responseType).toBe('list');
+    expect(result.metadata.gatewayOutcome).toBeUndefined();
+  });
+
+  it('NEVER returns knowledge as answerSource for operational tools', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new Error('Database unavailable'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.answerSource).not.toBe('knowledge');
+    expect(result.answerSource).not.toBe('fallback');
+    expect(result.answerSource).toBe('error');
+  });
+
+  it('includes traceId in controlled error for debugging', async () => {
+    const { service, prisma } = makeService();
+    const ForbiddenException = require('@nestjs/common').ForbiddenException;
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.building.findMany.mockRejectedValue(new ForbiddenException('Access denied'));
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      { question: 'unidad 101', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' } },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.metadata.traceId).toMatch(/^[A-Z0-9]+$/);
+    expect(result.answer).toContain(result.metadata.traceId);
   });
 });

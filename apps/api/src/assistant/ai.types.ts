@@ -19,6 +19,10 @@ export interface ChatResponse {
   answer: string;
   suggestedActions: SuggestedAction[];
   interactionId?: string;
+  answerSource?: 'live_data' | 'knowledge' | 'fallback' | 'snapshot' | string;
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data' | 'exact' | 'summary' | 'list';
+  options?: Array<{ id: string; label: string; index: number }>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AiProviderContext {

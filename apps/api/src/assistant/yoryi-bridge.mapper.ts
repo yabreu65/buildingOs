@@ -17,7 +17,22 @@ export type CanonicalAssistantResponse = {
     auditId?: string;
     intentCode?: string;
     traceId?: string;
+    timestamp?: string;
+    tenantId?: string;
+    userId?: string;
+    role?: string;
+    buildingId?: string;
+    unitId?: string;
+    resolvedLevel?: 'P0' | 'P1' | 'P2B' | 'P2' | 'P3' | 'FALLBACK';
+    resolvedIntentCode?: string;
+    toolName?: string;
+    fallbackPath?: string;
     gatewayOutcome: GatewayOutcome;
+    latencyMsTotal?: number;
+    latencyMsRouting?: number;
+    latencyMsGateway?: number;
+    p0EnforcementEnabled?: boolean;
+    p3Enabled?: boolean;
     rawAnswerSource?: string;
   };
 };
@@ -43,6 +58,7 @@ export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantRespons
   }
 
   const y = payload as YoryiPayload;
+  const sourceMetadata = extractSourceMetadata(y.provenance?.sources);
   const answer = asNonEmptyString(y.answer);
   const answerSource = asAllowedAnswerSource(y.answerSource);
   if (!answer || !answerSource) {
@@ -56,9 +72,26 @@ export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantRespons
     suggestedActions: mapActions(y.actions),
     metadata: {
       auditId: asNonEmptyString(y.auditId) ?? undefined,
-      intentCode: extractMetaString(y.provenance?.sources, 'intentCode') ?? undefined,
+      intentCode: extractMetaString(y.provenance?.sources, 'intentCode')
+        ?? extractMetaString(y.provenance?.sources, 'resolvedIntentCode')
+        ?? undefined,
       traceId: extractMetaString(y.provenance?.sources, 'traceId') ?? undefined,
-      gatewayOutcome: 'success',
+      timestamp: asNonEmptyString(sourceMetadata?.timestamp) ?? undefined,
+      tenantId: asNonEmptyString(sourceMetadata?.tenantId) ?? undefined,
+      userId: asNonEmptyString(sourceMetadata?.userId) ?? undefined,
+      role: asNonEmptyString(sourceMetadata?.role) ?? undefined,
+      buildingId: asNonEmptyString(sourceMetadata?.buildingId) ?? undefined,
+      unitId: asNonEmptyString(sourceMetadata?.unitId) ?? undefined,
+      resolvedLevel: asResolvedLevel(sourceMetadata?.resolvedLevel) ?? undefined,
+      resolvedIntentCode: asNonEmptyString(sourceMetadata?.resolvedIntentCode) ?? undefined,
+      toolName: asNonEmptyString(sourceMetadata?.toolName) ?? undefined,
+      fallbackPath: asNonEmptyString(sourceMetadata?.fallbackPath) ?? undefined,
+      gatewayOutcome: asGatewayOutcome(sourceMetadata?.gatewayOutcome) ?? 'success',
+      latencyMsTotal: asFiniteNumber(sourceMetadata?.latencyMsTotal),
+      latencyMsRouting: asFiniteNumber(sourceMetadata?.latencyMsRouting),
+      latencyMsGateway: asFiniteNumber(sourceMetadata?.latencyMsGateway),
+      p0EnforcementEnabled: asBoolean(sourceMetadata?.p0EnforcementEnabled),
+      p3Enabled: asBoolean(sourceMetadata?.p3Enabled),
       rawAnswerSource: typeof y.answerSource === 'string' ? y.answerSource : undefined,
     },
   };
@@ -116,6 +149,44 @@ function extractMetaString(
     }
   }
   return null;
+}
+
+function extractSourceMetadata(
+  sources: YoryiSourceMeta[] | undefined,
+): Record<string, unknown> | null {
+  if (!Array.isArray(sources)) return null;
+  for (const source of sources) {
+    if (isRecord(source?.metadata)) {
+      return source.metadata;
+    }
+  }
+  return null;
+}
+
+function asResolvedLevel(
+  value: unknown,
+): CanonicalAssistantResponse['metadata']['resolvedLevel'] | null {
+  if (value === 'P0' || value === 'P1' || value === 'P2B' || value === 'P2' || value === 'P3' || value === 'FALLBACK') {
+    return value;
+  }
+  return null;
+}
+
+function asGatewayOutcome(value: unknown): GatewayOutcome | null {
+  if (value === 'success' || value === 'timeout' || value === 'unavailable' || value === 'invalid_payload' || value === 'contract_mismatch' || value === 'denied') {
+    return value;
+  }
+  return null;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  return undefined;
 }
 
 function asAllowedAnswerSource(value?: string): CanonicalAssistantResponse['answerSource'] | null {

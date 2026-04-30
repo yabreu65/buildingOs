@@ -4,6 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { AuditAction, ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -62,60 +63,73 @@ export class AssistantToolsService {
     const startedAt = Date.now();
     this.assertApiKey(headers.apiKey);
     const context = this.normalizeAndValidateContext(request.context, headers);
-    await this.assertMembershipAndPermissions(context.tenantId, context.userId, context.role, toolName);
 
     let response: AssistantToolResponse;
-    switch (toolName) {
-      case 'resolve_unit_ref':
-        response = await this.resolveUnitRef(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'get_unit_balance':
-        response = await this.getUnitBalance(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'get_unit_profile':
-        response = await this.getUnitProfile(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'get_unit_payments':
-        response = await this.getUnitPayments(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'get_unit_balance_by_period':
-        response = await this.getUnitBalanceByPeriod(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'search_payments':
-        response = await this.searchPayments(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'analytics_debt_aging':
-        response = await this.analyticsDebtAging(context.tenantId, request.toolInput);
-        break;
-      case 'analytics_debt_by_tower':
-        response = await this.analyticsDebtByTower(context.tenantId, request.toolInput);
-        break;
-      case 'search_tickets':
-        response = await this.searchTickets(context.tenantId, request.question, request.toolInput);
-        break;
-      case 'get_unit_debt_trend':
-        response = await this.getUnitDebtTrend(context.tenantId, request.question ?? '', request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
-        break;
-      case 'get_building_debt_trend':
-        response = await this.getBuildingDebtTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
-        break;
-      case 'get_collections_trend':
-        response = await this.getCollectionsTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
-        break;
-      case 'search_processes':
-        response = await this.searchProcesses(context.tenantId, request.toolInput);
-        break;
-      case 'get_process_summary':
-        response = await this.getProcessSummary(context.tenantId, request.toolInput);
-        break;
-      case 'search_claims':
-        response = await this.searchClaims(context.tenantId, request.toolInput);
-        break;
-      case 'cross_query':
-        response = await this.executeCrossQuery(context.tenantId, context.role, request.toolInput);
-        break;
-      default:
-        throw new BadRequestException(`Unsupported tool: ${toolName}`);
+    try {
+      await this.assertMembershipAndPermissions(context.tenantId, context.userId, context.role, toolName);
+
+      switch (toolName) {
+        case 'resolve_unit_ref':
+          response = await this.resolveUnitRef(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'get_unit_balance':
+          response = await this.getUnitBalance(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'get_unit_profile':
+          response = await this.getUnitProfile(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'get_unit_payments':
+          response = await this.getUnitPayments(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'get_unit_balance_by_period':
+          response = await this.getUnitBalanceByPeriod(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'search_payments':
+          response = await this.searchPayments(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'analytics_debt_aging':
+          response = await this.analyticsDebtAging(context.tenantId, request.toolInput);
+          break;
+        case 'analytics_debt_by_tower':
+          response = await this.analyticsDebtByTower(context.tenantId, request.toolInput);
+          break;
+        case 'search_tickets':
+          response = await this.searchTickets(context.tenantId, request.question, request.toolInput);
+          break;
+        case 'get_unit_debt_trend':
+          response = await this.getUnitDebtTrend(context.tenantId, request.question ?? '', request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+          break;
+        case 'get_building_debt_trend':
+          response = await this.getBuildingDebtTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+          break;
+        case 'get_collections_trend':
+          response = await this.getCollectionsTrend(context.tenantId, request.toolInput, request.responseContractVersion ?? ASSISTANT_RESPONSE_SCHEMA_VERSION);
+          break;
+        case 'search_processes':
+          response = await this.searchProcesses(context.tenantId, request.toolInput);
+          break;
+        case 'get_process_summary':
+          response = await this.getProcessSummary(context.tenantId, request.toolInput);
+          break;
+        case 'search_claims':
+          response = await this.searchClaims(context.tenantId, request.toolInput);
+          break;
+        case 'cross_query':
+          response = await this.executeCrossQuery(context.tenantId, context.role, request.toolInput);
+          break;
+        default:
+          throw new BadRequestException(`Unsupported tool: ${toolName}`);
+      }
+    } catch (error) {
+      // Handle operational tool errors with controlled responses
+      // This prevents fallback to knowledge/docs when operational routes match
+      const traceId = this.generateTraceId();
+      const gatewayOutcome = this.getGatewayOutcomeFromError(error);
+
+      response = this.buildControlledErrorResponse(gatewayOutcome, traceId, {
+        originalError: error instanceof Error ? error.message : String(error),
+        toolName,
+      });
     }
 
     void this.audit.createLog({
@@ -546,6 +560,30 @@ export class AssistantToolsService {
     };
   }
 
+  /**
+   * Builds a controlled error response for operational tools
+   * Ensures no fallback to knowledge/docs when operational routes match
+   */
+  private buildControlledErrorResponse(
+    gatewayOutcome: string,
+    traceId: string,
+    metadata: Record<string, unknown> = {},
+  ): AssistantToolResponse {
+    return {
+      contractVersion: ASSISTANT_RESPONSE_SCHEMA_VERSION,
+      answer: `No pude obtener datos operativos en este momento. Detalle: ${gatewayOutcome}. Referencia: ${traceId}`,
+      answerSource: 'error',
+      responseType: 'error',
+      dataScope: 'tenant',
+      actions: [],
+      metadata: {
+        ...metadata,
+        gatewayOutcome,
+        traceId,
+      },
+    };
+  }
+
   private pickString(value: unknown, key: string): string | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return null;
@@ -576,27 +614,48 @@ export class AssistantToolsService {
   }
 
   private extractTowerToken(message: string): string | null {
-    const match = this.normalize(message).match(/torre\s+([a-z0-9]+)/i);
-    return match?.[1] ?? null;
+    const normalized = this.normalize(message);
+    const match = normalized.match(/(?:torre|edificio|bloque)\s+([a-z0-9]+)/i);
+    if (match?.[1]) return match[1];
+    const towerDirectMatch = normalized.match(/^([a-z0-9]+)\s*-\s*\d+\s*$/);
+    if (towerDirectMatch?.[1]) return towerDirectMatch[1];
+    return null;
   }
 
   private extractUnitToken(message: string): string | null {
-    const match = this.normalize(message).match(
-      /(?:unidad|apartamento|depto|departamento|apto)\s+([a-z0-9-]+)/i,
+    const normalized = this.normalize(message);
+    const explicitMatch = normalized.match(
+      /(?:unidad|apartamento|depto|departamento|apto|piso)\s+([a-z0-9][-]?[a-z0-9]*)/i,
     );
-    return match?.[1] ?? null;
+    if (explicitMatch?.[1]) return explicitMatch[1];
+    const directCodeMatch = normalized.match(/\b([a-z]\s*-\s*\d+|\d+\s*-\s*\d+)\b/i);
+    if (directCodeMatch?.[1]) return directCodeMatch[1].replace(/\s/g, '');
+    const standaloneUnitMatch = normalized.match(/\b([a-z]?\d{2,4})\b/);
+    if (standaloneUnitMatch?.[1]) return standaloneUnitMatch[1];
+    return null;
   }
 
   private matchesUnit(code: string, label: string | null, token: string): boolean {
-    const normalizedToken = this.normalize(token);
+    const normalizedCode = this.normalize(code).replace(/\s/g, '');
+    const normalizedLabel = this.normalize(label ?? '').replace(/\s/g, '');
+    const normalizedToken = this.normalize(token).replace(/\s/g, '');
     const compactToken = normalizedToken.replace(/[^a-z0-9]/g, '');
-    const normalizedCode = this.normalize(code);
-    const normalizedLabel = this.normalize(label ?? '');
-    return (
+    if (
       normalizedCode === normalizedToken ||
       normalizedLabel === normalizedToken ||
-      normalizedCode.replace(/[^a-z0-9]/g, '') === compactToken
-    );
+      normalizedCode.replace(/[^a-z0-9]/g, '') === compactToken ||
+      normalizedLabel.replace(/[^a-z0-9]/g, '') === compactToken
+    ) {
+      return true;
+    }
+    if (/^[a-z]-\d+$/i.test(token) || /^\d+-\d+$/.test(token)) {
+      const compactTokenForMatch = token.replace(/[^a-z0-9]/gi, '');
+      const codeNormalized = normalizedCode.replace(/[^a-z0-9]/gi, '');
+      if (codeNormalized === compactTokenForMatch) return true;
+      const labelNormalized = normalizedLabel.replace(/[^a-z0-9]/gi, '');
+      if (labelNormalized === compactTokenForMatch) return true;
+    }
+    return false;
   }
 
   private normalize(value: string): string {
@@ -614,6 +673,30 @@ export class AssistantToolsService {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(cents / 100);
+  }
+
+  private generateTraceId(): string {
+    try {
+      return crypto.randomUUID().slice(0, 8).toUpperCase();
+    } catch {
+      return `T${Date.now().toString(36).toUpperCase()}`;
+    }
+  }
+
+  private getGatewayOutcomeFromError(error: unknown): string {
+    if (error instanceof ForbiddenException) {
+      return 'forbidden';
+    }
+    if (error instanceof BadRequestException) {
+      return 'invalid_request';
+    }
+    if (error instanceof Error && error.message.includes('timeout')) {
+      return 'timeout';
+    }
+    if (error instanceof Error && error.message.includes('unavailable')) {
+      return 'unavailable';
+    }
+    return 'error';
   }
 
   private async getUnitPayments(

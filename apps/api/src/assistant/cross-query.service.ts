@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProcessSearchService } from '../process/process-search.service';
 
+function last<T>(arr: T[]): T | undefined {
+  return arr.length > 0 ? arr[arr.length - 1] : undefined;
+}
+
 export type TemplateId = 'TPL-01' | 'TPL-02' | 'TPL-03' | 'TPL-04' | 'TPL-05' | 'TPL-06' | 'TPL-07' | 'TPL-08' | 'TPL-09' | 'TPL-10';
 
 export const TEMPLATE_ALLOWLIST: Record<TemplateId, { roles: string[]; params: string[] }> = {
@@ -796,11 +800,11 @@ export class CrossQueryService {
       medium: openTickets.filter((t) => t.priority === 'MEDIUM').length,
       low: openTickets.filter((t) => t.priority === 'LOW').length,
     };
-    const ticketsAsOf = openTickets.length > 0 ? toIso(openTickets[openTickets.length - 1].createdAt) : new Date().toISOString();
+    const ticketsAsOf = last(openTickets) ? toIso(last(openTickets)!.createdAt) : new Date().toISOString();
 
     const pendingPaymentsAmountMinor = pendingPayments.reduce((acc, payment) => acc + payment.amount, 0);
-    const pendingPaymentsAsOf = pendingPayments.length > 0
-      ? toIso(pendingPayments[pendingPayments.length - 1].createdAt)
+    const pendingPaymentsAsOf = last(pendingPayments)
+      ? toIso(last(pendingPayments)!.createdAt)
       : new Date().toISOString();
 
     const asOf = maxIsoDate([snapshotAsOf, processesAsOf, ticketsAsOf, pendingPaymentsAsOf]);

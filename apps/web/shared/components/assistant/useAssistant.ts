@@ -19,6 +19,8 @@ export type AssistantMessage = {
     fileName: string;
   }>;
   actions?: AssistantAction[];
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
 };
 
 export type AssistantContext = {
@@ -99,11 +101,21 @@ type BuildingOsChatRequest = {
   page: string;
   buildingId?: string;
   unitId?: string;
+  context?: {
+    extra?: {
+      sessionId?: string;
+      choiceId?: string;
+      [key: string]: unknown;
+    };
+  };
 };
 
 type BuildingOsChatResponse = {
   answer: string;
   suggestedActions?: BuildingOsSuggestedAction[];
+  interactionId?: string;
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
 };
 
 const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
@@ -166,8 +178,16 @@ export function useAssistant(options: UseAssistantOptions = {}) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [context, setContext] = useState<AssistantContext | undefined>(initialContext);
+  const [sessionId] = useState(() => {
+    if (typeof window === 'undefined') return `ssr-${Date.now()}`;
+    const stored = sessionStorage.getItem('assistant_chat_session_id');
+    if (stored) return stored;
+    const newId = crypto.randomUUID();
+    sessionStorage.setItem('assistant_chat_session_id', newId);
+    return newId;
+  });
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, choiceId?: string) => {
     if (!context) {
       setError('Context not initialized');
       return;
@@ -192,6 +212,12 @@ export function useAssistant(options: UseAssistantOptions = {}) {
           page: context.currentModule || context.route || 'assistant',
           buildingId: context.buildingId,
           unitId: context.unitId,
+          context: {
+            extra: {
+              sessionId,
+              ...(choiceId && { choiceId }),
+            },
+          },
         },
         headers: {
           'X-Tenant-Id': context.tenantId,
@@ -203,6 +229,8 @@ export function useAssistant(options: UseAssistantOptions = {}) {
         role: 'assistant',
         content: data.answer,
         actions: (data.suggestedActions || []).map(mapSuggestedAction),
+        responseType: data.responseType,
+        options: data.options,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -219,7 +247,11 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [context]);
+  }, [context, sessionId]);
+
+  const sendClarificationChoice = useCallback((choiceId: string, label: string) => {
+    return sendMessage(label, choiceId);
+  }, [sendMessage]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
@@ -236,6 +268,7 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     error,
     context,
     sendMessage,
+    sendClarificationChoice,
     clearMessages,
     updateContext,
   };

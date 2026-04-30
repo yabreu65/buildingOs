@@ -36,7 +36,7 @@ describe('UnitGroupService', () => {
               update: jest.fn(),
               delete: jest.fn(),
             },
-            unit: { findMany: jest.fn() },
+            unit: { findMany: jest.fn(), findFirst: jest.fn() },
             unitGroupMember: {
               findFirst: jest.fn(),
               createMany: jest.fn(),

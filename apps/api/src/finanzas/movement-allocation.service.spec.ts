@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FinanzasValidators } from './finanzas.validators';
 import { MovementAllocationService } from './movement-allocation.service';
 
 describe('MovementAllocationService', () => {
@@ -21,7 +22,7 @@ describe('MovementAllocationService', () => {
           useValue: {
             building: { findMany: jest.fn() },
             movementAllocation: {
-              createMany: jest.fn(),
+              create: jest.fn(),
               findMany: jest.fn(),
               deleteMany: jest.fn(),
             },
@@ -32,8 +33,8 @@ describe('MovementAllocationService', () => {
           useValue: { createLog: jest.fn() },
         },
         {
-          provide: 'AuditService',
-          useValue: { createLog: jest.fn() },
+          provide: FinanzasValidators,
+          useValue: {},
         },
       ],
     }).compile();
@@ -202,8 +203,8 @@ describe('MovementAllocationService', () => {
 
       jest.spyOn(service, 'validateAllocations').mockResolvedValue(undefined);
       jest
-        .spyOn(prisma.movementAllocation, 'createMany')
-        .mockResolvedValue({ count: 2 });
+        .spyOn(prisma.movementAllocation, 'create')
+        .mockResolvedValue({ id: 'alloc-1' } as any);
 
       await service.createForExpense(
         tenantId,
@@ -214,15 +215,13 @@ describe('MovementAllocationService', () => {
         membershipId,
       );
 
-      expect(prisma.movementAllocation.createMany).toHaveBeenCalledWith(
+      expect(prisma.movementAllocation.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.arrayContaining([
-            expect.objectContaining({
-              tenantId,
-              expenseId: 'exp-1',
-              percentage: 60,
-            }),
-          ]),
+          data: expect.objectContaining({
+            tenantId,
+            expenseId: 'exp-1',
+            percentage: 60,
+          }),
         }),
       );
       expect(auditService.createLog).toHaveBeenCalledWith(
@@ -242,8 +241,8 @@ describe('MovementAllocationService', () => {
 
       jest.spyOn(service, 'validateAllocations').mockResolvedValue(undefined);
       jest
-        .spyOn(prisma.movementAllocation, 'createMany')
-        .mockResolvedValue({ count: 2 });
+        .spyOn(prisma.movementAllocation, 'create')
+        .mockResolvedValue({ id: 'alloc-1' } as any);
 
       await service.createForIncome(
         tenantId,
@@ -254,15 +253,13 @@ describe('MovementAllocationService', () => {
         membershipId,
       );
 
-      expect(prisma.movementAllocation.createMany).toHaveBeenCalledWith(
+      expect(prisma.movementAllocation.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.arrayContaining([
-            expect.objectContaining({
-              tenantId,
-              incomeId: 'inc-1',
-              percentage: 50,
-            }),
-          ]),
+          data: expect.objectContaining({
+            tenantId,
+            incomeId: 'inc-1',
+            percentage: 50,
+          }),
         }),
       );
       expect(auditService.createLog).toHaveBeenCalledWith(

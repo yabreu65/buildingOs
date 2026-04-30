@@ -66,6 +66,28 @@ type YoryiReadOnlyResolution =
   | { kind: 'blocked'; response: ChatResponse; family?: 'P0' | 'P2' | 'P3' };
 
 type RouteFamily = 'P0' | 'P2' | 'P3';
+type ResolvedLevel = 'P0' | 'P1' | 'P2B' | 'P2' | 'P3' | 'FALLBACK';
+
+type AssistantTurnCompletedEvent = {
+  event: 'assistant.turn_completed';
+  traceId: string;
+  timestamp: string;
+  tenantId: string;
+  userId?: string;
+  role: string;
+  buildingId?: string;
+  unitId?: string;
+  resolvedLevel: ResolvedLevel;
+  resolvedIntentCode?: string;
+  toolName?: string;
+  fallbackPath: string;
+  gatewayOutcome: GatewayOutcome;
+  latencyMsTotal: number;
+  latencyMsRouting: number;
+  latencyMsGateway?: number;
+  p0EnforcementEnabled: boolean;
+  p3Enabled: boolean;
+};
 
 interface YoryiAssistantChatResponse {
   answer?: string;
@@ -437,20 +459,78 @@ export class AssistantService {
     userRoles: string[];
     request: ChatRequest;
   }): Promise<YoryiReadOnlyResolution> {
+    const turnStartedAt = Date.now();
+    const role = this.resolvePrimaryAdminRole(params.userRoles) ?? 'RESIDENT';
+    const p3EnabledForTenant = this.isP3EnabledForTenant(params.tenantId);
+    const emitTurnCompleted = (event: AssistantTurnCompletedEvent): void => {
+      this.logger.log(event);
+    };
+
     if (!this.shouldUseYoryiEngine(params.tenantId, params.userRoles)) {
       this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (yoryi disabled or not allowed)', tenantId: params.tenantId });
+      emitTurnCompleted({
+        event: 'assistant.turn_completed',
+        traceId: this.generateTraceId(),
+        timestamp: new Date().toISOString(),
+        tenantId: params.tenantId,
+        userId: params.userId,
+        role,
+        buildingId: params.request.buildingId,
+        unitId: params.request.unitId,
+        resolvedLevel: 'FALLBACK',
+        fallbackPath: 'bridge_yoryi_disabled_or_not_allowed',
+        gatewayOutcome: 'unavailable',
+        latencyMsTotal: Date.now() - turnStartedAt,
+        latencyMsRouting: Date.now() - turnStartedAt,
+        p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+        p3Enabled: p3EnabledForTenant,
+      });
       return { kind: 'fallback_allowed' };
     }
 
     const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL;
     if (!baseUrl) {
       this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (no baseUrl)', tenantId: params.tenantId });
+      emitTurnCompleted({
+        event: 'assistant.turn_completed',
+        traceId: this.generateTraceId(),
+        timestamp: new Date().toISOString(),
+        tenantId: params.tenantId,
+        userId: params.userId,
+        role,
+        buildingId: params.request.buildingId,
+        unitId: params.request.unitId,
+        resolvedLevel: 'FALLBACK',
+        fallbackPath: 'bridge_missing_base_url',
+        gatewayOutcome: 'unavailable',
+        latencyMsTotal: Date.now() - turnStartedAt,
+        latencyMsRouting: Date.now() - turnStartedAt,
+        p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+        p3Enabled: p3EnabledForTenant,
+      });
       return { kind: 'fallback_allowed' };
     }
 
-    const role = this.resolvePrimaryAdminRole(params.userRoles);
-    if (!role) {
+    const adminRole = this.resolvePrimaryAdminRole(params.userRoles);
+    if (!adminRole) {
       this.logger.log({ msg: '[FLOW] operational-first: FALLBACK (no admin role)', tenantId: params.tenantId, userRoles: params.userRoles });
+      emitTurnCompleted({
+        event: 'assistant.turn_completed',
+        traceId: this.generateTraceId(),
+        timestamp: new Date().toISOString(),
+        tenantId: params.tenantId,
+        userId: params.userId,
+        role,
+        buildingId: params.request.buildingId,
+        unitId: params.request.unitId,
+        resolvedLevel: 'FALLBACK',
+        fallbackPath: 'bridge_no_admin_role',
+        gatewayOutcome: 'denied',
+        latencyMsTotal: Date.now() - turnStartedAt,
+        latencyMsRouting: Date.now() - turnStartedAt,
+        p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+        p3Enabled: p3EnabledForTenant,
+      });
       return { kind: 'fallback_allowed' };
     }
 
@@ -476,8 +556,8 @@ export class AssistantService {
         headers: this.buildYoryiHeaders({
           tenantId: params.tenantId,
           userId: params.userId,
-          role,
-          p3Enabled: this.isP3EnabledForTenant(params.tenantId),
+          role: adminRole,
+          p3Enabled: p3EnabledForTenant,
         }),
         body: JSON.stringify({
           message: params.request.message,
@@ -488,7 +568,7 @@ export class AssistantService {
             appId: 'buildingos',
             tenantId: params.tenantId,
             userId: params.userId,
-            role,
+            role: adminRole,
             route: this.resolveRouteFromPage(params.request.page),
             currentModule: this.resolveModuleFromPage(
               params.request.page,
@@ -509,6 +589,23 @@ export class AssistantService {
           status: response.status,
           statusText: response.statusText,
         });
+        emitTurnCompleted({
+          event: 'assistant.turn_completed',
+          traceId: requestId,
+          timestamp: new Date().toISOString(),
+          tenantId: params.tenantId,
+          userId: params.userId,
+          role: adminRole,
+          buildingId: params.request.buildingId,
+          unitId: params.request.unitId,
+          resolvedLevel: 'P0',
+          fallbackPath: 'bridge_http_not_ok',
+          gatewayOutcome: 'unavailable',
+          latencyMsTotal: Date.now() - turnStartedAt,
+          latencyMsRouting: Date.now() - turnStartedAt,
+          p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+          p3Enabled: p3EnabledForTenant,
+        });
         return {
           kind: 'blocked',
           response: this.buildYoryiControlledResponse('unavailable', 'P0', requestId),
@@ -519,7 +616,6 @@ export class AssistantService {
       const payload = (await response.json()) as YoryiAssistantChatResponse;
       const canonical = mapYoryiToCanonical(payload);
       const routeFamily = this.detectRouteFamily(payload.toolName);
-      const p3EnabledForTenant = this.isP3EnabledForTenant(params.tenantId);
       const uiPage = params.request.context?.extra?.uiPage;
       this.logger.debug({
         msg: '[BRIDGE] routing response diagnostics',
@@ -540,6 +636,23 @@ export class AssistantService {
           routeFamily,
           ASSISTANT_P3_ENABLED: process.env.ASSISTANT_P3_ENABLED ?? '(not set)',
           canaryTenants: this.parseCsvEnv(process.env.ASSISTANT_YORYI_CANARY_TENANTS),
+        });
+        emitTurnCompleted({
+          event: 'assistant.turn_completed',
+          traceId: requestId,
+          timestamp: new Date().toISOString(),
+          tenantId: params.tenantId,
+          userId: params.userId,
+          role: adminRole,
+          buildingId: params.request.buildingId,
+          unitId: params.request.unitId,
+          resolvedLevel: 'P3',
+          fallbackPath: 'bridge_p3_flag_blocked',
+          gatewayOutcome: 'unavailable',
+          latencyMsTotal: Date.now() - turnStartedAt,
+          latencyMsRouting: Date.now() - turnStartedAt,
+          p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+          p3Enabled: p3EnabledForTenant,
         });
         return {
           kind: 'blocked',
@@ -564,6 +677,23 @@ export class AssistantService {
           answerSource: payload?.answerSource,
           reason: 'invalid_payload',
         });
+        emitTurnCompleted({
+          event: 'assistant.turn_completed',
+          traceId: requestId,
+          timestamp: new Date().toISOString(),
+          tenantId: params.tenantId,
+          userId: params.userId,
+          role: adminRole,
+          buildingId: params.request.buildingId,
+          unitId: params.request.unitId,
+          resolvedLevel: routeFamily === 'P2' ? 'P2' : routeFamily,
+          fallbackPath: 'bridge_invalid_payload',
+          gatewayOutcome: 'invalid_payload',
+          latencyMsTotal: Date.now() - turnStartedAt,
+          latencyMsRouting: Date.now() - turnStartedAt,
+          p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+          p3Enabled: p3EnabledForTenant,
+        });
         return {
           kind: 'blocked',
           response: this.buildYoryiControlledResponse('invalid_payload', routeFamily, requestId),
@@ -577,6 +707,30 @@ export class AssistantService {
         const reason = operational && canonical.answerSource !== 'live_data'
           ? 'denied'
           : 'contract_mismatch';
+        emitTurnCompleted({
+          event: 'assistant.turn_completed',
+          traceId: requestId,
+          timestamp: new Date().toISOString(),
+          tenantId: params.tenantId,
+          userId: params.userId,
+          role: adminRole,
+          buildingId: params.request.buildingId,
+          unitId: params.request.unitId,
+          resolvedLevel:
+            canonical.metadata.resolvedLevel
+            ?? (routeFamily === 'P2' ? 'P2' : routeFamily),
+          resolvedIntentCode: canonical.metadata.resolvedIntentCode ?? canonical.metadata.intentCode,
+          toolName: canonical.metadata.toolName,
+          fallbackPath: reason === 'denied' ? 'bridge_non_live_data_operational' : 'bridge_contract_mismatch',
+          gatewayOutcome: reason,
+          latencyMsTotal: Date.now() - turnStartedAt,
+          latencyMsRouting: canonical.metadata.latencyMsRouting ?? (Date.now() - turnStartedAt),
+          latencyMsGateway: canonical.metadata.latencyMsGateway,
+          p0EnforcementEnabled:
+            canonical.metadata.p0EnforcementEnabled
+            ?? (process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true'),
+          p3Enabled: canonical.metadata.p3Enabled ?? p3EnabledForTenant,
+        });
         return {
           kind: 'blocked',
           response: this.buildYoryiControlledResponse(reason, routeFamily, requestId),
@@ -619,6 +773,31 @@ export class AssistantService {
           }))
         : this.mapYoryiActionsToBuildingOsActions(payload.actions, params.request);
 
+      emitTurnCompleted({
+        event: 'assistant.turn_completed',
+        traceId: canonical.metadata.traceId ?? this.generateTraceId(),
+        timestamp: canonical.metadata.timestamp ?? new Date().toISOString(),
+        tenantId: canonical.metadata.tenantId ?? params.tenantId,
+        userId: canonical.metadata.userId ?? params.userId,
+        role: canonical.metadata.role ?? adminRole,
+        buildingId: canonical.metadata.buildingId ?? params.request.buildingId,
+        unitId: canonical.metadata.unitId ?? params.request.unitId,
+        resolvedLevel:
+          canonical.metadata.resolvedLevel
+          ?? (routeFamily === 'P2' ? 'P2' : routeFamily),
+        resolvedIntentCode: canonical.metadata.resolvedIntentCode ?? canonical.metadata.intentCode,
+        toolName: canonical.metadata.toolName ?? payload.toolName,
+        fallbackPath: canonical.metadata.fallbackPath ?? 'none',
+        gatewayOutcome: canonical.metadata.gatewayOutcome,
+        latencyMsTotal: canonical.metadata.latencyMsTotal ?? (Date.now() - turnStartedAt),
+        latencyMsRouting: canonical.metadata.latencyMsRouting ?? (Date.now() - turnStartedAt),
+        latencyMsGateway: canonical.metadata.latencyMsGateway,
+        p0EnforcementEnabled:
+          canonical.metadata.p0EnforcementEnabled
+          ?? (process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true'),
+        p3Enabled: canonical.metadata.p3Enabled ?? p3EnabledForTenant,
+      });
+
       return {
         kind: 'response',
         response: {
@@ -647,6 +826,23 @@ export class AssistantService {
         msg: `[BRIDGE] Yoryi error, routeMatched family=${this.detectRouteFamily(undefined)}: ${String(error)}`,
         tenantId: params.tenantId,
         gatewayOutcome: outcome,
+      });
+      emitTurnCompleted({
+        event: 'assistant.turn_completed',
+        traceId: requestId,
+        timestamp: new Date().toISOString(),
+        tenantId: params.tenantId,
+        userId: params.userId,
+        role: adminRole,
+        buildingId: params.request.buildingId,
+        unitId: params.request.unitId,
+        resolvedLevel: 'P0',
+        fallbackPath: outcome === 'timeout' ? 'bridge_timeout' : 'bridge_exception',
+        gatewayOutcome: outcome,
+        latencyMsTotal: Date.now() - turnStartedAt,
+        latencyMsRouting: Date.now() - turnStartedAt,
+        p0EnforcementEnabled: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED === 'true',
+        p3Enabled: p3EnabledForTenant,
       });
       return {
         kind: 'blocked',
@@ -1288,6 +1484,7 @@ export class AssistantService {
       'aging',
       'antiguedad',
       'por torre',
+      'deuda torre',
       'que torres',
       'resumen',
       'unidades con deuda',

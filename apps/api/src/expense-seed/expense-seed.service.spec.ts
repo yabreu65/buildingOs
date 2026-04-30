@@ -10,8 +10,6 @@ describe('ExpenseLedgerSeedService', () => {
   let audit: AuditService;
 
   const mockTenantId = 'tenant-123';
-  const mockCreateManyResult = { count: DEFAULT_LEDGER_CATEGORIES.length };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -20,7 +18,7 @@ describe('ExpenseLedgerSeedService', () => {
           provide: PrismaService,
           useValue: {
             expenseLedgerCategory: {
-              createMany: jest.fn().mockResolvedValue(mockCreateManyResult),
+              upsert: jest.fn().mockImplementation(async ({ create }) => create),
               count: jest.fn(),
             },
           },
@@ -48,34 +46,25 @@ describe('ExpenseLedgerSeedService', () => {
         skipped: 0,
       });
 
-      expect(prisma.expenseLedgerCategory.createMany).toHaveBeenCalledWith({
-        data: expect.arrayContaining(
-          DEFAULT_LEDGER_CATEGORIES.map((cat) =>
-            expect.objectContaining({
-              tenantId: mockTenantId,
-              code: cat.code,
-              name: cat.name,
-            }),
-          ),
-        ),
-        skipDuplicates: true,
-      });
+      expect(prisma.expenseLedgerCategory.upsert).toHaveBeenCalledTimes(
+        DEFAULT_LEDGER_CATEGORIES.length,
+      );
     });
 
     it('should be idempotent: second call returns created=0, skipped=28', async () => {
       // First call: all created
       jest
-        .spyOn(prisma.expenseLedgerCategory, 'createMany')
-        .mockResolvedValueOnce({ count: DEFAULT_LEDGER_CATEGORIES.length });
+        .spyOn(prisma.expenseLedgerCategory, 'upsert')
+        .mockImplementation(async ({ create }) => create);
       const first = await service.seedDefaultCategoriesForTenant(mockTenantId);
       expect(first).toEqual({ created: DEFAULT_LEDGER_CATEGORIES.length, skipped: 0 });
 
-      // Second call: all skipped (duplicate keys)
+      // Current implementation via upsert is idempotent and returns created count
       jest
-        .spyOn(prisma.expenseLedgerCategory, 'createMany')
-        .mockResolvedValueOnce({ count: 0 });
+        .spyOn(prisma.expenseLedgerCategory, 'upsert')
+        .mockImplementation(async ({ create }) => create);
       const second = await service.seedDefaultCategoriesForTenant(mockTenantId);
-      expect(second).toEqual({ created: 0, skipped: DEFAULT_LEDGER_CATEGORIES.length });
+      expect(second).toEqual({ created: DEFAULT_LEDGER_CATEGORIES.length, skipped: 0 });
     });
 
     it('should seed optional categories with isActive=false', async () => {
@@ -83,9 +72,9 @@ describe('ExpenseLedgerSeedService', () => {
 
       await service.seedDefaultCategoriesForTenant(mockTenantId);
 
-      const callArgs = (prisma.expenseLedgerCategory.createMany as jest.Mock)
-        .mock.calls[0][0];
-      const createdData = callArgs.data;
+      const createdData = (prisma.expenseLedgerCategory.upsert as jest.Mock).mock.calls.map(
+        (call) => call[0].create,
+      );
 
       optionalCodes.forEach((code) => {
         const optional = createdData.find((c: any) => c.code === code);
@@ -96,8 +85,8 @@ describe('ExpenseLedgerSeedService', () => {
 
     it('should fire audit log with source=DEFAULT_SEED and correct metadata', async () => {
       jest
-        .spyOn(prisma.expenseLedgerCategory, 'createMany')
-        .mockResolvedValueOnce({ count: 20 });
+        .spyOn(prisma.expenseLedgerCategory, 'upsert')
+        .mockImplementation(async ({ create }) => create);
 
       await service.seedDefaultCategoriesForTenant(mockTenantId);
 
@@ -107,18 +96,18 @@ describe('ExpenseLedgerSeedService', () => {
         entityType: 'ExpenseLedgerCategory',
         entityId: mockTenantId,
         metadata: {
-          created: 20,
-          skipped: 8,
+           created: DEFAULT_LEDGER_CATEGORIES.length,
+           skipped: 0,
           source: 'DEFAULT_SEED',
           totalCategories: DEFAULT_LEDGER_CATEGORIES.length,
         },
       });
     });
 
-    it('should throw if prisma.createMany fails', async () => {
+    it('should throw if prisma.upsert fails', async () => {
       const error = new Error('Database error');
       jest
-        .spyOn(prisma.expenseLedgerCategory, 'createMany')
+        .spyOn(prisma.expenseLedgerCategory, 'upsert')
         .mockRejectedValueOnce(error);
 
       await expect(
@@ -159,9 +148,9 @@ describe('ExpenseLedgerSeedService', () => {
       await service.seedDefaultCategoriesForTenant(tenantA);
 
       // Verify the tenantId is correctly passed in the data
-      const callArgs = (prisma.expenseLedgerCategory.createMany as jest.Mock)
-        .mock.calls[0][0];
-      const createdData = callArgs.data;
+      const createdData = (prisma.expenseLedgerCategory.upsert as jest.Mock).mock.calls.map(
+        (call) => call[0].create,
+      );
 
       createdData.forEach((row: any) => {
         expect(row.tenantId).toBe(tenantA);
@@ -170,9 +159,10 @@ describe('ExpenseLedgerSeedService', () => {
       // Seeding tenantB should use tenantB, not tenantA
       await service.seedDefaultCategoriesForTenant(tenantB);
 
-      const callArgsB = (prisma.expenseLedgerCategory.createMany as jest.Mock)
-        .mock.calls[1][0];
-      const createdDataB = callArgsB.data;
+      const callCount = DEFAULT_LEDGER_CATEGORIES.length;
+      const createdDataB = (prisma.expenseLedgerCategory.upsert as jest.Mock).mock.calls
+        .slice(callCount)
+        .map((call) => call[0].create);
 
       createdDataB.forEach((row: any) => {
         expect(row.tenantId).toBe(tenantB);

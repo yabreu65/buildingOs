@@ -44,8 +44,8 @@ export type AssistantToolAction = {
 export interface AssistantToolResponse {
   contractVersion: string;
   answer: string;
-  answerSource: 'live_data' | 'fallback' | 'snapshot' | 'clarification';
-  responseType: 'metric' | 'list' | 'summary' | 'no_data' | 'clarification';
+  answerSource: 'live_data' | 'fallback' | 'snapshot' | 'clarification' | 'error';
+  responseType: 'metric' | 'list' | 'summary' | 'no_data' | 'clarification' | 'error';
   dataScope: 'tenant' | 'self' | 'module' | 'unknown';
   actions: AssistantToolAction[];
   metadata: Record<string, unknown>;

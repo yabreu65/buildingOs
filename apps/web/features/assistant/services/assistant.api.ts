@@ -22,6 +22,8 @@ export interface ChatResponse {
   answer: string;
   actions?: ActionDefinition[];
   suggestedActions: SuggestedAction[];
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
 }
 
 export interface ChatRequest {
@@ -29,6 +31,13 @@ export interface ChatRequest {
   page: string;
   buildingId?: string;
   unitId?: string;
+  context?: {
+    extra?: {
+      sessionId?: string;
+      choiceId?: string;
+      [key: string]: unknown;
+    };
+  };
 }
 
 export interface ActionDefinition {

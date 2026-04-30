@@ -26,12 +26,21 @@ interface BuildingOsChatRequest {
   page: string;
   buildingId?: string;
   unitId?: string;
+  context?: {
+    extra?: {
+      sessionId?: string;
+      uiPage?: string;
+      choiceId?: string;
+    };
+  };
 }
 
 interface BuildingOsChatResponse {
   answer: string;
   suggestedActions?: BuildingOsSuggestedAction[];
   interactionId?: string;
+  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
+  options?: Array<{ id: string; label: string; index: number }>;
 }
 
 const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
@@ -114,7 +123,14 @@ export function AssistantWidget({
 
   const tenantId = params?.tenantId as string | undefined || context.tenantId;
   
-  const [sessionId] = useState(() => getOrCreateSessionId());
+  const [sessionId] = useState(() => {
+    if (typeof window === 'undefined') return `ssr-${Date.now()}`;
+    const stored = sessionStorage.getItem('assistant_chat_session_id');
+    if (stored) return stored;
+    const newId = crypto.randomUUID();
+    sessionStorage.setItem('assistant_chat_session_id', newId);
+    return newId;
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -124,13 +140,14 @@ export function AssistantWidget({
     scrollToBottom();
   }, [messages]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+  const sendMessage = async (choiceId?: string) => {
+    const messageContent = choiceId ? input.trim() : input.trim();
+    if (!messageContent || isLoading) return;
 
     const userMessage: AssistantMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: input.trim(),
+      content: messageContent,
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -138,15 +155,30 @@ export function AssistantWidget({
     setIsLoading(true);
     setError(null);
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Assistant] Sending:', { 
+        endpoint: `/tenants/${tenantId}/assistant/chat`, 
+        sessionId, 
+        choiceId 
+      });
+    }
+
     try {
       const data = await apiClient<BuildingOsChatResponse, BuildingOsChatRequest>({
         path: `/tenants/${tenantId}/assistant/chat`,
         method: 'POST',
         body: {
           message: userMessage.content,
-          page: context.currentModule || context.route || 'assistant',
+          page: 'assistant',
           buildingId: context.buildingId,
           unitId: context.unitId,
+          context: {
+            extra: {
+              sessionId,
+              uiPage: context.route,
+              ...(choiceId && { choiceId }),
+            },
+          },
         },
         headers: {
           'X-Tenant-Id': tenantId,
@@ -158,6 +190,8 @@ export function AssistantWidget({
         role: 'assistant',
         content: data.answer,
         actions: (data.suggestedActions || []).map(mapSuggestedActionToAssistantAction),
+        responseType: data.responseType,
+        options: data.options,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -326,6 +360,23 @@ export function AssistantWidget({
                           </div>
                         </div>
                       )}
+
+                      {msg.role === 'assistant' && msg.options && msg.options.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+                          <div className="flex flex-col gap-2">
+                            {msg.options.map((option) => (
+                              <button
+                                key={option.id || option.index}
+                                onClick={() => sendMessage(option.id)}
+                                className="flex items-center justify-between px-3 py-2 text-sm bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/50 transition-colors"
+                              >
+                                <span className="font-medium">{option.label}</span>
+                                <ArrowRight size={14} />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -367,7 +418,7 @@ export function AssistantWidget({
                 disabled={isLoading}
               />
               <button
-                onClick={sendMessage}
+                onClick={() => sendMessage()}
                 disabled={!input.trim() || isLoading}
                 className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >

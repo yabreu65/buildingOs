@@ -6,7 +6,9 @@ import {
 import { FinanzasService } from './finanzas.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import { CreateChargeDto, UpdateChargeDto } from './finanzas.dto';
 import { ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
 
@@ -61,6 +63,18 @@ describe('FinanzasService', () => {
             getUserUnitIds: jest.fn(),
             canWritePayments: jest.fn(),
             canApprovePayments: jest.fn(),
+          },
+        },
+        {
+          provide: NotificationsService,
+          useValue: {
+            createNotification: jest.fn(),
+          },
+        },
+        {
+          provide: PaymentReceiptService,
+          useValue: {
+            ensureReceiptForPayment: jest.fn(),
           },
         },
       ],

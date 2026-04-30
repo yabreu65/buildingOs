@@ -18,6 +18,36 @@ export class HttpError extends Error {
   }
 }
 
+function sanitizeForJson(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForJson);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof Error) {
+    return { message: value.message, name: value.name };
+  }
+  if (typeof value === 'object') {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (key === '__proto__' || key === 'constructor') continue;
+      sanitized[key] = sanitizeForJson(val);
+    }
+    return sanitized;
+  }
+  return value;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 async function parseErrorMessage(response: Response): Promise<string> {
@@ -62,7 +92,8 @@ export async function apiClient<TRes, TReq = never>(
   };
 
   if (body && method !== 'GET') {
-    init.body = JSON.stringify(body);
+    const safeBody = sanitizeForJson(body);
+    init.body = JSON.stringify(safeBody);
   }
 
   const response = await fetch(url, init);

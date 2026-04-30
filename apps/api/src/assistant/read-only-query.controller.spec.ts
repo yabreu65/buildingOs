@@ -28,17 +28,10 @@ describe('AssistantReadOnlyQueryController', () => {
       controller.query(request, undefined, 'tenant-1', 'user-1', 'TENANT_ADMIN'),
     ).rejects.toBeInstanceOf(BadRequestException);
 
+    // request already includes context, so x-tenant-id/x-user-id/x-user-role are optional
     await expect(
       controller.query(request, 'test-key', undefined, 'user-1', 'TENANT_ADMIN'),
-    ).rejects.toBeInstanceOf(BadRequestException);
-
-    await expect(
-      controller.query(request, 'test-key', 'tenant-1', undefined, 'TENANT_ADMIN'),
-    ).rejects.toBeInstanceOf(BadRequestException);
-
-    await expect(
-      controller.query(request, 'test-key', 'tenant-1', 'user-1', undefined),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).resolves.not.toThrow();
   });
 
   it('passes normalized header context to service', async () => {
@@ -56,7 +49,12 @@ describe('AssistantReadOnlyQueryController', () => {
       apiKey: 'test-key',
       tenantId: 'tenant-1',
       userId: 'user-1',
-      role: 'tenant_admin',
+      role: 'TENANT_ADMIN',
+      context: {
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        role: 'TENANT_ADMIN',
+      },
     });
   });
 });

@@ -29,6 +29,7 @@ describe('LiquidationEngineService', () => {
               findFirst: jest.fn(),
               create: jest.fn(),
               update: jest.fn(),
+              delete: jest.fn(),
               deleteMany: jest.fn(),
             },
             charge: {
@@ -65,6 +66,7 @@ describe('LiquidationEngineService', () => {
           id: 'exp-1',
           amountMinor: 100000,
           currencyCode: 'ARS',
+          scopeType: 'BUILDING',
           category: { name: 'Electricidad' },
           vendor: { name: 'EDENOR' },
           allocations: [],
@@ -73,6 +75,7 @@ describe('LiquidationEngineService', () => {
           id: 'exp-2',
           amountMinor: 50000,
           currencyCode: 'ARS',
+          scopeType: 'BUILDING',
           category: { name: 'Agua' },
           vendor: null,
           allocations: [],
@@ -138,8 +141,10 @@ describe('LiquidationEngineService', () => {
           id: 'exp-1',
           amountMinor: 100000,
           currencyCode: 'ARS',
+          scopeType: 'BUILDING',
           category: { name: 'Electricidad' },
           vendor: { name: 'EDENOR' },
+          allocations: [],
         },
       ];
 
@@ -249,6 +254,8 @@ describe('LiquidationEngineService', () => {
           id: 'exp-1',
           amountMinor: 120000,
           currencyCode: 'ARS',
+          scopeType: 'BUILDING',
+          allocations: [],
         },
       ];
 
@@ -318,6 +325,7 @@ describe('LiquidationEngineService', () => {
           id: 'liq-1',
           status: 'CANCELED',
         } as any);
+      jest.spyOn(prisma.liquidation, 'delete').mockResolvedValue({ id: 'liq-1' } as any);
 
       await service.cancelLiquidation(
         tenantId,
@@ -339,6 +347,7 @@ describe('LiquidationEngineService', () => {
           id: 'liq-1',
           status: 'CANCELED',
         } as any);
+      jest.spyOn(prisma.liquidation, 'delete').mockResolvedValue({ id: 'liq-1' } as any);
 
       await service.cancelLiquidation(
         tenantId,
@@ -354,10 +363,11 @@ describe('LiquidationEngineService', () => {
       );
     });
 
-    it('debería lanzar error si ya está CANCELED', async () => {
+    it('debería permitir eliminar si ya está CANCELED', async () => {
       jest
         .spyOn(prisma.liquidation, 'findFirst')
         .mockResolvedValue({ id: 'liq-1', status: 'CANCELED' } as any);
+      jest.spyOn(prisma.liquidation, 'delete').mockResolvedValue({ id: 'liq-1' } as any);
 
       await expect(
         service.cancelLiquidation(
@@ -366,7 +376,7 @@ describe('LiquidationEngineService', () => {
           membershipId,
           adminRoles,
         ),
-      ).rejects.toThrow(BadRequestException);
+      ).resolves.toBeDefined();
     });
   });
 

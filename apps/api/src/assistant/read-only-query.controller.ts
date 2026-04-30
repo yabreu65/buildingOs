@@ -27,6 +27,7 @@ export class AssistantReadOnlyQueryController {
 
   /**
    * Internal endpoint for deterministic read-only assistant queries.
+   * Supports both body context and header-based context (fallback).
    */
   @Post('read-only-query')
   async query(
@@ -37,15 +38,26 @@ export class AssistantReadOnlyQueryController {
     @Headers('x-user-role') roleHeader?: string,
   ): Promise<AssistantReadOnlyQueryResponse> {
     const apiKey = this.requireHeader('x-api-key', apiKeyHeader);
-    const tenantId = this.requireHeader('x-tenant-id', tenantIdHeader);
-    const userId = this.requireHeader('x-user-id', userIdHeader);
-    const role = this.requireHeader('x-user-role', roleHeader);
+
+    // Build context from body OR from headers (fallback)
+    const tenantId = request.context?.tenantId || this.requireHeader('x-tenant-id', tenantIdHeader);
+    const userId = request.context?.userId || this.requireHeader('x-user-id', userIdHeader);
+    const role = request.context?.role || this.requireHeader('x-user-role', roleHeader);
+
+    // Ensure we have a valid context object
+    const context = request.context || {
+      tenantId,
+      userId,
+      role,
+      appId: 'buildingos',
+    };
 
     return this.readOnlyQueryService.execute(request, {
       apiKey,
       tenantId,
       userId,
       role,
+      context,
     });
   }
 }

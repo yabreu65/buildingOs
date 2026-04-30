@@ -3,6 +3,8 @@ import { BadRequestException } from '@nestjs/common';
 import { AssistantToolsService } from './tools.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ProcessSearchService } from '../process/process-search.service';
+import { CrossQueryService } from './cross-query.service';
 import { ASSISTANT_RESPONSE_SCHEMA_VERSION_V2, ASSISTANT_RESPONSE_SCHEMA_VERSION } from './tools.types';
 
 describe('P2 Snapshot Tools', () => {
@@ -31,6 +33,15 @@ describe('P2 Snapshot Tools', () => {
     createLog: jest.fn().mockResolvedValue({}),
   };
 
+  const mockProcessSearch = {
+    searchProcesses: jest.fn().mockResolvedValue({ procesos: [], pagination: { total: 0 } }),
+    getProcessSummary: jest.fn().mockResolvedValue({ groups: [] }),
+    searchClaims: jest.fn().mockResolvedValue({ procesos: [], pagination: { total: 0 } }),
+  };
+  const mockCrossQuery = {
+    execute: jest.fn().mockResolvedValue({ responseType: 'list', templateName: 'test' }),
+  };
+
   beforeEach(async () => {
     process.env.ASSISTANT_READONLY_API_KEYS = 'test-key';
     const module: TestingModule = await Test.createTestingModule({
@@ -38,6 +49,8 @@ describe('P2 Snapshot Tools', () => {
         AssistantToolsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: AuditService, useValue: mockAudit },
+        { provide: ProcessSearchService, useValue: mockProcessSearch },
+        { provide: CrossQueryService, useValue: mockCrossQuery },
       ],
     }).compile();
 
