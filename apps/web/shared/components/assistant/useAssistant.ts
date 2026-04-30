@@ -1,7 +1,12 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { apiClient, HttpError } from '@/shared/lib/http/client';
+import { HttpError } from '@/shared/lib/http/client';
+import {
+  assistantService,
+  BuildingOsSuggestedAction,
+  BuildingOsSuggestedActionType,
+} from '@/shared/services/assistantService';
 
 export type AssistantAction = {
   key: string;
@@ -83,41 +88,6 @@ export type AssistantResponse = {
   };
 };
 
-type BuildingOsSuggestedActionType =
-  | 'VIEW_TICKETS'
-  | 'VIEW_PAYMENTS'
-  | 'VIEW_REPORTS'
-  | 'SEARCH_DOCS'
-  | 'DRAFT_COMMUNICATION'
-  | 'CREATE_TICKET';
-
-type BuildingOsSuggestedAction = {
-  type: BuildingOsSuggestedActionType;
-  payload?: Record<string, unknown>;
-};
-
-type BuildingOsChatRequest = {
-  message: string;
-  page: string;
-  buildingId?: string;
-  unitId?: string;
-  context?: {
-    extra?: {
-      sessionId?: string;
-      choiceId?: string;
-      [key: string]: unknown;
-    };
-  };
-};
-
-type BuildingOsChatResponse = {
-  answer: string;
-  suggestedActions?: BuildingOsSuggestedAction[];
-  interactionId?: string;
-  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
-  options?: Array<{ id: string; label: string; index: number }>;
-};
-
 const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
   VIEW_TICKETS: {
     key: 'open-tickets',
@@ -171,6 +141,23 @@ interface UseAssistantOptions {
   initialContext?: AssistantContext;
 }
 
+function getSessionStorageKey(context?: AssistantContext): string {
+  if (!context) {
+    return 'assistant_chat_session_id:global';
+  }
+  return `assistant_chat_session_id:${context.tenantId}:${context.userId}`;
+}
+
+function getOrCreateScopedSessionId(context?: AssistantContext): string {
+  if (typeof window === 'undefined') return `ssr-${Date.now()}`;
+  const key = getSessionStorageKey(context);
+  const stored = sessionStorage.getItem(key);
+  if (stored) return stored;
+  const newId = crypto.randomUUID();
+  sessionStorage.setItem(key, newId);
+  return newId;
+}
+
 export function useAssistant(options: UseAssistantOptions = {}) {
   const { initialContext } = options;
   
@@ -178,14 +165,6 @@ export function useAssistant(options: UseAssistantOptions = {}) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [context, setContext] = useState<AssistantContext | undefined>(initialContext);
-  const [sessionId] = useState(() => {
-    if (typeof window === 'undefined') return `ssr-${Date.now()}`;
-    const stored = sessionStorage.getItem('assistant_chat_session_id');
-    if (stored) return stored;
-    const newId = crypto.randomUUID();
-    sessionStorage.setItem('assistant_chat_session_id', newId);
-    return newId;
-  });
 
   const sendMessage = useCallback(async (content: string, choiceId?: string) => {
     if (!context) {
@@ -204,24 +183,16 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     setError(null);
 
     try {
-      const data = await apiClient<BuildingOsChatResponse, BuildingOsChatRequest>({
-        path: `/tenants/${context.tenantId}/assistant/chat`,
-        method: 'POST',
-        body: {
-          message: content,
-          page: context.currentModule || context.route || 'assistant',
-          buildingId: context.buildingId,
-          unitId: context.unitId,
-          context: {
-            extra: {
-              sessionId,
-              ...(choiceId && { choiceId }),
-            },
-          },
-        },
-        headers: {
-          'X-Tenant-Id': context.tenantId,
-        },
+      const sessionId = getOrCreateScopedSessionId(context);
+      const data = await assistantService.ask({
+        tenantId: context.tenantId,
+        message: content,
+        page: context.currentModule || context.route || 'assistant',
+        buildingId: context.buildingId,
+        unitId: context.unitId,
+        route: context.route,
+        sessionId,
+        choiceId,
       });
 
       const assistantMessage: AssistantMessage = {
@@ -247,7 +218,7 @@ export function useAssistant(options: UseAssistantOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [context, sessionId]);
+  }, [context]);
 
   const sendClarificationChoice = useCallback((choiceId: string, label: string) => {
     return sendMessage(label, choiceId);

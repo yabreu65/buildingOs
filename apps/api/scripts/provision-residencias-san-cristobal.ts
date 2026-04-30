@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
@@ -38,6 +39,26 @@ function createSeededRandom(seed: number): SeededRandom {
 
 const rng = createSeededRandom(1337);
 
+let cachedProvisionPassword: string | undefined;
+
+function resolveProvisionDefaultPassword(): string {
+  if (cachedProvisionPassword) {
+    return cachedProvisionPassword;
+  }
+
+  const fromEnv = process.env.PROVISION_DEFAULT_PASSWORD?.trim();
+  if (fromEnv && fromEnv.length > 0) {
+    cachedProvisionPassword = fromEnv;
+    return cachedProvisionPassword;
+  }
+
+  cachedProvisionPassword = randomBytes(24).toString('base64url');
+  console.warn(
+    '[SETUP] PROVISION_DEFAULT_PASSWORD not set. Generated one-time password for seeded users.',
+  );
+  return cachedProvisionPassword;
+}
+
 function randomInt(min: number, max: number): number {
   return Math.floor(rng.next() * (max - min + 1)) + min;
 }
@@ -48,6 +69,14 @@ function randomFloat(min: number, max: number): number {
 
 function randomFromArray<T>(arr: T[]): T {
   return arr[randomInt(0, arr.length - 1)] as T;
+}
+
+function requireArrayValue<T>(arr: T[], index: number, label: string): T {
+  const value = arr[index];
+  if (value === undefined || value === null) {
+    throw new Error(`[SETUP] Missing required ${label} at index ${index}`);
+  }
+  return value;
 }
 
 function formatPeriod(year: number, month: number): string {
@@ -110,12 +139,17 @@ async function createTenantAndUsers(
       });
       const adminMember = members.find((m) => m.role === 'TENANT_ADMIN');
       const operatorMember = members.find((m) => m.role === 'OPERATOR');
+      if (!adminMember?.user?.id || !operatorMember?.user?.id) {
+        throw new Error(
+          `[SETUP] Existing tenant "${tenantName}" is missing TENANT_ADMIN or OPERATOR users. Run with --reset to recreate seed data.`,
+        );
+      }
       return {
         tenantId: existingTenant.id,
-        adminMemberId: adminMember?.id ?? '',
-        operatorMemberId: operatorMember?.id ?? '',
-        adminUserId: adminMember?.user?.id ?? '',
-        operatorUserId: operatorMember?.user?.id ?? '',
+        adminMemberId: adminMember.id,
+        operatorMemberId: operatorMember.id,
+        adminUserId: adminMember.user.id,
+        operatorUserId: operatorMember.user.id,
       };
     }
   }
@@ -138,7 +172,7 @@ async function createTenantAndUsers(
 
   console.log(`[SETUP] Created tenant: ${tenant.id}`);
 
-  const passwordHash = await bcrypt.hash('DevPass!123', 10);
+  const passwordHash = await bcrypt.hash(resolveProvisionDefaultPassword(), 10);
 
   const adminUser = await prisma.user.upsert({
     where: { email: 'admin@adminreal.test' },
@@ -317,7 +351,7 @@ async function createOccupants(
   const userCount = { owners: 0, renters: 0, occupants: 0 };
   const months = options.months || 24;
 
-  const passwordHash = await bcrypt.hash('DevPass!123', 10);
+  const passwordHash = await bcrypt.hash(resolveProvisionDefaultPassword(), 10);
 
   const occupiedUnits = Math.floor(unitIds.length * 0.82);
   const vacantUnits = Math.floor(unitIds.length * 0.1);
@@ -432,7 +466,7 @@ async function createOccupants(
   for (let i = 0; i < owners.length; i++) {
     const owner = owners[i]!;
     const { memberId, unitIndex } = owner;
-    const targetUnitId = unitIds[unitIndex] ?? '';
+    const targetUnitId = requireArrayValue(unitIds, unitIndex, 'unitId');
     await prisma.unitOccupant.create({
       data: {
         tenantId,
@@ -447,7 +481,7 @@ async function createOccupants(
 
   for (const resident of residents) {
     if (resident.memberId && resident.unitIndex !== undefined) {
-      const targetUnitId = unitIds[resident.unitIndex] ?? '';
+      const targetUnitId = requireArrayValue(unitIds, resident.unitIndex, 'unitId');
       await prisma.unitOccupant.create({
         data: {
           tenantId,
@@ -493,7 +527,7 @@ async function createCharges(
       const amount = Math.round(baseAmount * coef);
 
       const buildingIndex = Math.floor(i / (options.unitsPerFloor! * options.floors!));
-      const chargeBuildingId = buildingIds[buildingIndex] ?? buildingIds[0] ?? '';
+      const chargeBuildingId = requireArrayValue(buildingIds, buildingIndex, 'buildingId');
       charges.push({
         tenantId,
         buildingId: chargeBuildingId,
@@ -525,8 +559,8 @@ async function createCharges(
     for (let i = 0; i < Math.min(10, unitIds.length); i++) {
       const unitIndex = randomInt(0, unitIds.length - 1);
       const buildingIndex = Math.floor(unitIndex / (options.unitsPerFloor! * options.floors!));
-      const chargeBuildingId = buildingIds[buildingIndex] ?? buildingIds[0] ?? '';
-      const chargeUnitId = unitIds[unitIndex] ?? '';
+      const chargeBuildingId = requireArrayValue(buildingIds, buildingIndex, 'buildingId');
+      const chargeUnitId = requireArrayValue(unitIds, unitIndex, 'unitId');
       await prisma.charge.create({
         data: {
           tenantId,
@@ -577,7 +611,12 @@ async function createPayments(
     const unitBuildingMap = new Map<string, string>();
     if (unitIdsInCharges.length > 0) {
       const units = await prisma.unit.findMany({
-        where: { id: { in: unitIdsInCharges } },
+        where: {
+          id: { in: unitIdsInCharges },
+          building: {
+            tenantId,
+          },
+        },
         select: { id: true, buildingId: true },
       });
       for (const u of units) {
@@ -591,7 +630,7 @@ async function createPayments(
 
       if (rand < 0.88) {
         const paymentAmount = charge.amount;
-        const paymentBuildingId = correctBuildingId!;
+        const paymentBuildingId = correctBuildingId ?? requireArrayValue(buildingIds, 0, 'buildingId');
         const payment = await prisma.payment.create({
           data: {
             tenantId,
@@ -616,15 +655,15 @@ async function createPayments(
           },
         });
 
-        await prisma.charge.update({
-          where: { id: charge.id },
+        await prisma.charge.updateMany({
+          where: { id: charge.id, tenantId },
           data: { status: 'PAID' },
         });
 
         paymentCount++;
       } else if (rand < 0.94) {
         const partialAmount = Math.floor(charge.amount * randomFloat(0.3, 0.7));
-        const paymentBuildingId = correctBuildingId!;
+        const paymentBuildingId = correctBuildingId ?? requireArrayValue(buildingIds, 0, 'buildingId');
         const payment = await prisma.payment.create({
           data: {
             tenantId,
@@ -649,19 +688,19 @@ async function createPayments(
           },
         });
 
-        await prisma.charge.update({
-          where: { id: charge.id },
+        await prisma.charge.updateMany({
+          where: { id: charge.id, tenantId },
           data: { status: 'PARTIAL' },
         });
 
         paymentCount++;
       } else if (rand < 0.985) {
-        await prisma.charge.update({
-          where: { id: charge.id },
+        await prisma.charge.updateMany({
+          where: { id: charge.id, tenantId },
           data: { status: 'PENDING' },
         });
       } else if (rand < 0.9975) {
-        const paymentBuildingId = correctBuildingId!;
+        const paymentBuildingId = correctBuildingId ?? requireArrayValue(buildingIds, 0, 'buildingId');
         await prisma.payment.create({
           data: {
             tenantId,
@@ -679,7 +718,7 @@ async function createPayments(
         paymentCount++;
       } else {
         // SUBMITTED - enviado sin comprobante (~0.25%)
-        const paymentBuildingId = correctBuildingId!;
+        const paymentBuildingId = correctBuildingId ?? requireArrayValue(buildingIds, 0, 'buildingId');
         await prisma.payment.create({
           data: {
             tenantId,
@@ -707,7 +746,6 @@ async function createTickets(
   tenantId: string,
   buildingIds: string[],
   unitIds: string[],
-  memberIds: string[],
   adminUserId: string,
   options: ProvisionOptions,
 ): Promise<number> {
@@ -728,6 +766,18 @@ async function createTickets(
     { type: 'COMMON_AREA', priority: 'MEDIUM' },
   ];
 
+  const units = await prisma.unit.findMany({
+    where: {
+      id: { in: unitIds },
+      building: { tenantId },
+    },
+    select: {
+      id: true,
+      buildingId: true,
+    },
+  });
+  const unitBuildingMap = new Map(units.map((unit) => [unit.id, unit.buildingId]));
+
   for (let m = 0; m < months; m++) {
     const { year, month } = getMonthsAgo(months - 1 - m);
     const ticketsThisMonth = randomInt(50, 70);
@@ -735,7 +785,6 @@ async function createTickets(
     for (let t = 0; t < ticketsThisMonth; t++) {
       const ticketType = randomFromArray(ticketTypes);
       const unitIndex = randomInt(0, unitIds.length - 1);
-      const memberIndex = randomInt(0, memberIds.length - 1);
 
       const createdAt = new Date(year, month - 1, randomInt(1, 28));
       const slaMinutes = ticketType.priority === 'URGENT' ? 2880 : ticketType.priority === 'HIGH' ? 10080 : 20160;
@@ -746,8 +795,9 @@ async function createTickets(
         status = rng.next() < 0.7 ? 'IN_PROGRESS' : 'CLOSED';
       }
 
-      const ticketBuildingId = buildingIds[randomInt(0, buildingIds.length - 1)] ?? '';
-      const ticketUnitId = unitIds[unitIndex] ?? '';
+      const ticketUnitId = requireArrayValue(unitIds, unitIndex, 'unitId');
+      const ticketBuildingId =
+        unitBuildingMap.get(ticketUnitId) ?? requireArrayValue(buildingIds, 0, 'buildingId');
       const ticketCreatorId = adminUserId;
 
       const ticket = await prisma.ticket.create({
@@ -766,8 +816,8 @@ async function createTickets(
 
       if (status === 'CLOSED') {
         const closedAt = new Date(createdAt.getTime() + randomInt(1, slaMinutes / 2) * 60 * 1000);
-        await prisma.ticket.update({
-          where: { id: ticket.id },
+        await prisma.ticket.updateMany({
+          where: { id: ticket.id, tenantId },
           data: { closedAt },
         });
       }
@@ -784,7 +834,7 @@ async function createTickets(
 async function createProcesses(
   tenantId: string,
   buildingIds: string[],
-  memberIds: string[],
+  userIds: string[],
   options: ProvisionOptions,
 ): Promise<number> {
   rng.reset((options.seed || 1337) + 5000);
@@ -798,8 +848,8 @@ async function createProcesses(
     const { year, month } = getMonthsAgo(months - 1 - m);
     const period = formatPeriod(year, month);
 
-    const firstUserId = memberIds[0] ?? '';
-    const secondUserId = memberIds[1] ?? '';
+    const firstUserId = requireArrayValue(userIds, 0, 'adminUserId');
+    const secondUserId = requireArrayValue(userIds, 1, 'operatorUserId');
 
     for (const buildingId of buildingIds) {
       const liquidation = await prisma.processInstance.create({
@@ -817,8 +867,8 @@ async function createProcesses(
       });
 
       if (rng.next() < 0.5) {
-        await prisma.processInstance.update({
-          where: { id: liquidation.id },
+        await prisma.processInstance.updateMany({
+          where: { id: liquidation.id, tenantId },
           data: {
             assignedToUserId: secondUserId,
             assignedAt: new Date(year, month - 1, 4),
@@ -872,11 +922,18 @@ async function runSnapshots(tenantId: string, options: ProvisionOptions): Promis
 
     for (const building of buildings) {
       const units = await prisma.unit.findMany({
-        where: { buildingId: building.id, unitType: 'APARTAMENTO' },
+        where: {
+          building: {
+            id: building.id,
+            tenantId,
+          },
+          unitType: 'APARTAMENTO',
+        },
         include: {
-          charges: { where: { period }, select: { amount: true } },
+          charges: { where: { tenantId, period }, select: { amount: true } },
           payments: {
             where: {
+              tenantId,
               status: 'APPROVED',
               paidAt: { lte: asOf },
             },
@@ -1065,12 +1122,11 @@ Options:
   const startTime = Date.now();
 
   const tenantName = 'Residencias San Cristobal';
-  const { tenantId, adminMemberId, operatorMemberId, adminUserId, operatorUserId } = await createTenantAndUsers(tenantName, options);
-
   if (options.dryRun) {
-    console.log('[DRY-RUN] Would create tenant, exiting');
+    console.log('[DRY-RUN] Would create tenant and seed data, exiting without persisting');
     return;
   }
+  const { tenantId, adminUserId, operatorUserId } = await createTenantAndUsers(tenantName, options);
 
   const { buildingIds, unitIds, unitCodes } = await createBuildingsAndUnits(tenantId, options);
 
@@ -1080,15 +1136,15 @@ Options:
 
   const paymentsTotal = await createPayments(tenantId, buildingIds, unitIds, adminUserId, options);
 
-  const ticketsTotal = await createTickets(tenantId, buildingIds, unitIds, memberResult.memberIds, adminUserId, options);
+  const ticketsTotal = await createTickets(tenantId, buildingIds, unitIds, adminUserId, options);
 
-  const processesTotal = await createProcesses(tenantId, buildingIds, [adminMemberId, operatorMemberId], options);
+  const processesTotal = await createProcesses(tenantId, buildingIds, [adminUserId, operatorUserId], options);
 
   const { unitSnapshots, buildingSnapshots } = await runSnapshots(tenantId, options);
 
   const samples = await getSamples(tenantId, unitCodes);
 
-  // Validación post-run para smoke P0-P3
+  // Validación post-run de integridad de datos generados
   const [paymentsByBuilding, submittedCount, snapshotsCount] = await Promise.all([
     prisma.payment.groupBy({
       by: ['buildingId'],

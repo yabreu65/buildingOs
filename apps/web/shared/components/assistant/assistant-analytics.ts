@@ -9,6 +9,11 @@ import { apiClient } from '@/shared/lib/http/client';
 
 const STORAGE_KEY = 'assistant_session_id';
 
+function resolveStorageKey(scopeKey?: string): string {
+  const normalizedScope = scopeKey?.trim();
+  return normalizedScope ? `${STORAGE_KEY}:${normalizedScope}` : STORAGE_KEY;
+}
+
 export type AssistantActionClickEvent = {
   eventName: 'assistant_action_click';
   actionKey: string;
@@ -40,30 +45,34 @@ export function configureAssistantAnalytics(config: Partial<AssistantAnalyticsCo
   analyticsConfig = { ...analyticsConfig, ...config };
 }
 
-export function getOrCreateSessionId(): string {
+export function getOrCreateSessionId(scopeKey?: string): string {
   if (typeof window === 'undefined') {
     return `session-ssr-${Date.now()}`;
   }
 
+  const storageKey = resolveStorageKey(scopeKey);
+
   try {
-    const stored = sessionStorage.getItem(STORAGE_KEY);
+    const stored = sessionStorage.getItem(storageKey);
     if (stored) {
       return stored;
     }
 
     const newSessionId = crypto.randomUUID();
-    sessionStorage.setItem(STORAGE_KEY, newSessionId);
+    sessionStorage.setItem(storageKey, newSessionId);
     return newSessionId;
   } catch {
     return crypto.randomUUID();
   }
 }
 
-export function getSessionId(): string | null {
+export function getSessionId(scopeKey?: string): string | null {
   if (typeof window === 'undefined') return null;
 
+  const storageKey = resolveStorageKey(scopeKey);
+
   try {
-    return sessionStorage.getItem(STORAGE_KEY);
+    return sessionStorage.getItem(storageKey);
   } catch {
     return null;
   }
@@ -121,9 +130,6 @@ export async function trackAssistantActionClick(
           source: 'CHAT',
           page: event.currentRoute,
           interactionId: event.messageId,
-        },
-        headers: {
-          'X-Tenant-Id': event.tenantId,
         },
       });
     } catch (error) {

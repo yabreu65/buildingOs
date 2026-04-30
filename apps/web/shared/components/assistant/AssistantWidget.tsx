@@ -1,105 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Send, Bot, Sparkles, X, Minimize2, ArrowRight, ExternalLink } from 'lucide-react';
-import type { AssistantMessage, AssistantAction, AssistantContext } from './useAssistant';
+import { useAssistant, type AssistantAction, type AssistantContext } from './useAssistant';
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
-import { apiClient, HttpError } from '@/shared/lib/http/client';
-
-type BuildingOsSuggestedActionType =
-  | 'VIEW_TICKETS'
-  | 'VIEW_PAYMENTS'
-  | 'VIEW_REPORTS'
-  | 'SEARCH_DOCS'
-  | 'DRAFT_COMMUNICATION'
-  | 'CREATE_TICKET';
-
-interface BuildingOsSuggestedAction {
-  type: BuildingOsSuggestedActionType;
-  payload?: Record<string, unknown>;
-}
-
-interface BuildingOsChatRequest {
-  message: string;
-  page: string;
-  buildingId?: string;
-  unitId?: string;
-  context?: {
-    extra?: {
-      sessionId?: string;
-      uiPage?: string;
-      choiceId?: string;
-    };
-  };
-}
-
-interface BuildingOsChatResponse {
-  answer: string;
-  suggestedActions?: BuildingOsSuggestedAction[];
-  interactionId?: string;
-  responseType?: 'answer' | 'clarification' | 'error' | 'no_data';
-  options?: Array<{ id: string; label: string; index: number }>;
-}
-
-const SUGGESTED_ACTION_MAP: Record<BuildingOsSuggestedActionType, AssistantAction> = {
-  VIEW_TICKETS: {
-    key: 'open-tickets',
-    label: 'Ver tickets',
-    description: 'Abrir la gestión de tickets.',
-  },
-  VIEW_PAYMENTS: {
-    key: 'open-payments',
-    label: 'Ver pagos',
-    description: 'Abrir la gestión de pagos.',
-  },
-  VIEW_REPORTS: {
-    key: 'open-charges',
-    label: 'Ver finanzas',
-    description: 'Abrir el módulo financiero.',
-  },
-  SEARCH_DOCS: {
-    key: 'open-documents',
-    label: 'Ver documentos',
-    description: 'Abrir la biblioteca de documentos.',
-  },
-  DRAFT_COMMUNICATION: {
-    key: 'create-communication',
-    label: 'Crear comunicación',
-    description: 'Abrir el flujo de comunicación.',
-  },
-  CREATE_TICKET: {
-    key: 'create-ticket',
-    label: 'Crear ticket',
-    description: 'Abrir el flujo de creación de tickets.',
-  },
-};
-
-function mapSuggestedActionToAssistantAction(action: BuildingOsSuggestedAction): AssistantAction {
-  return SUGGESTED_ACTION_MAP[action.type];
-}
-
-function formatAssistantError(error: unknown): string {
-  if (error instanceof HttpError) {
-    if (error.status === 401) {
-      return 'Sesión expirada. Volvé a iniciar sesión.';
-    }
-    if (error.status === 403) {
-      return error.message || 'El asistente AI no está disponible para tu plan o usuario.';
-    }
-    if (error.status === 409) {
-      return error.message || 'El límite del asistente AI fue alcanzado.';
-    }
-    return error.message || `Error del asistente AI (${error.status}).`;
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return 'Error desconocido del asistente AI.';
-}
 
 export interface AssistantWidgetProps {
   context: AssistantContext;
@@ -111,26 +17,24 @@ export function AssistantWidget({
   className = '' 
 }: AssistantWidgetProps) {
   const router = useRouter();
-  const params = useParams();
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  
+
+  const {
+    messages,
+    isLoading,
+    error,
+    sendMessage: sendAssistantMessage,
+    clearMessages,
+    updateContext,
+  } = useAssistant({ initialContext: context });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastContextScopeRef = useRef<string>(`${context.tenantId}:${context.userId}`);
 
-  const tenantId = params?.tenantId as string | undefined || context.tenantId;
-  
-  const [sessionId] = useState(() => {
-    if (typeof window === 'undefined') return `ssr-${Date.now()}`;
-    const stored = sessionStorage.getItem('assistant_chat_session_id');
-    if (stored) return stored;
-    const newId = crypto.randomUUID();
-    sessionStorage.setItem('assistant_chat_session_id', newId);
-    return newId;
-  });
+  const tenantId = context.tenantId;
+  const sessionId = getOrCreateSessionId(`${context.tenantId}:${context.userId}`);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -140,74 +44,26 @@ export function AssistantWidget({
     scrollToBottom();
   }, [messages]);
 
-  const sendMessage = async (choiceId?: string) => {
-    const messageContent = choiceId ? input.trim() : input.trim();
+  useEffect(() => {
+    const nextScope = `${context.tenantId}:${context.userId}`;
+    if (lastContextScopeRef.current !== nextScope) {
+      clearMessages();
+      lastContextScopeRef.current = nextScope;
+    }
+    updateContext(context);
+  }, [context, clearMessages, updateContext]);
+
+  const sendMessage = async () => {
+    const messageContent = input.trim();
     if (!messageContent || isLoading) return;
 
-    const userMessage: AssistantMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: messageContent,
-    };
-
-    setMessages(prev => [...prev, userMessage]);
     setInput('');
-    setIsLoading(true);
-    setError(null);
+    await sendAssistantMessage(messageContent);
+  };
 
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[Assistant] Sending:', { 
-        endpoint: `/tenants/${tenantId}/assistant/chat`, 
-        sessionId, 
-        choiceId 
-      });
-    }
-
-    try {
-      const data = await apiClient<BuildingOsChatResponse, BuildingOsChatRequest>({
-        path: `/tenants/${tenantId}/assistant/chat`,
-        method: 'POST',
-        body: {
-          message: userMessage.content,
-          page: 'assistant',
-          buildingId: context.buildingId,
-          unitId: context.unitId,
-          context: {
-            extra: {
-              sessionId,
-              uiPage: context.route,
-              ...(choiceId && { choiceId }),
-            },
-          },
-        },
-        headers: {
-          'X-Tenant-Id': tenantId,
-        },
-      });
-
-      const assistantMessage: AssistantMessage = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: data.answer,
-        actions: (data.suggestedActions || []).map(mapSuggestedActionToAssistantAction),
-        responseType: data.responseType,
-        options: data.options,
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-    } catch (err) {
-      const errorMsg = formatAssistantError(err);
-      setError(errorMsg);
-      
-      const errorMessage: AssistantMessage = {
-        id: `error-${Date.now()}`,
-        role: 'assistant',
-        content: `Error: ${errorMsg}`,
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
+  const sendClarificationOption = async (optionId: string, optionLabel: string) => {
+    if (isLoading) return;
+    await sendAssistantMessage(optionLabel, optionId);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -218,8 +74,7 @@ export function AssistantWidget({
   };
 
   const clearChat = () => {
-    setMessages([]);
-    setError(null);
+    clearMessages();
   };
 
   const handleActionClick = (action: AssistantAction, messageId: string, actionIndex: number, totalActions: number) => {
@@ -367,7 +222,7 @@ export function AssistantWidget({
                             {msg.options.map((option) => (
                               <button
                                 key={option.id || option.index}
-                                onClick={() => sendMessage(option.id)}
+                                onClick={() => sendClarificationOption(option.id, option.label)}
                                 className="flex items-center justify-between px-3 py-2 text-sm bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/50 transition-colors"
                               >
                                 <span className="font-medium">{option.label}</span>
