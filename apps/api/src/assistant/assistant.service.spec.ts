@@ -52,6 +52,9 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
     const mockAiProvider: MockAiProvider = {
       chat: jest.fn().mockResolvedValue({ answer: 'local provider answer', suggestedActions: [] }),
     } as any;
+    const hitl = {
+      maybeCreateHandoff: jest.fn().mockResolvedValue({ created: false }),
+    } as any;
 
     const service = new AssistantService(
       prisma,
@@ -62,6 +65,7 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
       contextSummary,
       ollamaProvider,
       mockAiProvider,
+      hitl,
     );
 
     jest.spyOn(service as any, 'validateContext').mockResolvedValue({
@@ -76,7 +80,7 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
     jest.spyOn(service as any, 'logInteraction').mockResolvedValue(null);
     jest.spyOn(service as any, 'filterSuggestedActions').mockImplementation((actions: any[]) => actions);
 
-    return { service, budget, mockAiProvider };
+    return { service, budget, mockAiProvider, hitl };
   };
 
   it('does NOT fallback to local provider when yoryi responds !ok', async () => {
@@ -392,6 +396,7 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
     const contextSummary = { getSummary: jest.fn() } as any;
     const ollamaProvider = { chat: jest.fn() } as any;
     const mockAiProvider: MockAiProvider = { chat: jest.fn() } as any;
+    const hitl = { maybeCreateHandoff: jest.fn().mockResolvedValue({ created: false }) } as any;
 
     const service = new AssistantService(
       prisma,
@@ -402,6 +407,7 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
       contextSummary,
       ollamaProvider,
       mockAiProvider,
+      hitl,
     );
 
     const result = await (service as any).resolveStrictUnitMatch('tenant-1', '1203', 'a');
@@ -612,5 +618,34 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
     const blocked = (service as any).buildYoryiControlledResponse('invalid_payload', 'P0', 'trace-1');
     expect(blocked.answerSource).toBe('fallback');
     expect(blocked.responseType).toBe('clarification');
+  });
+
+  it('metadata fallbackPath = hitl_created cuando se dispara', async () => {
+    const { service, hitl } = makeService();
+    hitl.maybeCreateHandoff.mockResolvedValueOnce({ created: true, handoffId: 'h1' });
+
+    const result = await (service as any).applyHitlEscalationIfNeeded({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      role: 'TENANT_ADMIN',
+      question: 'no pude resolver esto',
+      request: { message: 'x', page: 'dashboard' },
+      response: {
+        answer: 'fallback response',
+        suggestedActions: [],
+        answerSource: 'fallback',
+        responseType: 'clarification',
+        metadata: {
+          traceId: 'trace-1',
+          resolvedLevel: 'FALLBACK',
+          fallbackPath: 'bridge_timeout',
+          gatewayOutcome: 'timeout',
+        },
+      },
+    });
+
+    expect(result.metadata?.fallbackPath).toBe('hitl_created');
+    expect(result.metadata?.gatewayOutcome).toBe('hitl_created');
+    expect(result.answer).toContain('Lo derive a un operador');
   });
 });

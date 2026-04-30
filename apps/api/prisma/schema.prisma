@@ -165,6 +165,7 @@ model Tenant {
   // Localization & Currency
   currency              String @default("ARS") // ARS (Argentina), VES (Venezuela), USD
   locale                String @default("es-AR") // es-AR, es-VE, en-US
+  managedServiceEnabled Boolean @default(false)
 
   // Relations
   memberships           Membership[]
@@ -218,6 +219,28 @@ model Tenant {
   buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
   processInstances        ProcessInstance[]
   processAudits           ProcessAudit[]
+  assistantHandoffs       AssistantHandoff[]
+}
+
+model AssistantHandoff {
+  id             String                 @id @default(cuid())
+  tenantId       String
+  userId         String
+  role           String
+  question       String
+  traceId        String
+  resolvedLevel  String
+  fallbackPath   String
+  gatewayOutcome String
+  contextJson    Json
+  createdAt      DateTime               @default(now())
+  status         AssistantHandoffStatus @default(PENDING)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@index([traceId])
 }
 
 model User {
@@ -681,6 +704,13 @@ enum PaymentVerificationStatus {
   PENDING // Waiting for admin approval
   APPROVED // Admin approved the payment
   REJECTED // Admin rejected the payment
+}
+
+enum AssistantHandoffStatus {
+  PENDING
+  NOTIFIED
+  FAILED
+  RESOLVED
 }
 
 model BillingPlan {

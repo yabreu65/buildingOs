@@ -6,7 +6,11 @@ export type GatewayOutcome =
   | 'unavailable'
   | 'invalid_payload'
   | 'contract_mismatch'
-  | 'denied';
+  | 'denied'
+  | 'invalid_entities'
+  | 'cache_hit'
+  | 'cache_miss'
+  | 'hitl_created';
 
 export type CanonicalAssistantResponse = {
   answer: string;
@@ -173,7 +177,18 @@ function asResolvedLevel(
 }
 
 function asGatewayOutcome(value: unknown): GatewayOutcome | null {
-  if (value === 'success' || value === 'timeout' || value === 'unavailable' || value === 'invalid_payload' || value === 'contract_mismatch' || value === 'denied') {
+  if (
+    value === 'success' ||
+    value === 'timeout' ||
+    value === 'unavailable' ||
+    value === 'invalid_payload' ||
+    value === 'contract_mismatch' ||
+    value === 'denied' ||
+    value === 'invalid_entities' ||
+    value === 'cache_hit' ||
+    value === 'cache_miss' ||
+    value === 'hitl_created'
+  ) {
     return value;
   }
   return null;

@@ -18,6 +18,7 @@ import {
   mapYoryiToCanonical,
   type GatewayOutcome,
 } from './yoryi-bridge.mapper';
+import { AssistantHitlService } from './hitl.service';
 
 // Re-export types for backward compatibility
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
@@ -164,6 +165,7 @@ export class AssistantService {
     private readonly contextSummary: AiContextSummaryService,
     private readonly ollamaProvider: OllamaProvider,
     private readonly mockAiProvider: MockAiProvider,
+    private readonly hitl: AssistantHitlService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
 
@@ -407,6 +409,15 @@ export class AssistantService {
 
     response = this.normalizeResponseContract(response);
 
+    response = await this.applyHitlEscalationIfNeeded({
+      tenantId,
+      userId,
+      role: userRoles[0] ?? 'RESIDENT',
+      question: request.message,
+      request,
+      response,
+    });
+
     // Step 4: Cache the response for future similar requests
     this.cache.set(cacheKey, response, resolvedModelForLog);
 
@@ -449,6 +460,71 @@ export class AssistantService {
     return {
       ...response,
       interactionId: interactionId ?? undefined,
+    };
+  }
+
+  private async applyHitlEscalationIfNeeded(params: {
+    tenantId: string;
+    userId: string;
+    role: string;
+    question: string;
+    request: ChatRequest;
+    response: ChatResponse;
+  }): Promise<ChatResponse> {
+    const fallbackPath = typeof params.response.metadata?.fallbackPath === 'string'
+      ? params.response.metadata.fallbackPath
+      : undefined;
+
+    const gatewayOutcome = typeof params.response.metadata?.gatewayOutcome === 'string'
+      ? params.response.metadata.gatewayOutcome
+      : undefined;
+
+    const traceId = typeof params.response.metadata?.traceId === 'string'
+      ? params.response.metadata.traceId
+      : this.generateTraceId();
+
+    if (!fallbackPath || !gatewayOutcome) {
+      return params.response;
+    }
+
+    const resolvedLevel = typeof params.response.metadata?.resolvedLevel === 'string'
+      ? params.response.metadata.resolvedLevel
+      : 'FALLBACK';
+
+    const result = await this.hitl.maybeCreateHandoff({
+      tenantId: params.tenantId,
+      userId: params.userId,
+      role: params.role,
+      question: params.question,
+      traceId,
+      resolvedLevel,
+      fallbackPath,
+      gatewayOutcome,
+      contextJson: {
+        page: params.request.page,
+        buildingId: params.request.buildingId,
+        unitId: params.request.unitId,
+        responseType: params.response.responseType,
+        answerSource: params.response.answerSource,
+      },
+    });
+
+    if (!result.created) {
+      return params.response;
+    }
+
+    return {
+      ...params.response,
+      answer: `Lo derive a un operador, te responderemos pronto. Referencia: ${traceId}.`,
+      responseType: 'clarification',
+      answerSource: 'fallback',
+      metadata: {
+        ...(params.response.metadata ?? {}),
+        traceId,
+        fallbackPath: 'hitl_created',
+        gatewayOutcome: 'hitl_created',
+        handoffId: result.handoffId,
+      },
     };
   }
 

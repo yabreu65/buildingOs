@@ -25,6 +25,9 @@ import { AssistantReadOnlyQueryController } from './read-only-query.controller';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
 import { AssistantToolsController } from './tools.controller';
 import { AssistantToolsService } from './tools.service';
+import { HitlQueueService } from './hitl-queue.service';
+import { HitlWorker } from './hitl.worker';
+import { AssistantHitlService } from './hitl.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -92,6 +95,9 @@ import { AssistantToolsService } from './tools.service';
     AssistantService,
     AssistantReadOnlyQueryService,
     AssistantToolsService,
+    HitlQueueService,
+    HitlWorker,
+    AssistantHitlService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
@@ -108,6 +114,7 @@ import { AssistantToolsService } from './tools.service';
     AssistantService,
     AssistantReadOnlyQueryService,
     AssistantToolsService,
+    AssistantHitlService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
