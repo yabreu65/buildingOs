@@ -28,6 +28,8 @@ import { AssistantToolsService } from './tools.service';
 import { HitlQueueService } from './hitl-queue.service';
 import { HitlWorker } from './hitl.worker';
 import { AssistantHitlService } from './hitl.service';
+import { AssistantMessagesController } from './assistant-messages.controller';
+import { AssistantMessagesService } from './assistant-messages.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -90,6 +92,7 @@ import { AssistantHitlService } from './hitl.service';
     AiUnitsController,
     AssistantReadOnlyQueryController,
     AssistantToolsController,
+    AssistantMessagesController,
   ],
   providers: [
     AssistantService,
@@ -98,6 +101,7 @@ import { AssistantHitlService } from './hitl.service';
     HitlQueueService,
     HitlWorker,
     AssistantHitlService,
+    AssistantMessagesService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,
@@ -114,7 +118,9 @@ import { AssistantHitlService } from './hitl.service';
     AssistantService,
     AssistantReadOnlyQueryService,
     AssistantToolsService,
+    HitlQueueService,
     AssistantHitlService,
+    AssistantMessagesService,
     AiBudgetService,
     AiRouterService,
     AiCacheService,

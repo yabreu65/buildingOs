@@ -80,9 +80,12 @@ type AssistantTurnCompletedEvent = {
   unitId?: string;
   resolvedLevel: ResolvedLevel;
   resolvedIntentCode?: string;
+  familyChosen?: string;
   toolName?: string;
   fallbackPath: string;
   gatewayOutcome: GatewayOutcome;
+  missingEntities?: string[];
+  defaultsApplied?: string[];
   latencyMsTotal: number;
   latencyMsRouting: number;
   latencyMsGateway?: number;
@@ -104,6 +107,7 @@ interface YoryiAssistantChatResponse {
       metadata?: Record<string, unknown>;
     }>;
   };
+  metadata?: Record<string, unknown>;
 }
 
 // MOCK Provider - always works, good for development
@@ -457,6 +461,80 @@ export class AssistantService {
       },
     });
 
+    // Log engine decision for observability
+    const traceId = this.generateTraceId();
+    const isYoryiEnabled = this.shouldUseYoryiEngine(tenantId, userRoles);
+    const baseUrl = process.env.YORYI_ASSISTANT_API_BASE_URL || '';
+    const envFlags = {
+      ASSISTANT_YORYI_ENGINE_ENABLED: process.env.ASSISTANT_YORYI_ENGINE_ENABLED,
+      ASSISTANT_YORYI_CANARY_TENANTS: process.env.ASSISTANT_YORYI_CANARY_TENANTS,
+      ASSISTANT_P0_ENFORCEMENT_ENABLED: process.env.ASSISTANT_P0_ENFORCEMENT_ENABLED,
+      ASSISTANT_P3_ENABLED: process.env.ASSISTANT_P3_ENABLED,
+    };
+
+    let engineUsed = 'mock';
+    if (resolvedModelForLog === 'LIVE_DATA_STRICT') {
+      engineUsed = 'live_data';
+    } else if (resolvedModelForLog === 'YORYI_CORE' || resolvedModelForLog === 'YORYI_CORE_BLOCKED') {
+      engineUsed = 'yoryi';
+    } else if (resolvedModelForLog === 'DEGRADED_MOCK') {
+      engineUsed = 'mock_degraded';
+    } else if (baseUrl && isYoryiEnabled) {
+      engineUsed = 'remote_fetch';
+    }
+
+    this.logger.log({
+      msg: '[ASSISTANT] engine decision',
+      engine: engineUsed,
+      resolvedModel: resolvedModelForLog,
+      tenantId,
+      userId,
+      role: userRoles[0] ?? 'RESIDENT',
+      requestId: traceId,
+      traceId,
+      baseUrl: baseUrl ? baseUrl.replace(/\/\/.+@/, '//***@') : '',
+      flags: envFlags,
+    });
+
+    // Log execution result from response metadata
+    const metadata = response.metadata as Record<string, unknown> | undefined;
+    if (metadata) {
+      this.logger.debug({
+        msg: '[ASSISTANT] turn completed',
+        traceId,
+        requestId: traceId,
+        fallbackPath: metadata.fallbackPath,
+        resolvedIntentCode: metadata.resolvedIntentCode,
+        missingEntities: metadata.missingEntities,
+        defaultsApplied: metadata.defaultsApplied,
+        familyChosen: metadata.familyChosen,
+        intentLibraryConfidence: metadata.intentLibraryConfidence,
+        resolvedLevel: metadata.resolvedLevel,
+        gatewayOutcome: metadata.gatewayOutcome,
+        latencyMsTotal: metadata.latencyMsTotal,
+        latencyMsRouting: metadata.latencyMsRouting,
+      });
+    }
+
+    const md = (response.metadata as Record<string, unknown> | undefined) ?? null;
+
+    this.logger.debug({
+      msg: '[ASSISTANT] final result',
+      tenantId,
+      role: userRoles[0] ?? 'RESIDENT',
+      requestId: traceId,
+      traceId,
+      answerPreview: (response.answer || '').slice(0, 80),
+      resolvedIntentCode: md?.resolvedIntentCode ?? md?.intentCode,
+      fallbackPath: md?.fallbackPath,
+      missingEntities: md?.missingEntities,
+      defaultsApplied: md?.defaultsApplied,
+      familyChosen: md?.familyChosen,
+      gatewayOutcome: md?.gatewayOutcome,
+      responseType: response.responseType,
+      answerSource: response.answerSource,
+    });
+
     return {
       ...response,
       interactionId: interactionId ?? undefined,
@@ -691,7 +769,10 @@ export class AssistantService {
 
       const payload = (await response.json()) as YoryiAssistantChatResponse;
       const canonical = mapYoryiToCanonical(payload);
-      const routeFamily = this.detectRouteFamily(payload.toolName);
+      const routeFamily = this.detectRouteFamily(
+        canonical?.metadata.resolvedLevel,
+        canonical?.metadata.toolName ?? payload.toolName,
+      );
       const uiPage = params.request.context?.extra?.uiPage;
       this.logger.debug({
         msg: '[BRIDGE] routing response diagnostics',
@@ -778,7 +859,8 @@ export class AssistantService {
       }
 
       const operational = this.isOperationalQuery(params.request.page, params.request.message);
-      if ((operational && canonical.answerSource !== 'live_data') || !this.isAllowedYoryiAnswerSource(canonical.answerSource, routeFamily)) {
+      const allowedAnswerSource = this.isAllowedYoryiAnswerSource(canonical.answerSource, routeFamily);
+      if (!allowedAnswerSource) {
         const requestId = `${params.tenantId}-${params.membershipId}-${Date.now()}`;
         const reason = operational && canonical.answerSource !== 'live_data'
           ? 'denied'
@@ -796,9 +878,12 @@ export class AssistantService {
             canonical.metadata.resolvedLevel
             ?? (routeFamily === 'P2' ? 'P2' : routeFamily),
           resolvedIntentCode: canonical.metadata.resolvedIntentCode ?? canonical.metadata.intentCode,
+          familyChosen: canonical.metadata.familyChosen,
           toolName: canonical.metadata.toolName,
           fallbackPath: reason === 'denied' ? 'bridge_non_live_data_operational' : 'bridge_contract_mismatch',
           gatewayOutcome: reason,
+          missingEntities: canonical.metadata.missingEntities,
+          defaultsApplied: canonical.metadata.defaultsApplied,
           latencyMsTotal: Date.now() - turnStartedAt,
           latencyMsRouting: canonical.metadata.latencyMsRouting ?? (Date.now() - turnStartedAt),
           latencyMsGateway: canonical.metadata.latencyMsGateway,
@@ -831,13 +916,6 @@ export class AssistantService {
       //   toolName: payload.toolName,
       // });
 
-      const finalAnswer = this.shouldOverrideGenericUnitLookupMenu(
-        params.request.message,
-        canonical.answer,
-      )
-        ? 'No encontré una coincidencia única para la unidad indicada. Verificá unidad y torre exactas.'
-        : canonical.answer;
-
       const suggestedActions = canonical.suggestedActions.length > 0
         ? canonical.suggestedActions.map((action) => ({
             ...action,
@@ -862,9 +940,12 @@ export class AssistantService {
           canonical.metadata.resolvedLevel
           ?? (routeFamily === 'P2' ? 'P2' : routeFamily),
         resolvedIntentCode: canonical.metadata.resolvedIntentCode ?? canonical.metadata.intentCode,
+        familyChosen: canonical.metadata.familyChosen,
         toolName: canonical.metadata.toolName ?? payload.toolName,
         fallbackPath: canonical.metadata.fallbackPath ?? 'none',
         gatewayOutcome: canonical.metadata.gatewayOutcome,
+        missingEntities: canonical.metadata.missingEntities,
+        defaultsApplied: canonical.metadata.defaultsApplied,
         latencyMsTotal: canonical.metadata.latencyMsTotal ?? (Date.now() - turnStartedAt),
         latencyMsRouting: canonical.metadata.latencyMsRouting ?? (Date.now() - turnStartedAt),
         latencyMsGateway: canonical.metadata.latencyMsGateway,
@@ -877,18 +958,12 @@ export class AssistantService {
       return {
         kind: 'response',
         response: {
-          answer: finalAnswer,
+          answer: canonical.answer,
           answerSource: canonical.answerSource,
           suggestedActions,
           responseType: canonical.responseType,
           options: payload.options,
-          metadata: {
-            gatewayOutcome: 'success',
-            rawAnswerSource: canonical.metadata.rawAnswerSource,
-            auditId: canonical.metadata.auditId,
-            intentCode: canonical.metadata.intentCode,
-            traceId: canonical.metadata.traceId,
-          },
+          metadata: canonical.metadata,
         },
       };
     } catch (error) {
@@ -928,7 +1003,14 @@ export class AssistantService {
     }
   }
 
-  private detectRouteFamily(toolName?: string): RouteFamily {
+  private detectRouteFamily(resolvedLevelOrToolName?: string, maybeToolName?: string): RouteFamily {
+    const resolvedLevel = this.isKnownResolvedLevel(resolvedLevelOrToolName)
+      ? resolvedLevelOrToolName
+      : undefined;
+    const toolName = maybeToolName ?? (resolvedLevel ? undefined : resolvedLevelOrToolName);
+    if (resolvedLevel === 'P3') return 'P3';
+    if (resolvedLevel === 'P2' || resolvedLevel === 'P2B' || resolvedLevel === 'P1') return 'P2';
+    if (resolvedLevel === 'P0') return 'P0';
     if (!toolName) return 'P0';
     if (toolName.includes('trend') || toolName.includes('snapshot') || toolName.includes('debt') || toolName.includes('collection')) {
       return 'P2';
@@ -937,6 +1019,15 @@ export class AssistantService {
       return 'P3';
     }
     return 'P0';
+  }
+
+  private isKnownResolvedLevel(value?: string): value is 'P0' | 'P1' | 'P2B' | 'P2' | 'P3' | 'FALLBACK' {
+    return value === 'P0'
+      || value === 'P1'
+      || value === 'P2B'
+      || value === 'P2'
+      || value === 'P3'
+      || value === 'FALLBACK';
   }
 
   private generateTraceId(): string {
@@ -1050,12 +1141,19 @@ export class AssistantService {
     const { detail, hint } = familyMessages[family];
     const reasonHint: Record<GatewayOutcome, string> = {
       success: hint,
+      null: 'El engine primario no devolvio datos operativos.',
+      error: 'El engine primario devolvio un error controlado.',
+      missing_entities: 'Faltan datos para ejecutar la consulta operativa.',
       timeout: 'El engine primario excedio el tiempo de respuesta.',
       unavailable: 'El engine primario no esta disponible temporalmente.',
       invalid_payload: 'El engine primario respondio con payload invalido.',
       contract_mismatch: 'La respuesta no cumple el contrato esperado por el bridge.',
       denied:
         'Para confirmar un dato operativo necesito respuesta live_data. Reformula con unidad y torre exactas o revisa Pagos.',
+      invalid_entities: 'Los datos proporcionados no se encontraron en el sistema.',
+      cache_hit: hint,
+      cache_miss: hint,
+      hitl_created: 'Se creo un ticket de atención humana.',
     };
     const finalHint = reasonHint[reason] ?? hint;
     return {
@@ -1385,28 +1483,17 @@ export class AssistantService {
     const unitToken = this.extractUnitToken(normalizedMessage);
     const towerToken = this.extractTowerToken(normalizedMessage);
 
-    if (!unitToken || !towerToken) {
-      if (unitToken && !towerToken) {
-        return {
-          answer:
-            'Para responder con precision necesito la torre/edificio exacto. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
-          answerSource: 'live_data',
-          responseType: 'clarification',
-          suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
-        };
-      }
-      if (!unitToken && towerToken) {
-        return {
-          answer:
-            'Para responder con precision necesito la unidad exacta dentro de la torre/edificio. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
-          answerSource: 'live_data',
-          responseType: 'clarification',
-          suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
-        };
-      }
+    if (!unitToken) {
+      // Query does not explicitly reference a specific unit.
+      // Let the Yoryi engine handle it and generate clarifications
+      // based on missingEntities (period, buildingId, etc.)
+      return null;
+    }
+
+    if (!towerToken) {
       return {
         answer:
-          'Para responder con precision necesito ambos datos exactos: unidad y torre. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
+          'Para responder con precision necesito la torre/edificio exacto. Ejemplo: "Cuanto debe la unidad 123 de Torre A".',
         answerSource: 'live_data',
         responseType: 'clarification',
         suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
@@ -1567,26 +1654,6 @@ export class AssistantService {
       'listame',
     ];
     return aggregateKeywords.some((keyword) => normalizedMessage.includes(keyword));
-  }
-
-  private shouldOverrideGenericUnitLookupMenu(message: string, answer: string): boolean {
-    const normalizedMessage = this.normalizeText(message);
-    const normalizedAnswer = this.normalizeText(answer);
-    const looksGenericMenu =
-      normalizedAnswer.includes('elegi una opcion') ||
-      normalizedAnswer.includes('decime si queres');
-    if (!looksGenericMenu) {
-      return false;
-    }
-
-    const hasUnitAndBuilding =
-      /(?:unidad|apartamento|depto|departamento|apto|uf)\s+[a-z0-9-]+/.test(normalizedMessage) &&
-      /(?:torre|edificio|bloque)\s+[a-z0-9]+/.test(normalizedMessage);
-    const isResidentLookup =
-      normalizedMessage.includes('residente') ||
-      normalizedMessage.includes('telefono');
-
-    return hasUnitAndBuilding && isResidentLookup;
   }
 
   private isMutationLikeStrictQuery(normalizedMessage: string): boolean {
@@ -1868,8 +1935,8 @@ export class AssistantService {
     };
   }
 
-  private normalizeAnswerSource(answerSource?: string): 'live_data' | 'knowledge' | 'fallback' {
-    if (answerSource === 'live_data' || answerSource === 'knowledge' || answerSource === 'fallback') {
+  private normalizeAnswerSource(answerSource?: string): 'live_data' | 'knowledge' | 'fallback' | 'snapshot' {
+    if (answerSource === 'live_data' || answerSource === 'knowledge' || answerSource === 'fallback' || answerSource === 'snapshot') {
       return answerSource;
     }
     return 'fallback';

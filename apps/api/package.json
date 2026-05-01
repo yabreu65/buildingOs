@@ -17,6 +17,7 @@
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "migrate:status": "prisma migrate status",
+    "schema:check": "ts-node --project tsconfig.script.json scripts/check-schema-readiness.ts",
     "seed": "ts-node prisma/seed.ts",
     "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
     "seed:pilot": "ts-node prisma/seed-pilot.ts",

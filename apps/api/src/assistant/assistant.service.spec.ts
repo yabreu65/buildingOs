@@ -301,6 +301,129 @@ describe('AssistantService - P0 yoryi bridge lock', () => {
     expect(result.metadata?.traceId).toBe('trace-123');
   });
 
+  it('preserves engine clarification text instead of inventing a bridge clarification', async () => {
+    const engineAnswer = 'Necesito una aclaracion para responder en modo operativo. Elegi una opcion:\n1) Ver unidad\n2) Ver residente';
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        answer: engineAnswer,
+        answerSource: 'live_data',
+        responseType: 'clarification',
+        actions: [],
+        provenance: {
+          sources: [{
+            metadata: {
+              intentCode: 'UNIT_RESIDENT_LOOKUP',
+              traceId: 'trace-engine-text',
+              gatewayOutcome: 'missing_entities',
+              missingEntities: [],
+            },
+          }],
+        },
+      }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const { service } = makeService();
+
+    const result = await service.chat(
+      'tenant-1',
+      'user-1',
+      'membership-1',
+      { message: 'telefono residente unidad 101 torre a', page: 'payments' },
+      ['TENANT_ADMIN'],
+    );
+
+    expect(result.answer).toBe(engineAnswer);
+    expect(result.answer).not.toContain('No encontré una coincidencia única');
+    expect(result.metadata?.missingEntities).toEqual([]);
+  });
+
+  it('preserves snapshot answerSource from yoryi P2 responses', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        answer: 'Snapshot de deuda del edificio.',
+        answerSource: 'snapshot',
+        responseType: 'summary',
+        actions: [],
+        provenance: {
+          sources: [{
+            metadata: {
+              traceId: 'trace-snapshot',
+              resolvedLevel: 'P2',
+              resolvedIntentCode: 'BUILDING_DEBT_SNAPSHOT',
+              gatewayOutcome: 'success',
+            },
+          }],
+        },
+      }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const { service, mockAiProvider } = makeService();
+
+    const result = await service.chat(
+      'tenant-1',
+      'user-1',
+      'membership-1',
+      { message: 'snapshot deuda edificio a', page: 'payments' },
+      ['TENANT_ADMIN'],
+    );
+
+    expect(result.answer).toBe('Snapshot de deuda del edificio.');
+    expect(result.answerSource).toBe('snapshot');
+    expect(result.metadata?.traceId).toBe('trace-snapshot');
+    expect((mockAiProvider.chat as jest.Mock)).not.toHaveBeenCalled();
+  });
+
+  it('does not block debt queries without explicit unit reference', async () => {
+    const { service } = makeService();
+
+    const result = await (service as any).tryResolveStrictUnitDebtQuestion(
+      'tenant-1',
+      'dame deuda del edificio A',
+      ['TENANT_ADMIN'],
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('routes building-scoped debt queries to yoryi without blocking by unit gate', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        answer: 'Necesito que indiques el período para consultar la deuda del edificio A.',
+        answerSource: 'live_data',
+        responseType: 'clarification',
+        actions: [],
+        provenance: {
+          sources: [{ metadata: { missingEntities: ['period'], gatewayOutcome: 'missing_entities' } }],
+        },
+      }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const { service, mockAiProvider } = makeService();
+    // Restore strict resolver mock so the real implementation runs
+    (service as any).tryResolveStrictOperationalQuestion.mockRestore();
+
+    const result = await service.chat(
+      'tenant-1',
+      'user-1',
+      'membership-1',
+      { message: 'dame deuda del edificio A', page: 'payments' },
+      ['TENANT_ADMIN'],
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(result.answer).toContain('período');
+    expect(result.answer.toLowerCase()).not.toContain('unidad exacta');
+    expect(result.metadata?.missingEntities).toEqual(['period']);
+    expect(result.metadata?.gatewayOutcome).toBe('missing_entities');
+    expect((mockAiProvider.chat as jest.Mock)).not.toHaveBeenCalled();
+  });
+
   it('returns controlled timeout response when yoryi aborts', async () => {
     const abortError = new Error('aborted');
     (abortError as any).name = 'AbortError';

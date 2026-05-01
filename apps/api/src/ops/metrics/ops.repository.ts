@@ -3,6 +3,19 @@ import { OpsAlertSeverity, OpsAlertStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 const OPEN_HANDOFF_STATUSES = ['OPEN', 'PENDING', 'NOTIFIED', 'FAILED', 'IN_PROGRESS'] as const;
+const SCHEMA_DRIFT_ERROR_CODES = new Set(['P2021', 'P2022', '42P01', '42703']);
+
+function isSchemaDriftError(error: unknown): boolean {
+  const record = error as { code?: unknown; meta?: { code?: unknown }; message?: unknown };
+  const code = typeof record?.code === 'string' ? record.code : undefined;
+  const metaCode = typeof record?.meta?.code === 'string' ? record.meta.code : undefined;
+  const message = typeof record?.message === 'string' ? record.message : '';
+  return (
+    (code !== undefined && SCHEMA_DRIFT_ERROR_CODES.has(code)) ||
+    (metaCode !== undefined && SCHEMA_DRIFT_ERROR_CODES.has(metaCode)) ||
+    /column .* does not exist|relation .* does not exist|table .* does not exist/i.test(message)
+  );
+}
 
 @Injectable()
 export class OpsRepository {
@@ -100,27 +113,37 @@ export class OpsRepository {
   }
 
   async getAssignP95Minutes(tenantId?: string): Promise<number | null> {
-    const rows = await this.prisma.$queryRaw<Array<{ p95: number | null }>>`
-      SELECT percentile_cont(0.95) WITHIN GROUP (
-        ORDER BY EXTRACT(EPOCH FROM ("assignedAt" - "createdAt")) / 60.0
-      ) AS p95
-      FROM "AssistantHandoff"
-      WHERE "assignedAt" IS NOT NULL
-      ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
-    `;
-    return rows[0]?.p95 ?? null;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ p95: number | null }>>`
+        SELECT percentile_cont(0.95) WITHIN GROUP (
+          ORDER BY EXTRACT(EPOCH FROM ("assignedAt" - "createdAt")) / 60.0
+        ) AS p95
+        FROM "AssistantHandoff"
+        WHERE "assignedAt" IS NOT NULL
+        ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
+      `;
+      return rows[0]?.p95 ?? null;
+    } catch (error) {
+      if (isSchemaDriftError(error)) return null;
+      throw error;
+    }
   }
 
   async getResolveP95Hours(tenantId?: string): Promise<number | null> {
-    const rows = await this.prisma.$queryRaw<Array<{ p95: number | null }>>`
-      SELECT percentile_cont(0.95) WITHIN GROUP (
-        ORDER BY EXTRACT(EPOCH FROM ("resolvedAt" - "createdAt")) / 3600.0
-      ) AS p95
-      FROM "AssistantHandoff"
-      WHERE "resolvedAt" IS NOT NULL
-      ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
-    `;
-    return rows[0]?.p95 ?? null;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ p95: number | null }>>`
+        SELECT percentile_cont(0.95) WITHIN GROUP (
+          ORDER BY EXTRACT(EPOCH FROM ("resolvedAt" - "createdAt")) / 3600.0
+        ) AS p95
+        FROM "AssistantHandoff"
+        WHERE "resolvedAt" IS NOT NULL
+        ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
+      `;
+      return rows[0]?.p95 ?? null;
+    } catch (error) {
+      if (isSchemaDriftError(error)) return null;
+      throw error;
+    }
   }
 
   async getBreachedSlaCount(params: {
@@ -128,29 +151,34 @@ export class OpsRepository {
     assignMaxMinutes: number;
     resolveMaxHours: number;
   }) {
-    const rows = await this.prisma.$queryRaw<Array<{ assign_breach: bigint; resolve_breach: bigint }>>`
-      SELECT
-        COUNT(*) FILTER (
-          WHERE "assignedAt" IS NULL
-            AND status IN ('OPEN', 'PENDING', 'NOTIFIED', 'FAILED')
-            AND EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 60.0 > ${params.assignMaxMinutes}
-        ) AS assign_breach,
-        COUNT(*) FILTER (
-          WHERE "resolvedAt" IS NULL
-            AND status = 'IN_PROGRESS'
-            AND EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 3600.0 > ${params.resolveMaxHours}
-        ) AS resolve_breach
-      FROM "AssistantHandoff"
-      WHERE 1=1
-      ${params.tenantId ? Prisma.sql`AND "tenantId" = ${params.tenantId}` : Prisma.empty}
-    `;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ assign_breach: bigint; resolve_breach: bigint }>>`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE "assignedAt" IS NULL
+              AND status IN ('OPEN', 'PENDING', 'NOTIFIED', 'FAILED')
+              AND EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 60.0 > ${params.assignMaxMinutes}
+          ) AS assign_breach,
+          COUNT(*) FILTER (
+            WHERE "resolvedAt" IS NULL
+              AND status = 'IN_PROGRESS'
+              AND EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 3600.0 > ${params.resolveMaxHours}
+          ) AS resolve_breach
+        FROM "AssistantHandoff"
+        WHERE 1=1
+        ${params.tenantId ? Prisma.sql`AND "tenantId" = ${params.tenantId}` : Prisma.empty}
+      `;
 
-    const row = rows[0] ?? { assign_breach: 0n, resolve_breach: 0n };
-    return {
-      assign: Number(row.assign_breach),
-      resolve: Number(row.resolve_breach),
-      total: Number(row.assign_breach) + Number(row.resolve_breach),
-    };
+      const row = rows[0] ?? { assign_breach: 0n, resolve_breach: 0n };
+      return {
+        assign: Number(row.assign_breach),
+        resolve: Number(row.resolve_breach),
+        total: Number(row.assign_breach) + Number(row.resolve_breach),
+      };
+    } catch (error) {
+      if (isSchemaDriftError(error)) return { assign: 0, resolve: 0, total: 0 };
+      throw error;
+    }
   }
 
   async getTopFallbackPaths24h(tenantId?: string) {
@@ -167,40 +195,50 @@ export class OpsRepository {
   }
 
   async getGatewayErrorRate15m(tenantId?: string): Promise<{ rate: number | null; total: number }> {
-    const rows = await this.prisma.$queryRaw<Array<{ errors: bigint; total: bigint }>>`
-      SELECT
-        COUNT(*) FILTER (
-          WHERE LOWER("gatewayOutcome") LIKE '%error%'
-             OR LOWER("gatewayOutcome") LIKE '%timeout%'
-             OR LOWER("gatewayOutcome") LIKE '%exception%'
-             OR LOWER("gatewayOutcome") LIKE '%invalid%'
-             OR LOWER("gatewayOutcome") LIKE '%mismatch%'
-             OR LOWER("gatewayOutcome") LIKE '%not_ok%'
-        ) AS errors,
-        COUNT(*) AS total
-      FROM "AssistantHandoff"
-      WHERE "createdAt" >= NOW() - INTERVAL '15 minutes'
-      ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
-    `;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ errors: bigint; total: bigint }>>`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE LOWER("gatewayOutcome") LIKE '%error%'
+               OR LOWER("gatewayOutcome") LIKE '%timeout%'
+               OR LOWER("gatewayOutcome") LIKE '%exception%'
+               OR LOWER("gatewayOutcome") LIKE '%invalid%'
+               OR LOWER("gatewayOutcome") LIKE '%mismatch%'
+               OR LOWER("gatewayOutcome") LIKE '%not_ok%'
+          ) AS errors,
+          COUNT(*) AS total
+        FROM "AssistantHandoff"
+        WHERE "createdAt" >= NOW() - INTERVAL '15 minutes'
+        ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
+      `;
 
-    const row = rows[0] ?? { errors: 0n, total: 0n };
-    const total = Number(row.total);
-    return { rate: total > 0 ? Number(row.errors) / total : null, total };
+      const row = rows[0] ?? { errors: 0n, total: 0n };
+      const total = Number(row.total);
+      return { rate: total > 0 ? Number(row.errors) / total : null, total };
+    } catch (error) {
+      if (isSchemaDriftError(error)) return { rate: null, total: 0 };
+      throw error;
+    }
   }
 
   async getP0NoDataRate15m(tenantId?: string): Promise<{ rate: number | null; total: number }> {
-    const rows = await this.prisma.$queryRaw<Array<{ no_data: bigint; total: bigint }>>`
-      SELECT
-        COUNT(*) FILTER (WHERE "fallbackPath" = 'rag_no_sources') AS no_data,
-        COUNT(*) AS total
-      FROM "AssistantHandoff"
-      WHERE "createdAt" >= NOW() - INTERVAL '15 minutes'
-      ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
-    `;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ no_data: bigint; total: bigint }>>`
+        SELECT
+          COUNT(*) FILTER (WHERE "fallbackPath" = 'rag_no_sources') AS no_data,
+          COUNT(*) AS total
+        FROM "AssistantHandoff"
+        WHERE "createdAt" >= NOW() - INTERVAL '15 minutes'
+        ${tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` : Prisma.empty}
+      `;
 
-    const row = rows[0] ?? { no_data: 0n, total: 0n };
-    const total = Number(row.total);
-    return { rate: total > 0 ? Number(row.no_data) / total : null, total };
+      const row = rows[0] ?? { no_data: 0n, total: 0n };
+      const total = Number(row.total);
+      return { rate: total > 0 ? Number(row.no_data) / total : null, total };
+    } catch (error) {
+      if (isSchemaDriftError(error)) return { rate: null, total: 0 };
+      throw error;
+    }
   }
 
   async getCacheHitRate15m(tenantId?: string): Promise<{ rate: number | null; total: number }> {

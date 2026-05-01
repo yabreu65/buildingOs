@@ -2,6 +2,9 @@ import { SuggestedAction, SuggestedActionType } from './ai.types';
 
 export type GatewayOutcome =
   | 'success'
+  | 'null'
+  | 'error'
+  | 'missing_entities'
   | 'timeout'
   | 'unavailable'
   | 'invalid_payload'
@@ -12,10 +15,21 @@ export type GatewayOutcome =
   | 'cache_miss'
   | 'hitl_created';
 
+export type IntentFamily =
+  | 'TOP_N'
+  | 'BREAKDOWN'
+  | 'TOTAL'
+  | 'TREND'
+  | 'AGING'
+  | 'OVERDUE'
+  | 'PAYMENT_STATUS'
+  | 'PAYMENT_HISTORY'
+  | 'LEGACY';
+
 export type CanonicalAssistantResponse = {
   answer: string;
   responseType: 'exact' | 'summary' | 'list' | 'clarification';
-  answerSource: 'live_data' | 'knowledge' | 'fallback';
+  answerSource: 'live_data' | 'knowledge' | 'fallback' | 'snapshot';
   suggestedActions: SuggestedAction[];
   metadata: {
     auditId?: string;
@@ -29,9 +43,12 @@ export type CanonicalAssistantResponse = {
     unitId?: string;
     resolvedLevel?: 'P0' | 'P1' | 'P2B' | 'P2' | 'P3' | 'FALLBACK';
     resolvedIntentCode?: string;
+    familyChosen?: IntentFamily;
     toolName?: string;
     fallbackPath?: string;
     gatewayOutcome: GatewayOutcome;
+    missingEntities?: string[];
+    defaultsApplied?: string[];
     latencyMsTotal?: number;
     latencyMsRouting?: number;
     latencyMsGateway?: number;
@@ -54,6 +71,7 @@ type YoryiPayload = {
   provenance?: {
     sources?: YoryiSourceMeta[];
   };
+  metadata?: Record<string, unknown>;
 };
 
 export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantResponse | null {
@@ -62,7 +80,7 @@ export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantRespons
   }
 
   const y = payload as YoryiPayload;
-  const sourceMetadata = extractSourceMetadata(y.provenance?.sources);
+  const sourceMetadata = extractPayloadMetadata(y);
   const answer = asNonEmptyString(y.answer);
   const answerSource = asAllowedAnswerSource(y.answerSource);
   if (!answer || !answerSource) {
@@ -78,8 +96,12 @@ export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantRespons
       auditId: asNonEmptyString(y.auditId) ?? undefined,
       intentCode: extractMetaString(y.provenance?.sources, 'intentCode')
         ?? extractMetaString(y.provenance?.sources, 'resolvedIntentCode')
+        ?? asNonEmptyString(sourceMetadata?.intentCode)
+        ?? asNonEmptyString(sourceMetadata?.resolvedIntentCode)
         ?? undefined,
-      traceId: extractMetaString(y.provenance?.sources, 'traceId') ?? undefined,
+      traceId: extractMetaString(y.provenance?.sources, 'traceId')
+        ?? asNonEmptyString(sourceMetadata?.traceId)
+        ?? undefined,
       timestamp: asNonEmptyString(sourceMetadata?.timestamp) ?? undefined,
       tenantId: asNonEmptyString(sourceMetadata?.tenantId) ?? undefined,
       userId: asNonEmptyString(sourceMetadata?.userId) ?? undefined,
@@ -88,9 +110,12 @@ export function mapYoryiToCanonical(payload: unknown): CanonicalAssistantRespons
       unitId: asNonEmptyString(sourceMetadata?.unitId) ?? undefined,
       resolvedLevel: asResolvedLevel(sourceMetadata?.resolvedLevel) ?? undefined,
       resolvedIntentCode: asNonEmptyString(sourceMetadata?.resolvedIntentCode) ?? undefined,
+      familyChosen: asIntentFamily(sourceMetadata?.familyChosen) ?? undefined,
       toolName: asNonEmptyString(sourceMetadata?.toolName) ?? undefined,
       fallbackPath: asNonEmptyString(sourceMetadata?.fallbackPath) ?? undefined,
       gatewayOutcome: asGatewayOutcome(sourceMetadata?.gatewayOutcome) ?? 'success',
+      missingEntities: asStringArray(sourceMetadata?.missingEntities),
+      defaultsApplied: asStringArray(sourceMetadata?.defaultsApplied),
       latencyMsTotal: asFiniteNumber(sourceMetadata?.latencyMsTotal),
       latencyMsRouting: asFiniteNumber(sourceMetadata?.latencyMsRouting),
       latencyMsGateway: asFiniteNumber(sourceMetadata?.latencyMsGateway),
@@ -146,11 +171,9 @@ function extractMetaString(
   key: string,
 ): string | null {
   if (!Array.isArray(sources)) return null;
-  for (const source of sources) {
-    const value = source?.metadata?.[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
+  const value = sources[0]?.metadata?.[key];
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
   }
   return null;
 }
@@ -159,12 +182,12 @@ function extractSourceMetadata(
   sources: YoryiSourceMeta[] | undefined,
 ): Record<string, unknown> | null {
   if (!Array.isArray(sources)) return null;
-  for (const source of sources) {
-    if (isRecord(source?.metadata)) {
-      return source.metadata;
-    }
-  }
-  return null;
+  const firstSource = sources[0];
+  return isRecord(firstSource?.metadata) ? firstSource.metadata : null;
+}
+
+function extractPayloadMetadata(y: YoryiPayload): Record<string, unknown> | null {
+  return extractSourceMetadata(y.provenance?.sources) ?? (isRecord(y.metadata) ? y.metadata : null);
 }
 
 function asResolvedLevel(
@@ -176,9 +199,29 @@ function asResolvedLevel(
   return null;
 }
 
+function asIntentFamily(value: unknown): IntentFamily | null {
+  if (
+    value === 'TOP_N' ||
+    value === 'BREAKDOWN' ||
+    value === 'TOTAL' ||
+    value === 'TREND' ||
+    value === 'AGING' ||
+    value === 'OVERDUE' ||
+    value === 'PAYMENT_STATUS' ||
+    value === 'PAYMENT_HISTORY' ||
+    value === 'LEGACY'
+  ) {
+    return value;
+  }
+  return null;
+}
+
 function asGatewayOutcome(value: unknown): GatewayOutcome | null {
   if (
     value === 'success' ||
+    value === 'null' ||
+    value === 'error' ||
+    value === 'missing_entities' ||
     value === 'timeout' ||
     value === 'unavailable' ||
     value === 'invalid_payload' ||
@@ -194,6 +237,17 @@ function asGatewayOutcome(value: unknown): GatewayOutcome | null {
   return null;
 }
 
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  return strings.length === value.length ? strings.map((entry) => entry.trim()) : undefined;
+}
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.every(isRecord) ? value : undefined;
+}
+
 function asFiniteNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   return value;
@@ -205,7 +259,7 @@ function asBoolean(value: unknown): boolean | undefined {
 }
 
 function asAllowedAnswerSource(value?: string): CanonicalAssistantResponse['answerSource'] | null {
-  if (value === 'live_data' || value === 'knowledge' || value === 'fallback') {
+  if (value === 'live_data' || value === 'knowledge' || value === 'fallback' || value === 'snapshot') {
     return value;
   }
   return null;
