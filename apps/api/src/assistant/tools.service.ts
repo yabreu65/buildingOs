@@ -45,7 +45,7 @@ export class AssistantToolsService {
     const startedAt = Date.now();
     this.assertApiKey(headers.apiKey);
     const context = this.normalizeAndValidateContext(request.context, headers);
-    await this.assertMembershipAndPermissions(context.tenantId, context.userId, context.role, toolName);
+    await this.assertMembershipAndPermissions(context.tenantId, context.userId, context.role, toolName, request.toolInput);
 
     let response: AssistantToolResponse;
     switch (toolName) {
@@ -92,6 +92,40 @@ export class AssistantToolsService {
     input?: Record<string, unknown>,
   ): Promise<AssistantToolResponse> {
     const ranking = this.pickRanking(input);
+    const directUnitId = this.pickString(input, 'unitId');
+    if (directUnitId) {
+      const unit = await this.prisma.unit.findFirst({
+        where: {
+          id: directUnitId,
+          building: { tenantId },
+        },
+        select: {
+          id: true,
+          code: true,
+          label: true,
+          buildingId: true,
+          building: { select: { name: true } },
+        },
+      });
+
+      if (!unit) {
+        return this.buildResponse('No encontré unidad para esa referencia.', 'clarification', {
+          noUnitMatch: true,
+        });
+      }
+
+      return this.buildResponse(
+        `Unidad resuelta: ${unit.building?.name ?? 'N/A'} ${unit.label ?? unit.code}.`,
+        'summary',
+        {
+          buildingId: unit.buildingId,
+          unitId: unit.id,
+          unitCode: unit.code,
+          ranking,
+        },
+      );
+    }
+
     const buildingFilter = this.pickString(input, 'buildingName') ?? this.extractTowerToken(question ?? '');
     const unitFilter =
       this.pickString(input, 'unitRef') ??
@@ -227,6 +261,11 @@ export class AssistantToolsService {
       unitId,
       debtStatus,
       outstanding,
+      amount: outstanding,
+      overdueAmount: outstanding,
+      currency: 'ARS',
+      asOf: now.toISOString().slice(0, 10),
+      status: 'operativo',
     });
   }
 
@@ -284,6 +323,54 @@ export class AssistantToolsService {
   ): Promise<AssistantToolResponse> {
     const ranking = this.pickRanking(input);
     const mode = (this.pickString(input, 'mode') ?? '').toLowerCase();
+
+    if (mode === 'last_payment') {
+      const buildingId = this.pickString(input, 'buildingId');
+      const rows = await this.prisma.payment.findMany({
+        where: {
+          tenantId,
+          ...(buildingId ? { buildingId } : {}),
+          status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
+          canceledAt: null,
+        },
+        include: {
+          unit: { select: { label: true, code: true, building: { select: { name: true } } } },
+          building: { select: { name: true } },
+        },
+        orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+        take: 1,
+      });
+
+      const lastPayment = rows[0];
+      if (!lastPayment) {
+        return this.buildResponse('No hay pagos aprobados para ese edificio.', 'no_data', {
+          mode,
+          ranking: 1,
+          buildingId,
+          count: 0,
+        });
+      }
+
+      const paymentDate = lastPayment.paidAt ?? lastPayment.createdAt;
+      const paymentDateIso = paymentDate.toISOString().slice(0, 10);
+      const towerName = lastPayment.building?.name ?? lastPayment.unit?.building?.name ?? 'N/A';
+
+      return this.buildResponse(
+        `Último pago recibido: ${this.formatMoney(lastPayment.amount)} el ${paymentDateIso} (${towerName}, estado ${String(lastPayment.status).toLowerCase()}).`,
+        'summary',
+        {
+          mode,
+          ranking: 1,
+          buildingId,
+          count: 1,
+          lastPaymentAmount: lastPayment.amount,
+          lastPaymentDate: paymentDateIso,
+          towerName,
+          status: lastPayment.status,
+          currency: lastPayment.currency,
+        },
+      );
+    }
 
     if (mode === 'overdue_units') {
       const now = new Date();
@@ -399,6 +486,7 @@ export class AssistantToolsService {
     userId: string,
     role: string,
     toolName: AssistantToolName,
+    toolInput?: Record<string, unknown>,
   ): Promise<void> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
@@ -413,11 +501,49 @@ export class AssistantToolsService {
       throw new ForbiddenException('Role does not match tenant membership');
     }
 
+    if (role === 'RESIDENT' && toolName === 'get_unit_balance') {
+      await this.assertResidentUnitSelfScope(tenantId, userId, toolInput);
+      return;
+    }
+
     const rolePermissions = this.getRolePermissionPolicy();
     const rolePerms = rolePermissions[role] ?? [];
     const requiredPermission = TOOL_PERMISSION[toolName];
     if (!rolePerms.includes(requiredPermission)) {
       throw new ForbiddenException(`Role not allowed for tool ${toolName}`);
+    }
+  }
+
+  private async assertResidentUnitSelfScope(
+    tenantId: string,
+    userId: string,
+    toolInput?: Record<string, unknown>,
+  ): Promise<void> {
+    const requestedUserId = this.pickString(toolInput, 'userId');
+    if (requestedUserId && requestedUserId !== userId) {
+      throw new ForbiddenException('Resident self-scope user mismatch');
+    }
+
+    const unitId = this.pickString(toolInput, 'unitId');
+    if (!unitId) {
+      throw new ForbiddenException('Resident self-scope unit is required');
+    }
+
+    const activeOccupancy = await this.prisma.unitOccupant.findFirst({
+      where: {
+        tenantId,
+        unitId,
+        endDate: null,
+        member: {
+          userId,
+          disabledAt: null,
+        },
+      },
+      select: { id: true },
+    });
+
+    if (!activeOccupancy) {
+      throw new ForbiddenException('Resident is not allowed for requested unit');
     }
   }
 
