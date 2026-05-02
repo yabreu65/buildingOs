@@ -51,7 +51,7 @@ jobs:
         run: npm ci
 
       - name: 🗂️ Setup database
-        run: npm run db:migrate
+        run: npm run migrate:deploy -w apps/api
 
       - name: 🔥 P0 Smoke - Bridge Lock Tests (PR-1)
         run: npm run test -w apps/api -- --testPathPattern="assistant.service.spec.ts" --no-coverage
@@ -129,7 +129,7 @@ jobs:
         run: npm ci
 
       - name: 🗂️ Setup database
-        run: npm run db:migrate
+        run: npm run migrate:deploy -w apps/api
 
       - name: 🔍 Lint
         run: npm run lint
