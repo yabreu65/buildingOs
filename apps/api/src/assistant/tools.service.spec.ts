@@ -19,11 +19,11 @@ describe('AssistantToolsService', () => {
     const prisma = {
       membership: { findUnique: jest.fn() },
       building: { findMany: jest.fn() },
-      unit: { findMany: jest.fn(), findUniqueOrThrow: jest.fn() },
+      unit: { findMany: jest.fn(), findFirst: jest.fn(), findUniqueOrThrow: jest.fn() },
       charge: { findMany: jest.fn(), aggregate: jest.fn() },
       payment: { findMany: jest.fn(), aggregate: jest.fn() },
       ticket: { findMany: jest.fn() },
-      unitOccupant: { findMany: jest.fn() },
+      unitOccupant: { findMany: jest.fn(), findFirst: jest.fn() },
     } as any;
     const audit = { createLog: jest.fn() } as any;
     const service = new AssistantToolsService(prisma, audit);
@@ -49,6 +49,65 @@ describe('AssistantToolsService', () => {
       { question: 'pagos', context: { tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' } },
       { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'RESIDENT' },
     );
+    expect(result.answerSource).toBe('error');
+    expect(result.responseType).toBe('error');
+    expect(result.metadata.gatewayOutcome).toBe('forbidden');
+  });
+
+  it('allows RESIDENT get_unit_balance only for self-scoped occupied unit', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'RESIDENT' }] });
+    prisma.unitOccupant.findFirst.mockResolvedValue({ id: 'occ-1' });
+    prisma.unit.findFirst.mockResolvedValue({
+      id: 'u1',
+      code: '101',
+      label: 'Apt 101',
+      buildingId: 'b1',
+      building: { name: 'Torre A' },
+    });
+    prisma.unit.findUniqueOrThrow.mockResolvedValue({
+      id: 'u1',
+      code: '101',
+      label: 'Apt 101',
+      building: { name: 'Torre A' },
+    });
+    prisma.charge.findMany.mockResolvedValue([
+      { id: 'c1', amount: 50000, paymentAllocations: [] },
+    ]);
+
+    const result = await service.executeTool(
+      'get_unit_balance',
+      {
+        question: 'cuánto debo',
+        toolInput: { scope: 'self', unitId: 'u1', userId: 'resident-1' },
+        context: { tenantId: 'tenant-1', userId: 'resident-1', role: 'RESIDENT' },
+      },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'resident-1', role: 'RESIDENT' },
+    );
+
+    expect(result.responseType).toBe('summary');
+    expect(result.metadata.unitId).toBe('u1');
+    expect(result.metadata.outstanding).toBe(50000);
+    expect(result.metadata.amount).toBe(50000);
+    expect(result.metadata.asOf).toEqual(expect.any(String));
+    expect(result.metadata.status).toBe('operativo');
+  });
+
+  it('denies RESIDENT get_unit_balance for a unit outside self scope', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'RESIDENT' }] });
+    prisma.unitOccupant.findFirst.mockResolvedValue(null);
+
+    const result = await service.executeTool(
+      'get_unit_balance',
+      {
+        question: 'cuánto debo',
+        toolInput: { scope: 'self', unitId: 'other-unit', userId: 'resident-1' },
+        context: { tenantId: 'tenant-1', userId: 'resident-1', role: 'RESIDENT' },
+      },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'resident-1', role: 'RESIDENT' },
+    );
+
     expect(result.answerSource).toBe('error');
     expect(result.responseType).toBe('error');
     expect(result.metadata.gatewayOutcome).toBe('forbidden');
@@ -86,11 +145,11 @@ describe('AssistantToolsService P1', () => {
     const prisma = {
       membership: { findUnique: jest.fn() },
       building: { findMany: jest.fn() },
-      unit: { findMany: jest.fn(), findUniqueOrThrow: jest.fn() },
+      unit: { findMany: jest.fn(), findFirst: jest.fn(), findUniqueOrThrow: jest.fn() },
       charge: { findMany: jest.fn(), aggregate: jest.fn() },
       payment: { findMany: jest.fn(), aggregate: jest.fn() },
       ticket: { findMany: jest.fn() },
-      unitOccupant: { findMany: jest.fn() },
+      unitOccupant: { findMany: jest.fn(), findFirst: jest.fn() },
     } as any;
     const audit = { createLog: jest.fn() } as any;
     const service = new AssistantToolsService(prisma, audit);
@@ -194,6 +253,47 @@ describe('AssistantToolsService P1', () => {
 
     expect(result.metadata.status).toContain('SUBMITTED');
     expect(result.metadata).not.toHaveProperty('mode');
+  });
+
+  it('search_payments mode=last_payment returns latest building payment metadata', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 'p1',
+        amount: 152526,
+        currency: 'ARS',
+        status: 'APPROVED',
+        paidAt: new Date('2024-05-01T03:00:00.000Z'),
+        createdAt: new Date('2024-05-01T03:00:00.000Z'),
+        unit: { label: '101', code: '101', building: { name: 'Torre A' } },
+      },
+    ]);
+
+    const result = await service.executeTool(
+      'search_payments',
+      {
+        question: 'ultimo pago recibido global del edificio',
+        toolInput: { mode: 'last_payment', buildingId: 'b1', ranking: 1 },
+        context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+      },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 'tenant-1',
+          buildingId: 'b1',
+        }),
+        take: 1,
+      }),
+    );
+    expect(result.responseType).toBe('summary');
+    expect(result.metadata.lastPaymentAmount).toBe(152526);
+    expect(result.metadata.lastPaymentDate).toBe('2024-05-01');
+    expect(result.metadata.towerName).toBe('Torre A');
+    expect(result.metadata.status).toBe('APPROVED');
   });
 });
 
