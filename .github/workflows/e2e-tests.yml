@@ -93,8 +93,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Run E2E tests
-        working-directory: apps/web
-        run: npm run test:e2e
+        run: npm run test:e2e -w apps/web
         env:
           BASE_URL: http://localhost:3000
           DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
