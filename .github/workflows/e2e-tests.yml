@@ -44,8 +44,17 @@ jobs:
 
       - name: Setup environment
         run: |
-          cp .env.example .env.test
-          echo "DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test" >> .env.test
+          cat > .env.test <<'EOF'
+          NODE_ENV=test
+          DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          EOF
+
+      - name: Generate Prisma client
+        working-directory: apps/api
+        run: npm run prisma:generate
+        env:
+          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          NODE_ENV: test
 
       - name: Build API
         working-directory: apps/api

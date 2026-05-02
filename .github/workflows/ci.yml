@@ -50,6 +50,9 @@ jobs:
       - name: 📦 Install dependencies
         run: npm ci
 
+      - name: 🧬 Generate Prisma client
+        run: npm run prisma:generate -w apps/api
+
       - name: 🗂️ Setup database
         run: npm run migrate:deploy -w apps/api
 
@@ -127,6 +130,9 @@ jobs:
 
       - name: 📦 Install dependencies
         run: npm ci
+
+      - name: 🧬 Generate Prisma client
+        run: npm run prisma:generate -w apps/api
 
       - name: 🗂️ Setup database
         run: npm run migrate:deploy -w apps/api
