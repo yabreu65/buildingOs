@@ -24,7 +24,8 @@
     "demo:tenants": "ts-node scripts/create_demo_tenants.ts",
     "reset:building:categories": "ts-node --project tsconfig.script.json scripts/reset_building_expense_categories.ts",
     "repair:charge-status": "ts-node --project tsconfig.script.json scripts/recalculate_charge_statuses.ts",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "lint:ci": "eslint \"{src,apps,libs,test}/**/*.ts\" --no-error-on-unmatched-pattern"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

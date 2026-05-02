@@ -5,6 +5,8 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
-    "build": "echo \"no-build (ts-only)\""
+    "build": "echo \"no-build (ts-only)\"",
+    "lint": "echo \"no-lint (ts-only package)\"",
+    "typecheck": "echo \"no-typecheck (ts-only package)\""
   }
 }

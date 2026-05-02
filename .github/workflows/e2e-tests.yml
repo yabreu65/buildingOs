@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: '0 2 * * *' # Run daily at 2 AM UTC
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   test:
     name: E2E Tests
@@ -36,7 +41,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -44,8 +49,20 @@ jobs:
 
       - name: Setup environment
         run: |
-          cp .env.example .env.test
-          echo "DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test" >> .env.test
+          cat > .env.test <<'EOF'
+          NODE_ENV=test
+          DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          EOF
+
+      - name: Build internal packages
+        run: npm run build:packages
+
+      - name: Generate Prisma client
+        working-directory: apps/api
+        run: npm run prisma:generate
+        env:
+          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          NODE_ENV: test
 
       - name: Build API
         working-directory: apps/api
@@ -55,7 +72,7 @@ jobs:
 
       - name: Run database migrations
         working-directory: apps/api
-        run: npm run db:migrate
+        run: npm run migrate:deploy
         env:
           DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
           NODE_ENV: test
@@ -101,6 +118,7 @@ jobs:
 
       - name: Comment PR with test results
         if: github.event_name == 'pull_request' && always()
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
