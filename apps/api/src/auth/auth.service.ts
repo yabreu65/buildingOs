@@ -96,6 +96,7 @@ export class AuthService {
       // Create TENANT_OWNER role
       await tx.membershipRole.create({
         data: {
+          tenantId: tenant.id,
           membershipId: membership.id,
           role: 'TENANT_OWNER',
         },

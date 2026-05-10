@@ -95,16 +95,23 @@ async function main() {
   });
   console.log(`   ✅ Tenant ID: ${tenant.id}\n`);
 
-  // 3. Create Buildings
+  // 3. Create Buildings with aliases
   console.log('2. Creating buildings...');
   const buildingA = await prisma.building.create({
-    data: { tenantId: tenant.id, name: 'Torre A', address: 'Avenida Principal 100' },
+    data: { tenantId: tenant.id, name: 'Torre A', alias: 'A', address: 'Avenida Principal 100' },
   });
   const buildingB = await prisma.building.create({
-    data: { tenantId: tenant.id, name: 'Torre B', address: 'Avenida Principal 102' },
+    data: { tenantId: tenant.id, name: 'Torre B', alias: 'B', address: 'Avenida Principal 102' },
   });
-  console.log(`   ✅ Torre A: ${buildingA.id}`);
-  console.log(`   ✅ Torre B: ${buildingB.id}\n`);
+
+  // Update tenant's nextBuildingAliasIndex
+  await prisma.tenant.update({
+    where: { id: tenant.id },
+    data: { nextBuildingAliasIndex: 3 },
+  });
+
+  console.log(`   ✅ Torre A: ${buildingA.id} (alias: A)`);
+  console.log(`   ✅ Torre B: ${buildingB.id} (alias: B)\n`);
 
   // 4. Create Units (12 floors x 8 units = 96 per building)
   console.log('3. Creating units (192 total)...');
@@ -113,17 +120,17 @@ async function main() {
   
   for (let floor = 1; floor <= 12; floor++) {
     for (let unit = 1; unit <= 8; unit++) {
-      const code = `${floor.toString().padStart(2, '0')}${unit}`;
+      const code = `${floor.toString().padStart(2, '0')}${unit.toString().padStart(2, '0')}`;
       const m2Range = UNIT_M2_SIZES[unit - 1];
       const m2 = Math.floor(Math.random() * (m2Range[1] - m2Range[0]) + m2Range[0]);
       
       const unitA = await prisma.unit.create({
-        data: { buildingId: buildingA.id, code, label: `Torre A - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
+        data: { tenantId: tenant.id, buildingId: buildingA.id, code, label: `Torre A - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
       });
       unitIdsA.push(unitA.id);
       
       const unitB = await prisma.unit.create({
-        data: { buildingId: buildingB.id, code, label: `Torre B - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
+        data: { tenantId: tenant.id, buildingId: buildingB.id, code, label: `Torre B - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
       });
       unitIdsB.push(unitB.id);
     }
@@ -256,7 +263,7 @@ async function main() {
     data: { userId: adminUser.id, tenantId: tenant.id },
   });
   await prisma.membershipRole.create({
-    data: { membershipId: adminMember.id, role: Role.TENANT_ADMIN },
+    data: { tenantId: tenant.id, membershipId: adminMember.id, role: Role.TENANT_ADMIN },
   });
   const adminTenantMember = await prisma.tenantMember.create({
     data: { tenantId: tenant.id, userId: adminUser.id, name: 'Admin Residencia San Cristóbal', email: 'admin@sancristobal.test', role: Role.TENANT_ADMIN, status: MemberStatus.ACTIVE },
@@ -273,7 +280,7 @@ async function main() {
     data: { userId: operatorUser.id, tenantId: tenant.id },
   });
   await prisma.membershipRole.create({
-    data: { membershipId: operatorMember.id, role: Role.OPERATOR },
+    data: { tenantId: tenant.id, membershipId: operatorMember.id, role: Role.OPERATOR },
   });
   await prisma.tenantMember.create({
     data: { tenantId: tenant.id, userId: operatorUser.id, name: 'Operador Residencia San Cristóbal', email: 'operador@sancristobal.test', role: Role.OPERATOR, status: MemberStatus.ACTIVE },
@@ -305,11 +312,11 @@ async function main() {
     
     // MembershipRole - upsert
     const existingRole = await prisma.membershipRole.findFirst({
-      where: { membershipId: member.id, role: Role.RESIDENT },
+      where: { tenantId: tenant.id, membershipId: member.id, role: Role.RESIDENT },
     });
     if (!existingRole) {
       await prisma.membershipRole.create({
-        data: { membershipId: member.id, role: Role.RESIDENT },
+        data: { tenantId: tenant.id, membershipId: member.id, role: Role.RESIDENT },
       });
     }
     
@@ -378,11 +385,11 @@ async function main() {
     
     // Upsert MembershipRole
     const existingRole = await prisma.membershipRole.findFirst({
-      where: { membershipId: member.id, role: Role.RESIDENT },
+      where: { tenantId: tenant.id, membershipId: member.id, role: Role.RESIDENT },
     });
     if (!existingRole) {
       await prisma.membershipRole.create({
-        data: { membershipId: member.id, role: Role.RESIDENT },
+        data: { tenantId: tenant.id, membershipId: member.id, role: Role.RESIDENT },
       });
     }
     

@@ -12,6 +12,19 @@ import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 
+export interface UnitWithDisplayCode extends Unit {
+  building: { id: string; name: string; alias: string };
+  displayCode: string;
+}
+
+function addDisplayCode<T extends Unit & { building?: { alias?: string | null } | null }>(
+  unit: T,
+): T & { displayCode: string } {
+  const alias = unit.building?.alias;
+  const displayCode = alias ? `${alias}-${unit.code}` : unit.code;
+  return { ...unit, displayCode };
+}
+
 @Injectable()
 export class UnitsService {
   constructor(
@@ -58,6 +71,7 @@ export class UnitsService {
     try {
       const unit = await this.prisma.unit.create({
         data: {
+          tenantId,
           buildingId,
           code: dto.code,
           label: dto.label,
@@ -66,6 +80,7 @@ export class UnitsService {
           m2: dto.m2,
         },
         include: {
+          building: { select: { id: true, name: true, alias: true } },
           unitCategory: { select: { id: true, name: true } },
           unitOccupants: { include: { member: true } },
         },
@@ -86,7 +101,7 @@ export class UnitsService {
         },
       });
 
-      return unit;
+      return addDisplayCode(unit);
     } catch (error: unknown) {
       if (
         typeof error === 'object' &&
@@ -106,30 +121,32 @@ export class UnitsService {
    * Get all units for a tenant (optionally filtered by buildingId)
    * Multi-tenant safe: filters by building.tenantId
    */
-  async findAllByTenant(tenantId: string, buildingId?: string): Promise<Unit[]> {
+  async findAllByTenant(tenantId: string, buildingId?: string): Promise<UnitWithDisplayCode[]> {
     const where: Prisma.UnitWhereInput = {
-      building: { tenantId },
+      tenantId,
     };
 
     if (buildingId) {
       where.buildingId = buildingId;
     }
 
-    return await this.prisma.unit.findMany({
+    const units = await this.prisma.unit.findMany({
       where,
       include: {
-        building: { select: { id: true, name: true } },
+        building: { select: { id: true, name: true, alias: true } },
         unitCategory: { select: { id: true, name: true } },
         unitOccupants: { include: { member: true } },
       },
       orderBy: [{ building: { name: 'asc' } }, { label: 'asc' }],
     });
+
+    return units.map(addDisplayCode);
   }
 
   /**
    * List all units in a building, scoped to tenant
    */
-  async findAll(tenantId: string, buildingId: string): Promise<Unit[]> {
+  async findAll(tenantId: string, buildingId: string): Promise<UnitWithDisplayCode[]> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -141,20 +158,23 @@ export class UnitsService {
       );
     }
 
-    return await this.prisma.unit.findMany({
-      where: { buildingId },
+    const units = await this.prisma.unit.findMany({
+      where: { tenantId, buildingId },
       include: {
+        building: { select: { id: true, name: true, alias: true } },
         unitCategory: { select: { id: true, name: true } },
         unitOccupants: { include: { member: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    return units.map(addDisplayCode);
   }
 
   /**
    * Get a single unit by ID, scoped to tenant and building
    */
-  async findOne(tenantId: string, buildingId: string, unitId: string): Promise<Unit> {
+  async findOne(tenantId: string, buildingId: string, unitId: string): Promise<UnitWithDisplayCode> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId },
@@ -167,8 +187,9 @@ export class UnitsService {
     }
 
     const unit = await this.prisma.unit.findFirst({
-      where: { id: unitId, buildingId },
+      where: { id: unitId, tenantId, buildingId },
       include: {
+        building: { select: { id: true, name: true, alias: true } },
         unitCategory: { select: { id: true, name: true } },
         unitOccupants: { include: { member: true } },
       },
@@ -180,7 +201,7 @@ export class UnitsService {
       );
     }
 
-    return unit;
+    return addDisplayCode(unit);
   }
 
   /**
@@ -220,6 +241,7 @@ export class UnitsService {
           unitCategoryId: dto.unitCategoryId,
         },
         include: {
+          building: { select: { id: true, name: true, alias: true } },
           unitCategory: { select: { id: true, name: true } },
           unitOccupants: { include: { member: true } },
         },
@@ -241,7 +263,7 @@ export class UnitsService {
         },
       });
 
-      return updatedUnit;
+      return addDisplayCode(updatedUnit);
     } catch (error: unknown) {
       if (
         typeof error === 'object' &&
@@ -283,7 +305,7 @@ export class UnitsService {
 
     // Validate: check for active charges
     const activeCharges = await this.prisma.charge.count({
-      where: { unitId, canceledAt: null },
+      where: { tenantId, unitId, canceledAt: null },
     });
     if (activeCharges > 0) {
       throw new BadRequestException(
@@ -293,7 +315,7 @@ export class UnitsService {
 
     // Validate: check for payments
     const payments = await this.prisma.payment.count({
-      where: { unitId, canceledAt: null },
+      where: { tenantId, unitId, canceledAt: null },
     });
     if (payments > 0) {
       throw new BadRequestException(
@@ -303,11 +325,27 @@ export class UnitsService {
 
     // Validate: check for occupants
     const occupants = await this.prisma.unitOccupant.count({
-      where: { unitId, endDate: null },
+      where: { tenantId, unitId, endDate: null },
     });
     if (occupants > 0) {
       throw new BadRequestException(
         'No se puede eliminar una unidad con ocupantes activos. Retire los ocupantes primero.',
+      );
+    }
+
+    // Fetch full unit with building before deleting (Prisma delete doesn't support include)
+    const unitToDelete = await this.prisma.unit.findFirst({
+      where: { id: unitId, tenantId, buildingId },
+      include: {
+        building: { select: { id: true, name: true, alias: true } },
+        unitCategory: { select: { id: true, name: true } },
+        unitOccupants: { include: { member: true } },
+      },
+    });
+
+    if (!unitToDelete) {
+      throw new NotFoundException(
+        `Unit not found or does not belong to this building`,
       );
     }
 
@@ -324,11 +362,11 @@ export class UnitsService {
       entityId: unitId,
       metadata: {
         buildingId,
-        code: unit.code,
-        label: unit.label,
+        code: deletedUnit.code,
+        label: deletedUnit.label,
       },
     });
 
-    return deletedUnit;
+    return addDisplayCode(unitToDelete);
   }
 }

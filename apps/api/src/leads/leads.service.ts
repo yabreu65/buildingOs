@@ -459,8 +459,8 @@ export class LeadsService {
       // Add roles to membership
       await tx.membershipRole.createMany({
         data: [
-          { membershipId: membership.id, role: Role.TENANT_OWNER },
-          { membershipId: membership.id, role: Role.TENANT_ADMIN },
+          { tenantId: tenant.id, membershipId: membership.id, role: Role.TENANT_OWNER },
+          { tenantId: tenant.id, membershipId: membership.id, role: Role.TENANT_ADMIN },
         ],
       });
 
@@ -709,8 +709,8 @@ export class LeadsService {
       // Add roles to membership
       await tx.membershipRole.createMany({
         data: [
-          { membershipId: membership.id, role: Role.TENANT_OWNER },
-          { membershipId: membership.id, role: Role.TENANT_ADMIN },
+          { tenantId: tenant.id, membershipId: membership.id, role: Role.TENANT_OWNER },
+          { tenantId: tenant.id, membershipId: membership.id, role: Role.TENANT_ADMIN },
         ],
       });
       this.logger.log(`[CONVERT] ✓ Membership created with roles`);

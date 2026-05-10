@@ -78,7 +78,7 @@ export class ContextService {
     // Get membership
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { userContext: true, user: true, roles: true },
+      include: { userContext: true, user: true, roles: { where: { tenantId } } },
     });
 
     if (!membership) {
@@ -91,12 +91,12 @@ export class ContextService {
 
     // If unit is specified, derive/validate building
     if (effectiveUnitId) {
-      const unit = await this.prisma.unit.findUnique({
-        where: { id: effectiveUnitId },
+      const unit = await this.prisma.unit.findFirst({
+        where: { id: effectiveUnitId, tenantId },
         include: { building: true },
       });
 
-      if (!unit || unit.building.tenantId !== tenantId) {
+      if (!unit) {
         throw new NotFoundException('Unit not found or does not belong to this tenant');
       }
 
@@ -110,11 +110,11 @@ export class ContextService {
 
     // Validate building if specified
     if (effectiveBuildingId) {
-      const building = await this.prisma.building.findUnique({
-        where: { id: effectiveBuildingId },
+      const building = await this.prisma.building.findFirst({
+        where: { id: effectiveBuildingId, tenantId },
       });
 
-      if (!building || building.tenantId !== tenantId) {
+      if (!building) {
         throw new NotFoundException('Building not found or does not belong to this tenant');
       }
 
@@ -156,6 +156,7 @@ export class ContextService {
 
         const isOccupant = await this.prisma.unitOccupant.findFirst({
           where: {
+            tenantId,
             unitId: effectiveUnitId,
             memberId: member.id,
           },
@@ -184,10 +185,12 @@ export class ContextService {
     const userContext = await this.prisma.userContext.upsert({
       where: { membershipId: membership.id },
       update: {
+        tenantId,
         activeBuildingId: effectiveBuildingId,
         activeUnitId: effectiveUnitId,
       },
       create: {
+        tenantId,
         membershipId: membership.id,
         activeBuildingId: effectiveBuildingId,
         activeUnitId: effectiveUnitId,
@@ -267,7 +270,7 @@ export class ContextService {
       if (!member) return [];
 
       const occupancies = await this.prisma.unitOccupant.findMany({
-        where: { memberId: member.id },
+        where: { tenantId, memberId: member.id },
         include: { unit: { include: { building: true } } },
       });
 
@@ -298,7 +301,7 @@ export class ContextService {
 
     if (buildingIds.length > 0) {
       return this.prisma.building.findMany({
-        where: { id: { in: buildingIds } },
+        where: { tenantId, id: { in: buildingIds } },
         select: { id: true, name: true },
       });
     }
@@ -341,9 +344,10 @@ export class ContextService {
 
       return this.prisma.unit.findMany({
         where: {
+          tenantId: _tenantId,
           buildingId,
           unitOccupants: {
-            some: { memberId: member.id },
+            some: { tenantId: _tenantId, memberId: member.id },
           },
         },
         select: { id: true, code: true, label: true },
@@ -353,7 +357,7 @@ export class ContextService {
     // If TENANT or BUILDING scoped: return all units in building
     if (hasTenantScope || hasBuildingScope) {
       return this.prisma.unit.findMany({
-        where: { buildingId },
+        where: { tenantId: _tenantId, buildingId },
         select: { id: true, code: true, label: true },
       });
     }
@@ -367,6 +371,7 @@ export class ContextService {
 
       return this.prisma.unit.findMany({
         where: {
+          tenantId: _tenantId,
           buildingId,
           id: { in: unitIds },
         },
@@ -384,7 +389,7 @@ export class ContextService {
   async initializeContext(userId: string, tenantId: string): Promise<UserContextData> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { userContext: true, roles: true, user: true },
+      include: { userContext: true, roles: { where: { tenantId } }, user: true },
     });
 
     if (!membership || membership.userContext) {
@@ -423,6 +428,7 @@ export class ContextService {
     // No auto-selection possible, just create empty context
     await this.prisma.userContext.create({
       data: {
+        tenantId,
         membershipId: membership.id,
       },
     });

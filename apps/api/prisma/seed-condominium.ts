@@ -98,6 +98,7 @@ async function main() {
     try {
       await prisma.membershipRole.create({
         data: {
+          tenantId: tenant.id,
           membershipId: ownerMembership.id,
           role: "TENANT_OWNER" as Role,
           scopeType: "TENANT" as any,
@@ -197,6 +198,7 @@ async function main() {
             },
             update: {},
             create: {
+              tenantId: tenant.id,
               buildingId: building.id,
               code: label,
               label,
@@ -235,6 +237,7 @@ async function main() {
     try {
       await prisma.membershipRole.create({
         data: {
+          tenantId: tenant.id,
           membershipId: residentMember.id,
           role: "RESIDENT" as Role,
           scopeType: "TENANT" as any,

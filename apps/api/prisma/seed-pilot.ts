@@ -211,12 +211,14 @@ async function seedPilot() {
   await Promise.all([
     prisma.membershipRole.create({
       data: {
+        tenantId: tenant.id,
         membershipId: ownerMembership.id,
         role: Role.TENANT_OWNER,
       },
     }),
     prisma.membershipRole.create({
       data: {
+        tenantId: tenant.id,
         membershipId: ownerMembership.id,
         role: Role.TENANT_ADMIN,
       },
@@ -253,6 +255,7 @@ async function seedPilot() {
       const unitNumber = 101 + i;
       return prisma.unit.create({
         data: {
+          tenantId: tenant.id,
           buildingId: building.id,
           label: `Apartment ${unitNumber}`,
           code: `${unitNumber}`,
@@ -298,6 +301,7 @@ async function seedPilot() {
 
   await prisma.membershipRole.create({
     data: {
+      tenantId: tenant.id,
       membershipId: residentMembership.id,
       role: Role.RESIDENT,
     },

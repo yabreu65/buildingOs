@@ -1,0 +1,4 @@
+-- Placeholder for a failed/rolled-back local migration attempt recorded in _prisma_migrations.
+-- The local database contains three rolled_back entries with this name and no successful finish.
+-- Keep this no-op file only to let Prisma reconcile local migration folder names with DB metadata.
+-- Do not put schema changes here; the successful assistant table changes live in later migrations.

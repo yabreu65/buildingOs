@@ -132,6 +132,7 @@ async function main() {
         if (!roleExists) {
           await prisma.membershipRole.create({
             data: {
+              tenantId: tenant.id,
               membershipId: membership.id,
               role: Role.TENANT_OWNER,
             },

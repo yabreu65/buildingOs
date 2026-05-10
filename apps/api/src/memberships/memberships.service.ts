@@ -39,7 +39,7 @@ export class MembershipsService {
     }
 
     const roles = await this.prisma.membershipRole.findMany({
-      where: { membershipId },
+      where: { tenantId, membershipId },
       select: {
         id: true,
         role: true,
@@ -127,12 +127,12 @@ export class MembershipsService {
         throw new BadRequestException('UNIT scope requires scopeUnitId');
       }
 
-      const unit = await this.prisma.unit.findUnique({
-        where: { id: dto.scopeUnitId },
-        include: { building: { select: { tenantId: true } } },
+      const unit = await this.prisma.unit.findFirst({
+        where: { id: dto.scopeUnitId, tenantId },
+        select: { id: true, buildingId: true },
       });
 
-      if (!unit || unit.building.tenantId !== tenantId) {
+      if (!unit) {
         throw new BadRequestException('Unit not found in this tenant');
       }
 
@@ -143,6 +143,7 @@ export class MembershipsService {
     // 6. Check for duplicates
     const existingRole = await this.prisma.membershipRole.findFirst({
       where: {
+        tenantId,
         membershipId,
         role: dto.role,
         scopeType: dto.scopeType,
@@ -160,6 +161,7 @@ export class MembershipsService {
     // 7. Create the role
     const role = await this.prisma.membershipRole.create({
       data: {
+        tenantId,
         membershipId,
         role: dto.role,
         scopeType: dto.scopeType,
@@ -213,7 +215,7 @@ export class MembershipsService {
     // Verify membership belongs to tenant
     const membership = await this.prisma.membership.findUnique({
       where: { id: membershipId },
-      include: { user: true, roles: { where: { id: roleId } } },
+      include: { user: true, roles: { where: { id: roleId, tenantId } } },
     });
 
     if (!membership || membership.tenantId !== tenantId) {

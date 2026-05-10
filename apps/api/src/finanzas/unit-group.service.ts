@@ -49,6 +49,7 @@ export class UnitGroupService {
     const units = await this.prisma.unit.findMany({
       where: {
         id: { in: unitIds },
+        tenantId,
         buildingId,
       },
     });
@@ -72,6 +73,8 @@ export class UnitGroupService {
     if (unitIds.length > 0) {
       await this.prisma.unitGroupMember.createMany({
         data: unitIds.map((unitId) => ({
+          tenantId,
+          buildingId,
           unitGroupId: group.id,
           unitId,
         })),
@@ -172,7 +175,7 @@ export class UnitGroupService {
     }
 
     const unit = await this.prisma.unit.findFirst({
-      where: { id: unitId, buildingId: group.buildingId },
+      where: { id: unitId, tenantId, buildingId: group.buildingId },
     });
     if (!unit) {
       throw new BadRequestException(
@@ -182,14 +185,14 @@ export class UnitGroupService {
 
     // Verificar que no exista ya
     const existing = await this.prisma.unitGroupMember.findFirst({
-      where: { unitGroupId: groupId, unitId },
+      where: { tenantId, unitGroupId: groupId, unitId },
     });
     if (existing) {
       throw new ConflictException('La unidad ya pertenece a este grupo');
     }
 
     await this.prisma.unitGroupMember.create({
-      data: { unitGroupId: groupId, unitId },
+      data: { tenantId, buildingId: group.buildingId, unitGroupId: groupId, unitId },
     });
 
     void this.auditService.createLog({
@@ -223,7 +226,7 @@ export class UnitGroupService {
     }
 
     const member = await this.prisma.unitGroupMember.findFirst({
-      where: { unitGroupId: groupId, unitId },
+      where: { tenantId, unitGroupId: groupId, unitId },
       include: { unit: true },
     });
     if (!member) {

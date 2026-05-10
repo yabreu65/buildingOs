@@ -253,6 +253,7 @@ export class InvitationsService {
         for (const role of roles) {
           await tx.membershipRole.create({
             data: {
+              tenantId,
               membershipId: membership.id,
               role: role as Role,
             },

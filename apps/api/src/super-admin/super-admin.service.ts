@@ -673,6 +673,7 @@ export class SuperAdminService {
           tenantId: platformTenant.id,
           roles: {
             create: {
+              tenantId: platformTenant.id,
               role: 'SUPER_ADMIN',
             },
           },

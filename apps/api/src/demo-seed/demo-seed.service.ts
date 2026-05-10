@@ -91,11 +91,12 @@ export class DemoSeedService {
         throw new ConflictException(reason);
       }
 
-      // Create building
+      // Create building with alias
       const building = await this.prisma.building.create({
         data: {
           tenantId,
           name: 'Demo Building - Reforma 123',
+          alias: 'A',
           address: 'Reforma 123, Mexico City, Mexico',
         },
       });
@@ -110,6 +111,7 @@ export class DemoSeedService {
         unitLabels.map((label, idx) =>
           this.prisma.unit.create({
             data: {
+              tenantId,
               buildingId: building.id,
               code: `CODE-${label}`,
               label,

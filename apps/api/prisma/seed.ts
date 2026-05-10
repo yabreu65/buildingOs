@@ -361,6 +361,7 @@ async function main() {
     try {
       await prisma.membershipRole.create({
         data: {
+          tenantId: params.tenantId,
           membershipId: membership.id,
           role: params.role,
           scopeType: 'TENANT',
@@ -424,6 +425,7 @@ async function main() {
   try {
     await prisma.membershipRole.create({
       data: {
+        tenantId: tenantAdmin.id,
         membershipId: superAdminMembership.id,
         role: Role.SUPER_ADMIN,
         scopeType: 'TENANT',
@@ -490,6 +492,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building1Admin.id, code: "A-101" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building1Admin.id,
       code: "A-101",
       label: "Apt A-101",
@@ -502,6 +505,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building1Admin.id, code: "A-102" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building1Admin.id,
       code: "A-102",
       label: "Apt A-102",
@@ -514,6 +518,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building1Admin.id, code: "A-103" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building1Admin.id,
       code: "A-103",
       label: "Apt A-103",
@@ -527,6 +532,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building2Admin.id, code: "B-201" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building2Admin.id,
       code: "B-201",
       label: "Apt B-201",
@@ -539,6 +545,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building2Admin.id, code: "B-202" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building2Admin.id,
       code: "B-202",
       label: "Apt B-202",
@@ -551,6 +558,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building2Admin.id, code: "B-203" } },
     update: {},
     create: {
+      tenantId: tenantAdmin.id,
       buildingId: building2Admin.id,
       code: "B-203",
       label: "Apt B-203",
@@ -575,6 +583,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "101" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "101",
       label: "Apt 101",
@@ -587,6 +596,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "102" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "102",
       label: "Apt 102",
@@ -599,6 +609,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "103" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "103",
       label: "Apt 103",
@@ -611,6 +622,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "201" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "201",
       label: "Apt 201",
@@ -623,6 +635,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "202" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "202",
       label: "Apt 202",
@@ -635,6 +648,7 @@ async function main() {
     where: { buildingId_code: { buildingId: building.id, code: "203" } },
     update: {},
     create: {
+      tenantId: tenantBuilding.id,
       buildingId: building.id,
       code: "203",
       label: "Apt 203",

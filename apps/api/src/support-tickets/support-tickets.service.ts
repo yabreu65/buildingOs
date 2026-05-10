@@ -325,6 +325,7 @@ export class SupportTicketsService {
 
     const comment = await this.prisma.supportTicketComment.create({
       data: {
+        tenantId: ticket.tenantId,
         supportTicketId: ticketId,
         authorUserId: userId,
         body: dto.body,

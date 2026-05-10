@@ -166,6 +166,9 @@ model Tenant {
   currency              String @default("ARS") // ARS (Argentina), VES (Venezuela), USD
   locale                String @default("es-AR") // es-AR, es-VE, en-US
 
+  // Building alias generation sequence
+  nextBuildingAliasIndex Int @default(1)
+
   // Relations
   memberships           Membership[]
   buildings             Building[]
@@ -213,6 +216,12 @@ model Tenant {
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
   unitOccupants         UnitOccupant[]
+  units                 Unit[]
+  membershipRoles       MembershipRole[]
+  userContexts          UserContext[]
+  unitGroupMembers      UnitGroupMember[]
+  supportTicketComments SupportTicketComment[]
+  unitAssociations      UnitAssociation[]
   pushSubscriptions    PushSubscription[]
 }
 
@@ -270,15 +279,20 @@ model Membership {
 
 model UserContext {
   id                String   @id @default(cuid())
+  tenantId          String
   membershipId      String   @unique
   activeBuildingId  String?
   activeUnitId      String?
   updatedAt         DateTime @updatedAt
 
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   building   Building?  @relation("UserContextBuilding", fields: [activeBuildingId], references: [id], onDelete: SetNull)
   unit       Unit?      @relation("UserContextUnit", fields: [activeUnitId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId, membershipId])
+  @@index([tenantId, activeBuildingId])
+  @@index([tenantId, activeUnitId])
   @@index([membershipId])
   @@index([activeBuildingId])
   @@index([activeUnitId])
@@ -286,16 +300,21 @@ model UserContext {
 
 model MembershipRole {
   id              String     @id @default(cuid())
+  tenantId        String
   membershipId    String
   role            Role
   scopeType       ScopeType  @default(TENANT)
   scopeBuildingId String?
   scopeUnitId     String?
 
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   membership    Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   scopeBuilding Building?  @relation("BuildingMembershipRoles", fields: [scopeBuildingId], references: [id], onDelete: SetNull)
   scopeUnit     Unit?      @relation("UnitMembershipRoles", fields: [scopeUnitId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId, membershipId])
+  @@index([tenantId, scopeBuildingId])
+  @@index([tenantId, scopeUnitId])
   @@index([membershipId, role])
   @@index([scopeType, scopeBuildingId])
   @@index([scopeType, scopeUnitId])
@@ -333,6 +352,7 @@ model Building {
   id             String   @id @default(cuid())
   tenantId       String
   name           String
+  alias          String   // Alias operativo (A, B, C...)
   address        String?
   allocationMode String   @default("MANUAL") // "MANUAL" | "BY_CATEGORY_RANGE_M2_COEFFICIENT"
   createdAt      DateTime @default(now())
@@ -357,15 +377,19 @@ model Building {
   incomes              Income[]
   movementAllocations  MovementAllocation[]
   unitGroups           UnitGroup[]
+  unitGroupMembers    UnitGroupMember[]
   liquidations         Liquidation[]
   adjustments          Adjustment[]
+  unitAssociations     UnitAssociation[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, alias])
   @@index([tenantId])
 }
 
 model Unit {
   id              String   @id @default(cuid())
+  tenantId        String
   buildingId      String
   code            String
   label           String?
@@ -377,6 +401,7 @@ model Unit {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building        Building          @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitCategory    UnitCategory?     @relation("UnitCategoryUnits", fields: [unitCategoryId], references: [id], onDelete: SetNull)
   unitOccupants   UnitOccupant[]
@@ -387,8 +412,13 @@ model Unit {
   membershipRoles MembershipRole[]  @relation("UnitMembershipRoles")
   userContexts    UserContext[]     @relation("UserContextUnit")
   unitGroupMembers UnitGroupMember[]
+  apartmentParkings UnitAssociation[] @relation("ApartmentParkings")
+  parkingApartments UnitAssociation[] @relation("ParkingApartment")
 
   @@unique([buildingId, code])
+  @@unique([tenantId, buildingId, code])
+  @@index([tenantId])
+  @@index([tenantId, buildingId])
   @@index([buildingId])
   @@index([buildingId, unitCategoryId])
 }
@@ -410,9 +440,34 @@ model UnitOccupant {
   member   TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@unique([unitId, memberId])
+  @@unique([tenantId, unitId, memberId])
   @@index([tenantId, memberId])
   @@index([unitId])
   @@index([unitId, isPrimary])
+}
+
+// ============================================================================
+// UNIT ASSOCIATIONS: Relación entre unidades (ej. Apartamento ↔ Estacionamiento)
+// ============================================================================
+model UnitAssociation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  buildingId  String
+  apartmentId String   // FK a Unit (el apartamento padre)
+  parkingId   String   // FK a Unit (el estacionamiento)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building  Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  apartment Unit     @relation("ApartmentParkings", fields: [apartmentId], references: [id], onDelete: Cascade)
+  parking   Unit     @relation("ParkingApartment", fields: [parkingId], references: [id], onDelete: Cascade)
+
+  @@unique([apartmentId, parkingId])
+  @@unique([tenantId, buildingId, apartmentId, parkingId])
+  @@index([tenantId, buildingId])
+  @@index([apartmentId])
+  @@index([parkingId])
 }
 
 // ============================================================================
@@ -938,6 +993,7 @@ model SupportTicket {
 
 model SupportTicketComment {
   id              String @id @default(cuid())
+  tenantId        String
   supportTicketId String
   authorUserId    String
 
@@ -945,9 +1001,11 @@ model SupportTicketComment {
   createdAt DateTime @default(now())
 
   // Relations
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   supportTicket SupportTicket @relation(fields: [supportTicketId], references: [id], onDelete: Cascade)
   author        User          @relation("SupportTicketCommentAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, supportTicketId])
   @@index([supportTicketId])
   @@index([authorUserId])
 }
@@ -1651,14 +1709,20 @@ model UnitGroup {
 
 model UnitGroupMember {
   id          String @id @default(cuid())
+  tenantId    String
+  buildingId  String
   unitGroupId String
   unitId      String
   createdAt   DateTime @default(now())
 
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building  Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitGroup UnitGroup @relation(fields: [unitGroupId], references: [id], onDelete: Cascade)
   unit      Unit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   @@unique([unitGroupId, unitId])
+  @@unique([tenantId, unitGroupId, unitId])
+  @@index([tenantId, buildingId])
   @@index([unitGroupId])
   @@index([unitId])
 }
