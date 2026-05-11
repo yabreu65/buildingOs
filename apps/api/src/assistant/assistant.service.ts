@@ -1453,7 +1453,7 @@ export class AssistantService {
     buildingToken: string,
   ): Promise<{ id: string; name: string } | null> {
     const buildings = await this.prisma.building.findMany({
-      where: { tenantId },
+      where: { tenantId, deletedAt: null },
       select: { id: true, name: true },
     });
 
@@ -1541,7 +1541,7 @@ export class AssistantService {
     // Validate buildingId if provided
     if (buildingId) {
       const building = await this.prisma.building.findFirst({
-        where: { id: buildingId, tenantId },
+        where: { id: buildingId, tenantId, deletedAt: null },
       });
 
       if (!building) {

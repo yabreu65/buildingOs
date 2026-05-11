@@ -146,7 +146,7 @@ export class AssistantToolsService {
       this.queryParser.extractUnitToken(question ?? '');
 
     const buildings = await this.prisma.building.findMany({
-      where: { tenantId },
+      where: { tenantId, deletedAt: null },
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     });

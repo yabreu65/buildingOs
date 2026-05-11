@@ -58,7 +58,7 @@ export class DocumentsValidators {
     buildingId: string,
   ): Promise<void> {
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {

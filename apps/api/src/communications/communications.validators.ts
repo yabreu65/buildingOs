@@ -83,6 +83,7 @@ export class CommunicationsValidators {
       where: {
         id: buildingId,
         tenantId,
+        deletedAt: null,
       },
       select: { id: true },
     });

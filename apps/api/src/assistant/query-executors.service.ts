@@ -528,7 +528,7 @@ export class AssistantQueryExecutorsService {
     }
 
     const buildings = await this.prisma.building.findMany({
-      where: { tenantId: context.tenantId },
+      where: { tenantId: context.tenantId, deletedAt: null },
       select: { id: true, name: true },
     });
     const match = this.parser.findBuilding(buildings, token);

@@ -45,6 +45,7 @@ export class ReportsValidators {
       where: {
         id: buildingId,
         tenantId,
+        deletedAt: null,
       },
     });
 

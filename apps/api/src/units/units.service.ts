@@ -56,7 +56,7 @@ export class UnitsService {
 
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {
@@ -149,7 +149,7 @@ export class UnitsService {
   async findAll(tenantId: string, buildingId: string): Promise<UnitWithDisplayCode[]> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {
@@ -177,7 +177,7 @@ export class UnitsService {
   async findOne(tenantId: string, buildingId: string, unitId: string): Promise<UnitWithDisplayCode> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {

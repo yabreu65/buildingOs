@@ -167,7 +167,7 @@ export class AssistantUnitResolverService {
     // Caso 1: Alias explícito
     if (token.buildingAlias) {
       const found = await this.prisma.building.findFirst({
-        where: { tenantId, alias: token.buildingAlias },
+        where: { tenantId, alias: token.buildingAlias, deletedAt: null },
         select: { id: true, name: true, alias: true },
       });
 
@@ -189,6 +189,7 @@ export class AssistantUnitResolverService {
       const found = await this.prisma.building.findFirst({
         where: {
           tenantId,
+          deletedAt: null,
           name: { contains: token.buildingName, mode: 'insensitive' },
         },
         select: { id: true, name: true, alias: true },
@@ -209,7 +210,7 @@ export class AssistantUnitResolverService {
 
     // Caso 3: Sin edificio especificado → inferir
     const buildings = await this.prisma.building.findMany({
-      where: { tenantId },
+      where: { tenantId, deletedAt: null },
       select: { id: true, name: true, alias: true },
     });
 
