@@ -4,8 +4,18 @@
  * Uses in-memory store for development, Redis for production
  */
 
-import { Injectable, NestMiddleware, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, NestMiddleware, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
+
+interface RateLimitEntry {
+  resetTime: number;
+  count: number;
+}
+
+interface RateLimitConfig {
+  readonly max: number;
+  readonly windowMs: number;
+}
 
 /**
  * Simple in-memory rate limiter (for development)
@@ -13,7 +23,8 @@ import { Request, Response, NextFunction } from 'express';
  */
 @Injectable()
 export class RateLimitMiddleware implements NestMiddleware {
-  private readonly limits = new Map<string, { count: number; resetTime: number }>();
+  private readonly logger = new Logger(RateLimitMiddleware.name);
+  private readonly limits = new Map<string, RateLimitEntry>();
   private readonly cleanupInterval = 60000; // 1 minute
 
   constructor() {
@@ -21,7 +32,14 @@ export class RateLimitMiddleware implements NestMiddleware {
     setInterval(() => this.cleanup(), this.cleanupInterval);
   }
 
-  use(req: Request, res: Response, next: NextFunction) {
+  /**
+   * Apply route-specific rate limits and attach standard RateLimit headers.
+   *
+   * @param req - Incoming Express request.
+   * @param res - Outgoing Express response.
+   * @param next - Express continuation callback.
+   */
+  use(req: Request, res: Response, next: NextFunction): void {
     // Bypass rate limiting in test environment
     if (process.env.NODE_ENV === 'test') {
       return next();
@@ -95,7 +113,7 @@ export class RateLimitMiddleware implements NestMiddleware {
   /**
    * Get rate limit config for this endpoint
    */
-  private getLimitConfig(req: Request): { max: number; windowMs: number } | null {
+  private getLimitConfig(req: Request): RateLimitConfig | null {
     const path = req.path;
     const method = req.method;
 
@@ -178,7 +196,7 @@ export class RateLimitMiddleware implements NestMiddleware {
     }
 
     if (cleaned > 0) {
-      console.log(`[RateLimit] Cleaned ${cleaned} expired entries`);
+      this.logger.debug(`[RateLimit] Cleaned ${cleaned} expired entries`);
     }
   }
 }

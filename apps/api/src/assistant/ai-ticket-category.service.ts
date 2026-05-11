@@ -37,24 +37,24 @@ import { TicketCategory, TicketPriority } from '@prisma/client';
  */
 
 export interface TicketCategorySuggestion {
-  category: TicketCategory;
-  priority: TicketPriority;
-  confidence: number; // 0-100
-  reasoning: string; // Why AI chose this
+  readonly category: TicketCategory;
+  readonly priority: TicketPriority;
+  readonly confidence: number; // 0-100
+  readonly reasoning: string; // Why AI chose this
 }
 
 interface CategoryRule {
-  keywords: string[];
-  category: TicketCategory;
-  priority: TicketPriority;
-  reasoning: string;
+  readonly keywords: readonly string[];
+  readonly category: TicketCategory;
+  readonly priority: TicketPriority;
+  readonly reasoning: string;
 }
 
 @Injectable()
 export class AiTicketCategoryService {
   private readonly logger = new Logger(AiTicketCategoryService.name);
 
-  private readonly rules: CategoryRule[] = [
+  private readonly rules: readonly CategoryRule[] = [
     // REPAIR - Plumbing (highest priority)
     {
       keywords: ['cañería', 'cañeria', 'plomería', 'plomeria', 'fuga', 'agua', 'inundación', 'inundacion', 'lavamanos', 'lavabo', 'baño', 'bano', 'ducha', 'tubería', 'tuberia', 'desagüe', 'desague', 'grifo', 'llave de paso'],
@@ -131,12 +131,21 @@ export class AiTicketCategoryService {
     buildingId?: string,
     unitId?: string,
   ): Promise<TicketCategorySuggestion | null> {
+    const normalizedTenantId = tenantId.trim();
+    const normalizedTitle = title.trim().slice(0, 300);
+    const normalizedDescription = description.trim().slice(0, 2_000);
+
+    if (!normalizedTenantId || !normalizedTitle) {
+      this.logger.warn('[AI Categorization] Skipped categorization because tenantId or title is empty');
+      return null;
+    }
+
     try {
       this.logger.debug(
-        `[AI Categorization] Starting for ticket: "${title}" (tenant: ${tenantId})`,
+        `[AI Categorization] Starting for ticket: "${normalizedTitle}" (tenant: ${normalizedTenantId})`,
       );
 
-      const text = `${title} ${description}`.toLowerCase();
+      const text = `${normalizedTitle} ${normalizedDescription}`.toLowerCase();
       
       // Find matching rules
       let bestMatch: CategoryRule | null = null;
@@ -152,7 +161,7 @@ export class AiTicketCategoryService {
 
       if (!bestMatch || maxMatches === 0) {
         this.logger.debug(
-          `[AI Categorization] No matching keywords found for ticket: "${title}", falling back to OTHER`,
+          `[AI Categorization] No matching keywords found for ticket: "${normalizedTitle}", falling back to OTHER`,
         );
         return {
           category: 'OTHER',
@@ -177,7 +186,8 @@ export class AiTicketCategoryService {
     } catch (error) {
       // Graceful error handling - never fail the ticket creation
       this.logger.error(
-        `[AI Categorization] Error for ticket "${title}": ${error instanceof Error ? error.message : String(error)}`,
+        `[AI Categorization] Error for ticket "${normalizedTitle}": ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
       return null;
     }

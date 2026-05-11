@@ -15,6 +15,16 @@ import { JwtService } from '@nestjs/jwt';
  * detectar preguntas que no matchean correctamente.
  */
 
+interface AssistantE2EReportItem {
+  readonly category: string;
+  readonly id: string;
+  readonly question: string;
+  readonly status: 'PASS' | 'FAIL' | 'WARNING';
+  readonly response?: string;
+  readonly latencyMs: number;
+  readonly error?: string;
+}
+
 describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -25,15 +35,7 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   let buildingBId: string;
 
   // Reporte acumulado
-  const report: Array<{
-    category: string;
-    id: string;
-    question: string;
-    status: 'PASS' | 'FAIL' | 'WARNING';
-    response?: string;
-    latencyMs: number;
-    error?: string;
-  }> = [];
+  const report: AssistantE2EReportItem[] = [];
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({

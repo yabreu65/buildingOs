@@ -6,17 +6,22 @@ import { TicketsService } from '../../tickets/tickets.service';
 import { RecurringExpenseService } from '../../finanzas/recurring-expense.service';
 import { FinanceSummaryService } from '../../finanzas/finance-summary.service';
 
+interface CronJobResult<T> {
+  readonly success: boolean;
+  readonly data?: T;
+  readonly error?: string;
+  readonly durationMs: number;
+}
+
 @Injectable()
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
-  private readonly maxRetries = 3;
-
   constructor(
-    private communicationsService: CommunicationsService,
-    private finanzasService: FinanzasService,
-    private ticketsService: TicketsService,
-    private recurringExpenseService: RecurringExpenseService,
-    private financeSummaryService: FinanceSummaryService,
+    private readonly communicationsService: CommunicationsService,
+    private readonly finanzasService: FinanzasService,
+    private readonly ticketsService: TicketsService,
+    private readonly recurringExpenseService: RecurringExpenseService,
+    private readonly financeSummaryService: FinanceSummaryService,
   ) {}
 
   /**
@@ -28,7 +33,7 @@ export class CronJobsService {
   private async runWithErrorHandling<T>(
     jobName: string,
     fn: () => Promise<T>,
-  ): Promise<{ success: boolean; data?: T; error?: string; durationMs: number }> {
+  ): Promise<CronJobResult<T>> {
     const startTime = Date.now();
     try {
       this.logger.log(`[CRON] Starting: ${jobName}`);
@@ -57,7 +62,7 @@ export class CronJobsService {
    * Fixes broken feature where scheduled comms never send
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
-  async dispatchScheduledCommunications() {
+  async dispatchScheduledCommunications(): Promise<CronJobResult<{ dispatchedCount: number }>> {
     return this.runWithErrorHandling('dispatchScheduledCommunications', async () => {
       const count = await this.communicationsService.dispatchScheduledCommunications();
       return { dispatchedCount: count };
@@ -68,7 +73,7 @@ export class CronJobsService {
    * [PHASE 3 MEDIUM #9] Monthly at 8am on 1st: Auto-create next month's expense period
    */
   @Cron('0 8 1 * *')
-  async autoCreateMonthlyExpensePeriods() {
+  async autoCreateMonthlyExpensePeriods(): Promise<CronJobResult<{ created: number }>> {
     return this.runWithErrorHandling('autoCreateMonthlyExpensePeriods', async () => {
       return await this.finanzasService.autoCreateMonthlyExpensePeriods();
     });
@@ -78,7 +83,7 @@ export class CronJobsService {
    * [PHASE 3 MEDIUM #10] Daily at 10am: Send payment reminders for charges due in 3 days
    */
   @Cron('0 10 * * *')
-  async sendPaymentReminders() {
+  async sendPaymentReminders(): Promise<CronJobResult<{ count: number }>> {
     return this.runWithErrorHandling('sendPaymentReminders', async () => {
       return await this.finanzasService.sendPaymentReminders();
     });
@@ -90,7 +95,7 @@ export class CronJobsService {
    * Notifies building admins and marks as escalated
    */
   @Cron('0 * * * *') // Every hour at :00
-  async escalateUrgentTickets() {
+  async escalateUrgentTickets(): Promise<CronJobResult<{ escalatedCount: number }>> {
     return this.runWithErrorHandling('escalateUrgentTickets', async () => {
       return await this.ticketsService.escalateUrgentTickets();
     });
@@ -101,7 +106,7 @@ export class CronJobsService {
    * Creates DRAFT expenses for all active recurring templates due today or past
    */
   @Cron('0 6 * * *')
-  async processRecurringExpenses() {
+  async processRecurringExpenses(): Promise<CronJobResult<{ createdCount: number }>> {
     return this.runWithErrorHandling('processRecurringExpenses', async () => {
       return await this.recurringExpenseService.processRecurringExpenses();
     });
@@ -112,7 +117,7 @@ export class CronJobsService {
    * Generates and emails monthly finance reports to all TENANT_ADMIN members
    */
   @Cron('0 1 1 * *')
-  async sendMonthlyFinanceSummaries() {
+  async sendMonthlyFinanceSummaries(): Promise<CronJobResult<{ sentCount: number }>> {
     return this.runWithErrorHandling('sendMonthlyFinanceSummaries', async () => {
       return await this.financeSummaryService.sendMonthlyFinanceSummaries();
     });

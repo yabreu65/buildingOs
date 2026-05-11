@@ -48,7 +48,7 @@ async function runTests() {
   }
 
   const admin = await prisma.user.findUnique({
-    where: { email: 'admin@sancristobal.test' },
+    where: { email: process.env.SAN_CRISTOBAL_ADMIN_EMAIL || 'admin@sancristobal.test' },
     include: { memberships: { include: { roles: true } } },
   });
   if (!admin) {

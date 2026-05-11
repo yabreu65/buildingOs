@@ -2353,9 +2353,9 @@ export class FinanzasService {
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[FinanzasService] Failed to send payment received notification for payment ${payment.id}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `[FinanzasService] Failed to send payment received notification for payment ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
     }
   }
@@ -2409,9 +2409,9 @@ export class FinanzasService {
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[FinanzasService] Failed to send payment rejected notification for payment ${payment.id}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `[FinanzasService] Failed to send payment rejected notification for payment ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
     }
   }
@@ -2468,7 +2468,7 @@ export class FinanzasService {
       }
 
       if (adminsToNotify.length === 0) {
-        console.log(`[FinanzasService] No admins found for tenant ${tenantId}, skipping notification`);
+        this.logger.debug(`[FinanzasService] No admins found for tenant ${tenantId}, skipping notification`);
         return;
       }
 
@@ -2486,7 +2486,7 @@ export class FinanzasService {
         : null;
       const amount = (payment.amount / 100).toFixed(2);
 
-      console.log(`[FinanzasService] Notifying ${adminsToNotify.length} admins about payment ${payment.id}`);
+      this.logger.debug(`[FinanzasService] Notifying ${adminsToNotify.length} admins about payment ${payment.id}`);
 
       for (const admin of adminsToNotify) {
         await this.notificationsService.createNotification({
@@ -2511,9 +2511,9 @@ export class FinanzasService {
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[FinanzasService] Failed to notify admins of payment submitted ${payment.id}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `[FinanzasService] Failed to notify admins of payment submitted ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
     }
   }
@@ -2591,9 +2591,30 @@ export class FinanzasService {
     const startOfDay = new Date(inThreeDays.getFullYear(), inThreeDays.getMonth(), inThreeDays.getDate());
     const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
 
-    // Find charges due in exactly 3 days
+    const tenantIds = await this.prisma.tenant.findMany({ select: { id: true } });
+    let reminderCount = 0;
+
+    for (const tenant of tenantIds) {
+      reminderCount += await this.sendPaymentRemindersForTenant(
+        tenant.id,
+        now,
+        startOfDay,
+        endOfDay,
+      );
+    }
+
+    return { count: reminderCount };
+  }
+
+  private async sendPaymentRemindersForTenant(
+    tenantId: string,
+    now: Date,
+    startOfDay: Date,
+    endOfDay: Date,
+  ): Promise<number> {
     const remindableCharges = await this.prisma.charge.findMany({
       where: {
+        tenantId,
         status: { in: ['PENDING', 'PARTIAL'] },
         dueDate: {
           gte: startOfDay,
@@ -2648,7 +2669,7 @@ export class FinanzasService {
       }
     }
 
-    return { count: reminderCount };
+    return reminderCount;
   }
 
   /**
@@ -2662,15 +2683,12 @@ export class FinanzasService {
     periodId?: string,
   ): Promise<{ validatedCount: number; errorCount: number }> {
     // Build query for DRAFT expenses
-    const where: any = {
+    const where: Prisma.ExpenseWhereInput = {
       tenantId,
       buildingId,
       status: 'DRAFT',
+      ...(periodId ? { period: periodId } : {}),
     };
-
-    if (periodId) {
-      where.period = periodId;
-    }
 
     // Find all DRAFT expenses
     const draftExpenses = await this.prisma.expense.findMany({

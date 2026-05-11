@@ -6,12 +6,12 @@ import { Page, expect } from '@playwright/test';
  */
 
 export interface TestUser {
-  email: string;
-  password: string;
-  fullName?: string;
+  readonly email: string;
+  readonly password: string;
+  readonly fullName?: string;
 }
 
-const TEST_PASSWORD = 'TestPass123!';
+const TEST_PASSWORD = process.env.TEST_E2E_PASSWORD || 'TestPass123!';
 
 export const TEST_USERS = {
   superAdmin: { email: 'test-superadmin@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Super Admin' },
@@ -20,7 +20,7 @@ export const TEST_USERS = {
   operator: { email: 'test-operator@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Operator' },
   resident: { email: 'test-resident@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident' },
   residentB: { email: 'test-resident-b@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident B' },
-};
+} as const satisfies Record<string, TestUser>;
 
 /**
  * Login to BuildingOS

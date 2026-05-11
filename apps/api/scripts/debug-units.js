@@ -2,7 +2,8 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function debug() {
-  const tenantId = 'cmoshktma00009auq4r31sthd';
+  const tenantId = process.env.TENANT_ID;
+  if (!tenantId) throw new Error('TENANT_ID is required');
   
   // Buscar edificio Torre A
   const building = await prisma.building.findFirst({

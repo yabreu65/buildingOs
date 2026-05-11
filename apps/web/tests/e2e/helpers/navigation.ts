@@ -16,7 +16,7 @@ export const ROUTES = {
   documents: (tenantId: string) => `/${tenantId}/documents`,
   members: (tenantId: string) => `/${tenantId}/settings/members`,
   tenants: '/super-admin/tenants',
-};
+} as const;
 
 /**
  * Navigate to a route and wait for it to load

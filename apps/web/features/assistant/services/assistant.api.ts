@@ -37,6 +37,19 @@ export interface ActionDefinition {
   description?: string;
 }
 
+
+export class AssistantApiError extends Error {
+  readonly code: 'AI_RATE_LIMITED' | 'FEATURE_NOT_AVAILABLE' | 'AI_ERROR';
+  readonly status?: number;
+
+  constructor(code: AssistantApiError['code'], message: string, status?: number) {
+    super(message);
+    this.name = 'AssistantApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 export class AssistantApi {
   /**
    * Send chat message to AI assistant
@@ -77,27 +90,27 @@ export class AssistantApi {
 
       // Special handling for rate limit
       if (httpError.status === 429) {
-        throw {
-          code: 'AI_RATE_LIMITED',
-          message: httpError.message || 'Daily AI limit exceeded',
-          status: 429,
-        };
+        throw new AssistantApiError(
+          'AI_RATE_LIMITED',
+          httpError.message || 'Daily AI limit exceeded',
+          429,
+        );
       }
 
       // Feature not available
       if (httpError.status === 403) {
-        throw {
-          code: 'FEATURE_NOT_AVAILABLE',
-          message: httpError.message || 'AI Assistant not available on your plan',
-          status: 403,
-        };
+        throw new AssistantApiError(
+          'FEATURE_NOT_AVAILABLE',
+          httpError.message || 'AI Assistant not available on your plan',
+          403,
+        );
       }
 
-      throw {
-        code: 'AI_ERROR',
-        message: httpError.message || 'Failed to get AI response',
-        status: httpError.status,
-      };
+      throw new AssistantApiError(
+        'AI_ERROR',
+        httpError.message || 'Failed to get AI response',
+        httpError.status,
+      );
     }
   }
 

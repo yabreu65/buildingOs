@@ -4,8 +4,12 @@
  */
 
 const BASE_URL = process.env.API_URL || 'http://localhost:4000';
-const ADMIN_EMAIL = 'admin@sancristobal.test';
-const ADMIN_PASSWORD = 'DevPass!123';
+const ADMIN_EMAIL = process.env.SAN_CRISTOBAL_ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.SAN_CRISTOBAL_ADMIN_PASSWORD;
+
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  throw new Error('SAN_CRISTOBAL_ADMIN_EMAIL and SAN_CRISTOBAL_ADMIN_PASSWORD are required');
+}
 const fs = require('fs');
 
 async function login() {

@@ -15,7 +15,7 @@ import { CronJobsService } from './cron-jobs.service';
  * Manual cron trigger endpoints for QA and staging validation.
  * Only enabled in development or staging environments.
  */
-// @UseGuards(JwtAuthGuard) // TEMPORARILY DISABLED FOR TESTING
+@UseGuards(JwtAuthGuard)
 @Controller('buildings/:buildingId/automation/cron-triggers')
 export class CronJobsTriggerController {
   constructor(
@@ -31,9 +31,14 @@ export class CronJobsTriggerController {
       throw new ForbiddenException('Cron triggers are disabled in this environment');
     }
 
-    // In dev/staging, allow all requests for testing
-    // Role check is skipped for QA automation testing
-    return;
+    const roles = req.user?.roles ?? [];
+    const isPrivileged = roles.some((role) =>
+      ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'].includes(role),
+    );
+
+    if (!isPrivileged) {
+      throw new ForbiddenException('Insufficient role for cron trigger');
+    }
   }
 
   /**
@@ -43,7 +48,7 @@ export class CronJobsTriggerController {
   async triggerScheduledCommunications(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.dispatchScheduledCommunications();
   }
@@ -55,7 +60,7 @@ export class CronJobsTriggerController {
   async triggerAutoCreateExpensePeriods(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.autoCreateMonthlyExpensePeriods();
   }
@@ -67,7 +72,7 @@ export class CronJobsTriggerController {
   async triggerPaymentReminders(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.sendPaymentReminders();
   }
@@ -79,7 +84,7 @@ export class CronJobsTriggerController {
   async triggerUrgentTicketEscalation(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.escalateUrgentTickets();
   }
@@ -91,7 +96,7 @@ export class CronJobsTriggerController {
   async triggerRecurringExpenses(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.processRecurringExpenses();
   }
@@ -103,7 +108,7 @@ export class CronJobsTriggerController {
   async triggerMonthlyFinanceSummary(
     @Param('buildingId') _buildingId: string,
     @Request() req: AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnvAndRole(req);
     return this.cronJobsService.sendMonthlyFinanceSummaries();
   }

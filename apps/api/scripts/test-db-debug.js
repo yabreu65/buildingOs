@@ -1,4 +1,5 @@
-process.env.DATABASE_URL = 'postgresql://buildingos:buildingos@127.0.0.1:5434/buildingos?schema=public&connect_timeout=5&pool_timeout=5';
+process.env.DATABASE_URL = process.env.DATABASE_URL || process.env.TEST_DATABASE_URL;
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL or TEST_DATABASE_URL is required');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient({
   log: ['query', 'info', 'warn', 'error'],

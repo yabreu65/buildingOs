@@ -26,6 +26,9 @@ export type AssistantContext = {
   userId: string;
   role: string;
   route: string;
+  page?: string;
+  buildingId?: string;
+  unitId?: string;
   currentModule?: string;
   permissions?: string[];
   unitOccupantRole?: 'OWNER' | 'RESIDENT';

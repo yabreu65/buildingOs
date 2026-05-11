@@ -3,7 +3,8 @@ const prisma = new PrismaClient();
 
 async function resetDailyLimit() {
   const today = new Date().toISOString().split('T')[0];
-  const tenantId = 'cmoshktma00009auq4r31sthd';
+  const tenantId = process.env.TENANT_ID;
+  if (!tenantId) throw new Error('TENANT_ID is required');
   
   console.log(`Resetting AI daily limit for tenant ${tenantId} on ${today}...`);
   

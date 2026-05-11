@@ -50,7 +50,8 @@ const unitSchema = z.object({
   buildingId: z.string().min(1, 'Building is required'),
 });
 
-type UnitFormData = z.infer<typeof unitSchema>;
+type UnitFormInput = z.input<typeof unitSchema>;
+type UnitFormData = z.output<typeof unitSchema>;
 
 const UNIT_TYPES = [
   { value: 'APARTMENT', label: 'Apartment' },
@@ -83,7 +84,7 @@ export default function UnitCreateForm({
     handleSubmit,
     formState: { errors },
     reset,
-  } = useForm<UnitFormData>({
+  } = useForm<UnitFormInput, unknown, UnitFormData>({
     resolver: zodResolver(unitSchema),
     defaultValues: {
       code: '',
