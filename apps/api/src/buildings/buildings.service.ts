@@ -120,7 +120,7 @@ export class BuildingsService {
     (BuildingWithUnits)[]
   > {
     return await this.prisma.building.findMany({
-      where: { tenantId },
+      where: { tenantId, deletedAt: null },
       include: { units: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -131,7 +131,7 @@ export class BuildingsService {
    */
   async findOne(tenantId: string, buildingId: string): Promise<BuildingWithUnitsDetail> {
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
       include: { units: { include: { unitOccupants: { include: { member: true } } } } },
     });
 
@@ -150,7 +150,7 @@ export class BuildingsService {
   async update(tenantId: string, buildingId: string, dto: UpdateBuildingDto, userId?: string): Promise<BuildingWithUnits> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {
@@ -206,7 +206,7 @@ export class BuildingsService {
   async remove(tenantId: string, buildingId: string, userId?: string): Promise<Building> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, deletedAt: null },
     });
 
     if (!building) {
@@ -215,8 +215,9 @@ export class BuildingsService {
       );
     }
 
-    const deleted = await this.prisma.building.delete({
+    const deleted = await this.prisma.building.update({
       where: { id: buildingId },
+      data: { deletedAt: new Date() },
     });
 
     // Audit: BUILDING_DELETE

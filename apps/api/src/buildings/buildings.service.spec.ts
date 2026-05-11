@@ -29,7 +29,6 @@ describe('BuildingsService', () => {
               findFirst: jest.fn(),
               findUnique: jest.fn(),
               update: jest.fn(),
-              delete: jest.fn(),
             },
             tenant: {
               findUnique: jest.fn(),
@@ -265,7 +264,7 @@ describe('BuildingsService', () => {
       // ASSERT
       expect(result).toEqual(expectedBuildings);
       expect(prismaService.building.findMany).toHaveBeenCalledWith({
-        where: { tenantId },
+        where: { tenantId, deletedAt: null },
         include: { units: true },
         orderBy: { createdAt: 'desc' },
       });
@@ -386,7 +385,7 @@ describe('BuildingsService', () => {
       // ASSERT
       expect(result).toEqual(expectedBuilding);
       expect(prismaService.building.findFirst).toHaveBeenCalledWith({
-        where: { id: buildingId, tenantId },
+        where: { id: buildingId, tenantId, deletedAt: null },
         include: {
           units: {
             include: {
@@ -586,7 +585,7 @@ describe('BuildingsService', () => {
       };
 
       jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(existingBuilding as any);
-      jest.spyOn(prismaService.building, 'delete').mockResolvedValue(existingBuilding as any);
+      jest.spyOn(prismaService.building, 'update').mockResolvedValue(existingBuilding as any);
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
@@ -594,8 +593,9 @@ describe('BuildingsService', () => {
 
       // ASSERT
       expect(result).toEqual(existingBuilding);
-      expect(prismaService.building.delete).toHaveBeenCalledWith({
+      expect(prismaService.building.update).toHaveBeenCalledWith({
         where: { id: buildingId },
+        data: { deletedAt: expect.any(Date) },
       });
       expect(auditService.createLog).toHaveBeenCalledWith({
         tenantId,
@@ -636,7 +636,7 @@ describe('BuildingsService', () => {
       };
 
       jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(existingBuilding as any);
-      jest.spyOn(prismaService.building, 'delete').mockResolvedValue(existingBuilding as any);
+      jest.spyOn(prismaService.building, 'update').mockResolvedValue(existingBuilding as any);
 
       // ACT
       const result = await service.remove(tenantId, buildingId);

@@ -357,6 +357,7 @@ model Building {
   allocationMode String   @default("MANUAL") // "MANUAL" | "BY_CATEGORY_RANGE_M2_COEFFICIENT"
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
 
   tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   units                 Unit[]
@@ -2155,4 +2156,3 @@ model TenantInvitation {
   @@index([tenantId, tokenHash])
   @@index([tenantId, expiresAt])
 }
-
