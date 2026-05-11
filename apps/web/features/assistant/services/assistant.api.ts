@@ -52,7 +52,7 @@ export class AssistantApi {
         answer: string;
         actions?: ActionDefinition[];
       }, ChatRequest>({
-        path: `/tenants/${tenantId}/assistant/${tenantId}/chat`,
+        path: `/tenants/${tenantId}/assistant/chat`,
         method: 'POST',
         body: request,
         headers: {

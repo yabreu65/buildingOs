@@ -107,7 +107,7 @@ const BuildingsPage = () => {
             {t('buildings.list')}
           </p>
         </div>
-        <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+        <Button onClick={() => setShowCreateForm(!showCreateForm)} data-testid="building-create-btn">
           <Plus className="w-4 h-4 mr-2" />
           {t('buildings.create')}
         </Button>
@@ -124,7 +124,7 @@ const BuildingsPage = () => {
               {createError}
             </div>
           )}
-          <form onSubmit={handleCreate} className="space-y-4">
+          <form onSubmit={handleCreate} className="space-y-4" data-testid="building-form">
             <div>
               <label className="block text-sm font-medium mb-1">
                 {t('buildings.name')} *
@@ -138,6 +138,7 @@ const BuildingsPage = () => {
                 }
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 placeholder={t('forms.placeholder')}
+                data-testid="building-name-input"
               />
             </div>
             <div>
@@ -152,6 +153,7 @@ const BuildingsPage = () => {
                 }
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 placeholder={t('forms.placeholder')}
+                data-testid="building-address-input"
               />
             </div>
             <div className="flex gap-2 justify-end">
@@ -165,7 +167,7 @@ const BuildingsPage = () => {
               >
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" disabled={submitting} data-testid="building-submit-btn">
                 {submitting ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -208,11 +210,12 @@ const BuildingsPage = () => {
         />
       ) : (
         /* Buildings Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="buildings-list">
           {buildings.map((building) => (
             <Card
               key={building.id}
               className="hover:shadow-md transition"
+              data-testid={`building-card-${building.id}`}
             >
               <Link href={routes.buildingOverview(tenantId, building.id)}>
                 <h3 className="text-lg font-semibold hover:text-blue-600 transition mb-2 cursor-pointer">

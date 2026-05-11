@@ -78,7 +78,7 @@ export type AssistantResponse = {
   };
 };
 
-const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL || 'http://localhost:4001';
+const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 interface UseAssistantOptions {
   initialContext?: AssistantContext;

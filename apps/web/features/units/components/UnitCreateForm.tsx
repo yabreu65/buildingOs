@@ -43,7 +43,10 @@ const unitSchema = z.object({
   label: z.string().optional(),
   unitType: z.enum(['APARTMENT', 'HOUSE', 'OFFICE', 'STORAGE', 'PARKING', 'OTHER']).optional(),
   occupancyStatus: z.enum(['UNKNOWN', 'VACANT', 'OCCUPIED']).optional(),
-  m2: z.union([z.number().positive('m² must be a positive number'), z.undefined()]).optional(),
+  m2: z.preprocess(
+    (val) => (typeof val === 'number' && Number.isNaN(val) ? undefined : val),
+    z.union([z.number().positive('m² must be a positive number'), z.undefined()]).optional()
+  ),
   buildingId: z.string().min(1, 'Building is required'),
 });
 
@@ -137,7 +140,7 @@ export default function UnitCreateForm({
         </div>
       )}
 
-      <form onSubmit={handleSubmit(handleCreate)} className="space-y-4">
+      <form onSubmit={handleSubmit(handleCreate)} className="space-y-4" data-testid="unit-create-form">
         {/* Building Selector - Only shown in global context */}
         {!isBuildingScoped && (
           <div>
@@ -170,6 +173,7 @@ export default function UnitCreateForm({
             </label>
             <Input
               id="code"
+              data-testid="unit-code-input"
               placeholder="e.g., 101"
               {...register('code')}
               className={errors.code ? 'border-red-500' : ''}
@@ -185,6 +189,7 @@ export default function UnitCreateForm({
             </label>
             <Input
               id="label"
+              data-testid="unit-label-input"
               placeholder="e.g., Apt 101"
               {...register('label')}
             />
@@ -201,7 +206,7 @@ export default function UnitCreateForm({
             type="number"
             placeholder="e.g., 65"
             step="0.01"
-            {...register('m2')}
+            {...register('m2', { valueAsNumber: true })}
             className={errors.m2 ? 'border-red-500' : ''}
           />
           {errors.m2 && (
@@ -258,6 +263,7 @@ export default function UnitCreateForm({
           </Button>
           <Button
             type="submit"
+            data-testid="unit-submit-btn"
             disabled={isSubmitting}
           >
             {isSubmitting ? (

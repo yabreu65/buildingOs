@@ -6,6 +6,7 @@ import { Send, Bot, Sparkles, X, Minimize2, ArrowRight, ExternalLink } from 'luc
 import type { AssistantMessage, AssistantAction, AssistantContext } from './useAssistant';
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
+import { getToken } from '@/features/auth/session.storage';
 
 export interface AssistantWidgetProps {
   context: AssistantContext;
@@ -57,22 +58,34 @@ export function AssistantWidget({
     setError(null);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL || 'http://localhost:4001';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+      const token = getToken();
       
-      const response = await fetch(`${API_URL}/assistant/chat`, {
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+      
+      const response = await fetch(`${API_URL}/tenants/${tenantId}/assistant/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+          'X-Tenant-Id': tenantId,
         },
         body: JSON.stringify({
           message: userMessage.content,
-          context,
-          useLlm,
+          page: context.page || 'dashboard',
+          buildingId: context.buildingId,
+          unitId: context.unitId,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        if (response.status === 401) {
+          throw new Error('Sesión expirada. Por favor, inicia sesión nuevamente.');
+        }
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error: ${response.status}`);
       }
 
       const data = await response.json();
@@ -83,7 +96,11 @@ export function AssistantWidget({
         content: data.answer,
         llmUsed: data.llmUsed,
         sources: data.knowledgeUsed?.sources,
-        actions: data.actions || [],
+        actions: data.suggestedActions?.map((action: any) => ({
+          key: action.type,
+          label: action.type,
+          payload: action.payload,
+        })) || [],
       };
 
       setMessages(prev => [...prev, assistantMessage]);

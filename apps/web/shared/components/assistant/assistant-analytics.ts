@@ -32,9 +32,9 @@ export type AssistantAnalyticsConfig = {
 let analyticsConfig: AssistantAnalyticsConfig = {
   debug: process.env.NODE_ENV !== 'production',
   sendToBackend: true,
-  backendUrl: process.env.NEXT_PUBLIC_ASSISTANT_API_URL 
-    ? `${process.env.NEXT_PUBLIC_ASSISTANT_API_URL}/api/analytics/events`
-    : 'http://localhost:4001/api/analytics/events',
+  backendUrl: process.env.NEXT_PUBLIC_API_URL 
+    ? `${process.env.NEXT_PUBLIC_API_URL}/api/analytics/events`
+    : 'http://localhost:4000/api/analytics/events',
 };
 
 export function configureAssistantAnalytics(config: Partial<AssistantAnalyticsConfig>): void {

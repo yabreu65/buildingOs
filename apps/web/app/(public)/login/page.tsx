@@ -57,7 +57,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4" data-testid="login-form">
             <div>
               <label htmlFor="email" className="block text-sm font-medium mb-1">
                 Email
@@ -68,6 +68,7 @@ export default function LoginPage() {
                 id="email"
                 placeholder="tu@email.com"
                 className="w-full px-3 py-2 border border-input rounded-md text-sm"
+                data-testid="login-email"
               />
               {errors.email && (
                 <p className="text-xs text-red-500 mt-1">{errors.email.message}</p>
@@ -84,6 +85,7 @@ export default function LoginPage() {
                 id="password"
                 placeholder="••••••••"
                 className="w-full px-3 py-2 border border-input rounded-md text-sm"
+                data-testid="login-password"
               />
               {errors.password && (
                 <p className="text-xs text-red-500 mt-1">{errors.password.message}</p>
@@ -102,6 +104,7 @@ export default function LoginPage() {
               type="submit"
               className="w-full"
               disabled={loginMutation.isPending}
+              data-testid="login-submit"
             >
               {loginMutation.isPending ? 'Iniciando...' : 'Iniciar sesión'}
             </Button>

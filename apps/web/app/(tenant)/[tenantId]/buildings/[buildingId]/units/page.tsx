@@ -243,7 +243,7 @@ const UnitsPage = () => {
           </p>
         </div>
         {!showCreateForm && !editingUnit && (
-          <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+          <Button onClick={() => setShowCreateForm(!showCreateForm)} data-testid="unit-create-btn">
             <Plus className="w-4 h-4 mr-2" />
             Nueva unidad
           </Button>
@@ -450,9 +450,9 @@ const UnitsPage = () => {
                   <th className="text-left py-3 px-4 font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody data-testid="units-table-body">
                 {units.map((unit) => (
-                  <tr key={unit.id} className="border-b hover:bg-muted/50 transition">
+                  <tr key={unit.id} className="border-b hover:bg-muted/50 transition" data-testid={`unit-row-${unit.unitCode || unit.id}`}>
                     <td className="py-3 px-4 font-medium">{unit.unitCode || 'N/A'}</td>
                     <td className="py-3 px-4">{unit.label || '-'}</td>
                     <td className="py-3 px-4 text-right">{unit.m2 ? `${unit.m2} m²` : '-'}</td>
