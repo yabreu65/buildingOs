@@ -17,7 +17,7 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class VendorsValidators {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   // ============================================================================
   // VENDOR VALIDATORS

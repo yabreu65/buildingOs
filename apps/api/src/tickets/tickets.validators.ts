@@ -14,7 +14,7 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class TicketsValidators {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Validate that a building belongs to a tenant
