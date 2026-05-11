@@ -49,18 +49,6 @@ export class CronJobsTriggerController {
   }
 
   /**
-   * Trigger #8: Detect overdue charges and notify residents.
-   */
-  @Post('overdue-charges')
-  async triggerOverdueCharges(
-    @Param('buildingId') _buildingId: string,
-    @Request() req: AuthenticatedRequest,
-  ) {
-    this.ensureEnvAndRole(req);
-    return this.cronJobsService.detectAndNotifyOverdueCharges();
-  }
-
-  /**
    * Trigger #9: Auto-create monthly expense periods.
    */
   @Post('expense-periods')

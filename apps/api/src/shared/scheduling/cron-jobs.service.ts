@@ -65,16 +65,6 @@ export class CronJobsService {
   }
 
   /**
-   * [PHASE 3 MEDIUM #8] Daily at 9am: Detect overdue charges and notify residents
-   */
-  @Cron('0 9 * * *')
-  async detectAndNotifyOverdueCharges() {
-    return this.runWithErrorHandling('detectAndNotifyOverdueCharges', async () => {
-      return await this.finanzasService.detectAndNotifyOverdueCharges();
-    });
-  }
-
-  /**
    * [PHASE 3 MEDIUM #9] Monthly at 8am on 1st: Auto-create next month's expense period
    */
   @Cron('0 8 1 * *')

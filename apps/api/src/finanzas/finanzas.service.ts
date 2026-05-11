@@ -2519,69 +2519,6 @@ export class FinanzasService {
   }
 
   /**
-   * [PHASE 3 MEDIUM #8] Detect and notify overdue charges
-   * Runs daily at 9am - marks charges as overdue and notifies residents
-   */
-  async detectAndNotifyOverdueCharges(): Promise<{ count: number }> {
-    const now = new Date();
-    const overdue = await this.prisma.charge.findMany({
-      where: {
-        status: { in: ['PENDING', 'PARTIAL'] },
-        dueDate: { lt: now },
-        overdueSince: null, // Only process once
-        canceledAt: null,
-      },
-      include: {
-        unit: {
-          include: {
-            unitOccupants: {
-              where: { endDate: null },
-              include: { member: { select: { user: { select: { id: true } } } } },
-            },
-            building: { select: { id: true, name: true, tenantId: true } },
-          },
-        },
-      },
-    });
-
-    let notifiedCount = 0;
-
-    for (const charge of overdue) {
-      // Mark as overdue
-      await this.prisma.charge.update({
-        where: { id: charge.id },
-        data: { overdueSince: now },
-      });
-
-      // Notify residents
-      const daysOverdue = Math.floor((now.getTime() - charge.dueDate.getTime()) / (1000 * 60 * 60 * 24));
-      for (const occupant of charge.unit.unitOccupants) {
-        if (occupant.member?.user?.id) {
-          const amount = (charge.amount / 100).toFixed(2);
-          await this.notificationsService.createNotification({
-            tenantId: charge.tenantId,
-            userId: occupant.member.user.id,
-            type: 'PAYMENT_OVERDUE',
-            title: `Pago vencido - ${charge.unit.building.name}`,
-            body: `El pago de ${amount} ${charge.currency} en la unidad ${charge.unit.label} vence hace ${daysOverdue} días. Por favor realiza el pago inmediatamente.`,
-            data: {
-              chargeAmount: charge.amount / 100,
-              chargeCurrency: charge.currency,
-              unitLabel: charge.unit.label,
-              buildingName: charge.unit.building.name,
-              daysOverdue,
-            },
-            deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
-          notifiedCount++;
-        }
-      }
-    }
-
-    return { count: notifiedCount };
-  }
-
-  /**
    * [PHASE 3 MEDIUM #9] Auto-create monthly expense periods
    * Runs on 1st of each month at 8am - creates next month's period for buildings
    */
