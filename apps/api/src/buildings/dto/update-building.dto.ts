@@ -1,12 +1,16 @@
 import { IsString, IsOptional, MinLength } from 'class-validator';
 
 export class UpdateBuildingDto {
-  @IsOptional()
   @IsString()
   @MinLength(1)
-  name?: string;
+  name!: string;
 
   @IsOptional()
   @IsString()
   address?: string;
+
+  // Alias is immutable for MVP — not editable
+  // @IsOptional()
+  // @IsString()
+  // alias?: string;
 }

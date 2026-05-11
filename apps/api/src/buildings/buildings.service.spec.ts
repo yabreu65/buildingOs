@@ -22,6 +22,7 @@ describe('BuildingsService', () => {
         {
           provide: PrismaService,
           useValue: {
+            $transaction: jest.fn(),
             building: {
               create: jest.fn(),
               findMany: jest.fn(),
@@ -29,6 +30,10 @@ describe('BuildingsService', () => {
               findUnique: jest.fn(),
               update: jest.fn(),
               delete: jest.fn(),
+            },
+            tenant: {
+              findUnique: jest.fn(),
+              update: jest.fn(),
             },
           },
         },
@@ -62,7 +67,7 @@ describe('BuildingsService', () => {
 
   // ========== TESTS: CREATE ==========
   describe('create', () => {
-    it('should create a building successfully', async () => {
+    it('should create a building with auto-generated alias A', async () => {
       // ARRANGE
       const tenantId = 'tenant-123';
       const userId = 'user-123';
@@ -74,13 +79,25 @@ describe('BuildingsService', () => {
         id: 'building-123',
         tenantId,
         name: 'Building A',
+        alias: 'A',
         address: '123 Main St',
         createdAt: new Date('2026-03-21'),
         updatedAt: new Date('2026-03-21'),
       };
 
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.building, 'create').mockResolvedValue(expectedBuilding as any);
+      jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: any) => {
+        const tx = {
+          tenant: {
+            findUnique: jest.fn().mockResolvedValue({ nextBuildingAliasIndex: 1 }),
+            update: jest.fn().mockResolvedValue({}),
+          },
+          building: {
+            create: jest.fn().mockResolvedValue(expectedBuilding),
+          },
+        };
+        return callback(tx);
+      });
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
@@ -88,14 +105,8 @@ describe('BuildingsService', () => {
 
       // ASSERT
       expect(result).toEqual(expectedBuilding);
+      expect(result.alias).toBe('A');
       expect(planEntitlementsService.assertLimit).toHaveBeenCalledWith(tenantId, 'buildings');
-      expect(prismaService.building.create).toHaveBeenCalledWith({
-        data: {
-          tenantId,
-          name: 'Building A',
-          address: '123 Main St',
-        },
-      });
       expect(auditService.createLog).toHaveBeenCalledWith({
         tenantId,
         actorUserId: userId,
@@ -104,12 +115,13 @@ describe('BuildingsService', () => {
         entityId: 'building-123',
         metadata: {
           name: 'Building A',
+          alias: 'A',
           address: '123 Main St',
         },
       });
     });
 
-    it('should create building without userId (no audit)', async () => {
+    it('should create second building with alias B', async () => {
       // ARRANGE
       const tenantId = 'tenant-123';
       const dto: CreateBuildingDto = {
@@ -120,19 +132,31 @@ describe('BuildingsService', () => {
         id: 'building-456',
         tenantId,
         name: 'Building B',
+        alias: 'B',
         address: '456 Oak Ave',
         createdAt: new Date(),
         updatedAt: new Date(),
       };
 
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.building, 'create').mockResolvedValue(expectedBuilding as any);
+      jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: any) => {
+        const tx = {
+          tenant: {
+            findUnique: jest.fn().mockResolvedValue({ nextBuildingAliasIndex: 2 }),
+            update: jest.fn().mockResolvedValue({}),
+          },
+          building: {
+            create: jest.fn().mockResolvedValue(expectedBuilding),
+          },
+        };
+        return callback(tx);
+      });
 
       // ACT
       const result = await service.create(tenantId, dto);
 
       // ASSERT
-      expect(result).toEqual(expectedBuilding);
+      expect(result.alias).toBe('B');
       expect(auditService.createLog).not.toHaveBeenCalled();
     });
 
@@ -149,7 +173,18 @@ describe('BuildingsService', () => {
       };
 
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.building, 'create').mockRejectedValue(error);
+      jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: any) => {
+        const tx = {
+          tenant: {
+            findUnique: jest.fn().mockResolvedValue({ nextBuildingAliasIndex: 1 }),
+            update: jest.fn().mockResolvedValue({}),
+          },
+          building: {
+            create: jest.fn().mockRejectedValue(error),
+          },
+        };
+        return callback(tx);
+      });
 
       // ACT & ASSERT
       await expect(service.create(tenantId, dto)).rejects.toThrow(
@@ -187,7 +222,7 @@ describe('BuildingsService', () => {
       const unexpectedError = new Error('Database connection failed');
 
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.building, 'create').mockRejectedValue(unexpectedError);
+      jest.spyOn(prismaService, '$transaction').mockRejectedValue(unexpectedError);
 
       // ACT & ASSERT
       await expect(service.create(tenantId, dto)).rejects.toThrow(

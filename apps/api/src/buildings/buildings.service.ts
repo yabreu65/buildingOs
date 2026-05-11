@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { AuditAction, Building, TenantMember, Unit, UnitOccupant } from '@prisma/client';
 
-
+import { aliasFromIndex } from '../shared/utils/alias-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
@@ -26,20 +26,45 @@ export class BuildingsService {
   ) {}
 
   /**
-   * Create a new building for the tenant
+   * Create a new building for the tenant.
+   * Alias se genera automáticamente desde Tenant.nextBuildingAliasIndex.
    */
   async create(tenantId: string, dto: CreateBuildingDto, userId?: string): Promise<Building> {
     // 1. Check plan limit: maxBuildings
     await this.planEntitlements.assertLimit(tenantId, 'buildings');
 
-    // 2. Create building
+    // 2. Create building with auto-generated alias in transaction
     try {
-      const building = await this.prisma.building.create({
-        data: {
-          tenantId,
-          name: dto.name,
-          address: dto.address,
-        },
+      const building = await this.prisma.$transaction(async (tx) => {
+        // Read current alias index
+        const tenant = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: { nextBuildingAliasIndex: true },
+        });
+
+        if (!tenant) {
+          throw new NotFoundException('Tenant not found');
+        }
+
+        const alias = aliasFromIndex(tenant.nextBuildingAliasIndex);
+
+        // Create building with alias
+        const building = await tx.building.create({
+          data: {
+            tenantId,
+            name: dto.name,
+            alias,
+            address: dto.address,
+          },
+        });
+
+        // Increment counter
+        await tx.tenant.update({
+          where: { id: tenantId },
+          data: { nextBuildingAliasIndex: { increment: 1 } },
+        });
+
+        return building;
       });
 
       // Audit: BUILDING_CREATE
@@ -52,6 +77,7 @@ export class BuildingsService {
           entityId: building.id,
           metadata: {
             name: building.name,
+            alias: building.alias,
             address: building.address,
           },
         });
@@ -65,6 +91,20 @@ export class BuildingsService {
         'code' in error &&
         error.code === 'P2002'
       ) {
+        // Check if it's alias or name conflict
+        const meta = typeof error === 'object' && 'meta' in error
+          ? (error as Record<string, unknown>).meta
+          : null;
+        const target = meta && typeof meta === 'object' && 'target' in meta
+          ? (meta as Record<string, unknown>).target
+          : null;
+
+        if (Array.isArray(target) && target.includes('alias')) {
+          throw new BadRequestException(
+            `Alias conflict detected for building "${dto.name}". Please try again.`,
+          );
+        }
+
         throw new BadRequestException(
           `Building name "${dto.name}" already exists in this tenant`,
         );
