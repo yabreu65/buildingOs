@@ -22,17 +22,53 @@ const SEMANTIC_DEFINITIONS: Record<AssistantQueryIntent, AssistantSemanticDefini
     scope: 'unit',
     requiredPermission: 'payments.review',
   },
+  unit_documents: {
+    intent: 'unit_documents',
+    module: 'documents',
+    scope: 'unit',
+    requiredPermission: 'units.read',
+  },
   unit_tickets: {
     intent: 'unit_tickets',
     module: 'tickets',
     scope: 'unit',
     requiredPermission: 'tickets.read',
   },
+  unit_payments: {
+    intent: 'unit_payments',
+    module: 'payments',
+    scope: 'unit',
+    requiredPermission: 'payments.review',
+  },
+  building_debt: {
+    intent: 'building_debt',
+    module: 'payments',
+    scope: 'building',
+    requiredPermission: 'payments.review',
+  },
+  building_delinquents: {
+    intent: 'building_delinquents',
+    module: 'payments',
+    scope: 'building',
+    requiredPermission: 'payments.review',
+  },
+  building_documents: {
+    intent: 'building_documents',
+    module: 'documents',
+    scope: 'building',
+    requiredPermission: 'buildings.read',
+  },
   building_tickets: {
     intent: 'building_tickets',
     module: 'tickets',
     scope: 'building',
     requiredPermission: 'tickets.read',
+  },
+  building_payments: {
+    intent: 'building_payments',
+    module: 'payments',
+    scope: 'building',
+    requiredPermission: 'payments.review',
   },
   building_stats: {
     intent: 'building_stats',

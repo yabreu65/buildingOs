@@ -62,15 +62,33 @@ export class AssistantQueryPlanService {
     if (this.hasAny(normalized, ['debe', 'deuda', 'saldo', 'adeuda', 'estado de cuenta', 'al dia'])) {
       return 'unit_debt';
     }
+    if (this.hasAny(normalized, ['documento', 'documentos', 'archivo', 'archivos', 'pdf', 'comprobante', 'acta', 'planilla'])) {
+      return 'unit_documents';
+    }
     if (this.hasAny(normalized, ['ticket', 'tickets', 'reclamo', 'problema', 'averia', 'falla', 'incidente'])) {
       return 'unit_tickets';
+    }
+    if (this.hasAny(normalized, ['pago', 'pagos', 'transferencia', 'recibo', 'movimiento', 'transaccion', 'abono', 'cobro'])) {
+      return 'unit_payments';
     }
     return null;
   }
 
   private pickBuildingIntent(normalized: string): AssistantQueryIntent | null {
+    if (this.hasAny(normalized, ['moroso', 'morosos', 'morosa', 'morosas', 'deudor', 'deudores', 'top deudores', 'ranking de deuda', 'atrasados', 'impagos'])) {
+      return 'building_delinquents';
+    }
+    if (this.hasAny(normalized, ['deuda', 'deudas', 'saldo', 'adeuda', 'cuanto debe', 'cuanto se debe', 'estado de cuenta'])) {
+      return 'building_debt';
+    }
+    if (this.hasAny(normalized, ['documento', 'documentos', 'archivo', 'archivos', 'pdf', 'comprobante', 'acta', 'planilla'])) {
+      return 'building_documents';
+    }
     if (this.hasAny(normalized, ['ticket', 'tickets', 'reclamo', 'reclamos', 'problema', 'incidente'])) {
       return 'building_tickets';
+    }
+    if (this.hasAny(normalized, ['pago', 'pagos', 'transferencia', 'recibo', 'cobranza', 'cobranzas', 'cobro', 'cobros'])) {
+      return 'building_payments';
     }
     if (this.hasAny(normalized, ['estadistica', 'estadisticas', 'resumen', 'estado del edificio', 'situacion', 'cuantas unidades', 'datos del edificio'])) {
       return 'building_stats';

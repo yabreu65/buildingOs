@@ -26,10 +26,22 @@ export class AssistantQueryExecutorsService {
         return this.executeUnitResidents(context);
       case 'unit_debt':
         return this.executeUnitDebt(context);
+      case 'unit_documents':
+        return this.executeUnitDocuments(context);
       case 'unit_tickets':
         return this.executeUnitTickets(context);
+      case 'unit_payments':
+        return this.executeUnitPayments(context);
+      case 'building_debt':
+        return this.executeBuildingDebt(context);
+      case 'building_delinquents':
+        return this.executeBuildingDelinquents(context);
+      case 'building_documents':
+        return this.executeBuildingDocuments(context);
       case 'building_tickets':
         return this.executeBuildingTickets(context);
+      case 'building_payments':
+        return this.executeBuildingPayments(context);
       case 'building_stats':
         return this.executeBuildingStats(context);
       default:
@@ -139,6 +151,44 @@ export class AssistantQueryExecutorsService {
     );
   }
 
+  private async executeUnitDocuments(context: AssistantQueryExecutionContext): Promise<ChatResponse> {
+    const unitResolution = await this.resolveUnit(context);
+    if (unitResolution.errorResponse) {
+      return unitResolution.errorResponse;
+    }
+    const resolved = unitResolution.resolved;
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: resolved.building.id,
+      unitId: resolved.unit.id,
+    });
+
+    const documents = await this.prisma.document.findMany({
+      where: { tenantId: context.tenantId, unitId: resolved.unit.id },
+      select: { id: true, title: true, category: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    if (documents.length === 0) {
+      return this.response(
+        `La unidad ${resolved.displayCode} (${resolved.building.name}) no tiene documentos registrados.`,
+        'VIEW_DOCUMENTS',
+        resolved,
+      );
+    }
+
+    const documentList = documents.map((document, index) => `${index + 1}. ${document.title} (${document.category})`).join('\n');
+    return this.response(
+      `Documentos de la unidad ${resolved.displayCode} (${resolved.building.name}):\n${documentList}`,
+      'VIEW_DOCUMENTS',
+      resolved,
+    );
+  }
+
   private async executeUnitTickets(context: AssistantQueryExecutionContext): Promise<ChatResponse> {
     const unitResolution = await this.resolveUnit(context);
     if (unitResolution.errorResponse) {
@@ -181,6 +231,173 @@ export class AssistantQueryExecutorsService {
     );
   }
 
+  private async executeUnitPayments(context: AssistantQueryExecutionContext): Promise<ChatResponse> {
+    const unitResolution = await this.resolveUnit(context);
+    if (unitResolution.errorResponse) {
+      return unitResolution.errorResponse;
+    }
+    const resolved = unitResolution.resolved;
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: resolved.building.id,
+      unitId: resolved.unit.id,
+    });
+
+    const payments = await this.prisma.payment.findMany({
+      where: { tenantId: context.tenantId, unitId: resolved.unit.id, canceledAt: null },
+      select: { id: true, amount: true, currency: true, status: true, method: true, paidAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    if (payments.length === 0) {
+      return this.response(
+        `La unidad ${resolved.displayCode} (${resolved.building.name}) no tiene pagos registrados.`,
+        'VIEW_PAYMENTS',
+        resolved,
+      );
+    }
+
+    const paymentList = payments.map((payment, index) => {
+      const date = payment.paidAt ? new Date(payment.paidAt).toLocaleDateString('es-AR') : 'sin fecha';
+      return `${index + 1}. ${this.formatMoney(payment.amount, payment.currency)} (${payment.status}) - ${date}`;
+    }).join('\n');
+
+    return this.response(
+      `Últimos pagos de la unidad ${resolved.displayCode} (${resolved.building.name}):\n${paymentList}`,
+      'VIEW_PAYMENTS',
+      resolved,
+    );
+  }
+
+  private async executeBuildingDebt(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    const building = await this.resolveBuilding(context);
+    if (!building) {
+      return null;
+    }
+
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: building.id,
+    });
+
+    const [tenant, charges] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
+      this.prisma.charge.findMany({
+        where: { tenantId: context.tenantId, buildingId: building.id, canceledAt: null },
+        include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
+      }),
+    ]);
+
+    const outstanding = this.calculateOutstanding(charges);
+    return {
+      answer: outstanding > 0
+        ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, tenant.currency)}.`
+        : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, tenant.currency)}.`,
+      suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+    };
+  }
+
+  private async executeBuildingDelinquents(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    const building = await this.resolveBuilding(context);
+    if (!building) {
+      return null;
+    }
+
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: building.id,
+    });
+
+    const [tenant, units] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
+      this.prisma.unit.findMany({
+        where: { tenantId: context.tenantId, buildingId: building.id },
+        select: { id: true, code: true, label: true },
+      }),
+    ]);
+
+    const unitIds = units.map((unit) => unit.id);
+    const charges = await this.prisma.charge.findMany({
+      where: { tenantId: context.tenantId, unitId: { in: unitIds }, canceledAt: null },
+      include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
+    });
+
+    const debtByUnit = new Map<string, number>();
+    for (const charge of charges) {
+      const debt = this.calculateOutstanding([charge]);
+      debtByUnit.set(charge.unitId, (debtByUnit.get(charge.unitId) ?? 0) + debt);
+    }
+
+    const topDebtors = Array.from(debtByUnit.entries())
+      .filter(([, debt]) => debt > 0)
+      .sort(([, left], [, right]) => right - left)
+      .slice(0, 10);
+
+    if (topDebtors.length === 0) {
+      return {
+        answer: `El edificio ${building.name} no tiene unidades con deuda pendiente. Todas las unidades están al día.`,
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+      };
+    }
+
+    const debtorList = topDebtors.map(([unitId, debt], index) => {
+      const unit = units.find((item) => item.id === unitId);
+      const unitLabel = unit ? (unit.label || unit.code) : 'Desconocida';
+      return `${index + 1}. ${unitLabel}: ${this.formatMoney(debt, tenant.currency)}`;
+    }).join('\n');
+    const totalDebt = topDebtors.reduce((sum, [, debt]) => sum + debt, 0);
+
+    return {
+      answer: `Top deudores del edificio ${building.name} (deuda total: ${this.formatMoney(totalDebt, tenant.currency)}):\n${debtorList}`,
+      suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+    };
+  }
+
+  private async executeBuildingDocuments(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    const building = await this.resolveBuilding(context);
+    if (!building) {
+      return null;
+    }
+
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: building.id,
+    });
+
+    const documents = await this.prisma.document.findMany({
+      where: { tenantId: context.tenantId, buildingId: building.id },
+      select: { id: true, title: true, category: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    if (documents.length === 0) {
+      return {
+        answer: `El edificio ${building.name} no tiene documentos registrados.`,
+        suggestedActions: [{ type: 'VIEW_DOCUMENTS', payload: { buildingId: building.id } }],
+      };
+    }
+
+    const documentList = documents.map((document, index) => `${index + 1}. ${document.title} (${document.category})`).join('\n');
+    return {
+      answer: `Documentos del edificio ${building.name}:\n${documentList}`,
+      suggestedActions: [{ type: 'VIEW_DOCUMENTS', payload: { buildingId: building.id } }],
+    };
+  }
+
   private async executeBuildingTickets(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
     const building = await this.resolveBuilding(context);
     if (!building) {
@@ -212,6 +429,53 @@ export class AssistantQueryExecutorsService {
     const ticketList = recentTickets.map((ticket, index) => `${index + 1}. ${ticket.title} [${ticket.status}]`).join('\n');
     const openText = openCount > 0 ? ` (${openCount} abiertos)` : '';
     return { answer: `Tickets del edificio ${building.name}${openText}:\n${ticketList}`, suggestedActions: [{ type: 'VIEW_TICKETS', payload: { buildingId: building.id } }] };
+  }
+
+  private async executeBuildingPayments(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    const building = await this.resolveBuilding(context);
+    if (!building) {
+      return null;
+    }
+
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+      buildingId: building.id,
+    });
+
+    const payments = await this.prisma.payment.findMany({
+      where: { tenantId: context.tenantId, buildingId: building.id, canceledAt: null },
+      select: { id: true, amount: true, currency: true, status: true, method: true, paidAt: true, createdAt: true, unitId: true },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    if (payments.length === 0) {
+      return {
+        answer: `El edificio ${building.name} no tiene pagos registrados.`,
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+      };
+    }
+
+    const unitIds = [...new Set(payments.map((payment) => payment.unitId).filter((unitId): unitId is string => unitId !== null))];
+    const units = await this.prisma.unit.findMany({
+      where: { tenantId: context.tenantId, id: { in: unitIds } },
+      select: { id: true, code: true, label: true },
+    });
+
+    const paymentList = payments.map((payment, index) => {
+      const date = payment.paidAt ? new Date(payment.paidAt).toLocaleDateString('es-AR') : 'sin fecha';
+      const unit = units.find((item) => item.id === payment.unitId);
+      const unitLabel = unit ? (unit.label || unit.code) : 'N/A';
+      return `${index + 1}. ${this.formatMoney(payment.amount, payment.currency)} (${payment.status}) - ${unitLabel} - ${date}`;
+    }).join('\n');
+
+    return {
+      answer: `Últimos pagos del edificio ${building.name}:\n${paymentList}`,
+      suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+    };
   }
 
   private async executeBuildingStats(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
@@ -289,13 +553,26 @@ export class AssistantQueryExecutorsService {
 
   private response(
     answer: string,
-    actionType: 'VIEW_REPORTS' | 'VIEW_PAYMENTS' | 'VIEW_TICKETS',
+    actionType: 'VIEW_REPORTS' | 'VIEW_PAYMENTS' | 'VIEW_TICKETS' | 'VIEW_DOCUMENTS',
     resolved: ResolvedUnit,
   ): ChatResponse {
     return {
       answer,
       suggestedActions: [{ type: actionType, payload: { buildingId: resolved.building.id, unitId: resolved.unit.id } }],
     };
+  }
+
+  private calculateOutstanding(charges: Array<{ amount: number; paymentAllocations: Array<{ amount: number; payment?: { status: PaymentStatus } | null }> }>): number {
+    return charges.reduce((sum, charge) => {
+      const approvedAllocated = charge.paymentAllocations.reduce((allocationSum, allocation) => {
+        const status = allocation.payment?.status;
+        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+          return allocationSum + allocation.amount;
+        }
+        return allocationSum;
+      }, 0);
+      return sum + Math.max(0, charge.amount - approvedAllocated);
+    }, 0);
   }
 
   private formatMoney(amountCents: number, currency: string): string {

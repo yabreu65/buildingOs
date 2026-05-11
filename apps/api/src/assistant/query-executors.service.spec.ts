@@ -8,6 +8,8 @@ describe('AssistantQueryExecutorsService', () => {
     charge: { findMany: jest.fn() },
     unitOccupant: { findMany: jest.fn() },
     ticket: { count: jest.fn(), findMany: jest.fn() },
+    document: { findMany: jest.fn() },
+    payment: { findMany: jest.fn() },
     unit: { findMany: jest.fn() },
     building: { findMany: jest.fn() },
   };
@@ -93,6 +95,95 @@ describe('AssistantQueryExecutorsService', () => {
       where: { tenantId: 'tenant-1', unitId: 'unit-1', endDate: null },
     }));
     expect(result?.answer).toContain('Juana Perez');
+  });
+
+
+
+  it('executes unit_documents with tenant and unit scoped filters', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'unit_documents',
+      module: 'documents',
+      scope: 'unit',
+      requiredPermission: 'units.read',
+      executor: 'unit_documents',
+      filters: { unitCode: '0101', buildingAlias: 'A' },
+      confidence: 0.92,
+      source: 'deterministic_rules',
+    };
+    prisma.document.findMany.mockResolvedValue([
+      { id: 'doc-1', title: 'Acta Asamblea', category: 'ACTA', createdAt: new Date() },
+    ]);
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'admin-1', userRoles: ['TENANT_ADMIN'], plan });
+
+    expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      plan,
+    }));
+    expect(prisma.document.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 'tenant-1', unitId: 'unit-1' },
+    }));
+    expect(result?.answer).toContain('Acta Asamblea');
+    expect(result?.suggestedActions[0].type).toBe('VIEW_DOCUMENTS');
+  });
+
+  it('executes building_debt with tenant and building scoped charge filters', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+      filters: { buildingToken: 'A' },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
+    prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
+    prisma.charge.findMany.mockResolvedValue([
+      {
+        amount: 150000,
+        unitId: 'unit-1',
+        paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.RECONCILED } }],
+      },
+    ]);
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ buildingId: 'building-1' }));
+    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 'tenant-1', buildingId: 'building-1', canceledAt: null },
+    }));
+    expect(result?.answer).toContain('deuda pendiente total');
+  });
+
+  it('executes building_payments and resolves payment unit labels inside the same tenant', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_payments',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_payments',
+      filters: { buildingToken: 'A' },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
+    prisma.payment.findMany.mockResolvedValue([
+      { id: 'payment-1', amount: 100000, currency: 'ARS', status: PaymentStatus.APPROVED, method: 'TRANSFER', paidAt: new Date('2026-05-01'), createdAt: new Date(), unitId: 'unit-1' },
+    ]);
+    prisma.unit.findMany.mockResolvedValue([{ id: 'unit-1', code: '0101', label: 'Unidad 0101' }]);
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 'tenant-1', buildingId: 'building-1', canceledAt: null },
+    }));
+    expect(prisma.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 'tenant-1', id: { in: ['unit-1'] } },
+    }));
+    expect(result?.answer).toContain('Unidad 0101');
   });
 
   it('executes building_tickets only for the resolved building in the tenant', async () => {

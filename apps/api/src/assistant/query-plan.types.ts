@@ -5,8 +5,14 @@ export type AssistantQueryModule = 'units' | 'payments' | 'tickets' | 'documents
 export type AssistantQueryIntent =
   | 'unit_residents'
   | 'unit_debt'
+  | 'unit_documents'
   | 'unit_tickets'
+  | 'unit_payments'
+  | 'building_debt'
+  | 'building_delinquents'
+  | 'building_documents'
   | 'building_tickets'
+  | 'building_payments'
   | 'building_stats';
 
 export type AssistantQueryScope = 'unit' | 'building';

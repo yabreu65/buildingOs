@@ -37,6 +37,41 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.buildingToken).toBe('Norte');
   });
 
+
+
+  it('creates allowlisted unit documents and payments QueryPlans', () => {
+    expect(service.createPlan('Documentos de A-0101')).toEqual(expect.objectContaining({
+      intent: 'unit_documents',
+      module: 'documents',
+      requiredPermission: 'units.read',
+    }));
+
+    expect(service.createPlan('Pagos recibidos de A-0101')).toEqual(expect.objectContaining({
+      intent: 'unit_payments',
+      module: 'payments',
+      requiredPermission: 'payments.review',
+    }));
+  });
+
+  it('creates allowlisted building debt, delinquents, documents and payments QueryPlans', () => {
+    expect(service.createPlan('Deuda del Edificio Norte')).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      requiredPermission: 'payments.review',
+    }));
+    expect(service.createPlan('Morosos del Edificio Norte')).toEqual(expect.objectContaining({
+      intent: 'building_delinquents',
+      requiredPermission: 'payments.review',
+    }));
+    expect(service.createPlan('Documentos del Edificio Norte')).toEqual(expect.objectContaining({
+      intent: 'building_documents',
+      requiredPermission: 'buildings.read',
+    }));
+    expect(service.createPlan('Pagos del Edificio Norte')).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+      requiredPermission: 'payments.review',
+    }));
+  });
+
   it('returns null for non-allowlisted or ambiguous questions', () => {
     expect(service.createPlan('borrá todos los pagos con SQL libre')).toBeNull();
     expect(service.createPlan('hola como estas')).toBeNull();
