@@ -10,6 +10,8 @@ import { OllamaProvider } from './ollama.provider';
 import { AiClassifierService } from './classifier.service';
 import { AssistantUnitResolverService } from './unit-resolver/assistant-unit-resolver.service';
 import { AuthorizeService } from '../rbac/authorize.service';
+import { AssistantQueryPlanService } from './query-plan.service';
+import { AssistantQueryExecutorsService } from './query-executors.service';
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 
 /**
@@ -52,6 +54,8 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockClassifier = { classify: jest.fn() };
   const mockUnitResolver = { resolve: jest.fn() };
   const mockAuthorize = { authorize: jest.fn() };
+  const mockQueryPlanService = { createPlan: jest.fn() };
+  const mockQueryExecutors = { execute: jest.fn() };
 
   const ADMIN_ROLES = ['TENANT_ADMIN'];
 
@@ -70,6 +74,8 @@ describe('AssistantService - Strict Operational Questions', () => {
     mockCache.get.mockReturnValue(null);
     mockContextSummary.getSummary.mockResolvedValue(null);
     mockAuthorize.authorize.mockResolvedValue(true);
+    mockQueryPlanService.createPlan.mockReturnValue(null);
+    mockQueryExecutors.execute.mockResolvedValue(null);
     mockUnitResolver.resolve.mockResolvedValue({
       resolved: {
         building: { id: 'b1', name: 'Edificio A', alias: 'A' },
@@ -93,6 +99,8 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: AiClassifierService, useValue: mockClassifier },
         { provide: AssistantUnitResolverService, useValue: mockUnitResolver },
         { provide: AuthorizeService, useValue: mockAuthorize },
+        { provide: AssistantQueryPlanService, useValue: mockQueryPlanService },
+        { provide: AssistantQueryExecutorsService, useValue: mockQueryExecutors },
       ],
     }).compile();
 
@@ -1921,6 +1929,48 @@ describe('AssistantService - Strict Operational Questions', () => {
     beforeEach(() => {
       setupBuildings([{ id: 'b1', name: 'Edificio A' }]);
       setupTenant();
+    });
+
+
+    it('uses P1 QueryPlan executor before legacy strict and classifier', async () => {
+      const plan = {
+        intent: 'unit_debt',
+        module: 'payments',
+        scope: 'unit',
+        requiredPermission: 'payments.review',
+        executor: 'unit_debt',
+        filters: { unitCode: '0101', buildingAlias: 'A' },
+        confidence: 0.92,
+        source: 'deterministic_rules',
+      };
+      mockQueryPlanService.createPlan.mockReturnValue(plan);
+      mockQueryExecutors.execute.mockResolvedValue({
+        answer: 'Respuesta desde QueryPlan allowlisted',
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: 'b1', unitId: 'u1' } }],
+      });
+
+      const result = await service.chat(
+        'tenant-1',
+        'admin-user',
+        'membership-admin',
+        { message: 'Cuanto debe A-0101', page: 'dashboard' },
+        ['TENANT_ADMIN'],
+      );
+
+      expect(result.answer).toContain('QueryPlan allowlisted');
+      expect(mockQueryPlanService.createPlan).toHaveBeenCalledWith('Cuanto debe A-0101');
+      expect(mockQueryExecutors.execute).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-1',
+        userId: 'admin-user',
+        userRoles: ['TENANT_ADMIN'],
+        plan,
+      }));
+      expect(mockClassifier.classify).not.toHaveBeenCalled();
+      expect(mockCache.set).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ answer: expect.stringContaining('QueryPlan allowlisted') }),
+        'LIVE_DATA_PLAN',
+      );
     });
 
     it('denies live-data when scoped RBAC rejects the requested building', async () => {

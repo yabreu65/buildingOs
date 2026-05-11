@@ -25,6 +25,10 @@ import { AiClassifierService } from './classifier.service';
 import { AssistantUnitResolverService } from './unit-resolver/assistant-unit-resolver.service';
 import { AssistantReadOnlyQueryController } from './read-only-query.controller';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
+import { AssistantSemanticLayerService } from './semantic-layer.service';
+import { AssistantQueryPlanService } from './query-plan.service';
+import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
+import { AssistantQueryExecutorsService } from './query-executors.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -105,6 +109,10 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiClassifierService,
     AssistantUnitResolverService,
     AssistantToolsService,
+    AssistantSemanticLayerService,
+    AssistantQueryPlanService,
+    AssistantPolicyEnforcerService,
+    AssistantQueryExecutorsService,
   ],
   exports: [
     AssistantService,
@@ -120,6 +128,10 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiTicketCategoryService,
     AssistantUnitResolverService,
     AssistantToolsService,
+    AssistantSemanticLayerService,
+    AssistantQueryPlanService,
+    AssistantPolicyEnforcerService,
+    AssistantQueryExecutorsService,
   ],
 })
 export class AssistantModule {}

@@ -12,6 +12,8 @@ import { AssistantQueryParser } from './query-parser/assistant-query-parser';
 import { AssistantUnitResolverService } from './unit-resolver/assistant-unit-resolver.service';
 import { AuthorizeService } from '../rbac/authorize.service';
 import type { Permission } from '../rbac/permissions';
+import { AssistantQueryPlanService } from './query-plan.service';
+import { AssistantQueryExecutorsService } from './query-executors.service';
 import {
   SuggestedActionType,
   SuggestedAction,
@@ -134,6 +136,8 @@ export class AssistantService {
     private readonly classifier: AiClassifierService,
     private readonly unitResolver: AssistantUnitResolverService,
     private readonly authorize: AuthorizeService,
+    private readonly queryPlanService: AssistantQueryPlanService,
+    private readonly queryExecutors: AssistantQueryExecutorsService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
@@ -272,7 +276,17 @@ export class AssistantService {
     let response: ChatResponse;
     let resolvedModelForLog = modelName;
 
-    const strictOperationalResponse = await this.tryResolveStrictOperationalQuestion(
+    const queryPlan = this.queryPlanService.createPlan(request.message);
+    const plannedOperationalResponse = queryPlan
+      ? await this.queryExecutors.execute({
+        tenantId,
+        userId,
+        userRoles,
+        plan: queryPlan,
+      })
+      : null;
+
+    const strictOperationalResponse = plannedOperationalResponse ?? await this.tryResolveStrictOperationalQuestion(
       tenantId,
       request.message,
       userRoles,
@@ -281,7 +295,7 @@ export class AssistantService {
 
     if (strictOperationalResponse) {
       response = strictOperationalResponse;
-      resolvedModelForLog = 'LIVE_DATA_STRICT';
+      resolvedModelForLog = plannedOperationalResponse ? 'LIVE_DATA_PLAN' : 'LIVE_DATA_STRICT';
     } else {
       // NIVEL 2: Classifier LLM para detectar intención con lenguaje natural
       const classifierResult = await this.classifier.classify(request.message);
@@ -319,7 +333,7 @@ export class AssistantService {
 
     // Cache only non-live-data responses. Live-data strict answers depend on
     // current scoped RBAC and should be recomputed after authorization.
-    if (resolvedModelForLog !== 'LIVE_DATA_STRICT') {
+    if (resolvedModelForLog !== 'LIVE_DATA_STRICT' && resolvedModelForLog !== 'LIVE_DATA_PLAN') {
       this.cache.set(cacheKey, response, resolvedModelForLog);
     }
 
@@ -327,8 +341,8 @@ export class AssistantService {
     // Determine modelSize from router decision
     const modelSizeStr = resolvedModelForLog === 'YORYI_CORE'
       ? 'YORYI_CORE'
-      : resolvedModelForLog === 'LIVE_DATA_STRICT'
-        ? 'LIVE_DATA_STRICT'
+      : resolvedModelForLog === 'LIVE_DATA_STRICT' || resolvedModelForLog === 'LIVE_DATA_PLAN'
+        ? resolvedModelForLog
         : (routerDecision?.model === 'BIG' ? 'BIG' : (routerDecision?.model === 'SMALL' ? 'SMALL' : 'MOCK'));
     const interactionId = await this.logInteraction(tenantId, userId, membershipId, request, response, false, modelSizeStr);
 
