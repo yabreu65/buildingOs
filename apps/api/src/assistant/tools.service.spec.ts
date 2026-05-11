@@ -212,4 +212,63 @@ describe('AssistantToolsService', () => {
     expect(result.metadata.towerName).toBe('Torre A');
     expect(result.metadata.status).toBe('APPROVED');
   });
+
+  it('resolve_unit_ref scopes direct unitId lookup by tenantId', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.unit.findFirst.mockResolvedValue({
+      id: 'u1',
+      code: '101',
+      label: 'Apt 101',
+      buildingId: 'b1',
+      building: { name: 'Torre A' },
+    });
+
+    const result = await service.executeTool(
+      'resolve_unit_ref',
+      {
+        toolInput: { unitId: 'u1' },
+        context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+      },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(result.responseType).toBe('summary');
+    expect(prisma.unit.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'u1', tenantId: 'tenant-1' }),
+    }));
+  });
+
+  it('get_unit_profile scopes occupant lookup by tenantId', async () => {
+    const { service, prisma } = makeService();
+    prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+    prisma.unit.findFirst.mockResolvedValue({
+      id: 'u1',
+      code: '101',
+      label: 'Apt 101',
+      buildingId: 'b1',
+      building: { name: 'Torre A' },
+    });
+    prisma.unit.findUniqueOrThrow.mockResolvedValue({
+      id: 'u1',
+      code: '101',
+      label: 'Apt 101',
+      building: { id: 'b1', name: 'Torre A' },
+    });
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
+
+    await service.executeTool(
+      'get_unit_profile',
+      {
+        toolInput: { unitId: 'u1' },
+        context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+      },
+      { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+    );
+
+    expect(prisma.unitOccupant.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 'tenant-1', unitId: 'u1', endDate: null }),
+    }));
+  });
+
 });

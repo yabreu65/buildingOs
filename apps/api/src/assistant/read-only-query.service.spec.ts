@@ -141,4 +141,43 @@ describe('AssistantReadOnlyQueryService', () => {
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
+
+  it('filters vacant units with explicit tenantId on Unit', async () => {
+    const { service, prisma } = makeService();
+
+    prisma.membership.findUnique.mockResolvedValue({
+      roles: [{ role: 'TENANT_ADMIN' }],
+    });
+    prisma.unit.count.mockResolvedValue(1);
+    prisma.unit.findMany.mockResolvedValue([
+      { id: 'u1', code: '101', label: '101', building: { name: 'Torre A' } },
+    ]);
+
+    const result = await service.execute(
+      {
+        intentCode: 'GET_VACANT_UNITS',
+        question: 'unidades vacantes',
+        context: {
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          role: 'TENANT_ADMIN',
+        },
+      },
+      {
+        apiKey: 'test-readonly-key',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        role: 'TENANT_ADMIN',
+      },
+    );
+
+    expect(result.metadata.intentCode).toBe('GET_VACANT_UNITS');
+    expect(prisma.unit.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 'tenant-1', occupancyStatus: 'VACANT' }),
+    }));
+    expect(prisma.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 'tenant-1', occupancyStatus: 'VACANT' }),
+    }));
+  });
+
 });

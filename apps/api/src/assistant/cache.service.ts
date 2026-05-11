@@ -26,6 +26,12 @@ export interface CacheStats {
   estimatedSavingsCents: number;
 }
 
+export interface AiCacheSecurityContext {
+  membershipId?: string;
+  userRoles?: string[];
+  securityScopeVersion?: string;
+}
+
 @Injectable()
 export class AiCacheService {
   private cache: Map<string, CacheEntry> = new Map();
@@ -47,7 +53,7 @@ export class AiCacheService {
   /**
    * Generate cache key from request context
    *
-   * Key = hash(tenantId + page + buildingId + unitId + normalized_message)
+   * Key = hash(tenantId + page + buildingId + unitId + normalized_message + membership/security context)
    * This ensures same question from same context hits cache,
    * but different contexts don't collide
    *
@@ -64,16 +70,27 @@ export class AiCacheService {
     page: string,
     buildingId?: string,
     unitId?: string,
+    securityContext?: AiCacheSecurityContext,
   ): string {
     // Normalize message: trim, lowercase, remove extra spaces
     const normalized = message.trim().toLowerCase().replace(/\s+/g, ' ');
 
-    // Build key components
+    const normalizedRoles = [...(securityContext?.userRoles || [])]
+      .map((role) => String(role).trim().toUpperCase())
+      .filter((role) => role.length > 0)
+      .sort()
+      .join(',') || 'none';
+
+    // Build key components. Membership/roles are intentionally part of the
+    // cache key so live-data answers cannot be reused across RBAC scopes.
     const keyParts = [
       tenantId,
       page,
       buildingId || 'none',
       unitId || 'none',
+      securityContext?.membershipId || 'anonymous',
+      normalizedRoles,
+      securityContext?.securityScopeVersion || 'v1',
       normalized,
     ].join('::');
 

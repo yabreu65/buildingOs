@@ -6,6 +6,7 @@ export type SuggestedActionType =
   | 'VIEW_TICKETS'
   | 'VIEW_PAYMENTS'
   | 'VIEW_REPORTS'
+  | 'VIEW_DOCUMENTS'
   | 'SEARCH_DOCS'
   | 'DRAFT_COMMUNICATION'
   | 'CREATE_TICKET';
@@ -36,4 +37,9 @@ export interface AiProvider {
     context: AiProviderContext,
     options?: { model?: string; maxTokens?: number },
   ): Promise<ChatResponse>;
+}
+
+export interface ClassifierResult {
+  category: 'DEBT' | 'TICKETS' | 'DOCUMENTS' | 'PAYMENTS' | 'RESIDENTS' | 'STATS' | 'GENERAL';
+  confidence: number;
 }

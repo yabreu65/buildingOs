@@ -49,7 +49,7 @@ export class AssistantController {
    * - 403: Feature not available (canUseAI flag) or monthly consultation limit reached
    * - 429: Rate limit exceeded (100 per day)
    */
-  @Post(':tenantId/chat')
+  @Post('chat')
   @UseGuards(RequireFeatureGuard)
   @RequireFeature('canUseAI')
   async chat(
@@ -120,7 +120,7 @@ export class AssistantController {
    *
    * Only admins can use this endpoint (checked via role validation)
    */
-  @Post(':tenantId/ticket-replies')
+  @Post('ticket-replies')
   @UseGuards(RequireFeatureGuard)
   @RequireFeature('canUseAI')
   async getTicketReplySuggestions(
@@ -148,6 +148,12 @@ export class AssistantController {
       throw new BadRequestException('User not found in tenant');
     }
 
+    const allowedRoles = new Set(['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR']);
+    const userRoles = membership.roles || [];
+    if (!userRoles.some((role: string) => allowedRoles.has(role))) {
+      throw new ForbiddenException('Only admins/operators can use ticket reply suggestions');
+    }
+
     // Check monthly AI consultation limit
     const hasRemaining = await this.aiEntitlements.hasRemainingConsultations(tenantId);
     if (!hasRemaining) {
@@ -160,6 +166,8 @@ export class AssistantController {
       dto.ticketId,
       dto.title,
       dto.description,
+      userId,
+      userRoles,
     );
 
     // Track consumption

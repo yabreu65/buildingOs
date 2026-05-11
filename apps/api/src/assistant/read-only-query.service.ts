@@ -354,17 +354,13 @@ export class AssistantReadOnlyQueryService {
     const [count, units] = await Promise.all([
       this.prisma.unit.count({
         where: {
-          building: {
-            tenantId: context.tenantId,
-          },
+          tenantId: context.tenantId,
           occupancyStatus: 'VACANT',
         },
       }),
       this.prisma.unit.findMany({
         where: {
-          building: {
-            tenantId: context.tenantId,
-          },
+          tenantId: context.tenantId,
           occupancyStatus: 'VACANT',
         },
         include: {

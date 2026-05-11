@@ -13,6 +13,7 @@ import {
   AssistantToolRequest,
   AssistantToolResponse,
 } from './tools.types';
+import { AssistantQueryParser } from './query-parser/assistant-query-parser';
 
 const TOOL_PERMISSION = {
   resolve_unit_ref: 'tools.resolve_unit_ref',
@@ -32,6 +33,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 
 @Injectable()
 export class AssistantToolsService {
+  private readonly queryParser = new AssistantQueryParser();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -97,7 +100,7 @@ export class AssistantToolsService {
       const unit = await this.prisma.unit.findFirst({
         where: {
           id: directUnitId,
-          building: { tenantId },
+          tenantId,
         },
         select: {
           id: true,
@@ -126,11 +129,11 @@ export class AssistantToolsService {
       );
     }
 
-    const buildingFilter = this.pickString(input, 'buildingName') ?? this.extractTowerToken(question ?? '');
+    const buildingFilter = this.pickString(input, 'buildingName') ?? this.queryParser.extractBuildingToken(question ?? '');
     const unitFilter =
       this.pickString(input, 'unitRef') ??
       this.pickString(input, 'unitCode') ??
-      this.extractUnitToken(question ?? '');
+      this.queryParser.extractUnitToken(question ?? '');
 
     const buildings = await this.prisma.building.findMany({
       where: { tenantId },
@@ -163,7 +166,7 @@ export class AssistantToolsService {
 
     const buildingIds = matchedBuildings.map((b) => b.id);
     const units = await this.prisma.unit.findMany({
-      where: { buildingId: { in: buildingIds } },
+      where: { tenantId, buildingId: { in: buildingIds } },
       select: {
         id: true,
         code: true,
@@ -175,31 +178,31 @@ export class AssistantToolsService {
       take: 200,
     });
 
-    const matchedUnits = unitFilter
-      ? units.filter((u) => this.matchesUnit(u.code, u.label, unitFilter))
-      : units;
+    const unitMatch = unitFilter
+      ? this.queryParser.findUnit(units, unitFilter)
+      : null;
 
-    if (matchedUnits.length === 0) {
-      return this.buildResponse('No encontré unidad para esa referencia.', 'clarification', {
-        noUnitMatch: true,
-      });
-    }
-
-    if (matchedUnits.length > 1) {
+    if (unitMatch && !unitMatch.matched && unitMatch.alternatives.length > 1) {
       return this.buildResponse(
-        `Referencia ambigua. Opciones: ${matchedUnits
+        `Referencia ambigua. Opciones: ${unitMatch.alternatives
           .slice(0, 2)
           .map((u, i) => `${i + 1}) ${u.building?.name ?? 'N/A'} ${u.label ?? u.code}`)
           .join(' | ')}`,
         'clarification',
         {
           ambiguousUnit: true,
-          options: matchedUnits.slice(0, 2).map((u) => ({ id: u.id, label: u.label ?? u.code })),
+          options: unitMatch.alternatives.slice(0, 2).map((u) => ({ id: u.id, label: u.label ?? u.code })),
         },
       );
     }
 
-    const selected = matchedUnits[0]!;
+    if (!unitMatch || !unitMatch.matched) {
+      return this.buildResponse('No encontré unidad para esa referencia.', 'clarification', {
+        noUnitMatch: true,
+      });
+    }
+
+    const selected = unitMatch.item!;
     return this.buildResponse(
       `Unidad resuelta: ${selected.building?.name ?? 'N/A'} ${selected.label ?? selected.code}.`,
       'summary',
@@ -224,10 +227,14 @@ export class AssistantToolsService {
 
     const debtStatus = (this.pickString(input, 'debtStatus') ?? 'OVERDUE').toUpperCase();
     const now = new Date();
-    const unit = await this.prisma.unit.findUniqueOrThrow({
-      where: { id: unitId },
+    const unit = await this.prisma.unit.findFirst({
+      where: { id: unitId, tenantId },
       select: { id: true, code: true, label: true, building: { select: { name: true } } },
     });
+
+    if (!unit) {
+      throw new ForbiddenException('Unit is not accessible for tenant');
+    }
 
     const charges = await this.prisma.charge.findMany({
       where: {
@@ -287,8 +294,8 @@ export class AssistantToolsService {
       'unit',
     ];
 
-    const unit = await this.prisma.unit.findUniqueOrThrow({
-      where: { id: unitId },
+    const unit = await this.prisma.unit.findFirst({
+      where: { id: unitId, tenantId },
       select: {
         id: true,
         code: true,
@@ -297,8 +304,12 @@ export class AssistantToolsService {
       },
     });
 
+    if (!unit) {
+      throw new ForbiddenException('Unit is not accessible for tenant');
+    }
+
     const occupants = await this.prisma.unitOccupant.findMany({
-      where: { unitId, endDate: null },
+      where: { tenantId, unitId, endDate: null },
       include: { member: { select: { id: true, name: true, role: true } } },
       orderBy: { createdAt: 'asc' },
     });
@@ -649,30 +660,6 @@ export class AssistantToolsService {
       return 5;
     }
     return Math.min(20, Math.max(1, Math.floor(numeric)));
-  }
-
-  private extractTowerToken(message: string): string | null {
-    const match = this.normalize(message).match(/torre\s+([a-z0-9]+)/i);
-    return match?.[1] ?? null;
-  }
-
-  private extractUnitToken(message: string): string | null {
-    const match = this.normalize(message).match(
-      /(?:unidad|apartamento|depto|departamento|apto)\s+([a-z0-9-]+)/i,
-    );
-    return match?.[1] ?? null;
-  }
-
-  private matchesUnit(code: string, label: string | null, token: string): boolean {
-    const normalizedToken = this.normalize(token);
-    const compactToken = normalizedToken.replace(/[^a-z0-9]/g, '');
-    const normalizedCode = this.normalize(code);
-    const normalizedLabel = this.normalize(label ?? '');
-    return (
-      normalizedCode === normalizedToken ||
-      normalizedLabel === normalizedToken ||
-      normalizedCode.replace(/[^a-z0-9]/g, '') === compactToken
-    );
   }
 
   private normalize(value: string): string {

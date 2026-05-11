@@ -4,7 +4,9 @@ import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { AssistantService, MockAiProvider } from './assistant.service';
+import { AssistantToolsService } from './tools.service';
 import { AssistantController, SuperAdminAiController } from './assistant.controller';
+import { AssistantToolsController } from './tools.controller';
 import { AiUnitsController } from './ai-units.controller';
 import { AiBudgetService } from './budget.service';
 import { AiBudgetController } from './ai-budget.controller';
@@ -19,6 +21,8 @@ import { AiNudgesService } from './ai-nudges.service';
 import { AiNudgesController } from './ai-nudges.controller';
 import { AiTicketCategoryService } from './ai-ticket-category.service';
 import { OllamaProvider } from './ollama.provider';
+import { AiClassifierService } from './classifier.service';
+import { AssistantUnitResolverService } from './unit-resolver/assistant-unit-resolver.service';
 import { AssistantReadOnlyQueryController } from './read-only-query.controller';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
 
@@ -82,6 +86,7 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiNudgesController,
     AiUnitsController,
     AssistantReadOnlyQueryController,
+    AssistantToolsController,
   ],
   providers: [
     AssistantService,
@@ -97,6 +102,9 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiTicketCategoryService,
     OllamaProvider,
     MockAiProvider,
+    AiClassifierService,
+    AssistantUnitResolverService,
+    AssistantToolsService,
   ],
   exports: [
     AssistantService,
@@ -110,6 +118,8 @@ import { AssistantReadOnlyQueryService } from './read-only-query.service';
     AiActionEventsService,
     AiNudgesService,
     AiTicketCategoryService,
+    AssistantUnitResolverService,
+    AssistantToolsService,
   ],
 })
 export class AssistantModule {}

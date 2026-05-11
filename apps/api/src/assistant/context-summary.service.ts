@@ -316,8 +316,8 @@ export class AiContextSummaryService {
           u.label as unit,
           SUM(c.amount) as outstanding
         FROM "Charge" c
-        JOIN "Building" b ON c."buildingId" = b.id
-        LEFT JOIN "Unit" u ON c."unitId" = u.id
+        JOIN "Building" b ON c."buildingId" = b.id AND b."tenantId" = c."tenantId"
+        LEFT JOIN "Unit" u ON c."unitId" = u.id AND u."tenantId" = c."tenantId"
         WHERE c."tenantId" = ${request.tenantId}
           AND c.status = ${ChargeStatus.PENDING}
           ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
