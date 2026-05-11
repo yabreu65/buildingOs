@@ -29,6 +29,7 @@ import { AssistantSemanticLayerService } from './semantic-layer.service';
 import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -113,6 +114,7 @@ import { AssistantQueryExecutorsService } from './query-executors.service';
     AssistantQueryPlanService,
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
+    AssistantDebtCalculatorService,
   ],
   exports: [
     AssistantService,
@@ -132,6 +134,7 @@ import { AssistantQueryExecutorsService } from './query-executors.service';
     AssistantQueryPlanService,
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
+    AssistantDebtCalculatorService,
   ],
 })
 export class AssistantModule {}

@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { AssistantToolsService } from './tools.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantToolsService', () => {
   const previousApiKeys = process.env.ASSISTANT_READONLY_API_KEYS;
@@ -26,7 +27,7 @@ describe('AssistantToolsService', () => {
       unitOccupant: { findMany: jest.fn(), findFirst: jest.fn() },
     } as any;
     const audit = { createLog: jest.fn() } as any;
-    const service = new AssistantToolsService(prisma, audit);
+    const service = new AssistantToolsService(prisma, audit, new AssistantDebtCalculatorService());
     return { service, prisma, audit };
   };
 

@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
+import { UnitOccupantRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AssistantQueryParser, UnitToken } from './query-parser/assistant-query-parser';
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantUnitResolverService, ResolvedUnit } from './unit-resolver/assistant-unit-resolver.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 import type { ChatResponse } from './ai.types';
 import type { AssistantQueryExecutionContext } from './query-plan.types';
 
@@ -15,6 +16,7 @@ export class AssistantQueryExecutorsService {
     private readonly prisma: PrismaService,
     private readonly policy: AssistantPolicyEnforcerService,
     private readonly unitResolver: AssistantUnitResolverService,
+    private readonly debtCalculator: AssistantDebtCalculatorService,
   ) {}
 
   /**
@@ -130,16 +132,7 @@ export class AssistantQueryExecutorsService {
       }),
     ]);
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocationSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocationSum + allocation.amount;
-        }
-        return allocationSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const amountText = this.formatMoney(outstanding, tenant.currency);
     return this.response(
@@ -295,7 +288,7 @@ export class AssistantQueryExecutorsService {
       }),
     ]);
 
-    const outstanding = this.calculateOutstanding(charges);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
     return {
       answer: outstanding > 0
         ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, tenant.currency)}.`
@@ -334,7 +327,7 @@ export class AssistantQueryExecutorsService {
 
     const debtByUnit = new Map<string, number>();
     for (const charge of charges) {
-      const debt = this.calculateOutstanding([charge]);
+      const debt = this.debtCalculator.calculateChargeOutstanding(charge);
       debtByUnit.set(charge.unitId, (debtByUnit.get(charge.unitId) ?? 0) + debt);
     }
 
@@ -503,16 +496,7 @@ export class AssistantQueryExecutorsService {
       }),
     ]);
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocationSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocationSum + allocation.amount;
-        }
-        return allocationSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const averageDebt = units.length > 0 ? Math.round(outstanding / units.length) : 0;
     return {
@@ -560,19 +544,6 @@ export class AssistantQueryExecutorsService {
       answer,
       suggestedActions: [{ type: actionType, payload: { buildingId: resolved.building.id, unitId: resolved.unit.id } }],
     };
-  }
-
-  private calculateOutstanding(charges: Array<{ amount: number; paymentAllocations: Array<{ amount: number; payment?: { status: PaymentStatus } | null }> }>): number {
-    return charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocationSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocationSum + allocation.amount;
-        }
-        return allocationSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
   }
 
   private formatMoney(amountCents: number, currency: string): string {

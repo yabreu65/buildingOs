@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { PaymentStatus } from '@prisma/client';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantReadOnlyQueryService', () => {
   const previousApiKeys = process.env.ASSISTANT_READONLY_API_KEYS;
@@ -36,7 +37,7 @@ describe('AssistantReadOnlyQueryService', () => {
       },
     } as any;
 
-    const service = new AssistantReadOnlyQueryService(prisma);
+    const service = new AssistantReadOnlyQueryService(prisma, new AssistantDebtCalculatorService());
     return { service, prisma };
   };
 

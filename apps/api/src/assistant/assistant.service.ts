@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction, PaymentStatus, Prisma, UnitOccupantRole } from '@prisma/client';
+import { AuditAction, Prisma, UnitOccupantRole } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
@@ -14,6 +14,7 @@ import { AuthorizeService } from '../rbac/authorize.service';
 import type { Permission } from '../rbac/permissions';
 import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 import {
   SuggestedActionType,
   SuggestedAction,
@@ -26,22 +27,22 @@ import {
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
 
 export interface ChatRequest {
-  message: string;
-  page: string;
-  buildingId?: string;
-  unitId?: string;
+  readonly message: string;
+  readonly page: string;
+  readonly buildingId?: string;
+  readonly unitId?: string;
 }
 
 interface ContextValidation {
-  tenantId: string;
-  userId: string;
-  membershipId: string;
-  buildingId?: string;
-  unitId?: string;
-  page: string;
-  userRoles: string[];
-  buildingScope?: string; // For BUILDING-scoped roles
-  unitScope?: string; // For UNIT-scoped roles
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly membershipId: string;
+  readonly buildingId?: string;
+  readonly unitId?: string;
+  readonly page: string;
+  readonly userRoles: readonly string[];
+  readonly buildingScope?: string; // For BUILDING-scoped roles
+  readonly unitScope?: string; // For UNIT-scoped roles
 }
 
 
@@ -138,6 +139,7 @@ export class AssistantService {
     private readonly authorize: AuthorizeService,
     private readonly queryPlanService: AssistantQueryPlanService,
     private readonly queryExecutors: AssistantQueryExecutorsService,
+    private readonly debtCalculator: AssistantDebtCalculatorService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     // Initialize provider based on env
@@ -586,17 +588,7 @@ export class AssistantService {
       }),
     ]);
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocSum + allocation.amount;
-        }
-        return allocSum;
-      }, 0);
-
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const amountText = this.formatMoney(outstanding, tenant.currency);
     const answer = outstanding > 0
@@ -942,16 +934,7 @@ export class AssistantService {
       },
     });
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocSum + allocation.amount;
-        }
-        return allocSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const amountText = this.formatMoney(outstanding, tenant.currency);
 
@@ -1148,20 +1131,7 @@ export class AssistantService {
     });
 
     // Calcular deuda por unidad
-    const unitDebts = new Map<string, number>();
-    for (const charge of charges) {
-      const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return sum + allocation.amount;
-        }
-        return sum;
-      }, 0);
-
-      const debt = Math.max(0, charge.amount - approvedAllocated);
-      const current = unitDebts.get(charge.unitId) || 0;
-      unitDebts.set(charge.unitId, current + debt);
-    }
+    const unitDebts = this.debtCalculator.calculateOutstandingByUnit(charges);
 
     // Ordenar por deuda descendente y tomar top 10
     const sortedDebts = Array.from(unitDebts.entries())
@@ -1281,16 +1251,7 @@ export class AssistantService {
 
     const unitIds = units.map((u) => u.id);
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const approvedAllocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocSum + allocation.amount;
-        }
-        return allocSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - approvedAllocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const avgDebt = units.length > 0 ? outstanding / units.length : 0;
 
@@ -1574,13 +1535,8 @@ export class AssistantService {
     userRoles?: string[],
     membershipId?: string,
   ): Promise<ContextValidation> {
-    const context: ContextValidation = {
-      tenantId,
-      userId,
-      membershipId: membershipId || '',
-      page: '', // Will be set by caller
-      userRoles: userRoles || [],
-    };
+    let validatedBuildingId: string | undefined;
+    let validatedUnitId: string | undefined;
 
     // Validate buildingId if provided
     if (buildingId) {
@@ -1591,7 +1547,7 @@ export class AssistantService {
       if (!building) {
         throw new BadRequestException('Invalid building');
       }
-      context.buildingId = buildingId;
+      validatedBuildingId = buildingId;
     }
 
     // Validate unitId if provided
@@ -1604,7 +1560,7 @@ export class AssistantService {
       if (!unit) {
         throw new BadRequestException('Invalid unit');
       }
-      context.unitId = unitId;
+      validatedUnitId = unitId;
 
       // If unitId provided, buildingId should match
       if (buildingId && unit.buildingId !== buildingId) {
@@ -1612,7 +1568,15 @@ export class AssistantService {
       }
     }
 
-    return context;
+    return {
+      tenantId,
+      userId,
+      membershipId: membershipId || '',
+      buildingId: validatedBuildingId,
+      unitId: validatedUnitId,
+      page: '', // Will be set by caller
+      userRoles: userRoles || [],
+    };
   }
 
   /**

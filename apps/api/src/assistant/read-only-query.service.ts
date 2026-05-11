@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 import {
   ASSISTANT_READ_ONLY_INTENTS,
   AssistantReadOnlyAction,
@@ -17,19 +18,26 @@ import {
   resolveReadOnlyIntentCode,
 } from './read-only-query.types';
 
-type ResolverResult = {
+interface ResolverResult {
   answer: string;
   responseType: AssistantReadOnlyResponseType;
   actions: AssistantReadOnlyAction[];
   metadata: Record<string, unknown>;
-};
+}
 
 @Injectable()
 export class AssistantReadOnlyQueryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly debtCalculator: AssistantDebtCalculatorService,
+  ) {}
 
   /**
    * Execute a deterministic read-only query for assistant intents.
+   *
+   * @param request - Read-only assistant request with question, intent, and authoritative context.
+   * @param headers - Authoritative headers used to prevent tenant/user/role spoofing.
+   * @returns Controlled assistant response built from allowlisted read-only resolvers.
    */
   async execute(
     request: AssistantReadOnlyQueryRequest,
@@ -155,17 +163,7 @@ export class AssistantReadOnlyQueryService {
     >();
 
     for (const charge of overdueCharges) {
-      const approvedAllocated = charge.paymentAllocations.reduce((acc, allocation) => {
-        if (
-          allocation.payment?.status === PaymentStatus.APPROVED ||
-          allocation.payment?.status === PaymentStatus.RECONCILED
-        ) {
-          return acc + allocation.amount;
-        }
-        return acc;
-      }, 0);
-
-      const outstanding = Math.max(0, charge.amount - approvedAllocated);
+      const outstanding = this.debtCalculator.calculateChargeOutstanding(charge);
       if (outstanding <= 0) {
         continue;
       }
@@ -437,20 +435,8 @@ export class AssistantReadOnlyQueryService {
     });
 
     const emitted = charges.reduce((sum, charge) => sum + charge.amount, 0);
-    const collectedApplied = charges.reduce((sum, charge) => {
-      const approvedAllocations = charge.paymentAllocations.reduce((allocSum, allocation) => {
-        if (
-          allocation.payment?.status === PaymentStatus.APPROVED ||
-          allocation.payment?.status === PaymentStatus.RECONCILED
-        ) {
-          return allocSum + allocation.amount;
-        }
-        return allocSum;
-      }, 0);
-      return sum + approvedAllocations;
-    }, 0);
-
-    const outstanding = Math.max(0, emitted - collectedApplied);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
+    const collectedApplied = Math.max(0, emitted - outstanding);
 
     const [pendingApprovals, approvedInMonth] = await Promise.all([
       this.prisma.payment.count({

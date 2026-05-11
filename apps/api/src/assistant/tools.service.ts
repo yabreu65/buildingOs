@@ -14,6 +14,7 @@ import {
   AssistantToolResponse,
 } from './tools.types';
 import { AssistantQueryParser } from './query-parser/assistant-query-parser';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 const TOOL_PERMISSION = {
   resolve_unit_ref: 'tools.resolve_unit_ref',
@@ -38,8 +39,17 @@ export class AssistantToolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly debtCalculator: AssistantDebtCalculatorService,
   ) {}
 
+  /**
+   * Execute an allowlisted assistant tool using authoritative tenant, user, and role headers.
+   *
+   * @param toolName - Allowlisted assistant tool name to execute.
+   * @param request - Tool request with question, context, and optional structured input.
+   * @param headers - Authoritative headers used to prevent tenant/user/role spoofing.
+   * @returns Controlled assistant tool response.
+   */
   async executeTool(
     toolName: AssistantToolName,
     request: AssistantToolRequest,
@@ -249,16 +259,7 @@ export class AssistantToolsService {
       },
     });
 
-    const outstanding = charges.reduce((sum, charge) => {
-      const allocated = charge.paymentAllocations.reduce((allocSum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-          return allocSum + allocation.amount;
-        }
-        return allocSum;
-      }, 0);
-      return sum + Math.max(0, charge.amount - allocated);
-    }, 0);
+    const outstanding = this.debtCalculator.calculateOutstanding(charges);
 
     const answer = outstanding > 0
       ? `La unidad ${unit.label ?? unit.code} (${unit.building.name}) tiene deuda pendiente de ${this.formatMoney(outstanding)}.`
@@ -401,14 +402,7 @@ export class AssistantToolsService {
 
       const debtByUnit = new Map<string, { label: string; building: string; amount: number }>();
       for (const charge of charges) {
-        const allocated = charge.paymentAllocations.reduce((sum, allocation) => {
-          const status = allocation.payment?.status;
-          if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
-            return sum + allocation.amount;
-          }
-          return sum;
-        }, 0);
-        const outstanding = Math.max(0, charge.amount - allocated);
+        const outstanding = this.debtCalculator.calculateChargeOutstanding(charge);
         if (outstanding <= 0) continue;
         const current = debtByUnit.get(charge.unitId) ?? {
           label: charge.unit?.label ?? charge.unit?.code ?? charge.unitId,

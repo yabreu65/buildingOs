@@ -12,6 +12,7 @@ import { AssistantUnitResolverService } from './unit-resolver/assistant-unit-res
 import { AuthorizeService } from '../rbac/authorize.service';
 import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 
 /**
@@ -56,6 +57,7 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockAuthorize = { authorize: jest.fn() };
   const mockQueryPlanService = { createPlan: jest.fn() };
   const mockQueryExecutors = { execute: jest.fn() };
+  const mockDebtCalculator = new AssistantDebtCalculatorService();
 
   const ADMIN_ROLES = ['TENANT_ADMIN'];
 
@@ -101,6 +103,7 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: AuthorizeService, useValue: mockAuthorize },
         { provide: AssistantQueryPlanService, useValue: mockQueryPlanService },
         { provide: AssistantQueryExecutorsService, useValue: mockQueryExecutors },
+        { provide: AssistantDebtCalculatorService, useValue: mockDebtCalculator },
       ],
     }).compile();
 

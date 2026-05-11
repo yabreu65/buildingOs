@@ -1,6 +1,7 @@
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import type { AssistantQueryPlan } from './query-plan.types';
+import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantQueryExecutorsService', () => {
   const prisma = {
@@ -25,7 +26,12 @@ describe('AssistantQueryExecutorsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new AssistantQueryExecutorsService(prisma as never, policy as never, unitResolver as never);
+    service = new AssistantQueryExecutorsService(
+      prisma as never,
+      policy as never,
+      unitResolver as never,
+      new AssistantDebtCalculatorService(),
+    );
     unitResolver.resolve.mockResolvedValue({ resolved: resolvedUnit, errorResponse: null });
     policy.assertCanExecute.mockResolvedValue(undefined);
   });
