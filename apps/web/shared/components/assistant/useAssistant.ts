@@ -2,84 +2,85 @@
 
 import { useState, useCallback } from 'react';
 
-export type AssistantAction = {
-  key: string;
-  label: string;
-  description: string;
-};
+export interface AssistantAction {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string;
+}
 
-export type AssistantMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  llmUsed?: boolean;
-  sources?: Array<{
-    type: string;
-    fileName: string;
-  }>;
-  actions?: AssistantAction[];
-};
+export interface AssistantSourceTrace {
+  readonly rankingVersion: string;
+  readonly strategyId: string;
+  readonly moduleScore: number;
+  readonly keywordScore: number;
+  readonly tagScore: number;
+  readonly occupantScore: number;
+  readonly totalScore: number;
+  readonly matchedModule: boolean;
+  readonly matchedOccupantScope: boolean;
+  readonly matchedTags: readonly string[];
+  readonly matchedKeywords: readonly string[];
+}
 
-export type AssistantContext = {
-  appId: string;
-  tenantId: string;
-  userId: string;
-  role: string;
-  route: string;
-  page?: string;
-  buildingId?: string;
-  unitId?: string;
-  currentModule?: string;
-  permissions?: string[];
-  unitOccupantRole?: 'OWNER' | 'RESIDENT';
-};
+export interface AssistantSource {
+  readonly type: string;
+  readonly fileName: string;
+  readonly trace?: AssistantSourceTrace;
+}
 
-export type AssistantRequest = {
-  message: string;
-  context: AssistantContext;
-  useLlm?: boolean;
-};
+export interface AssistantMessage {
+  readonly id: string;
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+  readonly llmUsed?: boolean;
+  readonly sources?: readonly AssistantSource[];
+  readonly actions?: readonly AssistantAction[];
+}
 
-export type AssistantResponse = {
-  message: string;
-  answer: string;
-  context: {
-    appId: string;
-    tenantId: string;
-    userId: string;
-    role: string;
-    route: string;
-    currentModule?: string;
-    permissions?: string[];
-  };
-  actions: Array<{
-    key: string;
-    label: string;
-    description: string;
-  }>;
-  llmUsed?: boolean;
-  knowledgeUsed?: {
-    module?: string;
-    found: boolean;
-    sources: Array<{
-      type: string;
-      fileName: string;
-      trace?: {
-        rankingVersion: string;
-        strategyId: string;
-        moduleScore: number;
-        keywordScore: number;
-        tagScore: number;
-        occupantScore: number;
-        totalScore: number;
-        matchedModule: boolean;
-        matchedOccupantScope: boolean;
-        matchedTags: string[];
-        matchedKeywords: string[];
-      };
-    }>;
-  };
-};
+export interface AssistantContext {
+  readonly appId: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly role: string;
+  readonly route: string;
+  readonly page?: string;
+  readonly buildingId?: string;
+  readonly unitId?: string;
+  readonly currentModule?: string;
+  readonly permissions?: readonly string[];
+  readonly unitOccupantRole?: 'OWNER' | 'RESIDENT';
+}
+
+export interface AssistantRequest {
+  readonly message: string;
+  readonly context: AssistantContext;
+  readonly useLlm?: boolean;
+}
+
+export interface AssistantResponseContext {
+  readonly appId: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly role: string;
+  readonly route: string;
+  readonly currentModule?: string;
+  readonly permissions?: readonly string[];
+}
+
+export interface AssistantKnowledgeUsed {
+  readonly module?: string;
+  readonly found: boolean;
+  readonly sources: readonly AssistantSource[];
+}
+
+export interface AssistantResponse {
+  readonly message: string;
+  readonly answer: string;
+  readonly context: AssistantResponseContext;
+  readonly actions: readonly AssistantAction[];
+  readonly llmUsed?: boolean;
+  readonly knowledgeUsed?: AssistantKnowledgeUsed;
+}
 
 const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -88,6 +89,12 @@ interface UseAssistantOptions {
   defaultUseLlm?: boolean;
 }
 
+/**
+ * Manage assistant chat state and message dispatch for legacy widget consumers.
+ *
+ * @param options - Initial assistant context and default LLM behavior.
+ * @returns State and actions for rendering an assistant chat surface.
+ */
 export function useAssistant(options: UseAssistantOptions = {}) {
   const { initialContext, defaultUseLlm = false } = options;
   

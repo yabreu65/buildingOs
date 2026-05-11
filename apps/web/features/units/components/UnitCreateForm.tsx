@@ -18,23 +18,25 @@ import type { Unit } from '@/features/units/units.api';
  */
 
 interface Building {
-  id: string;
-  name: string;
+  readonly id: string;
+  readonly name: string;
+}
+
+interface UnitCreateInput {
+  readonly code: string;
+  readonly label?: string;
+  readonly unitType?: string;
+  readonly occupancyStatus?: string;
+  readonly m2?: number;
 }
 
 interface UnitCreateFormProps {
-  tenantId: string;
-  buildings: Building[];
-  defaultBuildingId?: string; // If provided, building is pre-selected and hidden
-  onSuccess: (unit: Unit) => void;
-  onCancel: () => void;
-  onCreateUnit: (buildingId: string, input: {
-    code: string;
-    label?: string;
-    unitType?: string;
-    occupancyStatus?: string;
-    m2?: number;
-  }) => Promise<Unit>;
+  readonly tenantId: string;
+  readonly buildings: readonly Building[];
+  readonly defaultBuildingId?: string; // If provided, building is pre-selected and hidden
+  readonly onSuccess: (unit: Unit) => void;
+  readonly onCancel: () => void;
+  readonly onCreateUnit: (buildingId: string, input: UnitCreateInput) => Promise<Unit>;
 }
 
 // Shared validation schema
@@ -68,7 +70,13 @@ const OCCUPANCY_STATUSES = [
   { value: 'OCCUPIED', label: 'Occupied' },
 ];
 
-export default function UnitCreateForm({
+/**
+ * Render the shared unit creation form for building-scoped and tenant-scoped flows.
+ *
+ * @param props - Form dependencies, callbacks, and optional building scope.
+ * @returns Unit creation form UI.
+ */
+export function UnitCreateForm({
   tenantId,
   buildings,
   defaultBuildingId,
