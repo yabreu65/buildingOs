@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/test-e2e",
+    "module": "commonjs",
+    "types": ["jest", "node"],
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "noEmit": true,
+    "esModuleInterop": true
+  },
+  "include": ["test/**/*.e2e-spec.ts", "test/**/*.spec.ts", "src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

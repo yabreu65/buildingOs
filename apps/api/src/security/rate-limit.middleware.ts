@@ -22,6 +22,11 @@ export class RateLimitMiddleware implements NestMiddleware {
   }
 
   use(req: Request, res: Response, next: NextFunction) {
+    // Bypass rate limiting in test environment
+    if (process.env.NODE_ENV === 'test') {
+      return next();
+    }
+
     const key = this.getKey(req);
     const limit = this.getLimitConfig(req);
 
@@ -101,6 +106,12 @@ export class RateLimitMiddleware implements NestMiddleware {
 
     // Auth endpoints - strict limits
     if (path === '/auth/login' && method === 'POST') {
+      // Allow more attempts from localhost for E2E testing
+      const clientIp = this.getClientIp(req);
+      const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1';
+      if (isLocalhost) {
+        return { max: 100, windowMs: 60 * 1000 }; // 100 attempts per minute for local dev/tests
+      }
       return { max: 5, windowMs: 15 * 60 * 1000 }; // 5 attempts per 15 minutes
     }
 

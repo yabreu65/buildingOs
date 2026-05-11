@@ -13,14 +13,26 @@ permissions:
   issues: write
   pull-requests: write
 
-env:
-  RUN_BROWSER_E2E: ${{ vars.RUN_BROWSER_E2E || 'false' }}
-
 jobs:
   test:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-ci-only
+      WEB_ORIGIN: http://localhost:3000
+      APP_BASE_URL: http://localhost:3000
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: test-access-key
+      S3_SECRET_KEY: test-secret-key
+      S3_BUCKET: buildingos-test
+      S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
+      S3_FORCE_PATH_STYLE: true
+      MAIL_PROVIDER: none
+      PORT: 4000
 
     services:
       postgres:
@@ -55,6 +67,16 @@ jobs:
           cat > .env.test <<'EOF'
           NODE_ENV=test
           DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test
+          JWT_SECRET=test-jwt-secret-minimum-32-characters-long-for-ci-only
+          WEB_ORIGIN=http://localhost:3000
+          APP_BASE_URL=http://localhost:3000
+          S3_ENDPOINT=http://localhost:9000
+          S3_ACCESS_KEY=test-access-key
+          S3_SECRET_KEY=test-secret-key
+          S3_BUCKET=buildingos-test
+          S3_PUBLIC_BASE_URL=http://localhost:9000/buildingos-test
+          S3_FORCE_PATH_STYLE=true
+          MAIL_PROVIDER=none
           EOF
 
       - name: Build internal packages
@@ -63,51 +85,45 @@ jobs:
       - name: Generate Prisma client
         working-directory: apps/api
         run: npm run prisma:generate
-        env:
-          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          NODE_ENV: test
 
       - name: Build API
         working-directory: apps/api
         run: npm run build
-        env:
-          NODE_ENV: test
 
       - name: Run database migrations
         working-directory: apps/api
         run: npm run migrate:deploy
-        env:
-          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          NODE_ENV: test
 
-      - name: Seed test data
+      - name: Seed deterministic test data
         working-directory: apps/api
-        run: npm run db:seed
-        env:
-          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          NODE_ENV: test
-        continue-on-error: true
+        run: npm run seed:test
 
-      - name: Build web app
-        working-directory: apps/web
-        run: npm run build
+      - name: Start API server
+        working-directory: apps/api
+        run: |
+          node dist/main.js &
+          API_PID=$!
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          # Wait for API to be ready
+          for i in {1..30}; do
+            if curl -s http://localhost:4000/health > /dev/null; then
+              echo "API is ready!"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+        run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        if: env.RUN_BROWSER_E2E == 'true'
-        run: npm run test:e2e -w apps/web
+        run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
-          DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          NODE_ENV: test
 
-      - name: Skip browser E2E when credentials are not configured
-        if: env.RUN_BROWSER_E2E != 'true'
-        run: |
-          echo "Browser E2E is skipped in baseline CI because the legacy suite requires seeded TEST_* credentials and deterministic multi-tenant fixtures."
-          echo "Set repository variable RUN_BROWSER_E2E=true and provide TEST_* credentials to enable the full browser suite."
+      - name: Stop API server
+        if: always()
+        run: kill $API_PID || true
 
       - name: Upload playwright report
         uses: actions/upload-artifact@v4
