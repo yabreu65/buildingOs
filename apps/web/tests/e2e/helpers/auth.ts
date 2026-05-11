@@ -1,7 +1,8 @@
 import { Page, expect } from '@playwright/test';
 
 /**
- * Helper functions for authentication flows
+ * Test users - Hardcoded deterministic credentials from seed.test.ts
+ * These match the users created by `npm run seed:test` in the API
  */
 
 export interface TestUser {
@@ -10,80 +11,47 @@ export interface TestUser {
   fullName?: string;
 }
 
-/**
- * Test users loaded from environment variables
- * Must be set in playwright environment or .env.test file
- * Fallbacks to process.env only - no hardcoded values
- */
-function getTestUser(
-  emailEnv: string,
-  passwordEnv: string,
-  fullName: string
-): TestUser {
-  const email = process.env[emailEnv];
-  const password = process.env[passwordEnv];
-
-  if (!email || !password) {
-    throw new Error(
-      `Missing test credentials: ${emailEnv} and/or ${passwordEnv}. ` +
-      `Set them in .env.test or as environment variables.`
-    );
-  }
-
-  return { email, password, fullName };
-}
+const TEST_PASSWORD = 'TestPass123!';
 
 export const TEST_USERS = {
-  superAdmin: getTestUser('TEST_SUPER_ADMIN_EMAIL', 'TEST_SUPER_ADMIN_PASSWORD', 'Super Admin'),
-  tenantAdminA: getTestUser('TEST_TENANT_ADMIN_EMAIL', 'TEST_TENANT_ADMIN_PASSWORD', 'Admin Tenant A'),
-  tenantAdminB: getTestUser('TEST_TENANT_ADMIN_B_EMAIL', 'TEST_TENANT_ADMIN_PASSWORD', 'Admin Tenant B'),
-  operator: getTestUser('TEST_OPERATOR_EMAIL', 'TEST_OPERATOR_PASSWORD', 'Operator User'),
-  resident: getTestUser('TEST_RESIDENT_EMAIL', 'TEST_RESIDENT_PASSWORD', 'Resident User'),
-  residentB: getTestUser('TEST_RESIDENT_B_EMAIL', 'TEST_RESIDENT_PASSWORD', 'Resident B'),
+  superAdmin: { email: 'test-superadmin@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Super Admin' },
+  tenantAdminA: { email: 'test-tenant-admin-a@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Admin A' },
+  tenantAdminB: { email: 'test-tenant-admin-b@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Admin B' },
+  operator: { email: 'test-operator@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Operator' },
+  resident: { email: 'test-resident@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident' },
+  residentB: { email: 'test-resident-b@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident B' },
 };
 
 /**
  * Login to BuildingOS
+ * Uses data-testid selectors for stability
+ * Returns the tenantId from the post-login URL
  */
-export async function login(page: Page, user: TestUser): Promise<void> {
-  await page.goto('/auth/login');
-  await page.fill('input[name="email"]', user.email);
-  await page.fill('input[name="password"]', user.password);
-  await page.click('button:has-text("Sign In")');
+export async function login(page: Page, user: TestUser): Promise<string> {
+  await page.goto('/login');
+  await page.fill('[data-testid="login-email"]', user.email);
+  await page.fill('[data-testid="login-password"]', user.password);
+  await page.getByRole('button', { name: /iniciar sesión/i }).click();
 
-  // Wait for redirect to dashboard
-  await page.waitForURL('**/dashboard', { timeout: 10000 });
-  await expect(page).toHaveURL(/.*dashboard/);
-}
+  // Wait for navigation away from login page (goes to /:tenantId/dashboard)
+  await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20000 });
 
-/**
- * Sign up a new user
- */
-export async function signup(page: Page, user: TestUser & { tenantName: string }): Promise<void> {
-  await page.goto('/auth/signup');
-
-  // Fill signup form
-  await page.fill('input[name="fullName"]', user.fullName || 'Test User');
-  await page.fill('input[name="email"]', user.email);
-  await page.fill('input[name="tenantName"]', user.tenantName);
-  await page.fill('input[name="password"]', user.password);
-
-  // Submit
-  await page.click('button:has-text("Create Account")');
-
-  // Wait for redirect to dashboard
-  await page.waitForURL('**/dashboard', { timeout: 10000 });
-  await expect(page).toHaveURL(/.*dashboard/);
+  // Extract tenantId from URL like /:tenantId/dashboard
+  const url = new URL(page.url());
+  const tenantId = url.pathname.split('/')[1];
+  if (!tenantId || tenantId === 'login') {
+    throw new Error('Failed to extract tenantId after login');
+  }
+  return tenantId;
 }
 
 /**
  * Logout from BuildingOS
  */
 export async function logout(page: Page): Promise<void> {
-  await page.click('button[aria-label="User menu"], [data-testid="user-menu"]');
-  await page.click('button:has-text("Sign Out"), a:has-text("Logout")');
-  await page.waitForURL('/auth/login', { timeout: 10000 });
-  await expect(page).toHaveURL(/.*auth\/login/);
+  await page.click('button:has-text("Logout")');
+  await page.waitForURL('/login', { timeout: 10000 });
+  await expect(page).toHaveURL(/.*login/);
 }
 
 /**

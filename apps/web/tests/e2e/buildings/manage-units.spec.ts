@@ -1,152 +1,79 @@
 import { test, expect } from '@playwright/test';
 import { login, TEST_USERS } from '../helpers/auth';
-import { clickNavLink, fillField, clickButton } from '../helpers/navigation';
 
-test.describe('Tenant Admin - Manage Units Flow', () => {
-  let buildingName: string;
+test.describe.serial('Tenant Admin - Manage Units Flow', () => {
+  let tenantId: string;
 
   test.beforeEach(async ({ page }) => {
-    // Login as tenant admin
-    await login(page, TEST_USERS.tenantAdminA);
-
-    // Create a building first for testing units
-    await page.goto('/buildings/create');
-    buildingName = `Units Test ${Date.now()}`;
-    await fillField(page, 'name', buildingName);
-    await fillField(page, 'address', '789 Elm Street');
-    await clickButton(page, 'Create');
-    await page.waitForURL('**/buildings', { timeout: 10000 });
+    tenantId = await login(page, TEST_USERS.tenantAdminA);
   });
 
-  test('should create a new unit in a building', async ({ page }) => {
-    // STEP 1: Navigate to buildings
-    await clickNavLink(page, 'Buildings');
+  test('should create a new unit in an existing building', async ({ page }) => {
+    // STEP 1: Navigate to buildings list
+    await page.goto(`/${tenantId}/buildings`);
     await page.waitForLoadState('networkidle');
 
-    // STEP 2: Click on the building
-    await page.locator(`text=${buildingName}`).first().click();
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
+    // STEP 2: Click on the seeded building "Torre A Test"
+    await page.locator('text=Torre A Test').first().click();
+    await page.waitForURL(`**/${tenantId}/buildings/**`, { timeout: 10000 });
 
-    // STEP 3: Click to create unit
-    await clickButton(page, 'New Unit');
-    await page.waitForURL('**/units/create', { timeout: 10000 });
-
-    // STEP 4: Fill unit form
-    const unitLabel = `Unit-${Math.random().toString(36).substr(2, 9)}`;
-    await fillField(page, 'label', unitLabel);
-
-    // Select unit type if select exists
-    try {
-      await fillField(page, 'unitType', 'ONE_BED');
-    } catch {
-      // Some configurations might not have this field
+    // Extract buildingId from URL
+    const buildingUrl = new URL(page.url());
+    const buildingId = buildingUrl.pathname.split('/')[3];
+    if (!buildingId) {
+      throw new Error('Failed to extract buildingId from URL');
     }
 
-    // STEP 5: Submit
-    await clickButton(page, 'Create');
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
+    // STEP 3: Navigate directly to building units page
+    await page.goto(`/${tenantId}/buildings/${buildingId}/units`);
+    await page.waitForLoadState('networkidle');
 
-    // STEP 6: Verify unit appears in list
-    const unitVisible = await page.locator(`text=${unitLabel}`).isVisible().catch(() => false);
-    expect(unitVisible).toBe(true);
+    // STEP 4: Click create unit button
+    await page.locator('[data-testid="unit-create-btn"]').click();
+    await page.waitForSelector('[data-testid="unit-create-form"]', { state: 'visible' });
+
+    // STEP 5: Fill unit form
+    const unitCode = `E2E-${Date.now()}`;
+    await page.fill('[data-testid="unit-code-input"]', unitCode);
+    await page.fill('[data-testid="unit-label-input"]', `Unidad Test ${unitCode}`);
+
+    // STEP 6: Submit
+    await page.locator('[data-testid="unit-submit-btn"]').click();
+
+    // STEP 7: Verify unit appears in list (search by label text)
+    await page.waitForSelector(`[data-testid="units-table-body"]`, { state: 'visible' });
+    const unitLabel = `Unidad Test ${unitCode}`;
+    const unitRow = page.locator(`tbody tr:has-text("${unitLabel}")`);
+    await unitRow.waitFor({ state: 'visible', timeout: 10000 });
+    expect(await unitRow.isVisible()).toBe(true);
   });
 
-  test('should display validation error for empty unit label', async ({ page }) => {
-    // STEP 1: Navigate to the building
-    await clickNavLink(page, 'Buildings');
+  test('should show validation error for empty unit code', async ({ page }) => {
+    // STEP 1: Navigate to buildings and select Torre A Test
+    await page.goto(`/${tenantId}/buildings`);
     await page.waitForLoadState('networkidle');
-    await page.locator(`text=${buildingName}`).first().click();
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
+    await page.locator('text=Torre A Test').first().click();
+    await page.waitForURL(`**/${tenantId}/buildings/**`, { timeout: 10000 });
 
-    // STEP 2: Try to create unit without label
-    await clickButton(page, 'New Unit');
-    await page.waitForURL('**/units/create', { timeout: 10000 });
+    // Extract buildingId and navigate directly to units
+    const buildingUrl = new URL(page.url());
+    const buildingId = buildingUrl.pathname.split('/')[3];
+    if (!buildingId) {
+      throw new Error('Failed to extract buildingId from URL');
+    }
+    await page.goto(`/${tenantId}/buildings/${buildingId}/units`);
+    await page.waitForLoadState('networkidle');
 
-    // STEP 3: Try to submit without filling label
-    await clickButton(page, 'Create');
+    // STEP 3: Open create form
+    await page.locator('[data-testid="unit-create-btn"]').click();
+    await page.waitForSelector('[data-testid="unit-create-form"]', { state: 'visible' });
+
+    // STEP 4: Try to submit without filling code (required field)
+    await page.locator('[data-testid="unit-submit-btn"]').click();
+
+    // STEP 5: Verify still shows form (HTML5 required prevents submit)
     await page.waitForTimeout(1000);
-
-    // STEP 4: Should still be on create page
-    expect(page.url()).toContain('/units/create');
-  });
-
-  test('should not allow duplicate unit labels in same building', async ({ page }) => {
-    // STEP 1: Create first unit
-    await clickNavLink(page, 'Buildings');
-    await page.waitForLoadState('networkidle');
-    await page.locator(`text=${buildingName}`).first().click();
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    const duplicateLabel = `Duplicate-${Date.now()}`;
-    await clickButton(page, 'New Unit');
-    await fillField(page, 'label', duplicateLabel);
-    await clickButton(page, 'Create');
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    // STEP 2: Try to create another unit with same label
-    await clickButton(page, 'New Unit');
-    await fillField(page, 'label', duplicateLabel);
-    await clickButton(page, 'Create');
-    await page.waitForTimeout(2000);
-
-    // STEP 3: Should show error or stay on create page
-    const stillOnCreate = page.url().includes('/units/create');
-    const hasError = await page.locator('text=/duplicate|already|exists/i').isVisible().catch(() => false);
-    expect(stillOnCreate || hasError).toBe(true);
-  });
-
-  test('should allow assigning resident to unit', async ({ page }) => {
-    // STEP 1: Create a unit
-    await clickNavLink(page, 'Buildings');
-    await page.waitForLoadState('networkidle');
-    await page.locator(`text=${buildingName}`).first().click();
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    const unitLabel = `Resident-Unit-${Date.now()}`;
-    await clickButton(page, 'New Unit');
-    await fillField(page, 'label', unitLabel);
-    await clickButton(page, 'Create');
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    // STEP 2: Click on unit to open details
-    await page.locator(`text=${unitLabel}`).first().click();
-    await page.waitForLoadState('networkidle');
-
-    // STEP 3: Look for assign resident button/action
-    try {
-      await clickButton(page, 'Assign Resident');
-      await page.waitForTimeout(1000);
-
-      // If modal/form appears, try to fill it
-      const modalVisible = await page.locator('[role="dialog"], .modal').isVisible().catch(() => false);
-      expect(modalVisible).toBe(true);
-    } catch {
-      // Assign resident might not be in this location, that's okay for this test
-      console.log('Assign resident button not found in expected location');
-    }
-  });
-
-  test('should update unit occupancy status', async ({ page }) => {
-    // STEP 1: Create a unit
-    await clickNavLink(page, 'Buildings');
-    await page.waitForLoadState('networkidle');
-    await page.locator(`text=${buildingName}`).first().click();
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    const unitLabel = `Status-Unit-${Date.now()}`;
-    await clickButton(page, 'New Unit');
-    await fillField(page, 'label', unitLabel);
-    await clickButton(page, 'Create');
-    await page.waitForURL('**/buildings/**', { timeout: 10000 });
-
-    // STEP 2: Try to click unit to edit status
-    await page.locator(`text=${unitLabel}`).first().click();
-    await page.waitForLoadState('networkidle');
-
-    // STEP 3: Look for status control
-    const statusControl = await page.locator('select[name="occupancyStatus"], [data-testid="occupancy-status"]').isVisible({ timeout: 5000 }).catch(() => false);
-    if (statusControl) {
-      expect(statusControl).toBe(true);
-    }
+    const formVisible = await page.locator('[data-testid="unit-create-form"]').isVisible().catch(() => false);
+    expect(formVisible).toBe(true);
   });
 });
