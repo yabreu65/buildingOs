@@ -566,7 +566,35 @@ export class AssistantService implements OnModuleInit {
       );
     } catch (error) {
       this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
-      throw new BadRequestException('Could not understand your message. Please rephrase.');
+
+      // Fallback: use conversation context for follow-up questions
+      // Check if message looks like a follow-up (short, starts with "y", "y cuántos", etc.)
+      const isFollowUp = this.isFollowUpQuestion(request.message);
+      const lastTurn = conversationContext.length > 0
+        ? conversationContext[conversationContext.length - 1]
+        : null;
+
+      if (isFollowUp && lastTurn?.resolvedEntities) {
+        // Try to infer intent from the follow-up message using last context
+        const inferredIntent = this.inferIntentFromFollowUp(request.message);
+        if (inferredIntent) {
+          extractedIntent = {
+            intent: inferredIntent,
+            entity: {
+              type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
+              buildingAlias: undefined,
+              unitCode: undefined,
+            },
+            filters: {},
+            confidence: 0.6,
+          };
+          this.logger.log(`[chatV2] Follow-up detected, using inferred intent: ${inferredIntent}`);
+        } else {
+          throw new BadRequestException('Could not understand your message. Please rephrase.');
+        }
+      } else {
+        throw new BadRequestException('Could not understand your message. Please rephrase.');
+      }
     }
 
     // Validate intent exists in registry
@@ -713,6 +741,71 @@ export class AssistantService implements OnModuleInit {
     );
 
     return structuredResponse;
+  }
+
+  /**
+   * Detect if a message is a follow-up question
+   */
+  private isFollowUpQuestion(message: string): boolean {
+    const normalized = message
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+    // Short messages (under 10 words) are likely follow-ups
+    const wordCount = normalized.split(/\s+/).length;
+    if (wordCount > 10) return false;
+
+    // Starts with conjunctions or question words typical of follow-ups
+    const followUpPatterns = [
+      /^y\b/,           // "y cuántos", "y quién"
+      /^cuantos\b/,     // "cuántos meses"
+      /^cuantas\b/,     // "cuántas personas"
+      /^quien\b/,       // "quién vive"
+      /^donde\b/,       // "dónde está"
+      /^cuanto\b/,      // "cuánto debe"
+      /^tiene\b/,       // "tiene tickets"
+      /^hay\b/,         // "hay deuda"
+      /^cuales\b/,      // "cuáles son"
+      /^que\b/,          // "qué más"
+      /^como\b/,         // "cómo está"
+    ];
+
+    return followUpPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  /**
+   * Infer intent from a follow-up message
+   */
+  private inferIntentFromFollowUp(message: string): string | null {
+    const normalized = message
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+    // Map follow-up keywords to intents
+    if (/\bmes(es)?\b.*\bdeuda\b|\bdeuda\b.*\bmes(es)?\b/.test(normalized)) {
+      return 'unit_debt';
+    }
+    if (/\bticket(s)?\b/.test(normalized)) {
+      return 'unit_tickets';
+    }
+    if (/\bpago(s)?\b/.test(normalized)) {
+      return 'unit_payments';
+    }
+    if (/\bresidente(s)?\b|\bvive\b|\bquien\b/.test(normalized)) {
+      return 'unit_residents';
+    }
+    if (/\bdocumento(s)?\b/.test(normalized)) {
+      return 'unit_documents';
+    }
+    if (/\bestacionamiento\b|\bcochera\b/.test(normalized)) {
+      return 'unit_parking';
+    }
+
+    return null;
   }
 
   /**
