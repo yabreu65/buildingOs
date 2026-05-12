@@ -5,7 +5,7 @@ import { ChatResponse, SuggestedActionType } from '../ai.types';
 /**
  * Supported formatter types
  */
-type FormatterType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification';
+type FormatterType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
 
 /**
  * Intent to action type mapping

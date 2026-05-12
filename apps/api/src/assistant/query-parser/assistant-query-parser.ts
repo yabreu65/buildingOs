@@ -110,7 +110,8 @@ export class AssistantQueryParser {
     // Patrón 1: Alias-Code explícito (A-0101, B-0101, AA-0101)
     // También soporta A0101 (compacto sin guion)
     // NOTA: Solo guion opcional, NO espacio (evita capturar "EN 0101")
-    const aliasCodePattern = /\b([a-zA-Z]{1,3})-?(\d{3,4})\b/;
+    // Lookbehind negativo para evitar matchear P0012 después de A-P0012
+    const aliasCodePattern = /(?<![a-zA-Z]-)\b([a-zA-Z]{1,3})-?(\d{3,4})\b/;
     const aliasCodeMatch = message.match(aliasCodePattern);
     if (aliasCodeMatch && aliasCodeMatch[1] && aliasCodeMatch[2]) {
       return {

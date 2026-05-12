@@ -32,7 +32,7 @@ import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
-import { ConversationContextService } from './context/conversation-context.service';
+import { RedisConversationContextService } from './context/redis-conversation-context.service';
 import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
@@ -50,6 +50,10 @@ import { buildingDocumentsIntent } from './intent-engine/allowed-intents/buildin
 import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
 import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
+import { expensesSummaryIntent } from './intent-engine/allowed-intents/expenses-summary.intent';
+import { cashflowCompareIntent } from './intent-engine/allowed-intents/cashflow-compare.intent';
+import { vendorsListIntent } from './intent-engine/allowed-intents/vendors-list.intent';
+import { communicationsSendReminderIntent } from './intent-engine/allowed-intents/communications-send-reminder.intent';
 
 export interface ChatRequest {
   readonly message: string;
@@ -158,7 +162,7 @@ export class AssistantService implements OnModuleInit {
   private readonly _intentExtractor: IntentExtractorService;
   private readonly _entityResolver: EntityResolverService;
   private readonly _ambiguityService: AmbiguityService;
-  private readonly _conversationContext: ConversationContextService;
+  private readonly _conversationContext: RedisConversationContextService;
   private readonly _queryPlanner: QueryPlannerService;
   private readonly _queryExecutor: QueryExecutorService;
   private readonly _responseFormatter: ResponseFormatterService;
@@ -183,7 +187,7 @@ export class AssistantService implements OnModuleInit {
     private readonly intentExtractor: IntentExtractorService,
     private readonly entityResolver: EntityResolverService,
     private readonly ambiguityService: AmbiguityService,
-    private readonly conversationContext: ConversationContextService,
+    private readonly conversationContext: RedisConversationContextService,
     private readonly queryPlanner: QueryPlannerService,
     private readonly queryExecutor: QueryExecutorService,
     private readonly responseFormatter: ResponseFormatterService,
@@ -231,6 +235,10 @@ export class AssistantService implements OnModuleInit {
       buildingTicketsIntent,
       buildingPaymentsIntent,
       buildingStatsIntent,
+      expensesSummaryIntent,
+      cashflowCompareIntent,
+      vendorsListIntent,
+      communicationsSendReminderIntent,
     ];
 
     for (const intent of intents) {
@@ -533,8 +541,8 @@ export class AssistantService implements OnModuleInit {
     const sessionId = request.sessionId || this.generateSessionId();
 
     // Step 1: Get conversation context
-    const conversationContext = await this.conversationContext.getContext(sessionId);
-    const lastResolved = await this.conversationContext.getLastResolved(sessionId);
+    const conversationContext = await this.conversationContext.getContext(tenantId, userId, sessionId);
+    const lastResolved = await this.conversationContext.getLastResolved(tenantId, userId, sessionId);
 
     // Build context for intent extraction
     const contextForExtraction = {
@@ -554,6 +562,27 @@ export class AssistantService implements OnModuleInit {
     } catch (error) {
       this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
       throw new BadRequestException('Could not understand your message. Please rephrase.');
+    }
+
+    // Validate intent exists in registry
+    if (!this.intentRegistry.has(extractedIntent.intent)) {
+      this.logger.warn(`[chatV2] Unknown intent "${extractedIntent.intent}" from LLM, falling back to deterministic`);
+      // Fallback to deterministic keyword matching
+      const plan = this.queryPlanService.createPlan(request.message);
+      if (plan) {
+        extractedIntent = {
+          intent: plan.intent,
+          entity: {
+            type: plan.scope === 'unit' ? 'unit' : plan.scope === 'building' ? 'building' : 'person',
+            buildingAlias: plan.filters.buildingAlias,
+            unitCode: plan.filters.unitCode,
+          },
+          filters: {},
+          confidence: plan.confidence,
+        };
+      } else {
+        throw new BadRequestException('Could not understand your message. Please try a different question.');
+      }
     }
 
     // Step 3: Resolve entities
@@ -653,12 +682,18 @@ export class AssistantService implements OnModuleInit {
     };
 
     // Step 8: Store turn in conversation context
-    await this.conversationContext.storeTurn(sessionId, {
-      role: 'user',
-      message: request.message,
-      timestamp: new Date(),
-      resolvedEntities: entityResolution,
-    });
+    await this.conversationContext.storeTurn(
+      tenantId,
+      userId,
+      sessionId,
+      {
+        role: 'user',
+        message: request.message,
+        timestamp: new Date(),
+        resolvedEntities: entityResolution,
+      },
+      { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
+    );
 
     // Log interaction (fire-and-forget)
     void this.logInteraction(

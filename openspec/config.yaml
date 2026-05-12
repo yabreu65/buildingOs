@@ -1,0 +1,63 @@
+# OpenSpec Configuration — BuildingOS
+
+project: buildingos
+description: >
+  Multi-tenant SaaS for building/condominium management.
+  NestJS backend + Next.js frontend + Prisma/PostgreSQL.
+
+strict_tdd: true
+
+testing:
+  unit:
+    api:
+      runner: jest
+      command: npm run test -w apps/api
+      config: apps/api/jest.config.js
+      pattern: "*.spec.ts"
+    web:
+      runner: jest
+      command: npm run test -w apps/web
+      config: apps/web/jest.config.js
+      pattern: "__tests__/**/*.test.ts"
+  e2e:
+    web:
+      runner: playwright
+      command: npm run test:e2e -w apps/web
+      config: apps/web/playwright.config.ts
+      testDir: apps/web/tests/e2e
+    api:
+      runner: jest
+      command: npm run test:e2e -w apps/api
+      config: apps/api/test/jest-e2e.json
+      pattern: "*.e2e-spec.ts"
+  ci:
+    command: npm run test:ci
+    focused: "assistant/(tools.service|tools.controller|read-only-query.service).spec.ts"
+
+quality:
+  linter:
+    api: eslint --fix "src/**/*.ts"
+    web: eslint
+  typecheck:
+    api: tsc --noEmit
+    web: tsc --noEmit
+  formatter: prettier --write "src/**/*.ts"
+
+phases:
+  - proposal
+  - spec
+  - design
+  - tasks
+  - apply
+  - verify
+  - archive
+
+context:
+  - Monorepo with npm workspaces (apps/*, packages/*)
+  - Multi-tenant SaaS with RBAC (SUPER_ADMIN → RESIDENT)
+  - Backend: NestJS 10, Prisma 5, PostgreSQL 16, Redis, MinIO
+  - Frontend: Next.js 16, React 19, Tailwind 4, Zod 4
+  - Shared packages: @buildingos/contracts, @buildingos/permissions
+  - Infra: Docker Compose (postgres, redis, minio)
+  - CI: GitHub Actions (build, lint, test, e2e gates)
+  - All data isolated by tenantId; never allow cross-tenant access

@@ -8,15 +8,24 @@ See `_shared/skill-resolver.md` for the full resolution protocol.
 
 | Trigger | Skill | Path |
 |---------|-------|------|
-| When creating a pull request, opening a PR, or preparing changes for review. | branch-pr | /Users/yoryiabreu/.claude/skills/branch-pr/SKILL.md |
-| When writing Go tests, using teatest, or adding test coverage. | go-testing | /Users/yoryiabreu/.claude/skills/go-testing/SKILL.md |
-| Generate/edit raster images; avoid for vector/code-native asset tasks. | imagegen | /Users/yoryiabreu/.codex/skills/.system/imagegen/SKILL.md |
-| When creating a GitHub issue, reporting a bug, or requesting a feature. | issue-creation | /Users/yoryiabreu/.claude/skills/issue-creation/SKILL.md |
-| When user requests adversarial dual review (“judgment day”, “dual review”, etc.). | judgment-day | /Users/yoryiabreu/.claude/skills/judgment-day/SKILL.md |
-| When user asks OpenAI API/product usage and needs official up-to-date docs. | openai-docs | /Users/yoryiabreu/.codex/skills/.system/openai-docs/SKILL.md |
-| When scaffolding Codex plugins and marketplace entries. | plugin-creator | /Users/yoryiabreu/.codex/skills/.system/plugin-creator/SKILL.md |
-| When creating new AI skills or documenting reusable agent patterns. | skill-creator | /Users/yoryiabreu/.claude/skills/skill-creator/SKILL.md |
-| When listing or installing Codex skills from curated/GitHub sources. | skill-installer | /Users/yoryiabreu/.codex/skills/.system/skill-installer/SKILL.md |
+| When creating a pull request, opening a PR, or preparing changes for review. | branch-pr | /Users/yoryiabreu/.config/opencode/skills/branch-pr/SKILL.md |
+| When writing Go tests, using teatest, or adding test coverage. | go-testing | /Users/yoryiabreu/.config/opencode/skills/go-testing/SKILL.md |
+| When creating a GitHub issue, reporting a bug, or requesting a feature. | issue-creation | /Users/yoryiabreu/.config/opencode/skills/issue-creation/SKILL.md |
+| When user requests adversarial dual review ("judgment day", "dual review", etc.). | judgment-day | /Users/yoryiabreu/.config/opencode/skills/judgment-day/SKILL.md |
+| When creating new AI skills or documenting reusable agent patterns. | skill-creator | /Users/yoryiabreu/.config/opencode/skills/skill-creator/SKILL.md |
+| When listing or installing agent skills from curated/GitHub sources. | find-skills | /Users/yoryiabreu/.agents/skills/find-skills/SKILL.md |
+| Docker containerization, multi-stage builds, image optimization, and compose patterns. | docker-expert | /Users/yoryiabreu/.agents/skills/docker-expert/SKILL.md |
+
+## Project Skills
+
+| Trigger | Skill | Path |
+|---------|-------|------|
+| Creating new NestJS services, controllers, or modules in BuildingOS | nestjs-service | .agents/skills/nestjs-service/SKILL.md |
+| Creating new Prisma models, relations, or migrations in BuildingOS | prisma-model | .agents/skills/prisma-model/SKILL.md |
+| Writing Playwright E2E tests in BuildingOS | e2e-testing | .agents/skills/e2e-testing/SKILL.md |
+| Creating new frontend features, pages, or components in BuildingOS | frontend-feature | .agents/skills/frontend-feature/SKILL.md |
+| Security hardening, audit, or review for BuildingOS multi-tenant SaaS | security | .agents/skills/security/SKILL.md |
+| Creating Prisma migrations in BuildingOS | migration-guide | .agents/skills/migration-guide/SKILL.md |
 
 ## Compact Rules
 
@@ -40,15 +49,6 @@ Pre-digested rules per skill. Delegators copy matching blocks into sub-agent pro
 - Use golden files for stable visual/text output assertions.
 - Use `t.TempDir()` for filesystem tests and isolate side effects.
 
-### imagegen
-- Default to built-in `image_gen` tool; CLI fallback only if user explicitly asks.
-- Do not auto-switch to CLI; explain fallback requirements first.
-- For built-in edits of local files, load image via `view_image` first.
-- Keep edits non-destructive; preserve invariants explicitly.
-- Move/copy final project assets from `$CODEX_HOME/generated_images/...` into workspace.
-- Do not overwrite existing assets unless user explicitly requests replacement.
-- Prefer raster generation only when task is truly bitmap-oriented (not SVG/code-native).
-
 ### issue-creation
 - Use issue templates; blank issues are disabled.
 - New issues start with `status:needs-review`; PRs wait for `status:approved`.
@@ -66,24 +66,6 @@ Pre-digested rules per skill. Delegators copy matching blocks into sub-agent pro
 - Classify warnings as real vs theoretical; theoretical does not block.
 - Orchestrator coordinates only; do not mix coordinator with executor responsibilities.
 
-### openai-docs
-- Use OpenAI docs MCP tools first for OpenAI-related questions.
-- Use official docs as source of truth; avoid speculative guidance.
-- Restrict fallback browsing to official OpenAI domains only.
-- Validate model recommendations against current docs before answering.
-- Keep quotes short; prefer cited paraphrases.
-- If docs conflict, call out the difference and cite both sources.
-- If docs do not cover the need, state the gap and propose next steps.
-
-### plugin-creator
-- Always create/keep `.codex-plugin/plugin.json` in plugin root.
-- Normalize plugin name to lowercase hyphen-case; folder and manifest name must match.
-- Keep placeholder manifest values until explicitly filled by user.
-- For marketplace entries, always set `policy.installation`, `policy.authentication`, and `category`.
-- Keep marketplace `source.path` as `./plugins/<plugin-name>` (repo-local).
-- Use `--force` only for intentional overwrite/update flows.
-- Preserve existing marketplace `interface.displayName` when updating.
-
 ### skill-creator
 - Create skills only for reusable non-trivial patterns, not one-off tasks.
 - Follow required SKILL frontmatter (`name`, `description`, `license`, `metadata`).
@@ -93,24 +75,85 @@ Pre-digested rules per skill. Delegators copy matching blocks into sub-agent pro
 - Keep examples minimal and commands copy-paste ready.
 - Register new skills in project instructions/index when applicable.
 
-### skill-installer
-- Use helper scripts instead of ad-hoc installers.
-- Request escalated permissions for listing/install scripts (network required).
-- List skills first when user request is ambiguous.
-- Install curated skills by name; install external skills by repo/path or URL.
-- Abort if destination skill already exists (unless user wants overwrite flow).
-- Explain if `.system` skills are already preinstalled.
-- After install, instruct user to restart Codex to load new skills.
+### find-skills
+- Search curated skill registries and GitHub for matching capabilities.
+- Validate skill compatibility before recommending install.
+- Prefer official/verified skills over community ones.
+- Explain installation steps and any required configuration.
+
+### docker-expert
+- Always use multi-stage builds for production images.
+- Pin base image versions; never use `latest` in production.
+- Minimize layer count; combine RUN commands logically.
+- Run as non-root user; set USER directive explicitly.
+- Use .dockerignore to exclude node_modules, .git, and build artifacts.
+- Healthcheck every service; use HEALTHCHECK instruction.
+- Compose: separate networks, named volumes, and resource limits.
+
+### nestjs-service
+- Module structure: controller, service, module, dto/, entities/, interfaces/.
+- Constructor injects PrismaService and any dependent services.
+- Use `@Injectable()` decorator; never export service class directly.
+- DTOs use class-validator decorators for all fields.
+- All queries MUST include tenantId filter for multi-tenant isolation.
+- Use typed exceptions, never throw raw Error or string.
+- JSDoc comments required on all public methods.
+
+### prisma-model
+- Schema location: `apps/api/prisma/schema.prisma`.
+- All models MUST have `tenantId String @map("tenant_id")` for multi-tenancy.
+- Use `cuid()` for primary keys: `id String @id @default(cuid())`.
+- Audit fields: `createdAt`, `updatedAt`, optional `deletedAt` for soft deletes.
+- Relations use explicit `@relation` with `fields` and `references`.
+- Map camelCase fields to snake_case columns with `@map`.
+- Add indexes on frequently queried foreign keys and tenantId.
+
+### e2e-testing
+- Test directory: `apps/web/tests/e2e/`.
+- Use `testIgnore: '**/_archive/**'` to skip deprecated tests.
+- CI retries: 2; local retries: 0.
+- Trace on first retry, screenshot on failure, video retain on failure.
+- Multi-browser: chromium, firefox, webkit projects.
+- Web server: `npm run dev` on localhost:3000, reuseExistingServer in local.
+- Global timeout: 30 minutes; per-test timeout: 30 seconds.
+- Test critical flows: auth, tenant admin, resident, super-admin, operations.
+
+### frontend-feature
+- Feature structure: `apps/web/features/{module}/` with components/, hooks/, services/, types/, index.ts.
+- Pages: `apps/web/app/(tenant)/[tenantId]/{module}/` for tenant-scoped routes.
+- Use functional components only; named exports preferred.
+- TypeScript for all components; proper prop typing with interfaces.
+- Use `const` for component definitions.
+- Hooks: use{Module} for data, use{Module}List for queries, use{Module}Mutations for mutations.
+- Form validation with react-hook-form + Zod resolvers.
+
+### security
+- Multi-tenant isolation: ALL queries MUST filter by tenantId.
+- RBAC: enforce role checks at controller and service layers.
+- Never hardcode secrets; use environment variables only.
+- Hash passwords with bcrypt; validate all user input.
+- JWT tokens: set httpOnly and secure flags; implement rotation.
+- Helmet middleware enabled; CORS restricted to known origins.
+- Audit logging for all sensitive operations.
+- SQL injection prevention: Prisma parameterized queries only.
+
+### migration-guide
+- Workflow: edit schema → `prisma migrate dev --name descriptive_name` → `prisma generate` → test.
+- Never modify existing migration files after they are committed.
+- For production: `prisma migrate deploy` (non-interactive, safe for CI).
+- Always include `tenantId` on new models for multi-tenant isolation.
+- Test migrations on staging copy before production deploy.
+- Reset local DB with `prisma migrate reset` if schema drift occurs.
+- Seed data after migration if new models require initial data.
 
 ## Project Conventions
 
 | File | Path | Notes |
 |------|------|-------|
-| AGENT.md | /Users/yoryiabreu/proyectos/buildingos/AGENT.md | Index-style global constitution; references paths below. |
-| AGENTS.md | /Users/yoryiabreu/proyectos/buildingos/AGENTS.md | TypeScript/Nest/React/API/testing/security/DB/commit standards. |
-| product_decision/ | /Users/yoryiabreu/proyectos/buildingos/product_decision/ | Referenced by AGENT.md (currently missing in workspace). |
-| frontend/AGENT.md | /Users/yoryiabreu/proyectos/buildingos/frontend/AGENT.md | Referenced by AGENT.md (currently missing in workspace). |
-| api/AGENT.md | /Users/yoryiabreu/proyectos/buildingos/api/AGENT.md | Referenced by AGENT.md (currently missing in workspace). |
-| infra/AGENT.md | /Users/yoryiabreu/proyectos/buildingos/infra/AGENT.md | Referenced by AGENT.md (present). |
+| AGENT.md | /AGENT.md | Repo constitution: multi-tenancy, RBAC, layered architecture. |
+| AGENTS.md | /AGENTS.md | Code standards: TS, NestJS, React, API, testing, security, DB, commits. |
+| ARCHITECTURE.md | /ARCHITECTURE.md | System architecture documentation. |
+| product_decision/ | /product_decision/ | Business rules and product decisions (source of truth). |
+| infra/AGENT.md | /infra/AGENT.md | Infrastructure conventions and CI/CD. |
 
 Read the convention files listed above for project-specific patterns and rules.

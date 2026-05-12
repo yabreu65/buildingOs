@@ -16,7 +16,7 @@ import { AssistantDebtCalculatorService } from './assistant-debt-calculator.serv
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
-import { ConversationContextService } from './context/conversation-context.service';
+import { RedisConversationContextService } from './context/redis-conversation-context.service';
 import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
@@ -123,7 +123,7 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: IntentExtractorService, useValue: mockIntentExtractor },
         { provide: EntityResolverService, useValue: mockEntityResolver },
         { provide: AmbiguityService, useValue: mockAmbiguityService },
-        { provide: ConversationContextService, useValue: mockConversationContext },
+        { provide: RedisConversationContextService, useValue: mockConversationContext },
         { provide: QueryPlannerService, useValue: mockQueryPlannerService },
         { provide: QueryExecutorService, useValue: mockQueryExecutorService },
         { provide: ResponseFormatterService, useValue: mockResponseFormatter },

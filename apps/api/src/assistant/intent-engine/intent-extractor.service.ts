@@ -181,24 +181,34 @@ export class IntentExtractorService {
   private buildPrompt(message: string, context?: ConversationContext): string {
     // NEVER include tenantId, roles, or permissions in the prompt
     let prompt = `Eres un extractor de intenciones para un asistente de administracion de edificios.
-Extra la intencion del mensaje del usuario y responde SOLO con JSON valido.
+Extrae la intencion del mensaje del usuario y responde SOLO con JSON valido.
 
 Intenciones disponibles:
-- list_payments: listar pagos de una unidad o edificio
-- search_tickets: buscar tickets o reclamos
-- get_balance: consultar saldo o deuda de una unidad
-- list_residents: listar residentes de una unidad
-- get_building_stats: obtener estadisticas del edificio
+- unit_residents: listar residentes de una unidad
+- unit_debt: consultar saldo o deuda de una unidad
+- unit_documents: listar documentos de una unidad
+- unit_tickets: buscar tickets o reclamos de una unidad
+- unit_payments: listar pagos de una unidad
+- building_debt: consultar deuda total de un edificio
+- building_delinquents: listar morosos de un edificio
+- building_documents: listar documentos de un edificio
+- building_tickets: buscar tickets de un edificio
+- building_payments: listar pagos de un edificio
+- building_stats: obtener estadisticas del edificio
+- expenses_summary: resumen de gastos (proximamente)
+- cashflow_compare: comparar ingresos vs gastos (proximamente)
+- vendors_list: listar proveedores (proximamente)
+- communications_send_reminder: enviar recordatorio (proximamente)
 
 Entidades:
-- unit: requiere buildingAlias y unitCode
-- building: requiere buildingAlias
-- person: puede requerir personName
+- unit: requiere buildingAlias y unitCode (ej: A-0101)
+- building: requiere buildingAlias (ej: Torre A)
+- person: requiere personName (ej: Juan Perez)
 
-Filtros disponibles: period, status, minAmount, maxAmount, sortField, sortOrder, limit
+Filtros disponibles: period (YYYY-MM), status, minAmount, maxAmount, method, minAgeDays, sortField, sortOrder, limit
 
-Responde SOLO con JSON valido sin markdown:
-{"intent":"nombre_intent","entity":{"type":"unit|building|person","buildingAlias":"...","unitCode":"..."},"filters":{},"confidence":0.0-1.0}`;
+Responde SOLO con JSON valido sin markdown ni comentarios:
+{"intent":"nombre_intent","entity":{"type":"unit|building|person","buildingAlias":"A","unitCode":"0101","personName":""},"filters":{},"confidence":0.0-1.0}`;
 
     if (context?.buildingId) {
       prompt += `\n\nContexto del edificio actual: ${context.buildingId}`;
