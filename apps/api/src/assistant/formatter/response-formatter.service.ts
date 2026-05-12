@@ -108,7 +108,7 @@ export class ResponseFormatterService {
     const formatter = this.determineFormatter(intent, data);
     const type = this.determineResponseType(intent, data);
     const title = INTENT_TO_TITLE[intent] ?? 'Response';
-    const summary = this.formatSummary(data, formatter);
+    const summary = this.formatSummary(data, formatter, intent);
 
     return {
       type,
@@ -364,21 +364,132 @@ export class ResponseFormatterService {
   /**
    * Format summary text based on formatter type
    */
-  private formatSummary(data: unknown, formatter: FormatterType): string {
+  private formatSummary(data: unknown, formatter: FormatterType, intent?: string): string {
+    // Intent-specific summaries with real data
+    if (intent && data && typeof data === 'object') {
+      const record = data as Record<string, unknown>;
+
+      switch (intent) {
+        case 'unit_debt':
+        case 'building_debt': {
+          const totalDebt = record.totalDebt as number;
+          const currency = (record.currency as string) || 'VES';
+          if (totalDebt !== undefined) {
+            return `Deuda total: ${this.formatMoney(totalDebt, currency)}`;
+          }
+          break;
+        }
+
+        case 'unit_residents': {
+          const residents = record.residents as Array<Record<string, unknown>>;
+          if (Array.isArray(residents)) {
+            const names = residents.map((r) => r.name || 'Desconocido').join(', ');
+            return `${residents.length} residente${residents.length === 1 ? '' : 's'}: ${names}`;
+          }
+          break;
+        }
+
+        case 'unit_payments':
+        case 'building_payments': {
+          const payments = record.payments as Array<Record<string, unknown>>;
+          if (Array.isArray(payments)) {
+            return `${payments.length} pago${payments.length === 1 ? '' : 's'} encontrado${payments.length === 1 ? '' : 's'}`;
+          }
+          break;
+        }
+
+        case 'unit_tickets':
+        case 'building_tickets': {
+          const tickets = record.tickets as Array<Record<string, unknown>>;
+          if (Array.isArray(tickets)) {
+            return `${tickets.length} ticket${tickets.length === 1 ? '' : 's'} encontrado${tickets.length === 1 ? '' : 's'}`;
+          }
+          break;
+        }
+
+        case 'unit_documents':
+        case 'building_documents': {
+          const documents = record.documents as Array<Record<string, unknown>>;
+          if (Array.isArray(documents)) {
+            return `${documents.length} documento${documents.length === 1 ? '' : 's'} encontrado${documents.length === 1 ? '' : 's'}`;
+          }
+          break;
+        }
+
+        case 'building_delinquents': {
+          const delinquents = record.delinquents as Array<Record<string, unknown>>;
+          if (Array.isArray(delinquents)) {
+            return `${delinquents.length} unidad${delinquents.length === 1 ? '' : 'es'} con deuda pendiente`;
+          }
+          break;
+        }
+
+        case 'building_stats': {
+          const stats = record.stats as Record<string, unknown>;
+          if (stats) {
+            const totalUnits = stats.totalUnits as number;
+            const occupied = stats.occupiedUnits as number;
+            const vacant = stats.vacantUnits as number;
+            const parts: string[] = [];
+            if (totalUnits !== undefined) parts.push(`${totalUnits} unidades totales`);
+            if (occupied !== undefined) parts.push(`${occupied} ocupadas`);
+            if (vacant !== undefined) parts.push(`${vacant} vacantes`);
+            return parts.join(' | ');
+          }
+          break;
+        }
+
+        case 'expenses_summary': {
+          const totalExpenses = record.totalExpenses as number;
+          if (totalExpenses !== undefined) {
+            return `Gastos totales: ${this.formatMoney(totalExpenses)}`;
+          }
+          break;
+        }
+
+        case 'cashflow_compare': {
+          const income = record.income as number;
+          const expenses = record.expenses as number;
+          if (income !== undefined && expenses !== undefined) {
+            const diff = income - expenses;
+            return `Ingresos: ${this.formatMoney(income)} | Gastos: ${this.formatMoney(expenses)} | Diferencia: ${this.formatMoney(Math.abs(diff))} ${diff >= 0 ? '(superávit)' : '(déficit)'}`;
+          }
+          break;
+        }
+
+        case 'vendors_list': {
+          const vendors = record.vendors as Array<Record<string, unknown>>;
+          if (Array.isArray(vendors)) {
+            return `${vendors.length} proveedor${vendors.length === 1 ? '' : 'es'} activo${vendors.length === 1 ? '' : 's'}`;
+          }
+          break;
+        }
+
+        case 'communications_send_reminder': {
+          const sent = record.sent as number;
+          if (sent !== undefined) {
+            return `${sent} recordatorio${sent === 1 ? '' : 's'} enviado${sent === 1 ? '' : 's'}`;
+          }
+          break;
+        }
+      }
+    }
+
+    // Fallback to generic formatter-based summaries
     switch (formatter) {
       case 'table':
         if (Array.isArray(data)) {
-          return `Found ${data.length} result${data.length === 1 ? '' : 's'}`;
+          return `${data.length} resultado${data.length === 1 ? '' : 's'}`;
         }
-        return 'Query results';
+        return 'Resultados de la consulta';
       case 'kpi':
-        return 'Key metric';
+        return 'Métrica clave';
       case 'chart':
-        return 'Chart data';
+        return 'Datos del gráfico';
       case 'clarification':
-        return 'Clarification required';
+        return 'Se requiere clarificación';
       default:
-        return 'Response';
+        return 'Respuesta';
     }
   }
 
