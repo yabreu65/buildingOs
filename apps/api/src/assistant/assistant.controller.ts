@@ -18,6 +18,7 @@ import { AiEntitlementsService } from '../billing/ai-entitlements.service';
 import { AssistantService, ChatRequest, ChatResponse } from './assistant.service';
 import { AiAnalyticsService, TenantAnalyticsResponse, TenantSummaryItem } from './analytics.service';
 import { AiActionEventsService, CreateActionEventDto } from './action-events.service';
+import { StructuredResponse } from './ai.types';
 
 @Controller('tenants/:tenantId/assistant')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
@@ -96,6 +97,83 @@ export class AssistantController {
     );
 
     // FASE 1: Track consumption after successful chat
+    await this.aiEntitlements.trackConsumption(tenantId, 1);
+
+    return response;
+  }
+
+  /**
+   * POST /tenants/:tenantId/assistant/chat/v2
+   *
+   * V2 AI chat endpoint with structured responses via the intent engine
+   *
+   * Request body:
+   * - message: string (required, max 2000 chars)
+   * - page: string (required, for context tracking)
+   * - buildingId?: string (optional, validates ownership)
+   * - unitId?: string (optional, validates ownership)
+   * - sessionId?: string (optional, for conversation context)
+   *
+   * Returns:
+   * - type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification'
+   * - title: string
+   * - summary: string
+   * - data?: unknown
+   * - actions?: Array<{ label: string; action: string; payload?: object }>
+   * - meta: { intent, confidence, tenantScoped }
+   *
+   * Errors:
+   * - 400: Missing/invalid message, invalid building/unit
+   * - 403: Feature not available OR intent engine disabled via AI_INTENT_ENGINE_ENABLED env var
+   * - 429: Rate limit exceeded (100 per day)
+   */
+  @Post('chat/v2')
+  @UseGuards(RequireFeatureGuard)
+  @RequireFeature('canUseAI')
+  async chatV2(
+    @Param('tenantId') tenantId: string,
+    @Body() request: ChatRequest & { sessionId?: string },
+    @Request() req?: any,
+  ): Promise<StructuredResponse> {
+    // Validate tenantId
+    if (!tenantId || tenantId.trim().length === 0) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    // Validate request
+    if (!request || !request.message || !request.page) {
+      throw new BadRequestException('message and page are required');
+    }
+
+    // Extract user info from JWT
+    const userId = req.user?.id;
+    const membership = req.user?.memberships?.find(
+      (m: any) => m.tenantId === tenantId,
+    );
+
+    if (!userId || !membership) {
+      throw new BadRequestException('User not found in tenant');
+    }
+
+    const membershipId = membership.id;
+    const userRoles = membership.roles || [];
+
+    // Check monthly AI consultation limit
+    const hasRemaining = await this.aiEntitlements.hasRemainingConsultations(tenantId);
+    if (!hasRemaining) {
+      throw new ForbiddenException('Monthly IA consultation limit reached');
+    }
+
+    // Call the assistant service v2 method
+    const response = await this.assistantService.chatV2(
+      tenantId,
+      userId,
+      membershipId,
+      request,
+      userRoles,
+    );
+
+    // Track consumption after successful chat
     await this.aiEntitlements.trackConsumption(tenantId, 1);
 
     return response;

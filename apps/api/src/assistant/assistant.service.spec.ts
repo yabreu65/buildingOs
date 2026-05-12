@@ -13,6 +13,14 @@ import { AuthorizeService } from '../rbac/authorize.service';
 import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { EntityResolverService } from './resolver/entity-resolver.service';
+import { AmbiguityService } from './resolver/ambiguity.service';
+import { ConversationContextService } from './context/conversation-context.service';
+import { QueryPlannerService } from './planner/query-planner.service';
+import { QueryExecutorService } from './executor/query-executor.service';
+import { ResponseFormatterService } from './formatter/response-formatter.service';
+import { IntentRegistry } from './intent-engine/intent-registry';
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 
 /**
@@ -58,6 +66,14 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockQueryPlanService = { createPlan: jest.fn() };
   const mockQueryExecutors = { execute: jest.fn() };
   const mockDebtCalculator = new AssistantDebtCalculatorService();
+  const mockIntentExtractor = { extractIntent: jest.fn() };
+  const mockEntityResolver = { resolveBuilding: jest.fn(), resolveUnit: jest.fn(), resolvePerson: jest.fn() };
+  const mockAmbiguityService = { detectAmbiguity: jest.fn(), generateClarification: jest.fn() };
+  const mockConversationContext = { storeTurn: jest.fn(), getContext: jest.fn(), getLastResolved: jest.fn() };
+  const mockQueryPlannerService = { buildPlan: jest.fn() };
+  const mockQueryExecutorService = { execute: jest.fn() };
+  const mockResponseFormatter = { formatV1: jest.fn(), formatV2: jest.fn() };
+  const mockIntentRegistry = { register: jest.fn(), get: jest.fn(), has: jest.fn(), list: jest.fn() };
 
   const ADMIN_ROLES = ['TENANT_ADMIN'];
 
@@ -104,6 +120,14 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: AssistantQueryPlanService, useValue: mockQueryPlanService },
         { provide: AssistantQueryExecutorsService, useValue: mockQueryExecutors },
         { provide: AssistantDebtCalculatorService, useValue: mockDebtCalculator },
+        { provide: IntentExtractorService, useValue: mockIntentExtractor },
+        { provide: EntityResolverService, useValue: mockEntityResolver },
+        { provide: AmbiguityService, useValue: mockAmbiguityService },
+        { provide: ConversationContextService, useValue: mockConversationContext },
+        { provide: QueryPlannerService, useValue: mockQueryPlannerService },
+        { provide: QueryExecutorService, useValue: mockQueryExecutorService },
+        { provide: ResponseFormatterService, useValue: mockResponseFormatter },
+        { provide: IntentRegistry, useValue: mockIntentRegistry },
       ],
     }).compile();
 

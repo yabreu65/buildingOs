@@ -43,3 +43,35 @@ export interface ClassifierResult {
   category: 'DEBT' | 'TICKETS' | 'DOCUMENTS' | 'PAYMENTS' | 'RESIDENTS' | 'STATS' | 'GENERAL';
   confidence: number;
 }
+
+/**
+ * Structured response from the NLU engine (v2 endpoint)
+ */
+export interface StructuredResponse {
+  /** Response type */
+  type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification';
+  /** Response title */
+  title: string;
+  /** Human-readable summary */
+  summary: string;
+  /** Response data (format depends on type) */
+  data?: unknown;
+  /** Suggested actions */
+  actions?: Array<{
+    /** Action type identifier */
+    type: string;
+    /** Human-readable label */
+    label: string;
+    /** Action payload */
+    payload?: Record<string, string>;
+  }>;
+  /** Metadata */
+  meta?: {
+    /** Intent that produced this response */
+    intent?: string;
+    /** Confidence score from extraction */
+    confidence?: number;
+    /** Additional metadata */
+    [key: string]: unknown;
+  };
+}

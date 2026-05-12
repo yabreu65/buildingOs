@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, Prisma, UnitOccupantRole } from '@prisma/client';
@@ -21,10 +21,35 @@ import {
   ChatResponse,
   AiProvider,
   AiProviderContext,
+  StructuredResponse,
 } from './ai.types';
 
 // Re-export types for backward compatibility
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
+
+// Intent Engine imports
+import { IntentRegistry } from './intent-engine/intent-registry';
+import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { EntityResolverService } from './resolver/entity-resolver.service';
+import { AmbiguityService } from './resolver/ambiguity.service';
+import { ConversationContextService } from './context/conversation-context.service';
+import { QueryPlannerService } from './planner/query-planner.service';
+import { QueryExecutorService } from './executor/query-executor.service';
+import { ResponseFormatterService } from './formatter/response-formatter.service';
+import { ExtractedIntent, EntityResolution, ConversationTurn } from './intent-engine/intent.types';
+
+// Intent definitions
+import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
+import { unitResidentsIntent } from './intent-engine/allowed-intents/unit-residents.intent';
+import { unitDocumentsIntent } from './intent-engine/allowed-intents/unit-documents.intent';
+import { unitTicketsIntent } from './intent-engine/allowed-intents/unit-tickets.intent';
+import { unitPaymentsIntent } from './intent-engine/allowed-intents/unit-payments.intent';
+import { buildingDebtIntent } from './intent-engine/allowed-intents/building-debt.intent';
+import { buildingDelinquentsIntent } from './intent-engine/allowed-intents/building-delinquents.intent';
+import { buildingDocumentsIntent } from './intent-engine/allowed-intents/building-documents.intent';
+import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
+import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
+import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
 
 export interface ChatRequest {
   readonly message: string;
@@ -119,11 +144,24 @@ export class MockAiProvider implements AiProvider {
 }
 
 @Injectable()
-export class AssistantService {
+export class AssistantService implements OnModuleInit {
   private readonly provider: AiProvider;
   private readonly dailyLimit: number;
   private readonly logger = new Logger(AssistantService.name);
   private readonly queryParser = new AssistantQueryParser();
+
+  // Intent Engine feature flag
+  private readonly intentEngineEnabled: boolean;
+
+  // Stored references for use in chatV2
+  private readonly _intentRegistry: IntentRegistry;
+  private readonly _intentExtractor: IntentExtractorService;
+  private readonly _entityResolver: EntityResolverService;
+  private readonly _ambiguityService: AmbiguityService;
+  private readonly _conversationContext: ConversationContextService;
+  private readonly _queryPlanner: QueryPlannerService;
+  private readonly _queryExecutor: QueryExecutorService;
+  private readonly _responseFormatter: ResponseFormatterService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -140,8 +178,19 @@ export class AssistantService {
     private readonly queryPlanService: AssistantQueryPlanService,
     private readonly queryExecutors: AssistantQueryExecutorsService,
     private readonly debtCalculator: AssistantDebtCalculatorService,
+    // Intent Engine services injected
+    private readonly intentRegistry: IntentRegistry,
+    private readonly intentExtractor: IntentExtractorService,
+    private readonly entityResolver: EntityResolverService,
+    private readonly ambiguityService: AmbiguityService,
+    private readonly conversationContext: ConversationContextService,
+    private readonly queryPlanner: QueryPlannerService,
+    private readonly queryExecutor: QueryExecutorService,
+    private readonly responseFormatter: ResponseFormatterService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
+    this.intentEngineEnabled = process.env.AI_INTENT_ENGINE_ENABLED !== 'false';
+
     // Initialize provider based on env
     const providerName = process.env.AI_PROVIDER || 'MOCK';
     if (providerName === 'OLLAMA') {
@@ -153,6 +202,44 @@ export class AssistantService {
     } else {
       this.provider = this.mockAiProvider;
     }
+
+    // Store references for use in chatV2
+    this._intentRegistry = intentRegistry;
+    this._intentExtractor = intentExtractor;
+    this._entityResolver = entityResolver;
+    this._ambiguityService = ambiguityService;
+    this._conversationContext = conversationContext;
+    this._queryPlanner = queryPlanner;
+    this._queryExecutor = queryExecutor;
+    this._responseFormatter = responseFormatter;
+  }
+
+  /**
+   * Initialize intent registry with all available intents
+   */
+  async onModuleInit(): Promise<void> {
+    // Register all available intents
+    const intents = [
+      unitDebtIntent,
+      unitResidentsIntent,
+      unitDocumentsIntent,
+      unitTicketsIntent,
+      unitPaymentsIntent,
+      buildingDebtIntent,
+      buildingDelinquentsIntent,
+      buildingDocumentsIntent,
+      buildingTicketsIntent,
+      buildingPaymentsIntent,
+      buildingStatsIntent,
+    ];
+
+    for (const intent of intents) {
+      if (!this.intentRegistry.has(intent.name)) {
+        this.intentRegistry.register(intent);
+      }
+    }
+
+    this.logger.log(`[AssistantService] Intent engine initialized with ${intents.length} intents (enabled: ${this.intentEngineEnabled})`);
   }
 
   /**
@@ -374,6 +461,226 @@ export class AssistantService {
     };
   }
 
+  /**
+   * V2 Chat endpoint: Process user message with the intent engine
+   *
+   * Feature-gated via AI_INTENT_ENGINE_ENABLED env var.
+   * When disabled, returns 403 ForbiddenException.
+   *
+   * Pipeline:
+   * 1. Validate message
+   * 2. Check rate limits
+   * 3. Get conversation context (sessionId or generate one)
+   * 4. IntentExtractor.extractIntent() - dual LLM with fallback
+   * 5. EntityResolver.resolveBuilding/resolveUnit/resolvePerson
+   * 6. If ambiguous -> ResponseFormatter.formatV2() with clarification
+   * 7. QueryPlanner.buildPlan()
+   * 8. QueryExecutor.execute() with RBAC
+   * 9. ResponseFormatter.formatV2()
+   * 10. Store turn in ConversationContext
+   * 11. Return StructuredResponse
+   *
+   * @param tenantId - Tenant ID from X-Tenant-Id header
+   * @param userId - User ID from JWT
+   * @param membershipId - Membership ID from JWT
+   * @param request - Chat request with message, page, buildingId, unitId, sessionId
+   * @param userRoles - User roles for this tenant
+   * @returns StructuredResponse with type, title, summary, data, actions, meta
+   */
+  async chatV2(
+    tenantId: string,
+    userId: string,
+    membershipId: string,
+    request: ChatRequest & { sessionId?: string },
+    userRoles: string[],
+  ): Promise<StructuredResponse> {
+    // Check feature flag
+    if (!this.intentEngineEnabled) {
+      throw new ForbiddenException('Intent engine disabled');
+    }
+
+    // Validate message
+    if (!request.message || request.message.trim().length === 0) {
+      throw new BadRequestException('Message cannot be empty');
+    }
+
+    if (request.message.length > 2000) {
+      throw new BadRequestException('Message cannot exceed 2000 characters');
+    }
+
+    // Validate context (buildingId, unitId ownership)
+    await this.validateContext(
+      tenantId,
+      userId,
+      request.buildingId,
+      request.unitId,
+      userRoles,
+      membershipId,
+    );
+
+    // Check rate limit
+    await this.checkRateLimit(tenantId);
+
+    // Check monthly calls limit
+    const callsLimitCheck = await this.budget.checkCallsLimit(tenantId);
+    if (!callsLimitCheck.allowed) {
+      throw new ConflictException(
+        `AI calls limit exceeded. Used: ${callsLimitCheck.callsUsed} of ${callsLimitCheck.callsLimit} calls this month`,
+      );
+    }
+
+    // Get or generate sessionId for conversation context
+    const sessionId = request.sessionId || this.generateSessionId();
+
+    // Step 1: Get conversation context
+    const conversationContext = await this.conversationContext.getContext(sessionId);
+    const lastResolved = await this.conversationContext.getLastResolved(sessionId);
+
+    // Build context for intent extraction
+    const contextForExtraction = {
+      buildingId: request.buildingId || lastResolved.buildingId,
+      unitId: request.unitId || lastResolved.unitId,
+      userId,
+      previousTurns: conversationContext as ConversationTurn[],
+    };
+
+    // Step 2: Extract intent using dual LLM with fallback
+    let extractedIntent: ExtractedIntent;
+    try {
+      extractedIntent = await this.intentExtractor.extractIntent(
+        request.message,
+        contextForExtraction,
+      );
+    } catch (error) {
+      this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
+      throw new BadRequestException('Could not understand your message. Please rephrase.');
+    }
+
+    // Step 3: Resolve entities
+    let entityResolution: EntityResolution = { alternatives: [] };
+
+    // Resolve building if alias provided
+    if (extractedIntent.entity.buildingAlias) {
+      const buildingResolution = await this.entityResolver.resolveBuilding(
+        extractedIntent.entity.buildingAlias,
+        tenantId,
+      );
+      if (buildingResolution) {
+        entityResolution = { ...entityResolution, ...buildingResolution };
+      }
+    }
+
+    // Resolve unit if building and code provided
+    if (entityResolution.building && extractedIntent.entity.unitCode) {
+      const unitResolution = await this.entityResolver.resolveUnit(
+        extractedIntent.entity.unitCode,
+        entityResolution.building.id,
+        tenantId,
+      );
+      if (unitResolution) {
+        entityResolution = { ...entityResolution, ...unitResolution };
+      }
+    }
+
+    // Resolve person if name provided
+    if (extractedIntent.entity.personName) {
+      const personResolution = await this.entityResolver.resolvePerson(
+        extractedIntent.entity.personName,
+        tenantId,
+      );
+      if (personResolution) {
+        entityResolution = { ...entityResolution, ...personResolution };
+      }
+    }
+
+    // Step 4: Check for ambiguity
+    if (this.ambiguityService.detectAmbiguity(entityResolution)) {
+      const ambiguityResult = this.ambiguityService.generateClarification(
+        entityResolution,
+        extractedIntent.entity.type,
+      );
+
+      // Format and return clarification response
+      return this.responseFormatter.formatV2(
+        {
+          isAmbiguous: true,
+          alternatives: entityResolution.alternatives,
+          clarificationMessage: ambiguityResult.clarificationMessage,
+        },
+        'ambiguous',
+        extractedIntent.confidence,
+      );
+    }
+
+    // Step 5: Build execution plan
+    let executionPlan;
+    try {
+      executionPlan = this.queryPlanner.buildPlan(extractedIntent, entityResolution);
+    } catch (error) {
+      this.logger.warn(`[chatV2] Plan build failed: ${error}`);
+      throw new BadRequestException('Could not understand your query. Please rephrase.');
+    }
+
+    // Step 6: Execute with RBAC
+    let rawData: unknown;
+    try {
+      rawData = await this.queryExecutor.execute(
+        executionPlan,
+        tenantId,
+        userRoles,
+      );
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+      this.logger.error(`[chatV2] Execution failed: ${error}`);
+      throw new BadRequestException('Query execution failed. Please try again.');
+    }
+
+    // Step 7: Format response
+    const structuredResponse = this.responseFormatter.formatV2(
+      rawData,
+      extractedIntent.intent,
+      extractedIntent.confidence,
+    );
+
+    // Ensure tenantScoped is true in meta
+    structuredResponse.meta = {
+      ...structuredResponse.meta,
+      intent: extractedIntent.intent,
+      confidence: extractedIntent.confidence,
+      tenantScoped: true as const,
+    };
+
+    // Step 8: Store turn in conversation context
+    await this.conversationContext.storeTurn(sessionId, {
+      role: 'user',
+      message: request.message,
+      timestamp: new Date(),
+      resolvedEntities: entityResolution,
+    });
+
+    // Log interaction (fire-and-forget)
+    void this.logInteraction(
+      tenantId,
+      userId,
+      membershipId,
+      request,
+      { answer: structuredResponse.summary, suggestedActions: [] } as ChatResponse,
+      false,
+      'INTENT_ENGINE',
+    );
+
+    return structuredResponse;
+  }
+
+  /**
+   * Generate a simple session ID
+   */
+  private generateSessionId(): string {
+    return `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
   private async tryResolveStrictOperationalQuestion(
     tenantId: string,
     message: string,
@@ -395,6 +702,12 @@ export class AssistantService {
       if (response) {
         return response;
       }
+    }
+
+    // Person-based queries (search by occupant name)
+    const personCheck = await this.tryResolveStrictPersonSearchQuestion(tenantId, message, userRoles, userId);
+    if (personCheck) {
+      return personCheck;
     }
 
     // Unit-level queries (when unit is specified)
@@ -440,7 +753,8 @@ export class AssistantService {
       normalizedMessage.includes('locatario') ||
       normalizedMessage.includes('titular') ||
       normalizedMessage.includes('habitante') ||
-      normalizedMessage.includes('dueno');
+      normalizedMessage.includes('dueno') ||
+      normalizedMessage.includes('tiene');
 
     if (!isResidentQuery) {
       return null;
@@ -457,10 +771,26 @@ export class AssistantService {
       return resolution.errorResponse;
     }
 
-    const { building, unit, displayCode } = resolution.resolved;
+    let { building, unit, displayCode } = resolution.resolved;
 
     if (!(await this.canAccessScopedOperationalData({ userId, tenantId, userRoles, permission: 'units.read', buildingId: building.id, unitId: unit.id }))) {
       return null;
+    }
+
+    // Si es estacionamiento, buscar apartamento asociado y usar sus ocupantes
+    let apartmentCode = '';
+    if (unit.unitType === 'ESTACIONAMIENTO') {
+      const association = await this.prisma.unitAssociation.findFirst({
+        where: { parkingId: unit.id },
+        include: {
+          apartment: { select: { id: true, code: true } },
+        },
+      });
+
+      if (association?.apartment) {
+        unit = { ...unit, id: association.apartment.id }; // Usar ID del apartamento para buscar ocupantes
+        apartmentCode = `${building.alias}-${association.apartment.code}`;
+      }
     }
 
     const occupants = await this.prisma.unitOccupant.findMany({
@@ -478,6 +808,12 @@ export class AssistantService {
     });
 
     if (occupants.length === 0) {
+      if (apartmentCode) {
+        return {
+          answer: `El estacionamiento ${displayCode} está asociado al apartamento ${apartmentCode}, pero no tiene ocupantes activos.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
+        };
+      }
       return {
         answer: `La unidad ${displayCode} (${building.name}) no tiene ocupantes activos asignados.`,
         suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: building.id, unitId: unit.id } }],
@@ -507,6 +843,21 @@ export class AssistantService {
     const roleLabel =
       selected.role === UnitOccupantRole.OWNER ? 'propietario/a' : 'residente';
 
+    if (apartmentCode) {
+      return {
+        answer: `El estacionamiento ${displayCode} está asociado al apartamento ${apartmentCode} (${building.name}). El ${roleLabel} principal del apartamento es ${selected.member.name}.`,
+        suggestedActions: [
+          {
+            type: 'VIEW_REPORTS',
+            payload: {
+              buildingId: building.id,
+              unitId: unit.id,
+            },
+          },
+        ],
+      };
+    }
+
     return {
       answer: `En ${building.name}, la unidad ${displayCode} tiene como ${roleLabel} principal a ${selected.member.name}.`,
       suggestedActions: [
@@ -518,6 +869,125 @@ export class AssistantService {
           },
         },
       ],
+    };
+  }
+
+  private async tryResolveStrictPersonSearchQuestion(
+    tenantId: string,
+    message: string,
+    userRoles: string[],
+    userId?: string,
+  ): Promise<ChatResponse | null> {
+    if (!this.canAccessOperationalData(userRoles)) {
+      return null;
+    }
+
+    const normalizedMessage = this.normalizeText(message);
+
+    // Keywords that indicate a person search
+    const isPersonQuery =
+      normalizedMessage.includes('owner') ||
+      normalizedMessage.includes('residente') ||
+      normalizedMessage.includes('inquilino') ||
+      normalizedMessage.includes('propietario') ||
+      normalizedMessage.includes('habitante') ||
+      normalizedMessage.includes('persona') ||
+      normalizedMessage.includes('quien es') ||
+      normalizedMessage.includes('donde vive') ||
+      normalizedMessage.includes('estacionamiento de') ||
+      normalizedMessage.includes('puesto de') ||
+      normalizedMessage.includes('cochera de') ||
+      normalizedMessage.includes('garage de');
+
+    if (!isPersonQuery) {
+      return null;
+    }
+
+    // Extract name from message
+    // Patterns: "owner-17", "Owner 17", "Juan Perez", etc.
+    const namePatterns = [
+      /(?:owner|residente|inquilino|propietario)[\s-]+(\w+(?:\s+\w+)?)/i,
+      /(?:de|del)\s+(?:el\s+)?(?:owner|residente|inquilino|propietario)[\s-]+(\w+(?:\s+\w+)?)/i,
+    ];
+
+    let personName = '';
+    for (const pattern of namePatterns) {
+      const match = message.match(pattern);
+      if (match && match[1]) {
+        personName = match[1].trim();
+        break;
+      }
+    }
+
+    if (!personName) {
+      return null;
+    }
+
+    // Search for occupant by name
+    const occupant = await this.prisma.unitOccupant.findFirst({
+      where: {
+        tenantId,
+        endDate: null,
+        member: {
+          name: {
+            contains: personName,
+            mode: 'insensitive',
+          },
+        },
+      },
+      include: {
+        member: true,
+        unit: {
+          include: {
+            building: true,
+          },
+        },
+      },
+    });
+
+    if (!occupant) {
+      return {
+        answer: `No encontré a ningún residente con nombre "${personName}" en este tenant.`,
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
+    const { member, unit } = occupant;
+    const displayCode = `${unit.building.alias}-${unit.code}`;
+
+    // Check if user asks about parking
+    const asksParking =
+      normalizedMessage.includes('estacionamiento') ||
+      normalizedMessage.includes('puesto') ||
+      normalizedMessage.includes('cochera') ||
+      normalizedMessage.includes('garage');
+
+    if (asksParking) {
+      // Find associated parking
+      const association = await this.prisma.unitAssociation.findFirst({
+        where: { apartmentId: unit.id },
+        include: {
+          parking: { select: { id: true, code: true } },
+        },
+      });
+
+      if (association?.parking) {
+        const parkingDisplayCode = `${unit.building.alias}-${association.parking.code}`;
+        return {
+          answer: `${member.name} vive en el apartamento ${displayCode} (${unit.building.name}). Su estacionamiento asignado es ${parkingDisplayCode}.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: unit.building.id, unitId: unit.id } }],
+        };
+      } else {
+        return {
+          answer: `${member.name} vive en el apartamento ${displayCode} (${unit.building.name}), pero no tiene estacionamiento asignado.`,
+          suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: unit.building.id, unitId: unit.id } }],
+        };
+      }
+    }
+
+    return {
+      answer: `${member.name} vive en el apartamento ${displayCode} (${unit.building.name}).`,
+      suggestedActions: [{ type: 'VIEW_REPORTS', payload: { buildingId: unit.building.id, unitId: unit.id } }],
     };
   }
 

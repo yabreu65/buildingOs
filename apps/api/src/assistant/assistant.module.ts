@@ -31,6 +31,30 @@ import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
+// Intent Engine services
+import { IntentRegistry } from './intent-engine/intent-registry';
+import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { EntityResolverService } from './resolver/entity-resolver.service';
+import { AmbiguityService } from './resolver/ambiguity.service';
+import { ConversationContextService } from './context/conversation-context.service';
+import { QueryPlannerService } from './planner/query-planner.service';
+import { QueryExecutorService } from './executor/query-executor.service';
+import { ResponseFormatterService } from './formatter/response-formatter.service';
+import { AssistantFeedbackService } from './feedback/assistant-feedback.service';
+
+// Intent definitions
+import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
+import { unitResidentsIntent } from './intent-engine/allowed-intents/unit-residents.intent';
+import { unitDocumentsIntent } from './intent-engine/allowed-intents/unit-documents.intent';
+import { unitTicketsIntent } from './intent-engine/allowed-intents/unit-tickets.intent';
+import { unitPaymentsIntent } from './intent-engine/allowed-intents/unit-payments.intent';
+import { buildingDebtIntent } from './intent-engine/allowed-intents/building-debt.intent';
+import { buildingDelinquentsIntent } from './intent-engine/allowed-intents/building-delinquents.intent';
+import { buildingDocumentsIntent } from './intent-engine/allowed-intents/building-documents.intent';
+import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
+import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
+import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
+
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
  *
@@ -115,6 +139,16 @@ import { AssistantDebtCalculatorService } from './assistant-debt-calculator.serv
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
     AssistantDebtCalculatorService,
+    // Intent Engine services
+    IntentRegistry,
+    IntentExtractorService,
+    EntityResolverService,
+    AmbiguityService,
+    ConversationContextService,
+    QueryPlannerService,
+    QueryExecutorService,
+    ResponseFormatterService,
+    AssistantFeedbackService,
   ],
   exports: [
     AssistantService,
@@ -135,6 +169,15 @@ import { AssistantDebtCalculatorService } from './assistant-debt-calculator.serv
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
     AssistantDebtCalculatorService,
+    IntentRegistry,
+    IntentExtractorService,
+    EntityResolverService,
+    AmbiguityService,
+    ConversationContextService,
+    QueryPlannerService,
+    QueryExecutorService,
+    ResponseFormatterService,
+    AssistantFeedbackService,
   ],
 })
 export class AssistantModule {}
