@@ -661,6 +661,7 @@ export class AssistantService implements OnModuleInit {
       rawData = await this.queryExecutor.execute(
         executionPlan,
         tenantId,
+        userId,
         userRoles,
       );
     } catch (error) {

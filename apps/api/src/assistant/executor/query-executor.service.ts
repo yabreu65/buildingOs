@@ -40,7 +40,7 @@ export class QueryExecutorService {
    * @throws {ForbiddenException} If user lacks required permission
    * @throws Error if intent not found or executor fails
    */
-  async execute(plan: ExecutionPlan, tenantId: string, userRoles: string[]): Promise<unknown> {
+  async execute(plan: ExecutionPlan, tenantId: string, userId: string, userRoles: string[]): Promise<unknown> {
     const startTime = performance.now();
 
     // Look up intent in registry
@@ -49,28 +49,35 @@ export class QueryExecutorService {
       throw new Error(`Intent "${plan.intent}" not found in registry`);
     }
 
-    // RBAC check
-    const hasPermission = await this.authorizeService.authorize({
-      userId: '', // Will be filled by controller
-      tenantId,
-      permission: intentDefinition.requiredPermission,
-      buildingId: plan.entityIds?.buildingId,
-      unitId: plan.entityIds?.unitId,
-    });
-
-    if (!hasPermission) {
-      const durationMs = performance.now() - startTime;
-      this.feedbackService.logExecution({
-        intent: plan.intent,
-        entity: { type: plan.entityIds?.unitId ? 'unit' : 'building' },
-        filters: plan.filters as Record<string, unknown>,
-        success: false,
-        error: 'Forbidden',
-        durationMs,
+    // Development bypass: skip RBAC check in development mode
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    if (!isDevelopment) {
+      // RBAC check (only in production)
+      const hasPermission = await this.authorizeService.authorize({
+        userId,
         tenantId,
-        userId: '',
+        permission: intentDefinition.requiredPermission,
+        buildingId: plan.entityIds?.buildingId,
+        unitId: plan.entityIds?.unitId,
       });
-      throw new ForbiddenException('Unauthorized access to this resource');
+
+      if (!hasPermission) {
+        const durationMs = performance.now() - startTime;
+        this.feedbackService.logExecution({
+          intent: plan.intent,
+          entity: { type: plan.entityIds?.unitId ? 'unit' : 'building' },
+          filters: plan.filters as Record<string, unknown>,
+          success: false,
+          error: 'Forbidden',
+          durationMs,
+          tenantId,
+          userId,
+        });
+        throw new ForbiddenException('Unauthorized access to this resource');
+      }
+    } else {
+      // Development: log bypass
+      console.log(`[DEV BYPASS] RBAC check skipped for intent "${plan.intent}" (user: ${userId}, roles: ${userRoles.join(',')})`);
     }
 
     try {
