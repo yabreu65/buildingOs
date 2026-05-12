@@ -38,6 +38,12 @@ export class RequireFeatureGuard implements CanActivate {
       return true;
     }
 
+    // Development bypass: allow all features in development mode
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    if (isDevelopment) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest();
     const tenantId = request.user?.tenantId || request.headers['x-tenant-id'];
 
