@@ -5,7 +5,24 @@ import { useState, useCallback } from 'react';
 export interface AssistantAction {
   readonly key: string;
   readonly label: string;
-  readonly description: string;
+  readonly description?: string;
+}
+
+export interface StructuredResponse {
+  readonly type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
+  readonly title: string;
+  readonly summary: string;
+  readonly data?: unknown;
+  readonly actions?: Array<{
+    readonly label: string;
+    readonly action: string;
+    readonly payload?: object;
+  }>;
+  readonly meta: {
+    readonly intent: string;
+    readonly confidence: number;
+    readonly tenantScoped: true;
+  };
 }
 
 export interface AssistantSourceTrace {
@@ -35,6 +52,7 @@ export interface AssistantMessage {
   readonly llmUsed?: boolean;
   readonly sources?: readonly AssistantSource[];
   readonly actions?: readonly AssistantAction[];
+  readonly structuredResponse?: StructuredResponse;
 }
 
 export interface AssistantContext {

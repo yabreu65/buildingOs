@@ -7,6 +7,8 @@ import type { AssistantMessage, AssistantAction, AssistantContext } from './useA
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
 import { getToken } from '@/features/auth/session.storage';
+import { assistantApi, StructuredResponse } from '@/features/assistant/services/assistant.api';
+import { AssistantResponseRenderer } from './renderers';
 
 export interface AssistantWidgetProps {
   context: AssistantContext;
@@ -43,6 +45,8 @@ export function AssistantWidget({
     scrollToBottom();
   }, [messages]);
 
+  const [conversationId] = useState(() => `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -58,48 +62,28 @@ export function AssistantWidget({
     setError(null);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      const token = getToken();
-      
       if (!tenantId) {
         throw new Error('No tenant ID available');
       }
       
-      const response = await fetch(`${API_URL}/tenants/${tenantId}/assistant/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
-          'X-Tenant-Id': tenantId,
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          page: context.page || 'dashboard',
-          buildingId: context.buildingId,
-          unitId: context.unitId,
-        }),
+      // Use v2 endpoint for structured responses
+      const response = await assistantApi.chatV2(tenantId, {
+        message: userMessage.content,
+        page: context.page || 'dashboard',
+        buildingId: context.buildingId,
+        unitId: context.unitId,
+        conversationId,
       });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error('Sesión expirada. Por favor, inicia sesión nuevamente.');
-        }
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Error: ${response.status}`);
-      }
-
-      const data = await response.json();
 
       const assistantMessage: AssistantMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
-        content: data.answer,
-        llmUsed: data.llmUsed,
-        sources: data.knowledgeUsed?.sources,
-        actions: data.suggestedActions?.map((action: any) => ({
-          key: action.type,
-          label: action.type,
-          payload: action.payload,
+        content: response.summary,
+        structuredResponse: response,
+        actions: response.actions?.map((action) => ({
+          key: action.action,
+          label: action.label,
+          payload: action.payload as Record<string, unknown>,
         })) || [],
       };
 
@@ -233,7 +217,21 @@ export function AssistantWidget({
                       : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white'
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  {msg.structuredResponse ? (
+                    <AssistantResponseRenderer
+                      response={msg.structuredResponse}
+                      onClarificationSelect={(value) => {
+                        setInput(value);
+                        setTimeout(() => sendMessage(), 100);
+                      }}
+                      onAction={(action, payload) => {
+                        // Handle action clicks from structured response
+                        console.log('Action:', action, payload);
+                      }}
+                    />
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  )}
                   
                   {msg.role === 'assistant' && msg.llmUsed !== undefined && (
                     <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
@@ -253,34 +251,6 @@ export function AssistantWidget({
                       {msg.sources && msg.sources.length > 0 && (
                         <div className="mt-1 text-xs text-gray-500">
                           Fuentes: {msg.sources.map(s => s.fileName).join(', ')}
-                        </div>
-                      )}
-                      
-                      {msg.role === 'assistant' && msg.actions && msg.actions.length > 0 && (
-                        <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-                          <div className="flex flex-wrap gap-2">
-                            {msg.actions.map((action, actionIndex) => {
-                              const path = getAssistantActionPath(action.key, tenantId);
-                              const isMapped = path !== null;
-                              const totalActions = msg.actions?.length ?? 0;
-                              return (
-                                <button
-                                  key={action.key}
-                                  onClick={() => handleActionClick(action, msg.id, actionIndex, totalActions)}
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                                    isMapped
-                                      ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/50 cursor-pointer'
-                                      : 'bg-gray-50 border-gray-200 text-gray-500 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-500 cursor-not-allowed opacity-60'
-                                  }`}
-                                  title={action.description}
-                                  disabled={!isMapped}
-                                >
-                                  {isMapped ? <ArrowRight size={12} /> : <ExternalLink size={12} />}
-                                  {action.label}
-                                </button>
-                              );
-                            })}
-                          </div>
                         </div>
                       )}
                     </div>
