@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
+import { RedisModule } from '../redis/redis.module';
 import { AssistantService, MockAiProvider } from './assistant.service';
 import { AssistantToolsService } from './tools.service';
 import { AssistantController, SuperAdminAiController } from './assistant.controller';
@@ -106,7 +107,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
  * - AuditModule: Audit logging
  */
 @Module({
-  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule],
+  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule, RedisModule],
   controllers: [
     AssistantController,
     AiBudgetController,
