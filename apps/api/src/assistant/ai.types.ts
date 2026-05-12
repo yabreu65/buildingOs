@@ -49,7 +49,7 @@ export interface ClassifierResult {
  */
 export interface StructuredResponse {
   /** Response type */
-  type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification';
+  type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
   /** Response title */
   title: string;
   /** Human-readable summary */
@@ -59,11 +59,11 @@ export interface StructuredResponse {
   /** Suggested actions */
   actions?: Array<{
     /** Action type identifier */
-    type: string;
+    action: string;
     /** Human-readable label */
     label: string;
     /** Action payload */
-    payload?: Record<string, string>;
+    payload?: Record<string, unknown>;
   }>;
   /** Metadata */
   meta?: {

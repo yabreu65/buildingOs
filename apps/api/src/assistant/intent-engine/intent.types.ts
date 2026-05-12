@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 /**
  * Supported response types for intent execution
  */
-export type SupportedResponseType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification';
+export type SupportedResponseType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
 
 /**
  * Supported filter types for intent execution
@@ -128,15 +128,18 @@ export interface ExtractedIntent {
 /**
  * Structured response types
  */
-export type ResponseType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification';
+export type ResponseType = 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
 
 /**
  * Action that can be suggested in a response
  */
 export interface SuggestedAction {
-  type: string;
+  /** Action identifier */
+  action: string;
+  /** Human-readable label */
   label: string;
-  payload: Record<string, string>;
+  /** Action payload */
+  payload?: Record<string, unknown>;
 }
 
 /**

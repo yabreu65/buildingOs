@@ -132,7 +132,7 @@ export class ResponseFormatterService {
       return [];
     }
 
-    return [{ type: actionType, label: this.getActionLabel(actionType), payload: {} }];
+    return [{ action: actionType, label: this.getActionLabel(actionType), payload: {} }];
   }
 
   /**
