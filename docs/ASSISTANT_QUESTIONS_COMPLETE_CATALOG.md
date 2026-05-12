@@ -1,386 +1,559 @@
-# 📋 Catálogo Completo de Preguntas - Asistente AI BuildingOS
+# Catálogo de Preguntas y Respuestas del Asistente AI - BuildingOS
 
-## ✅ Funcionando Correctamente (Determinístico)
-
-### 1. RESIDENTES / OCUPANTES (Unit-Level)
-
-**Keywords:** residente, ocupante, inquilino, propietario, habita, vive, reside, ocupa, arrendatario, locatario, titular, habitante, dueño
-
-> **⚠️ Nota importante:** Los códigos de unidad en San Cristóbal tienen **4 dígitos** (piso de 2 dígitos + departamento de 2 dígitos). Ejemplo: `0101` = Piso 1, Depto 1. El **displayCode** visible se forma como `${alias}-${code}`: `A-0101`, `B-0102`.
-
-#### Preguntas con unidad + edificio específicos (formato alias explícito):
-- "Quien vive en A-0101" ✅
-- "Residente del apartamento B-0102" ✅
-- "Inquilino del depto A-0103" ✅
-- "Propietario del departamento B-0104" ✅
-- "Quien habita en la unidad A-0105" ✅
-- "Ocupante del apartamento A-0106" ✅
-- "Persona que vive en el depto B-0107" ✅
-- "Dueño del apartamento A-0108" ✅
-- "Habitante de la unidad B-0201" ✅
-- "Arrendatario del depto A-1101" ✅
-- "Locatario del apartamento B-1102" ✅
-- "Titular de la unidad A-1103" ✅
-
-#### Preguntas con formato compacto (sin guion):
-- "Quien vive en A0101" ✅
-- "Residente de B0102" ✅
-- "Inquilino de A0103" ✅
-
-#### Preguntas con reverse pattern:
-- "Residente de 0101 de la A" ✅
-- "Quien vive en 0102 del edificio B" ✅
-- "Inquilino de 0103 de la Torre A" ✅
-
-#### Variaciones sin edificio (auto-resolución o ambigüedad):
-- "Quien reside en el departamento 0101" → Si 1 edificio: auto-resuelve como A-0101. Si 2+ edificios: "Necesito que me indiques el edificio. Por ejemplo: A-0101 o B-0101."
-- "Quien ocupa el departamento 0102" → Mismo comportamiento según cantidad de edificios.
+> Documento de pruebas: TODAS las preguntas que el asistente puede resolver con sus respuestas esperadas.
+> Versión: 2.0 (Incluye Intent Engine v2 + Follow-ups Conversacionales)
+> Última actualización: 2026-05-12
 
 ---
 
-### 2. DEUDA (Unit-Level)
+## Índice
 
-**Keywords:** debe, cuanto debe, deuda, saldo, adeuda, cuanto, monto, importe, estado de cuenta
-
-#### Preguntas con unidad + edificio (formato alias):
-- "Cuanto debe A-0101"
-- "Deuda del apartamento B-0102"
-- "Que saldo tiene A-0103"
-- "Cuanto adeuda B-0104"
-- "Monto de deuda de A-0105"
-- "Importe pendiente del apartamento B-0106"
-- "La unidad A-0107 esta al dia"
-- "Deuda de B-0201"
-- "Expensas de A-0108"
-- "Cuanto debe el apto B-0109"
-- "Situacion de pagos de la unidad A-1101"
-- "Estado de cuenta del departamento B-1102"
-
-#### Preguntas con formato compacto:
-- "Deuda de A0101"
-- "Saldo de B0102"
-
-#### Preguntas con reverse pattern:
-- "Cuanto debe 0101 de la A"
-- "Deuda de 0102 del edificio B"
+1. [Consultas a Nivel Unidad](#1-consultas-a-nivel-unidad)
+2. [Consultas a Nivel Edificio](#2-consultas-a-nivel-edificio)
+3. [Follow-ups Conversacionales](#3-follow-ups-conversacionales)
+4. [Consultas a Nivel Tenant](#4-consultas-a-nivel-tenant)
+5. [Sinónimos Soportados](#5-sinónimos-soportados)
+6. [Roles Autorizados](#6-roles-autorizados)
 
 ---
 
-### 3. DOCUMENTOS (Unit-Level)
+## 1. CONSULTAS A NIVEL UNIDAD
 
-**Keywords:** documento, documentos, archivo, archivos, pdf, comprobante, comprobantes, expediente, acta, planilla
+> **Requieren:** Identificación de unidad (código o alias) + edificio en el mensaje, o contexto conversacional previo.
+> **Permiso requerido:** `units.read` o `payments.review` (según intent)
 
-#### Preguntas con unidad + edificio (formato alias):
-- "Documentos del departamento A-0101"
-- "Archivos del apartamento B-0102"
-- "PDFs de la unidad A-0103"
-- "Comprobantes del depto B-0104"
-- "Planillas del departamento A-0105"
-- "Expedientes del apartamento B-0106"
+### 1.1 Residentes / Ocupantes
 
----
+**Intent:** `unit_residents`
+**Keywords:** `residente`, `ocupante`, `inquilino`, `propietario`, `habita`, `vive`, `quien vive`
 
-### 4. TICKETS (Unit-Level)
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 1.1 | "¿Cómo se llama el residente del departamento 101 del Edificio A?" | "Juan Pérez (propietario)" |
+| 1.2 | "¿Quién es el residente del apartamento 5B de la Torre B?" | "María Gómez (residente)" |
+| 1.3 | "Nombre del residente de la unidad 301 del bloque C" | "Carlos López (propietario)" |
+| 1.4 | "Nombre del residente propietario del local 12 del Edificio Central" | "Ana Rodríguez (propietario)" |
+| 1.5 | "Nombre del residente del depto 2-14 del sector Norte" | "Pedro Martínez (residente)" |
+| 1.6 | "¿Quién vive en el apartamento 101 del Edificio A?" | "Luis Torres (residente)" |
+| 1.7 | "¿Quién es el inquilino de la unidad 5B?" | "Sofía Ruiz (residente)" |
 
-**Keywords:** ticket, tickets, reclamo, reclamos, problema, problemas, averia, averias, falla, fallas, solicitud, solicitudes, incidente, incidentes, reparacion, arreglo
-
-#### Preguntas con unidad + edificio (formato alias):
-- "Tickets del departamento A-0101"
-- "Reclamos del apartamento B-0102"
-- "Problemas de la unidad A-0103"
-- "Averias del depto B-0104"
-- "Solicitudes del departamento A-0105"
-- "Incidentes del apartamento B-0106"
-
----
-
-### 5. PAGOS (Unit-Level)
-
-**Keywords:** pago, pagos, transferencia, transferencias, recibo, recibos, movimiento, movimientos, transaccion, transacciones, abono, abonos, cobro, cobros
-
-#### Preguntas con unidad + edificio (formato alias):
-- "Ultimos pagos del departamento A-0101"
-- "Historial de pagos del apartamento B-0102"
-- "Transferencias de la unidad A-0103"
-- "Recibos del depto B-0104"
-- "Movimientos del departamento A-0105"
-- "Transacciones del apto B-0106"
-- "Cobros de la unidad A-0107"
-- "Abonos del departamento B-0108"
+**Fallbacks:**
+- Sin ocupantes → "La unidad no tiene ocupantes activos"
+- Múltiples primarios → "Hay más de un ocupante primario..."
+- Sin unidad/edificio → Pide ambos con ejemplo
 
 ---
 
-### 5.1 ESTACIONAMIENTOS (Unit-Level)
+### 1.2 Deuda / Saldo Pendiente
 
-**Keywords:** estacionamiento, puesto, cochera, garage, parking
+**Intent:** `unit_debt`
+**Keywords:** `debe`, `cuanto debe`, `deuda`, `saldo`, `adeuda`, `cuanto`, `monto`, `importe`, `meses adeudados`
 
-#### Preguntas con estacionamiento + edificio (formato alias):
-- "Quien tiene el estacionamiento A-P001"
-- "Dueño del puesto B-P002"
-- "Deuda del estacionamiento A-P003"
-- "Tickets de la cochera B-P004"
-- "Pagos del puesto A-P005"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 2.1 | "¿Cuánto debe la unidad 101 del Edificio A?" | "Deuda total: Bs.S 22.669,45" |
+| 2.2 | "Deuda del departamento 5B de la Torre B" | "Deuda total: Bs.S [monto]" |
+| 2.3 | "¿Qué saldo pendiente tiene el apartamento 301?" | "Deuda total: Bs.S [monto]" |
+| 2.4 | "¿Cuánto adeuda el local 12 del Edificio Central?" | "Deuda total: Bs.S [monto]" |
+| 2.5 | "¿La unidad 2-14 tiene deuda?" | "Sí, deuda total: Bs.S [monto]" o "No tiene deuda pendiente" |
+| 2.6 | "¿Cuántos meses debe la unidad A-1204?" | "Deuda total: Bs.S 23.888,69 (3 meses adeudados)" |
 
-#### Preguntas con formato compacto:
-- "Quien tiene A-P001"
-- "Dueño de B-P002"
+**Datos incluidos:**
+- `totalDebt`: Monto total adeudado
+- `overduePeriodCount`: Cantidad de meses/períodos adeudados
+- `overduePeriods`: Lista de períodos (ej: `["2026-01", "2026-02", "2026-03"]`)
+- `charges`: Array de cargos con concepto, monto, período, estado
 
-#### Notas sobre estacionamientos:
-- Los estacionamientos tienen código `P001`, `P002`, etc.
-- El **displayCode** es `A-P001`, `B-P002`.
-- Pueden estar **asociados a un apartamento** (heredan el ocupante) o ser **del condominio** (sin propietario asignado).
-- Si pregunta por un estacionamiento asociado, el asistente indica el apartamento correspondiente.
-
----
-
-## 🏢 Building-Level (Nivel Edificio)
-
-### 6. DEUDA TOTAL DEL EDIFICIO
-
-**Keywords:** debe, deuda, saldo, adeuda, monto, importe, expensas, total adeudado
-
-#### Preguntas con edificio (sin unidad específica):
-- "Cuanto debe el edificio A"
-- "Deuda del edificio B"
-- "Que saldo tiene el edificio A"
-- "Monto adeudado del edificio B"
-- "Importe pendiente del edificio A"
-- "Expensas del edificio B"
-- "Total adeudado del edificio A"
-
-**Respuesta:** Deuda total del edificio + cantidad de unidades con deuda
+**Fallbacks:**
+- Sin deuda → "No tiene deuda pendiente. Saldo actual: Bs.S 0,00"
+- Sin unidad/edificio → Pide ambos con ejemplo
 
 ---
 
-### 7. TICKETS DEL EDIFICIO
+### 1.3 Documentos
 
-**Keywords:** ticket, tickets, reclamo, reclamos, problema, problemas, falla, fallas, solicitud, solicitudes, incidente, incidentes, reparacion, arreglo
+**Intent:** `unit_documents`
+**Keywords:** `documento`, `documentos`, `archivo`, `archivos`, `pdf`, `comprobante`, `comprobantes`, `expediente`, `acta`, `planilla`
 
-#### Preguntas con edificio (sin unidad):
-- "Tickets del edificio A"
-- "Reclamos del edificio B"
-- "Problemas del edificio A"
-- "Fallas del edificio B"
-- "Solicitudes del edificio A"
-- "Incidentes del edificio B"
-- "Reparaciones del edificio A"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 3.1 | "Documentos del departamento 101 del Edificio A" | Tabla: nombre, tipo, fecha |
+| 3.2 | "¿Qué archivos tiene la unidad 5B de la Torre B?" | Lista de documentos |
+| 3.3 | "PDFs del apartamento 301" | Lista de documentos |
+| 3.4 | "Comprobantes del local 12 del Edificio Central" | Lista de documentos |
+| 3.5 | "Documentos de la cochera 15 del sector Norte" | Lista de documentos |
 
-**Respuesta:** Lista de tickets + conteo de abiertos
-
----
-
-### 8. MOROSOS / TOP DEUDORES
-
-**Keywords:** moroso, morosos, morosa, morosas, deudor, deudores, deudora, deudoras, quien debe, quienes deben, quien no pago, quienes no pagan, top deudores, ranking de deuda, atrasados, atrasadas, impagos, incobrables
-
-#### Preguntas con edificio:
-- "Quienes son los morosos del edificio A"
-- "Top deudores del edificio B"
-- "Ranking de deuda del edificio A"
-- "Atrasados del edificio B"
-- "Impagos del edificio A"
-- "Deudores del edificio B"
-- "Unidades que no pagan del edificio A"
-- "Listado de morosos del edificio B"
-- "Quien debe mas del edificio A"
-- "Mayores deudores del edificio B"
-
-**Respuesta:** Top 10 unidades con mayor deuda + total adeudado (se muestra con displayCode: A-0101, B-0102)
+**Fallbacks:**
+- Sin documentos → "No tiene documentos registrados"
+- Sin unidad/edificio → Pide ambos con ejemplo
 
 ---
 
-### 9. ESTADÍSTICAS DEL EDIFICIO
+### 1.4 Tickets / Reclamos / Averías
 
-**Keywords:** estadistica, estadísticas, estadisticas, cuantas unidades, cuántas unidades, resumen, informacion del edificio, información del edificio, datos del edificio, como viene, como va, estado del edificio, situacion del edificio, cuentas del edificio
+**Intent:** `unit_tickets`
+**Keywords:** `ticket`, `tickets`, `reclamo`, `reclamos`, `problema`, `problemas`, `averia`, `falla`, `solicitud`, `incidente`, `reparacion`, `arreglo`
 
-#### Preguntas con edificio:
-- "Estadisticas del edificio A"
-- "Cuantas unidades tiene el edificio B"
-- "Resumen del edificio A"
-- "Como viene el edificio B"
-- "Cuentas del edificio A"
-- "Informacion general del edificio B"
-- "Datos del edificio A"
-- "Situacion del edificio B"
-- "Cuanto se debe en total en el edificio A"
-- "Balance del edificio B"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 4.1 | "Tickets del departamento 101 del Edificio A" | Tabla: título, estado, prioridad, fecha |
+| 4.2 | "¿Hay reclamos en la unidad 5B de la Torre B?" | Lista de tickets abiertos/recientes |
+| 4.3 | "Problemas del apartamento 301" | Lista de tickets |
+| 4.4 | "Averías del local 12 del Edificio Central" | Lista de tickets |
+| 4.5 | "¿Qué tickets tiene la cochera 15?" | Lista de tickets |
 
-**Respuesta:** Unidades, tickets abiertos, deuda total, promedio por unidad
-
----
-
-### 10. DOCUMENTOS DEL EDIFICIO
-
-**Keywords:** documento, documentos, archivo, archivos, pdf, comprobante, comprobantes, expediente, acta, planilla
-
-#### Preguntas con edificio (sin unidad):
-- "Documentos del edificio A"
-- "Archivos del edificio B"
-- "Actas del edificio A"
-- "Reglamentos del edificio B"
-- "Planos del edificio A"
-
-**Respuesta:** Lista de documentos del edificio (sin filtro por unidad)
+**Fallbacks:**
+- Sin tickets → "No tiene tickets registrados"
+- Sin unidad/edificio → Pide ambos con ejemplo
 
 ---
 
-### 11. PAGOS DEL EDIFICIO
+### 1.5 Pagos Recientes
 
-**Keywords:** pago, pagos, transferencia, transferencias, recibo, recibos, cobranza, cobranzas, recaudacion, ingresos
+**Intent:** `unit_payments`
+**Keywords:** `pago`, `pagos`, `transferencia`, `transferencias`, `recibo`, `recibos`, `movimiento`, `movimientos`
 
-#### Preguntas con edificio (sin unidad):
-- "Pagos del edificio A"
-- "Transferencias del edificio B"
-- "Recibos del edificio A"
-- "Cobranzas del edificio B"
-- "Ingresos del edificio A"
-- "Recaudacion del edificio B"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 5.1 | "Últimos pagos del departamento 101 del Edificio A" | Tabla: monto, método, estado, fecha |
+| 5.2 | "Historial de pagos de la unidad 5B de la Torre B" | Lista de pagos |
+| 5.3 | "Pagos recientes del apartamento 301" | Lista de pagos |
+| 5.4 | "Historial de transferencias del local 12" | Lista de pagos |
+| 5.5 | "Recibos recientes de la cochera 15" | Lista de pagos |
+| 5.6 | "Últimas transferencias de la unidad 101" | Lista de pagos |
+| 5.7 | "Movimientos de la unidad 5B" | Lista de pagos |
 
-**Respuesta:** Últimos pagos del edificio con info de unidad (displayCode)
+**Filtros soportados:** `period` (YYYY-MM), `status`, `method`, `minAmount`, `maxAmount`
 
----
-
-## 🔄 Formatos de Referencia a Unidades (Parser)
-
-El asistente soporta múltiples formatos para referirse a una unidad:
-
-### 1. Alias explícito con guion (recomendado)
-`A-0101`, `B-0201`, `C-1201`
-
-- "Quién vive en A-0101"
-- "Deuda de B-0201"
-- "Tickets de C-1201"
-
-### 2. Compacto sin guion
-`A0101`, `B0101`, `C0201`
-
-- "Tickets de B0101"
-- "Documentos de A0101"
-
-### 3. Reverse pattern
-`{code} de la {alias}` o `{code} del edificio {alias}`
-
-- "Residente de 0101 de la A"
-- "Deuda de 0201 del edificio B"
-- "Pagos de 1201 de la Torre C"
-
-### 4. Solo código (auto-resolución / ambigüedad)
-`{code}`
-
-- "Quién vive en 0101"
-- "Deuda de 0201"
-
-**Reglas de resolución:**
-- **Tenant con 1 edificio:** `0101` → auto-resuelve como `A-0101`
-- **Tenant con 2+ edificios:** `0101` → mensaje de ambigüedad:
-  > "Necesito que me indiques el edificio. Por ejemplo: A-0101 o B-0101."
+**Fallbacks:**
+- Sin pagos → "No tiene pagos registrados"
+- Sin unidad/edificio → Pide ambos con ejemplo
 
 ---
 
-## 🤖 Classifier (Nivel 2 - Lenguaje Natural)
+## 2. CONSULTAS A NIVEL EDIFICIO
 
-Cuando los keywords estrictos no matchean, el classifier detecta la intención y sugiere navegación:
+> **Requieren:** Identificación del edificio en el mensaje, **sin** especificar unidad.
+> **Permiso requerido:** `buildings.read` o `payments.review` (según intent)
 
-### Preguntas que activan el classifier:
+### 2.1 Deuda Total del Edificio
 
-#### DEUDA/SALDOS (sugiere Finanzas):
-- "Estoy al dia con las expensas"
-- "Todo esta pagado"
-- "No debo nada verdad"
-- "Como anda la cobranza"
-- "Me puedes decir si debo algo"
+**Intent:** `building_debt`
+**Keywords:** `debe`, `cuanto debe`, `deuda`, `saldo`, `adeuda`, `cuanto`, `monto`, `importe`
 
-#### TICKETS/RECLAMOS (sugiere Tickets):
-- "Hay algun problema en el edificio"
-- "Necesito ver si hay reclamos"
-- "Hay algo roto en el edificio"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 6.1 | "¿Cuánto debe el Edificio A?" | "Deuda total: Bs.S [monto] ([N] unidades con deuda)" |
+| 6.2 | "Deuda de la Torre B" | Deuda total + desglose por unidad |
+| 6.3 | "¿Qué saldo pendiente tiene el bloque C?" | Deuda total |
+| 6.4 | "¿Cuánto adeuda el sector Norte?" | Deuda total |
+| 6.5 | "Deuda del complejo residencial" | Deuda total |
 
-#### DOCUMENTOS (sugiere Archivos):
-- "Necesito ver los documentos"
-- "Quiero revisar los papeles"
-- "Donde estan los archivos"
+**Datos incluidos:**
+- `totalDebt`: Monto total adeudado del edificio
+- `totalUnits`: Cantidad de unidades con deuda
+- `byUnit`: Array con código de unidad, label, deuda total, deuda pagada, deuda restante
 
-#### PAGOS (sugiere Finanzas):
-- "Quiero ver los pagos recientes"
-- "Todo bien con los pagos"
-
-#### RESIDENTES (sugiere Reportes):
-- "Quien habita aca" (muy ambiguo, puede ir a fallback)
-- "Los inquilinos estan al dia"
-
-#### ESTADÍSTICAS (sugiere Reportes):
-- "Como viene el complejo" (muy ambiguo, puede ir a fallback)
-- "Cuantas unidades tenemos"
+**Fallbacks:**
+- Sin deuda → "No tiene deuda pendiente. Todas las unidades están al día"
+- Edificio no encontrado → "Edificio no encontrado"
 
 ---
 
-## 💬 Fallback (Nivel 3 - Conversación General)
+### 2.2 Tickets del Edificio
 
-Preguntas que no matchean con ninguna categoría operativa:
+**Intent:** `building_tickets`
+**Keywords:** `ticket`, `tickets`, `reclamo`, `reclamos`, `problema`, `problemas`, `averia`, `falla`, `solicitud`, `incidente`, `reparacion`, `arreglo`, `fallas`, `reparaciones`
 
-- "Buenos dias"
-- "Gracias por la ayuda"
-- "Cual es el clima hoy"
-- "Hola"
-- "Adios"
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 7.1 | "Tickets del Edificio A" | Lista de tickets + resumen por estado |
+| 7.2 | "Reclamos de la Torre B" | Lista de tickets |
+| 7.3 | "Problemas del bloque C" | Lista de tickets |
+| 7.4 | "Averías del sector Norte" | Lista de tickets |
+| 7.5 | "¿Hay tickets en el complejo?" | Lista de tickets |
+| 7.6 | "Fallas del edificio A" | Lista de tickets |
+| 7.7 | "Reparaciones del edificio A" | Lista de tickets |
 
-**Respuesta:** Mensaje educado sugiriendo especificar unidad y edificio
+**Datos incluidos:**
+- `tickets`: Array con título, estado, prioridad, categoría, fecha
+- `statusSummary`: Conteo por estado (OPEN, CLOSED, etc.)
+- `total`: Cantidad total de tickets
 
----
-
-## ❌ NO Soportado (Va a Fallback)
-
-### Sin edificio específico en building-level:
-- "Cuanto se debe en total" ❌ (necesita edificio)
-- "Quienes son los morosos" ❌ (necesita edificio)
-- "Estadisticas del complejo" ❌ (necesita edificio específico)
-
-### Edificio inexistente:
-- "Deuda de la Torre Z" ❌ (edificio no existe)
-- "Tickets del departamento 9999" ❌ (unidad no existe)
-
-### Preguntas no operativas:
-- "Que hora es"
-- "Cual es el clima"
-- "Contame un chiste"
+**Fallbacks:**
+- Sin tickets → "No tiene tickets registrados"
+- Edificio no encontrado → "Edificio no encontrado"
 
 ---
 
-## 📊 Resumen por Categoría
+### 2.3 Morosos / Top Deudores
 
-| Categoría | Unit-Level | Building-Level | Classifier |
-|-----------|-----------|----------------|------------|
-| Residentes | ✅ 15+ preguntas | ❌ No aplica | ⚠️ Parcial |
-| Deuda | ✅ 12+ preguntas | ✅ 7+ preguntas | ✅ Activo |
-| Documentos | ✅ 6+ preguntas | ✅ 5+ preguntas | ✅ Activo |
-| Tickets | ✅ 6+ preguntas | ✅ 6+ preguntas | ✅ Activo |
-| Pagos | ✅ 8+ preguntas | ✅ 6+ preguntas | ✅ Activo |
-| Estacionamientos | ✅ 5+ preguntas | ❌ No aplica | ⚠️ Parcial |
-| Morosos | ❌ No aplica | ✅ 10+ preguntas | ⚠️ Parcial |
-| Estadísticas | ❌ No aplica | ✅ 10+ preguntas | ⚠️ Parcial |
+**Intent:** `building_delinquents`
+**Keywords:** `moroso`, `morosos`, `morosa`, `morosas`, `deudor`, `deudores`, `deudora`, `deudoras`, `quien debe`, `quienes deben`, `quien no pago`, `quienes no pagan`, `top deudores`, `ranking de deuda`, `atrasados`, `atrasadas`, `impagos`, `incobrables`
 
-**Total estimado:** 75+ preguntas operativas + 10+ preguntas classifier + fallback conversacional
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 8.1 | "¿Quiénes son los morosos del Edificio A?" | Top 10 deudores ordenados por monto |
+| 8.2 | "Top deudores de la Torre B" | Top 10 deudores |
+| 8.3 | "Ranking de deuda del bloque C" | Top 10 deudores |
+| 8.4 | "¿Quién debe en el sector Norte?" | Top 10 deudores |
+| 8.5 | "Morosos del complejo" | Top 10 deudores |
+| 8.6 | "Deudores del Edificio Central" | Top 10 deudores |
+| 8.7 | "Atrasados del edificio A" | Top 10 deudores |
+| 8.8 | "Impagos del edificio A" | Top 10 deudores |
+
+**Datos incluidos:**
+- `delinquents`: Array con código de unidad, label, deuda total
+- `totalUnitsWithDebt`: Cantidad de unidades morosas
+- Ordenados por deuda descendente
+
+**Fallbacks:**
+- Sin deudores → "No tiene unidades con deuda pendiente. Todas están al día"
+- Edificio no encontrado → "Edificio no encontrado"
 
 ---
 
-## 🔧 Formato Recomendado
+### 2.4 Estadísticas del Edificio
 
-Para máxima precisión, usar formato: **[Categoría] + [Unidad]**
+**Intent:** `building_stats`
+**Keywords:** `estadistica`, `estadísticas`, `estadisticas`, `cuantas unidades`, `cuántas unidades`, `resumen`, `informacion del edificio`, `información del edificio`, `datos del edificio`, `como viene`, `como va`, `estado del edificio`, `situacion del edificio`, `cuentas del edificio`
 
-**Ejemplos óptimos:**
-- "Deuda de A-0101" ← Más corto y preciso
-- "Tickets del edificio B"
-- "Quien vive en B-0102"
-- "Morosos del edificio A"
-- "Documentos de A0101" ← Compacto, también válido
-- "Residente de 0101 de la A" ← Reverse pattern
-- "Dueño del estacionamiento A-P001" ← Estacionamiento con alias
-- "Deuda del puesto B-P002" ← Estacionamiento con alias
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 9.1 | "Estadísticas del Edificio A" | Unidades, tickets, deuda total, deuda promedio |
+| 9.2 | "¿Cuántas unidades tiene la Torre B?" | Total de unidades + resumen |
+| 9.3 | "Resumen del bloque C" | Estadísticas completas |
+| 9.4 | "Información del edificio A" | Estadísticas completas |
+| 9.5 | "Datos del edificio A" | Estadísticas completas |
+| 9.6 | "Estadísticas del edificio A" (variante) | Estadísticas completas |
+| 9.7 | "¿Cómo viene el edificio A?" | Estadísticas completas |
+| 9.8 | "Cuentas del edificio A" | Estadísticas completas |
 
-**Ejemplos ambiguos (van al classifier):**
-- "Estoy al día" → Sugiere Finanzas
-- "Hay problemas" → Sugiere Tickets
-- "Quiero ver documentos" → Sugiere Archivos
+**Datos incluidos:**
+- `totalUnits`: Total de unidades
+- `billableUnits`: Unidades facturables
+- `unitTypeCounts`: Conteo por tipo (apartamento, local, etc.)
+- `occupancyCounts`: Conteo por estado de ocupación
+- `openTickets`: Tickets abiertos
+- `totalTickets`: Total de tickets
+- `totalDebt`: Deuda total del edificio
+- `averageDebt`: Deuda promedio por unidad
 
-**Ejemplos con ambigüedad de edificio:**
-- "Deuda de 0101" → Si hay 2+ edificios, pide especificar: "¿Te refieres a A-0101 o B-0101?"
+**Fallbacks:**
+- Edificio no encontrado → "Edificio no encontrado"
+
+---
+
+### 2.5 Documentos del Edificio
+
+**Intent:** `building_documents`
+**Keywords:** `documento`, `documentos`, `archivo`, `archivos`, `pdf`, `comprobante`, `comprobantes`, `expediente`, `acta`, `planilla`
+
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 10.1 | "Documentos del Edificio A" | Lista de documentos del edificio |
+| 10.2 | "Archivos de la Torre B" | Lista de documentos |
+| 10.3 | "PDFs del bloque C" | Lista de documentos |
+| 10.4 | "Comprobantes del sector Norte" | Lista de documentos |
+| 10.5 | "Documentos del complejo" | Lista de documentos |
+| 10.6 | "Actas del edificio A" | Lista de documentos |
+| 10.7 | "Expedientes del edificio A" | Lista de documentos |
+
+**Datos incluidos:**
+- `name`: Título del documento
+- `type`: Categoría
+- `visibility`: Visibilidad
+- `isUnitSpecific`: Si es específico de una unidad
+- `createdAt`: Fecha de creación
+
+**Fallbacks:**
+- Sin documentos → "No tiene documentos registrados"
+- Edificio no encontrado → "Edificio no encontrado"
+
+---
+
+### 2.6 Pagos Recientes del Edificio
+
+**Intent:** `building_payments`
+**Keywords:** `pago`, `pagos`, `transferencia`, `transferencias`, `recibo`, `recibos`, `cobranza`, `cobranzas`
+
+| # | Pregunta | Respuesta Esperada |
+|---|----------|-------------------|
+| 11.1 | "Pagos del Edificio A" | Últimos pagos con unidad origen |
+| 11.2 | "Últimas transferencias de la Torre B" | Últimos pagos |
+| 11.3 | "Recibos del bloque C" | Últimos pagos |
+| 11.4 | "Pagos recientes del sector Norte" | Últimos pagos |
+| 11.5 | "Transferencias del complejo" | Últimos pagos |
+| 11.6 | "Cobranzas del edificio A" | Últimos pagos |
+| 11.7 | "Recibos del edificio A" | Últimos pagos |
+
+**Datos incluidos:**
+- `payments`: Array con monto, método, estado, fecha, si es específico de unidad
+- `sumByMethod`: Suma por método de pago
+- `total`: Cantidad de pagos
+
+**Filtros soportados:** `period` (YYYY-MM), `status`, `method`, `minAmount`, `maxAmount`
+
+**Fallbacks:**
+- Sin pagos → "No tiene pagos registrados"
+- Edificio no encontrado → "Edificio no encontrado"
+
+---
+
+## 3. FOLLOW-UPS CONVERSACIONALES
+
+> **Requieren:** Contexto conversacional previo (al menos un turno con entidades resueltas).
+> El sistema detecta follow-ups por: mensajes cortos (< 10 palabras) que empiezan con conjunciones o palabras interrogativas.
+
+### 3.1 Patrones de Follow-up Detectados
+
+| Patrón | Ejemplo | Acción |
+|--------|---------|--------|
+| `^y\b` | "y cuántos meses" | Reusa último intent + entidades |
+| `^cuantos\b` | "cuántos meses debe" | Reusa último intent + entidades |
+| `^cuantas\b` | "cuántas personas viven" | Reusa último intent + entidades |
+| `^quien\b` | "quién vive ahí" | Reusa último intent + entidades |
+| `^donde\b` | "dónde está" | Reusa último intent + entidades |
+| `^cuanto\b` | "cuánto debe" | Reusa último intent + entidades |
+| `^tiene\b` | "tiene tickets" | Reusa último intent + entidades |
+| `^hay\b` | "hay deuda" | Reusa último intent + entidades |
+| `^cuales\b` | "cuáles son" | Reusa último intent + entidades |
+| `^que\b` | "qué más" | Reusa último intent + entidades |
+| `^como\b` | "cómo está" | Reusa último intent + entidades |
+
+### 3.2 Flujos de Follow-up Validados
+
+#### Flujo 1: Deuda + Meses
+```
+Usuario: "deuda unidad A-1203"
+Asistente: "Deuda total: Bs.S 22.669,45 (5 meses adeudados)"
+
+Usuario: "cuántos meses debe"
+Asistente: "Deuda total: Bs.S 22.669,45 (5 meses adeudados)"
+```
+
+#### Flujo 2: Deuda + Tickets
+```
+Usuario: "deuda del departamento 101"
+Asistente: "Deuda total: Bs.S 15.000,00"
+
+Usuario: "y tiene tickets"
+Asistente: [Lista de tickets de la unidad 101]
+```
+
+#### Flujo 3: Residentes + Pagos
+```
+Usuario: "quién vive en el apartamento 5B"
+Asistente: "María Gómez (residente)"
+
+Usuario: "cuáles son sus últimos pagos"
+Asistente: [Lista de pagos de la unidad 5B]
+```
+
+#### Flujo 4: Edificio + Morosos
+```
+Usuario: "estadísticas del Edificio A"
+Asistente: [Resumen del edificio]
+
+Usuario: "y quiénes son los morosos"
+Asistente: [Top deudores del Edificio A]
+```
+
+#### Flujo 5: Documentos + Más documentos
+```
+Usuario: "documentos de la unidad 101"
+Asistente: [Lista de documentos]
+
+Usuario: "y los del edificio"
+Asistente: [Lista de documentos del edificio]
+```
+
+### 3.3 Inferencia de Intent en Follow-ups
+
+Cuando el follow-up no trae palabras clave claras, el sistema infiere el intent del mensaje:
+
+| Mensaje Follow-up | Intent Inferido |
+|-------------------|-----------------|
+| "meses" + "deuda" / "debe" | `unit_debt` |
+| "tickets" / "reclamos" | `unit_tickets` o `building_tickets` |
+| "pagos" / "transferencias" | `unit_payments` o `building_payments` |
+| "residentes" / "vive" / "quién" | `unit_residents` |
+| "documentos" / "archivos" | `unit_documents` o `building_documents` |
+
+Si no puede inferir, **reusa el último intent** del contexto.
+
+---
+
+## 4. CONSULTAS A NIVEL TENANT
+
+> **Requieren:** Autenticación API key. No usan lenguaje natural directamente; usan **intents formales**.
+
+### 4.1 Unidades Morosas
+
+**Intent:** `GET_OVERDUE_UNITS`
+
+| # | Pregunta Equivalente | Respuesta Esperada |
+|---|---------------------|-------------------|
+| 12.1 | "¿Qué unidades tienen deuda vencida?" | Lista de unidades morosas ordenadas por monto |
+| 12.2 | "Top morosos del tenant" | Top 5 morosos con monto y edificio |
+| 12.3 | "¿Cuántas unidades están morosas?" | Cantidad + preview |
+
+---
+
+### 4.2 Pagos Pendientes de Aprobación
+
+**Intent:** `GET_PENDING_PAYMENTS`
+
+| # | Pregunta Equivalente | Respuesta Esperada |
+|---|---------------------|-------------------|
+| 13.1 | "¿Hay pagos pendientes de aprobación?" | Cantidad + preview de los 5 primeros |
+| 13.2 | "Pagos por revisar" | Cantidad + preview |
+| 13.3 | "Transferencias sin aprobar" | Cantidad + monto total pendiente |
+
+---
+
+### 4.3 Tickets Abiertos
+
+**Intent:** `GET_OPEN_TICKETS`
+
+| # | Pregunta Equivalente | Respuesta Esperada |
+|---|---------------------|-------------------|
+| 14.1 | "¿Qué tickets están abiertos?" | Cantidad + lista de tickets prioritarios |
+| 14.2 | "Reclamos sin resolver" | Cantidad + preview |
+| 14.3 | "Problemas pendientes" | Tickets abiertos/en progreso |
+
+---
+
+### 4.4 Unidades Vacantes
+
+**Intent:** `GET_VACANT_UNITS`
+
+| # | Pregunta Equivalente | Respuesta Esperada |
+|---|---------------------|-------------------|
+| 15.1 | "¿Qué unidades están vacantes?" | Lista de unidades vacantes |
+| 15.2 | "Departamentos desocupados" | Cantidad + preview |
+| 15.3 | "Unidades sin ocupantes" | Lista con edificio |
+
+---
+
+### 4.5 Resumen de Cobranzas
+
+**Intent:** `GET_COLLECTIONS_SUMMARY`
+
+| # | Pregunta Equivalente | Respuesta Esperada |
+|---|---------------------|-------------------|
+| 16.1 | "Resumen de cobranzas del mes" | Emitido, cobrado, pendiente, tasa de cobranza |
+| 16.2 | "¿Cómo va la recaudación?" | Métricas del período actual |
+| 16.3 | "Cobranzas del período" | Emitido, cobrado, pendiente, aprobaciones pendientes |
+
+---
+
+## 5. SINÓNIMOS SOPORTADOS
+
+### Edificio
+`torre`, `edificio`, `bloque`, `tower`, `building`, `sector`, `pabellon`, `pabellón`, `residencia`, `conjunto`, `complejo`
+
+### Unidad
+`unidad`, `apartamento`, `depto`, `departamento`, `apto`, `local`, `oficina`, `casa`, `cochera`, `garage`, `baulera`
+
+### Persona
+`residente`, `ocupante`, `inquilino`, `propietario`, `habitante`, `persona`, `dueño`
+
+---
+
+## 6. ROLES AUTORIZADOS
+
+### Consultas Operativas (Todas las de nivel unidad y edificio)
+- `SUPER_ADMIN`
+- `TENANT_OWNER`
+- `TENANT_ADMIN`
+- `OPERATOR`
+
+### Restricciones
+- `RESIDENT`: Solo puede ver datos de su propia unidad (si está implementado)
+- `GUEST`: No puede acceder a datos operativos
+
+---
+
+## 7. RESUMEN DE COBERTURA
+
+| Capa | Intents | Preguntas Documentadas | Follow-ups | Total Interacciones |
+|------|---------|----------------------|------------|-------------------|
+| **Unidad** | 5 | 33 | 15 | 48 |
+| **Edificio** | 6 | 40 | 20 | 60 |
+| **Tenant** | 5 | 15 | — | 15 |
+| **Follow-ups** | — | — | 25 | 25 |
+| **TOTAL** | **16** | **88** | **60** | **148** |
+
+---
+
+## 8. NOTAS DE IMPLEMENTACIÓN
+
+### Pipeline de Resolución v2 (Intent Engine)
+
+```
+1. IntentExtractorService (Dual LLM)
+   ├── Ollama local (primario, 3s timeout)
+   ├── Opencode API (fallback, 5s timeout)
+   └── Deterministic fallback (regex keywords)
+
+2. EntityResolverService
+   ├── resolveBuilding(alias) → buildingId
+   ├── resolveUnit(code, buildingId) → unitId
+   └── resolvePerson(name) → personId
+
+3. AmbiguityService
+   └── Si hay múltiples matches → Clarification response
+
+4. QueryPlannerService
+   └── Build ExecutionPlan (intent + entityIds + filters)
+
+5. QueryExecutorService
+   ├── RBAC check (AuthorizeService)
+   ├── IntentRegistry lookup
+   └── Execute intent executor
+
+6. ResponseFormatterService
+   └── Format V2 StructuredResponse
+```
+
+### Contexto Conversacional
+
+- **Almacenamiento:** Redis (producción) / Memoria (desarrollo)
+- **TTL:** 30-120 minutos configurable
+- **Key:** `assistant:context:{tenantId}:{userId}:{conversationId}`
+- **Datos guardados:** Solo IDs (no nombres ni montos)
+- **Max turns:** 5 últimos turnos
+
+### Feature Flags
+
+- `AI_INTENT_ENGINE_ENABLED`: Activa el endpoint `/chat/v2`
+- Desarrollo: Bypass de RBAC y feature guards activo
+
+---
+
+## 9. INVENTARIO DE INVENTOS
+
+| # | Nombre | Archivo | Permiso | Response Types |
+|---|--------|---------|---------|----------------|
+| 1 | `unit_residents` | `unit-residents.intent.ts` | `units.read` | table, text |
+| 2 | `unit_debt` | `unit-debt.intent.ts` | `payments.review` | kpi, text |
+| 3 | `unit_documents` | `unit-documents.intent.ts` | `units.read` | table, text |
+| 4 | `unit_tickets` | `unit-tickets.intent.ts` | `tickets.read` | table, text |
+| 5 | `unit_payments` | `unit-payments.intent.ts` | `payments.review` | table, text |
+| 6 | `building_debt` | `building-debt.intent.ts` | `payments.review` | kpi, text |
+| 7 | `building_delinquents` | `building-delinquents.intent.ts` | `payments.review` | table, text |
+| 8 | `building_stats` | `building-stats.intent.ts` | `buildings.read` | kpi, text, chart |
+| 9 | `building_documents` | `building-documents.intent.ts` | `buildings.read` | table, text |
+| 10 | `building_tickets` | `building-tickets.intent.ts` | `tickets.read` | table, text |
+| 11 | `building_payments` | `building-payments.intent.ts` | `payments.review` | table, text |
+| 12 | `expenses_summary` | `expenses-summary.intent.ts` | `payments.review` | kpi, text |
+| 13 | `cashflow_compare` | `cashflow-compare.intent.ts` | `payments.review` | chart, text |
+| 14 | `vendors_list` | `vendors-list.intent.ts` | `payments.review` | table, text |
+| 15 | `communications_send_reminder` | `communications-send-reminder.intent.ts` | `communications.create` | action_list |
+
+**Nota:** Los intents 12-15 son stubs (esqueletos) y aún no tienen queries reales implementadas.
+
+---
+
+*Documento generado automáticamente a partir del código fuente y tests del Intent Engine v2.*
