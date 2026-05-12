@@ -502,9 +502,14 @@ export class AssistantService implements OnModuleInit {
     request: ChatRequest & { sessionId?: string },
     userRoles: string[],
   ): Promise<StructuredResponse> {
-    // Check feature flag
-    if (!this.intentEngineEnabled) {
+    // Check feature flag (bypass in development)
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    if (!this.intentEngineEnabled && !isDevelopment) {
       throw new ForbiddenException('Intent engine disabled');
+    }
+
+    if (!this.intentEngineEnabled && isDevelopment) {
+      this.logger.warn('[chatV2] Intent engine disabled by flag, but bypassing in development mode');
     }
 
     // Validate message
