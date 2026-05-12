@@ -135,6 +135,8 @@ export class AssistantController {
     @Body() request: ChatRequest & { sessionId?: string },
     @Request() req?: any,
   ): Promise<StructuredResponse> {
+    console.log(`[CONTROLLER chatV2] Received: tenantId=${tenantId}, message="${request.message}", page=${request.page}, buildingId=${request.buildingId}, unitId=${request.unitId}`);
+
     // Validate tenantId
     if (!tenantId || tenantId.trim().length === 0) {
       throw new BadRequestException('tenantId is required');
@@ -172,6 +174,8 @@ export class AssistantController {
       request,
       userRoles,
     );
+
+    console.log(`[CONTROLLER chatV2] Response: type=${response.type}, intent=${response.meta?.intent}, summary="${response.summary?.substring(0, 50)}..."`);
 
     // Track consumption after successful chat
     await this.aiEntitlements.trackConsumption(tenantId, 1);

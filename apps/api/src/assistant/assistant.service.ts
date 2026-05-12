@@ -562,36 +562,61 @@ export class AssistantService implements OnModuleInit {
 
     // Step 2: Extract intent using dual LLM with fallback
     let extractedIntent: ExtractedIntent;
+    let contextResolvedEntities: EntityResolution | undefined;
+    this.logger.log(`[chatV2] Step 2: Extracting intent for message: "${request.message}"`);
     try {
       extractedIntent = await this.intentExtractor.extractIntent(
         request.message,
         contextForExtraction,
       );
+      this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
     } catch (error) {
       this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
       // Fallback: use conversation context for follow-up questions
-      // Check if message looks like a follow-up (short, starts with "y", "y cuántos", etc.)
-      const isFollowUp = this.isFollowUpQuestion(request.message);
-      const lastTurn = conversationContext.length > 0
-        ? conversationContext[conversationContext.length - 1]
-        : null;
+      const isFollowUp = await this.detectFollowUp(
+        request.message,
+        conversationContext,
+        tenantId,
+        userId,
+        sessionId,
+      );
 
-      if (isFollowUp && lastTurn?.resolvedEntities) {
-        // Try to infer intent from the follow-up message using last context
-        const inferredIntent = this.inferIntentFromFollowUp(request.message);
-        if (inferredIntent) {
-          extractedIntent = {
-            intent: inferredIntent,
-            entity: {
-              type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
-              buildingAlias: undefined,
-              unitCode: undefined,
-            },
-            filters: {},
-            confidence: 0.6,
-          };
-          this.logger.log(`[chatV2] Follow-up detected, using inferred intent: ${inferredIntent}`);
+      if (isFollowUp) {
+        const lastTurn = conversationContext.length > 0
+          ? conversationContext[conversationContext.length - 1]
+          : null;
+
+        if (lastTurn?.resolvedEntities) {
+          contextResolvedEntities = lastTurn.resolvedEntities;
+
+          // Try to infer intent from the follow-up message using last context
+          let inferredIntent = this.inferIntentFromFollowUp(request.message);
+
+          // Fallback: if we can't infer a new intent, reuse the last one
+          if (!inferredIntent) {
+            const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+            if (lastIntent) {
+              inferredIntent = lastIntent;
+              this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+            }
+          }
+
+          if (inferredIntent) {
+            extractedIntent = {
+              intent: inferredIntent,
+              entity: {
+                type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
+                buildingAlias: undefined,
+                unitCode: undefined,
+              },
+              filters: {},
+              confidence: 0.6,
+            };
+            this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+          } else {
+            throw new BadRequestException('Could not understand your message. Please rephrase.');
+          }
         } else {
           throw new BadRequestException('Could not understand your message. Please rephrase.');
         }
@@ -622,7 +647,7 @@ export class AssistantService implements OnModuleInit {
     }
 
     // Step 3: Resolve entities
-    let entityResolution: EntityResolution = { alternatives: [] };
+    let entityResolution: EntityResolution = contextResolvedEntities ?? { alternatives: [] };
 
     // Resolve building if alias provided
     if (extractedIntent.entity.buildingAlias) {
@@ -632,6 +657,23 @@ export class AssistantService implements OnModuleInit {
       );
       if (buildingResolution) {
         entityResolution = { ...entityResolution, ...buildingResolution };
+      }
+    }
+
+    // Fallback: if building-level intent but no building resolved, use request.buildingId
+    if (!entityResolution.building && extractedIntent.entity.type === 'building' && request.buildingId) {
+      const building = await this.prisma.building.findFirst({
+        where: { id: request.buildingId, tenantId, deletedAt: null },
+      });
+      if (building) {
+        entityResolution = {
+          ...entityResolution,
+          building: {
+            id: building.id,
+            name: building.name,
+            alias: building.alias || undefined,
+          },
+        };
       }
     }
 
@@ -747,35 +789,114 @@ export class AssistantService implements OnModuleInit {
   }
 
   /**
-   * Detect if a message is a follow-up question
+   * Detect if a message is a follow-up question.
+   *
+   * A message is a follow-up ONLY if ALL of these are true:
+   * 1. Short: under 10 words
+   * 2. No explicit subject (no unit codes, names, or standalone nouns)
+   * 3. Useful conversation context exists (lastEntity, lastIntent, lastFilters)
+   * 4. Contains a continuity pattern ("y", "también", pronouns, etc.)
    */
-  private isFollowUpQuestion(message: string): boolean {
+  private async detectFollowUp(
+    message: string,
+    conversationContext: ConversationTurn[],
+    tenantId: string,
+    userId: string,
+    sessionId: string,
+  ): Promise<boolean> {
     const normalized = message
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-    // Short messages (under 10 words) are likely follow-ups
+    // 1. Must be short (under 10 words)
     const wordCount = normalized.split(/\s+/).length;
     if (wordCount > 10) return false;
 
-    // Starts with conjunctions or question words typical of follow-ups
-    const followUpPatterns = [
-      /^y\b/,           // "y cuántos", "y quién"
-      /^cuantos\b/,     // "cuántos meses"
-      /^cuantas\b/,     // "cuántas personas"
-      /^quien\b/,       // "quién vive"
-      /^donde\b/,       // "dónde está"
-      /^cuanto\b/,      // "cuánto debe"
-      /^tiene\b/,       // "tiene tickets"
-      /^hay\b/,         // "hay deuda"
-      /^cuales\b/,      // "cuáles son"
-      /^que\b/,          // "qué más"
-      /^como\b/,         // "cómo está"
+    // 2. Must NOT contain explicit subject
+    if (this.hasExplicitSubject(normalized)) return false;
+
+    // 3. Must have useful conversation context
+    const hasContext = await this.hasUsefulContext(tenantId, userId, sessionId);
+    if (!hasContext) return false;
+
+    // 4. Must contain a continuity pattern
+    const continuityPatterns = [
+      /^y\b/,                        // "y cuántos", "y quién"
+      /\btambien\b/,                 // "también"
+      /\bademas\b/,                  // "además"
+      /\bese\b/,                     // "ese"
+      /\besa\b/,                     // "esa"
+      /\bellos\b/,                   // "ellos"
+      /\bellas\b/,                   // "ellas"
+      /\bsu\b/,                      // "su"
+      /\bsus\b/,                     // "sus"
+      /\bcuantos\s+meses\b/,         // "cuántos meses"
+      /\bcuantas\s+personas\b/,      // "cuántas personas"
+      /\by\s+cuanto\b/,              // "y cuánto"
+      /\by\s+cuando\b/,              // "y cuándo"
+      /^cuantos\b/,                  // "cuántos" (standalone follow-up)
+      /^cuantas\b/,                  // "cuántas" (standalone follow-up)
+      /^cuanto\b/,                   // "cuánto" (standalone follow-up)
+      /^quien\b/,                    // "quién" (standalone follow-up)
     ];
 
-    return followUpPatterns.some((pattern) => pattern.test(normalized));
+    const hasContinuity = continuityPatterns.some((pattern) => pattern.test(normalized));
+    if (!hasContinuity) return false;
+
+    this.logger.log(`[chatV2] Follow-up detected: "${message}"`);
+    return true;
+  }
+
+  /**
+   * Check if a message contains an explicit subject.
+   *
+   * Explicit subjects indicate a new, self-contained query rather than a follow-up.
+   */
+  private hasExplicitSubject(message: string): boolean {
+    // Unit codes: A-1203, 101, 5B, etc.
+    const unitCodePattern = /\b[a-z]?\d+[a-z]?\b/i;
+
+    // Standalone nouns that indicate a new intent
+    const standaloneNouns = [
+      'alguien', 'alguno', 'alguna', 'algunos', 'algunas',
+      'todos', 'todas', 'todo',
+      'morosos', 'morosas', 'deudores', 'deudoras',
+      'residentes', 'ocupantes', 'inquilinos', 'propietarios',
+      'pagos', 'transferencias', 'recibos', 'movimientos',
+      'tickets', 'reclamos', 'problemas', 'averias', 'fallas', 'reparaciones',
+      'gastos', 'expensas', 'deuda', 'deudas', 'saldo', 'saldos',
+      'documentos', 'archivos', 'pdfs', 'comprobantes', 'expedientes', 'actas',
+      'edificio', 'torre', 'bloque', 'sector', 'complejo', 'conjunto',
+      'unidad', 'apartamento', 'departamento', 'depto', 'local', 'cochera',
+    ];
+
+    const hasUnitCode = unitCodePattern.test(message);
+    const hasStandaloneNoun = standaloneNouns.some((noun) =>
+      new RegExp(`\\b${noun}\\b`, 'i').test(message),
+    );
+
+    return hasUnitCode || hasStandaloneNoun;
+  }
+
+  /**
+   * Check if useful conversation context exists.
+   */
+  private async hasUsefulContext(
+    tenantId: string,
+    userId: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    const lastResolved = await this.conversationContext.getLastResolved(tenantId, userId, sessionId);
+    const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+
+    return !!(
+      lastResolved?.buildingId ||
+      lastResolved?.unitId ||
+      lastResolved?.personId ||
+      lastIntent
+    );
   }
 
   /**
@@ -790,6 +911,9 @@ export class AssistantService implements OnModuleInit {
 
     // Map follow-up keywords to intents
     if (/\bmes(es)?\b.*\bdeuda\b|\bdeuda\b.*\bmes(es)?\b/.test(normalized)) {
+      return 'unit_debt';
+    }
+    if (/\bmes(es)?\b.*\bdebe\b|\bdebe\b.*\bmes(es)?\b/.test(normalized)) {
       return 'unit_debt';
     }
     if (/\bticket(s)?\b/.test(normalized)) {

@@ -74,6 +74,14 @@ describe('ResponseFormatterService', () => {
       expect(result.type).toBe('kpi');
     });
 
+    it('includes overdue months for unit debt summaries', () => {
+      const data = { totalDebt: 2388869, overduePeriodCount: 3, currency: 'VES' };
+      const result = service.formatV2(data, 'unit_debt', 0.9);
+
+      expect(result.summary).toContain('Deuda total');
+      expect(result.summary).toContain('3 meses adeudados');
+    });
+
     it('includes suggestedActions based on intent type', () => {
       const data = [{ id: '1', name: 'Test' }];
       const result = service.formatV2(data, 'list_payments', 0.9);

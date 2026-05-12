@@ -38,6 +38,8 @@ export class RedisConversationContextService {
   private readonly logger = new Logger(RedisConversationContextService.name);
   private readonly ttlSeconds: number;
   private readonly maxTurns: number;
+  /** In-memory fallback when Redis is unavailable (development) */
+  private readonly memoryStore = new Map<string, ConversationSession>();
 
   constructor(private readonly redis: RedisService) {
     const envTtl = parseInt(process.env.ASSISTANT_CONTEXT_TTL_MINUTES || '30', 10);
@@ -95,7 +97,13 @@ export class RedisConversationContextService {
       session.lastFilters = metadata.filters;
     }
 
-    await this.redis.set(key, JSON.stringify(session), this.ttlSeconds);
+    // Write to Redis (best effort) and always keep in memory
+    try {
+      await this.redis.set(key, JSON.stringify(session), this.ttlSeconds);
+    } catch {
+      this.logger.debug(`Redis unavailable, using memory fallback for ${key}`);
+    }
+    this.memoryStore.set(key, session);
   }
 
   /**
@@ -135,6 +143,24 @@ export class RedisConversationContextService {
   }
 
   /**
+   * Get last intent name from conversation
+   *
+   * @param tenantId - Tenant ID
+   * @param userId - User ID
+   * @param conversationId - Conversation/session ID
+   * @returns Last intent name or undefined
+   */
+  async getLastIntent(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+  ): Promise<string | undefined> {
+    const key = this.getKey(tenantId, userId, conversationId);
+    const session = await this.getSession(key);
+    return session.lastIntent;
+  }
+
+  /**
    * Resolve anaphoric references in a message
    *
    * @param tenantId - Tenant ID
@@ -165,14 +191,26 @@ export class RedisConversationContextService {
    * Load or create a session from Redis
    */
   private async getSession(key: string): Promise<ConversationSession> {
-    const data = await this.redis.get(key);
-    if (data) {
-      try {
-        return JSON.parse(data);
-      } catch {
-        this.logger.warn(`Failed to parse conversation session: ${key}`);
+    // Try Redis first
+    try {
+      const data = await this.redis.get(key);
+      if (data) {
+        try {
+          return JSON.parse(data);
+        } catch {
+          this.logger.warn(`Failed to parse conversation session: ${key}`);
+        }
       }
+    } catch {
+      this.logger.debug(`Redis unavailable, checking memory fallback for ${key}`);
     }
+
+    // Fallback to in-memory store
+    const memory = this.memoryStore.get(key);
+    if (memory) {
+      return memory;
+    }
+
     return { turns: [] };
   }
 }

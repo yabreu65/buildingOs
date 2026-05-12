@@ -69,7 +69,7 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockIntentExtractor = { extractIntent: jest.fn() };
   const mockEntityResolver = { resolveBuilding: jest.fn(), resolveUnit: jest.fn(), resolvePerson: jest.fn() };
   const mockAmbiguityService = { detectAmbiguity: jest.fn(), generateClarification: jest.fn() };
-  const mockConversationContext = { storeTurn: jest.fn(), getContext: jest.fn(), getLastResolved: jest.fn() };
+  const mockConversationContext = { storeTurn: jest.fn(), getContext: jest.fn(), getLastResolved: jest.fn(), getLastIntent: jest.fn() };
   const mockQueryPlannerService = { buildPlan: jest.fn() };
   const mockQueryExecutorService = { execute: jest.fn() };
   const mockResponseFormatter = { formatV1: jest.fn(), formatV2: jest.fn() };
@@ -94,6 +94,9 @@ describe('AssistantService - Strict Operational Questions', () => {
     mockAuthorize.authorize.mockResolvedValue(true);
     mockQueryPlanService.createPlan.mockReturnValue(null);
     mockQueryExecutors.execute.mockResolvedValue(null);
+    mockConversationContext.getContext.mockResolvedValue([]);
+    mockConversationContext.getLastResolved.mockResolvedValue({});
+    mockConversationContext.getLastIntent.mockResolvedValue(undefined);
     mockUnitResolver.resolve.mockResolvedValue({
       resolved: {
         building: { id: 'b1', name: 'Edificio A', alias: 'A' },
@@ -137,6 +140,169 @@ describe('AssistantService - Strict Operational Questions', () => {
   // ============================================================
   // HELPERS
   // ============================================================
+
+  describe('chatV2 follow-ups', () => {
+    it('reutiliza las entidades resueltas del turno anterior', async () => {
+      const previousResolvedEntities = {
+        building: { id: 'building-1', name: 'Edificio A', alias: 'A' },
+        unit: { id: 'unit-1203', code: '1203', label: 'A-1203', buildingId: 'building-1' },
+        alternatives: [],
+      };
+
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda unidad A-1203',
+          timestamp: new Date(),
+          resolvedEntities: previousResolvedEntities,
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'building-1', unitId: 'unit-1203' });
+      mockConversationContext.getLastIntent.mockResolvedValue('unit_debt');
+      mockIntentExtractor.extractIntent.mockRejectedValue(new Error('LLM failed'));
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: {
+          buildingId: resolved.building?.id,
+          unitId: resolved.unit?.id,
+          personId: resolved.person?.id,
+        },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ total: 22669.45 });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'text',
+        title: 'Deuda',
+        summary: 'Deuda total: Bs.S 22.669,45',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'cuanto meses debe', page: 'dashboard', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: 'unit_debt' }),
+        previousResolvedEntities,
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ unitId: 'unit-1203' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
+    });
+  });
+
+  describe('follow-up detection rules', () => {
+    // Caso 1: sujeto explícito con contexto previo → NO follow-up
+    it('Caso 1: "hay alguien con deuda" con contexto → NO es follow-up (sujeto explícito)', async () => {
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda unidad A-1203',
+          timestamp: new Date(),
+          resolvedEntities: {
+            building: { id: 'b1', name: 'Edificio A', alias: 'A' },
+            unit: { id: 'u1', code: '1203', label: 'A-1203', buildingId: 'b1' },
+            alternatives: [],
+          },
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'b1', unitId: 'u1' });
+      mockConversationContext.getLastIntent.mockResolvedValue('unit_debt');
+
+      const isFollowUp = await (service as any).detectFollowUp(
+        'hay alguien con deuda mayor a 500',
+        await mockConversationContext.getContext(),
+        'tenant-1',
+        'user-1',
+        'conv-1',
+      );
+
+      expect(isFollowUp).toBe(false);
+    });
+
+    // Caso 2: sin contexto previo → NO follow-up
+    it('Caso 2: "hay deuda?" sin contexto → NO es follow-up (sin contexto útil)', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+
+      const isFollowUp = await (service as any).detectFollowUp(
+        'hay deuda?',
+        [],
+        'tenant-1',
+        'user-1',
+        'conv-1',
+      );
+
+      expect(isFollowUp).toBe(false);
+    });
+
+    // Caso 3: mensaje corto + continuidad + contexto útil → SÍ follow-up
+    it('Caso 3: "y cuántos meses" con lastEntity → SÍ es follow-up', async () => {
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda unidad A-1203',
+          timestamp: new Date(),
+          resolvedEntities: {
+            building: { id: 'b1', name: 'Edificio A', alias: 'A' },
+            unit: { id: 'u1', code: '1203', label: 'A-1203', buildingId: 'b1' },
+            alternatives: [],
+          },
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'b1', unitId: 'u1' });
+      mockConversationContext.getLastIntent.mockResolvedValue('unit_debt');
+
+      const isFollowUp = await (service as any).detectFollowUp(
+        'y cuántos meses',
+        await mockConversationContext.getContext(),
+        'tenant-1',
+        'user-1',
+        'conv-1',
+      );
+
+      expect(isFollowUp).toBe(true);
+    });
+
+    // Caso 4: sujeto explícito nuevo con contexto → NO follow-up
+    it('Caso 4: "y la unidad A-0101" con contexto → NO es follow-up (sujeto explícito)', async () => {
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda unidad A-1203',
+          timestamp: new Date(),
+          resolvedEntities: {
+            building: { id: 'b1', name: 'Edificio A', alias: 'A' },
+            unit: { id: 'u1', code: '1203', label: 'A-1203', buildingId: 'b1' },
+            alternatives: [],
+          },
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'b1', unitId: 'u1' });
+      mockConversationContext.getLastIntent.mockResolvedValue('unit_debt');
+
+      const isFollowUp = await (service as any).detectFollowUp(
+        'y la unidad A-0101',
+        await mockConversationContext.getContext(),
+        'tenant-1',
+        'user-1',
+        'conv-1',
+      );
+
+      expect(isFollowUp).toBe(false);
+    });
+  });
 
   const setupBuildings = (buildings: Array<{ id: string; name: string }>) => {
     mockPrisma.building.findMany.mockResolvedValue(buildings);

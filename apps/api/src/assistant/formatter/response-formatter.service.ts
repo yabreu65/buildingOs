@@ -370,7 +370,21 @@ export class ResponseFormatterService {
       const record = data as Record<string, unknown>;
 
       switch (intent) {
-        case 'unit_debt':
+        case 'unit_debt': {
+          const totalDebt = record.totalDebt as number;
+          const currency = (record.currency as string) || 'VES';
+          const overduePeriodCount = record.overduePeriodCount as number | undefined;
+          if (totalDebt !== undefined) {
+            const debtSummary = `Deuda total: ${this.formatMoney(totalDebt, currency)}`;
+            if (overduePeriodCount !== undefined) {
+              const periodLabel = overduePeriodCount === 1 ? 'mes adeudado' : 'meses adeudados';
+              return `${debtSummary} (${overduePeriodCount} ${periodLabel})`;
+            }
+            return debtSummary;
+          }
+          break;
+        }
+
         case 'building_debt': {
           const totalDebt = record.totalDebt as number;
           const currency = (record.currency as string) || 'VES';

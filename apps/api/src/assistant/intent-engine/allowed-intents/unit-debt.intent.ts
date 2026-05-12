@@ -39,10 +39,19 @@ export const unitDebtIntent: IntentDefinition = {
     });
 
     const totalDebt = chargesWithDebt.reduce((sum, c) => sum + c.remainingDebt, 0);
+    const overduePeriods = Array.from(
+      new Set(
+        chargesWithDebt
+          .filter((c) => c.remainingDebt > 0 && c.period)
+          .map((c) => c.period),
+      ),
+    ).sort();
 
     return {
       data: {
         totalDebt,
+        overduePeriodCount: overduePeriods.length,
+        overduePeriods,
         currency: 'VES',
         charges: chargesWithDebt.map((c) => ({
           period: c.period,
