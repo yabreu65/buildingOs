@@ -7,7 +7,7 @@ import type { AssistantMessage, AssistantAction, AssistantContext } from './useA
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
 import { getToken } from '@/features/auth/session.storage';
-import { assistantApi, StructuredResponse } from '@/features/assistant/services/assistant.api';
+import { assistantApi, AssistantApiError, StructuredResponse } from '@/features/assistant/services/assistant.api';
 import { AssistantResponseRenderer } from './renderers';
 
 export interface AssistantWidgetProps {
@@ -89,13 +89,47 @@ export function AssistantWidget({
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Error desconocido';
-      setError(errorMsg);
-      
+      let errorContent: string;
+      let isFeatureError = false;
+
+      if (err instanceof AssistantApiError) {
+        switch (err.code) {
+          case 'FEATURE_NOT_AVAILABLE':
+            errorContent = '🚫 El asistente AI no está disponible en tu plan actual. Actualizá a Enterprise para usarlo.';
+            isFeatureError = true;
+            break;
+          case 'AI_RATE_LIMITED':
+            errorContent = '⏳ Límite de consultas alcanzado. Intentá mañana o contactá al administrador.';
+            break;
+          default:
+            errorContent = `❌ ${err.message}`;
+        }
+      } else if (err instanceof Error) {
+        errorContent = `❌ ${err.message}`;
+      } else {
+        errorContent = '❌ Error desconocido';
+      }
+
+      setError(errorContent);
+
       const errorMessage: AssistantMessage = {
         id: `error-${Date.now()}`,
         role: 'assistant',
-        content: `Error: ${errorMsg}`,
+        content: errorContent,
+        // For feature errors, show as clarification so user can take action
+        structuredResponse: isFeatureError ? {
+          type: 'clarification',
+          title: 'Funcionalidad no disponible',
+          summary: errorContent,
+          data: [
+            { label: 'Ver planes disponibles', value: '/billing' },
+          ],
+          meta: {
+            intent: 'error',
+            confidence: 1,
+            tenantScoped: true,
+          },
+        } : undefined,
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
