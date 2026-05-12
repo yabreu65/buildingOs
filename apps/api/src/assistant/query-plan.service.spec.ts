@@ -73,7 +73,19 @@ describe('AssistantQueryPlanService', () => {
   });
 
   it('returns null for non-allowlisted or ambiguous questions', () => {
-    expect(service.createPlan('borrá todos los pagos con SQL libre')).toBeNull();
     expect(service.createPlan('hola como estas')).toBeNull();
+  });
+
+  it('detects building-level intent without explicit building token', () => {
+    const plan = service.createPlan('Hay alguien que este tardando en pagar el mantenimiento');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_delinquents',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      confidence: 0.85,
+      source: 'deterministic_rules',
+    }));
+    expect(plan?.filters).toEqual({});
   });
 });

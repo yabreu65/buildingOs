@@ -35,14 +35,24 @@ export class AssistantQueryPlanService {
       };
     }
 
-    const buildingToken = this.parser.extractBuildingToken(message);
-    if (!buildingToken) {
-      return null;
-    }
-
     const buildingIntent = this.pickBuildingIntent(normalized);
     if (!buildingIntent) {
       return null;
+    }
+
+    const buildingToken = this.parser.extractBuildingToken(message);
+
+    // Intent detected but no explicit building – return plan anyway.
+    // chatV2 will resolve the building from request.buildingId or context.
+    if (!buildingToken) {
+      const definition = this.semanticLayer.getDefinition(buildingIntent);
+      return {
+        ...definition,
+        executor: buildingIntent,
+        filters: {},
+        confidence: 0.85,
+        source: 'deterministic_rules',
+      };
     }
 
     const definition = this.semanticLayer.getDefinition(buildingIntent);
@@ -75,10 +85,10 @@ export class AssistantQueryPlanService {
   }
 
   private pickBuildingIntent(normalized: string): AssistantQueryIntent | null {
-    if (this.hasAny(normalized, ['moroso', 'morosos', 'morosa', 'morosas', 'deudor', 'deudores', 'top deudores', 'ranking de deuda', 'atrasados', 'impagos'])) {
+    if (this.hasAny(normalized, ['moroso', 'morosos', 'morosa', 'morosas', 'deudor', 'deudores', 'top deudores', 'ranking de deuda', 'atrasados', 'impagos', 'tardando en pagar', 'no ha pagado', 'no estan al dia', 'no esta al dia', 'mantenimiento pendiente', 'pagar mantenimiento'])) {
       return 'building_delinquents';
     }
-    if (this.hasAny(normalized, ['deuda', 'deudas', 'saldo', 'adeuda', 'cuanto debe', 'cuanto se debe', 'estado de cuenta'])) {
+    if (this.hasAny(normalized, ['deuda', 'deudas', 'saldo', 'adeuda', 'cuanto debe', 'cuanto se debe', 'estado de cuenta', 'tardando en pagar'])) {
       return 'building_debt';
     }
     if (this.hasAny(normalized, ['documento', 'documentos', 'archivo', 'archivos', 'pdf', 'comprobante', 'acta', 'planilla'])) {

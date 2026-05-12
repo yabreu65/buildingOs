@@ -8,7 +8,7 @@ import { extractedIntentSchema, validateExtractedIntent } from './intent.schema'
 /**
  * Timeout configuration for LLM calls
  */
-const OLLAMA_TIMEOUT_MS = 3000;
+const OLLAMA_TIMEOUT_MS = 15000;
 const OPENCODE_TIMEOUT_MS = 5000;
 
 /**
@@ -49,57 +49,107 @@ export class IntentExtractorService {
     const startTime = performance.now();
     let lastError: Error | null = null;
 
-    // Step 1: Try Ollama first
-    try {
-      const result = await this.tryOllama(message, context);
-      const durationMs = performance.now() - startTime;
-      this.logSuccess(result.intent, durationMs, 'ollama');
-      return result;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      this.logger.debug(`Ollama extraction failed: ${lastError.message}`);
-    }
+    this.logger.log(`[EXTRACTOR] Starting extraction for: "${message}"`);
 
-    // Step 2: Fallback to Opencode Go API
+    // Step 1: Try deterministic keyword matching first (fast, reliable, no hallucinations)
     try {
-      const result = await this.tryOpencode(message, context);
-      const durationMs = performance.now() - startTime;
-      this.logSuccess(result.intent, durationMs, 'opencode');
-      return result;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      this.logger.debug(`Opencode extraction failed: ${lastError.message}`);
-    }
-
-    // Step 3: Final fallback to deterministic keyword matching
-    try {
+      this.logger.log(`[EXTRACTOR] Step 1: Trying deterministic...`);
       const result = await this.tryDeterministic(message, context);
       const durationMs = performance.now() - startTime;
       this.logSuccess(result.intent, durationMs, 'deterministic');
+      this.logger.log(`[EXTRACTOR] Deterministic SUCCESS: intent=${result.intent} in ${durationMs.toFixed(0)}ms`);
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      this.logger.debug(`Deterministic extraction failed: ${lastError.message}`);
+      this.logger.warn(`[EXTRACTOR] Deterministic FAILED: ${lastError.message}`);
+    }
+
+    // Step 2: Fallback to Ollama for ambiguous language
+    try {
+      this.logger.log(`[EXTRACTOR] Step 2: Trying Ollama...`);
+      const result = await this.tryOllama(message, context);
+      const durationMs = performance.now() - startTime;
+      this.logSuccess(result.intent, durationMs, 'ollama');
+      this.logger.log(`[EXTRACTOR] Ollama SUCCESS: intent=${result.intent} in ${durationMs.toFixed(0)}ms`);
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(`[EXTRACTOR] Ollama FAILED: ${lastError.message}`);
+    }
+
+    // Step 3: Final fallback to Opencode Go API
+    try {
+      this.logger.log(`[EXTRACTOR] Step 3: Trying Opencode...`);
+      const result = await this.tryOpencode(message, context);
+      const durationMs = performance.now() - startTime;
+      this.logSuccess(result.intent, durationMs, 'opencode');
+      this.logger.log(`[EXTRACTOR] Opencode SUCCESS: intent=${result.intent} in ${durationMs.toFixed(0)}ms`);
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(`[EXTRACTOR] Opencode FAILED: ${lastError.message}`);
     }
 
     // All fallbacks failed
     const durationMs = performance.now() - startTime;
     this.logError('unknown', durationMs, lastError?.message ?? 'All fallbacks failed');
+    this.logger.error(`[EXTRACTOR] ALL FALLBACKS FAILED after ${durationMs.toFixed(0)}ms: ${lastError?.message}`);
     throw new Error(`Failed to extract intent: ${lastError?.message ?? 'All extraction methods failed'}`);
   }
 
   /**
    * Try extraction via Ollama with timeout
+   *
+   * Calls Ollama directly instead of OllamaProvider.chat() to use the
+   * extractor's system prompt without the provider's general chat wrapper.
    */
   private async tryOllama(message: string, context?: ConversationContext): Promise<ExtractedIntent> {
-    const prompt = this.buildPrompt(message, context);
+    const systemPrompt = this.buildPrompt(message, context);
+    this.logger.log(`[OLLAMA] Calling Ollama at ${this.ollamaUrl} with timeout ${OLLAMA_TIMEOUT_MS}ms`);
 
-    const response = await Promise.race([
-      this.ollamaProvider.chat(prompt, { buildingId: context?.buildingId }),
-      this.timeoutPromise(OLLAMA_TIMEOUT_MS),
-    ]) as Awaited<ReturnType<OllamaProvider['chat']>>;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      this.logger.error(`[OLLAMA] TIMEOUT after ${OLLAMA_TIMEOUT_MS}ms`);
+      controller.abort();
+    }, OLLAMA_TIMEOUT_MS);
 
-    return this.parseAndValidate(response.answer);
+    const fetchStart = performance.now();
+
+    try {
+      const response = await fetch(`${this.ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama3',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message },
+          ],
+          stream: false,
+          options: { num_predict: 120 },
+        }),
+        signal: controller.signal,
+      });
+
+      const fetchDuration = performance.now() - fetchStart;
+      this.logger.log(`[OLLAMA] HTTP response in ${fetchDuration.toFixed(0)}ms: status=${response.status}`);
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json() as any;
+      const answer = data.message?.content ?? '';
+      this.logger.log(`[OLLAMA] Raw answer: ${answer.substring(0, 200)}`);
+
+      return this.parseAndValidate(answer);
+    } catch (error) {
+      const fetchDuration = performance.now() - fetchStart;
+      this.logger.error(`[OLLAMA] Error after ${fetchDuration.toFixed(0)}ms: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /**
