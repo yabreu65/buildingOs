@@ -29,6 +29,27 @@ export interface ChatRequest {
   page: string;
   buildingId?: string;
   unitId?: string;
+  conversationId?: string;
+}
+
+/**
+ * Structured response from the NLU engine (v2 endpoint)
+ */
+export interface StructuredResponse {
+  type: 'text' | 'table' | 'kpi' | 'chart' | 'clarification' | 'action_list';
+  title: string;
+  summary: string;
+  data?: unknown;
+  actions?: Array<{
+    label: string;
+    action: string;
+    payload?: object;
+  }>;
+  meta: {
+    intent: string;
+    confidence: number;
+    tenantScoped: true;
+  };
 }
 
 export interface ActionDefinition {
@@ -147,6 +168,55 @@ export class AssistantApi {
       'view-rules': 'SEARCH_DOCS',
     };
     return mapping[actionKey] || 'VIEW_REPORTS';
+  }
+
+  /**
+   * Send chat message to AI assistant (v2 - structured responses)
+   *
+   * @param tenantId - Tenant ID
+   * @param request - Chat request with message, page, context, and conversationId
+   * @returns StructuredResponse with typed response
+   * @throws Error if feature not available, rate limited, or request fails
+   */
+  async chatV2(tenantId: string, request: ChatRequest): Promise<StructuredResponse> {
+    try {
+      const response = await apiClient<StructuredResponse, ChatRequest>({
+        path: `/tenants/${tenantId}/assistant/chat/v2`,
+        method: 'POST',
+        body: request,
+        headers: {
+          'X-Tenant-Id': tenantId,
+        },
+      });
+
+      return response;
+    } catch (error) {
+      const httpError = error as HttpError;
+
+      // Special handling for rate limit
+      if (httpError.status === 429) {
+        throw new AssistantApiError(
+          'AI_RATE_LIMITED',
+          httpError.message || 'Daily AI limit exceeded',
+          429,
+        );
+      }
+
+      // Feature not available
+      if (httpError.status === 403) {
+        throw new AssistantApiError(
+          'FEATURE_NOT_AVAILABLE',
+          httpError.message || 'AI Assistant not available on your plan',
+          403,
+        );
+      }
+
+      throw new AssistantApiError(
+        'AI_ERROR',
+        httpError.message || 'Failed to get AI response',
+        httpError.status,
+      );
+    }
   }
 }
 
