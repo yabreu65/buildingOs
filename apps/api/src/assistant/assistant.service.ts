@@ -60,6 +60,8 @@ export interface ChatRequest {
   readonly page: string;
   readonly buildingId?: string;
   readonly unitId?: string;
+  readonly conversationId?: string;
+  readonly sessionId?: string;
 }
 
 interface ContextValidation {
@@ -543,7 +545,8 @@ export class AssistantService implements OnModuleInit {
     }
 
     // Get or generate sessionId for conversation context
-    const sessionId = request.sessionId || this.generateSessionId();
+    // Frontend sends 'conversationId', backend expects 'sessionId'
+    const sessionId = request.sessionId || request.conversationId || this.generateSessionId();
 
     // Step 1: Get conversation context
     const conversationContext = await this.conversationContext.getContext(tenantId, userId, sessionId);
