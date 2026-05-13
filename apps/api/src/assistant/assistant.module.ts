@@ -35,6 +35,7 @@ import { AssistantDebtCalculatorService } from './assistant-debt-calculator.serv
 // Intent Engine services
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
 import { RedisConversationContextService } from './context/redis-conversation-context.service';
@@ -42,6 +43,8 @@ import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
 import { AssistantFeedbackService } from './feedback/assistant-feedback.service';
+import { AssistantLlmHealthController } from './llm-health.controller';
+import { AssistantLlmHealthService } from './llm-health.service';
 
 // Intent definitions
 import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
@@ -117,6 +120,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     AiUnitsController,
     AssistantReadOnlyQueryController,
     AssistantToolsController,
+    AssistantLlmHealthController,
   ],
   providers: [
     AssistantService,
@@ -143,6 +147,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     // Intent Engine services
     IntentRegistry,
     IntentExtractorService,
+    FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,
     RedisConversationContextService,
@@ -150,6 +155,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
+    AssistantLlmHealthService,
   ],
   exports: [
     AssistantService,
@@ -172,6 +178,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     AssistantDebtCalculatorService,
     IntentRegistry,
     IntentExtractorService,
+    FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,
     RedisConversationContextService,
@@ -179,6 +186,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
+    AssistantLlmHealthService,
   ],
 })
 export class AssistantModule {}

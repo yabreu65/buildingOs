@@ -15,6 +15,9 @@ const mockQueryPlanServiceInstance = {
 const mockFeedbackServiceInstance = {
   logExecution: mockLogExecution,
 };
+const mockFilterCoverageValidatorInstance = {
+  analyze: jest.fn(),
+};
 
 describe('IntentExtractorService', () => {
   let service: IntentExtractorService;
@@ -25,7 +28,13 @@ describe('IntentExtractorService', () => {
       undefined as any, // ollamaProvider no longer used
       mockQueryPlanServiceInstance as any,
       mockFeedbackServiceInstance as any,
+      mockFilterCoverageValidatorInstance as any,
     );
+    mockFilterCoverageValidatorInstance.analyze.mockReturnValue({
+      complete: true,
+      detectedSignals: [],
+      missingFields: [],
+    });
   });
 
   afterEach(() => {
@@ -60,6 +69,7 @@ describe('IntentExtractorService', () => {
       expect(result.entity.buildingAlias).toBe('A');
       expect(result.entity.unitCode).toBe('0101');
       expect(result.confidence).toBe(0.85);
+      expect(result.llmProvider).toBe('ollama');
     });
 
     it('falls back to deterministic keyword matching on timeout', async () => {
@@ -70,7 +80,7 @@ describe('IntentExtractorService', () => {
         module: 'payments',
         scope: 'unit',
         executor: 'unit_debt',
-        filters: { unitCode: '0101', buildingAlias: 'A' },
+        filters: { unitCode: '0101', buildingAlias: 'A', minAmount: undefined },
         confidence: 0.92,
         source: 'deterministic_rules',
       };
@@ -81,6 +91,64 @@ describe('IntentExtractorService', () => {
       expect(result).toBeDefined();
       expect(result.intent).toBe('unit_debt');
       expect(result.confidence).toBe(0.92);
+      expect(result.source).toBe('deterministic');
+    });
+
+    it('maps deterministic buildingToken into entity.buildingAlias', async () => {
+      mockCreatePlan.mockReturnValue({
+        intent: 'building_payments',
+        module: 'payments',
+        scope: 'building',
+        executor: 'building_payments',
+        filters: { buildingToken: 'A', period: '2026-04', method: 'TRANSFER' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+
+      const result = await service.extractIntent('Pagos por banco del mes pasado en Torre A');
+
+      expect(result.intent).toBe('building_payments');
+      expect(result.entity.type).toBe('building');
+      expect(result.entity.buildingAlias).toBe('A');
+    });
+
+    it('calls LLM when deterministic intent exists but filter coverage is incomplete', async () => {
+      mockCreatePlan.mockReturnValue({
+        intent: 'building_payments',
+        module: 'payments',
+        scope: 'building',
+        executor: 'building_payments',
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockFilterCoverageValidatorInstance.analyze.mockReturnValue({
+        complete: false,
+        detectedSignals: ['period', 'method'],
+        missingFields: ['period', 'method'],
+      });
+
+      const mockResponse = {
+        message: {
+          content: JSON.stringify({
+            intent: 'building_payments',
+            entity: { type: 'building', buildingAlias: 'A' },
+            filters: { period: '2026-01', method: 'TRANSFER' },
+            confidence: 0.88,
+          }),
+        },
+      };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await service.extractIntent('Pagos de enero por transferencia');
+
+      expect(result.intent).toBe('building_payments');
+      expect(result.filters.period).toBe('2026-01');
+      expect(result.filters.method).toBe('TRANSFER');
     });
 
     it('rejects LLM response when confidence is below threshold', async () => {
@@ -119,6 +187,41 @@ describe('IntentExtractorService', () => {
       });
 
       await expect(service.extractIntent('¿Cuánto debe A-0101?')).rejects.toThrow(/Confidence 0.5 below threshold 0.7/);
+
+      delete process.env.OPENCODE_API_KEY;
+    });
+
+    it('tracks opencode as provider when ollama fails and opencode succeeds', async () => {
+      mockCreatePlan.mockReturnValue(null);
+      process.env.OPENCODE_API_KEY = 'test-key';
+
+      const opencodeResponse = {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              intent: 'building_tickets',
+              entity: { type: 'building', buildingAlias: 'A' },
+              filters: { status: 'OPEN' },
+              confidence: 0.88,
+            }),
+          },
+        }],
+      };
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url.includes('/api/chat')) {
+          throw new Error('Ollama unavailable');
+        }
+        if (url.includes('opencode')) {
+          return { ok: true, json: async () => opencodeResponse };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      });
+
+      const result = await service.extractIntent('Tickets abiertos del edificio A');
+
+      expect(result.intent).toBe('building_tickets');
+      expect(result.llmProvider).toBe('opencode');
 
       delete process.env.OPENCODE_API_KEY;
     });

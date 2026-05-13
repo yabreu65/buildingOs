@@ -147,6 +147,14 @@ export class QueryPlannerService {
       applied.maxAmount = filters.maxAmount;
     }
 
+    if (filters.minDebt !== undefined) {
+      applied.minDebt = filters.minDebt;
+      // Backward-compatible mapping for executors still expecting minAmount
+      if (applied.minAmount === undefined) {
+        applied.minAmount = filters.minDebt;
+      }
+    }
+
     if (filters.period !== undefined) {
       // Validate period format YYYY-MM
       if (/^\d{4}-\d{2}$/.test(filters.period)) {

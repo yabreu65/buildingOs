@@ -21,6 +21,7 @@ import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
 import { IntentRegistry } from './intent-engine/intent-registry';
+import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 
 /**
@@ -74,6 +75,7 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockQueryExecutorService = { execute: jest.fn() };
   const mockResponseFormatter = { formatV1: jest.fn(), formatV2: jest.fn() };
   const mockIntentRegistry = { register: jest.fn(), get: jest.fn(), has: jest.fn(), list: jest.fn() };
+  const mockFilterCoverageValidator = { analyze: jest.fn() };
 
   const ADMIN_ROLES = ['TENANT_ADMIN'];
 
@@ -105,6 +107,11 @@ describe('AssistantService - Strict Operational Questions', () => {
       },
       errorResponse: null,
     });
+    mockFilterCoverageValidator.analyze.mockReturnValue({
+      complete: true,
+      detectedSignals: [],
+      missingFields: [],
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -131,6 +138,7 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: QueryExecutorService, useValue: mockQueryExecutorService },
         { provide: ResponseFormatterService, useValue: mockResponseFormatter },
         { provide: IntentRegistry, useValue: mockIntentRegistry },
+        { provide: FilterCoverageValidator, useValue: mockFilterCoverageValidator },
       ],
     }).compile();
 
@@ -198,6 +206,167 @@ describe('AssistantService - Strict Operational Questions', () => {
         'user-1',
         ADMIN_ROLES,
       );
+    });
+  });
+
+  describe('chatV2 debug payload', () => {
+    it('includes debug metadata when request.debug=true', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'building_tickets',
+        entity: { type: 'building', buildingAlias: 'A' },
+        filters: { status: 'OPEN', minAgeDays: 7 },
+        confidence: 0.9,
+        source: 'deterministic',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'building-1', name: 'Edificio A', alias: 'A' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockReturnValue({
+        intent: 'building_tickets',
+        entityIds: { buildingId: 'building-1' },
+        filters: { status: 'OPEN', minAgeDays: 7 },
+        pagination: { limit: 20 },
+      });
+      mockQueryExecutorService.execute.mockResolvedValue({ tickets: [] });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'table',
+        title: 'Tickets',
+        summary: 'Sin tickets',
+        data: { tickets: [] },
+        meta: { intent: 'building_tickets', confidence: 0.9, tenantScoped: true },
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'Tickets abiertos hace más de 7 días en edificio A',
+          page: 'tickets',
+          conversationId: 'conv-1',
+          debug: true,
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(result.debug).toBeDefined();
+      expect(result.debug?.finalIntent).toBe('building_tickets');
+      expect(result.debug?.zodValidationPassed).toBe(true);
+      expect(result.debug?.rbacChecked).toBe(true);
+      expect(result.debug?.tenantScoped).toBe(true);
+    });
+  });
+
+  describe('chatV2 entity guards', () => {
+    it('returns clarification when unit intent cannot resolve requested unit', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'unit_debt',
+        entity: { type: 'unit', buildingAlias: 'A', unitCode: '0123' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'building-1', name: 'Torre A', alias: 'A' },
+        alternatives: [],
+      });
+      mockEntityResolver.resolveUnit.mockResolvedValue(null);
+      mockUnitResolver.resolve.mockResolvedValue({
+        resolved: null,
+        errorResponse: {
+          answer: 'No encontré la unidad A-0123. ¿Querés revisar el código?',
+          suggestedActions: [],
+        },
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: 'No encontré la unidad solicitada.',
+        data: [],
+        meta: { intent: 'unit_debt', confidence: 0.9, tenantScoped: true },
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'deuda de la unidad A-0123', page: 'dashboard', conversationId: 'conv-x' },
+        ADMIN_ROLES,
+      );
+
+      expect(result.type).toBe('clarification');
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+    });
+
+    it('uses operational unit resolver when no explicit building is provided', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'unit_debt',
+        entity: { type: 'unit', unitCode: 'A-0123' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockEntityResolver.resolveBuilding.mockResolvedValue(null);
+      mockEntityResolver.resolveUnit.mockResolvedValue(null);
+      mockUnitResolver.resolve.mockResolvedValue({
+        resolved: {
+          building: { id: 'building-1', name: 'Torre A', alias: 'A' },
+          unit: { id: 'unit-123', code: '0123', label: 'A-0123' },
+          displayCode: 'A-0123',
+        },
+        errorResponse: null,
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockReturnValue({
+        intent: 'unit_debt',
+        entityIds: { buildingId: 'building-1', unitId: 'unit-123' },
+        filters: {},
+        pagination: { limit: 20 },
+      });
+      mockQueryExecutorService.execute.mockResolvedValue({ total: 1000 });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'text',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.000,00',
+        data: {},
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'deuda de la unidad A-0123', page: 'dashboard', conversationId: 'conv-x' },
+        ADMIN_ROLES,
+      );
+
+      expect(result.type).toBe('text');
+      expect(mockUnitResolver.resolve).toHaveBeenCalledWith('tenant-1', expect.objectContaining({
+        unitCode: 'A-0123',
+      }));
+      expect(mockQueryExecutorService.execute).toHaveBeenCalled();
     });
   });
 
@@ -301,6 +470,68 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(isFollowUp).toBe(false);
+    });
+  });
+
+  describe('person resolution in chatV2', () => {
+    it('pide aclaración cuando hay múltiples personas con el mismo nombre', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'unit_debt',
+        entity: { type: 'person', personName: 'Juan Pérez' },
+        filters: {},
+        confidence: 0.9,
+        source: 'llm',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockEntityResolver.resolvePerson.mockResolvedValue({
+        person: { id: 'person-1', name: 'Juan Pérez', unitId: 'unit-1' },
+        alternatives: [
+          {
+            type: 'person',
+            id: 'person-2',
+            displayName: 'Juan Pérez (B-0201)',
+            matchScore: 0.82,
+            reason: 'Coincidencia parcial',
+          },
+        ],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(true);
+      mockAmbiguityService.generateClarification.mockReturnValue({
+        isAmbiguous: true,
+        alternatives: [
+          {
+            intent: 'unknown',
+            entity: { type: 'person' },
+            confidence: 0.82,
+            reason: 'Coincidencia parcial',
+          },
+        ],
+        clarificationMessage: 'Encontré más de un Juan Pérez. ¿A cuál te referís?',
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: 'Encontré más de un Juan Pérez. ¿A cuál te referís?',
+        meta: { intent: 'ambiguous', confidence: 0.9, tenantScoped: true },
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: '¿Cuánto debe Juan Pérez?', page: 'dashboard', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockEntityResolver.resolvePerson).toHaveBeenCalledWith('Juan Pérez', 'tenant-1');
+      expect(mockResponseFormatter.formatV2).toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
     });
   });
 

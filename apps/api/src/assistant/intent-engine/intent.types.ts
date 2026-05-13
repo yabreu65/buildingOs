@@ -12,6 +12,7 @@ export type SupportedResponseType = 'text' | 'table' | 'kpi' | 'chart' | 'clarif
 export type SupportedFilter =
   | 'minAmount'
   | 'maxAmount'
+  | 'minDebt'
   | 'period'
   | 'status'
   | 'method'
@@ -27,6 +28,7 @@ export type SupportedFilter =
 export interface IntentFilters {
   minAmount?: number;
   maxAmount?: number;
+  minDebt?: number;
   period?: string;
   status?: string;
   method?: string;
@@ -121,8 +123,20 @@ export interface ExtractedIntent {
   entity: EntityReference;
   /** Applied filters */
   filters: IntentFilters;
+  /** Optional sort metadata extracted from message */
+  sort?: { field?: string; order?: 'asc' | 'desc' };
+  /** Optional limit extracted from message */
+  limit?: number;
   /** Confidence score 0-1 */
   confidence: number;
+  /** Extraction source */
+  source?: 'deterministic' | 'llm' | 'hybrid';
+  /** LLM provider that produced this extraction when source involves LLM */
+  llmProvider?: 'ollama' | 'opencode' | 'none';
+  /** Whether clarification should be asked before execution */
+  requiresClarification?: boolean;
+  /** Missing semantic fields when extraction is incomplete */
+  missingFields?: string[];
 }
 
 /**

@@ -25,6 +25,27 @@ interface Props {
   onAction?: (action: string, payload?: object) => void;
 }
 
+function normalizeClarificationOptions(data: unknown): Array<{ label: string; value: string }> {
+  if (Array.isArray(data)) {
+    return data
+      .filter((item): item is { label: string; value: string } => {
+        return Boolean(item && typeof item === 'object' && 'label' in item && 'value' in item);
+      });
+  }
+
+  if (data && typeof data === 'object') {
+    const record = data as { alternatives?: unknown };
+    if (Array.isArray(record.alternatives)) {
+      return record.alternatives.map((item: any, idx) => ({
+        label: item?.displayName || item?.name || item?.reason || `Opción ${idx + 1}`,
+        value: item?.id || item?.value || String(idx),
+      }));
+    }
+  }
+
+  return [];
+}
+
 /**
  * AssistantResponseRenderer - Dispatcher component that renders the appropriate response type
  *
@@ -46,7 +67,7 @@ export function AssistantResponseRenderer({ response, onClarificationSelect, onA
       return (
         <AssistantClarificationResponse
           message={response.summary}
-          options={(response.data as Array<{ label: string; value: string }>) || []}
+          options={normalizeClarificationOptions(response.data)}
           onSelect={onClarificationSelect || (() => {})}
         />
       );

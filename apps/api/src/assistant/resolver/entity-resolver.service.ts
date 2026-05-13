@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntityResolution, EntityAlternative } from '../intent-engine/intent.types';
+import { UnitCodeNormalizer } from '../unit-code-normalizer';
 
 /**
  * EntityResolverService - Resolves entity references to database records
@@ -101,12 +102,14 @@ export class EntityResolverService {
     buildingId: string,
     tenantId: string,
   ): Promise<EntityResolution | null> {
+    const codeCandidates = this.buildUnitCodeCandidates(code);
+
     // Exact match on code within building
     const exactMatch = await this.prisma.unit.findFirst({
       where: {
         tenantId,
         buildingId,
-        code,
+        code: codeCandidates.length === 1 ? codeCandidates[0] : { in: codeCandidates },
       },
       select: { id: true, code: true, label: true, buildingId: true },
     });
@@ -125,6 +128,10 @@ export class EntityResolverService {
 
     // No match found
     return null;
+  }
+
+  private buildUnitCodeCandidates(rawCode: string): string[] {
+    return UnitCodeNormalizer.normalize(rawCode).candidates;
   }
 
   /**

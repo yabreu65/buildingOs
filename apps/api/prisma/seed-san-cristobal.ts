@@ -95,6 +95,23 @@ async function main() {
   });
   console.log(`   ✅ Tenant ID: ${tenant.id}\n`);
 
+  // 2b. Create Subscription with PRO plan (enables AI)
+  const proPlan = await prisma.billingPlan.findUnique({
+    where: { planId: 'PRO' },
+  });
+  if (proPlan) {
+    await prisma.subscription.create({
+      data: {
+        tenantId: tenant.id,
+        planId: proPlan.id,
+        status: 'ACTIVE',
+      },
+    });
+    console.log(`   ✅ Subscription: PRO plan (AI enabled)\n`);
+  } else {
+    console.log(`   ⚠️  PRO plan not found - AI may be disabled\n`);
+  }
+
   // 3. Create Buildings with aliases
   console.log('2. Creating buildings...');
   const buildingA = await prisma.building.create({
@@ -113,30 +130,53 @@ async function main() {
   console.log(`   ✅ Torre A: ${buildingA.id} (alias: A)`);
   console.log(`   ✅ Torre B: ${buildingB.id} (alias: B)\n`);
 
-  // 4. Create Units (12 floors x 8 units = 96 per building)
-  console.log('3. Creating units (192 total)...');
+  // 4. Create Units (12 floors x 8 units = 96 apartments per building + 96 parkings)
+  console.log('3. Creating units (192 apartments + 192 parkings)...');
   const unitIdsA: string[] = [];
   const unitIdsB: string[] = [];
-  
+  const parkingIdsA: string[] = [];
+  const parkingIdsB: string[] = [];
+
   for (let floor = 1; floor <= 12; floor++) {
     for (let unit = 1; unit <= 8; unit++) {
-      const code = `${floor.toString().padStart(2, '0')}${unit.toString().padStart(2, '0')}`;
+      const baseCode = `${floor.toString().padStart(2, '0')}${unit.toString().padStart(2, '0')}`;
       const m2Range = UNIT_M2_SIZES[unit - 1];
       const m2 = Math.floor(Math.random() * (m2Range[1] - m2Range[0]) + m2Range[0]);
-      
-      const unitA = await prisma.unit.create({
-        data: { tenantId: tenant.id, buildingId: buildingA.id, code, label: `Torre A - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
+
+      // Torre A: Apartment A-XXXX + Parking AP-XXXX
+      const apartmentA = await prisma.unit.create({
+        data: { tenantId: tenant.id, buildingId: buildingA.id, code: `A-${baseCode}`, label: `Torre A - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true, unitType: 'APARTAMENTO' },
       });
-      unitIdsA.push(unitA.id);
-      
-      const unitB = await prisma.unit.create({
-        data: { tenantId: tenant.id, buildingId: buildingB.id, code, label: `Torre B - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true },
+      unitIdsA.push(apartmentA.id);
+
+      const parkingA = await prisma.unit.create({
+        data: { tenantId: tenant.id, buildingId: buildingA.id, code: `AP-${baseCode}`, label: `Puesto AP-${baseCode}`, m2: 12, isBillable: false, unitType: 'ESTACIONAMIENTO' },
       });
-      unitIdsB.push(unitB.id);
+      parkingIdsA.push(parkingA.id);
+
+      await prisma.unitAssociation.create({
+        data: { tenantId: tenant.id, buildingId: buildingA.id, apartmentId: apartmentA.id, parkingId: parkingA.id },
+      });
+
+      // Torre B: Apartment B-XXXX + Parking BP-XXXX
+      const apartmentB = await prisma.unit.create({
+        data: { tenantId: tenant.id, buildingId: buildingB.id, code: `B-${baseCode}`, label: `Torre B - Piso ${floor} - Depto ${unit}`, m2: m2, isBillable: true, unitType: 'APARTAMENTO' },
+      });
+      unitIdsB.push(apartmentB.id);
+
+      const parkingB = await prisma.unit.create({
+        data: { tenantId: tenant.id, buildingId: buildingB.id, code: `BP-${baseCode}`, label: `Puesto BP-${baseCode}`, m2: 12, isBillable: false, unitType: 'ESTACIONAMIENTO' },
+      });
+      parkingIdsB.push(parkingB.id);
+
+      await prisma.unitAssociation.create({
+        data: { tenantId: tenant.id, buildingId: buildingB.id, apartmentId: apartmentB.id, parkingId: parkingB.id },
+      });
     }
   }
-  console.log(`   ✅ Torre A: ${unitIdsA.length} units`);
-  console.log(`   ✅ Torre B: ${unitIdsB.length} units\n`);
+  console.log(`   ✅ Torre A: ${unitIdsA.length} apartments + ${parkingIdsA.length} parkings`);
+  console.log(`   ✅ Torre B: ${unitIdsB.length} apartments + ${parkingIdsB.length} parkings`);
+  console.log(`   ✅ Total: ${unitIdsA.length + unitIdsB.length + parkingIdsA.length + parkingIdsB.length} units\n`);
 
   // 4b. Create UnitCategories (for m2-based prorrateo)
   console.log('3b. Creating unit categories (prorrateo por m²)...');

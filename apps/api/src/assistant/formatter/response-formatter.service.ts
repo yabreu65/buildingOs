@@ -407,7 +407,17 @@ export class ResponseFormatterService {
         case 'building_payments': {
           const payments = record.payments as Array<Record<string, unknown>>;
           if (Array.isArray(payments)) {
-            return `${payments.length} pago${payments.length === 1 ? '' : 's'} encontrado${payments.length === 1 ? '' : 's'}`;
+            const currency = (record.currency as string) || 'ARS';
+            const explicitTotalAmount = typeof record.totalAmount === 'number' ? record.totalAmount : undefined;
+            const sumByMethod = record.sumByMethod as Record<string, number> | undefined;
+            const inferredTotal =
+              explicitTotalAmount ??
+              (sumByMethod
+                ? Object.values(sumByMethod).reduce((acc, value) => acc + Number(value || 0), 0)
+                : payments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0));
+
+            const countText = `${payments.length} pago${payments.length === 1 ? '' : 's'} encontrado${payments.length === 1 ? '' : 's'}`;
+            return `${countText}. Monto total: ${this.formatMoney(inferredTotal, currency)}`;
           }
           break;
         }
@@ -501,6 +511,13 @@ export class ResponseFormatterService {
       case 'chart':
         return 'Datos del gráfico';
       case 'clarification':
+        if (data && typeof data === 'object') {
+          const record = data as Record<string, unknown>;
+          const clarificationMessage = record.clarificationMessage;
+          if (typeof clarificationMessage === 'string' && clarificationMessage.trim().length > 0) {
+            return clarificationMessage;
+          }
+        }
         return 'Se requiere clarificación';
       default:
         return 'Respuesta';

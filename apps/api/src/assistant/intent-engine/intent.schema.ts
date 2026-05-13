@@ -24,6 +24,7 @@ const entityReferenceSchema: z.ZodType<{
 const intentFiltersSchema: z.ZodType<{
   minAmount?: number;
   maxAmount?: number;
+  minDebt?: number;
   period?: string;
   status?: string;
   method?: string;
@@ -36,6 +37,7 @@ const intentFiltersSchema: z.ZodType<{
   .object({
     minAmount: z.number().optional(),
     maxAmount: z.number().optional(),
+    minDebt: z.number().optional(),
     period: z.string().optional(),
     status: z.string().optional(),
     method: z.string().optional(),
@@ -62,8 +64,22 @@ export const extractedIntentSchema = z.object({
   intent: z.string().min(1, 'Intent name is required'),
   entity: entityReferenceSchema,
   filters: intentFiltersSchema,
+  sort: z
+    .object({
+      field: z.string().optional(),
+      order: z.enum(['asc', 'desc']).optional(),
+    })
+    .strict()
+    .optional(),
+  limit: z.number().max(100).optional(),
   confidence: z.number().min(0, 'Confidence must be at least 0').max(1, 'Confidence must be at most 1'),
+  source: z.enum(['deterministic', 'llm', 'hybrid']).optional().default('llm'),
+  llmProvider: z.enum(['ollama', 'opencode', 'none']).optional(),
+  requiresClarification: z.boolean().optional().default(false),
+  missingFields: z.array(z.string()).optional().default([]),
 }).strict();
+
+export const normalizedIntentSchema = extractedIntentSchema;
 
 /**
  * Inferred TypeScript type from schema

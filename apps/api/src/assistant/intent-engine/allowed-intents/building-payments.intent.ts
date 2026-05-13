@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
 
@@ -10,15 +9,13 @@ export const buildingPaymentsIntent: IntentDefinition = {
   executor: async (params): Promise<IntentExecutionResult> => {
     const { tenantId, entityIds, filters, pagination, prisma } = params;
     const buildingId = entityIds?.buildingId;
-
-    if (!buildingId) {
-      throw new BadRequestException('buildingId required for building_payments intent');
-    }
-
     const whereClause: Record<string, unknown> = {
-      buildingId,
       tenantId,
     };
+
+    if (buildingId) {
+      whereClause.buildingId = buildingId;
+    }
 
     if (filters?.status) {
       whereClause.status = filters.status;
@@ -29,7 +26,12 @@ export const buildingPaymentsIntent: IntentDefinition = {
     }
 
     if (filters?.period) {
-      whereClause.paidAt = { gte: new Date(`${filters.period}-01`), lt: new Date(`${filters.period}-31`) };
+      const periodStart = new Date(`${filters.period}-01T00:00:00.000Z`);
+      if (!Number.isNaN(periodStart.getTime())) {
+        const periodEnd = new Date(periodStart);
+        periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+        whereClause.paidAt = { gte: periodStart, lt: periodEnd };
+      }
     }
 
     if (filters?.minAmount) {
@@ -65,7 +67,7 @@ export const buildingPaymentsIntent: IntentDefinition = {
       // Sum by method
       prisma.payment.groupBy({
         by: ['method'],
-        where: { buildingId, tenantId },
+        where: whereClause,
         _sum: { amount: true },
       }),
     ]);
@@ -77,6 +79,8 @@ export const buildingPaymentsIntent: IntentDefinition = {
       }
     }
 
+    const totalAmount = payments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0);
+
     return {
       data: {
         payments: payments.map((p) => ({
@@ -87,6 +91,7 @@ export const buildingPaymentsIntent: IntentDefinition = {
           isUnitSpecific: !!p.unitId,
         })),
         sumByMethod,
+        totalAmount,
         total: payments.length,
       },
     };

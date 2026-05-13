@@ -33,6 +33,8 @@ export interface UnitToken {
   unitCode: string;
   buildingAlias?: string;
   buildingName?: string;
+  unitCodeCandidates?: string[];
+  unitCodeRaw?: string;
 }
 
 export interface MatchResult<T> {
@@ -84,82 +86,83 @@ export class AssistantQueryParser {
   }
 
   /**
-   * Parsea una referencia completa a unidad con soporte para alias de edificio.
+   * Parsea una referencia completa a unidad.
    *
-   * Formatos soportados:
-   * - "A-0101" → { buildingAlias: "A", unitCode: "0101" }
-   * - "B0101" → { buildingAlias: "B", unitCode: "0101" }
-   * - "0101" → { unitCode: "0101" }
-   * - "departamento 0101 de la A" → { buildingAlias: "A", unitCode: "0101" }
-   * - "departamento 0101 del edificio A" → { buildingAlias: "A", unitCode: "0101" }
+   * Regla de producto:
+   * - El código de unidad se trata como identificador opaco.
+   * - No se infiere edificio desde el código.
+   * - El edificio solo se extrae cuando es explícito en el mensaje.
    */
   parseUnitReference(message: string): UnitToken | null {
-    const normalized = message.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const unitCodeRaw = this.extractOpaqueUnitCode(message);
+    if (!unitCodeRaw) return null;
 
-    // Patrón 0: Estacionamientos (A-P001, B-P002)
-    // Debe ir ANTES del patrón general para no capturar A-P001 como alias=A, code=001
-    const parkingPattern = /\b([a-zA-Z])-([A-Z]\d{3})\b/i;
-    const parkingMatch = message.match(parkingPattern);
-    if (parkingMatch && parkingMatch[1] && parkingMatch[2]) {
-      return {
-        buildingAlias: parkingMatch[1].toUpperCase(),
-        unitCode: parkingMatch[2].toUpperCase(),
-      };
+    const normalized = UnitCodeNormalizer.normalize(unitCodeRaw);
+    if (!normalized.normalized) return null;
+
+    const explicitBuilding = this.extractExplicitBuildingReference(message);
+
+    return {
+      unitCodeRaw: normalized.raw,
+      unitCode: normalized.normalized,
+      unitCodeCandidates: normalized.candidates,
+      buildingAlias: explicitBuilding?.buildingAlias,
+      buildingName: explicitBuilding?.buildingName,
+    };
+  }
+
+  private extractOpaqueUnitCode(message: string): string | null {
+    const unitSynonyms = UNIT_SYNONYMS.join('|');
+    const normalizedMessage = message.replace(/[\u2010-\u2015\u2212]/g, '-');
+    const explicitUnitCodePattern =
+      '([A-Za-z]{1,3}\\d{1,2}-\\d{2,4}|[A-Za-z]{1,3}\\s*-\\s*\\d{1,5}|\\d{1,4}\\s*-\\s*[A-Za-z0-9]{1,3}|[A-Za-z]{1,3}\\d{2,5}|\\d{1,4}[A-Za-z]{1,2}|[A-Za-z]{1,3}\\s+\\d{2,5}|\\d{1,5})';
+    const genericUnitCodePattern =
+      '([A-Za-z]{1,3}\\d{1,2}-\\d{2,4}|[A-Za-z]{1,3}\\s*-\\s*\\d{1,5}|\\d{1,4}\\s*-\\s*[A-Za-z0-9]{1,3}|[A-Za-z]{1,3}\\d{2,5}|\\d{1,4}[A-Za-z]{1,2})';
+
+    // 1) Prefer explicit unit mention: "unidad X", "depto X"
+    const explicitPattern = new RegExp(
+      `(?:${unitSynonyms})\\s+(?:nro\\.?\\s*|numero\\s+|número\\s+|num\\.?\\s+)?${explicitUnitCodePattern}(?=\\s+(?:de|del|en)\\b|$)`,
+      'i',
+    );
+    const explicitMatch = explicitPattern.exec(normalizedMessage);
+    if (explicitMatch && explicitMatch[1]) {
+      return explicitMatch[1];
     }
 
-    // Patrón 1: Alias-Code explícito (A-0101, B-0101, AA-0101)
-    // También soporta A0101 (compacto sin guion)
-    // NOTA: Solo guion opcional, NO espacio (evita capturar "EN 0101")
-    // Lookbehind negativo para evitar matchear P0012 después de A-P0012
-    const aliasCodePattern = /(?<![a-zA-Z]-)\b([a-zA-Z]{1,3})-?(\d{3,4})\b/;
-    const aliasCodeMatch = message.match(aliasCodePattern);
-    if (aliasCodeMatch && aliasCodeMatch[1] && aliasCodeMatch[2]) {
-      return {
-        buildingAlias: aliasCodeMatch[1].toUpperCase(),
-        unitCode: aliasCodeMatch[2].padStart(4, '0'),
-      };
+    // 2) Standalone operational patterns: "debe A-0123", "deuda de A0123", "debe PB-01", "deuda 2-B"
+    const standalonePattern = new RegExp(`\\b${genericUnitCodePattern}\\b`, 'i');
+    const standaloneMatch = standalonePattern.exec(normalizedMessage);
+    if (standaloneMatch && standaloneMatch[1]) {
+      return standaloneMatch[1];
     }
 
-    // Patrón 2: "0101 de la A" / "0101 del edificio A"
-    // Primero buscar "de la A", "del edificio A", "de los A", etc.
-    const reversePattern = /\b(\d{3,4})\s+(?:de\s+(?:la|el|los|las)\s+|del\s+(?:edificio|torre|bloque)\s+|del\s+)([a-zA-Z])\b/i;
-    const reverseMatch = message.match(reversePattern);
-    if (reverseMatch && reverseMatch[1] && reverseMatch[2]) {
-      return {
-        unitCode: reverseMatch[1].padStart(4, '0'),
-        buildingAlias: reverseMatch[2].toUpperCase(),
-      };
-    }
-
-    // Patrón 3: "0101 de Torre Norte" (nombre de edificio completo)
-    const namePattern = /\b(\d{3,4})\s+(?:de\s+(?:la|el|los|las)\s+)?([a-zA-Z]+(?:\s+[a-zA-Z]+)*)\b/;
-    const nameMatch = message.match(namePattern);
-    if (nameMatch && nameMatch[1] && nameMatch[2]) {
-      const potentialName = nameMatch[2].trim();
-      // Ignorar si es solo una preposición
-      if (potentialName.length > 2) {
-        return {
-          unitCode: nameMatch[1].padStart(4, '0'),
-          buildingName: potentialName,
-        };
+    // 3) Numeric unit fallback only when message is clearly operational
+    if (/\b(deuda|debe|saldo|adeuda|pago|pagos|ticket|tickets|residente|vive)\b/i.test(normalizedMessage)) {
+      const numericMatch = normalizedMessage.match(/\b(\d{3,4})\b/);
+      if (numericMatch && numericMatch[1]) {
+        return numericMatch[1];
       }
     }
 
-    // Patrón 4: Solo código (0101) — debe ser 3-4 dígitos
-    // Intentar extraer directamente un número de 3-4 dígitos
-    const directCodeMatch = message.match(/\b(\d{3,4})\b/);
-    if (directCodeMatch && directCodeMatch[1]) {
-      return { unitCode: directCodeMatch[1].padStart(4, '0') };
-    }
-
-    // Patrón 5: Código con guion tipo "12-01" → 1201
-    const floorDeptMatch = message.match(/\b(\d{1,2})[-\s](\d{2})\b/);
-    if (floorDeptMatch && floorDeptMatch[1] && floorDeptMatch[2]) {
-      const code = `${floorDeptMatch[1].padStart(2, '0')}${floorDeptMatch[2]}`;
-      return { unitCode: code };
-    }
-
     return null;
+  }
+
+  private extractExplicitBuildingReference(message: string): { buildingAlias?: string; buildingName?: string } | null {
+    const buildingSynonyms = BUILDING_SYNONYMS.join('|');
+    const normalizedMessage = message.replace(/[\u2010-\u2015\u2212]/g, '-');
+    const pattern = new RegExp(
+      `(?:\\ben\\s+(?:la\\s+|el\\s+)?)?(?:${buildingSynonyms})\\s+([A-Za-z0-9]+(?:\\s+[A-Za-z0-9]+)*)`,
+      'i',
+    );
+    const match = normalizedMessage.match(pattern);
+    if (!match || !match[1]) return null;
+
+    const rawToken = match[1].trim();
+    if (/^[A-Za-z0-9]{1,3}$/.test(rawToken)) {
+      return { buildingAlias: rawToken.toUpperCase() };
+    }
+
+    return { buildingName: rawToken };
   }
 
   /**
@@ -344,3 +347,4 @@ export class AssistantQueryParser {
     return match?.[1] || null;
   }
 }
+import { UnitCodeNormalizer } from '../unit-code-normalizer';

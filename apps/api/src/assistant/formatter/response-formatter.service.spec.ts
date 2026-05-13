@@ -96,6 +96,23 @@ describe('ResponseFormatterService', () => {
 
       expect(result.meta?.confidence).toBe(0.85);
     });
+
+    it('includes total amount in building_payments summary', () => {
+      const data = {
+        payments: [
+          { amount: 100000, method: 'TRANSFER' },
+          { amount: 50000, method: 'TRANSFER' },
+        ],
+        sumByMethod: { TRANSFER: 150000 },
+        totalAmount: 150000,
+        total: 2,
+        currency: 'ARS',
+      };
+      const result = service.formatV2(data, 'building_payments', 0.9);
+
+      expect(result.summary).toContain('2 pagos encontrados');
+      expect(result.summary).toContain('Monto total');
+    });
   });
 
   describe('formatter support', () => {
@@ -117,6 +134,17 @@ describe('ResponseFormatterService', () => {
       const result = service.formatV2(data, 'clarification', 0.5);
 
       expect(result.type).toBe('clarification');
+    });
+
+    it('uses clarificationMessage as summary when provided', () => {
+      const data = {
+        isAmbiguous: true,
+        alternatives: [],
+        clarificationMessage: 'No encontré la unidad A-0123 en Torre A. ¿Me indicás una válida?',
+      };
+      const result = service.formatV2(data, 'clarification', 0.5);
+
+      expect(result.summary).toBe('No encontré la unidad A-0123 en Torre A. ¿Me indicás una válida?');
     });
   });
 });

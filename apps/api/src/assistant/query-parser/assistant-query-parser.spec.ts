@@ -170,37 +170,66 @@ describe('AssistantQueryParser', () => {
 
   describe('parseUnitReference', () => {
     it.each([
-      ['A-0101', { buildingAlias: 'A', unitCode: '0101' }],
-      ['B-0101', { buildingAlias: 'B', unitCode: '0101' }],
-      ['C-0201', { buildingAlias: 'C', unitCode: '0201' }],
-      ['A0101', { buildingAlias: 'A', unitCode: '0101' }],
-      ['B0101', { buildingAlias: 'B', unitCode: '0101' }],
+      ['A-0101', { unitCode: 'A-0101' }],
+      ['B-0101', { unitCode: 'B-0101' }],
+      ['C-0201', { unitCode: 'C-0201' }],
+      ['A0101', { unitCode: 'A0101' }],
+      ['B0101', { unitCode: 'B0101' }],
+      ['A1-123', { unitCode: 'A1-123' }],
+      ['B2-045', { unitCode: 'B2-045' }],
     ])('should parse alias-code "%s"', (message, expected) => {
-      expect(parser.parseUnitReference(message)).toEqual(expected);
+      expect(parser.parseUnitReference(message)).toEqual(expect.objectContaining(expected));
     });
 
     it.each([
-      ['departamento 0101 de la A', { buildingAlias: 'A', unitCode: '0101' }],
+      ['departamento 0101 de la A', { unitCode: '0101' }],
       ['depto 0101 del edificio B', { buildingAlias: 'B', unitCode: '0101' }],
-      ['unidad 0201 de la C', { buildingAlias: 'C', unitCode: '0201' }],
+      ['unidad 0201 en Torre C', { buildingAlias: 'C', unitCode: '0201' }],
     ])('should parse reverse pattern "%s"', (message, expected) => {
-      expect(parser.parseUnitReference(message)).toEqual(expected);
+      expect(parser.parseUnitReference(message)).toEqual(expect.objectContaining(expected));
     });
 
     it.each([
-      ['0101', { unitCode: '0101' }],
+      ['quien vive en 0101', { unitCode: '0101' }],
       ['departamento 0101', { unitCode: '0101' }],
       ['unidad 0101', { unitCode: '0101' }],
     ])('should parse code-only "%s"', (message, expected) => {
-      expect(parser.parseUnitReference(message)).toEqual(expected);
+      expect(parser.parseUnitReference(message)).toEqual(expect.objectContaining(expected));
     });
 
     it.each([
-      ['1-01', { unitCode: '0101' }],
-      ['12-01', { unitCode: '1201' }],
-      ['2-03', { unitCode: '0203' }],
+      ['deuda de 1-01', { unitCode: '1-01' }],
+      ['pagos de 12-01', { unitCode: '12-01' }],
+      ['deuda unidad 2-B', { unitCode: '2-B' }],
+      ['deuda depto PB-01', { unitCode: 'PB-01' }],
     ])('should parse floor-dept pattern "%s"', (message, expected) => {
-      expect(parser.parseUnitReference(message)).toEqual(expected);
+      expect(parser.parseUnitReference(message)).toEqual(expect.objectContaining(expected));
+    });
+
+    it('should not infer building alias from unit code token', () => {
+      const result = parser.parseUnitReference('deuda de la unidad A-0123');
+      expect(result).toEqual(expect.objectContaining({ unitCode: 'A-0123' }));
+      expect(result?.buildingAlias).toBeUndefined();
+    });
+
+    it('should extract explicit building alias only when building is explicitly mentioned', () => {
+      const result = parser.parseUnitReference('deuda de la unidad 0123 en Torre A');
+      expect(result).toEqual(expect.objectContaining({
+        unitCode: '0123',
+        buildingAlias: 'A',
+      }));
+    });
+
+    it('should keep code as opaque for "cuanto debe A-0123"', () => {
+      const result = parser.parseUnitReference('cuánto debe A-0123');
+      expect(result).toEqual(expect.objectContaining({ unitCode: 'A-0123' }));
+      expect(result?.buildingAlias).toBeUndefined();
+    });
+
+    it('should keep code as opaque for "deuda unidad 2-B"', () => {
+      const result = parser.parseUnitReference('deuda unidad 2-B');
+      expect(result).toEqual(expect.objectContaining({ unitCode: '2-B' }));
+      expect(result?.buildingAlias).toBeUndefined();
     });
 
     it('should return null for messages without unit reference', () => {

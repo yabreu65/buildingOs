@@ -49,10 +49,9 @@ export class QueryExecutorService {
       throw new Error(`Intent "${plan.intent}" not found in registry`);
     }
 
-    // Development bypass: skip RBAC check in development mode
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    if (!isDevelopment) {
-      // RBAC check (only in production)
+    const rbacBypassAllowed = this.isRbacBypassAllowed();
+    if (!rbacBypassAllowed) {
+      // RBAC check is mandatory unless explicit local bypass is enabled
       const hasPermission = await this.authorizeService.authorize({
         userId,
         tenantId,
@@ -75,9 +74,6 @@ export class QueryExecutorService {
         });
         throw new ForbiddenException('Unauthorized access to this resource');
       }
-    } else {
-      // Development: log bypass
-      console.log(`[DEV BYPASS] RBAC check skipped for intent "${plan.intent}" (user: ${userId}, roles: ${userRoles.join(',')})`);
     }
 
     try {
@@ -98,7 +94,7 @@ export class QueryExecutorService {
         success: true,
         durationMs,
         tenantId,
-        userId: '',
+        userId,
       });
 
       return result.data;
@@ -112,11 +108,77 @@ export class QueryExecutorService {
         error: error instanceof Error ? error.message : String(error),
         durationMs,
         tenantId,
-        userId: '',
+        userId,
       });
 
       this.logger.error(`[QueryExecutor] Execution failed for "${plan.intent}": ${error}`);
       throw error;
+    }
+  }
+
+  /**
+   * Explicit, local-only RBAC bypass guard.
+   *
+   * Rules:
+   * - Disabled by default (ALLOW_RBAC_BYPASS=false).
+   * - Never allowed in staging/production.
+   * - Only allowed in local development/test mode.
+   * - Requires DATABASE_URL to point to local/docker-local postgres host.
+   */
+  private isRbacBypassAllowed(): boolean {
+    const rawFlag = (process.env.ALLOW_RBAC_BYPASS || '').trim().toLowerCase();
+    const wantsBypass = rawFlag === 'true' || rawFlag === '1' || rawFlag === 'yes';
+    if (!wantsBypass) {
+      return false;
+    }
+
+    const nodeEnv = (process.env.NODE_ENV || '').trim().toLowerCase();
+    if (nodeEnv === 'production' || nodeEnv === 'staging') {
+      this.logger.warn('Ignoring ALLOW_RBAC_BYPASS=true in staging/production environment.');
+      return false;
+    }
+
+    if (!['development', 'dev', 'test', 'local'].includes(nodeEnv)) {
+      this.logger.warn(`Ignoring ALLOW_RBAC_BYPASS=true because NODE_ENV=${process.env.NODE_ENV || 'undefined'} is not local.`);
+      return false;
+    }
+
+    const databaseUrl = process.env.DATABASE_URL || '';
+    if (!this.isLocalDatabaseUrl(databaseUrl)) {
+      this.logger.warn('Ignoring ALLOW_RBAC_BYPASS=true because DATABASE_URL is not local/docker-local.');
+      return false;
+    }
+
+    this.logger.warn('RBAC bypass is ENABLED by ALLOW_RBAC_BYPASS=true for local environment.');
+    return true;
+  }
+
+  private isLocalDatabaseUrl(databaseUrl: string): boolean {
+    if (!databaseUrl) {
+      return false;
+    }
+
+    try {
+      const parsed = new URL(databaseUrl);
+      const host = (parsed.hostname || '').toLowerCase();
+      return (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host === '::1' ||
+        host === 'db' ||
+        host.endsWith('.local') ||
+        host === 'host.docker.internal'
+      );
+    } catch {
+      // Support DSN-like strings that may not parse cleanly in URL()
+      const value = databaseUrl.toLowerCase();
+      return (
+        value.includes('localhost') ||
+        value.includes('127.0.0.1') ||
+        value.includes('@db:') ||
+        value.includes('host.docker.internal')
+      );
     }
   }
 }

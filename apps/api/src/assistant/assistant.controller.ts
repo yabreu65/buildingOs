@@ -9,6 +9,7 @@ import {
   ForbiddenException,
   Get,
   Query,
+  Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -23,6 +24,8 @@ import { StructuredResponse } from './ai.types';
 @Controller('tenants/:tenantId/assistant')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class AssistantController {
+  private readonly logger = new Logger(AssistantController.name);
+
   constructor(
     private readonly assistantService: AssistantService,
     private readonly analyticsService: AiAnalyticsService,
@@ -58,6 +61,12 @@ export class AssistantController {
     @Body() request: ChatRequest,
     @Request() req?: any,
   ): Promise<ChatResponse> {
+    /**
+     * @deprecated Use POST /tenants/:tenantId/assistant/chat/v2 as the official flow.
+     * Legacy /chat remains for backward compatibility only.
+     */
+    this.logger.warn('Deprecated assistant endpoint used: /chat. Prefer /chat/v2.');
+
     // Validate tenantId
     if (!tenantId || tenantId.trim().length === 0) {
       throw new BadRequestException('tenantId is required');

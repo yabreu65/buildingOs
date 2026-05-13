@@ -4,12 +4,15 @@ import { AssistantQueryPlanService } from '../query-plan.service';
 import { AssistantFeedbackService } from '../feedback/assistant-feedback.service';
 import { ExtractedIntent, ConversationContext, ConversationTurn } from './intent.types';
 import { extractedIntentSchema, validateExtractedIntent } from './intent.schema';
+import { FilterCoverageValidator } from './filter-coverage.validator';
 
 /**
  * Timeout configuration for LLM calls
  */
 const OLLAMA_TIMEOUT_MS = 15000;
 const OPENCODE_TIMEOUT_MS = 5000;
+const OPENCODE_BASE_URL = 'https://api.opencode.ai/v1/chat/completions';
+const OPENCODE_MODEL = 'qwen3.6-plus';
 
 /**
  * Minimum confidence threshold for LLM extraction
@@ -30,11 +33,13 @@ const CONFIDENCE_THRESHOLD = 0.7;
 export class IntentExtractorService {
   private readonly logger = new Logger(IntentExtractorService.name);
   private readonly ollamaUrl = process.env.AI_OLLAMA_URL || 'http://localhost:11434';
+  private readonly ollamaModel = process.env.AI_OLLAMA_MODEL || 'llama3:latest';
 
   constructor(
     private readonly ollamaProvider: OllamaProvider,
     private readonly queryPlanService: AssistantQueryPlanService,
     private readonly feedbackService: AssistantFeedbackService,
+    private readonly filterCoverageValidator: FilterCoverageValidator,
   ) {}
 
   /**
@@ -120,7 +125,7 @@ export class IntentExtractorService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama3',
+          model: this.ollamaModel,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: message },
@@ -142,7 +147,8 @@ export class IntentExtractorService {
       const answer = data.message?.content ?? '';
       this.logger.log(`[OLLAMA] Raw answer: ${answer.substring(0, 200)}`);
 
-      return this.parseAndValidate(answer);
+      const parsed = this.parseAndValidate(answer);
+      return { ...parsed, llmProvider: 'ollama' };
     } catch (error) {
       const fetchDuration = performance.now() - fetchStart;
       this.logger.error(`[OLLAMA] Error after ${fetchDuration.toFixed(0)}ms: ${error instanceof Error ? error.message : String(error)}`);
@@ -167,14 +173,14 @@ export class IntentExtractorService {
     const timeoutId = setTimeout(() => controller.abort(), OPENCODE_TIMEOUT_MS);
 
     try {
-      const response = await fetch('https://api.opencode.ai/v1/chat/completions', {
+      const response = await fetch(OPENCODE_BASE_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'qwen3.6-plus',
+          model: OPENCODE_MODEL,
           messages: [
             {
               role: 'system',
@@ -197,7 +203,8 @@ export class IntentExtractorService {
       const data = await response.json() as any;
       const answer = data.choices?.[0]?.message?.content ?? '';
 
-      return this.parseAndValidate(answer);
+      const parsed = this.parseAndValidate(answer);
+      return { ...parsed, llmProvider: 'opencode' };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -213,16 +220,42 @@ export class IntentExtractorService {
       throw new Error('No deterministic plan match');
     }
 
-    return {
+    const extracted: ExtractedIntent = {
       intent: plan.intent,
       entity: {
-        type: plan.scope === 'unit' ? 'unit' : plan.scope === 'building' ? 'building' : 'person',
-        buildingAlias: plan.filters.buildingAlias,
+        type: plan.filters.personName
+          ? 'person'
+          : plan.scope === 'unit'
+            ? 'unit'
+            : plan.scope === 'building'
+              ? 'building'
+              : 'person',
+        buildingAlias: plan.filters.buildingAlias ?? plan.filters.buildingToken,
         unitCode: plan.filters.unitCode,
+        personName: plan.filters.personName,
       },
-      filters: {},
+      filters: {
+        minAmount: plan.filters.minAmount,
+        maxAmount: plan.filters.maxAmount,
+        minDebt: plan.filters.minDebt,
+        period: plan.filters.period,
+        status: plan.filters.status,
+        method: plan.filters.method,
+        minAgeDays: plan.filters.minAgeDays,
+      },
       confidence: plan.confidence,
+      source: 'deterministic',
+      llmProvider: 'none',
+      requiresClarification: false,
+      missingFields: [],
     };
+
+    const coverage = this.filterCoverageValidator.analyze(message, extracted.filters);
+    if (!coverage.complete) {
+      throw new Error(`Deterministic extraction incomplete: ${coverage.missingFields.join(',')}`);
+    }
+
+    return this.parseAndValidate(JSON.stringify(extracted));
   }
 
   /**

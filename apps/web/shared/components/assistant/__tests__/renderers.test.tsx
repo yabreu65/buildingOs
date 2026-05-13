@@ -187,6 +187,31 @@ describe('AssistantResponseRenderer', () => {
     expect(onSelect).toHaveBeenCalledWith('a');
   });
 
+  it('normalizes clarification object data with alternatives array', () => {
+    const onSelect = jest.fn();
+    const { container } = render(
+      <AssistantResponseRenderer
+        response={{
+          type: 'clarification',
+          title: '',
+          summary: 'No encontré la unidad indicada',
+          data: {
+            alternatives: [
+              { id: 'u1', displayName: 'A-0101' },
+              { id: 'u2', displayName: 'A-0102' },
+            ],
+          },
+        }}
+        onClarificationSelect={onSelect}
+      />
+    );
+
+    const buttons = container.querySelectorAll('button');
+    expect(buttons.length).toBe(2);
+    fireEvent.click(buttons[0]);
+    expect(onSelect).toHaveBeenCalledWith('u1');
+  });
+
   it('dispatches action_list type with onAction', () => {
     const onAction = jest.fn();
     const { container } = render(

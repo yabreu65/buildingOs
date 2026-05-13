@@ -20,7 +20,7 @@ export class AiClassifierService {
   private readonly logger = new Logger(AiClassifierService.name);
   private readonly ollamaUrl = process.env.AI_OLLAMA_URL || 'http://localhost:11434';
   private readonly timeout = 5000; // 5 seconds - classifier should be fast
-  private readonly model = process.env.AI_CLASSIFIER_MODEL || 'llama3';
+  private readonly model = process.env.AI_CLASSIFIER_MODEL || process.env.AI_OLLAMA_MODEL || 'llama3:latest';
 
   /**
    * Classify a user message into a known category

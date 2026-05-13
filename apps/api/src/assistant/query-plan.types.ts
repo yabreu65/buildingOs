@@ -22,6 +22,14 @@ export interface AssistantQueryPlanFilters {
   unitCode?: string;
   buildingAlias?: string;
   buildingName?: string;
+  personName?: string;
+  period?: string;
+  status?: string;
+  method?: string;
+  minAmount?: number;
+  maxAmount?: number;
+  minDebt?: number;
+  minAgeDays?: number;
 }
 
 export interface AssistantQueryPlan {

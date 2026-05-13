@@ -20,9 +20,22 @@ describe('AssistantQueryPlanService', () => {
       source: 'deterministic_rules',
     }));
     expect(plan?.filters).toEqual(expect.objectContaining({
-      unitCode: '0101',
-      buildingAlias: 'A',
+      unitCode: 'A-0101',
     }));
+    expect(plan?.filters.buildingAlias).toBeUndefined();
+  });
+
+  it('creates unit debt plan for block-style unit code A1-123', () => {
+    const plan = service.createPlan('deuda de la unidad A1-123');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'unit_debt',
+      scope: 'unit',
+    }));
+    expect(plan?.filters).toEqual(expect.objectContaining({
+      unitCode: 'A1-123',
+    }));
+    expect(plan?.filters.buildingAlias).toBeUndefined();
   });
 
   it('creates an allowlisted building tickets QueryPlan', () => {
@@ -87,5 +100,54 @@ describe('AssistantQueryPlanService', () => {
       source: 'deterministic_rules',
     }));
     expect(plan?.filters).toEqual({});
+  });
+
+  it('extracts period and payment method from natural language filters', () => {
+    const plan = service.createPlan('Pagos de enero por transferencia');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+    }));
+    expect(plan?.filters.period).toMatch(/^\d{4}-01$/);
+    expect(plan?.filters.method).toBe('TRANSFER');
+  });
+
+  it('detects bank-income phrasing and maps it to building_payments with transfer method', () => {
+    const plan = service.createPlan('Mostrame la plata que entró por banco el mes pasado');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+    }));
+    expect(plan?.filters.method).toBe('TRANSFER');
+    expect(plan?.filters.period).toMatch(/^\d{4}-\d{2}$/);
+  });
+
+  it('maps explicit building token into buildingAlias for downstream resolver', () => {
+    const plan = service.createPlan('Mostrame la plata que entró por banco el mes pasado en Torre A');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('A');
+    expect(plan?.filters.buildingToken).toBe('A');
+  });
+
+  it('extracts status and minAgeDays from ticket aging query', () => {
+    const plan = service.createPlan('Tickets abiertos hace más de 7 días');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_tickets',
+    }));
+    expect(plan?.filters.status).toBe('OPEN');
+    expect(plan?.filters.minAgeDays).toBe(7);
+  });
+
+  it('classifies debt comparison with someone as delinquents and extracts minDebt', () => {
+    const plan = service.createPlan('¿Hay alguien con deuda mayor a 500?');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_delinquents',
+    }));
+    expect(plan?.filters.minDebt).toBe(500);
   });
 });

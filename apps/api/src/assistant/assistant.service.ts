@@ -37,6 +37,8 @@ import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
 import { ExtractedIntent, EntityResolution, ConversationTurn } from './intent-engine/intent.types';
+import { validateExtractedIntent } from './intent-engine/intent.schema';
+import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 
 // Intent definitions
 import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
@@ -62,6 +64,7 @@ export interface ChatRequest {
   readonly unitId?: string;
   readonly conversationId?: string;
   readonly sessionId?: string;
+  readonly debug?: boolean;
 }
 
 interface ContextValidation {
@@ -193,6 +196,7 @@ export class AssistantService implements OnModuleInit {
     private readonly queryPlanner: QueryPlannerService,
     private readonly queryExecutor: QueryExecutorService,
     private readonly responseFormatter: ResponseFormatterService,
+    private readonly filterCoverageValidator: FilterCoverageValidator,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     this.intentEngineEnabled = process.env.AI_INTENT_ENGINE_ENABLED !== 'false';
@@ -504,6 +508,25 @@ export class AssistantService implements OnModuleInit {
     request: ChatRequest & { sessionId?: string },
     userRoles: string[],
   ): Promise<StructuredResponse> {
+    const debugEnabled = request.debug === true;
+    const debugInfo: NonNullable<StructuredResponse['debug']> = {
+      usedDeterministic: false,
+      deterministicIntent: null,
+      deterministicConfidence: null,
+      coverageStatus: 'failed',
+      coverageMissing: [],
+      usedLLM: false,
+      llmProvider: 'none',
+      llmBaseUrl: process.env.AI_OLLAMA_URL || 'http://localhost:11434',
+      llmModel: process.env.AI_OLLAMA_MODEL || 'llama3:latest',
+      llmReason: 'none',
+      zodValidationPassed: false,
+      finalIntent: undefined,
+      finalFilters: {},
+      rbacChecked: false,
+      tenantScoped: true,
+    };
+
     // Check feature flag (bypass in development)
     const isDevelopment = process.env.NODE_ENV === 'development';
     if (!this.intentEngineEnabled && !isDevelopment) {
@@ -560,6 +583,29 @@ export class AssistantService implements OnModuleInit {
       previousTurns: conversationContext as ConversationTurn[],
     };
 
+    const deterministicPlan = this.queryPlanService.createPlan(request.message);
+    if (deterministicPlan) {
+      debugInfo.usedDeterministic = true;
+      debugInfo.deterministicIntent = deterministicPlan.intent;
+      debugInfo.deterministicConfidence = deterministicPlan.confidence;
+      const coverage = this.filterCoverageValidator.analyze(request.message, {
+        minAmount: deterministicPlan.filters.minAmount,
+        maxAmount: deterministicPlan.filters.maxAmount,
+        minDebt: deterministicPlan.filters.minDebt,
+        period: deterministicPlan.filters.period,
+        status: deterministicPlan.filters.status,
+        method: deterministicPlan.filters.method,
+        minAgeDays: deterministicPlan.filters.minAgeDays,
+      });
+      debugInfo.coverageStatus = coverage.complete ? 'complete' : 'incomplete';
+      debugInfo.coverageMissing = coverage.missingFields;
+      if (!coverage.complete) {
+        debugInfo.llmReason = 'missing_filters';
+      }
+    } else {
+      debugInfo.llmReason = 'no_intent';
+    }
+
     // Step 2: Extract intent using dual LLM with fallback
     let extractedIntent: ExtractedIntent;
     let contextResolvedEntities: EntityResolution | undefined;
@@ -569,6 +615,18 @@ export class AssistantService implements OnModuleInit {
         request.message,
         contextForExtraction,
       );
+      if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
+        debugInfo.usedLLM = true;
+        if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
+          debugInfo.llmProvider = extractedIntent.llmProvider;
+          if (extractedIntent.llmProvider === 'opencode') {
+            debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
+            debugInfo.llmModel = 'qwen3.6-plus';
+          }
+        } else {
+          debugInfo.llmProvider = 'unknown';
+        }
+      }
       this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
     } catch (error) {
       this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
@@ -612,7 +670,12 @@ export class AssistantService implements OnModuleInit {
               },
               filters: {},
               confidence: 0.6,
+              source: 'hybrid',
+              requiresClarification: false,
+              missingFields: [],
             };
+            debugInfo.usedLLM = false;
+            debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
             this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
           } else {
             throw new BadRequestException('Could not understand your message. Please rephrase.');
@@ -635,15 +698,62 @@ export class AssistantService implements OnModuleInit {
           intent: plan.intent,
           entity: {
             type: plan.scope === 'unit' ? 'unit' : plan.scope === 'building' ? 'building' : 'person',
-            buildingAlias: plan.filters.buildingAlias,
+            buildingAlias: plan.filters.buildingAlias ?? plan.filters.buildingToken,
             unitCode: plan.filters.unitCode,
+            personName: plan.filters.personName,
           },
-          filters: {},
+          filters: {
+            minAmount: plan.filters.minAmount,
+            maxAmount: plan.filters.maxAmount,
+            minDebt: plan.filters.minDebt,
+            period: plan.filters.period,
+            status: plan.filters.status,
+            method: plan.filters.method,
+            minAgeDays: plan.filters.minAgeDays,
+          },
           confidence: plan.confidence,
+          source: 'hybrid',
+          llmProvider: 'none',
+          requiresClarification: false,
+          missingFields: [],
         };
       } else {
         throw new BadRequestException('Could not understand your message. Please try a different question.');
       }
+    }
+
+    const normalizedValidation = validateExtractedIntent({
+      ...extractedIntent,
+      source: extractedIntent.source ?? 'hybrid',
+      requiresClarification: extractedIntent.requiresClarification ?? false,
+      missingFields: extractedIntent.missingFields ?? [],
+    });
+
+    if (!normalizedValidation.success || !normalizedValidation.data) {
+      this.logger.warn(`[chatV2] NormalizedIntent validation failed: ${normalizedValidation.error?.message || 'unknown error'}`);
+      throw new BadRequestException('Could not normalize assistant intent. Please rephrase.');
+    }
+
+    extractedIntent = normalizedValidation.data as ExtractedIntent;
+    debugInfo.zodValidationPassed = true;
+    debugInfo.finalIntent = extractedIntent.intent;
+    debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
+
+    if (extractedIntent.requiresClarification) {
+      const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
+      const clarificationResponse = this.responseFormatter.formatV2(
+        {
+          isAmbiguous: true,
+          alternatives: [],
+          clarificationMessage: `Necesito más contexto para responder con precisión (${missing}).`,
+        },
+        'ambiguous',
+        extractedIntent.confidence,
+      );
+      if (debugEnabled) {
+        (clarificationResponse as StructuredResponse).debug = debugInfo;
+      }
+      return clarificationResponse;
     }
 
     // Step 3: Resolve entities
@@ -695,9 +805,153 @@ export class AssistantService implements OnModuleInit {
         extractedIntent.entity.personName,
         tenantId,
       );
-      if (personResolution) {
-        entityResolution = { ...entityResolution, ...personResolution };
+      if (!personResolution) {
+        const notFoundResponse = this.responseFormatter.formatV2(
+          {
+            isAmbiguous: true,
+            alternatives: [],
+            clarificationMessage: `No encontré a "${extractedIntent.entity.personName}" en este tenant.`,
+          },
+          'ambiguous',
+          extractedIntent.confidence,
+        );
+        if (debugEnabled) {
+          (notFoundResponse as StructuredResponse).debug = debugInfo;
+        }
+        return notFoundResponse;
       }
+
+      entityResolution = { ...entityResolution, ...personResolution };
+      // If asking unit-level intent from a person reference, infer the unit
+      // context directly from the resolved person when available.
+      if (!entityResolution.unit && personResolution.person?.unitId) {
+        const personUnit = await this.prisma.unit.findFirst({
+          where: { id: personResolution.person.unitId, tenantId },
+          select: {
+            id: true,
+            code: true,
+            label: true,
+            buildingId: true,
+            building: {
+              select: { id: true, name: true, alias: true },
+            },
+          },
+        });
+
+        if (personUnit) {
+          entityResolution = {
+            ...entityResolution,
+            unit: {
+              id: personUnit.id,
+              code: personUnit.code,
+              label: personUnit.label || undefined,
+              buildingId: personUnit.buildingId,
+            },
+            building: entityResolution.building ?? {
+              id: personUnit.building.id,
+              name: personUnit.building.name,
+              alias: personUnit.building.alias || undefined,
+            },
+          };
+        }
+      }
+    }
+
+    const unitScopedIntents = new Set([
+      'unit_debt',
+      'unit_residents',
+      'unit_documents',
+      'unit_tickets',
+      'unit_payments',
+    ]);
+
+    // Fallback robusto: resolver unidad con resolver operativo (soporta building implícito + candidatos de código)
+    if (extractedIntent.entity.unitCode && !entityResolution.unit) {
+      const tokenForResolver = {
+        unitCode: extractedIntent.entity.unitCode,
+        buildingAlias: extractedIntent.entity.buildingAlias,
+      };
+
+      const fallbackResolution = await this.unitResolver.resolve(tenantId, tokenForResolver);
+      if (fallbackResolution.resolved) {
+        const resolved = fallbackResolution.resolved;
+        entityResolution = {
+          ...entityResolution,
+          building: {
+            id: resolved.building.id,
+            name: resolved.building.name,
+            alias: resolved.building.alias,
+          },
+          unit: {
+            id: resolved.unit.id,
+            code: resolved.unit.code,
+            label: resolved.unit.label ?? undefined,
+            buildingId: resolved.building.id,
+          },
+        };
+      } else if (unitScopedIntents.has(extractedIntent.intent)) {
+        const fallbackMessage = fallbackResolution.errorResponse.answer;
+        const fallbackClarification = this.responseFormatter.formatV2(
+          {
+            isAmbiguous: true,
+            alternatives: [],
+            clarificationMessage: fallbackMessage,
+          },
+          'ambiguous',
+          extractedIntent.confidence,
+        );
+        if (debugEnabled) {
+          (fallbackClarification as StructuredResponse).debug = debugInfo;
+        }
+        return fallbackClarification;
+      }
+    }
+
+    // Guard: unit-specific intents must resolve a unit, otherwise ask for clarification
+    if (unitScopedIntents.has(extractedIntent.intent) && !entityResolution.unit) {
+      const requestedUnit = extractedIntent.entity.unitCode || 'la unidad indicada';
+      const buildingHint = entityResolution.building?.name
+        ? ` en ${entityResolution.building.name}`
+        : extractedIntent.entity.buildingAlias
+          ? ` en Torre ${extractedIntent.entity.buildingAlias}`
+          : '';
+      const clarification = this.responseFormatter.formatV2(
+        {
+          isAmbiguous: true,
+          alternatives: [],
+          clarificationMessage: `No encontré la unidad ${requestedUnit}${buildingHint}. ¿Me indicás una unidad válida?`,
+        },
+        'ambiguous',
+        extractedIntent.confidence,
+      );
+      if (debugEnabled) {
+        (clarification as StructuredResponse).debug = debugInfo;
+      }
+      return clarification;
+    }
+
+    // Guard: building-specific intents (except tenant-wide building_payments) need building context
+    const strictBuildingIntents = new Set([
+      'building_debt',
+      'building_delinquents',
+      'building_documents',
+      'building_tickets',
+      'building_stats',
+    ]);
+    if (strictBuildingIntents.has(extractedIntent.intent) && !entityResolution.building) {
+      const clarification = this.responseFormatter.formatV2(
+        {
+          isAmbiguous: true,
+          alternatives: [],
+          clarificationMessage: 'Necesito que me indiques el edificio/torre para esa consulta.',
+        },
+        'ambiguous',
+        extractedIntent.confidence,
+      );
+      if (debugEnabled) {
+        (clarification as StructuredResponse).debug = debugInfo;
+      }
+      return clarification;
     }
 
     // Step 4: Check for ambiguity
@@ -708,7 +962,7 @@ export class AssistantService implements OnModuleInit {
       );
 
       // Format and return clarification response
-      return this.responseFormatter.formatV2(
+      const ambiguityResponse = this.responseFormatter.formatV2(
         {
           isAmbiguous: true,
           alternatives: entityResolution.alternatives,
@@ -717,6 +971,10 @@ export class AssistantService implements OnModuleInit {
         'ambiguous',
         extractedIntent.confidence,
       );
+      if (debugEnabled) {
+        (ambiguityResponse as StructuredResponse).debug = debugInfo;
+      }
+      return ambiguityResponse;
     }
 
     // Step 5: Build execution plan
@@ -731,6 +989,7 @@ export class AssistantService implements OnModuleInit {
     // Step 6: Execute with RBAC
     let rawData: unknown;
     try {
+      debugInfo.rbacChecked = true;
       rawData = await this.queryExecutor.execute(
         executionPlan,
         tenantId,
@@ -759,6 +1018,10 @@ export class AssistantService implements OnModuleInit {
       confidence: extractedIntent.confidence,
       tenantScoped: true as const,
     };
+
+    if (debugEnabled) {
+      (structuredResponse as StructuredResponse).debug = debugInfo;
+    }
 
     // Step 8: Store turn in conversation context
     await this.conversationContext.storeTurn(

@@ -74,4 +74,24 @@ export interface StructuredResponse {
     /** Additional metadata */
     [key: string]: unknown;
   };
+  /**
+   * Optional diagnostics for /chat/v2 debug mode.
+   */
+  debug?: {
+    usedDeterministic?: boolean;
+    deterministicIntent?: string | null;
+    deterministicConfidence?: number | null;
+    coverageStatus?: 'complete' | 'incomplete' | 'failed';
+    coverageMissing?: string[];
+    usedLLM?: boolean;
+    llmProvider?: 'ollama' | 'opencode' | 'none' | 'unknown';
+    llmBaseUrl?: string;
+    llmModel?: string;
+    llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'none';
+    zodValidationPassed?: boolean;
+    finalIntent?: string;
+    finalFilters?: Record<string, unknown>;
+    rbacChecked?: boolean;
+    tenantScoped?: boolean;
+  };
 }

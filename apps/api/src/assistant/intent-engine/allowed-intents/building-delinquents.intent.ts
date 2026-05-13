@@ -6,7 +6,7 @@ import { IntentDefinition, IntentExecutionResult } from '../intent.types';
 export const buildingDelinquentsIntent: IntentDefinition = {
   name: 'building_delinquents',
   requiredPermission: 'payments.review' as Permission,
-  supportedFilters: ['limit', 'sortField', 'sortOrder'],
+  supportedFilters: ['minAmount', 'maxAmount', 'limit', 'sortField', 'sortOrder'],
   supportedResponseTypes: ['table', 'text'],
   executor: async (params): Promise<IntentExecutionResult> => {
     const { tenantId, entityIds, filters, pagination, prisma } = params;
@@ -54,6 +54,13 @@ export const buildingDelinquentsIntent: IntentDefinition = {
     const delinquents = Object.values(unitDebts)
       .filter((u) => u.totalDebt > 0)
       .sort((a, b) => b.totalDebt - a.totalDebt)
+      .filter((u) => {
+        const minDebt = typeof filters?.minDebt === 'number' ? filters.minDebt : filters?.minAmount;
+        const maxDebt = filters?.maxAmount;
+        if (typeof minDebt === 'number' && u.totalDebt < minDebt) return false;
+        if (typeof maxDebt === 'number' && u.totalDebt > maxDebt) return false;
+        return true;
+      })
       .slice(0, pagination?.limit || 20);
 
     return {

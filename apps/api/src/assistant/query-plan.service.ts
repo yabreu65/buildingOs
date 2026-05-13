@@ -14,7 +14,24 @@ export class AssistantQueryPlanService {
    */
   createPlan(message: string): AssistantQueryPlan | null {
     const normalized = this.normalize(message);
-    const unitToken = this.parser.parseUnitReference(message);
+    const parsedUnitToken = this.parser.parseUnitReference(message);
+    const extractedFilters = this.extractCommonFilters(normalized);
+    const personName = this.extractPersonName(message, normalized);
+    const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
+
+    const hasExplicitUnitSyntax =
+      /\b(unidad|apartamento|departamento|depto|apto|local|cochera|garage)\b/.test(normalized) ||
+      /\b[a-z]{1,3}-\d{3,4}\b/.test(normalized);
+
+    const unitToken =
+      parsedUnitToken &&
+      !(
+        (typeof extractedFilters.minAmount === 'number' || typeof extractedFilters.minDebt === 'number') &&
+        referencesSomeone &&
+        !hasExplicitUnitSyntax
+      )
+        ? parsedUnitToken
+        : null;
 
     if (unitToken) {
       const unitIntent = this.pickUnitIntent(normalized);
@@ -29,6 +46,7 @@ export class AssistantQueryPlanService {
           unitCode: unitToken.unitCode,
           buildingAlias: unitToken.buildingAlias,
           buildingName: unitToken.buildingName,
+          ...extractedFilters,
         },
         confidence: 0.92,
         source: 'deterministic_rules',
@@ -36,6 +54,19 @@ export class AssistantQueryPlanService {
     }
 
     const buildingIntent = this.pickBuildingIntent(normalized);
+    if (!buildingIntent && personName && this.hasAny(normalized, ['debe', 'deuda', 'saldo', 'adeuda'])) {
+      const definition = this.semanticLayer.getDefinition('unit_debt');
+      return {
+        ...definition,
+        executor: 'unit_debt',
+        filters: {
+          personName,
+          ...extractedFilters,
+        },
+        confidence: 0.84,
+        source: 'deterministic_rules',
+      };
+    }
     if (!buildingIntent) {
       return null;
     }
@@ -49,7 +80,7 @@ export class AssistantQueryPlanService {
       return {
         ...definition,
         executor: buildingIntent,
-        filters: {},
+        filters: { ...extractedFilters },
         confidence: 0.85,
         source: 'deterministic_rules',
       };
@@ -59,7 +90,7 @@ export class AssistantQueryPlanService {
     return {
       ...definition,
       executor: buildingIntent,
-      filters: { buildingToken },
+      filters: { buildingToken, buildingAlias: buildingToken, ...extractedFilters },
       confidence: 0.9,
       source: 'deterministic_rules',
     };
@@ -85,6 +116,12 @@ export class AssistantQueryPlanService {
   }
 
   private pickBuildingIntent(normalized: string): AssistantQueryIntent | null {
+    const referencesSomeone = this.hasAny(normalized, ['alguien', 'algun', 'algun', 'persona', 'quien']);
+    const asksDebtComparison = /(?:mayor(?:es)?\s+(?:que|a)|mas(?: de)?|más(?: de)?|menor(?:es)?\s+(?:que|a)|menos(?: de)?)\s+\$?\s*\d+/.test(normalized);
+    if (referencesSomeone && (asksDebtComparison || this.hasAny(normalized, ['deuda', 'debe', 'adeuda']))) {
+      return 'building_delinquents';
+    }
+
     if (this.hasAny(normalized, ['moroso', 'morosos', 'morosa', 'morosas', 'deudor', 'deudores', 'top deudores', 'ranking de deuda', 'atrasados', 'impagos', 'tardando en pagar', 'no ha pagado', 'no estan al dia', 'no esta al dia', 'mantenimiento pendiente', 'pagar mantenimiento'])) {
       return 'building_delinquents';
     }
@@ -97,7 +134,7 @@ export class AssistantQueryPlanService {
     if (this.hasAny(normalized, ['ticket', 'tickets', 'reclamo', 'reclamos', 'problema', 'incidente'])) {
       return 'building_tickets';
     }
-    if (this.hasAny(normalized, ['pago', 'pagos', 'transferencia', 'recibo', 'cobranza', 'cobranzas', 'cobro', 'cobros'])) {
+    if (this.hasAny(normalized, ['pago', 'pagos', 'transferencia', 'recibo', 'cobranza', 'cobranzas', 'cobro', 'cobros', 'banco', 'plata', 'ingreso', 'ingresos'])) {
       return 'building_payments';
     }
     if (this.hasAny(normalized, ['estadistica', 'estadisticas', 'resumen', 'estado del edificio', 'situacion', 'cuantas unidades', 'datos del edificio'])) {
@@ -116,5 +153,160 @@ export class AssistantQueryPlanService {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .trim();
+  }
+
+  private extractCommonFilters(normalized: string): AssistantQueryPlan['filters'] {
+    const filters: AssistantQueryPlan['filters'] = {};
+
+    const period = this.extractPeriod(normalized);
+    if (period) {
+      filters.period = period;
+    }
+
+    const status = this.extractStatus(normalized);
+    if (status) {
+      filters.status = status;
+    }
+
+    const method = this.extractMethod(normalized);
+    if (method) {
+      filters.method = method;
+    }
+
+    const minAgeDays = this.extractMinAgeDays(normalized);
+    if (typeof minAgeDays === 'number') {
+      filters.minAgeDays = minAgeDays;
+    }
+
+    const amountFilters = this.extractAmountFilters(normalized);
+    return {
+      ...filters,
+      ...amountFilters,
+    };
+  }
+
+  private extractPeriod(normalized: string): string | undefined {
+    const direct = normalized.match(/\b(\d{4}-\d{2})\b/);
+    if (direct?.[1]) {
+      return direct[1];
+    }
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const monthMap: Record<string, number> = {
+      enero: 1,
+      febrero: 2,
+      marzo: 3,
+      abril: 4,
+      mayo: 5,
+      junio: 6,
+      julio: 7,
+      agosto: 8,
+      septiembre: 9,
+      setiembre: 9,
+      octubre: 10,
+      noviembre: 11,
+      diciembre: 12,
+      january: 1,
+      february: 2,
+      march: 3,
+      april: 4,
+      may_en: 5,
+      june: 6,
+      july: 7,
+      august: 8,
+      september: 9,
+      october: 10,
+      november: 11,
+      december: 12,
+    };
+
+    for (const [token, month] of Object.entries(monthMap)) {
+      const needle = token === 'may_en' ? 'may' : token;
+      if (new RegExp(`\\b${needle}\\b`).test(normalized)) {
+        return `${currentYear}-${String(month).padStart(2, '0')}`;
+      }
+    }
+
+    if (normalized.includes('este mes')) {
+      return `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    if (normalized.includes('mes pasado') || normalized.includes('ultimo mes') || normalized.includes('último mes')) {
+      const previous = new Date(currentYear, now.getMonth() - 1, 1);
+      return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    return undefined;
+  }
+
+  private extractMethod(normalized: string): string | undefined {
+    if (/\btransferencia|transfer\b/.test(normalized)) return 'TRANSFER';
+    if (/\bbanco|bancaria|bancario\b/.test(normalized)) return 'TRANSFER';
+    if (/\befectivo|cash\b/.test(normalized)) return 'CASH';
+    if (/\btarjeta|card\b/.test(normalized)) return 'CARD';
+    return undefined;
+  }
+
+  private extractStatus(normalized: string): string | undefined {
+    if (/\babierto|open\b/.test(normalized)) return 'OPEN';
+    if (/\bcerrado|closed\b/.test(normalized)) return 'CLOSED';
+    if (/\bpendiente|pending\b/.test(normalized)) return 'PENDING';
+    if (/\baprobado|approved\b/.test(normalized)) return 'APPROVED';
+    return undefined;
+  }
+
+  private extractMinAgeDays(normalized: string): number | undefined {
+    const match = normalized.match(/hace\s+mas\s+de\s+(\d+)\s+dias?|mas\s+de\s+(\d+)\s+dias?/);
+    if (!match) return undefined;
+    const raw = match[1] || match[2];
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private extractAmountFilters(normalized: string): Pick<AssistantQueryPlan['filters'], 'minAmount' | 'maxAmount' | 'minDebt'> {
+    const result: Pick<AssistantQueryPlan['filters'], 'minAmount' | 'maxAmount' | 'minDebt'> = {};
+
+    const minMatch = normalized.match(/(?:mayor(?:es)?\s+(?:que|a)|mas(?: de)?|más(?: de)?)\s+\$?\s*(\d+(?:[.,]\d+)?)/);
+    if (minMatch?.[1]) {
+      const value = Number(minMatch[1].replace(',', '.'));
+      if (Number.isFinite(value)) {
+        result.minAmount = value;
+        result.minDebt = value;
+      }
+    }
+
+    const maxMatch = normalized.match(/(?:menor(?:es)?\s+(?:que|a)|menos(?: de)?)\s+\$?\s*(\d+(?:[.,]\d+)?)/);
+    if (maxMatch?.[1]) {
+      const value = Number(maxMatch[1].replace(',', '.'));
+      if (Number.isFinite(value)) {
+        result.maxAmount = value;
+      }
+    }
+
+    return result;
+  }
+
+  private extractPersonName(message: string, normalized: string): string | undefined {
+    if (!this.hasAny(normalized, ['debe', 'deuda', 'donde vive', 'vive'])) {
+      return undefined;
+    }
+
+    const clean = message.replace(/[¿?.,!]/g, ' ').trim();
+    const patterns = [
+      /(?:debe|deuda de|donde vive|vive)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){1,2})/i,
+      /^([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){1,2})\s+(?:debe|deuda)/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = clean.match(pattern);
+      if (match?.[1]) {
+        const candidate = match[1].trim();
+        if (!/\b(unidad|edificio|torre|bloque|pago|ticket|deuda)\b/i.test(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    return undefined;
   }
 }

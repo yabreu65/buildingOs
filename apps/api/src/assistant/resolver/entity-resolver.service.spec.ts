@@ -123,6 +123,27 @@ describe('EntityResolverService', () => {
         }),
       );
     });
+
+    it('accepts block-style code and falls back to numeric unit code candidate', async () => {
+      mockFindFirst.mockResolvedValue({
+        id: 'unit-123',
+        code: '0123',
+        label: 'Depto 0123',
+        buildingId: 'building-1',
+      });
+
+      const result = await service.resolveUnit('A1-123', 'building-1', 'tenant-1');
+
+      expect(result).not.toBeNull();
+      expect(result!.unit!.code).toBe('0123');
+      expect(mockFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            code: { in: expect.arrayContaining(['A1-123', '0123']) },
+          }),
+        }),
+      );
+    });
   });
 
   describe('resolvePerson', () => {
