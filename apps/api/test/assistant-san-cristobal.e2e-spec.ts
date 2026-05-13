@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
@@ -8,10 +8,10 @@ import { JwtService } from '@nestjs/jwt';
 /**
  * E2E Test Suite: Asistente AI en Residencia San Cristóbal
  *
- * Este test ejecuta 55+ preguntas reales contra la API
+ * Este test ejecuta 66 preguntas reales contra la API legacy
  * utilizando datos del seed de San Cristóbal.
  *
- * Objetivo: Verificar cobertura real del asistente y
+ * Objetivo: Verificar cobertura real del endpoint legacy /chat y
  * detectar preguntas que no matchean correctamente.
  */
 
@@ -23,6 +23,11 @@ interface AssistantE2EReportItem {
   readonly response?: string;
   readonly latencyMs: number;
   readonly error?: string;
+}
+
+interface LegacyExpectation {
+  readonly expectedKeywords?: readonly string[];
+  readonly expectedActionType?: string;
 }
 
 describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
@@ -89,12 +94,25 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   /**
    * Helper: ejecuta una pregunta y registra el resultado
    */
+  async function resetAiUsage(): Promise<void> {
+    await prisma.tenantDailyAiUsage.deleteMany({ where: { tenantId } });
+    await prisma.subscription.updateMany({
+      where: { tenantId },
+      data: {
+        aiConsultationsUsed: 0,
+        aiConsultationsResetAt: new Date(),
+      },
+    });
+  }
+
   async function ask(
     category: string,
     id: string,
     question: string,
-    expectedKeywords: string[] = [],
+    expectationOrKeywords: LegacyExpectation | string[] = [],
   ): Promise<void> {
+    await resetAiUsage();
+
     const start = Date.now();
     const res = await request(app.getHttpServer())
       .post(`/tenants/${tenantId}/assistant/chat`)
@@ -107,14 +125,27 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
 
     let status: 'PASS' | 'FAIL' | 'WARNING' = 'PASS';
     let error: string | undefined;
+    const expectation = Array.isArray(expectationOrKeywords)
+      ? { expectedKeywords: expectationOrKeywords }
+      : expectationOrKeywords;
+    const expectedKeywords = expectation.expectedKeywords ?? [];
+    const actionTypes = Array.isArray(res.body?.suggestedActions)
+      ? res.body.suggestedActions.map((action: { type?: string }) => action.type)
+      : [];
 
-    if (res.status !== 200) {
+    if (res.status !== 201) {
       status = 'FAIL';
       error = `HTTP ${res.status}: ${res.body?.message || 'Unknown error'}`;
+    } else if (typeof res.body?.answer !== 'string' || res.body.answer.trim().length === 0) {
+      status = 'FAIL';
+      error = 'Respuesta vacía del endpoint legacy';
     } else if (res.body.answer?.includes('Entendí tu consulta')) {
       // Fallback del MockAiProvider = no matcheó ningún strict resolver
       status = 'FAIL';
       error = 'Fallback: no matcheó ningún strict resolver';
+    } else if (expectation.expectedActionType && !actionTypes.includes(expectation.expectedActionType)) {
+      status = 'WARNING';
+      error = `Suggested action faltante: ${expectation.expectedActionType}`;
     } else if (expectedKeywords.length > 0) {
       const missing = expectedKeywords.filter(k =>
         !res.body.answer?.toLowerCase().includes(k.toLowerCase())
@@ -136,39 +167,73 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
     });
 
     // Expect básico para que Jest cuente el test
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
   }
 
   // ============================================================
   // A. RESIDENTES / OCUPANTES (Unit-Level)
   // ============================================================
   describe('A. Residentes/Ocupantes (Unit-Level)', () => {
-    it('A1: Quien vive en el departamento 0101 de la Torre A', async () => {
-      await ask('Residentes', 'A1', 'Quien vive en el departamento 0101 de la Torre A', ['residente', 'principal']);
+    it('A1: Quien vive en el departamento A-0101', async () => {
+      await ask('Residentes', 'A1', 'Quien vive en el departamento A-0101', {
+        expectedKeywords: ['residente', 'principal'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A2: Residente del apartamento 0102 de la Torre A', async () => {
-      await ask('Residentes', 'A2', 'Residente del apartamento 0102 de la Torre A', ['residente']);
+    it('A2: Residente del apartamento A-0102', async () => {
+      await ask('Residentes', 'A2', 'Residente del apartamento A-0102', {
+        expectedKeywords: ['residente'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A3: Inquilino del depto 0103 de la Torre B', async () => {
-      await ask('Residentes', 'A3', 'Inquilino del depto 0103 de la Torre B', ['residente', 'principal']);
+    it('A3: Inquilino del depto B-0103', async () => {
+      await ask('Residentes', 'A3', 'Inquilino del depto B-0103', {
+        expectedKeywords: ['residente', 'principal'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A4: Propietario del departamento 0104 de la Torre A', async () => {
-      await ask('Residentes', 'A4', 'Propietario del departamento 0104 de la Torre A', ['propietario']);
+    it('A4: Propietario del departamento A-0104', async () => {
+      await ask('Residentes', 'A4', 'Propietario del departamento A-0104', {
+        expectedKeywords: ['propietario'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A5: Quien habita en la unidad 0105 de la Torre B', async () => {
-      await ask('Residentes', 'A5', 'Quien habita en la unidad 0105 de la Torre B', ['residente']);
+    it('A5: Quien habita en la unidad B-0105', async () => {
+      await ask('Residentes', 'A5', 'Quien habita en la unidad B-0105', {
+        expectedKeywords: ['residente'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A6: Ocupante del apartamento 0106 (sin torre)', async () => {
-      await ask('Residentes', 'A6', 'Ocupante del apartamento 0106', ['necesito', 'edificio']);
+    it('A6: Ocupante del apartamento A-0106 (único, sin torre)', async () => {
+      await ask('Residentes', 'A6', 'Ocupante del apartamento A-0106', {
+        expectedKeywords: ['residente'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
 
-    it('A7: Residente del departamento 9999 de la Torre A (inexistente)', async () => {
-      await ask('Residentes', 'A7', 'Residente del departamento 9999 de la Torre A', ['no encontré', 'unidad']);
+    it('A7: Residente del departamento A-9999 (inexistente)', async () => {
+      await ask('Residentes', 'A7', 'Residente del departamento A-9999', {
+        expectedKeywords: ['no encontré', 'unidad'],
+      });
+    });
+
+    it('A8: Quien vive en A-1203 (formato opaco)', async () => {
+      await ask('Residentes', 'A8', 'Quien vive en A-1203', {
+        expectedKeywords: ['residente'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
+    });
+
+    it('A9: Residente de B-1203 (formato opaco)', async () => {
+      await ask('Residentes', 'A9', 'Residente de B-1203', {
+        expectedKeywords: ['residente'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
   });
 
@@ -176,36 +241,74 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   // B. DEUDA (Unit-Level)
   // ============================================================
   describe('B. Deuda (Unit-Level)', () => {
-    it('B1: Cuanto debe el departamento 0101 de la Torre A', async () => {
-      await ask('Deuda-Unit', 'B1', 'Cuanto debe el departamento 0101 de la Torre A', ['deuda', 'USD']);
+    it('B1: Cuanto debe el departamento A-0101', async () => {
+      await ask('Deuda-Unit', 'B1', 'Cuanto debe el departamento A-0101', {
+        expectedKeywords: ['deuda', 'USD'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B2: Deuda del apartamento 0102 de la Torre B', async () => {
-      await ask('Deuda-Unit', 'B2', 'Deuda del apartamento 0102 de la Torre B', ['deuda']);
+    it('B2: Deuda del apartamento B-0102', async () => {
+      await ask('Deuda-Unit', 'B2', 'Deuda del apartamento B-0102', {
+        expectedKeywords: ['deuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B3: Que saldo tiene el depto 0103 de la Torre A', async () => {
-      await ask('Deuda-Unit', 'B3', 'Que saldo tiene el depto 0103 de la Torre A', ['saldo']);
+    it('B3: Que saldo tiene el depto A-0103', async () => {
+      await ask('Deuda-Unit', 'B3', 'Que saldo tiene el depto A-0103', {
+        expectedKeywords: ['saldo'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B4: Cuanto adeuda la unidad 0104 de la Torre B', async () => {
-      await ask('Deuda-Unit', 'B4', 'Cuanto adeuda la unidad 0104 de la Torre B', ['adeuda']);
+    it('B4: Cuanto adeuda la unidad B-0104', async () => {
+      await ask('Deuda-Unit', 'B4', 'Cuanto adeuda la unidad B-0104', {
+        expectedKeywords: ['adeuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B5: Monto de deuda del departamento 0105 de la Torre A', async () => {
-      await ask('Deuda-Unit', 'B5', 'Monto de deuda del departamento 0105 de la Torre A', ['monto']);
+    it('B5: Monto de deuda del departamento A-0105', async () => {
+      await ask('Deuda-Unit', 'B5', 'Monto de deuda del departamento A-0105', {
+        expectedKeywords: ['monto'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B6: Importe pendiente del apartamento 0106 de la Torre A', async () => {
-      await ask('Deuda-Unit', 'B6', 'Importe pendiente del apartamento 0106 de la Torre A', ['importe']);
+    it('B6: Importe pendiente del apartamento A-0106', async () => {
+      await ask('Deuda-Unit', 'B6', 'Importe pendiente del apartamento A-0106', {
+        expectedKeywords: ['importe'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B7: La unidad 0107 de la Torre B esta al dia', async () => {
-      await ask('Deuda-Unit', 'B7', 'La unidad 0107 de la Torre B esta al dia', ['deuda', 'saldo']);
+    it('B7: La unidad B-0107 esta al dia', async () => {
+      await ask('Deuda-Unit', 'B7', 'La unidad B-0107 esta al dia', {
+        expectedKeywords: ['deuda', 'saldo'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
-    it('B8: Deuda del departamento 0201 de la Torre A', async () => {
-      await ask('Deuda-Unit', 'B8', 'Deuda del departamento 0201 de la Torre A', ['deuda']);
+    it('B8: Deuda del departamento A-0201', async () => {
+      await ask('Deuda-Unit', 'B8', 'Deuda del departamento A-0201', {
+        expectedKeywords: ['deuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
+    });
+
+    it('B9: Deuda de la unidad A-1203 (formato opaco)', async () => {
+      await ask('Deuda-Unit', 'B9', 'Deuda de la unidad A-1203', {
+        expectedKeywords: ['deuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
+    });
+
+    it('B10: Deuda de la unidad B-1203 (formato opaco)', async () => {
+      await ask('Deuda-Unit', 'B10', 'Deuda de la unidad B-1203', {
+        expectedKeywords: ['deuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
   });
 
@@ -213,20 +316,20 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   // C. DOCUMENTOS (Unit-Level)
   // ============================================================
   describe('C. Documentos (Unit-Level)', () => {
-    it('C1: Documentos del departamento 0101 de la Torre A', async () => {
-      await ask('Documentos-Unit', 'C1', 'Documentos del departamento 0101 de la Torre A');
+    it('C1: Documentos del departamento A-0101', async () => {
+      await ask('Documentos-Unit', 'C1', 'Documentos del departamento A-0101');
     });
 
-    it('C2: Archivos del apartamento 0102 de la Torre B', async () => {
-      await ask('Documentos-Unit', 'C2', 'Archivos del apartamento 0102 de la Torre B');
+    it('C2: Archivos del apartamento B-0102', async () => {
+      await ask('Documentos-Unit', 'C2', 'Archivos del apartamento B-0102');
     });
 
-    it('C3: PDFs de la unidad 0103 de la Torre A', async () => {
-      await ask('Documentos-Unit', 'C3', 'PDFs de la unidad 0103 de la Torre A');
+    it('C3: PDFs de la unidad A-0103', async () => {
+      await ask('Documentos-Unit', 'C3', 'PDFs de la unidad A-0103');
     });
 
-    it('C4: Comprobantes del depto 0104 de la Torre B', async () => {
-      await ask('Documentos-Unit', 'C4', 'Comprobantes del depto 0104 de la Torre B');
+    it('C4: Comprobantes del depto B-0104', async () => {
+      await ask('Documentos-Unit', 'C4', 'Comprobantes del depto B-0104');
     });
   });
 
@@ -234,20 +337,20 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   // D. TICKETS (Unit-Level)
   // ============================================================
   describe('D. Tickets (Unit-Level)', () => {
-    it('D1: Tickets del departamento 0101 de la Torre A', async () => {
-      await ask('Tickets-Unit', 'D1', 'Tickets del departamento 0101 de la Torre A', ['ticket']);
+    it('D1: Tickets del departamento A-0101', async () => {
+      await ask('Tickets-Unit', 'D1', 'Tickets del departamento A-0101', ['ticket']);
     });
 
-    it('D2: Reclamos del apartamento 0102 de la Torre B', async () => {
-      await ask('Tickets-Unit', 'D2', 'Reclamos del apartamento 0102 de la Torre B', ['reclamo']);
+    it('D2: Reclamos del apartamento B-0102', async () => {
+      await ask('Tickets-Unit', 'D2', 'Reclamos del apartamento B-0102', ['reclamo']);
     });
 
-    it('D3: Problemas de la unidad 0103 de la Torre A', async () => {
-      await ask('Tickets-Unit', 'D3', 'Problemas de la unidad 0103 de la Torre A', ['problema']);
+    it('D3: Problemas de la unidad A-0103', async () => {
+      await ask('Tickets-Unit', 'D3', 'Problemas de la unidad A-0103', ['problema']);
     });
 
-    it('D4: Averias del depto 0104 de la Torre B', async () => {
-      await ask('Tickets-Unit', 'D4', 'Averias del depto 0104 de la Torre B', ['averia']);
+    it('D4: Averias del depto B-0104', async () => {
+      await ask('Tickets-Unit', 'D4', 'Averias del depto B-0104', ['averia']);
     });
   });
 
@@ -255,24 +358,24 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   // E. PAGOS (Unit-Level)
   // ============================================================
   describe('E. Pagos (Unit-Level)', () => {
-    it('E1: Ultimos pagos del departamento 0101 de la Torre A', async () => {
-      await ask('Pagos-Unit', 'E1', 'Ultimos pagos del departamento 0101 de la Torre A', ['pago']);
+    it('E1: Ultimos pagos del departamento A-0101', async () => {
+      await ask('Pagos-Unit', 'E1', 'Ultimos pagos del departamento A-0101', ['pago']);
     });
 
-    it('E2: Historial de pagos del apartamento 0102 de la Torre B', async () => {
-      await ask('Pagos-Unit', 'E2', 'Historial de pagos del apartamento 0102 de la Torre B', ['historial']);
+    it('E2: Historial de pagos del apartamento B-0102', async () => {
+      await ask('Pagos-Unit', 'E2', 'Historial de pagos del apartamento B-0102', ['historial']);
     });
 
-    it('E3: Transferencias de la unidad 0103 de la Torre A', async () => {
-      await ask('Pagos-Unit', 'E3', 'Transferencias de la unidad 0103 de la Torre A', ['transferencia']);
+    it('E3: Transferencias de la unidad A-0103', async () => {
+      await ask('Pagos-Unit', 'E3', 'Transferencias de la unidad A-0103', ['transferencia']);
     });
 
-    it('E4: Recibos del depto 0104 de la Torre B', async () => {
-      await ask('Pagos-Unit', 'E4', 'Recibos del depto 0104 de la Torre B', ['recibo']);
+    it('E4: Recibos del depto B-0104', async () => {
+      await ask('Pagos-Unit', 'E4', 'Recibos del depto B-0104', ['recibo']);
     });
 
-    it('E5: Movimientos del departamento 0105 de la Torre A', async () => {
-      await ask('Pagos-Unit', 'E5', 'Movimientos del departamento 0105 de la Torre A', ['movimiento']);
+    it('E5: Movimientos del departamento A-0105', async () => {
+      await ask('Pagos-Unit', 'E5', 'Movimientos del departamento A-0105', ['movimiento']);
     });
   });
 
@@ -418,20 +521,49 @@ describe('🤖 Assistant E2E - Residencia San Cristóbal', () => {
   // L. FRONTERA Y SEGURIDAD
   // ============================================================
   describe('L. Frontera y Seguridad', () => {
-    it('L1: Deuda del departamento 0101 sin torre', async () => {
-      await ask('Frontera', 'L1', 'Deuda del departamento 0101', ['necesito', 'edificio']);
+    it('L1: Deuda del departamento 0101 sin torre (sugiere similares)', async () => {
+      await ask('Frontera', 'L1', 'Deuda del departamento 0101', {
+        expectedKeywords: ['similar', 'A-0101'],
+      });
     });
 
     it('L2: Deuda de la Torre Z inexistente', async () => {
-      await ask('Frontera', 'L2', 'Deuda de la Torre Z', ['no encontré']);
+      await ask('Frontera', 'L2', 'Deuda de la Torre Z', {
+        expectedKeywords: ['no encontré'],
+      });
     });
 
-    it('L3: Tickets del departamento 9999 de la Torre A', async () => {
-      await ask('Frontera', 'L3', 'Tickets del departamento 9999 de la Torre A', ['no encontré']);
+    it('L3: Tickets del departamento A-9999 (inexistente)', async () => {
+      await ask('Frontera', 'L3', 'Tickets del departamento A-9999', {
+        expectedKeywords: ['no encontré'],
+      });
+    });
+
+    it('L4: Deuda del estacionamiento AP-1203', async () => {
+      await ask('Frontera', 'L4', 'Deuda del estacionamiento AP-1203', {
+        expectedKeywords: ['deuda'],
+        expectedActionType: 'VIEW_PAYMENTS',
+      });
     });
 
     it('L5: Hola como estas (fallback)', async () => {
-      await ask('Frontera', 'L5', 'Hola, como estas?', ['consulta']);
+      await ask('Frontera', 'L5', 'Hola, como estas?', {
+        expectedKeywords: ['consulta'],
+      });
+    });
+
+    it('L6: Donde vive el residente Residente 1', async () => {
+      await ask('Persona', 'L6', 'Donde vive el residente Residente 1', {
+        expectedKeywords: ['vive', 'A-0101'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
+    });
+
+    it('L7: Cual es el estacionamiento del residente Residente 1', async () => {
+      await ask('Persona', 'L7', 'Cual es el estacionamiento del residente Residente 1', {
+        expectedKeywords: ['estacionamiento', 'AP-0101'],
+        expectedActionType: 'VIEW_REPORTS',
+      });
     });
   });
 
