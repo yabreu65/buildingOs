@@ -49,7 +49,11 @@ export const buildingPaymentsIntent: IntentDefinition = {
       orderBy.paidAt = 'desc';
     }
 
-    const [payments, methodSummary] = await Promise.all([
+    const [tenant, payments, methodSummary] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
       prisma.payment.findMany({
         where: whereClause,
         select: {
@@ -93,6 +97,7 @@ export const buildingPaymentsIntent: IntentDefinition = {
         sumByMethod,
         totalAmount,
         total: payments.length,
+        currency: tenant.currency,
       },
     };
   },

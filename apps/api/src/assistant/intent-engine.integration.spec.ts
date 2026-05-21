@@ -66,16 +66,24 @@ describe('AssistantController - /chat/v2 Integration', () => {
   });
 
   describe('POST /tenants/:tenantId/assistant/chat', () => {
-    it('should call chat() and track consumption on success', async () => {
+    it('should delegate legacy /chat to chatV2 and track consumption on success', async () => {
       const request = {
         message: 'Cuanto debe la unidad 101 del Edificio A',
         page: 'payments',
       };
 
-      assistantService.chat.mockResolvedValue({
-        answer: 'La unidad debe 500.000 VES',
-        suggestedActions: [],
-      });
+      assistantService.chatV2.mockResolvedValue({
+        type: 'kpi',
+        title: 'Unit Debt',
+        summary: 'La unidad debe 500.000 ARS',
+        data: { totalDebt: 500000, currency: 'ARS' },
+        actions: [],
+        meta: {
+          intent: 'unit_debt',
+          confidence: 0.95,
+          tenantScoped: true,
+        },
+      } as StructuredResponse);
 
       const result = await controller.chat(
         mockTenantId,
@@ -83,12 +91,15 @@ describe('AssistantController - /chat/v2 Integration', () => {
         { user: mockUser } as any,
       );
 
-      expect(result.answer).toBe('La unidad debe 500.000 VES');
-      expect(assistantService.chat).toHaveBeenCalledWith(
+      expect(result.answer).toBe('La unidad debe 500.000 ARS');
+      expect(assistantService.chatV2).toHaveBeenCalledWith(
         mockTenantId,
         mockUserId,
         mockMembershipId,
-        request,
+        expect.objectContaining({
+          ...request,
+          routeSource: 'legacy_chat',
+        }),
         ['TENANT_ADMIN'],
       );
       expect(aiEntitlements.trackConsumption).toHaveBeenCalledWith(mockTenantId, 1);
@@ -106,7 +117,7 @@ describe('AssistantController - /chat/v2 Integration', () => {
         controller.chat(mockTenantId, request, { user: mockUser } as any),
       ).rejects.toBeInstanceOf(ForbiddenException);
 
-      expect(assistantService.chat).not.toHaveBeenCalled();
+      expect(assistantService.chatV2).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException when tenantId is empty', async () => {
@@ -166,7 +177,10 @@ describe('AssistantController - /chat/v2 Integration', () => {
         mockTenantId,
         mockUserId,
         mockMembershipId,
-        request,
+        expect.objectContaining({
+          ...request,
+          routeSource: 'chat_v2',
+        }),
         ['TENANT_ADMIN'],
       );
       expect(aiEntitlements.trackConsumption).toHaveBeenCalledWith(mockTenantId, 1);
@@ -203,7 +217,10 @@ describe('AssistantController - /chat/v2 Integration', () => {
         mockTenantId,
         mockUserId,
         mockMembershipId,
-        request,
+        expect.objectContaining({
+          ...request,
+          routeSource: 'chat_v2',
+        }),
         ['TENANT_ADMIN'],
       );
     });

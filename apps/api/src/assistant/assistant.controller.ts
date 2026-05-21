@@ -25,6 +25,15 @@ import { StructuredResponse } from './ai.types';
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class AssistantController {
   private readonly logger = new Logger(AssistantController.name);
+  private readonly legacyChatActions = new Set([
+    'VIEW_TICKETS',
+    'VIEW_PAYMENTS',
+    'VIEW_REPORTS',
+    'VIEW_DOCUMENTS',
+    'SEARCH_DOCS',
+    'DRAFT_COMMUNICATION',
+    'CREATE_TICKET',
+  ]);
 
   constructor(
     private readonly assistantService: AssistantService,
@@ -96,13 +105,34 @@ export class AssistantController {
       throw new ForbiddenException('Monthly IA consultation limit reached');
     }
 
-    // Call the assistant service
-    const response = await this.assistantService.chat(
+    // Legacy /chat now delegates internally to /chat/v2 behavior to avoid
+    // divergent assistant logic between endpoints.
+    const structured = await this.assistantService.chatV2(
       tenantId,
       userId,
       membershipId,
-      request,
+      { ...request, routeSource: 'legacy_chat' },
       userRoles,
+    );
+
+    const response: ChatResponse = {
+      answer: structured.summary,
+      suggestedActions: (structured.actions || [])
+        .map((action) => {
+          const rawAction = String(action.action || '').trim().toUpperCase();
+          const type = this.legacyChatActions.has(rawAction)
+            ? rawAction as ChatResponse['suggestedActions'][number]['type']
+            : 'VIEW_REPORTS';
+
+          return {
+            type,
+            payload: (action.payload || {}) as Record<string, string | undefined>,
+          };
+        }),
+    };
+
+    this.logger.warn(
+      `[assistant_legacy_chat_used] tenant=${tenantId} user=${userId} page=${request.page}`,
     );
 
     // FASE 1: Track consumption after successful chat
@@ -144,8 +174,6 @@ export class AssistantController {
     @Body() request: ChatRequest & { sessionId?: string },
     @Request() req?: any,
   ): Promise<StructuredResponse> {
-    console.log(`[CONTROLLER chatV2] Received: tenantId=${tenantId}, message="${request.message}", page=${request.page}, buildingId=${request.buildingId}, unitId=${request.unitId}`);
-
     // Validate tenantId
     if (!tenantId || tenantId.trim().length === 0) {
       throw new BadRequestException('tenantId is required');
@@ -180,11 +208,9 @@ export class AssistantController {
       tenantId,
       userId,
       membershipId,
-      request,
+      { ...request, routeSource: 'chat_v2' },
       userRoles,
     );
-
-    console.log(`[CONTROLLER chatV2] Response: type=${response.type}, intent=${response.meta?.intent}, summary="${response.summary?.substring(0, 50)}..."`);
 
     // Track consumption after successful chat
     await this.aiEntitlements.trackConsumption(tenantId, 1);

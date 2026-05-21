@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { ChargeStatus } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
+import { AssistantDebtCalculatorService } from '../../assistant-debt-calculator.service';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
+
+const debtCalculator = new AssistantDebtCalculatorService();
 
 export const unitDebtIntent: IntentDefinition = {
   name: 'unit_debt',
@@ -20,6 +23,7 @@ export const unitDebtIntent: IntentDefinition = {
       unitId,
       tenantId,
       status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+      canceledAt: null,
     };
 
     // Filter by period if provided (YYYY-MM format)
@@ -27,18 +31,33 @@ export const unitDebtIntent: IntentDefinition = {
       whereClause.period = filters.period;
     }
 
-    const charges = await prisma.charge.findMany({
-      where: whereClause,
-      include: { paymentAllocations: { where: { payment: { status: 'APPROVED' } } } },
-    });
+    const [tenant, charges] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      prisma.charge.findMany({
+        where: whereClause,
+        include: {
+          paymentAllocations: {
+            include: {
+              payment: {
+                select: {
+                  status: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
 
     const chargesWithDebt = charges.map((charge) => {
-      const paidAmount = charge.paymentAllocations.reduce((sum, pa) => sum + pa.amount, 0);
-      const remainingDebt = charge.amount - paidAmount;
+      const remainingDebt = debtCalculator.calculateChargeOutstanding(charge);
       return { ...charge, remainingDebt };
     });
 
-    const totalDebt = chargesWithDebt.reduce((sum, c) => sum + c.remainingDebt, 0);
+    const totalDebt = debtCalculator.calculateOutstanding(charges);
     const overduePeriods = Array.from(
       new Set(
         chargesWithDebt
@@ -52,7 +71,7 @@ export const unitDebtIntent: IntentDefinition = {
         totalDebt,
         overduePeriodCount: overduePeriods.length,
         overduePeriods,
-        currency: 'VES',
+        currency: tenant.currency,
         charges: chargesWithDebt.map((c) => ({
           period: c.period,
           concept: c.concept,

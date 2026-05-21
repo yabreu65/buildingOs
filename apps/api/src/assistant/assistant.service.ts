@@ -52,10 +52,13 @@ import { buildingDocumentsIntent } from './intent-engine/allowed-intents/buildin
 import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
 import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
-import { expensesSummaryIntent } from './intent-engine/allowed-intents/expenses-summary.intent';
-import { cashflowCompareIntent } from './intent-engine/allowed-intents/cashflow-compare.intent';
-import { vendorsListIntent } from './intent-engine/allowed-intents/vendors-list.intent';
-import { communicationsSendReminderIntent } from './intent-engine/allowed-intents/communications-send-reminder.intent';
+
+const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
+  'expenses_summary',
+  'cashflow_compare',
+  'vendors_list',
+  'communications_send_reminder',
+]);
 
 export interface ChatRequest {
   readonly message: string;
@@ -65,6 +68,11 @@ export interface ChatRequest {
   readonly conversationId?: string;
   readonly sessionId?: string;
   readonly debug?: boolean;
+  /**
+   * Internal-only route marker for analytics/compatibility.
+   * Not part of the public HTTP contract.
+   */
+  readonly routeSource?: 'legacy_chat' | 'chat_v2';
 }
 
 interface ContextValidation {
@@ -241,10 +249,12 @@ export class AssistantService implements OnModuleInit {
       buildingTicketsIntent,
       buildingPaymentsIntent,
       buildingStatsIntent,
-      expensesSummaryIntent,
-      cashflowCompareIntent,
-      vendorsListIntent,
-      communicationsSendReminderIntent,
+      // Temporarily unavailable intents are intentionally excluded from the
+      // active routing registry until their executors are implemented.
+      // expensesSummaryIntent,
+      // cashflowCompareIntent,
+      // vendorsListIntent,
+      // communicationsSendReminderIntent,
     ];
 
     for (const intent of intents) {
@@ -688,6 +698,14 @@ export class AssistantService implements OnModuleInit {
       }
     }
 
+    if (this.isTemporarilyUnavailableIntent(extractedIntent.intent)) {
+      const unavailableResponse = this.buildTemporarilyUnavailableIntentResponse(extractedIntent.intent);
+      if (debugEnabled) {
+        (unavailableResponse as StructuredResponse).debug = debugInfo;
+      }
+      return unavailableResponse;
+    }
+
     // Validate intent exists in registry
     if (!this.intentRegistry.has(extractedIntent.intent)) {
       this.logger.warn(`[chatV2] Unknown intent "${extractedIntent.intent}" from LLM, falling back to deterministic`);
@@ -720,6 +738,14 @@ export class AssistantService implements OnModuleInit {
       } else {
         throw new BadRequestException('Could not understand your message. Please try a different question.');
       }
+    }
+
+    if (this.isTemporarilyUnavailableIntent(extractedIntent.intent)) {
+      const unavailableResponse = this.buildTemporarilyUnavailableIntentResponse(extractedIntent.intent);
+      if (debugEnabled) {
+        (unavailableResponse as StructuredResponse).debug = debugInfo;
+      }
+      return unavailableResponse;
     }
 
     const normalizedValidation = validateExtractedIntent({
@@ -1038,6 +1064,10 @@ export class AssistantService implements OnModuleInit {
     );
 
     // Log interaction (fire-and-forget)
+    const interactionModelSize = request.routeSource === 'legacy_chat'
+      ? 'INTENT_ENGINE_LEGACY_ROUTE'
+      : 'INTENT_ENGINE';
+
     void this.logInteraction(
       tenantId,
       userId,
@@ -1045,7 +1075,7 @@ export class AssistantService implements OnModuleInit {
       request,
       { answer: structuredResponse.summary, suggestedActions: [] } as ChatResponse,
       false,
-      'INTENT_ENGINE',
+      interactionModelSize,
     );
 
     return structuredResponse;
@@ -2827,6 +2857,27 @@ Format each suggestion on a new line starting with 1., 2., 3.`;
       this.logger.warn(`Ticket reply scoped RBAC check failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
+  }
+
+  private isTemporarilyUnavailableIntent(intent: string): boolean {
+    return TEMPORARILY_UNAVAILABLE_INTENTS.has(intent);
+  }
+
+  private buildTemporarilyUnavailableIntentResponse(intent: string): StructuredResponse {
+    return {
+      type: 'text',
+      title: 'Capacidad no disponible',
+      summary: 'Esa capacidad aún no está disponible en este asistente. Puedo ayudarte con deuda, pagos, tickets, documentos, residentes o estadísticas.',
+      data: {
+        unavailableIntent: intent,
+      },
+      actions: [],
+      meta: {
+        intent,
+        confidence: 1,
+        tenantScoped: true,
+      },
+    };
   }
 
   /**

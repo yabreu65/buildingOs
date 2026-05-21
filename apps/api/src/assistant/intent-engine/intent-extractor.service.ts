@@ -278,10 +278,6 @@ Intenciones disponibles:
 - building_tickets: buscar tickets de un edificio
 - building_payments: listar pagos de un edificio
 - building_stats: obtener estadisticas del edificio
-- expenses_summary: resumen de gastos (proximamente)
-- cashflow_compare: comparar ingresos vs gastos (proximamente)
-- vendors_list: listar proveedores (proximamente)
-- communications_send_reminder: enviar recordatorio (proximamente)
 
 Entidades:
 - unit: requiere buildingAlias y unitCode (ej: A-0101)

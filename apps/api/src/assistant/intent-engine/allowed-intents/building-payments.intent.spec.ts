@@ -4,7 +4,11 @@ describe('buildingPaymentsIntent', () => {
   it('queries tenant-wide payments when buildingId is not provided', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const groupBy = jest.fn().mockResolvedValue([]);
+    const findUniqueOrThrow = jest.fn().mockResolvedValue({ currency: 'ARS' });
     const prisma = {
+      tenant: {
+        findUniqueOrThrow,
+      },
       payment: {
         findMany,
         groupBy,
@@ -25,6 +29,7 @@ describe('buildingPaymentsIntent', () => {
         sumByMethod: {},
         totalAmount: 0,
         total: 0,
+        currency: 'ARS',
       },
     });
 
@@ -40,4 +45,3 @@ describe('buildingPaymentsIntent', () => {
     expect(where.buildingId).toBeUndefined();
   });
 });
-

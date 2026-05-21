@@ -265,6 +265,69 @@ describe('AssistantService - Strict Operational Questions', () => {
     });
   });
 
+  describe('chatV2 temporarily unavailable intents', () => {
+    it('returns controlled response for temporarily unavailable intents', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'vendors_list',
+        entity: { type: 'building', buildingAlias: 'A' },
+        filters: {},
+        confidence: 0.9,
+        source: 'llm',
+        requiresClarification: false,
+        missingFields: [],
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'lista de proveedores', page: 'dashboard', conversationId: 'conv-unavailable' },
+        ADMIN_ROLES,
+      );
+
+      expect(result.type).toBe('text');
+      expect(result.summary).toContain('aún no está disponible');
+      expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+    });
+
+    it('includes debug payload for temporarily unavailable intents when debug=true', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'cashflow_compare',
+        entity: { type: 'building', buildingAlias: 'A' },
+        filters: {},
+        confidence: 0.88,
+        source: 'hybrid',
+        requiresClarification: false,
+        missingFields: [],
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'compará ingresos y gastos',
+          page: 'dashboard',
+          conversationId: 'conv-unavailable-debug',
+          debug: true,
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(result.debug).toBeDefined();
+      expect(result.debug?.finalIntent).toBeUndefined();
+      expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+    });
+  });
+
   describe('chatV2 entity guards', () => {
     it('returns clarification when unit intent cannot resolve requested unit', async () => {
       mockConversationContext.getContext.mockResolvedValue([]);

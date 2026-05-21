@@ -52,9 +52,13 @@ Para OpenCode diario, la fuente operativa prioritaria es:
 
 ## Assistant operativo (estado actual)
 
-- Runtime P0 con priorizacion de engine externo (`yoryi-ai-core`) por flag de entorno.
-- Respuestas operativas P0 rechazan `answerSource=knowledge`; fallback local solo por indisponibilidad/disable del engine primario.
-- Endpoint interno tools-based disponible en `apps/api/src/assistant/tools.controller.ts` con allowlist y auditoria por tenant.
+- `POST /tenants/:tenantId/assistant/chat/v2` es el flujo oficial.
+- `POST /tenants/:tenantId/assistant/chat` queda deprecado y actúa como wrapper de compatibilidad sobre `chat/v2` (sin lógica propia nueva).
+- Flujo operativo actual: parser determinístico + `FilterCoverageValidator` → LLM extractor (Ollama/Opencode) solo cuando falta cobertura o no hay intent robusto → validación Zod (`validateExtractedIntent`) → resolución de entidades → planner + query executor allowlisted.
+- El assistant NO genera SQL libre.
+- Tenant y RBAC se aplican server-side en query executor/policy layer; `tenantId` no viene del LLM.
+- Cálculo de deuda operativo centralizado en `AssistantDebtCalculatorService` (incluye estados válidos `APPROVED`/`RECONCILED`).
+- Intents no implementados (`expenses_summary`, `cashflow_compare`, `vendors_list`, `communications_send_reminder`) están fuera del ruteo activo y devuelven respuesta controlada de no disponibilidad.
 
 ## Regla de actualizacion
 

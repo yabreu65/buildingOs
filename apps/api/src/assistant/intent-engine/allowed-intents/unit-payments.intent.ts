@@ -29,7 +29,12 @@ export const unitPaymentsIntent: IntentDefinition = {
     }
 
     if (filters?.period) {
-      whereClause.paidAt = { gte: new Date(`${filters.period}-01`), lt: new Date(`${filters.period}-31`) };
+      const periodStart = new Date(`${filters.period}-01T00:00:00.000Z`);
+      if (!Number.isNaN(periodStart.getTime())) {
+        const periodEnd = new Date(periodStart);
+        periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+        whereClause.paidAt = { gte: periodStart, lt: periodEnd };
+      }
     }
 
     if (filters?.minAmount) {
@@ -47,27 +52,40 @@ export const unitPaymentsIntent: IntentDefinition = {
       orderBy.paidAt = 'desc';
     }
 
-    const payments = await prisma.payment.findMany({
-      where: whereClause,
-      select: {
-        id: true,
-        amount: true,
-        method: true,
-        status: true,
-        paidAt: true,
-        reference: true,
-      },
-      take: pagination?.limit || 50,
-      orderBy,
-    });
+    const [tenant, payments] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      prisma.payment.findMany({
+        where: whereClause,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          status: true,
+          paidAt: true,
+          reference: true,
+        },
+        take: pagination?.limit || 50,
+        orderBy,
+      }),
+    ]);
+
+    const totalAmount = payments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0);
 
     return {
-      data: payments.map((payment) => ({
-        amount: payment.amount,
-        method: payment.method,
-        paidAt: payment.paidAt,
-        status: payment.status,
-      })),
+      data: {
+        payments: payments.map((payment) => ({
+          amount: payment.amount,
+          method: payment.method,
+          paidAt: payment.paidAt,
+          status: payment.status,
+        })),
+        total: payments.length,
+        totalAmount,
+        currency: tenant.currency,
+      },
     };
   },
 };

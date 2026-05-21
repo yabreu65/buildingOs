@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { ChargeStatus } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
+import { AssistantDebtCalculatorService } from '../../assistant-debt-calculator.service';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
+
+const debtCalculator = new AssistantDebtCalculatorService();
 
 export const buildingDelinquentsIntent: IntentDefinition = {
   name: 'building_delinquents',
@@ -16,27 +19,41 @@ export const buildingDelinquentsIntent: IntentDefinition = {
       throw new BadRequestException('buildingId required for building_delinquents intent');
     }
 
-    // Find charges with OVERDUE status grouped by unit
-    const overdueCharges = await prisma.charge.findMany({
+    const [tenant, overdueCharges] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      // Find charges with OVERDUE status grouped by unit
+      prisma.charge.findMany({
       where: {
         buildingId,
         tenantId,
         status: ChargeStatus.PENDING, // PENDING includes overdue when overdueSince is set
         overdueSince: { not: null },
+        canceledAt: null,
       },
       include: {
         unit: { select: { code: true, label: true } },
-        paymentAllocations: { where: { payment: { status: 'APPROVED' } } },
+        paymentAllocations: {
+          include: {
+            payment: {
+              select: {
+                status: true,
+              },
+            },
+          },
+        },
       },
-    });
+    }),
+    ]);
 
     // Group by unit and calculate debt
     const unitDebts: Record<string, { unitCode: string; label: string; totalDebt: number }> = {};
 
     for (const charge of overdueCharges) {
       const unitKey = charge.unitId;
-      const paidAmount = charge.paymentAllocations.reduce((sum, pa) => sum + pa.amount, 0);
-      const remainingDebt = charge.amount - paidAmount;
+      const remainingDebt = debtCalculator.calculateChargeOutstanding(charge);
 
       if (remainingDebt <= 0) continue; // Skip fully paid
 
@@ -67,7 +84,7 @@ export const buildingDelinquentsIntent: IntentDefinition = {
       data: {
         delinquents,
         totalUnitsWithDebt: delinquents.length,
-        currency: 'VES',
+        currency: tenant.currency,
       },
     };
   },

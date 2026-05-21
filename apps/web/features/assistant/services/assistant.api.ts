@@ -82,11 +82,10 @@ export class AssistantApi {
    */
   async chat(tenantId: string, request: ChatRequest): Promise<ChatResponse> {
     try {
-      const response = await apiClient<{
-        answer: string;
-        actions?: ActionDefinition[];
-      }, ChatRequest>({
-        path: `/tenants/${tenantId}/assistant/chat`,
+      // Legacy frontend consumer now uses the official v2 endpoint while
+      // preserving the legacy ChatResponse contract.
+      const response = await apiClient<StructuredResponse, ChatRequest>({
+        path: `/tenants/${tenantId}/assistant/chat/v2`,
         method: 'POST',
         body: request,
         headers: {
@@ -94,16 +93,16 @@ export class AssistantApi {
         },
       });
 
-      // Map backend actions to frontend suggestedActions format
+      // Map structured actions to legacy suggestedActions format
       const suggestedActions: SuggestedAction[] = (response.actions || []).map((action) => {
         return {
-          type: this.mapActionKeyToType(action.key),
-          payload: { actionKey: action.key },
+          type: this.mapActionKeyToType(action.action),
+          payload: { actionKey: action.action },
         };
       });
 
       return {
-        answer: response.answer,
+        answer: response.summary,
         suggestedActions,
       };
     } catch (error) {

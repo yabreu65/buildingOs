@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { ChargeStatus } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
+import { AssistantDebtCalculatorService } from '../../assistant-debt-calculator.service';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
+
+const debtCalculator = new AssistantDebtCalculatorService();
 
 export const buildingDebtIntent: IntentDefinition = {
   name: 'building_debt',
@@ -20,27 +23,42 @@ export const buildingDebtIntent: IntentDefinition = {
       buildingId,
       tenantId,
       status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+      canceledAt: null,
     };
 
     if (filters?.period) {
       whereClause.period = filters.period;
     }
 
-    const charges = await prisma.charge.findMany({
-      where: whereClause,
-      include: {
-        unit: { select: { code: true, label: true } },
-        paymentAllocations: { where: { payment: { status: 'APPROVED' } } },
-      },
-    });
+    const [tenant, charges] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { currency: true },
+      }),
+      prisma.charge.findMany({
+        where: whereClause,
+        include: {
+          unit: { select: { code: true, label: true } },
+          paymentAllocations: {
+            include: {
+              payment: {
+                select: {
+                  status: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
 
     // Group by unit and sum amounts
     const unitDebts: Record<string, { unitCode: string; label: string; totalAmount: number; paidAmount: number; remainingDebt: number }> = {};
 
     for (const charge of charges) {
       const unitKey = charge.unitId;
-      const paidAmount = charge.paymentAllocations.reduce((sum, pa) => sum + pa.amount, 0);
-      const remainingDebt = charge.amount - paidAmount;
+      const remainingDebt = debtCalculator.calculateChargeOutstanding(charge);
+      const paidAmount = Math.max(0, charge.amount - remainingDebt);
 
       if (!unitDebts[unitKey]) {
         unitDebts[unitKey] = {
@@ -57,12 +75,12 @@ export const buildingDebtIntent: IntentDefinition = {
       unitDebts[unitKey].remainingDebt += remainingDebt;
     }
 
-    const totalDebt = Object.values(unitDebts).reduce((sum, u) => sum + u.remainingDebt, 0);
+    const totalDebt = debtCalculator.calculateOutstanding(charges);
 
     return {
       data: {
         totalDebt,
-        currency: 'VES',
+        currency: tenant.currency,
         totalUnits: Object.keys(unitDebts).length,
         byUnit: Object.values(unitDebts).sort((a, b) => b.remainingDebt - a.remainingDebt).slice(0, pagination?.limit || 20),
       },
