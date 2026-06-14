@@ -304,4 +304,31 @@ export class MinioService {
       throw error;
     }
   }
+
+  /**
+   * Check bucket connectivity and availability.
+   */
+  async checkHealth(): Promise<{ status: 'up' | 'down'; latency?: number; error?: string }> {
+    const startedAt = Date.now();
+
+    try {
+      const exists = await this.minioClient.bucketExists(this.bucket);
+      if (!exists) {
+        return {
+          status: 'down',
+          error: `Bucket ${this.bucket} does not exist`,
+        };
+      }
+
+      return {
+        status: 'up',
+        latency: Date.now() - startedAt,
+      };
+    } catch (error) {
+      return {
+        status: 'down',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 }

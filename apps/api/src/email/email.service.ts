@@ -1,6 +1,6 @@
 /**
  * Email Service
- * Handles email sending via SMTP, SendGrid, or Mailgun
+ * Handles email sending via SMTP or Resend
  * Supports template rendering with tenant branding
  */
 
@@ -35,10 +35,10 @@ export class EmailService {
 
     if (this.provider === 'smtp') {
       this.initializeSMTP();
-    } else if (this.provider === 'sendgrid') {
-      this.logger.log('[Email] Using SendGrid provider');
-    } else if (this.provider === 'mailgun') {
-      this.logger.log('[Email] Using Mailgun provider');
+    } else if (this.provider === 'resend') {
+      this.logger.log('[Email] Using Resend provider');
+    } else if (this.provider === 'ses') {
+      this.logger.warn('[Email] SES provider selected but not implemented yet');
     }
   }
 
@@ -56,6 +56,9 @@ export class EmailService {
       host: config.smtpHost,
       port: config.smtpPort,
       secure: config.smtpPort === 465, // TLS for 465, STARTTLS for 587
+      connectionTimeout: 3000,
+      greetingTimeout: 3000,
+      socketTimeout: 3000,
       auth: {
         user: config.smtpUser,
         pass: config.smtpPass,
@@ -83,10 +86,10 @@ export class EmailService {
 
       if (this.provider === 'smtp') {
         externalId = await this.sendViaSMTP(options);
-      } else if (this.provider === 'sendgrid') {
-        externalId = await this.sendViaSendGrid(options);
-      } else if (this.provider === 'mailgun') {
-        externalId = await this.sendViaMailgun(options);
+      } else if (this.provider === 'resend') {
+        externalId = await this.sendViaResend(options);
+      } else if (this.provider === 'ses') {
+        throw new Error('SES provider is not implemented');
       }
 
       // Log email sent
@@ -160,19 +163,46 @@ export class EmailService {
   }
 
   /**
-   * Send via SendGrid
+   * Send via Resend
    */
-  private async sendViaSendGrid(_options: SendEmailOptions): Promise<string> {
-    // TODO: Implement SendGrid
-    throw new Error('SendGrid not yet implemented');
-  }
+  private async sendViaResend(options: SendEmailOptions): Promise<string> {
+    const config = this.config.get();
 
-  /**
-   * Send via Mailgun
-   */
-  private async sendViaMailgun(_options: SendEmailOptions): Promise<string> {
-    // TODO: Implement Mailgun
-    throw new Error('Mailgun not yet implemented');
+    if (!config.resendApiKey) {
+      throw new Error('RESEND_API_KEY not configured');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: config.mailFrom,
+          to: [options.to],
+          subject: options.subject,
+          html: options.htmlBody,
+          text: options.textBody || this.stripHtml(options.htmlBody),
+          reply_to: options.replyTo,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`Resend API error (${response.status}): ${errorBody}`);
+      }
+
+      const data = (await response.json()) as { id?: string };
+      return data.id || `resend-${Date.now()}`;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /**
@@ -222,5 +252,65 @@ export class EmailService {
    */
   isEmailAvailable(): boolean {
     return this.provider !== 'none';
+  }
+
+  /**
+   * Verify whether the configured provider is reachable.
+   */
+  async checkHealth(): Promise<{ status: 'up' | 'down' | 'not_configured'; provider: string; error?: string }> {
+    if (this.provider === 'none') {
+      return { status: 'not_configured', provider: 'disabled' };
+    }
+
+    try {
+      if (this.provider === 'smtp') {
+        if (!this.smtpTransporter) {
+          return { status: 'down', provider: 'smtp', error: 'SMTP transporter not configured' };
+        }
+
+        await this.smtpTransporter.verify();
+        return { status: 'up', provider: 'smtp' };
+      }
+
+      if (this.provider === 'resend') {
+        const config = this.config.get();
+        if (!config.resendApiKey) {
+          return { status: 'down', provider: 'resend', error: 'RESEND_API_KEY not configured' };
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        try {
+          const response = await fetch('https://api.resend.com/domains', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${config.resendApiKey}`,
+            },
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const errorBody = await response.text();
+            return {
+              status: 'down',
+              provider: 'resend',
+              error: `Resend health check failed (${response.status}): ${errorBody}`,
+            };
+          }
+
+          return { status: 'up', provider: 'resend' };
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      return { status: 'down', provider: this.provider, error: `${this.provider} provider is not implemented` };
+    } catch (error) {
+      return {
+        status: 'down',
+        provider: this.provider,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 }

@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MovementAllocationService } from './movement-allocation.service';
+import { FinanzasValidators } from './finanzas.validators';
 
 describe('MovementAllocationService', () => {
   let service: MovementAllocationService;
@@ -21,9 +22,13 @@ describe('MovementAllocationService', () => {
           useValue: {
             building: { findMany: jest.fn() },
             movementAllocation: {
+              create: jest.fn(),
               createMany: jest.fn(),
               findMany: jest.fn(),
               deleteMany: jest.fn(),
+            },
+            unit: {
+              aggregate: jest.fn(),
             },
           },
         },
@@ -32,8 +37,10 @@ describe('MovementAllocationService', () => {
           useValue: { createLog: jest.fn() },
         },
         {
-          provide: 'AuditService',
-          useValue: { createLog: jest.fn() },
+          provide: FinanzasValidators,
+          useValue: {
+            validateBuildingBelongsToTenant: jest.fn(),
+          },
         },
       ],
     }).compile();

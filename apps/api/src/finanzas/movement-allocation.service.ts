@@ -115,23 +115,18 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    // Crear allocations
-    for (const alloc of allocations) {
-      const resolvedAmount = alloc.percentage
-        ? Math.floor((amountMinor * (alloc.percentage / 100)))
-        : alloc.amountMinor!;
-
-      await this.prisma.movementAllocation.create({
-        data: {
-          tenantId,
-          expenseId,
-          buildingId: alloc.buildingId,
-          percentage: alloc.percentage ?? null,
-          amountMinor: resolvedAmount,
-          currencyCode,
-        },
-      });
-    }
+    await this.prisma.movementAllocation.createMany({
+      data: allocations.map((alloc) => ({
+        tenantId,
+        expenseId,
+        buildingId: alloc.buildingId,
+        percentage: alloc.percentage ?? null,
+        amountMinor: alloc.percentage
+          ? Math.floor((amountMinor * alloc.percentage) / 100)
+          : alloc.amountMinor!,
+        currencyCode,
+      })),
+    });
 
     // Audit
     void this.auditService.createLog({
@@ -157,22 +152,18 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    for (const alloc of allocations) {
-      const resolvedAmount = alloc.percentage
-        ? Math.floor((amountMinor * (alloc.percentage / 100)))
-        : alloc.amountMinor!;
-
-      await this.prisma.movementAllocation.create({
-        data: {
-          tenantId,
-          incomeId,
-          buildingId: alloc.buildingId,
-          percentage: alloc.percentage ?? null,
-          amountMinor: resolvedAmount,
-          currencyCode,
-        },
-      });
-    }
+    await this.prisma.movementAllocation.createMany({
+      data: allocations.map((alloc) => ({
+        tenantId,
+        incomeId,
+        buildingId: alloc.buildingId,
+        percentage: alloc.percentage ?? null,
+        amountMinor: alloc.percentage
+          ? Math.floor((amountMinor * alloc.percentage) / 100)
+          : alloc.amountMinor!,
+        currencyCode,
+      })),
+    });
 
     void this.auditService.createLog({
       tenantId,

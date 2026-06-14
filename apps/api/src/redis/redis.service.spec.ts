@@ -1,10 +1,14 @@
 import { RedisService } from './redis.service';
+import { ConfigService } from '../config/config.service';
 
 describe('RedisService', () => {
   let service: RedisService;
+  const mockConfigService = {
+    getValue: jest.fn().mockReturnValue(undefined),
+  } as unknown as ConfigService;
 
   beforeEach(() => {
-    service = new RedisService();
+    service = new RedisService(mockConfigService);
   });
 
   afterEach(() => {
@@ -36,6 +40,12 @@ describe('RedisService', () => {
     it('does nothing when not connected', async () => {
       // Should not throw
       await expect(service.del('any-key')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('incrementCounter', () => {
+    it('returns null when not connected', async () => {
+      await expect(service.incrementCounter('rate:key', 1000)).resolves.toBeNull();
     });
   });
 });

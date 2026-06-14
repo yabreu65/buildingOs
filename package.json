@@ -21,10 +21,10 @@
     "stack:up": "docker compose -f infra/docker/docker-compose.full.yml up -d",
     "stack:down": "docker compose -f infra/docker/docker-compose.full.yml down",
     "build:packages": "npm run build -w packages/contracts && npm run build -w packages/permissions",
-    "build:ci": "npm run build:packages && npm run build -w apps/api",
+    "build:ci": "npm run build:packages && npm run build -w apps/api && npm run build -w apps/web",
     "lint:ci": "npm run lint:ci -w apps/api && npm run lint --if-present -w packages/contracts && npm run lint --if-present -w packages/permissions",
-    "test:ci": "npm run test -w apps/api -- --runInBand --no-coverage --testPathPattern=\"assistant/(tools.service|tools.controller|read-only-query.service).spec.ts\"",
-    "test:e2e:ci": "echo \"API E2E legacy suite deferred; CI baseline uses focused assistant smoke tests and dedicated web E2E workflow.\""
+    "test:ci": "npm run test -w apps/api -- --runInBand --no-coverage",
+    "test:e2e:ci": "npm run test:e2e -w apps/api -- --runInBand test/config-validation.e2e-spec.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

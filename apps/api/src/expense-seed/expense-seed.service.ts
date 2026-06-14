@@ -30,28 +30,22 @@ export class ExpenseLedgerSeedService {
     this.logger.debug(`[Seed] Starting for tenant: ${tenantId}`);
 
     try {
-      // Use individual upserts to include catalogScope (not supported in createMany)
-      let created = 0;
-      let skipped = 0;
+      const result = await this.prisma.expenseLedgerCategory.createMany({
+        data: DEFAULT_LEDGER_CATEGORIES.map((category) => ({
+          tenantId,
+          code: category.code,
+          name: category.name,
+          description: category.description,
+          movementType: category.movementType,
+          catalogScope: category.catalogScope ?? 'BUILDING',
+          sortOrder: category.sortOrder,
+          isActive: category.isActive,
+        })),
+        skipDuplicates: true,
+      });
 
-      for (const category of DEFAULT_LEDGER_CATEGORIES) {
-        const result = await this.prisma.expenseLedgerCategory.upsert({
-          where: { tenantId_code: { tenantId, code: category.code } },
-          create: {
-            tenantId,
-            code: category.code,
-            name: category.name,
-            description: category.description,
-            movementType: category.movementType,
-            catalogScope: category.catalogScope ?? 'BUILDING',
-            sortOrder: category.sortOrder,
-            isActive: category.isActive,
-          },
-          update: {},
-        });
-        if (result) created++;
-        else skipped++;
-      }
+      const created = result.count;
+      const skipped = DEFAULT_LEDGER_CATEGORIES.length - created;
 
       this.logger.log(
         `[Seed] Completed for tenant ${tenantId}: created=${created}, skipped=${skipped}`,

@@ -108,7 +108,7 @@ describe('ExpenseLedgerSeedService', () => {
         entityId: mockTenantId,
         metadata: {
           created: 20,
-          skipped: 8,
+          skipped: DEFAULT_LEDGER_CATEGORIES.length - 20,
           source: 'DEFAULT_SEED',
           totalCategories: DEFAULT_LEDGER_CATEGORIES.length,
         },

@@ -37,14 +37,22 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-buildingos}:${POSTGRES_PASSWORD:-buildingos}@postgres:5432/${POSTGRES_DB:-buildingos}
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
-      MINIO_USE_SSL: "false"
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-buildingos}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-buildingos123}
-      MINIO_BUCKET: buildingos-local
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3011}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3011}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-buildingos}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-buildingos123}
+      S3_BUCKET: ${S3_BUCKET:-buildingos-local}
+      S3_FORCE_PATH_STYLE: "true"
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://localhost:9100/buildingos-local}
       JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-none}
+      MAIL_FROM: ${MAIL_FROM:-BuildingOS <no-reply@buildingos.local>}
+      FEATURE_PORTAL_RESIDENT: ${FEATURE_PORTAL_RESIDENT:-true}
+      FEATURE_PAYMENTS_MVP: ${FEATURE_PAYMENTS_MVP:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PORT: "3000"
     healthcheck:

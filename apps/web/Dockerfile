@@ -36,7 +36,7 @@ RUN npm ci --only=production
 # Copy .next from builder
 COPY --from=builder /app/apps/web/.next ./apps/web/.next
 COPY --from=builder /app/apps/web/public ./apps/web/public
-COPY apps/web/next.config.ts ./apps/web/
+COPY apps/web/next.config.mjs ./apps/web/
 
 # Expose port
 EXPOSE 3000

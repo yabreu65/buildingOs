@@ -125,9 +125,12 @@ describe('UnitsService', () => {
       const result = await service.create(tenantId, buildingId, 'user-123', dto);
 
       // ASSERT
-      expect(result).toEqual(expectedUnit);
+      expect(result).toEqual({
+        ...expectedUnit,
+        displayCode: 'A01',
+      });
       expect(prismaService.building.findFirst).toHaveBeenCalledWith({
-        where: { id: buildingId, tenantId },
+        where: { id: buildingId, tenantId, deletedAt: null },
       });
       expect(planEntitlementsService.assertLimit).toHaveBeenCalledWith(tenantId, 'units');
       expect(prismaService.unit.create).toHaveBeenCalled();
@@ -169,7 +172,10 @@ describe('UnitsService', () => {
       const result = await service.create(tenantId, buildingId, 'user-123', dto);
 
       // ASSERT
-      expect(result).toEqual(expectedUnit);
+      expect(result).toEqual({
+        ...expectedUnit,
+        displayCode: 'B02',
+      });
       expect(prismaService.unit.create).toHaveBeenCalled();
     });
 
@@ -290,7 +296,12 @@ describe('UnitsService', () => {
       const result = await service.findAllByTenant(tenantId);
 
       // ASSERT
-      expect(result).toEqual(expectedUnits);
+      expect(result).toEqual(
+        expectedUnits.map((unit) => ({
+          ...unit,
+          displayCode: unit.code,
+        })),
+      );
       expect(prismaService.unit.findMany).toHaveBeenCalled();
     });
 
@@ -319,7 +330,12 @@ describe('UnitsService', () => {
       const result = await service.findAllByTenant(tenantId, buildingId);
 
       // ASSERT
-      expect(result).toEqual(expectedUnits);
+      expect(result).toEqual(
+        expectedUnits.map((unit) => ({
+          ...unit,
+          displayCode: unit.code,
+        })),
+      );
       expect(prismaService.unit.findMany).toHaveBeenCalled();
     });
 
@@ -371,7 +387,12 @@ describe('UnitsService', () => {
       const result = await service.findAll(tenantId, buildingId);
 
       // ASSERT
-      expect(result).toEqual(expectedUnits);
+      expect(result).toEqual(
+        expectedUnits.map((unit) => ({
+          ...unit,
+          displayCode: unit.code,
+        })),
+      );
       expect(prismaService.unit.findMany).toHaveBeenCalled();
     });
 
@@ -441,9 +462,12 @@ describe('UnitsService', () => {
       const result = await service.findOne(tenantId, buildingId, unitId);
 
       // ASSERT
-      expect(result).toEqual(expectedUnit);
+      expect(result).toEqual({
+        ...expectedUnit,
+        displayCode: 'A01',
+      });
       expect(prismaService.building.findFirst).toHaveBeenCalledWith({
-        where: { id: buildingId, tenantId },
+        where: { id: buildingId, tenantId, deletedAt: null },
       });
       expect(prismaService.unit.findFirst).toHaveBeenCalled();
     });
@@ -535,7 +559,10 @@ describe('UnitsService', () => {
       const result = await service.update(tenantId, buildingId, unitId, 'user-123', dto);
 
       // ASSERT
-      expect(result).toEqual(updatedUnit);
+      expect(result).toEqual({
+        ...updatedUnit,
+        displayCode: 'A01-NEW',
+      });
       expect(prismaService.unit.update).toHaveBeenCalled();
       expect(auditService.createLog).toHaveBeenCalled();
     });
@@ -622,7 +649,10 @@ describe('UnitsService', () => {
       const result = await service.remove(tenantId, buildingId, unitId, 'user-123');
 
       // ASSERT
-      expect(result).toEqual(existingUnit);
+      expect(result).toEqual({
+        ...existingUnit,
+        displayCode: 'A01',
+      });
       expect(prismaService.unit.delete).toHaveBeenCalledWith({
         where: { id: unitId },
       });

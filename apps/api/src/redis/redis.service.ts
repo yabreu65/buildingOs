@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
+import { ConfigService } from '../config/config.service';
 
 /**
  * RedisService - Redis client wrapper for BuildingOS
@@ -20,28 +21,43 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis | null = null;
 
+  constructor(private readonly configService: ConfigService) {}
+
   async onModuleInit(): Promise<void> {
+    const redisUrl = this.configService.getValue('redisUrl');
     const host = process.env.REDIS_HOST || 'localhost';
     const port = parseInt(process.env.REDIS_PORT || '6379', 10);
 
     try {
-      this.client = new Redis({
-        host,
-        port,
-        retryStrategy: (times) => Math.min(times * 50, 2000),
-      });
+      this.client = redisUrl
+        ? new Redis(redisUrl, {
+            retryStrategy: (times) => Math.min(times * 50, 2000),
+            maxRetriesPerRequest: 1,
+            enableReadyCheck: true,
+          })
+        : new Redis({
+            host,
+            port,
+            retryStrategy: (times) => Math.min(times * 50, 2000),
+            maxRetriesPerRequest: 1,
+            enableReadyCheck: true,
+          });
 
       this.client.on('error', (err) => {
         this.logger.error(`Redis error: ${err.message}`);
       });
 
       this.client.on('connect', () => {
-        this.logger.log(`Redis connected to ${host}:${port}`);
+        this.logger.log(
+          `Redis connected to ${redisUrl ?? `${host}:${port}`}`,
+        );
       });
 
       // Test connection
       await this.client.ping();
-      this.logger.log(`Redis connected to ${host}:${port}`);
+      this.logger.log(
+        `Redis ready for ${redisUrl ?? `${host}:${port}`}`,
+      );
     } catch (error) {
       this.logger.error(`Redis connection failed: ${error}`);
       this.client = null;
@@ -62,6 +78,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    */
   getClient(): Redis | null {
     return this.client;
+  }
+
+  /**
+   * Whether Redis is currently ready to serve requests.
+   */
+  isReady(): boolean {
+    return this.client?.status === 'ready';
   }
 
   /**
@@ -99,5 +122,39 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async del(key: string): Promise<void> {
     if (!this.client) return;
     await this.client.del(key);
+  }
+
+  /**
+   * Atomically increments a counter and ensures the TTL window exists.
+   */
+  async incrementCounter(
+    key: string,
+    windowMs: number,
+  ): Promise<{ count: number; resetTime: number } | null> {
+    if (!this.client) return null;
+
+    const now = Date.now();
+    const results = await this.client
+      .multi()
+      .incr(key)
+      .pttl(key)
+      .exec();
+
+    if (!results) {
+      return null;
+    }
+
+    const count = Number(results[0]?.[1] ?? 0);
+    let ttlMs = Number(results[1]?.[1] ?? -1);
+
+    if (!Number.isFinite(ttlMs) || ttlMs < 0) {
+      await this.client.pexpire(key, windowMs);
+      ttlMs = windowMs;
+    }
+
+    return {
+      count,
+      resetTime: now + ttlMs,
+    };
   }
 }

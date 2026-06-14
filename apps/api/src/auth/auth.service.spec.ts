@@ -161,6 +161,7 @@ describe('AuthService', () => {
         email: 'newuser@example.com',
         sub: 'user-123',
         isSuperAdmin: false,
+        roles: ['TENANT_OWNER'],
       });
     });
 
@@ -409,6 +410,7 @@ describe('AuthService', () => {
         email: 'user@example.com',
         sub: 'user-123',
         isSuperAdmin: false,
+        roles: ['TENANT_OWNER'],
       });
     });
 
@@ -448,6 +450,7 @@ describe('AuthService', () => {
         email: 'admin@example.com',
         sub: 'super-user-123',
         isSuperAdmin: true,
+        roles: ['SUPER_ADMIN', 'TENANT_OWNER'],
       });
     });
 

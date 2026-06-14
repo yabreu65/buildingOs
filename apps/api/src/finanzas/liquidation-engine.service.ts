@@ -124,7 +124,7 @@ export class LiquidationEngineService {
 
     // Obtener unidades del building (solo billables)
     const units = await this.prisma.unit.findMany({
-      where: { buildingId, isBillable: true },
+      where: { tenantId, buildingId, isBillable: true },
       select: { id: true, code: true, label: true, m2: true },
     });
 
@@ -344,7 +344,7 @@ export class LiquidationEngineService {
     });
 
     const units = await this.prisma.unit.findMany({
-      where: { buildingId: liquidation.buildingId, isBillable: true },
+      where: { tenantId, buildingId: liquidation.buildingId, isBillable: true },
       select: { id: true, code: true, label: true, m2: true },
     });
 
@@ -422,6 +422,10 @@ export class LiquidationEngineService {
 
     if (!liquidation) {
       throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+    }
+
+    if (liquidation.status === 'CANCELED') {
+      throw new BadRequestException('La liquidación ya está cancelada');
     }
 
     // Si PUBLISHED, eliminar charges asociadas

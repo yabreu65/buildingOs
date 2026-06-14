@@ -7,6 +7,8 @@ import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { AppConfigModule } from '../config/config.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { StorageModule } from '../storage/storage.module';
+import { EmailModule } from '../email/email.module';
 import { LoggerService } from './logger.service';
 import { SentryService } from './sentry.service';
 import { RequestIdMiddleware } from './request-id.middleware';
@@ -15,7 +17,7 @@ import { HealthController } from './health.controller';
 import { SentryExceptionFilter } from './sentry-exception.filter';
 
 @Module({
-  imports: [AppConfigModule, PrismaModule],
+  imports: [AppConfigModule, PrismaModule, StorageModule, EmailModule],
   providers: [
     LoggerService,
     SentryService,

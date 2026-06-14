@@ -142,6 +142,22 @@ All configuration is validated on application startup using **Zod schemas**. If 
 
 ### Configuration Examples
 
+#### Canonical runtime contract
+
+The deployment artifacts MUST use the same env contract validated by
+`/Users/yoryiabreu/proyectos/buildingos/apps/api/src/config/config.ts`.
+
+Required names to keep aligned across `.env`, Docker, CI, and hosting:
+
+- `JWT_EXPIRES_IN` (not `JWT_EXPIRATION`)
+- `MAIL_FROM` (not `EMAIL_FROM`)
+- `SMTP_PASS` (not `SMTP_PASSWORD`)
+- `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_BASE_URL`, `S3_FORCE_PATH_STYLE`
+- `WEB_ORIGIN`
+- `APP_BASE_URL`
+- `FEATURE_PORTAL_RESIDENT`
+- `FEATURE_PAYMENTS_MVP`
+
 #### Development (.env)
 
 ```bash
@@ -256,6 +272,15 @@ npm run migrate:deploy
    ```bash
    # Apply same migration to staging database
    NODE_ENV=staging npm run migrate:deploy
+   ```
+
+3. **Validate release contract before cutover**:
+   ```bash
+   npm run lint:ci
+   npm run build:ci
+   npm run test:ci
+   npm run test:e2e:ci
+   cd apps/api && npx prisma validate
    ```
 
 3. **Never edit applied migrations**:

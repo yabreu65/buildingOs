@@ -29,6 +29,7 @@ describe('LiquidationEngineService', () => {
               findFirst: jest.fn(),
               create: jest.fn(),
               update: jest.fn(),
+              delete: jest.fn(),
               deleteMany: jest.fn(),
             },
             charge: {
@@ -84,7 +85,10 @@ describe('LiquidationEngineService', () => {
         { id: 'unit-2', code: 'A-102', label: '102', m2: 150 },
       ];
 
-      jest.spyOn(prisma.expense, 'findMany').mockResolvedValue(expenses as any);
+      jest
+        .spyOn(prisma.expense, 'findMany')
+        .mockResolvedValueOnce(expenses as any)
+        .mockResolvedValueOnce([]);
       jest.spyOn(prisma.unit, 'findMany').mockResolvedValue(units as any);
       jest.spyOn(prisma.liquidation, 'create').mockResolvedValue({
         id: 'liq-1',
@@ -118,7 +122,10 @@ describe('LiquidationEngineService', () => {
     });
 
     it('debería lanzar error si no hay gastos validados', async () => {
-      jest.spyOn(prisma.expense, 'findMany').mockResolvedValue([]);
+      jest
+        .spyOn(prisma.expense, 'findMany')
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       await expect(
         service.createLiquidationDraft(
@@ -140,10 +147,15 @@ describe('LiquidationEngineService', () => {
           currencyCode: 'ARS',
           category: { name: 'Electricidad' },
           vendor: { name: 'EDENOR' },
+          allocations: [],
+          scopeType: 'BUILDING',
         },
       ];
 
-      jest.spyOn(prisma.expense, 'findMany').mockResolvedValue(expenses as any);
+      jest
+        .spyOn(prisma.expense, 'findMany')
+        .mockResolvedValueOnce(expenses as any)
+        .mockResolvedValueOnce([]);
       jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([]);
 
       await expect(
@@ -249,6 +261,8 @@ describe('LiquidationEngineService', () => {
           id: 'exp-1',
           amountMinor: 120000,
           currencyCode: 'ARS',
+          allocations: [],
+          scopeType: 'BUILDING',
         },
       ];
 
@@ -260,7 +274,10 @@ describe('LiquidationEngineService', () => {
       jest
         .spyOn(prisma.liquidation, 'findFirst')
         .mockResolvedValue(liquidation as any);
-      jest.spyOn(prisma.expense, 'findMany').mockResolvedValue(expenses as any);
+      jest
+        .spyOn(prisma.expense, 'findMany')
+        .mockResolvedValueOnce(expenses as any)
+        .mockResolvedValueOnce([]);
       jest.spyOn(prisma.unit, 'findMany').mockResolvedValue(units as any);
       jest
         .spyOn(prisma.charge, 'createMany')
@@ -312,12 +329,10 @@ describe('LiquidationEngineService', () => {
       jest
         .spyOn(prisma.liquidation, 'findFirst')
         .mockResolvedValue({ id: 'liq-1', status: 'DRAFT' } as any);
-      jest
-        .spyOn(prisma.liquidation, 'update')
-        .mockResolvedValue({
-          id: 'liq-1',
-          status: 'CANCELED',
-        } as any);
+      jest.spyOn(prisma.liquidation, 'delete').mockResolvedValue({
+        id: 'liq-1',
+        status: 'DRAFT',
+      } as any);
 
       await service.cancelLiquidation(
         tenantId,
@@ -327,18 +342,19 @@ describe('LiquidationEngineService', () => {
       );
 
       expect(prisma.charge.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.liquidation.delete).toHaveBeenCalledWith({
+        where: { id: 'liq-1' },
+      });
     });
 
     it('debería eliminar charges si status es PUBLISHED', async () => {
       jest
         .spyOn(prisma.liquidation, 'findFirst')
         .mockResolvedValue({ id: 'liq-1', status: 'PUBLISHED' } as any);
-      jest
-        .spyOn(prisma.liquidation, 'update')
-        .mockResolvedValue({
-          id: 'liq-1',
-          status: 'CANCELED',
-        } as any);
+      jest.spyOn(prisma.liquidation, 'delete').mockResolvedValue({
+        id: 'liq-1',
+        status: 'PUBLISHED',
+      } as any);
 
       await service.cancelLiquidation(
         tenantId,

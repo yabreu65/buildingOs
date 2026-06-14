@@ -36,7 +36,7 @@ describe('UnitGroupService', () => {
               update: jest.fn(),
               delete: jest.fn(),
             },
-            unit: { findMany: jest.fn() },
+            unit: { findMany: jest.fn(), findFirst: jest.fn() },
             unitGroupMember: {
               findFirst: jest.fn(),
               createMany: jest.fn(),
@@ -258,6 +258,8 @@ describe('UnitGroupService', () => {
       expect(prisma.unitGroupMember.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: {
+            tenantId,
+            buildingId,
             unitGroupId: 'group-1',
             unitId: 'unit-1',
           },

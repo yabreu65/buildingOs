@@ -481,7 +481,7 @@ DATABASE_URL=postgresql://user:pass@staging-db:5432/buildingos_staging
 
 # JWT
 JWT_SECRET=<64+ caracteres aleatorios>
-JWT_EXPIRATION=86400
+JWT_EXPIRES_IN=24h
 
 # CORS
 WEB_ORIGIN=https://staging-app.buildingos.com
@@ -490,7 +490,7 @@ WEB_ORIGIN=https://staging-app.buildingos.com
 SMTP_HOST=smtp.sendgrid.net
 SMTP_PORT=587
 SMTP_USER=apikey
-SMTP_PASSWORD=<sendgrid-api-key>
+SMTP_PASS=<sendgrid-api-key>
 MAIL_FROM=noreply@buildingos.com
 SALES_TEAM_EMAIL=sales@buildingos.com
 
@@ -499,10 +499,10 @@ SENTRY_DSN=https://xxx@sentry.io/zzz
 SENTRY_ENVIRONMENT=staging
 
 # Optional: MinIO/S3
-MINIO_ENDPOINT=minio.staging.buildingos.com
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=documents
+S3_ENDPOINT=https://minio.staging.buildingos.com
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_BUCKET=documents
 ```
 
 ### Deploy Steps

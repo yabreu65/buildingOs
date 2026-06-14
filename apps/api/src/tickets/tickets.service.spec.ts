@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { TicketsValidators } from './tickets.validators';
 import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
@@ -69,6 +70,20 @@ describe('TicketsService', () => {
           provide: AiTicketCategoryService,
           useValue: {
             categorizeTicket: jest.fn().mockResolvedValue({ category: 'MAINTENANCE', confidence: 0.9 }),
+            suggestCategory: jest.fn().mockResolvedValue({
+              category: 'MAINTENANCE',
+              priority: 'HIGH',
+              confidence: 0.9,
+              reasoning: 'keyword match',
+            }),
+          },
+        },
+        {
+          provide: NotificationsService,
+          useValue: {
+            notifyTicketCreated: jest.fn(),
+            notifyTicketUpdated: jest.fn(),
+            notifyTicketCommentAdded: jest.fn(),
           },
         },
       ],

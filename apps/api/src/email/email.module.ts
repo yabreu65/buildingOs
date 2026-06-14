@@ -1,6 +1,6 @@
 /**
  * Email Module
- * Provides email sending capabilities via SMTP, SendGrid, Mailgun
+ * Provides email sending capabilities via SMTP and Resend
  */
 
 import { Module } from '@nestjs/common';

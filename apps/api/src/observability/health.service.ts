@@ -6,6 +6,8 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { MinioService } from '../storage/minio.service';
+import { EmailService } from '../email/email.service';
 
 export interface HealthStatus {
   status: 'healthy' | 'unhealthy';
@@ -34,6 +36,8 @@ export class HealthService {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    private minioService: MinioService,
+    private emailService: EmailService,
   ) {}
 
   /**
@@ -86,72 +90,13 @@ export class HealthService {
       return { status: 'not_configured' };
     }
 
-    // TODO: Implement S3 connectivity check
-    // For now, just verify configuration exists
-    return {
-      status: 'up',
-      note: 'Configuration exists, bucket not checked',
-    };
+    return this.minioService.checkHealth();
   }
 
   /**
    * Check email provider configuration
    */
   private async checkEmail(): Promise<any> {
-    const config = this.configService.get();
-    const provider = config.mailProvider;
-
-    if (provider === 'none') {
-      return {
-        status: 'not_configured',
-        provider: 'disabled',
-      };
-    }
-
-    // Check if SMTP is configured
-    if (provider === 'smtp') {
-      if (!config.smtpHost || !config.smtpPort) {
-        return {
-          status: 'down',
-          provider: 'smtp',
-          error: 'SMTP configuration incomplete',
-        };
-      }
-      return {
-        status: 'up',
-        provider: 'smtp',
-        note: 'Configuration exists, connection not tested',
-      };
-    }
-
-    // Check if Resend is configured
-    if (provider === 'resend') {
-      if (!config.resendApiKey) {
-        return {
-          status: 'down',
-          provider: 'resend',
-          error: 'Resend API key not configured',
-        };
-      }
-      return {
-        status: 'up',
-        provider: 'resend',
-        note: 'API key configured',
-      };
-    }
-
-    // Check if AWS SES is configured
-    if (provider === 'ses') {
-      return {
-        status: 'up',
-        provider: 'ses',
-        note: 'AWS SES configured via SDK',
-      };
-    }
-
-    return {
-      status: 'not_configured',
-      provider,
-    };
+    return this.emailService.checkHealth();
   }
 }

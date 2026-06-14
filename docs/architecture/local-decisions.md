@@ -13,7 +13,7 @@ Registro de decisiones locales activas para Fase 1.
 | BLD-DEC-007 | 2026-04-23 | Introducir RLS piloto gradual en tablas sensibles con modo inicial permisivo | active | Agregar defensa en profundidad sin cortar desarrollo funcional | Base para endurecer aislamiento DB por tandas |
 | BLD-DEC-008 | 2026-04-23 | Habilitar modo RLS con toggle (`permissive`/`strict`) para rollout canary | active | Endurecer aislamiento por etapas y con rollback rapido | Permite activar strict sin migracion big-bang |
 | BLD-DEC-009 | 2026-04-24 | Cronjobs operativos quedan deshabilitados por defecto (opt-in por flags/env y trigger manual solo admin) | active | Evitar decisiones automáticas no aprobadas por administración del condominio | Reduce envíos no deseados y obliga activación explícita de automatizaciones |
-| BLD-DEC-010 | 2026-04-24 | Enforcement runtime P0 del assistant: yoryi primario, bloqueo de knowledge fallback y tools internos con schema versionado | active | Garantizar respuestas operativas deterministas, tenant-safe y auditables | Menos deriva de respuestas y mayor control de fallback por disponibilidad |
+| BLD-DEC-010 | 2026-04-24 | Enforcement runtime P0 del assistant: `/assistant/chat/v2` oficial, `/chat` legacy solo wrapper, intents allowlisted y sin SQL libre | active | Garantizar respuestas operativas deterministas, tenant-safe y auditables sin depender de un engine externo primario | Menor deriva funcional, menos duplicación de lógica y trazabilidad operativa consistente |
 
 ## Decisiones pendientes (open)
 

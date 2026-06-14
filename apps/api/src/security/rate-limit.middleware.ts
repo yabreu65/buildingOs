@@ -1,11 +1,13 @@
 /**
  * Rate Limiting Middleware for BuildingOS
  * Protects against brute force, enumeration, and abuse
- * Uses in-memory store for development, Redis for production
+ * Uses Redis when available and falls back to in-memory counters when needed
  */
 
 import { Injectable, NestMiddleware, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
+import { RedisService } from '../redis/redis.service';
+import { ConfigService } from '../config/config.service';
 
 interface RateLimitEntry {
   resetTime: number;
@@ -18,16 +20,19 @@ interface RateLimitConfig {
 }
 
 /**
- * Simple in-memory rate limiter (for development)
- * In production, upgrade to Redis-based limiter
+ * Redis-backed rate limiter with in-memory fallback.
  */
 @Injectable()
 export class RateLimitMiddleware implements NestMiddleware {
   private readonly logger = new Logger(RateLimitMiddleware.name);
   private readonly limits = new Map<string, RateLimitEntry>();
   private readonly cleanupInterval = 60000; // 1 minute
+  private redisFallbackWarned = false;
 
-  constructor() {
+  constructor(
+    private readonly redisService: RedisService,
+    private readonly configService: ConfigService,
+  ) {
     // Cleanup expired entries
     setInterval(() => this.cleanup(), this.cleanupInterval);
   }
@@ -40,9 +45,18 @@ export class RateLimitMiddleware implements NestMiddleware {
    * @param next - Express continuation callback.
    */
   use(req: Request, res: Response, next: NextFunction): void {
+    void this.applyRateLimit(req, res, next).catch((error) => next(error));
+  }
+
+  private async applyRateLimit(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     // Bypass rate limiting in test environment
     if (process.env.NODE_ENV === 'test') {
-      return next();
+      next();
+      return;
     }
 
     const key = this.getKey(req);
@@ -50,21 +64,12 @@ export class RateLimitMiddleware implements NestMiddleware {
 
     if (!limit) {
       // No rate limit for this route
-      return next();
+      next();
+      return;
     }
 
+    const entry = await this.incrementCounter(key, limit.windowMs);
     const now = Date.now();
-    const entry = this.limits.get(key) || { count: 0, resetTime: now + limit.windowMs };
-
-    // Reset if window expired
-    if (now > entry.resetTime) {
-      entry.count = 0;
-      entry.resetTime = now + limit.windowMs;
-    }
-
-    // Increment counter
-    entry.count++;
-    this.limits.set(key, entry);
 
     // Set headers
     const remaining = Math.max(0, limit.max - entry.count);
@@ -76,7 +81,7 @@ export class RateLimitMiddleware implements NestMiddleware {
 
     // Check limit exceeded
     if (entry.count > limit.max) {
-      throw new HttpException(
+      next(new HttpException(
         {
           statusCode: 429,
           message: 'Too many requests, please try again later',
@@ -84,10 +89,52 @@ export class RateLimitMiddleware implements NestMiddleware {
           retryAfter: Math.ceil((entry.resetTime - now) / 1000),
         },
         HttpStatus.TOO_MANY_REQUESTS,
-      );
+      ));
+      return;
     }
 
     next();
+  }
+
+  private async incrementCounter(
+    key: string,
+    windowMs: number,
+  ): Promise<RateLimitEntry> {
+    const redisEntry = await this.redisService.incrementCounter(key, windowMs);
+    if (redisEntry) {
+      return {
+        count: redisEntry.count,
+        resetTime: redisEntry.resetTime,
+      };
+    }
+
+    this.warnOnRedisFallback();
+
+    const now = Date.now();
+    const entry = this.limits.get(key) || { count: 0, resetTime: now + windowMs };
+
+    if (now > entry.resetTime) {
+      entry.count = 0;
+      entry.resetTime = now + windowMs;
+    }
+
+    entry.count++;
+    this.limits.set(key, entry);
+    return entry;
+  }
+
+  private warnOnRedisFallback(): void {
+    if (this.redisFallbackWarned) {
+      return;
+    }
+
+    const nodeEnv = this.configService.getValue('nodeEnv');
+    if (nodeEnv === 'production' || nodeEnv === 'staging') {
+      this.logger.warn(
+        '[RateLimit] Redis unavailable; using in-memory fallback. Horizontal rate limiting is degraded.',
+      );
+    }
+    this.redisFallbackWarned = true;
   }
 
   /**

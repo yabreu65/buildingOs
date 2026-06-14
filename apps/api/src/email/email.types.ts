@@ -2,7 +2,7 @@
  * Email service types and interfaces
  */
 
-export type EmailProvider = 'none' | 'smtp' | 'sendgrid' | 'mailgun';
+export type EmailProvider = 'none' | 'smtp' | 'resend' | 'ses';
 
 export interface SendEmailOptions {
   to: string;
@@ -35,7 +35,7 @@ export interface EmailLog {
   status: 'SENT' | 'FAILED' | 'BOUNCED';
   error?: string;
   provider: EmailProvider;
-  externalId?: string; // SendGrid message ID, etc.
+  externalId?: string; // Provider message ID
   createdAt: Date;
   sentAt?: Date;
 }
@@ -49,14 +49,8 @@ export interface SMTPConfig {
   secure?: boolean; // TLS
 }
 
-export interface SendGridConfig {
+export interface ResendConfig {
   apiKey: string;
-  from: string;
-}
-
-export interface MailgunConfig {
-  apiKey: string;
-  domain: string;
   from: string;
 }
 

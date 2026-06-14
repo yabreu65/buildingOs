@@ -3,6 +3,7 @@ dist
 .next
 .env
 .env.*
+!infra/docker/.env.api.example
 .DS_Store
 coverage
 **/.turbo
