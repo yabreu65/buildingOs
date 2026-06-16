@@ -30,7 +30,7 @@ export class PaymentGatewayModule {
       // so that controllers can still be instantiated (they return 503 when webhooks are disabled).
       const noopPaymentProvider: Provider<PaymentProvider> = {
         provide: PAYMENT_PROVIDER_TOKEN,
-        useValue: null,
+        useValue: null as unknown as PaymentProvider,
       };
 
       return {
