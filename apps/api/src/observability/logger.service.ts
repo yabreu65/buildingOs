@@ -43,8 +43,11 @@ export class LoggerService {
     const config = this.configService.get();
     const isDev = config.nodeEnv === 'development';
 
+    // Pino does not recognize 'log' as a level — map it to 'info'.
+    const unused_logLevel = config.logLevel === 'log' ? 'info' : config.logLevel;
+
     return pino({
-      level: isDev ? 'debug' : config.logLevel,
+      level: isDev ? 'debug' : unused_logLevel,
 
       // Format logs as JSON in production, pretty-print in development
       transport: isDev ? {
