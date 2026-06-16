@@ -1,6 +1,9 @@
 /**
  * AI Provider Module — DynamicModule for AI provider selection with circuit breaker
  * Task 4.6: Wraps adapter in circuit breaker, selects provider from AI_PROVIDER env var
+ * 
+ * Production fix: When provider=none, exports a NoOp provider without CircuitBreaker
+ * to avoid DI injection issues with non-injectable constructor parameters.
  */
 
 import { DynamicModule, Module, Provider } from '@nestjs/common';
@@ -10,7 +13,6 @@ import { OpenAiAdapter } from './adapters/openai.adapter';
 import { OpenCodeAdapter } from './adapters/opencode.adapter';
 import { GeminiAdapter } from './adapters/gemini.adapter';
 import { CircuitBreaker } from './circuit-breaker';
-import { AiProvider as AiProviderType } from '../ai.types';
 import { AssistantLlmHealthService } from '../llm-health.service';
 import { AssistantLlmHealthController } from '../llm-health.controller';
 
@@ -38,15 +40,14 @@ export class AiProviderModule {
             provide: AI_PROVIDER_TOKEN,
             useValue: null,
           },
-          CircuitBreaker,
           AssistantLlmHealthService,
         ],
         controllers: [AssistantLlmHealthController],
-        exports: [AI_PROVIDER_TOKEN, CircuitBreaker, AssistantLlmHealthService],
+        exports: [AI_PROVIDER_TOKEN, AssistantLlmHealthService],
       };
     }
 
-    const aiProviderFactory: Provider<AiProviderType> = {
+    const aiProviderFactory: Provider = {
       provide: AI_PROVIDER_TOKEN,
       useFactory: () => {
         switch (options.provider) {
@@ -65,7 +66,7 @@ export class AiProviderModule {
             }
             return new GeminiAdapter(options.geminiApiKey, options.geminiModel);
           default:
-            return null as unknown as AiProviderType;
+            return null;
         }
       },
     };

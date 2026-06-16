@@ -148,7 +148,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     AssistantQueryPlanService,
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
-    AssistantDebtCalculatorService,
+AssistantDebtCalculatorService,
     // Intent Engine services
     IntentRegistry,
     IntentExtractorService,
@@ -160,8 +160,6 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
-    AssistantLlmHealthService,
-    CircuitBreaker,
   ],
   exports: [
     AssistantService,
@@ -192,9 +190,6 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
-    AssistantLlmHealthService,
-    CircuitBreaker,
-    AI_PROVIDER_TOKEN,
   ],
 })
 export class AssistantModule {}
