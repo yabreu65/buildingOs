@@ -1,9 +1,10 @@
 /**
  * AI Provider Module — DynamicModule for AI provider selection with circuit breaker
  * Task 4.6: Wraps adapter in circuit breaker, selects provider from AI_PROVIDER env var
- * 
- * Production fix: When provider=none, exports a NoOp provider without CircuitBreaker
- * to avoid DI injection issues with non-injectable constructor parameters.
+ *
+ * Production fix: CircuitBreaker constructor uses @Optional() string + primitive number.
+ * NestJS cannot inject these by default, so we use useFactory to create instances
+ * with explicit parameters instead of relying on class-based DI.
  */
 
 import { DynamicModule, Module, Provider } from '@nestjs/common';
@@ -32,6 +33,13 @@ export interface AiProviderOptions {
 @Module({})
 export class AiProviderModule {
   static register(options: AiProviderOptions): DynamicModule {
+    // Use factory to avoid NestJS DI resolving @Optional() string + number
+    // constructor params that have no matching providers in the container.
+    const circuitBreakerProvider: Provider = {
+      provide: CircuitBreaker,
+      useFactory: () => new CircuitBreaker(options.provider, 3),
+    };
+
     if (options.provider === 'none') {
       return {
         module: AiProviderModule,
@@ -40,10 +48,11 @@ export class AiProviderModule {
             provide: AI_PROVIDER_TOKEN,
             useValue: null,
           },
+          circuitBreakerProvider,
           AssistantLlmHealthService,
         ],
         controllers: [AssistantLlmHealthController],
-        exports: [AI_PROVIDER_TOKEN, AssistantLlmHealthService],
+        exports: [AI_PROVIDER_TOKEN, CircuitBreaker, AssistantLlmHealthService],
       };
     }
 
@@ -75,7 +84,7 @@ export class AiProviderModule {
       module: AiProviderModule,
       providers: [
         aiProviderFactory,
-        CircuitBreaker,
+        circuitBreakerProvider,
         AssistantLlmHealthService,
       ],
       controllers: [AssistantLlmHealthController],

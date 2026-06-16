@@ -3,7 +3,7 @@
  * Task 4.5: Trips after 3 failures, recovers after health check confirms provider is healthy
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
 
@@ -15,7 +15,7 @@ export class CircuitBreaker {
   private lastFailureTime: Date | null = null;
 
   constructor(
-    private readonly providerName: string,
+    @Optional() private readonly providerName: string = 'unknown',
     private readonly failureThreshold: number = 3,
   ) {}
 
