@@ -26,11 +26,18 @@ export class PaymentGatewayModule {
    */
   static register(providerName: 'none' | 'mercadopago' | 'stripe', options: PaymentGatewayOptions): DynamicModule {
     if (providerName === 'none') {
+      // When no payment provider is configured, register a NoOp PaymentGatewayService
+      // so that controllers can still be instantiated (they return 503 when webhooks are disabled).
+      const noopPaymentProvider: Provider<PaymentProvider> = {
+        provide: PAYMENT_PROVIDER_TOKEN,
+        useValue: null,
+      };
+
       return {
         module: PaymentGatewayModule,
         imports: [PrismaModule, RedisModule],
-        providers: [],
-        exports: [],
+        providers: [noopPaymentProvider, IdempotencyService, PaymentGatewayService],
+        exports: [PAYMENT_PROVIDER_TOKEN, PaymentGatewayService],
       };
     }
 
