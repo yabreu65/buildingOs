@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext } from './ai.types';
+import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext, SuggestedActionType } from './ai.types';
 
 /**
  * Ollama Provider for BuildingOS AI Assistant
@@ -12,6 +12,25 @@ import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext } from './
  * - JSON parse errors → use raw text as answer, generate context-based actions
  * - Ollama not running → clear error, attempt OpenAI fallback
  */
+
+type OllamaChatApiResponse = {
+  message?: {
+    content?: string;
+  };
+};
+
+type OpenAiChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+type ParsedOllamaResponse = {
+  answer?: unknown;
+  actions?: unknown;
+};
 
 @Injectable()
 export class OllamaProvider implements AiProvider {
@@ -71,7 +90,7 @@ export class OllamaProvider implements AiProvider {
   /**
    * Build context-aware system prompt
    */
-  private buildSystemPrompt(context: any): string {
+  private buildSystemPrompt(context: AiProviderContext): string {
     let prompt = `You are a helpful property management AI assistant for BuildingOS.
 You provide concise, actionable responses.
 Respond in JSON format with: { "answer": "...", "actions": ["ACTION_NAME", ...] }
@@ -148,7 +167,7 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as any;
+      const data = (await response.json()) as OllamaChatApiResponse;
 
       if (!data.message?.content) {
         throw new Error('Invalid Ollama response format: missing message.content');
@@ -166,13 +185,13 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
    * First tries JSON parsing. If that fails, uses raw text as answer
    * and generates context-based actions.
    */
-  private parseOllamaResponse(content: string, context: any): ChatResponse {
+  private parseOllamaResponse(content: string, context: AiProviderContext): ChatResponse {
     let answer = content;
     let suggestedActions: SuggestedAction[] = [];
 
     // Try to parse as JSON
     try {
-      const parsed = JSON.parse(content);
+      const parsed = JSON.parse(content) as ParsedOllamaResponse;
       if (parsed.answer && typeof parsed.answer === 'string') {
         answer = parsed.answer;
       }
@@ -180,8 +199,8 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
       // Extract actions from JSON
       if (Array.isArray(parsed.actions)) {
         suggestedActions = parsed.actions
-          .filter((action: any) => this.isValidActionType(action))
-          .map((action: any) => ({
+          .filter((action): action is SuggestedActionType => this.isValidActionType(action))
+          .map((action) => ({
             type: action,
             payload: { buildingId: context.buildingId },
           }));
@@ -205,7 +224,7 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
    *
    * Logic similar to MockProvider: suggest relevant actions based on page
    */
-  private generateContextBasedActions(context: any): SuggestedAction[] {
+  private generateContextBasedActions(context: AiProviderContext): SuggestedAction[] {
     const actions: SuggestedAction[] = [];
     const page = (context.page || '').toLowerCase();
 
@@ -250,7 +269,7 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
   /**
    * Check if action type is valid
    */
-  private isValidActionType(action: any): boolean {
+  private isValidActionType(action: unknown): action is SuggestedActionType {
     const validActions = [
       'VIEW_TICKETS',
       'VIEW_PAYMENTS',
@@ -267,7 +286,7 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
    *
    * Simple implementation for emergency fallback
    */
-  private async callOpenAiFallback(message: string, context: any, maxTokens: number): Promise<ChatResponse> {
+  private async callOpenAiFallback(message: string, context: AiProviderContext, maxTokens: number): Promise<ChatResponse> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error('OpenAI fallback requested but OPENAI_API_KEY not configured');
@@ -301,7 +320,7 @@ ${JSON.stringify(context.contextSnapshot, null, 2)}`;
       throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as any;
+    const data = (await response.json()) as OpenAiChatCompletionResponse;
     const answer = data.choices?.[0]?.message?.content || 'Unable to generate response';
 
     // Generate context-based actions for fallback

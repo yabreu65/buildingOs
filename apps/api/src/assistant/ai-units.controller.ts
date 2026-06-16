@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { RequireFeatureGuard, RequireFeature } from '../billing/require-feature.guard';
 import { AssistantService, ChatResponse } from './assistant.service';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 /**
  * AI Units Controller
@@ -70,7 +71,7 @@ export class AiUnitsController {
     @Param('tenantId') tenantId: string,
     @Param('buildingId') buildingId: string,
     @Body() dto: { unitType?: string; location?: string; market?: string },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ChatResponse> {
     // Validate building ID
     if (!buildingId || buildingId.trim().length === 0) {
@@ -80,11 +81,15 @@ export class AiUnitsController {
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
       throw new BadRequestException('User not found in tenant');
+    }
+    const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     const message = `
@@ -106,7 +111,7 @@ Format your response as JSON with fields: suggestedType, suggestedPrice, ameniti
     return this.assistantService.chat(
       tenantId,
       userId,
-      membership.id,
+      membershipId,
       {
         message,
         page: 'units.create',
@@ -164,7 +169,7 @@ Format your response as JSON with fields: suggestedType, suggestedPrice, ameniti
       creditScore?: number;
       previousDefaults?: number;
     },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ChatResponse> {
     // Validate inputs
     if (!unitId || unitId.trim().length === 0) {
@@ -178,11 +183,15 @@ Format your response as JSON with fields: suggestedType, suggestedPrice, ameniti
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
       throw new BadRequestException('User not found in tenant');
+    }
+    const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     const message = `
@@ -212,7 +221,7 @@ Format your response as JSON with fields: riskScore, paymentRisk, behaviorRisk, 
     return this.assistantService.chat(
       tenantId,
       userId,
-      membership.id,
+      membershipId,
       {
         message,
         page: 'units.residents',
@@ -273,7 +282,7 @@ Format your response as JSON with fields: riskScore, paymentRisk, behaviorRisk, 
       occupancyRate?: number;
       lastPriceChangeDate?: string;
     },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ChatResponse> {
     // Validate input
     if (!unitId || unitId.trim().length === 0) {
@@ -283,11 +292,15 @@ Format your response as JSON with fields: riskScore, paymentRisk, behaviorRisk, 
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
       throw new BadRequestException('User not found in tenant');
+    }
+    const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     const message = `
@@ -317,7 +330,7 @@ Format your response as JSON with fields: currentPriceAssessment, suggestedPrice
     return this.assistantService.chat(
       tenantId,
       userId,
-      membership.id,
+      membershipId,
       {
         message,
         page: 'units.pricing',
@@ -380,7 +393,7 @@ Format your response as JSON with fields: currentPriceAssessment, suggestedPrice
       recentRepairs?: string[];
       maintenanceHistory?: string;
     },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ChatResponse> {
     // Validate input
     if (!unitId || unitId.trim().length === 0) {
@@ -390,11 +403,15 @@ Format your response as JSON with fields: currentPriceAssessment, suggestedPrice
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
       throw new BadRequestException('User not found in tenant');
+    }
+    const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     const currentYear = new Date().getFullYear();
@@ -429,7 +446,7 @@ Format your response as JSON with fields: predictedIssues (array with: issue, ti
     return this.assistantService.chat(
       tenantId,
       userId,
-      membership.id,
+      membershipId,
       {
         message,
         page: 'units.maintenance',

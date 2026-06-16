@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AiNudge, AiNudgesService } from './ai-nudges.service';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('me/ai')
 @UseGuards(JwtAuthGuard)
@@ -19,7 +20,7 @@ export class AiNudgesController {
 
   @Get('nudges')
   async getNudges(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Headers('x-tenant-id') tenantHeader?: string,
   ): Promise<AiNudge[]> {
     const tenantId = this.aiNudgesService.resolveTenantId(
@@ -32,7 +33,7 @@ export class AiNudgesController {
 
   @Post('nudges/:key/dismiss')
   async dismissNudge(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Param('key') key: AiNudge['key'],
     @Headers('x-tenant-id') tenantHeader?: string,
   ) {
@@ -46,7 +47,7 @@ export class AiNudgesController {
 
   @Post('upgrade-request/recommended')
   async createRecommendedUpgradeRequest(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Headers('x-tenant-id') tenantHeader?: string,
     @Body() body?: { tenantId?: string },
   ) {

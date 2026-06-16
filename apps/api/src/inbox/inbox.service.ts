@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   InboxSummaryResponse,
@@ -8,6 +9,18 @@ import {
   AlertSummary,
   DelinquentUnit,
 } from './inbox.types';
+
+type ChargeWithInboxRelations = Prisma.ChargeGetPayload<{
+  include: {
+    unit: true;
+    building: true;
+    paymentAllocations: {
+      include: {
+        payment: true;
+      };
+    };
+  };
+}>;
 
 @Injectable()
 export class InboxService {
@@ -275,7 +288,14 @@ export class InboxService {
     });
 
     // Calculate real outstanding per unit (only from APPROVED/RECONCILED payments)
-    const unitOutstanding: Record<string, { unit: any; building: any; amount: number }> = {};
+    const unitOutstanding: Record<
+      string,
+      {
+        unit: ChargeWithInboxRelations['unit'];
+        building: ChargeWithInboxRelations['building'];
+        amount: number;
+      }
+    > = {};
 
     for (const charge of chargesWithAllocations) {
       const key = charge.unitId;

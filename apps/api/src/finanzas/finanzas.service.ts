@@ -1,5 +1,5 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
-import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
+import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -414,7 +414,15 @@ export class FinanzasService {
       );
     }
 
-    // 5. Duplicate detection: check for similar payments in last 48 hours
+    // 5. MVP payment provider policy: only bank transfers are supported in production.
+    // Keep the wider enum for future providers, but reject unsupported methods at runtime.
+    if (dto.method !== PaymentMethod.TRANSFER) {
+      throw new BadRequestException(
+        'Por ahora solo se aceptan pagos por transferencia bancaria',
+      );
+    }
+
+    // 6. Duplicate detection: check for similar payments in last 48 hours
     const duplicateWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const duplicatePayment = await this.prisma.payment.findFirst({
       where: {
@@ -434,7 +442,7 @@ export class FinanzasService {
     }
 
     // 7. Validate: TRANSFER method requires proofFileId
-    if (dto.method === 'TRANSFER' && !dto.proofFileId) {
+    if (!dto.proofFileId) {
       throw new BadRequestException(
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );

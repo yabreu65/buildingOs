@@ -4,8 +4,9 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
-import { ChargeStatus } from '@prisma/client';
+import { ChargeStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -17,8 +18,22 @@ import {
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
 
+interface LiquidationExpenseSnapshotItem {
+  expenseId: string;
+  categoryName: string;
+  vendorName: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  invoiceDate: string;
+  description: string | null;
+  type: 'EXPENSE' | 'ADJUSTMENT';
+  sourcePeriod?: string;
+}
+
 @Injectable()
 export class LiquidationsService {
+  private readonly logger = new Logger(LiquidationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -73,15 +88,7 @@ export class LiquidationsService {
     }
 
     // Rebuild expense list from snapshot
-    const expenseSnapshot = liq.expenseSnapshot as Array<{
-      expenseId: string;
-      categoryName: string;
-      vendorName: string | null;
-      amountMinor: number;
-      currencyCode: string;
-      invoiceDate: string;
-      description: string | null;
-    }>;
+    const expenseSnapshot = liq.expenseSnapshot as unknown as LiquidationExpenseSnapshotItem[];
 
     return {
       ...this.toDto(liq),
@@ -220,13 +227,13 @@ export class LiquidationsService {
     });
 
     // Si hay ajustes, agregarlos al snapshot y a los totales
-    const expenseSnapshot: any[] = allExpenses.map((e) => ({
+    const expenseSnapshot: LiquidationExpenseSnapshotItem[] = allExpenses.map((e) => ({
       expenseId: e.id,
       categoryName: e.category.name,
       vendorName: e.vendor?.name ?? null,
       amountMinor: e.amountMinor,
       currencyCode: e.currencyCode,
-      invoiceDate: e.invoiceDate,
+      invoiceDate: e.invoiceDate.toISOString(),
       description: e.description,
       type: 'EXPENSE' as const,
     }));
@@ -238,7 +245,7 @@ export class LiquidationsService {
         vendorName: null,
         amountMinor: adj.amountMinor,
         currencyCode: adj.currencyCode,
-        invoiceDate: adj.sourceInvoiceDate,
+        invoiceDate: adj.sourceInvoiceDate.toISOString(),
         description: `Ajuste retroactivo: ${adj.reason}`,
         type: 'ADJUSTMENT' as const,
         sourcePeriod: adj.sourcePeriod,
@@ -274,7 +281,7 @@ export class LiquidationsService {
         baseCurrency: dto.baseCurrency,
         totalAmountMinor,
         totalsByCurrency,
-        expenseSnapshot,
+        expenseSnapshot: expenseSnapshot as unknown as Prisma.InputJsonValue,
         unitCount: billableUnits.length,
         generatedByMembershipId: membershipId,
       },
@@ -305,7 +312,7 @@ export class LiquidationsService {
 
     return {
       ...this.toDto(liq),
-      expenses: expenseSnapshot.map((e: any) => ({
+      expenses: expenseSnapshot.map((e) => ({
         id: e.expenseId,
         categoryName: e.categoryName,
         vendorName: e.vendorName,
@@ -709,9 +716,9 @@ export class LiquidationsService {
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[LiquidationsService] Failed to send charge notifications for liquidation ${liquidationId}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `Failed to send charge notifications for liquidation ${liquidationId}`,
+        error instanceof Error ? error.stack : String(error),
       );
     }
   }

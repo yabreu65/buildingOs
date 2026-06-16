@@ -12,7 +12,17 @@ import {
   HttpException,
   Logger,
 } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { SentryService } from './sentry.service';
+
+type ExceptionRequest = Request & {
+  tenantId?: string;
+  userId?: string;
+};
+
+interface HttpExceptionResponseBody {
+  message?: string | string[];
+}
 
 @Catch()
 export class SentryExceptionFilter implements ExceptionFilter {
@@ -22,8 +32,8 @@ export class SentryExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
-    const request = ctx.getRequest();
-    const response = ctx.getResponse();
+    const request = ctx.getRequest<ExceptionRequest>();
+    const response = ctx.getResponse<Response>();
 
     // Extract context from request
     const context = {
@@ -46,7 +56,7 @@ export class SentryExceptionFilter implements ExceptionFilter {
       message =
         typeof exceptionResponse === 'string'
           ? exceptionResponse
-          : (exceptionResponse as any).message || 'HTTP Exception';
+          : this.getHttpExceptionMessage(exceptionResponse);
       error = exception as Error;
     }
     // Handle regular errors
@@ -83,5 +93,25 @@ export class SentryExceptionFilter implements ExceptionFilter {
       requestId: context.requestId,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  private getHttpExceptionMessage(response: unknown): string {
+    if (
+      typeof response === 'object' &&
+      response !== null &&
+      'message' in response
+    ) {
+      const { message } = response as HttpExceptionResponseBody;
+
+      if (Array.isArray(message)) {
+        return message.join(', ');
+      }
+
+      if (typeof message === 'string' && message) {
+        return message;
+      }
+    }
+
+    return 'HTTP Exception';
   }
 }

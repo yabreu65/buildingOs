@@ -7,26 +7,33 @@ import {
 } from '@nestjs/common';
 import { AuditAction, BillingPlanId } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type {
+  AuthenticatedMembership,
+  AuthenticatedServiceActor,
+} from '../common/types/request.types';
 import { CreatePlanChangeRequestDto } from './dto/create-plan-change-request.dto';
 
 @Injectable()
 export class BillingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private isSuperAdmin(user: any): boolean {
-    return user.memberships?.some((membership: any) =>
+  private isSuperAdmin(user: AuthenticatedServiceActor): boolean {
+    return user.memberships?.some((membership) =>
       membership.roles?.includes('SUPER_ADMIN'),
-    );
+    ) ?? false;
   }
 
-  private assertTenantAdmin(user: any, tenantId: string) {
-    const membership = user.memberships?.find((m: any) => m.tenantId === tenantId);
+  private assertTenantAdmin(
+    user: AuthenticatedServiceActor,
+    tenantId: string,
+  ): AuthenticatedMembership {
+    const membership = user.memberships?.find((membership) => membership.tenantId === tenantId);
 
     if (!membership) {
       throw new ForbiddenException('No tienes acceso al tenant indicado');
     }
 
-    const hasAdminRole = membership.roles?.some((role: any) =>
+    const hasAdminRole = membership.roles?.some((role) =>
       ['TENANT_OWNER', 'TENANT_ADMIN'].includes(role),
     );
 
@@ -39,7 +46,10 @@ export class BillingService {
     return membership;
   }
 
-  async createPlanChangeRequest(user: any, dto: CreatePlanChangeRequestDto) {
+  async createPlanChangeRequest(
+    user: AuthenticatedServiceActor,
+    dto: CreatePlanChangeRequestDto,
+  ) {
     const membership = this.assertTenantAdmin(user, dto.tenantId);
 
     const requestedPlan = await this.prisma.billingPlan.findUnique({
@@ -83,7 +93,7 @@ export class BillingService {
         tenantId: dto.tenantId,
         requestedPlanId: dto.requestedPlanId,
         status: 'PENDING',
-        requestedByMembershipId: membership.id,
+        requestedByMembershipId: membership.id!,
         note: dto.note,
       },
       include: {
@@ -95,7 +105,7 @@ export class BillingService {
       data: {
         tenantId: dto.tenantId,
         actorUserId: user.id,
-        actorMembershipId: membership.id,
+        actorMembershipId: membership.id!,
         action: AuditAction.PLAN_CHANGE_REQUESTED,
         entity: 'PlanChangeRequest',
         entityId: request.id,
@@ -118,7 +128,10 @@ export class BillingService {
     };
   }
 
-  async listTenantPlanChangeRequests(user: any, tenantId: string) {
+  async listTenantPlanChangeRequests(
+    user: AuthenticatedServiceActor,
+    tenantId: string,
+  ) {
     this.assertTenantAdmin(user, tenantId);
 
     return this.prisma.planChangeRequest.findMany({
@@ -130,7 +143,11 @@ export class BillingService {
     });
   }
 
-  async cancelPlanChangeRequest(user: any, tenantId: string, requestId: string) {
+  async cancelPlanChangeRequest(
+    user: AuthenticatedServiceActor,
+    tenantId: string,
+    requestId: string,
+  ) {
     const membership = this.assertTenantAdmin(user, tenantId);
 
     const request = await this.prisma.planChangeRequest.findUnique({
@@ -157,7 +174,7 @@ export class BillingService {
       data: {
         tenantId,
         actorUserId: user.id,
-        actorMembershipId: membership.id,
+        actorMembershipId: membership.id!,
         action: AuditAction.PLAN_CHANGE_REQUEST_CANCELED,
         entity: 'PlanChangeRequest',
         entityId: requestId,
@@ -168,7 +185,7 @@ export class BillingService {
   }
 
   async listSuperAdminPlanChangeRequests(
-    user: any,
+    user: AuthenticatedServiceActor,
     status?: string,
   ) {
     if (!this.isSuperAdmin(user)) {
@@ -187,7 +204,10 @@ export class BillingService {
     });
   }
 
-  async approvePlanChangeRequest(user: any, requestId: string) {
+  async approvePlanChangeRequest(
+    user: AuthenticatedServiceActor,
+    requestId: string,
+  ) {
     if (!this.isSuperAdmin(user)) {
       throw new ForbiddenException('Acceso sólo para SUPER_ADMIN');
     }
@@ -281,7 +301,11 @@ export class BillingService {
     return result;
   }
 
-  async rejectPlanChangeRequest(user: any, requestId: string, reason: string) {
+  async rejectPlanChangeRequest(
+    user: AuthenticatedServiceActor,
+    requestId: string,
+    reason: string,
+  ) {
     if (!this.isSuperAdmin(user)) {
       throw new ForbiddenException('Acceso sólo para SUPER_ADMIN');
     }

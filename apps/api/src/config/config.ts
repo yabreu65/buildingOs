@@ -7,6 +7,14 @@
 import { z } from 'zod';
 import { AppConfig, NodeEnv } from './config.types';
 
+function writeStdout(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 /**
  * Parse a comma-separated string into array
  */
@@ -190,6 +198,8 @@ export const createConfigSchema = (_nodeEnv: string) => {
   });
 };
 
+type ParsedConfig = z.infer<ReturnType<typeof createConfigSchema>>;
+
 /**
  * Load and validate configuration from process.env
  * Throws descriptive error if validation fails
@@ -197,7 +207,7 @@ export const createConfigSchema = (_nodeEnv: string) => {
 export function loadConfig(): AppConfig {
   const nodeEnv = (process.env.NODE_ENV || 'development') as NodeEnv;
 
-  console.log(`[Config] Loading configuration for environment: ${nodeEnv}`);
+  writeStdout(`[Config] Loading configuration for environment: ${nodeEnv}`);
 
   const schema = createConfigSchema(nodeEnv);
 
@@ -273,10 +283,10 @@ export function loadConfig(): AppConfig {
     return config;
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error('[Config] ❌ Configuration validation failed:');
+      writeStderr('[Config] ❌ Configuration validation failed:');
       error.issues.forEach((err) => {
         const path = err.path.join('.');
-        console.error(`  - ${path}: ${err.message}`);
+        writeStderr(`  - ${path}: ${err.message}`);
       });
       process.exit(1);
     }
@@ -287,7 +297,7 @@ export function loadConfig(): AppConfig {
 /**
  * Validate conditional configuration requirements
  */
-function validateConditionalConfig(config: any, nodeEnv: NodeEnv): void {
+function validateConditionalConfig(config: ParsedConfig, nodeEnv: NodeEnv): void {
   const errors: string[] = [];
 
   // Production: stricter requirements
@@ -301,8 +311,40 @@ function validateConditionalConfig(config: any, nodeEnv: NodeEnv): void {
     if (!config.WEB_ORIGIN.startsWith('https://')) {
       errors.push('WEB_ORIGIN in production must start with https://');
     }
+    if (
+      config.APP_BASE_URL.includes('localhost') ||
+      config.APP_BASE_URL.includes('127.0.0.1')
+    ) {
+      errors.push('APP_BASE_URL in production cannot use localhost');
+    }
+    if (
+      config.WEB_ORIGIN.includes('localhost') ||
+      config.WEB_ORIGIN.includes('127.0.0.1')
+    ) {
+      errors.push('WEB_ORIGIN in production cannot use localhost');
+    }
     if (config.DATABASE_URL.includes('localhost') || config.DATABASE_URL.includes('127.0.0.1')) {
       errors.push('DATABASE_URL in production cannot use localhost');
+    }
+    if (
+      config.S3_ENDPOINT.includes('localhost') ||
+      config.S3_ENDPOINT.includes('127.0.0.1')
+    ) {
+      errors.push('S3_ENDPOINT in production cannot use localhost');
+    }
+    if (!config.REDIS_URL) {
+      errors.push('REDIS_URL is required in production');
+    } else if (
+      config.REDIS_URL.includes('localhost') ||
+      config.REDIS_URL.includes('127.0.0.1')
+    ) {
+      errors.push('REDIS_URL in production cannot use localhost');
+    }
+    if (!config.SENTRY_DSN) {
+      errors.push('SENTRY_DSN is required in production');
+    }
+    if (config.MAIL_PROVIDER === 'none') {
+      errors.push('MAIL_PROVIDER cannot be none in production');
     }
   }
 
@@ -321,9 +363,9 @@ function validateConditionalConfig(config: any, nodeEnv: NodeEnv): void {
   }
 
   if (errors.length > 0) {
-    console.error('[Config] ❌ Configuration validation failed:');
+    writeStderr('[Config] ❌ Configuration validation failed:');
     errors.forEach((err) => {
-      console.error(`  - ${err}`);
+      writeStderr(`  - ${err}`);
     });
     process.exit(1);
   }
@@ -333,18 +375,18 @@ function validateConditionalConfig(config: any, nodeEnv: NodeEnv): void {
  * Log sanitized configuration (never log secrets)
  */
 function logConfigLoaded(config: AppConfig, nodeEnv: NodeEnv): void {
-  console.log(`[Config] ✅ Configuration loaded for ${nodeEnv}:`);
-  console.log(`  - Server: port ${config.port}, logLevel=${config.logLevel}`);
-  console.log(`  - Database: ${maskUrl(config.databaseUrl)}`);
-  console.log(`  - Auth: JWT expires in ${config.jwtExpiresIn}`);
-  console.log(`  - Frontend: ${config.webOrigin}`);
-  console.log(`  - Storage: ${config.s3Endpoint} (bucket: ${config.s3Bucket})`);
-  console.log(`  - Email: ${config.mailProvider}`);
+  writeStdout(`[Config] ✅ Configuration loaded for ${nodeEnv}:`);
+  writeStdout(`  - Server: port ${config.port}, logLevel=${config.logLevel}`);
+  writeStdout(`  - Database: ${maskUrl(config.databaseUrl)}`);
+  writeStdout(`  - Auth: JWT expires in ${config.jwtExpiresIn}`);
+  writeStdout(`  - Frontend: ${config.webOrigin}`);
+  writeStdout(`  - Storage: ${config.s3Endpoint} (bucket: ${config.s3Bucket})`);
+  writeStdout(`  - Email: ${config.mailProvider}`);
   if (config.redisUrl) {
-    console.log(`  - Redis: ${maskUrl(config.redisUrl)}`);
+    writeStdout(`  - Redis: ${maskUrl(config.redisUrl)}`);
   }
   if (config.sentryDsn) {
-    console.log(`  - Sentry: enabled`);
+    writeStdout('  - Sentry: enabled');
   }
 }
 

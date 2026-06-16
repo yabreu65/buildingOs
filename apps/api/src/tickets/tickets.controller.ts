@@ -10,6 +10,7 @@ import {
   Request,
   Query,
 } from '@nestjs/common';
+import { TicketPriority, TicketStatus } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { TicketsService } from './tickets.service';
@@ -17,6 +18,7 @@ import { TicketStateMachine } from './tickets.state-machine';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
+import type { TenantContextRequest } from '../common/types/request.types';
 
 /**
  * TicketsController: Tickets management endpoints
@@ -54,6 +56,11 @@ import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 export class TicketsController {
   constructor(private ticketsService: TicketsService) {}
 
+  private readonly sortableFields = ['createdAt', 'updatedAt', 'priority', 'status'] as const;
+  private readonly sortOrders = ['asc', 'desc'] as const;
+  private readonly ticketPriorities = Object.values(TicketPriority);
+  private readonly ticketStatuses = Object.values(TicketStatus);
+
   /**
    * Check if user has RESIDENT role in their current memberships
    */
@@ -78,7 +85,7 @@ export class TicketsController {
   async create(
     @Param('buildingId') buildingId: string,
     @Body() dto: CreateTicketDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
@@ -119,6 +126,7 @@ export class TicketsController {
   @Get()
   async findAll(
     @Param('buildingId') buildingId: string,
+    @Request() req: TenantContextRequest,
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('unitId') unitId?: string,
@@ -128,7 +136,6 @@ export class TicketsController {
     @Query('limit') limit?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
-    @Request() req?: any,
   ) {
     const tenantId = req.tenantId;
     const userId = req.user.id;
@@ -142,16 +149,24 @@ export class TicketsController {
       );
     }
 
-    const filters: any = {};
-    if (status) filters.status = status;
-    if (priority) filters.priority = priority;
+    const filters: NonNullable<Parameters<TicketsService['findAll']>[2]> = {};
+    if (status && this.ticketStatuses.includes(status as TicketStatus)) {
+      filters.status = status;
+    }
+    if (priority && this.ticketPriorities.includes(priority as TicketPriority)) {
+      filters.priority = priority;
+    }
     if (unitId) filters.unitId = unitId;
     if (assignedToMembership) filters.assignedToMembershipId = assignedToMembership;
     if (search) filters.search = search;
     if (page) filters.page = parseInt(page, 10);
     if (limit) filters.limit = parseInt(limit, 10);
-    if (sortBy) filters.sortBy = sortBy;
-    if (sortOrder) filters.sortOrder = sortOrder;
+    if (sortBy && this.sortableFields.includes(sortBy as typeof this.sortableFields[number])) {
+      filters.sortBy = sortBy as NonNullable<typeof filters.sortBy>;
+    }
+    if (sortOrder && this.sortOrders.includes(sortOrder as typeof this.sortOrders[number])) {
+      filters.sortOrder = sortOrder as NonNullable<typeof filters.sortOrder>;
+    }
 
     return await this.ticketsService.findAll(tenantId, buildingId, filters);
   }
@@ -169,7 +184,7 @@ export class TicketsController {
   async findOne(
     @Param('buildingId') buildingId: string,
     @Param('ticketId') ticketId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
@@ -210,7 +225,7 @@ export class TicketsController {
     @Param('buildingId') buildingId: string,
     @Param('ticketId') ticketId: string,
     @Body() dto: UpdateTicketDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
 
@@ -238,7 +253,7 @@ export class TicketsController {
   async remove(
     @Param('buildingId') buildingId: string,
     @Param('ticketId') ticketId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     return await this.ticketsService.remove(tenantId, buildingId, ticketId);
@@ -261,7 +276,7 @@ export class TicketsController {
     @Param('buildingId') buildingId: string,
     @Param('ticketId') ticketId: string,
     @Body() dto: AddTicketCommentDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
@@ -301,7 +316,7 @@ export class TicketsController {
   async getComments(
     @Param('buildingId') buildingId: string,
     @Param('ticketId') ticketId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     return await this.ticketsService.getComments(tenantId, buildingId, ticketId);

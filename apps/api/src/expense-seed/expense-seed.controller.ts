@@ -7,6 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { ExpenseLedgerSeedService } from './expense-seed.service';
 
 @Controller('api/super-admin/tenants')
@@ -28,7 +29,7 @@ export class ExpenseSeedController {
   @Post(':tenantId/seed-expense-categories')
   async seedExpenseCategories(
     @Param('tenantId') tenantId: string,
-    @Request() request: any,
+    @Request() request: AuthenticatedRequest,
   ) {
     // Inline SUPER_ADMIN check (same pattern as DemoSeedController)
     const userRoles = request.user?.roles || [];

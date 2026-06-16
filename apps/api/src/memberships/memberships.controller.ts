@@ -9,7 +9,7 @@ import {
   BadRequestException,
   Req,
 } from '@nestjs/common';
-import { Request } from 'express';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { MembershipsService, ScopedRoleResponse, AssignableResidentResponse } from './memberships.service';
@@ -52,14 +52,18 @@ export class MembershipsController {
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,
     @Body() dto: AddRoleDto,
-    @Req() req: Request & { user: any },
+    @Req() req: AuthenticatedRequest,
   ): Promise<ScopedRoleResponse> {
     const user = req.user;
+    const memberships = user.memberships ?? [];
 
     // Get actor membership (current user's membership in this tenant)
-    const actorMembership = user.memberships.find((m: any) => m.tenantId === tenantId);
+    const actorMembership = memberships.find((membership) => membership.tenantId === tenantId);
     if (!actorMembership) {
       throw new BadRequestException('User not a member of this tenant');
+    }
+    if (!actorMembership.id) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     return this.membershipsService.addRole(
@@ -79,14 +83,18 @@ export class MembershipsController {
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,
     @Param('roleId') roleId: string,
-    @Req() req: Request & { user: any },
+    @Req() req: AuthenticatedRequest,
   ): Promise<{ message: string }> {
     const user = req.user;
+    const memberships = user.memberships ?? [];
 
     // Get actor membership (current user's membership in this tenant)
-    const actorMembership = user.memberships.find((m: any) => m.tenantId === tenantId);
+    const actorMembership = memberships.find((membership) => membership.tenantId === tenantId);
     if (!actorMembership) {
       throw new BadRequestException('User not a member of this tenant');
+    }
+    if (!actorMembership.id) {
+      throw new BadRequestException('User membership is invalid');
     }
 
     await this.membershipsService.removeRole(

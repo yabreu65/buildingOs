@@ -32,7 +32,7 @@ export interface LogExecutionParams {
  * AssistantFeedbackService - Logs and tracks NLU engine execution feedback
  *
  * Provides execution logging for the intent engine with performance tracking.
- * Currently logs to console; ready for future database persistence.
+ * Currently logs through Nest logger; ready for future database persistence.
  *
  * TODO (PR 4): Persist to database via new AssistantIntentLog model
  * TODO (PR 4): Add query methods for analytics (success rate, avg duration, etc.)
@@ -127,12 +127,12 @@ export class AssistantFeedbackService {
 
   /**
    * Async persistence (ready for future database storage)
-   * Currently console.log only
+   * Currently logger-only
    */
   private async persistAsync(entry: Record<string, unknown>): Promise<void> {
     // Placeholder for future database persistence
     // Will be implemented in PR 4 when schema changes are made
     const jsonStr = JSON.stringify(entry, null, 2);
-    console.log(`[AssistantFeedback] Execution log: ${jsonStr}`);
+    this.logger.debug(`[AssistantFeedback] Execution log: ${jsonStr}`);
   }
 }

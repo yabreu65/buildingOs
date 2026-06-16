@@ -12,12 +12,14 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { DocumentCategory, DocumentVisibility } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { DocumentsService } from './documents.service';
 import { PresignUploadDto, PresignedUrlResponse } from './dto/presign-upload.dto';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import type { TenantContextRequest } from '../common/types/request.types';
 
 /**
  * DocumentsController: Documents and Files management
@@ -97,16 +99,16 @@ export class DocumentsController {
   /**
    * Check if user is SUPER_ADMIN (global role across any membership)
    */
-  private isSuperAdmin(memberships: any[]): boolean {
-    return memberships?.some((m) =>
-      m.roles?.some((r: any) => r.role === 'SUPER_ADMIN'),
-    ) || false;
+  private isSuperAdmin(
+    memberships: Array<{ tenantId: string; roles: string[] }>,
+  ): boolean {
+    return memberships?.some((membership) => membership.roles.includes('SUPER_ADMIN')) || false;
   }
 
   /**
    * Get user roles from active membership (tenant context)
    */
-  private getUserRoles(req: any): string[] {
+  private getUserRoles(req: TenantContextRequest): string[] {
     return req.user.roles || [];
   }
 
@@ -114,7 +116,7 @@ export class DocumentsController {
    * Get active tenantId from request (set by TenantContext middleware)
    * In this MVP, we'll get it from user's active membership
    */
-  private getTenantId(req: any): string {
+  private getTenantId(req: TenantContextRequest): string {
     return req.tenantId;
   }
 
@@ -130,7 +132,7 @@ export class DocumentsController {
   @Post('presign')
   async presignUpload(
     @Body() dto: PresignUploadDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ): Promise<PresignedUrlResponse> {
     const tenantId = this.getTenantId(req);
     return await this.documentsService.presignUpload(
@@ -161,7 +163,7 @@ export class DocumentsController {
   @Post()
   async create(
     @Body() dto: CreateDocumentDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;
@@ -194,7 +196,7 @@ export class DocumentsController {
     }
 
     // Get user membership ID
-    const userMembership = userMemberships.find((m: any) => m.tenantId === tenantId);
+    const userMembership = userMemberships.find((membership) => membership.tenantId === tenantId);
     if (!userMembership) {
       throw new BadRequestException('Invalid tenant context');
     }
@@ -213,7 +215,7 @@ export class DocumentsController {
 
     return await this.documentsService.createDocument(
       tenantId,
-      userMembership.id,
+      userMembership.id!,
       dto,
     );
   }
@@ -237,11 +239,11 @@ export class DocumentsController {
    */
   @Get()
   async findAll(
+    @Request() req: TenantContextRequest,
     @Query('buildingId') buildingId?: string,
     @Query('unitId') unitId?: string,
-    @Query('category') category?: string,
-    @Query('visibility') visibility?: string,
-    @Request() req?: any,
+    @Query('category') category?: DocumentCategory,
+    @Query('visibility') visibility?: DocumentVisibility,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;
@@ -249,7 +251,12 @@ export class DocumentsController {
     const userMemberships = req.user.memberships || [];
     const isSuperAdmin = this.isSuperAdmin(userMemberships);
 
-    const filters: any = {};
+    const filters: {
+      buildingId?: string;
+      unitId?: string;
+      category?: DocumentCategory;
+      visibility?: DocumentVisibility;
+    } = {};
     if (buildingId) filters.buildingId = buildingId;
     if (unitId) filters.unitId = unitId;
     if (category) filters.category = category;
@@ -275,7 +282,7 @@ export class DocumentsController {
   @Get(':documentId')
   async findOne(
     @Param('documentId') documentId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;
@@ -306,7 +313,7 @@ export class DocumentsController {
   async update(
     @Param('documentId') documentId: string,
     @Body() dto: UpdateDocumentDto,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;
@@ -332,7 +339,7 @@ export class DocumentsController {
   @Delete(':documentId')
   async remove(
     @Param('documentId') documentId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;
@@ -360,7 +367,7 @@ export class DocumentsController {
   @Get(':documentId/download')
   async getDownloadUrl(
     @Param('documentId') documentId: string,
-    @Request() req: any,
+    @Request() req: TenantContextRequest,
   ) {
     const tenantId = this.getTenantId(req);
     const userId = req.user.id;

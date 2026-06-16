@@ -8,7 +8,9 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import { AuditAction } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { TenantAccessGuard } from './tenant-access.guard';
 import {
   TenancyStatsService,
@@ -22,15 +24,6 @@ import {
   GetBrandingResponseDto,
   UpdateBrandingDto,
 } from './dto/branding.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    memberships: Array<{ tenantId: string; roles: string[] }>;
-  };
-}
 
 interface HealthResponse {
   ok: boolean;
@@ -136,8 +129,7 @@ export class TenancyController {
     const filters: AuditLogFilter = {
       skip: skip ? parseInt(skip, 10) : undefined,
       take: take ? parseInt(take, 10) : undefined,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      action: action as any,
+      action: action ? (action as AuditAction) : undefined,
       dateFrom: dateFrom ? new Date(dateFrom) : undefined,
       dateTo: dateTo ? new Date(dateTo) : undefined,
     };
@@ -177,7 +169,7 @@ export class TenancyController {
   async updateBranding(
     @Param('tenantId') tenantId: string,
     @Body() dto: UpdateBrandingDto,
-    @Request() req: RequestWithUser,
+    @Request() req: AuthenticatedRequest,
   ): Promise<GetBrandingResponseDto> {
     return this.brandingService.updateBranding(tenantId, dto, req.user.id);
   }

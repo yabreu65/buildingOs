@@ -20,6 +20,31 @@ import {
 } from './dto';
 import { DocumentCategory, DocumentVisibility, Role, Prisma } from '@prisma/client';
 
+type DocumentNotificationTarget = Prisma.DocumentGetPayload<{
+  include: {
+    file: true;
+    createdByMembership: {
+      include: {
+        user: true;
+      };
+    };
+  };
+}>;
+
+type UnitOccupantNotificationRecipient = Prisma.UnitOccupantGetPayload<{
+  include: {
+    member: {
+      select: {
+        user: {
+          select: {
+            id: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
 /**
  * DocumentsService: CRUD operations for Documents and Files with MinIO integration
  *
@@ -600,14 +625,14 @@ export class DocumentsService {
    */
   private async sendDocumentSharedNotification(
     tenantId: string,
-    document: Document & { file?: any; createdByMembership?: any },
+    document: DocumentNotificationTarget,
     dto: CreateDocumentDto,
   ): Promise<void> {
     try {
       // Only notify for RESIDENTS visibility
       if (document.visibility !== 'RESIDENTS') return;
 
-      let recipientUnitOccupants: any[] = [];
+      let recipientUnitOccupants: UnitOccupantNotificationRecipient[] = [];
 
       if (document.unitId) {
         // Unit-scoped: notify occupants of that unit
@@ -666,9 +691,9 @@ export class DocumentsService {
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[DocumentsService] Failed to send document shared notification for document ${document.id}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `Failed to send document shared notification for document ${document.id}`,
+        error instanceof Error ? error.stack : String(error),
       );
     }
   }

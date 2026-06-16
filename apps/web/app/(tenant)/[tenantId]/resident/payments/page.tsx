@@ -200,9 +200,9 @@ const ResidentPaymentsPage = () => {
 
       setProofFile(file);
       setProofFileId(createRes.fileId);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error uploading proof:', error);
-      const errorMessage = error?.response?.data?.message || error?.message || '';
+      const errorMessage = error instanceof Error ? error.message : '';
       setSubmitError(`Error al subir el comprobante: ${errorMessage || 'Intentalo de nuevo'}`);
     } finally {
       setUploadingProof(false);
@@ -227,7 +227,7 @@ const ResidentPaymentsPage = () => {
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
 
-  const canSubmit = formData.method !== PaymentMethod.TRANSFER || !!proofFileId;
+  const canSubmit = !!proofFileId;
 
   // Next due charge: use real outstanding, not legacy status
   const nextDueCharge = ledger?.charges
@@ -476,22 +476,12 @@ const ResidentPaymentsPage = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Método de pago</label>
-                  <Select
-                  value={formData.method}
-                  onChange={(e) => {
-                    const newMethod = e.target.value as PaymentMethod;
-                    setFormData({ ...formData, method: newMethod });
-                    if (newMethod !== PaymentMethod.TRANSFER) {
-                      setProofFile(null);
-                      setProofFileId(null);
-                    }
-                  }}
-                >
-                  <option value={PaymentMethod.TRANSFER}>Transferencia</option>
-                  <option value={PaymentMethod.CASH}>Efectivo</option>
-                  <option value={PaymentMethod.CARD}>Tarjeta</option>
-                  <option value={PaymentMethod.ONLINE}>Pago online</option>
+                <Select value={PaymentMethod.TRANSFER} disabled>
+                  <option value={PaymentMethod.TRANSFER}>Transferencia bancaria</option>
                 </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Por ahora BuildingOS solo acepta reportes de pago por transferencia.
+                </p>
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -8,6 +8,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { DemoSeedService } from './demo-seed.service';
 
 interface DemoSeedResult {
@@ -54,7 +55,7 @@ export class DemoSeedController {
   @Post('generate')
   async generateDemo(
     @Param('tenantId') tenantId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<DemoSeedResult> {
     const user = req.user;
 

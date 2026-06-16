@@ -1,8 +1,11 @@
 import { PayloadTooLargeException } from '@nestjs/common';
 
+type CsvCell = string | number | boolean | null | undefined;
+type CsvRow = Record<string, CsvCell>;
+
 export interface CsvOptions {
   headers: string[];
-  rows: any[];
+  rows: CsvRow[];
   maxRows?: number;
   filename: string;
 }
@@ -40,7 +43,7 @@ export class CsvUtility {
    */
   static formatCsv(
     headers: string[],
-    rows: any[],
+    rows: CsvRow[],
     filename: string,
   ): CsvExportResult {
     // Validate export size
@@ -97,7 +100,7 @@ export class CsvUtility {
    * // Returns: 'a,"b,c","d""e"'
    * ```
    */
-  private static escapeCsvRow(values: any[]): string {
+  private static escapeCsvRow(values: CsvCell[]): string {
     return values
       .map((value) => {
         // Convert to string

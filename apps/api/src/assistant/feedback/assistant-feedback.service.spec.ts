@@ -4,16 +4,19 @@ import { PrismaService } from '../../prisma/prisma.service';
 describe('AssistantFeedbackService', () => {
   let service: AssistantFeedbackService;
   let mockPrisma: jest.Mocked<PrismaService>;
-  let consoleLogSpy: jest.SpyInstance;
+  let loggerDebugSpy: jest.SpyInstance;
+  let loggerWarnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     mockPrisma = {} as jest.Mocked<PrismaService>;
     service = new AssistantFeedbackService(mockPrisma);
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    loggerDebugSpy = jest.spyOn((service as any).logger, 'debug').mockImplementation();
+    loggerWarnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation();
   });
 
   afterEach(() => {
-    consoleLogSpy.mockRestore();
+    loggerDebugSpy.mockRestore();
+    loggerWarnSpy.mockRestore();
   });
 
   const baseParams: LogExecutionParams = {
@@ -31,8 +34,8 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(consoleLogSpy).toHaveBeenCalled();
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      expect(loggerDebugSpy).toHaveBeenCalled();
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('[AssistantFeedback]');
       expect(logCall).toContain('Execution log:');
       expect(logCall).toContain('list_payments');
@@ -48,8 +51,8 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(unitParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(consoleLogSpy).toHaveBeenCalled();
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      expect(loggerDebugSpy).toHaveBeenCalled();
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('101');
     });
 
@@ -62,8 +65,8 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(personParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(consoleLogSpy).toHaveBeenCalled();
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      expect(loggerDebugSpy).toHaveBeenCalled();
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('John Doe');
     });
 
@@ -77,8 +80,8 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(failedParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(consoleLogSpy).toHaveBeenCalled();
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      expect(loggerDebugSpy).toHaveBeenCalled();
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('Database connection timeout');
     });
 
@@ -91,7 +94,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(emptyFiltersParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(consoleLogSpy).toHaveBeenCalled();
+      expect(loggerDebugSpy).toHaveBeenCalled();
     });
 
     it('does not throw when called with valid params', async () => {
@@ -103,7 +106,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('building');
     });
 
@@ -111,7 +114,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('success');
     });
 
@@ -119,7 +122,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('150');
     });
 
@@ -127,7 +130,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('tenant-1');
     });
 
@@ -135,7 +138,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('user-1');
     });
 
@@ -143,7 +146,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('timestamp');
     });
 
@@ -151,7 +154,7 @@ describe('AssistantFeedbackService', () => {
       service.logExecution(baseParams);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const logCall = consoleLogSpy.mock.calls[0][0] as string;
+      const logCall = loggerDebugSpy.mock.calls.at(-1)?.[0] as string;
       expect(logCall).toContain('filters');
     });
   });

@@ -25,8 +25,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const redisUrl = this.configService.getValue('redisUrl');
+    const nodeEnv = this.configService.getValue('nodeEnv');
+    const requiresRedis = nodeEnv === 'production' || nodeEnv === 'staging';
     const host = process.env.REDIS_HOST || 'localhost';
     const port = parseInt(process.env.REDIS_PORT || '6379', 10);
+
+    if (requiresRedis && !redisUrl) {
+      throw new Error(`Redis is required in ${nodeEnv} environment`);
+    }
 
     try {
       this.client = redisUrl
@@ -61,6 +67,9 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(`Redis connection failed: ${error}`);
       this.client = null;
+      if (requiresRedis) {
+        throw error;
+      }
     }
   }
 

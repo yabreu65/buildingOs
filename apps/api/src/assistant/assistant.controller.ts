@@ -20,6 +20,7 @@ import { AssistantService, ChatRequest, ChatResponse } from './assistant.service
 import { AiAnalyticsService, TenantAnalyticsResponse, TenantSummaryItem } from './analytics.service';
 import { AiActionEventsService, CreateActionEventDto } from './action-events.service';
 import { StructuredResponse } from './ai.types';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('tenants/:tenantId/assistant')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
@@ -68,7 +69,7 @@ export class AssistantController {
   async chat(
     @Param('tenantId') tenantId: string,
     @Body() request: ChatRequest,
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ChatResponse> {
     /**
      * @deprecated Use POST /tenants/:tenantId/assistant/chat/v2 as the official flow.
@@ -89,7 +90,7 @@ export class AssistantController {
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
@@ -97,6 +98,9 @@ export class AssistantController {
     }
 
     const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
+    }
     const userRoles = membership.roles || [];
 
     // FASE 1: Check monthly AI consultation limit
@@ -172,7 +176,7 @@ export class AssistantController {
   async chatV2(
     @Param('tenantId') tenantId: string,
     @Body() request: ChatRequest & { sessionId?: string },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<StructuredResponse> {
     // Validate tenantId
     if (!tenantId || tenantId.trim().length === 0) {
@@ -187,7 +191,7 @@ export class AssistantController {
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
@@ -195,6 +199,9 @@ export class AssistantController {
     }
 
     const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
+    }
     const userRoles = membership.roles || [];
 
     // Check monthly AI consultation limit
@@ -243,7 +250,7 @@ export class AssistantController {
   async getTicketReplySuggestions(
     @Param('tenantId') tenantId: string,
     @Body() dto: { ticketId: string; title: string; description: string },
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<{ replies: string[] }> {
     // Validate tenantId
     if (!tenantId || tenantId.trim().length === 0) {
@@ -258,7 +265,7 @@ export class AssistantController {
     // Extract user info from JWT
     const userId = req.user?.id;
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!userId || !membership) {
@@ -316,22 +323,26 @@ export class AssistantController {
   async trackActionEvent(
     @Param('tenantId') tenantId: string,
     @Body() dto: CreateActionEventDto,
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<{ success: boolean }> {
     if (!tenantId || tenantId.trim().length === 0) {
       throw new BadRequestException('tenantId is required');
     }
 
     const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId,
+      (membership) => membership.tenantId === tenantId,
     );
 
     if (!membership) {
       throw new BadRequestException('User not found in tenant');
     }
+    const membershipId = membership.id;
+    if (!membershipId) {
+      throw new BadRequestException('User membership is invalid');
+    }
 
     // Fire-and-forget: never blocks
-    void this.actionEventsService.trackClick(tenantId, membership.id, dto);
+    void this.actionEventsService.trackClick(tenantId, membershipId, dto);
 
     return { success: true };
   }

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { Payment, ReceiptStatus, DocumentCategory, DocumentVisibility } from '@prisma/client';
+import { DocumentCategory, DocumentVisibility, Prisma, ReceiptStatus } from '@prisma/client';
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -15,6 +15,23 @@ export interface ReceiptData {
   fileKey: string;
   url: string;
 }
+
+type PaymentReceiptPayment = Prisma.PaymentGetPayload<{
+  include: {
+    unit: true;
+    building: true;
+    createdByUser: true;
+    paymentAllocations: {
+      include: {
+        charge: {
+          include: {
+            expensePeriod: true;
+          };
+        };
+      };
+    };
+  };
+}>;
 
 @Injectable()
 export class PaymentReceiptService {
@@ -89,7 +106,11 @@ export class PaymentReceiptService {
       const receiptNumber = await this.reserveReceiptNumber(payment.tenantId);
 
       // Generate PDF content (for now, simple text - can be upgraded to proper PDF later)
-      const pdfContent = await this.generateReceiptPDF(payment, receiptNumber);
+      const pdfContent = await this.generateReceiptPDF(
+        payment,
+        receiptNumber,
+        approvedByUserName,
+      );
 
       // Save to storage
       const objectKey = `tenant/${payment.tenantId}/payments/${paymentId}/receipt_${receiptNumber}.pdf`;
@@ -239,14 +260,18 @@ export class PaymentReceiptService {
    * Generate receipt PDF content.
    * Currently returns simple text - can be upgraded to proper PDF library later.
    */
-  private async generateReceiptPDF(payment: any, receiptNumber: string): Promise<Buffer> {
+  private async generateReceiptPDF(
+    payment: PaymentReceiptPayment,
+    receiptNumber: string,
+    approvedByUserName: string,
+  ): Promise<Buffer> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: payment.tenantId },
       select: { name: true, brandName: true },
     });
     const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
 
-    const approvedBy = payment.approvedByUser?.name || 'Administración';
+    const approvedBy = approvedByUserName;
     const approvedAt = payment.approvedAt 
       ? new Date(payment.approvedAt).toLocaleString('es-AR', {
           day: '2-digit',
@@ -266,8 +291,11 @@ export class PaymentReceiptService {
     let allocationsText = '';
     if (payment.paymentAllocations && payment.paymentAllocations.length > 0) {
       allocationsText = payment.paymentAllocations
-        .map((alloc: any) => {
-          const period = alloc.charge?.expensePeriod?.period || alloc.charge?.period || 'N/A';
+        .map((alloc) => {
+          const expensePeriod = alloc.charge?.expensePeriod;
+          const period = expensePeriod
+            ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, '0')}`
+            : alloc.charge?.period || 'N/A';
           const concept = alloc.charge?.concept || 'Cargo';
           const amount = (alloc.amount / 100).toFixed(2);
           return `  - ${period}: ${concept} = ${currency} ${amount}`;
@@ -312,7 +340,7 @@ Este documento es una CONSTANCIA DE PAGO, no constituye factura fiscal.
    * Notify resident that their receipt is ready
    */
   private async notifyResidentReceiptReady(
-    payment: any,
+    payment: PaymentReceiptPayment,
     receiptNumber: string,
     receiptUrl: string,
     approvedByUserName: string,

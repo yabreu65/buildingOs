@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -21,6 +22,31 @@ export interface ChargeAllocation {
   areaM2: number;
   amountMinor: number; // prorrateo o monto fijo
 }
+
+type LiquidationExpense = Prisma.ExpenseGetPayload<{
+  include: {
+    category: {
+      select: {
+        name: true;
+      };
+    };
+    vendor: {
+      select: {
+        name: true;
+      };
+    };
+    allocations: true;
+  };
+}>;
+
+type LiquidationUnit = Prisma.UnitGetPayload<{
+  select: {
+    id: true;
+    code: true;
+    label: true;
+    m2: true;
+  };
+}>;
 
 @Injectable()
 export class LiquidationEngineService {
@@ -216,14 +242,14 @@ export class LiquidationEngineService {
    * - UNIT_GROUP scope: prorrateo solo dentro del grupo
    */
   private calculateCharges(
-    expenses: any[],
-    units: any[],
+    _expenses: ReadonlyArray<unknown>,
+    units: LiquidationUnit[],
     totalAmountMinor: number,
   ): ChargeAllocation[] {
     // Por ahora: prorrateo simple por m2 para BUILDING scope
     // TODO: soporte para TENANT_SHARED y UNIT_GROUP scopes
 
-    const totalM2 = units.reduce((sum, u) => sum + u.m2, 0);
+    const totalM2 = units.reduce((sum, u) => sum + (u.m2 ?? 0), 0);
     if (totalM2 === 0) {
       throw new BadRequestException(
         'Las unidades no tienen área m2 registrada para prorrateo',
@@ -231,14 +257,15 @@ export class LiquidationEngineService {
     }
 
     return units.map((unit) => {
-      const unitPercentage = unit.m2 / totalM2;
+      const unitAreaM2 = unit.m2 ?? 0;
+      const unitPercentage = unitAreaM2 / totalM2;
       const unitAmountMinor = Math.round(totalAmountMinor * unitPercentage);
 
       return {
         unitId: unit.id,
         unitCode: unit.code,
         unitLabel: unit.label,
-        areaM2: unit.m2,
+        areaM2: unitAreaM2,
         amountMinor: unitAmountMinor,
       };
     });

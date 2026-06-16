@@ -8,6 +8,7 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import { AdjustmentStatus } from '@prisma/client';
 import { IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -26,7 +27,7 @@ class ListAdjustmentsQuery {
 
   @IsOptional()
   @IsString()
-  status?: string;
+  status?: AdjustmentStatus;
 }
 
 @Controller('tenants/:tenantId/finance/adjustments')
@@ -71,7 +72,7 @@ export class AdjustmentsController {
       {
         buildingId: query.buildingId,
         targetPeriod: query.targetPeriod,
-        status: query.status as any,
+        status: query.status,
       },
     );
   }

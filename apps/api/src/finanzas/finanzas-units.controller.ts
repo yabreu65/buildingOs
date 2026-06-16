@@ -7,6 +7,7 @@ import {
   Request,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { FinanzasService } from './finanzas.service';
 
 /**
@@ -23,6 +24,16 @@ import { FinanzasService } from './finanzas.service';
 @UseGuards(JwtAuthGuard)
 export class FinanzasUnitsController {
   constructor(private finanzasService: FinanzasService) {}
+
+  private getTenantIdFromHeader(req: AuthenticatedRequest): string | undefined {
+    const tenantHeader = req.headers['x-tenant-id'];
+
+    if (typeof tenantHeader === 'string' && tenantHeader) {
+      return tenantHeader;
+    }
+
+    return Array.isArray(tenantHeader) ? tenantHeader[0] : undefined;
+  }
 
   /**
    * GET /units/:unitId/ledger?periodFrom=&periodTo=
@@ -41,9 +52,9 @@ export class FinanzasUnitsController {
     @Param('unitId') unitId: string,
     @Query('periodFrom') periodFrom: string = '',
     @Query('periodTo') periodTo: string = '',
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
-    const tenantIdFromHeader = (req as any).tenantId || req.headers?.['x-tenant-id'];
+    const tenantIdFromHeader = req.tenantId ?? this.getTenantIdFromHeader(req);
     const tenantId =
       (typeof tenantIdFromHeader === 'string' && tenantIdFromHeader) ||
       req.user.tenantId ||

@@ -10,6 +10,7 @@ import {
   PaymentVerificationStatus,
   SubscriptionStatus,
   AuditAction,
+  Prisma,
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 
@@ -18,7 +19,7 @@ export interface CreatePaymentVerificationDto {
   currency: string;
   reference?: string;
   bankDetails?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ApprovePaymentDto {
@@ -75,7 +76,7 @@ export class PaymentService {
         reference: dto.reference,
         bankDetails: dto.bankDetails,
         status: PaymentVerificationStatus.PENDING,
-        metadata: dto.metadata || {},
+        metadata: (dto.metadata || {}) as Prisma.InputJsonValue,
       },
     });
 

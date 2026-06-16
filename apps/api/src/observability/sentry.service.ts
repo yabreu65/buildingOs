@@ -4,9 +4,16 @@
  * Includes context and tags for debugging
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as Sentry from '@sentry/node';
 import { ConfigService } from '../config/config.service';
+
+type RedactableRequestData = {
+  password?: unknown;
+  token?: unknown;
+  secret?: unknown;
+  [key: string]: unknown;
+};
 
 export interface SentryContext {
   requestId?: string;
@@ -14,11 +21,12 @@ export interface SentryContext {
   userId?: string;
   route?: string;
   statusCode?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 @Injectable()
 export class SentryService {
+  private readonly logger = new Logger(SentryService.name);
   private isEnabled = false;
 
   constructor(private configService: ConfigService) {
@@ -32,7 +40,7 @@ export class SentryService {
     const config = this.configService.get();
 
     if (!config.sentryDsn) {
-      console.log('[Sentry] DSN not configured, error tracking disabled');
+      this.logger.warn('Sentry DSN not configured; error tracking disabled');
       return;
     }
 
@@ -54,9 +62,10 @@ export class SentryService {
         if (event.request?.data) {
           const data = event.request.data;
           if (typeof data === 'object' && data !== null) {
-            if ('password' in data) (data as any).password = '[REDACTED]';
-            if ('token' in data) (data as any).token = '[REDACTED]';
-            if ('secret' in data) (data as any).secret = '[REDACTED]';
+            const redactableData = data as RedactableRequestData;
+            if ('password' in redactableData) redactableData.password = '[REDACTED]';
+            if ('token' in redactableData) redactableData.token = '[REDACTED]';
+            if ('secret' in redactableData) redactableData.secret = '[REDACTED]';
           }
         }
 
@@ -71,7 +80,7 @@ export class SentryService {
     });
 
     this.isEnabled = true;
-    console.log('[Sentry] Initialized with DSN:', config.sentryDsn);
+    this.logger.log('Sentry initialized');
   }
 
   /**

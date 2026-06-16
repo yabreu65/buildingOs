@@ -1,7 +1,11 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import PaymentSubmitUI from '@/features/payments/payments.submit.ui';
+interface PaymentsSubmitPageProps {
+  params: {
+    tenantId: string;
+  };
+}
 
-export default function PaymentsSubmitPage() {
-  return <PaymentSubmitUI />;
+export default function PaymentsSubmitPage({ params }: PaymentsSubmitPageProps) {
+  redirect(`/${params.tenantId}/resident/payments`);
 }

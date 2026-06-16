@@ -1,5 +1,33 @@
 # Code Review Standards for BuildingOS
 
+# Code Review Standards for BuildingOS
+
+## AI Agent / RTK Usage
+
+When working with AI coding agents such as Codex or OpenCode, prefer RTK commands to reduce token usage and keep command outputs compact.
+
+Use RTK for project inspection, Git, Docker, build, lint, test and log commands.
+
+Prefer:
+
+* `rtk git status` instead of `git status`
+* `rtk git diff` instead of `git diff`
+* `rtk git log -n 10` instead of `git log -n 10`
+* `rtk docker ps` instead of `docker ps`
+* `rtk docker compose ps` instead of `docker compose ps`
+* `rtk docker logs <container>` instead of `docker logs <container>`
+* `rtk grep "text" .` instead of `grep` or `rg`
+* `rtk next build` instead of `next build`
+* `rtk tsc` instead of `tsc`
+* `rtk test npm test` or `rtk test pnpm test` for long test outputs
+
+For Codex App, follow this file as project instructions and use RTK whenever available.
+
+For OpenCode, use RTK through the configured OpenCode integration when available.
+
+If RTK is not installed or a command fails because of RTK, fall back to the normal command.
+
+
 ## TypeScript/Node.js
 
 - Use `const`/`let`, never `var`

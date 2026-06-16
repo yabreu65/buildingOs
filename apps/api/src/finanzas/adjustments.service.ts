@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { AdjustmentStatus, AuditAction, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -11,6 +12,16 @@ import {
   CreateAdjustmentDto,
   AdjustmentResponseDto,
 } from './expense-ledger.dto';
+
+type AdjustmentWithCategoryName = Prisma.AdjustmentGetPayload<{
+  include: {
+    category: {
+      select: {
+        name: true;
+      };
+    };
+  };
+}>;
 
 @Injectable()
 export class AdjustmentsService {
@@ -70,7 +81,7 @@ export class AdjustmentsService {
     void this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
-      action: 'OTHER' as any,
+      action: AuditAction.OTHER,
       entityType: 'Adjustment',
       entityId: adjustment.id,
       metadata: {
@@ -125,7 +136,7 @@ export class AdjustmentsService {
     void this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
-      action: 'OTHER' as any,
+      action: AuditAction.OTHER,
       entityType: 'Adjustment',
       entityId: adjustmentId,
       metadata: {
@@ -143,14 +154,14 @@ export class AdjustmentsService {
     filters?: {
       buildingId?: string;
       targetPeriod?: string;
-      status?: string;
+      status?: AdjustmentStatus;
     },
   ): Promise<AdjustmentResponseDto[]> {
     if (!this.validators.isAdminOrOperator(userRoles)) {
       throw new ForbiddenException('Solo administradores pueden ver ajustes');
     }
 
-    const where: any = { tenantId };
+    const where: Prisma.AdjustmentWhereInput = { tenantId };
     if (filters?.buildingId) {
       where.buildingId = filters.buildingId;
     }
@@ -169,12 +180,10 @@ export class AdjustmentsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return adjustments.map((a: any) => this.toDto(a));
+    return adjustments.map((adjustment) => this.toDto(adjustment));
   }
 
-  private toDto(
-    adjustment: any,
-  ): AdjustmentResponseDto {
+  private toDto(adjustment: AdjustmentWithCategoryName): AdjustmentResponseDto {
     return {
       id: adjustment.id,
       tenantId: adjustment.tenantId,
@@ -187,7 +196,7 @@ export class AdjustmentsService {
       amountMinor: adjustment.amountMinor,
       currencyCode: adjustment.currencyCode,
       reason: adjustment.reason,
-      status: adjustment.status as 'DRAFT' | 'VALIDATED' | 'VOIDED',
+      status: adjustment.status,
       createdByMembershipId: adjustment.createdByMembershipId,
       validatedByMembershipId: adjustment.validatedByMembershipId,
       validatedAt: adjustment.validatedAt,

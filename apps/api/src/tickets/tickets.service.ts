@@ -4,7 +4,14 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Ticket, TicketComment, Prisma, AuditAction } from '@prisma/client';
+import {
+  Ticket,
+  TicketComment,
+  Prisma,
+  AuditAction,
+  TicketPriority,
+  TicketStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -32,6 +39,39 @@ interface TicketFilters {
   sortBy?: 'createdAt' | 'updatedAt' | 'priority' | 'status';
   sortOrder?: 'asc' | 'desc';
 }
+
+const ticketFindAllArgs = Prisma.validator<Prisma.TicketDefaultArgs>()({
+  include: {
+    createdBy: { select: { id: true, name: true, email: true } },
+    assignedTo: {
+      include: { user: { select: { id: true, name: true, email: true } } },
+    },
+    building: { select: { id: true, name: true } },
+    unit: { select: { id: true, label: true, code: true } },
+    comments: {
+      take: 1,
+      orderBy: { createdAt: 'desc' },
+      include: { author: { select: { id: true, name: true } } },
+    },
+  },
+});
+
+type FindAllTicket = Prisma.TicketGetPayload<typeof ticketFindAllArgs>;
+
+export interface FindAllTicketsResponse {
+  tickets: FindAllTicket[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+const VALID_TICKET_STATUSES: readonly TicketStatus[] = [
+  'OPEN',
+  'IN_PROGRESS',
+  'RESOLVED',
+  'CLOSED',
+];
 
 @Injectable()
 export class TicketsService {
@@ -256,7 +296,11 @@ export class TicketsService {
    *
    * @throws NotFoundException if building doesn't belong to tenant
    */
-  async findAll(tenantId: string, buildingId: string, filters?: TicketFilters): Promise<any> {
+  async findAll(
+    tenantId: string,
+    buildingId: string,
+    filters?: TicketFilters,
+  ): Promise<FindAllTicketsResponse> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -268,16 +312,20 @@ export class TicketsService {
     
     // Handle multiple status values (comma-separated: "OPEN,IN_PROGRESS")
     if (filters?.status) {
-      const validStatuses = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
-      const statusValues = filters.status.split(',').filter(s => validStatuses.includes(s));
-      
+      const statusValues = filters.status
+        .split(',')
+        .filter(
+          (status): status is TicketStatus =>
+            VALID_TICKET_STATUSES.includes(status as TicketStatus),
+        );
+
       if (statusValues.length === 1) {
-        where.status = statusValues[0] as any;
+        where.status = statusValues[0];
       } else if (statusValues.length > 1) {
-        where.status = { in: statusValues } as any;
+        where.status = { in: statusValues };
       }
     }
-    if (filters?.priority) where.priority = filters.priority as any;
+    if (filters?.priority) where.priority = filters.priority as TicketPriority;
     if (filters?.unitId) where.unitId = filters.unitId;
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
@@ -298,8 +346,9 @@ export class TicketsService {
     // 4. Sorting
     const sortBy = filters?.sortBy || 'createdAt';
     const sortOrder = filters?.sortOrder || 'desc';
-    const orderBy: any = {};
-    orderBy[sortBy] = sortOrder;
+    const orderBy: Prisma.TicketOrderByWithRelationInput = {
+      [sortBy]: sortOrder,
+    };
 
     // 5. Diagnostic logging
     const startTime = Date.now();
@@ -310,20 +359,8 @@ export class TicketsService {
     try {
       const [tickets, total] = await Promise.all([
         this.prisma.ticket.findMany({
+          ...ticketFindAllArgs,
           where,
-          include: {
-            createdBy: { select: { id: true, name: true, email: true } },
-            assignedTo: {
-              include: { user: { select: { id: true, name: true, email: true } } },
-            },
-            building: { select: { id: true, name: true } },
-            unit: { select: { id: true, label: true, code: true } },
-            comments: {
-              take: 1,
-              orderBy: { createdAt: 'desc' },
-              include: { author: { select: { id: true, name: true } } },
-            },
-          },
           orderBy,
           take: pageSize,
           skip,
@@ -337,7 +374,7 @@ export class TicketsService {
       );
 
       return {
-        tickets: tickets as any,
+        tickets,
         total,
         page: currentPage,
         limit: pageSize,

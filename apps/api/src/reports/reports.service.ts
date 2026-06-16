@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ChargeStatus, PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { CsvUtility, CsvExportResult } from './csv.utility';
 
 export interface ReportFilters {
@@ -75,7 +75,7 @@ export class ReportsService {
     tenantId: string,
     filters: ReportFilters
   ): Promise<TicketsReportData> {
-    const whereBase: any = {
+    const whereBase: Prisma.TicketWhereInput = {
       tenantId,
     };
 
@@ -84,9 +84,10 @@ export class ReportsService {
     }
 
     if (filters.from || filters.to) {
-      whereBase.createdAt = {};
-      if (filters.from) whereBase.createdAt.gte = filters.from;
-      if (filters.to) whereBase.createdAt.lte = filters.to;
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (filters.from) createdAt.gte = filters.from;
+      if (filters.to) createdAt.lte = filters.to;
+      whereBase.createdAt = createdAt;
     }
 
     const tickets = await this.prisma.ticket.findMany({
@@ -182,7 +183,7 @@ export class ReportsService {
     tenantId: string,
     filters: ReportFilters
   ): Promise<FinanceReportData> {
-    const whereBase: any = {
+    const whereBase: Prisma.ChargeWhereInput = {
       tenantId,
       canceledAt: null,
     };
@@ -269,7 +270,7 @@ export class ReportsService {
     tenantId: string,
     filters: ReportFilters
   ): Promise<CommunicationsReportData> {
-    const whereBase: any = {
+    const whereBase: Prisma.CommunicationWhereInput = {
       tenantId,
       status: 'SENT',
     };
@@ -279,9 +280,10 @@ export class ReportsService {
     }
 
     if (filters.from || filters.to) {
-      whereBase.sentAt = {};
-      if (filters.from) whereBase.sentAt.gte = filters.from;
-      if (filters.to) whereBase.sentAt.lte = filters.to;
+      const sentAt: Prisma.DateTimeFilter = {};
+      if (filters.from) sentAt.gte = filters.from;
+      if (filters.to) sentAt.lte = filters.to;
+      whereBase.sentAt = sentAt;
     }
 
     const communications = await this.prisma.communication.findMany({
@@ -344,7 +346,7 @@ export class ReportsService {
     filters: ReportFilters
   ): Promise<ActivityReportData> {
     // Build date filter
-    const dateFilter: any = {};
+    const dateFilter: Prisma.DateTimeFilter = {};
     if (filters.from) dateFilter.gte = filters.from;
     if (filters.to) dateFilter.lte = filters.to;
     const hasDateFilter = Object.keys(dateFilter).length > 0;
@@ -399,12 +401,13 @@ export class ReportsService {
     tenantId: string,
     filters: ReportFilters,
   ): Promise<CsvExportResult> {
-    const whereBase: any = { tenantId };
+    const whereBase: Prisma.TicketWhereInput = { tenantId };
     if (filters.buildingId) whereBase.buildingId = filters.buildingId;
     if (filters.from || filters.to) {
-      whereBase.createdAt = {};
-      if (filters.from) whereBase.createdAt.gte = filters.from;
-      if (filters.to) whereBase.createdAt.lte = filters.to;
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (filters.from) createdAt.gte = filters.from;
+      if (filters.to) createdAt.lte = filters.to;
+      whereBase.createdAt = createdAt;
     }
 
     const tickets = await this.prisma.ticket.findMany({
@@ -446,7 +449,15 @@ export class ReportsService {
     const report = await this.getFinanceReport(tenantId, filters);
 
     // Build rows with building + delinquent units
-    const rows: any[] = [];
+    const rows: Array<{
+      type: string;
+      building: string;
+      totalCharges: string;
+      totalPaid: string;
+      outstanding: string;
+      collectionRate: string;
+      currency: string;
+    }> = [];
 
     // Row 1: Summary
     rows.push({
@@ -488,15 +499,16 @@ export class ReportsService {
     tenantId: string,
     filters: ReportFilters & { status?: string },
   ): Promise<CsvExportResult> {
-    const whereBase: any = { tenantId };
+    const whereBase: Prisma.PaymentWhereInput = { tenantId };
     if (filters.buildingId) whereBase.buildingId = filters.buildingId;
     if (filters.from || filters.to) {
-      whereBase.createdAt = {};
-      if (filters.from) whereBase.createdAt.gte = filters.from;
-      if (filters.to) whereBase.createdAt.lte = filters.to;
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (filters.from) createdAt.gte = filters.from;
+      if (filters.to) createdAt.lte = filters.to;
+      whereBase.createdAt = createdAt;
     }
     if (filters.status) {
-      whereBase.status = filters.status;
+      whereBase.status = filters.status as PaymentStatus;
     }
 
     const payments = await this.prisma.payment.findMany({

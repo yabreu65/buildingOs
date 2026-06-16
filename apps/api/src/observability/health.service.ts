@@ -9,6 +9,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { EmailService } from '../email/email.service';
 
+type DatabaseHealthCheck = HealthStatus['checks']['database'];
+type StorageHealthCheck = HealthStatus['checks']['storage'];
+type EmailHealthCheck = HealthStatus['checks']['email'];
+
 export interface HealthStatus {
   status: 'healthy' | 'unhealthy';
   timestamp: string;
@@ -65,7 +69,7 @@ export class HealthService {
   /**
    * Check database connectivity
    */
-  private async checkDatabase(): Promise<any> {
+  private async checkDatabase(): Promise<DatabaseHealthCheck> {
     const startTime = Date.now();
     try {
       await this.prisma.$queryRaw`SELECT 1`;
@@ -82,7 +86,7 @@ export class HealthService {
   /**
    * Check S3/MinIO storage connectivity
    */
-  private async checkStorage(): Promise<any> {
+  private async checkStorage(): Promise<StorageHealthCheck> {
     const config = this.configService.get();
 
     // Check if storage is configured
@@ -96,7 +100,7 @@ export class HealthService {
   /**
    * Check email provider configuration
    */
-  private async checkEmail(): Promise<any> {
+  private async checkEmail(): Promise<EmailHealthCheck> {
     return this.emailService.checkHealth();
   }
 }

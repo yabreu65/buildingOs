@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import {
   TicketPriority,
   TicketStatus,
@@ -29,6 +29,8 @@ interface DemoSeedResult {
 
 @Injectable()
 export class DemoSeedService {
+  private readonly logger = new Logger(DemoSeedService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -329,7 +331,7 @@ export class DemoSeedService {
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate demo data';
-      console.error('[DemoSeedService] Error:', message);
+      this.logger.error(`Error generating demo seed: ${message}`);
       throw err;
     }
   }

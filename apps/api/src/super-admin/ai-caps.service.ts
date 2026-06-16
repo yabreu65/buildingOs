@@ -22,6 +22,9 @@ export interface AiCapsResponse {
   };
 }
 
+type TenantAiBudgetCreateInput = Prisma.TenantAiBudgetUncheckedCreateInput;
+type TenantAiBudgetUpdateInput = Prisma.TenantAiBudgetUncheckedUpdateInput;
+
 @Injectable()
 export class AiCapsService {
   constructor(
@@ -84,8 +87,8 @@ export class AiCapsService {
       where: { tenantId },
     });
 
-    const updateData: any = {};
-    const createData: any = { tenantId };
+    const updateData: TenantAiBudgetUpdateInput = {};
+    const createData: TenantAiBudgetCreateInput = { tenantId };
 
     if (dto.monthlyBudgetCents !== undefined && dto.monthlyBudgetCents !== null) {
       updateData.monthlyBudgetCents = dto.monthlyBudgetCents;

@@ -6,7 +6,15 @@
 
 import { Injectable, Logger as NestLogger } from '@nestjs/common';
 import pino, { Logger as PinoLogger } from 'pino';
+import type { Request, Response } from 'express';
 import { ConfigService } from '../config/config.service';
+
+type SerializableRequest = Pick<Request, 'method' | 'url' | 'headers' | 'ip'> & {
+  id?: string;
+  socket?: { remotePort?: number | undefined } | undefined;
+};
+
+type SerializableResponse = Pick<Response, 'statusCode' | 'getHeader'>;
 
 export interface LogContext {
   requestId?: string;
@@ -17,7 +25,7 @@ export interface LogContext {
   statusCode?: number;
   durationMs?: number;
   error?: Error | string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 @Injectable()
@@ -70,7 +78,7 @@ export class LoggerService {
 
       // Serializers for common objects
       serializers: {
-        req: (req: any) => ({
+        req: (req: SerializableRequest) => ({
           id: req.id,
           method: req.method,
           url: req.url,
@@ -83,7 +91,7 @@ export class LoggerService {
           remoteAddress: req.ip,
           remotePort: req.socket?.remotePort,
         }),
-        res: (res: any) => ({
+        res: (res: SerializableResponse) => ({
           statusCode: res.statusCode,
           headers: {
             'content-length': res.getHeader('content-length'),

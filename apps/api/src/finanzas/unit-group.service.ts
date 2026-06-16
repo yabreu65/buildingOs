@@ -5,9 +5,15 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
+import { Prisma, UnitGroup } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
+
+type UnitGroupDtoSource = Pick<
+  UnitGroup,
+  'id' | 'tenantId' | 'buildingId' | 'name' | 'description' | 'createdAt' | 'updatedAt'
+>;
 
 @Injectable()
 export class UnitGroupService {
@@ -296,7 +302,7 @@ export class UnitGroupService {
     });
   }
 
-  private toDto(group: any, memberCount: number) {
+  private toDto(group: UnitGroupDtoSource, memberCount: number) {
     return {
       id: group.id,
       tenantId: group.tenantId,

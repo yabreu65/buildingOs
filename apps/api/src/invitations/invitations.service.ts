@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
@@ -31,6 +32,8 @@ export interface AuthResponse {
 
 @Injectable()
 export class InvitationsService {
+  private readonly logger = new Logger(InvitationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -106,8 +109,7 @@ export class InvitationsService {
       },
     });
 
-    // STUB: Email sending handled by real EmailService in production
-    console.log(`[EMAIL STUB] Invitation token generated for ${dto.email}`);
+    this.logger.log(`Invitation created for ${dto.email}`);
 
     return {
       id: invitation.id,
@@ -478,8 +480,7 @@ export class InvitationsService {
       },
     });
 
-    // STUB: Email sending handled by real EmailService in production
-    console.log(`[EMAIL STUB] Invitation token resent for ${updated.email}`);
+    this.logger.log(`Invitation resent for ${updated.email}`);
 
     return {
       id: updated.id,
@@ -539,7 +540,7 @@ export class InvitationsService {
       });
     }
 
-    console.log(`[Invitations] Marked ${expiredInvitations.length} as EXPIRED`);
+    this.logger.log(`Marked ${expiredInvitations.length} invitations as EXPIRED`);
     return expiredInvitations.length;
   }
 }

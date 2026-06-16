@@ -14,6 +14,8 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '@prisma/client';
 import { ReportsService } from './reports.service';
 import { ReportsValidators } from './reports.validators';
+import type { Response as ExpressResponse } from 'express';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 /**
  * ReportsController: Reports endpoints for admins
@@ -41,10 +43,10 @@ export class ReportsController {
   /**
    * Extract user roles for the given tenant from JWT memberships
    */
-  private getUserRoles(req: any, tenantId: string): string[] {
+  private getUserRoles(req: AuthenticatedRequest, tenantId: string): string[] {
     // memberships is array [{tenantId, roles[]}] from JwtStrategy.validate()
-    const membership = req.user?.memberships?.find(
-      (m: any) => m.tenantId === tenantId
+    const membership = req.user.memberships?.find(
+      (membership) => membership.tenantId === tenantId
     );
     return membership?.roles || [];
   }
@@ -62,10 +64,10 @@ export class ReportsController {
   @Get(':tenantId/reports/tickets')
   async getTicketsReport(
     @Param('tenantId') tenantId: string,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Request() req?: any
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -96,9 +98,9 @@ export class ReportsController {
   @Get(':tenantId/reports/finance')
   async getFinanceReport(
     @Param('tenantId') tenantId: string,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('period') period?: string,
-    @Request() req?: any
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -125,10 +127,10 @@ export class ReportsController {
   @Get(':tenantId/reports/communications')
   async getCommunicationsReport(
     @Param('tenantId') tenantId: string,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Request() req?: any
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -156,10 +158,10 @@ export class ReportsController {
   @Get(':tenantId/reports/activity')
   async getActivityReport(
     @Param('tenantId') tenantId: string,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Request() req?: any
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -195,11 +197,11 @@ export class ReportsController {
   @RequireFeature('canExportReports')
   async exportTickets(
     @Param('tenantId') tenantId: string,
+    @Response() res: ExpressResponse,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Response() res?: any,
-    @Request() req?: any,
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -252,10 +254,10 @@ export class ReportsController {
   @RequireFeature('canExportReports')
   async exportFinance(
     @Param('tenantId') tenantId: string,
+    @Response() res: ExpressResponse,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('period') period?: string,
-    @Response() res?: any,
-    @Request() req?: any,
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {
@@ -306,12 +308,12 @@ export class ReportsController {
   @RequireFeature('canExportReports')
   async exportPayments(
     @Param('tenantId') tenantId: string,
+    @Response() res: ExpressResponse,
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('status') status?: string,
-    @Response() res?: any,
-    @Request() req?: any,
   ) {
     const userRoles = this.getUserRoles(req, tenantId);
     if (!this.validators.canReadReports(userRoles)) {

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
+import type { FindAllFilters, FindForUserFilters } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { CommunicationStatus } from '@prisma/client';
 import {
@@ -22,7 +23,7 @@ import {
   PublishCommunicationRequestSchema,
   ResidentCommunicationsQuerySchema,
 } from '@buildingos/contracts';
-import { AuthenticatedRequest } from '../common/types/request.types';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -74,19 +75,19 @@ export class CommunicationsUserController {
    */
   @Get()
   async listCommunications(
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('status') status?: CommunicationStatus,
-    @Request() req?: any,
   ) {
     // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'];
+    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
     if (!xTenantId) {
       throw new BadRequestException('X-Tenant-Id header is required');
     }
 
     // Get user's memberships to find matching tenant
     const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
+    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
     if (!membership) {
       throw new BadRequestException(
         'User does not have membership in the specified tenant',
@@ -99,7 +100,7 @@ export class CommunicationsUserController {
       throw new BadRequestException('Only administrators can list communications');
     }
 
-    const filters: any = {};
+    const filters: FindAllFilters = {};
     if (buildingId) {
       // Validate building belongs to tenant
       await this.validators.validateBuildingBelongsToTenant(
@@ -126,17 +127,17 @@ export class CommunicationsUserController {
   @Get(':communicationId')
   async getCommunication(
     @Param('communicationId') communicationId: string,
-    @Request() req?: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'];
+    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
     if (!xTenantId) {
       throw new BadRequestException('X-Tenant-Id header is required');
     }
 
     // Get user's memberships to find matching tenant
     const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: any) => m.tenantId === xTenantId);
+    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
     if (!membership) {
       throw new BadRequestException(
         'User does not have membership in the specified tenant',
@@ -327,10 +328,10 @@ export class CommunicationsInboxController {
    */
   @Get()
   async getInbox(
+    @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
     @Query('unitId') unitId?: string,
     @Query('readOnly') readOnly?: string,
-    @Request() req?: any,
   ) {
     // Get user's primary tenant membership
     const userMemberships = req.user?.memberships || [];
@@ -338,12 +339,12 @@ export class CommunicationsInboxController {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const userRoles = userMemberships[0]!.roles || [];
 
     // Validate building if provided
-    const filters: any = {};
+    const filters: FindForUserFilters & { unitId?: string } = {};
     if (buildingId) {
       await this.validators.validateBuildingBelongsToTenant(
         tenantId,
@@ -387,7 +388,7 @@ export class CommunicationsInboxController {
   @Get(':communicationId')
   async getCommunicationDetail(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     // Get user's primary tenant membership
     const userMemberships = req.user?.memberships || [];
@@ -395,9 +396,9 @@ export class CommunicationsInboxController {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const userRoles = userMemberships[0]!.roles || [];
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -441,7 +442,7 @@ export class CommunicationsInboxController {
   @HttpCode(200)
   async markAsRead(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     // Get user's primary tenant membership
     const userMemberships = req.user?.memberships || [];
@@ -449,9 +450,9 @@ export class CommunicationsInboxController {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
-    const userRoles = userMemberships[0].roles || [];
+    const userRoles = userMemberships[0]!.roles || [];
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -498,14 +499,14 @@ export class CommunicationsInboxController {
   @Post('resident/communications/:communicationId/read')
   async markResidentAsRead(
     @Param('communicationId') communicationId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<{ readAt: Date | null }> {
     const userMemberships = req.user?.memberships || [];
     if (userMemberships.length === 0) {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
 
     // Validate communication belongs to tenant

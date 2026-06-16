@@ -5,6 +5,17 @@ export interface ClassifierResult {
   confidence: number;
 }
 
+interface OllamaChatResponse {
+  message?: {
+    content?: string;
+  };
+}
+
+interface ClassifierResponsePayload {
+  category?: string;
+  confidence?: number;
+}
+
 /**
  * AI Classifier Service
  *
@@ -98,7 +109,8 @@ Responde SOLO con JSON valido sin markdown:
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as any;
+      const raw: unknown = await response.json();
+      const data = raw as OllamaChatResponse;
 
       if (!data.message?.content) {
         throw new Error('Invalid Ollama response format: missing message.content');
@@ -121,14 +133,15 @@ Responde SOLO con JSON valido sin markdown:
     }
 
     try {
-      const parsed = JSON.parse(jsonStr);
+      const parsed: unknown = JSON.parse(jsonStr);
+      const response = parsed as ClassifierResponsePayload;
 
       const validCategories = ['DEBT', 'TICKETS', 'DOCUMENTS', 'PAYMENTS', 'RESIDENTS', 'STATS', 'GENERAL'];
-      const category = parsed.category?.toUpperCase();
-      const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0;
+      const category = response.category?.toUpperCase();
+      const confidence = typeof response.confidence === 'number' ? response.confidence : 0;
 
-      if (!validCategories.includes(category)) {
-        this.logger.warn(`Invalid category from classifier: ${parsed.category}`);
+      if (!category || !validCategories.includes(category)) {
+        this.logger.warn(`Invalid category from classifier: ${response.category}`);
         return { category: 'GENERAL', confidence: 0 };
       }
 

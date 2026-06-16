@@ -9,6 +9,14 @@ export interface PlanFeatures {
   supportLevel: 'COMMUNITY' | 'EMAIL' | 'PRIORITY';
 }
 
+function toSupportLevel(value: string | null | undefined): PlanFeatures['supportLevel'] {
+  if (value === 'EMAIL' || value === 'PRIORITY') {
+    return value;
+  }
+
+  return 'COMMUNITY';
+}
+
 /**
  * PlanFeaturesService: Extract feature flags from BillingPlan
  * Features are determined by the subscription's plan, not hardcoded by client type.
@@ -38,7 +46,7 @@ export class PlanFeaturesService {
       canBulkOperations: subscription.plan.canBulkOperations ?? false,
       canUseAI: subscription.plan.canUseAI ?? false, // Phase 13
       aiConsultationsPerMonth: subscription.plan.aiConsultationsLimit ?? 0, // FASE 1
-      supportLevel: (subscription.plan.supportLevel as any) ?? 'COMMUNITY',
+      supportLevel: toSupportLevel(subscription.plan.supportLevel),
     };
   }
 

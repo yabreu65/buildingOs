@@ -17,9 +17,20 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { ScopeType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireFeature, RequireFeatureGuard } from '../billing/require-feature.guard';
 import { AiTemplateService, TemplateRunRequest, TemplateRunResponse } from './template.service';
+import type { AuthenticatedRequest, AuthenticatedUser } from '../common/types/request.types';
+
+interface TemplateRequestUser extends AuthenticatedUser {
+  activeTenantId?: string;
+  activeMembershipId?: string;
+}
+
+interface TemplateRequest extends AuthenticatedRequest {
+  user: TemplateRequestUser;
+}
 
 @Controller('assistant')
 @UseGuards(JwtAuthGuard, RequireFeatureGuard)
@@ -42,11 +53,14 @@ export class AiTemplateController {
    */
   @Get('templates')
   async getTemplates(
-    @Query('scope') scope?: string,
-    @Request() req?: any,
+    @Request() req: TemplateRequest,
+    @Query('scope') scope?: ScopeType,
   ) {
-    const tenantId = req.user?.activeTenantId || req.headers['x-tenant-id'];
-    const membership = req.user?.memberships?.find((m: any) => m.tenantId === tenantId);
+    const tenantHeader = req.headers['x-tenant-id'];
+    const tenantId = req.user?.activeTenantId || (
+      typeof tenantHeader === 'string' ? tenantHeader : tenantHeader?.[0]
+    );
+    const membership = req.user.memberships?.find((membership) => membership.tenantId === tenantId);
     const userRoles = membership?.roles || [];
 
     if (!tenantId) {
@@ -55,10 +69,7 @@ export class AiTemplateController {
     if (!membership) {
       throw new ForbiddenException('No access to tenant');
     }
-
-    const scopeType = scope || undefined;
-
-    return this.templateService.getAvailableTemplates(tenantId, userRoles, scopeType);
+    return this.templateService.getAvailableTemplates(tenantId, userRoles, scope);
   }
 
   /**
@@ -106,9 +117,12 @@ export class AiTemplateController {
   @RequireFeature('canUseAI')
   async runTemplate(
     @Body() request: TemplateRunRequest,
-    @Request() req?: any,
+    @Request() req: TemplateRequest,
   ): Promise<TemplateRunResponse> {
-    const tenantId = req.user?.activeTenantId || req.headers['x-tenant-id'];
+    const tenantHeader = req.headers['x-tenant-id'];
+    const tenantId = req.user?.activeTenantId || (
+      typeof tenantHeader === 'string' ? tenantHeader : tenantHeader?.[0]
+    );
     const membershipId = req.user?.activeMembershipId;
     const userId = req.user?.id;
     const memberships = req.user?.memberships || [];
@@ -122,7 +136,7 @@ export class AiTemplateController {
     }
 
     // Get user roles for this tenant
-    const membership = memberships.find((m: any) => m.tenantId === tenantId);
+    const membership = memberships.find((membership) => membership.tenantId === tenantId);
     const userRoles = membership?.roles || [];
     if (!membership) {
       throw new ForbiddenException('No access to tenant');

@@ -5,7 +5,13 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction } from '@prisma/client';
+import {
+  AuditAction,
+  BillingPlanId,
+  Prisma,
+  type BillingPlan,
+  type PlanChangeRequest,
+} from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { getCurrentMonth } from './pricing';
 
@@ -40,6 +46,19 @@ interface MembershipLike {
 interface UserLike {
   id: string;
   memberships?: MembershipLike[];
+}
+
+interface PlanRankSource {
+  rank?: number;
+  planId?: BillingPlanId | string;
+  name?: string | null;
+}
+
+interface OptionalPlanChangeRequestDelegate {
+  findFirst?: (
+    args: Prisma.PlanChangeRequestFindFirstArgs,
+  ) => Promise<PlanChangeRequest | null>;
+  create?: (args: Prisma.PlanChangeRequestCreateArgs) => Promise<PlanChangeRequest>;
 }
 
 @Injectable()
@@ -401,15 +420,15 @@ export class AiNudgesService {
     const targetTier: 'PRO' | 'ENTERPRISE' =
       isRepeatExceeded || bigCallRate > 20 ? 'ENTERPRISE' : 'PRO';
 
-    const currentPlanRank = this.getPlanRank(subscription.plan as any);
+    const currentPlanRank = this.getPlanRank(subscription.plan);
     const recommendedPlan = await this.findRecommendedPlan(currentPlanRank, targetTier);
     if (!recommendedPlan) {
       throw new BadRequestException('No se encontro un plan recomendado disponible');
     }
 
-    const prismaAny = this.prisma as any;
+    const planChangeRequestDelegate = this.getOptionalPlanChangeRequestDelegate();
 
-    const pendingRequest = await prismaAny.planChangeRequest?.findFirst?.({
+    const pendingRequest = await planChangeRequestDelegate?.findFirst?.({
       where: {
         tenantId,
         status: 'PENDING',
@@ -429,17 +448,17 @@ export class AiNudgesService {
       };
     }
 
-    if (currentPlanRank >= this.getPlanRank(recommendedPlan as any)) {
+    if (currentPlanRank >= this.getPlanRank(recommendedPlan)) {
       throw new BadRequestException('El tenant ya esta en un plan igual o superior al recomendado');
     }
 
-    if (!prismaAny.planChangeRequest?.create) {
+    if (!planChangeRequestDelegate?.create) {
       throw new BadRequestException(
         'PlanChangeRequest no disponible en el esquema Prisma actual',
       );
     }
 
-    const created = await prismaAny.planChangeRequest.create({
+    const created = await planChangeRequestDelegate.create({
       data: {
         tenantId,
         requestedPlanId: recommendedPlan.id,
@@ -454,7 +473,7 @@ export class AiNudgesService {
         tenantId,
         actorUserId: user.id,
         actorMembershipId: membership.id,
-        action: 'PLAN_CHANGE_REQUESTED' as any,
+        action: AuditAction.PLAN_CHANGE_REQUESTED,
         entity: 'PlanChangeRequest',
         entityId: created.id,
         metadata: {
@@ -465,9 +484,9 @@ export class AiNudgesService {
             percentUsed: usage.percentUsed,
             calls: usage.calls,
             estimatedCostCents: usage.estimatedCostCents,
-          },
-        } as any,
-      } as any,
+          } as Prisma.InputJsonObject,
+        } as Prisma.InputJsonObject,
+      },
     });
 
     return {
@@ -637,6 +656,14 @@ export class AiNudgesService {
     });
   }
 
+  private getOptionalPlanChangeRequestDelegate(): OptionalPlanChangeRequestDelegate | undefined {
+    const prismaWithOptionalPlanChangeRequest = this.prisma as unknown as {
+      planChangeRequest?: OptionalPlanChangeRequestDelegate;
+    };
+
+    return prismaWithOptionalPlanChangeRequest.planChangeRequest;
+  }
+
   private async getMonthAnalytics(tenantId: string, month: string) {
     const parts = month.split('-').map(Number);
     const year = parts[0]!;
@@ -678,12 +705,12 @@ export class AiNudgesService {
       this.prisma.auditLog.count({
         where: {
           tenantId,
-          action: 'AI_TEMPLATE_RUN' as any,
+          action: AuditAction.AI_TEMPLATE_RUN,
           createdAt: {
             gte: start,
             lte: end,
           },
-        } as any,
+        },
       }),
     ]);
 
@@ -734,7 +761,7 @@ export class AiNudgesService {
   private async findRecommendedPlan(
     currentPlanRank: number,
     targetTier: 'PRO' | 'ENTERPRISE',
-  ) {
+  ): Promise<BillingPlan | null> {
     const plans = await this.prisma.billingPlan.findMany();
 
     if (plans.length === 0) {
@@ -750,17 +777,17 @@ export class AiNudgesService {
     }
 
     const rankedPlans = [...plans].sort(
-      (a, b) => this.getPlanRank(a as any) - this.getPlanRank(b as any),
+      (a, b) => this.getPlanRank(a) - this.getPlanRank(b),
     );
 
     if (targetTier === 'ENTERPRISE') {
       return rankedPlans[rankedPlans.length - 1] ?? null;
     }
 
-    return rankedPlans.find((plan) => this.getPlanRank(plan as any) > currentPlanRank) ?? null;
+    return rankedPlans.find((plan) => this.getPlanRank(plan) > currentPlanRank) ?? null;
   }
 
-  private getPlanRank(plan: { rank?: number; planId?: string; name?: string }): number {
+  private getPlanRank(plan: PlanRankSource): number {
     if (typeof plan.rank === 'number') {
       return plan.rank;
     }

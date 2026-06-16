@@ -14,6 +14,20 @@ const OPENCODE_TIMEOUT_MS = 5000;
 const OPENCODE_BASE_URL = 'https://api.opencode.ai/v1/chat/completions';
 const OPENCODE_MODEL = 'qwen3.6-plus';
 
+interface OllamaChatResponse {
+  message?: {
+    content?: string;
+  };
+}
+
+interface OpencodeChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+}
+
 /**
  * Minimum confidence threshold for LLM extraction
  */
@@ -143,7 +157,8 @@ export class IntentExtractorService {
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as any;
+      const raw: unknown = await response.json();
+      const data = raw as OllamaChatResponse;
       const answer = data.message?.content ?? '';
       this.logger.log(`[OLLAMA] Raw answer: ${answer.substring(0, 200)}`);
 
@@ -200,7 +215,8 @@ export class IntentExtractorService {
         throw new Error(`Opencode API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as any;
+      const raw: unknown = await response.json();
+      const data = raw as OpencodeChatCompletionResponse;
       const answer = data.choices?.[0]?.message?.content ?? '';
 
       const parsed = this.parseAndValidate(answer);

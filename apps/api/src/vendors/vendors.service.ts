@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { Vendor, VendorAssignment, Quote, WorkOrder } from '@prisma/client';
+import { Prisma, Vendor, VendorAssignment, Quote, WorkOrder } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorsValidators } from './vendors.validators';
 import { CreateVendorDto } from './dto/create-vendor.dto';
@@ -782,7 +782,7 @@ export class VendorsService {
     }
 
     // Handle status transitions
-    const updateData: any = {};
+    const updateData: Prisma.WorkOrderUncheckedUpdateInput = {};
     if (dto.status) {
       updateData.status = dto.status as WorkOrderStatus;
       // If transitioning to DONE, set closedAt

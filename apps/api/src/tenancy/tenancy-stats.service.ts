@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface TenantStatsResponse {
@@ -36,8 +37,6 @@ export interface TenantBillingResponse {
     residents: number;
   };
 }
-
-import { AuditAction } from '@prisma/client';
 
 export interface AuditLogFilter {
   skip?: number;
@@ -240,8 +239,7 @@ export class TenancyStatsService {
     const { skip = 0, take = 10, action, dateFrom, dateTo } = filters;
 
     // Construir where clause
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const where: any = {
+    const where: Prisma.AuditLogWhereInput = {
       tenantId,
     };
 
@@ -278,7 +276,7 @@ export class TenancyStatsService {
       entity: log.entity,
       entityId: log.entityId,
       actorUserId: log.actorUserId,
-      actorName: (log.actor as any)?.name ?? null,
+      actorName: log.actor?.name ?? null,
       metadata: log.metadata as Record<string, unknown> | null,
       createdAt: log.createdAt,
     }));

@@ -2,6 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import * as Minio from 'minio';
 
+interface MinioErrorLike {
+  code?: string;
+  statusCode?: number;
+  message?: string;
+  stack?: string;
+}
+
 /**
  * MinIO Service: Wrapper around Minio SDK for presigned URLs and object operations
  *
@@ -15,6 +22,27 @@ import * as Minio from 'minio';
 @Injectable()
 export class MinioService {
   private readonly logger = new Logger(MinioService.name);
+
+  private getErrorLike(error: unknown): MinioErrorLike | undefined {
+    return typeof error === 'object' && error !== null
+      ? (error as MinioErrorLike)
+      : undefined;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return this.getErrorLike(error)?.message || String(error);
+  }
+
+  private getErrorStack(error: unknown): string | undefined {
+    return this.getErrorLike(error)?.stack;
+  }
+
+  private isNotFoundError(error: unknown): boolean {
+    const errorLike = this.getErrorLike(error);
+    return errorLike?.code === 'NotFound'
+      || errorLike?.statusCode === 404
+      || errorLike?.message?.includes('NotFound') === true;
+  }
   private readonly minioClient: Minio.Client;
   private readonly bucket: string;
 
@@ -132,10 +160,9 @@ export class MinioService {
       await this.minioClient.removeObject(bucketName, objectKey);
       this.logger.debug(`Deleted object: ${bucketName}/${objectKey}`);
     } catch (error: unknown) {
-      const errorObj = error as any;
       this.logger.error(
-        `Failed to delete object: ${errorObj?.message || String(error)}`,
-        errorObj?.stack,
+        `Failed to delete object: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
       );
       throw error;
     }
@@ -162,20 +189,14 @@ export class MinioService {
     } catch (error: unknown) {
       // statObject throws if object doesn't exist
       // Check for NotFound error from MinIO SDK (can be via statusCode or code)
-      const errorObj = error as any;
-      const isNotFound =
-        errorObj?.code === 'NotFound' ||
-        errorObj?.statusCode === 404 ||
-        errorObj?.message?.includes('NotFound');
-
-      if (isNotFound) {
+      if (this.isNotFoundError(error)) {
         this.logger.debug(`Object not found: ${bucketName}/${objectKey}`);
         return false;
       }
 
       this.logger.error(
-        `Failed to check object existence: ${errorObj?.message || String(error)}`,
-        errorObj?.stack,
+        `Failed to check object existence: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
       );
       throw error;
     }
@@ -207,10 +228,9 @@ export class MinioService {
         });
 
         stream.on('error', (error: unknown) => {
-          const errorObj = error as any;
           this.logger.error(
-            `Failed to list objects: ${errorObj?.message || String(error)}`,
-            errorObj?.stack,
+            `Failed to list objects: ${this.getErrorMessage(error)}`,
+            this.getErrorStack(error),
           );
           reject(error);
         });
@@ -223,10 +243,9 @@ export class MinioService {
         });
       });
     } catch (error: unknown) {
-      const errorObj = error as any;
       this.logger.error(
-        `Failed to list objects: ${errorObj?.message || String(error)}`,
-        errorObj?.stack,
+        `Failed to list objects: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
       );
       throw error;
     }
@@ -253,10 +272,9 @@ export class MinioService {
       this.logger.debug(`Got stat for ${bucketName}/${objectKey}`);
       return stat;
     } catch (error: unknown) {
-      const errorObj = error as any;
       this.logger.error(
-        `Failed to get object stat: ${errorObj?.message || String(error)}`,
-        errorObj?.stack,
+        `Failed to get object stat: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
       );
       throw error;
     }
@@ -296,10 +314,9 @@ export class MinioService {
       );
       this.logger.debug(`Uploaded buffer to ${bucketName}/${objectKey} (${buffer.length} bytes)`);
     } catch (error: unknown) {
-      const errorObj = error as any;
       this.logger.error(
-        `Failed to upload buffer: ${errorObj?.message || String(error)}`,
-        errorObj?.stack,
+        `Failed to upload buffer: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
       );
       throw error;
     }

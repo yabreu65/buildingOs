@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { UnitOccupant, AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -7,8 +7,23 @@ import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
 
+type OccupantNotificationUnit = {
+  id: string;
+  label: string | null;
+  buildingId: string;
+  building?: {
+    name: string;
+  } | null;
+};
+
+type OccupantWithRelations = UnitOccupant & {
+  unit?: OccupantNotificationUnit | null;
+};
+
 @Injectable()
 export class OccupantsService {
+  private readonly logger = new Logger(OccupantsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -209,8 +224,8 @@ export class OccupantsService {
    */
   private async sendOccupantAssignedNotification(
     tenantId: string,
-    occupant: UnitOccupant & { member?: any; unit?: any },
-    unit: any,
+    occupant: OccupantWithRelations,
+    unit: OccupantNotificationUnit,
   ): Promise<void> {
     try {
       // Load fresh member data to get user ID
@@ -242,9 +257,9 @@ export class OccupantsService {
       });
     } catch (error) {
       // Fire-and-forget: log but never fail
-      console.error(
-        `[OccupantsService] Failed to send occupant assigned notification for occupant ${occupant.id}:`,
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        `Failed to send occupant assigned notification for occupant ${occupant.id}`,
+        error instanceof Error ? error.stack : String(error),
       );
     }
   }

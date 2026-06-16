@@ -11,7 +11,13 @@ import {
   BadRequestException,
   Request,
 } from '@nestjs/common';
+import {
+  SupportTicketCategory,
+  SupportTicketPriority,
+  SupportTicketStatus,
+} from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { SupportTicketsService } from './support-tickets.service';
 import { CreateSupportTicketDto } from './dto/create-support-ticket.dto';
 import { UpdateSupportTicketDto, AddSupportTicketCommentDto, AssignSupportTicketDto, UpdateSupportTicketStatus } from './dto/update-support-ticket.dto';
@@ -53,10 +59,10 @@ export class SupportTicketsController {
    */
   @Get('super-admin/support')
   async listAllTickets(
-    @Request() req: any,
-    @Query('status') status?: string,
-    @Query('category') category?: string,
-    @Query('priority') priority?: string,
+    @Request() req: AuthenticatedRequest,
+    @Query('status') status?: SupportTicketStatus,
+    @Query('category') category?: SupportTicketCategory,
+    @Query('priority') priority?: SupportTicketPriority,
     @Query('skip') skip: string = '0',
     @Query('take') take: string = '50',
   ) {
@@ -79,7 +85,7 @@ export class SupportTicketsController {
    * GET /super-admin/support/:id
    */
   @Get('super-admin/support/:id')
-  async getTicket(@Param('id') id: string, @Request() req: any) {
+  async getTicket(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
     return this.supportTicketsService.findOne(id, null, user.roles || []);
   }
@@ -92,7 +98,7 @@ export class SupportTicketsController {
   async updateTicket(
     @Param('id') id: string,
     @Body() dto: UpdateSupportTicketDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.update(id, null, user.id, user.roles || [], dto);
@@ -106,13 +112,19 @@ export class SupportTicketsController {
   async updateTicketStatus(
     @Param('id') id: string,
     @Body('status') status: UpdateSupportTicketStatus,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     if (!status) {
       throw new BadRequestException('Status is required');
     }
-    return this.supportTicketsService.updateStatus(id, null, user.id, user.roles || [], status as any);
+    return this.supportTicketsService.updateStatus(
+      id,
+      null,
+      user.id,
+      user.roles || [],
+      status as SupportTicketStatus,
+    );
   }
 
   /**
@@ -123,7 +135,7 @@ export class SupportTicketsController {
   async assignTicket(
     @Param('id') id: string,
     @Body() dto: AssignSupportTicketDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.assign(id, null, user.id, user.roles || [], dto);
@@ -134,7 +146,7 @@ export class SupportTicketsController {
    * DELETE /super-admin/support/:id
    */
   @Delete('super-admin/support/:id')
-  async closeTicket(@Param('id') id: string, @Request() req: any) {
+  async closeTicket(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     const user = req.user;
     return this.supportTicketsService.close(id, null, user.id, user.roles || []);
   }
@@ -147,7 +159,7 @@ export class SupportTicketsController {
   async addCommentAdmin(
     @Param('id') id: string,
     @Body() dto: AddSupportTicketCommentDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.addComment(id, null, user.id, user.roles || [], dto);
@@ -164,9 +176,9 @@ export class SupportTicketsController {
   @Get(':tenantId/support')
   async listTenantTickets(
     @Param('tenantId') tenantId: string,
-    @Request() req: any,
-    @Query('status') status?: string,
-    @Query('category') category?: string,
+    @Request() req: AuthenticatedRequest,
+    @Query('status') status?: SupportTicketStatus,
+    @Query('category') category?: SupportTicketCategory,
     @Query('skip') skip: string = '0',
     @Query('take') take: string = '50',
   ) {
@@ -192,7 +204,7 @@ export class SupportTicketsController {
   async createTicket(
     @Param('tenantId') tenantId: string,
     @Body() dto: CreateSupportTicketDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.create(tenantId, user.id, dto);
@@ -206,7 +218,7 @@ export class SupportTicketsController {
   async getTenantTicket(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.findOne(id, tenantId, user.roles || []);
@@ -221,7 +233,7 @@ export class SupportTicketsController {
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
     @Body() dto: UpdateSupportTicketDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.update(id, tenantId, user.id, user.roles || [], dto);
@@ -236,7 +248,7 @@ export class SupportTicketsController {
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
     @Body() dto: AddSupportTicketCommentDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const user = req.user;
     return this.supportTicketsService.addComment(id, tenantId, user.id, user.roles || [], dto);

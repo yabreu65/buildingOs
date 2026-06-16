@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,7 +11,7 @@ import { FinanzasValidators } from './finanzas.validators';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import { CreateChargeDto, UpdateChargeDto } from './finanzas.dto';
-import { ChargeStatus, PaymentStatus, AuditAction } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, PaymentMethod, AuditAction } from '@prisma/client';
 
 describe('FinanzasService', () => {
   let service: FinanzasService;
@@ -35,6 +36,7 @@ describe('FinanzasService', () => {
             },
             payment: {
               create: jest.fn(),
+              findFirst: jest.fn(),
               findUnique: jest.fn(),
               findMany: jest.fn(),
               update: jest.fn(),
@@ -64,6 +66,7 @@ describe('FinanzasService', () => {
           provide: PaymentReceiptService,
           useValue: {
             generateForApprovedPayment: jest.fn(),
+            ensureReceiptForPayment: jest.fn(),
           },
         },
         {
@@ -77,6 +80,9 @@ describe('FinanzasService', () => {
             getUserUnitIds: jest.fn(),
             canWritePayments: jest.fn(),
             canApprovePayments: jest.fn(),
+            canSubmitPayments: jest.fn(),
+            canReviewPayments: jest.fn(),
+            validateResidentUnitAccess: jest.fn(),
           },
         },
       ],
@@ -442,10 +448,128 @@ describe('FinanzasService', () => {
 
   // ========== TESTS: SUBMIT PAYMENT ==========
   describe('submitPayment', () => {
-    it('should skip submitPayment tests - complex validator dependencies', () => {
-      // These tests require complex mocks for FinanzasValidators
-      // that are beyond unit test scope. Integration tests recommended.
-      expect(true).toBe(true);
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const unitId = 'unit-123';
+    const userId = 'user-123';
+    const userRoles = ['RESIDENT'];
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canSubmitPayments').mockReturnValue(true);
+      jest
+        .spyOn(validators, 'validateBuildingBelongsToTenant')
+        .mockResolvedValue(undefined);
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);
+      jest
+        .spyOn(validators, 'validateResidentUnitAccess')
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(validators, 'validateUnitBelongsToBuildingAndTenant')
+        .mockResolvedValue(undefined);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
+      jest
+        .spyOn(service as any, 'notifyAdminsOfPaymentSubmitted')
+        .mockResolvedValue(undefined);
+      jest.spyOn(prismaService.payment, 'create').mockResolvedValue({
+        id: 'payment-123',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.SUBMITTED,
+        proofFileId: 'file-123',
+        createdByUserId: userId,
+      } as any);
+    });
+
+    it('should create a submitted transfer payment with proof', async () => {
+      const result = await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        userRoles,
+        {
+          unitId,
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+          proofFileId: 'file-123',
+        },
+      );
+
+      expect(result.status).toBe(PaymentStatus.SUBMITTED);
+      expect(prismaService.payment.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tenantId,
+          buildingId,
+          unitId,
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          proofFileId: 'file-123',
+        }),
+      });
+    });
+
+    it('should reject transfer payment without proofFileId', async () => {
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prismaService.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject unsupported payment methods while provider is transfer-only', async () => {
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          amount: 10000,
+          method: PaymentMethod.CARD,
+          reference: 'CARD-123',
+          proofFileId: 'file-123',
+        }),
+      ).rejects.toThrow('Por ahora solo se aceptan pagos por transferencia bancaria');
+
+      expect(prismaService.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject resident payment for units outside self-scope', async () => {
+      jest
+        .spyOn(validators, 'validateResidentUnitAccess')
+        .mockRejectedValue(new BadRequestException('Unit does not belong to resident'));
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId: 'other-unit',
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+          proofFileId: 'file-123',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject duplicate transfer reference in the last 48 hours', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: 'payment-duplicate',
+      } as any);
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+          proofFileId: 'file-123',
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 

@@ -12,7 +12,8 @@
  * - Context enrichment integration
  */
 
-import { Injectable, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
+import type { Prisma, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiContextSummaryService } from './context-summary.service';
 import { AiBudgetService } from './budget.service';
@@ -35,12 +36,14 @@ export interface TemplateRunRequest {
 
 export interface TemplateRunResponse {
   answer: string;
-  suggestedActions: any[];
+  suggestedActions: ChatResponse['suggestedActions'];
   followUpQuestions?: string[];
 }
 
 @Injectable()
 export class AiTemplateService {
+  private readonly logger = new Logger(AiTemplateService.name);
+
   constructor(
     private prisma: PrismaService,
     private assistant: AssistantService,
@@ -60,10 +63,10 @@ export class AiTemplateService {
   async getAvailableTemplates(
     tenantId: string,
     userRoles: string[],
-    scopeType?: string,
+    scopeType?: ScopeType,
   ) {
     // Get templates available for this tenant
-    const where: any = {
+    const where: Prisma.AiTemplateWhereInput = {
       isActive: true,
       enabledByDefault: true,
       OR: [
@@ -167,7 +170,7 @@ export class AiTemplateService {
       userRoles,
     }).catch((err) => {
       // Fire-and-forget: log error but don't fail the request
-      console.warn('[TemplateService] Context enrichment failed:', err.message);
+      this.logger.warn(`Context enrichment failed: ${err.message}`);
       return { summaryVersion: null, snapshot: null };
     });
 
@@ -213,7 +216,7 @@ export class AiTemplateService {
       },
     }).catch((err) => {
       // Fire-and-forget: log error but don't fail the response
-      console.warn('[TemplateService] Audit logging failed:', err.message);
+      this.logger.warn(`Audit logging failed: ${err.message}`);
     });
 
     // Return response with template context
@@ -249,7 +252,7 @@ export class AiTemplateService {
    */
   private hasPermissions(
     userRoles: string[],
-    requiredPermissionsJson: string | any,
+    requiredPermissionsJson: unknown,
   ): boolean {
     // SUPER_ADMIN has all permissions
     if (userRoles.includes('SUPER_ADMIN')) {
@@ -264,7 +267,7 @@ export class AiTemplateService {
     // For other roles, check required permissions
     const requiredPermissions = typeof requiredPermissionsJson === 'string'
       ? (JSON.parse(requiredPermissionsJson) as string[])
-      : (requiredPermissionsJson as string[]);
+      : (requiredPermissionsJson as string[] | null | undefined);
 
     if (!requiredPermissions || requiredPermissions.length === 0) {
       return true; // No special permissions required

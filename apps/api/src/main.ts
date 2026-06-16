@@ -7,7 +7,10 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { ConfigService } from "./config/config.service";
 import { RateLimitMiddleware } from "./security/rate-limit.middleware";
 import { SentryService } from "./observability/sentry.service";
+import { NextFunction, Request, Response } from 'express';
 import helmet from "helmet";
+
+const bootstrapLogger = new Logger('Bootstrap');
 
 /**
  * Bootstrap the NestJS application with security middleware, validation, and observability.
@@ -91,7 +94,7 @@ async function bootstrap() {
   // =========================================================
   // Security: Cache Control for sensitive endpoints
   // =========================================================
-  app.use((req: any, res: any, next: any) => {
+  app.use((req: Request, res: Response, next: NextFunction) => {
     // Disable client-side caching for sensitive data
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -164,6 +167,9 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error: unknown) => {
-  console.error('Fatal error during bootstrap:', error);
+  bootstrapLogger.error(
+    'Fatal error during bootstrap',
+    error instanceof Error ? error.stack : String(error),
+  );
   process.exit(1);
 });

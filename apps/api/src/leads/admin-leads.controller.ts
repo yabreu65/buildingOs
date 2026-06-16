@@ -12,6 +12,7 @@ import {
   HttpStatus,
   Request,
 } from '@nestjs/common';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { LeadsService } from './leads.service';
 import { UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -129,7 +130,7 @@ export class AdminLeadsController {
   async convertLead(
     @Param('id') id: string,
     @Body() dto: ConvertLeadDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ConvertLeadResponseDto> {
     const superAdminUserId = req.user?.id;
     return this.leadsService.convertLeadToTenant(id, dto, superAdminUserId);

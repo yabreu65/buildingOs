@@ -1,5 +1,5 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { SupportTicketStatus } from '@prisma/client';
+import { Prisma, SupportTicketCategory, SupportTicketPriority, SupportTicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -65,10 +65,14 @@ export class SupportTicketsService {
     userRoles: string[],
     skip: number = 0,
     take: number = 50,
-    filters?: { status?: string; category?: string; priority?: string },
+    filters?: {
+      status?: SupportTicketStatus;
+      category?: SupportTicketCategory;
+      priority?: SupportTicketPriority;
+    },
   ) {
     // Build query
-    const where: any = {};
+    const where: Prisma.SupportTicketWhereInput = {};
 
     // SUPER_ADMIN sees all, TENANT_ADMIN sees only their tenant's
     if (!userRoles.includes('SUPER_ADMIN')) {

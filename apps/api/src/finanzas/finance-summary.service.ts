@@ -1,7 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { EmailType } from '../email/email.types';
+
+type ChargeWithUnitAndAllocations = Prisma.ChargeGetPayload<{
+  include: {
+    unit: {
+      select: {
+        id: true;
+        label: true;
+        building: {
+          select: {
+            name: true;
+          };
+        };
+      };
+    };
+    paymentAllocations: {
+      include: {
+        payment: true;
+      };
+    };
+  };
+}>;
 
 /**
  * [PHASE 4 HARD #15] FinanceSummaryService
@@ -44,7 +66,7 @@ export class FinanceSummaryService {
     });
 
     for (const tenant of tenants) {
-      const tenantMembers = (tenant as any).tenantMembers;
+      const tenantMembers = tenant.tenantMembers;
       if (tenantMembers.length === 0) continue;
 
       try {
@@ -55,7 +77,7 @@ export class FinanceSummaryService {
         const html = this.generateSummaryHtml(tenant.name, lastMonth, report);
 
         // Send to all TENANT_ADMINs
-        for (const membership of (tenant as any).tenantMembers) {
+        for (const membership of tenantMembers) {
           if (membership.user?.email) {
             try {
               await this.emailService.sendEmail(
@@ -152,7 +174,14 @@ export class FinanceSummaryService {
     });
 
     // Calculate real outstanding from APPROVED/RECONCILED payments only
-    const unitDebtMap = new Map<string, { unit: any; buildingName: string; outstanding: number }>();
+    const unitDebtMap = new Map<
+      string,
+      {
+        unit: ChargeWithUnitAndAllocations['unit'];
+        buildingName: string;
+        outstanding: number;
+      }
+    >();
     for (const charge of allCharges) {
       const allocatedApproved = charge.paymentAllocations.reduce((sum, pa) => {
         const status = pa.payment?.status;

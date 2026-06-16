@@ -1,5 +1,27 @@
 import { Request } from 'express';
 
+export interface AuthenticatedMembership {
+  id?: string;
+  tenantId: string;
+  roles: string[];
+}
+
+export interface AuthenticatedUser {
+  id: string;
+  sub?: string;
+  email: string;
+  name?: string;
+  isSuperAdmin?: boolean;
+  roles?: string[];
+  membershipId?: string;
+  permissions?: string[];
+  tenantId?: string; // From JWT context for tenant-level routes
+  memberships?: AuthenticatedMembership[];
+}
+
+export interface AuthenticatedServiceActor
+  extends Pick<AuthenticatedUser, 'id' | 'memberships'> {}
+
 /**
  * Request type with typed tenantId, userId, and user properties
  * Used across all controllers that require authentication
@@ -11,19 +33,7 @@ import { Request } from 'express';
 export interface AuthenticatedRequest extends Request {
   tenantId?: string; // Populated by BuildingAccessGuard for building-scoped routes
   userId?: string;
-  user: {
-    id: string;
-    sub?: string;
-    email: string;
-    roles?: string[];
-    membershipId?: string;
-    permissions?: string[];
-    tenantId?: string; // From JWT context for tenant-level routes
-    memberships?: Array<{
-      tenantId: string;
-      roles: string[];
-    }>;
-  };
+  user: AuthenticatedUser;
 }
 
 /**

@@ -6,13 +6,15 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { PlanFeaturesService } from './plan-features.service';
+import { PlanFeatures } from './plan-features.service';
 
 /**
  * Decorator to mark an endpoint as requiring a specific feature
  * Usage: @RequireFeature('canExportReports')
  */
-export const RequireFeature = (featureKey: string) =>
+export const RequireFeature = (featureKey: keyof PlanFeatures) =>
   SetMetadata('requiredFeature', featureKey);
 
 /**
@@ -28,7 +30,7 @@ export class RequireFeatureGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Get the feature key from decorator metadata
-    const featureKey = this.reflector.get<string>(
+    const featureKey = this.reflector.get<keyof PlanFeatures>(
       'requiredFeature',
       context.getHandler(),
     );
@@ -44,18 +46,16 @@ export class RequireFeatureGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const tenantId = request.user?.tenantId || request.headers['x-tenant-id'];
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const tenantId =
+      request.user?.tenantId || this.getTenantIdFromHeader(request);
 
     if (!tenantId) {
       throw new ForbiddenException('Tenant ID required');
     }
 
     // Check if tenant has the feature
-    const hasFeature = await this.planFeatures.hasFeature(
-      tenantId,
-      featureKey as any,
-    );
+    const hasFeature = await this.planFeatures.hasFeature(tenantId, featureKey);
 
     if (!hasFeature) {
       throw new ForbiddenException({
@@ -71,17 +71,28 @@ export class RequireFeatureGuard implements CanActivate {
     return true;
   }
 
+  private getTenantIdFromHeader(request: AuthenticatedRequest): string | undefined {
+    const tenantHeader = request.headers['x-tenant-id'];
+
+    if (typeof tenantHeader === 'string' && tenantHeader) {
+      return tenantHeader;
+    }
+
+    return Array.isArray(tenantHeader) ? tenantHeader[0] : undefined;
+  }
+
   /**
    * Helper to suggest which plan includes this feature
    */
-  private getPlanRequiringFeature(featureKey: string): string {
-    const featurePlanMap: Record<string, string> = {
+  private getPlanRequiringFeature(featureKey: keyof PlanFeatures): string {
+    const featurePlanMap: Record<keyof PlanFeatures, string> = {
       canExportReports: 'BASIC',
       canBulkOperations: 'PRO',
       canUseAI: 'ENTERPRISE',
-      canUseWhatsApp: 'PRO',
+      aiConsultationsPerMonth: 'ENTERPRISE',
+      supportLevel: 'PRO',
     };
 
-    return featurePlanMap[featureKey] || 'PRO';
+    return featurePlanMap[featureKey];
   }
 }

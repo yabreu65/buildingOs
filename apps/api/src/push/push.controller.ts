@@ -10,6 +10,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscribePushDto } from './dto/subscribe-push.dto';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('push')
 @UseGuards(JwtAuthGuard)
@@ -29,14 +30,14 @@ export class PushController {
    */
   async subscribe(
     @Body() dto: SubscribePushDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const userMemberships = req.user?.memberships || [];
     if (userMemberships.length === 0) {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
 
     // Upsert push subscription
@@ -74,14 +75,14 @@ export class PushController {
    */
   async unsubscribe(
     @Body() body: { endpoint: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const userMemberships = req.user?.memberships || [];
     if (userMemberships.length === 0) {
       throw new BadRequestException('User does not have a tenant membership');
     }
 
-    const tenantId = userMemberships[0].tenantId;
+    const tenantId = userMemberships[0]!.tenantId;
     const userId = req.user.id;
 
     // Revoke push subscription

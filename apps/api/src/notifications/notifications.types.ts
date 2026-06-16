@@ -6,7 +6,7 @@ export interface CreateNotificationInput {
   type: NotificationType;
   title: string;
   body: string;
-  data?: Record<string, any>;
+  data?: Record<string, unknown>;
   deliveryMethods?: DeliveryMethod[];
 }
 

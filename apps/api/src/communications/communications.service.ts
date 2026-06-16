@@ -10,6 +10,7 @@ import {
   BadRequestException,
   NotFoundException,
   UnprocessableEntityException,
+  Logger,
 } from '@nestjs/common';
 import {
   CommunicationChannel,
@@ -23,7 +24,10 @@ import { CommunicationsValidators } from './communications.validators';
 import { ADMIN_ROLES } from './admin-role.guard';
 import { ConfigService } from '../config/config.service';
 import type { CommunicationScopeType } from '@buildingos/contracts';
-import type { ResidentCommunicationListResponse } from '@buildingos/contracts';
+import type {
+  ResidentCommunicationListItem,
+  ResidentCommunicationListResponse,
+} from '@buildingos/contracts';
 
 /** Include spec shared by all queries that return full communication details */
 const COMMUNICATION_INCLUDE = {
@@ -101,6 +105,8 @@ export interface PublishV2Options {
 
 @Injectable()
 export class CommunicationsService {
+  private readonly logger = new Logger(CommunicationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly validators: CommunicationsValidators,
@@ -419,6 +425,8 @@ export class CommunicationsService {
     communicationId: string,
     sendWebPush: boolean,
   ): Promise<CommunicationWithDetails> {
+    this.assertWebPushAvailable(sendWebPush);
+
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -626,21 +634,7 @@ export class CommunicationsService {
     userId: string,
     limit: number = 20,
     cursor?: string,
-  ): Promise<{
-    items: Array<{
-      id: string;
-      title: string;
-      body: string;
-      priority: string;
-      scopeType: string;
-      buildingIds: string[];
-      createdAt: Date;
-      publishedAt: Date | null;
-      deliveryStatus: 'UNREAD' | 'READ';
-      readAt: Date | null;
-    }>;
-    nextCursor?: string;
-  }> {
+  ): Promise<ResidentCommunicationListResponse> {
     // Decode cursor if provided
     let cursorDate: Date | undefined;
     let cursorId: string | undefined;
@@ -713,7 +707,7 @@ export class CommunicationsService {
     const items = receipts.slice(0, limit);
 
     // Map to response format
-    const mappedItems = items.map((receipt) => {
+    const mappedItems = items.map((receipt): ResidentCommunicationListItem => {
       const comm = receipt.communication;
       const buildingIds = comm.targets
         .filter((t) => t.targetType === 'BUILDING' && t.targetId)
@@ -733,9 +727,9 @@ export class CommunicationsService {
         scopeType: scopeType as 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL',
         buildingIds,
         createdAt: comm.createdAt.toISOString(),
-        publishedAt: comm.sentAt?.toISOString() ?? undefined,
-        deliveryStatus: (receipt.readAt ? 'READ' : 'UNREAD') as 'UNREAD' | 'READ',
-        readAt: receipt.readAt?.toISOString() ?? undefined,
+        publishedAt: comm.sentAt?.toISOString() ?? null,
+        deliveryStatus: receipt.readAt ? 'READ' : 'UNREAD',
+        readAt: receipt.readAt?.toISOString() ?? null,
       };
     });
 
@@ -751,7 +745,7 @@ export class CommunicationsService {
       ).toString('base64');
     }
 
-    return { items: mappedItems as unknown as Array<{id: string; title: string; body: string; priority: string; scopeType: string; buildingIds: string[]; createdAt: Date; publishedAt: Date | null; deliveryStatus: 'UNREAD' | 'READ'; readAt: Date | null}>, nextCursor };
+    return { items: mappedItems, nextCursor };
   }
 
   /**
@@ -921,6 +915,8 @@ export class CommunicationsService {
     communicationId: string,
     sendWebPush: boolean,
   ): Promise<CommunicationWithDetails> {
+    this.assertWebPushAvailable(sendWebPush);
+
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
       communicationId,
@@ -953,53 +949,17 @@ export class CommunicationsService {
       include: COMMUNICATION_INCLUDE,
     });
 
-    if (sendWebPush) {
-      await this.sendWebPushIfApplicable(tenantId, communicationId);
-    }
-
     return published;
   }
 
-  /**
-   * Send web push to users with active subscriptions
-   * Best-effort: does NOT fail if no subscriptions exist
-   */
-  private async sendWebPushIfApplicable(
-    tenantId: string,
-    communicationId: string,
-  ): Promise<void> {
-    const subscriptions = await this.prisma.pushSubscription.findMany({
-      where: {
-        tenantId,
-        revokedAt: null,
-      },
-      select: {
-        userId: true,
-        endpoint: true,
-        p256dh: true,
-        auth: true,
-      },
-    });
-
-    if (subscriptions.length === 0) {
+  private assertWebPushAvailable(sendWebPush: boolean): void {
+    if (!sendWebPush) {
       return;
     }
 
-    const communication = await this.prisma.communication.findUnique({
-      where: { id: communicationId },
-      select: { title: true, body: true },
-    });
-
-    if (!communication) {
-      return;
-    }
-
-    // TODO: Integrate with actual push notification service (FCM, WebPush, etc.)
-    // For now, this is a placeholder that logs what would be sent
-    console.log(`[Push] Would send push to ${subscriptions.length} users:`, {
-      title: communication.title,
-      body: communication.body,
-      subscriptions: subscriptions.map((s) => s.endpoint),
+    throw new UnprocessableEntityException({
+      code: 'WEB_PUSH_NOT_AVAILABLE',
+      message: 'Web push is not available in production yet',
     });
   }
 
@@ -1165,18 +1125,18 @@ export class CommunicationsService {
           dispatchedCount++;
         } catch (error) {
           // Fire-and-forget: log but continue with next
-          console.error(
-            `Failed to dispatch scheduled communication ${comm.id}:`,
-            error instanceof Error ? error.message : String(error),
+          this.logger.error(
+            `Failed to dispatch scheduled communication ${comm.id}`,
+            error instanceof Error ? error.stack : String(error),
           );
         }
       }
 
       return dispatchedCount;
     } catch (error) {
-      console.error(
-        'Error in dispatchScheduledCommunications:',
-        error instanceof Error ? error.message : String(error),
+      this.logger.error(
+        'Error in dispatchScheduledCommunications',
+        error instanceof Error ? error.stack : String(error),
       );
       return 0;
     }

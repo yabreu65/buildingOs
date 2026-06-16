@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -14,6 +15,17 @@ export interface CreateAllocationInput {
   amountMinor?: number;
   currencyCode?: string;
 }
+
+type MovementAllocationWithBuilding = Prisma.MovementAllocationGetPayload<{
+  include: {
+    building: {
+      select: {
+        id: true;
+        name: true;
+      };
+    };
+  };
+}>;
 
 @Injectable()
 export class MovementAllocationService {
@@ -182,7 +194,7 @@ export class MovementAllocationService {
     tenantId: string,
     expenseId?: string,
     incomeId?: string,
-  ): Promise<any[]> {
+  ): Promise<MovementAllocationWithBuilding[]> {
     return this.prisma.movementAllocation.findMany({
       where: {
         tenantId,
