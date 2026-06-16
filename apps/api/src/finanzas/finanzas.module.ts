@@ -43,6 +43,9 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import { SignatureGuard } from './payment-gateway/webhooks/signature.guard';
 import { IdempotencyService } from './payment-gateway/webhooks/idempotency.service';
 import { PaymentWebhookController } from './payment-gateway/webhooks/payment-webhook.controller';
+import { resolvePaymentGateway } from './payment-gateway/payment-gateway.resolver';
+
+const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGateway();
 
 @Module({
   imports: [
@@ -50,7 +53,7 @@ import { PaymentWebhookController } from './payment-gateway/webhooks/payment-web
     EmailModule,
     NotificationsModule,
     StorageModule,
-    PaymentGatewayModule.register('none', {}),
+    PaymentGatewayModule.register(paymentProvider, paymentOptions),
   ],
   controllers: [
     FinanzasController,

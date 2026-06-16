@@ -9,12 +9,12 @@ import { AppConfigModule } from '../config/config.module';
 import { EmailDeliveryModule } from './email/email-delivery.module';
 import { EmailBounceController } from './email/webhooks/email-bounce.controller';
 import { DeliveryTrackingService } from './email/delivery-tracking.service';
+import { resolveEmailDelivery } from './email/email-delivery.resolver';
+
+const emailOptions = resolveEmailDelivery();
 
 @Module({
-  imports: [PrismaModule, AppConfigModule, EmailDeliveryModule.register({
-    mailProvider: 'none',
-    mailFrom: 'BuildingOS <no-reply@buildingos.local>',
-  })],
+  imports: [PrismaModule, AppConfigModule, EmailDeliveryModule.register(emailOptions)],
   controllers: [
     CommunicationsController,
     CommunicationsUserController,
