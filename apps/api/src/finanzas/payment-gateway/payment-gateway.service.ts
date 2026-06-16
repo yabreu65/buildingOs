@@ -3,18 +3,19 @@
  * Task 2.3: Orchestrates payment creation, webhook handling, and charge confirmation
  */
 
-import { Injectable, Logger } from '@nestjs/common';
-import { PaymentProvider, CreatePreferenceInput, PaymentPreference, WebhookEvent, PaymentStatus } from './interfaces/payment-provider.interface';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { PaymentProvider, CreatePreferenceInput, PaymentPreference, WebhookEvent, PaymentStatus, PAYMENT_PROVIDER_TOKEN } from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
 import { ChargeStatus } from '@prisma/client';
+import { Inject } from '@nestjs/common';
 
 @Injectable()
 export class PaymentGatewayService {
   private readonly logger = new Logger(PaymentGatewayService.name);
 
   constructor(
-    private readonly provider: PaymentProvider,
+    @Optional() @Inject(PAYMENT_PROVIDER_TOKEN) private readonly provider: PaymentProvider | null,
     private readonly prisma: PrismaService,
     private readonly idempotencyService: IdempotencyService,
   ) {}
@@ -23,6 +24,7 @@ export class PaymentGatewayService {
    * Create a payment preference (checkout link) for a charge
    */
   async createPreference(input: CreatePreferenceInput): Promise<PaymentPreference> {
+    if (!this.provider) throw new Error('Payment provider not configured');
     return this.provider.createPreference(input);
   }
 
@@ -34,6 +36,7 @@ export class PaymentGatewayService {
     signature: string,
     providerName: string,
   ): Promise<WebhookEvent & { chargeUpdated?: boolean }> {
+    if (!this.provider) throw new Error('Payment provider not configured');
     const event = await this.provider.handleWebhook(payload, signature);
 
     // Idempotency: check via dedicated IdempotencyService
@@ -83,6 +86,7 @@ export class PaymentGatewayService {
    * Get the status of a charge from the provider
    */
   async getChargeStatus(externalId: string): Promise<PaymentStatus> {
+    if (!this.provider) throw new Error('Payment provider not configured');
     return this.provider.getChargeStatus(externalId);
   }
 }
