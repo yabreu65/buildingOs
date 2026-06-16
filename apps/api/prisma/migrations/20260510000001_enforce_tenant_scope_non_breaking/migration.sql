@@ -1,3 +1,18 @@
+-- Fix: UnitAssociation table was originally created via prisma db push (not a migration).
+-- This CREATE TABLE IF NOT EXISTS makes the migration replayable for shadow databases.
+-- Safe for production: IF NOT EXISTS is a no-op when the table already exists.
+CREATE TABLE IF NOT EXISTS "UnitAssociation" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "buildingId" TEXT NOT NULL,
+    "apartmentId" TEXT NOT NULL,
+    "parkingId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "UnitAssociation_pkey" PRIMARY KEY ("id")
+);
+
 -- Contract phase: validate backfill, then enforce NOT NULL, simple Tenant FKs, and additive tenant-aware uniques.
 -- Existing constraints are intentionally preserved for compatibility.
 
