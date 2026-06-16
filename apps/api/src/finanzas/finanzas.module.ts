@@ -30,6 +30,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../storage/storage.module';
 import { PaymentGatewayModule } from './payment-gateway/payment-gateway.module';
 import { ConfigService } from '../config/config.service';
+import { AppConfigModule } from '../config/config.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -53,6 +54,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     EmailModule,
     NotificationsModule,
     StorageModule,
+    AppConfigModule,
     PaymentGatewayModule.register(paymentProvider, paymentOptions),
   ],
   controllers: [
