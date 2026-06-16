@@ -69,8 +69,14 @@ COPY packages ./packages
 # Copy Prisma schema (needed for migrations)
 COPY apps/api/prisma ./apps/api/prisma
 
+# Copy compiled contracts from builder (workspace dependency)
+COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
+
 # Copy compiled application from builder
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
+
+# Copy built contracts package from builder
+COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
 
 # Expose port
 EXPOSE 3000
