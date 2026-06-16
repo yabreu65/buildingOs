@@ -7,6 +7,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PaymentProvider, CreatePreferenceInput, PaymentPreference, WebhookEvent, PaymentStatus } from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
+import { ChargeStatus } from '@prisma/client';
 
 @Injectable()
 export class PaymentGatewayService {
@@ -55,7 +56,7 @@ export class PaymentGatewayService {
       if (charge && charge.status === 'PENDING') {
         await this.prisma.charge.update({
           where: { id: event.chargeId },
-          data: { status: event.status, paymentExternalId: event.externalId },
+          data: { status: event.status as ChargeStatus, paymentExternalId: event.externalId },
         });
         chargeUpdated = true;
         this.logger.log(`Charge ${event.chargeId} updated to ${event.status}`);

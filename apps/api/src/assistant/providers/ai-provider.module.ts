@@ -10,6 +10,7 @@ import { OpenAiAdapter } from './adapters/openai.adapter';
 import { OpenCodeAdapter } from './adapters/opencode.adapter';
 import { GeminiAdapter } from './adapters/gemini.adapter';
 import { CircuitBreaker } from './circuit-breaker';
+import { AiProvider as AiProviderType } from '../ai.types';
 import { AssistantLlmHealthService } from '../llm-health.service';
 import { AssistantLlmHealthController } from '../llm-health.controller';
 
@@ -45,7 +46,7 @@ export class AiProviderModule {
       };
     }
 
-    const aiProviderFactory: Provider<AiProvider> = {
+    const aiProviderFactory: Provider<AiProviderType> = {
       provide: AI_PROVIDER_TOKEN,
       useFactory: () => {
         switch (options.provider) {
@@ -64,7 +65,7 @@ export class AiProviderModule {
             }
             return new GeminiAdapter(options.geminiApiKey, options.geminiModel);
           default:
-            return null;
+            return null as unknown as AiProviderType;
         }
       },
     };
