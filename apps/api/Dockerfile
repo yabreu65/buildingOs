@@ -8,6 +8,9 @@
 # ---- Stage 1: Builder ----
 FROM node:20-alpine AS builder
 
+# Install openssl so prisma generate detects the correct binary target
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy root package files for workspace resolution
@@ -34,6 +37,9 @@ RUN npm run build -w apps/api
 # ---- Stage 2: Production Dependencies ----
 FROM node:20-alpine AS prod-deps
 
+# Install openssl so prisma generate detects the correct binary target
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy root package files
@@ -50,7 +56,7 @@ COPY apps/api/prisma ./apps/api/prisma
 RUN cd apps/api && npm install prisma@5.22.0 && npx prisma generate && npm uninstall prisma
 
 # ---- Stage 3: Runtime ----
-FROM node:20-alpine
+FROM node:20-alpine AS runtime
 
 WORKDIR /app
 
@@ -75,9 +81,6 @@ COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
 # Copy compiled application from builder
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 
-# Copy built contracts package from builder
-COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
-
 # Expose port
 EXPOSE 3000
 
@@ -87,3 +90,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 
 # Start application
 CMD ["node", "apps/api/dist/main"]
+
+# ---- Stage 4: Dev Tools (migrate, seed) ----
+# Uses builder which has all deps (dev + prod) including ts-node
+FROM builder AS dev-tools

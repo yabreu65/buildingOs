@@ -472,6 +472,7 @@ async function main() {
     create: {
       tenantId: tenantAdmin.id,
       name: "Building A - Downtown",
+      alias: "A",
       address: "456 Park Ave, Downtown District",
     },
   });
@@ -482,6 +483,7 @@ async function main() {
     create: {
       tenantId: tenantAdmin.id,
       name: "Building B - Uptown",
+      alias: "B",
       address: "789 Oak Boulevard, Uptown Area",
     },
   });
@@ -574,6 +576,7 @@ async function main() {
     create: {
       tenantId: tenantBuilding.id,
       name: "Demo Building - Self Managed",
+      alias: "A",
       address: "123 Main St, Apartment Complex",
     },
   });
