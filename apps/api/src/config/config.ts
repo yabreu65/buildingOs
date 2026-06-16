@@ -178,6 +178,33 @@ export const createConfigSchema = (_nodeEnv: string) => {
       emptyStringToUndefined,
       z.string().email().optional(),
     ),
+
+    // Payment Gateway
+    PAYMENT_PROVIDER: z
+      .enum(['none', 'mercadopago', 'stripe'])
+      .default('none'),
+    MERCADOPAGO_ACCESS_TOKEN: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    STRIPE_SECRET_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    ENABLE_PAYMENT_WEBHOOKS: z
+      .string()
+      .optional()
+      .default('false')
+      .transform((v) => parseBoolean(v, false)),
+
+    // SES email (conditional on MAIL_PROVIDER=ses)
+    SES_REGION: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    SES_ACCESS_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    SES_SECRET_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+
+    // AI Provider
+    AI_PROVIDER: z
+      .enum(['none', 'openai', 'opencode', 'ollama'])
+      .default('none'),
+    AI_OLLAMA_URL: z.preprocess(
+      emptyStringToUndefined,
+      z.string().url().nullable().optional().transform(v => v ?? null),
+    ),
+    OPENAI_API_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
   }).superRefine((data, ctx) => {
     if (data.MAIL_PROVIDER === 'smtp') {
       if (!data.SMTP_HOST) {
@@ -194,6 +221,40 @@ export const createConfigSchema = (_nodeEnv: string) => {
           message: 'SMTP_PORT is required when MAIL_PROVIDER=smtp',
         });
       }
+    }
+
+    // SES requires region, access key, and secret key
+    if (data.MAIL_PROVIDER === 'ses') {
+      if (!data.SES_REGION) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SES_REGION'],
+          message: 'SES_REGION is required when MAIL_PROVIDER=ses',
+        });
+      }
+      if (!data.SES_ACCESS_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SES_ACCESS_KEY'],
+          message: 'SES_ACCESS_KEY is required when MAIL_PROVIDER=ses',
+        });
+      }
+      if (!data.SES_SECRET_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SES_SECRET_KEY'],
+          message: 'SES_SECRET_KEY is required when MAIL_PROVIDER=ses',
+        });
+      }
+    }
+
+    // AI_PROVIDER=ollama requires AI_OLLAMA_URL
+    if (data.AI_PROVIDER === 'ollama' && !data.AI_OLLAMA_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AI_OLLAMA_URL'],
+        message: 'AI_OLLAMA_URL is required when AI_PROVIDER=ollama',
+      });
     }
   });
 };
@@ -277,6 +338,22 @@ export function loadConfig(): AppConfig {
 
       // Development overrides
       invitationEmailOverride: parsed.INVITATION_EMAIL_OVERRIDE,
+
+      // Payment Gateway
+      paymentProvider: parsed.PAYMENT_PROVIDER,
+      mercadopagoAccessToken: parsed.MERCADOPAGO_ACCESS_TOKEN,
+      stripeSecretKey: parsed.STRIPE_SECRET_KEY,
+      enablePaymentWebhooks: parsed.ENABLE_PAYMENT_WEBHOOKS,
+
+      // SES
+      sesRegion: parsed.SES_REGION,
+      sesAccessKey: parsed.SES_ACCESS_KEY,
+      sesSecretKey: parsed.SES_SECRET_KEY,
+
+      // AI Provider
+      aiProvider: parsed.AI_PROVIDER,
+      aiOllamaUrl: parsed.AI_OLLAMA_URL,
+      openaiApiKey: parsed.OPENAI_API_KEY,
     };
 
     logConfigLoaded(config, nodeEnv);
@@ -382,6 +459,8 @@ function logConfigLoaded(config: AppConfig, nodeEnv: NodeEnv): void {
   writeStdout(`  - Frontend: ${config.webOrigin}`);
   writeStdout(`  - Storage: ${config.s3Endpoint} (bucket: ${config.s3Bucket})`);
   writeStdout(`  - Email: ${config.mailProvider}`);
+  writeStdout(`  - Payment: ${config.paymentProvider}`);
+  writeStdout(`  - AI: ${config.aiProvider}`);
   if (config.redisUrl) {
     writeStdout(`  - Redis: ${maskUrl(config.redisUrl)}`);
   }

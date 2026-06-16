@@ -223,6 +223,8 @@ model Tenant {
   supportTicketComments SupportTicketComment[]
   unitAssociations      UnitAssociation[]
   pushSubscriptions    PushSubscription[]
+  paymentProviderConfigs PaymentProviderConfig[]
+  emailDeliveries       EmailDelivery[]
 }
 
 model User {
@@ -1384,6 +1386,10 @@ model Charge {
   // Liquidation traceability (null si charge es manual o viene de ExpensePeriod)
   liquidationId               String?     // FK a Liquidation (nuevo flujo Gastos → Liquidación)
 
+  // Payment gateway fields
+  paymentProviderId        String?            // FK to PaymentProviderConfig (tenant-scoped)
+  paymentExternalId        String?            // Provider's charge/preference ID
+
   // Relations
   tenant                      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building                    Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
@@ -1392,6 +1398,7 @@ model Charge {
   expensePeriod               ExpensePeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
   liquidation                 Liquidation?          @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
   paymentAllocations          PaymentAllocation[]
+  paymentProviderConfig       PaymentProviderConfig? @relation(fields: [paymentProviderId], references: [id], onDelete: SetNull)
 
   @@index([unitId, period, concept])
   @@index([tenantId, buildingId, period])
@@ -1400,6 +1407,7 @@ model Charge {
   @@index([dueDate])
   @@index([periodId])
   @@index([liquidationId])
+  @@index([paymentExternalId])
 }
 
 // ============================================================================
@@ -1441,6 +1449,9 @@ model Payment {
   receiptError             String?           // Error message if receipt generation failed
   receiptGeneratedAt       DateTime?         // When receipt was successfully generated
   
+  // Webhook idempotency key (payment gateway)
+  paymentEventId           String?            // Provider's webhook event ID for idempotency
+
   // Who approved/rejected (track by user, not membership, for audit)
   approvedByUserId         String?            // User ID who approved the payment
   approvedAt               DateTime?          // When the payment was approved
@@ -2155,4 +2166,55 @@ model TenantInvitation {
 
   @@index([tenantId, tokenHash])
   @@index([tenantId, expiresAt])
+}
+
+// ============================================================================
+// PRODUCTION READINESS: Payment Provider, Webhook, Email Delivery
+// ============================================================================
+
+// Payment provider configuration per tenant
+model PaymentProviderConfig {
+  id          String   @id @default(cuid())
+  tenantId    String
+  provider    String   // mercadopago | stripe
+  credentials String   // encrypted JSON
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  charges Charge[]
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+}
+
+// Processed webhook events for idempotency
+model ProcessedWebhookEvent {
+  id          String   @id @default(cuid())
+  eventId     String   // Provider's event ID
+  provider    String   // mercadopago | stripe
+  processedAt DateTime @default(now())
+
+  @@unique([eventId, provider])
+  @@index([provider])
+}
+
+// Email delivery tracking
+model EmailDelivery {
+  id          String   @id @default(cuid())
+  tenantId    String
+  messageId   String
+  to          String
+  subject     String
+  status      String   // queued | sent | delivered | bounced | failed
+  provider    String   // smtp | resend | ses | noop
+  externalId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([messageId])
 }

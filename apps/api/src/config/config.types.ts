@@ -65,6 +65,22 @@ export interface AppConfig {
 
   // Development overrides (optional)
   invitationEmailOverride?: string;
+
+  // Payment Gateway
+  paymentProvider: 'none' | 'mercadopago' | 'stripe';
+  mercadopagoAccessToken?: string;
+  stripeSecretKey?: string;
+  enablePaymentWebhooks: boolean;
+
+  // SES
+  sesRegion?: string;
+  sesAccessKey?: string;
+  sesSecretKey?: string;
+
+  // AI Provider
+  aiProvider: 'none' | 'openai' | 'opencode' | 'ollama';
+  aiOllamaUrl: string | null;
+  openaiApiKey?: string;
 }
 
 /**

@@ -31,6 +31,8 @@ import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { CircuitBreaker } from './providers/circuit-breaker';
+import { AiProviderModule, AI_PROVIDER_TOKEN } from './providers/ai-provider.module';
 
 // Intent Engine services
 import { IntentRegistry } from './intent-engine/intent-registry';
@@ -110,7 +112,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
  * - AuditModule: Audit logging
  */
 @Module({
-  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule, RedisModule],
+  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule, RedisModule, AiProviderModule.register({ provider: 'none' })],
   controllers: [
     AssistantController,
     AiBudgetController,
@@ -156,6 +158,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     ResponseFormatterService,
     AssistantFeedbackService,
     AssistantLlmHealthService,
+    CircuitBreaker,
   ],
   exports: [
     AssistantService,
@@ -187,6 +190,8 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     ResponseFormatterService,
     AssistantFeedbackService,
     AssistantLlmHealthService,
+    CircuitBreaker,
+    AI_PROVIDER_TOKEN,
   ],
 })
 export class AssistantModule {}

@@ -37,6 +37,23 @@ export interface AiProvider {
     context: AiProviderContext,
     options?: { model?: string; maxTokens?: number },
   ): Promise<ChatResponse>;
+
+  /**
+   * Check if the AI provider is reachable and responsive.
+   * Returns status: healthy (reachable), degraded (slow/partial), unavailable (down), or disabled (not configured).
+   */
+  healthCheck(): Promise<AiProviderStatus>;
+}
+
+/**
+ * Health check status for AI providers
+ */
+export interface AiProviderStatus {
+  status: 'healthy' | 'degraded' | 'unavailable' | 'disabled';
+  provider: string;
+  latencyMs?: number;
+  error?: string;
+  modelsAvailable?: string[];
 }
 
 export interface ClassifierResult {

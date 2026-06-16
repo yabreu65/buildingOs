@@ -21,6 +21,7 @@ import {
   ChatResponse,
   AiProvider,
   AiProviderContext,
+  AiProviderStatus,
   StructuredResponse,
 } from './ai.types';
 
@@ -157,6 +158,17 @@ export class MockAiProvider implements AiProvider {
     }
 
     return { answer, suggestedActions };
+  }
+
+  /**
+   * Mock provider is always healthy (no external dependency)
+   */
+  async healthCheck(): Promise<AiProviderStatus> {
+    return {
+      status: 'healthy',
+      provider: 'mock',
+      latencyMs: 0,
+    };
   }
 }
 

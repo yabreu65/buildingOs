@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext, SuggestedActionType } from './ai.types';
+import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext, AiProviderStatus, SuggestedActionType } from './ai.types';
 
 /**
  * Ollama Provider for BuildingOS AI Assistant
@@ -35,8 +35,55 @@ type ParsedOllamaResponse = {
 @Injectable()
 export class OllamaProvider implements AiProvider {
   private readonly logger = new Logger(OllamaProvider.name);
-  private readonly ollamaUrl = process.env.AI_OLLAMA_URL || 'http://localhost:11434';
+  private readonly ollamaUrl = process.env.AI_OLLAMA_URL || '';
   private readonly timeout = 10000; // 10 seconds
+
+  /**
+   * Check Ollama provider health
+   */
+  async healthCheck(): Promise<AiProviderStatus> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(`${this.ollamaUrl}/api/tags`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+
+      const latencyMs = Date.now() - startedAt;
+
+      if (!response.ok) {
+        return {
+          status: 'unavailable',
+          provider: 'ollama',
+          latencyMs,
+          error: `Ollama returned HTTP ${response.status}`,
+        };
+      }
+
+      const body = (await response.json()) as { models?: Array<{ name?: string }> };
+      const modelsAvailable = Array.isArray(body.models)
+        ? body.models.map((m) => m?.name).filter((name): name is string => Boolean(name))
+        : [];
+
+      return {
+        status: latencyMs > 3000 ? 'degraded' : 'healthy',
+        provider: 'ollama',
+        latencyMs,
+        modelsAvailable,
+      };
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        provider: 'ollama',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 
   /**
    * Chat with Ollama provider

@@ -28,6 +28,8 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../storage/storage.module';
+import { PaymentGatewayModule } from './payment-gateway/payment-gateway.module';
+import { ConfigService } from '../config/config.service';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -38,9 +40,18 @@ import { RecurringExpenseController } from './recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
 import { FinanceSummaryService } from './finance-summary.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { SignatureGuard } from './payment-gateway/webhooks/signature.guard';
+import { IdempotencyService } from './payment-gateway/webhooks/idempotency.service';
+import { PaymentWebhookController } from './payment-gateway/webhooks/payment-webhook.controller';
 
 @Module({
-  imports: [PrismaModule, EmailModule, NotificationsModule, StorageModule],
+  imports: [
+    PrismaModule,
+    EmailModule,
+    NotificationsModule,
+    StorageModule,
+    PaymentGatewayModule.register('none', {}),
+  ],
   controllers: [
     FinanzasController,
     FinanzasUnitsController,
@@ -58,6 +69,7 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
     VendorPreferenceController,
     ExpenseReportsController,
     RecurringExpenseController,
+    PaymentWebhookController,
   ],
   providers: [
     FinanzasService,
@@ -78,6 +90,8 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
     RecurringExpenseService,
     FinanceSummaryService,
     PaymentReceiptService,
+    SignatureGuard,
+    IdempotencyService,
   ],
   exports: [
     FinanzasService,
