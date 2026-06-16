@@ -198,13 +198,14 @@ export const createConfigSchema = (_nodeEnv: string) => {
 
     // AI Provider
     AI_PROVIDER: z
-      .enum(['none', 'openai', 'opencode', 'ollama'])
+      .enum(['none', 'openai', 'opencode', 'ollama', 'gemini'])
       .default('none'),
     AI_OLLAMA_URL: z.preprocess(
       emptyStringToUndefined,
       z.string().url().nullable().optional().transform(v => v ?? null),
     ),
     OPENAI_API_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    GEMINI_API_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
   }).superRefine((data, ctx) => {
     if (data.MAIL_PROVIDER === 'smtp') {
       if (!data.SMTP_HOST) {
@@ -254,6 +255,15 @@ export const createConfigSchema = (_nodeEnv: string) => {
         code: z.ZodIssueCode.custom,
         path: ['AI_OLLAMA_URL'],
         message: 'AI_OLLAMA_URL is required when AI_PROVIDER=ollama',
+      });
+    }
+
+    // AI_PROVIDER=gemini requires GEMINI_API_KEY
+    if (data.AI_PROVIDER === 'gemini' && !data.GEMINI_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['GEMINI_API_KEY'],
+        message: 'GEMINI_API_KEY is required when AI_PROVIDER=gemini',
       });
     }
   });
@@ -354,6 +364,7 @@ export function loadConfig(): AppConfig {
       aiProvider: parsed.AI_PROVIDER,
       aiOllamaUrl: parsed.AI_OLLAMA_URL,
       openaiApiKey: parsed.OPENAI_API_KEY,
+      geminiApiKey: parsed.GEMINI_API_KEY,
     };
 
     logConfigLoaded(config, nodeEnv);

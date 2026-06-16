@@ -8,6 +8,7 @@ import { AiProvider } from '../ai.types';
 import { OllamaAdapter } from './adapters/ollama.adapter';
 import { OpenAiAdapter } from './adapters/openai.adapter';
 import { OpenCodeAdapter } from './adapters/opencode.adapter';
+import { GeminiAdapter } from './adapters/gemini.adapter';
 import { CircuitBreaker } from './circuit-breaker';
 import { AssistantLlmHealthService } from '../llm-health.service';
 import { AssistantLlmHealthController } from '../llm-health.controller';
@@ -15,12 +16,14 @@ import { AssistantLlmHealthController } from '../llm-health.controller';
 export const AI_PROVIDER_TOKEN = 'AI_PROVIDER';
 
 export interface AiProviderOptions {
-  provider: 'none' | 'openai' | 'opencode' | 'ollama';
+  provider: 'none' | 'openai' | 'opencode' | 'ollama' | 'gemini';
   ollamaUrl?: string;
   openaiApiKey?: string;
   opencodeApiKey?: string;
   opencodeUrl?: string;
   openaiModel?: string;
+  geminiApiKey?: string;
+  geminiModel?: string;
 }
 
 @Module({})
@@ -55,6 +58,11 @@ export class AiProviderModule {
               throw new Error('AI_OLLAMA_URL is required when AI_PROVIDER=ollama');
             }
             return new OllamaAdapter(options.ollamaUrl);
+          case 'gemini':
+            if (!options.geminiApiKey) {
+              throw new Error('GEMINI_API_KEY is required when AI_PROVIDER=gemini');
+            }
+            return new GeminiAdapter(options.geminiApiKey, options.geminiModel);
           default:
             return null;
         }

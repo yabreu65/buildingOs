@@ -78,9 +78,10 @@ export interface AppConfig {
   sesSecretKey?: string;
 
   // AI Provider
-  aiProvider: 'none' | 'openai' | 'opencode' | 'ollama';
+  aiProvider: 'none' | 'openai' | 'opencode' | 'ollama' | 'gemini';
   aiOllamaUrl: string | null;
   openaiApiKey?: string;
+  geminiApiKey?: string;
 }
 
 /**
