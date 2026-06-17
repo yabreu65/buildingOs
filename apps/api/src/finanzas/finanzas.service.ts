@@ -1299,15 +1299,17 @@ export class FinanzasService {
       (item) => item.outstanding > 0,
     );
 
-    const totalCharges = chargesWithOutstanding.reduce(
-      (sum, item) => sum + item.charge.amount,
-      0,
-    );
-    const totalAllocated = chargesWithOutstanding.reduce(
+    // TotalPaid = sum of ALL approved allocations (not just on outstanding charges)
+    const totalPaid = chargesWithApprovedAllocated.reduce(
       (sum, item) => sum + item.approvedAllocated,
       0,
     );
-    const balance = totalCharges - totalAllocated;
+    // TotalCharges = sum of ALL charge amounts
+    const totalCharges = chargesWithApprovedAllocated.reduce(
+      (sum, item) => sum + item.charge.amount,
+      0,
+    );
+    const balance = totalCharges - totalPaid;
 
     return {
       unitId,
@@ -1336,9 +1338,8 @@ export class FinanzasService {
       })),
       totals: {
         totalCharges,
-        totalPaid: totalAllocated,
-        // Keep totalAllocated for backward compatibility
-        totalAllocated,
+        totalPaid,
+        totalAllocated: totalPaid,
         balance,
         currency: tenant.currency,
       },
