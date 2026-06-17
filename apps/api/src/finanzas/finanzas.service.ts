@@ -1093,7 +1093,7 @@ export class FinanzasService {
     const where: Prisma.ChargeWhereInput = {
       tenantId,
       buildingId,
-      canceledAt: null, // Exclude canceled charges
+      canceledAt: null,
     };
 
     if (period) {
@@ -1112,39 +1112,39 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals by REAL outstanding using approved/reconciled payments
-    const chargesWithOutstanding = charges
-      .map((c) => {
-        const allocated = c.paymentAllocations.reduce((asum, a) => {
-          return asum +
-            (a.payment &&
-            (a.payment.status === PaymentStatus.APPROVED ||
-              a.payment.status === PaymentStatus.RECONCILED)
-              ? a.amount
-              : 0);
-        }, 0);
+    // 3. Calculate totals using approved/reconciled payments across ALL charges
+    const chargesAnnotated = charges.map((c) => {
+      const allocated = c.paymentAllocations.reduce((asum, a) => {
+        return asum +
+          (a.payment &&
+          (a.payment.status === PaymentStatus.APPROVED ||
+            a.payment.status === PaymentStatus.RECONCILED)
+            ? a.amount
+            : 0);
+      }, 0);
 
-        return {
-          charge: c,
-          allocated,
-          outstanding: Math.max(0, c.amount - allocated),
-        };
-      })
-      .filter((item) => item.outstanding > 0);
+      return {
+        charge: c,
+        allocated,
+        outstanding: Math.max(0, c.amount - allocated),
+      };
+    });
 
-    const totalCharges = chargesWithOutstanding.reduce(
-      (sum, item) => sum + item.charge.amount,
-      0,
-    );
-
-    const totalPaid = chargesWithOutstanding.reduce(
+    // totalPaid = sum of ALL approved allocations across ALL charges
+    const totalPaid = chargesAnnotated.reduce(
       (sum, item) => sum + item.allocated,
       0,
     );
-
-    const totalOutstanding = chargesWithOutstanding.reduce(
-      (sum, item) => sum + item.outstanding,
+    // totalCharges = sum of ALL charge amounts
+    const totalCharges = chargesAnnotated.reduce(
+      (sum, item) => sum + item.charge.amount,
       0,
+    );
+    const totalOutstanding = Math.max(0, totalCharges - totalPaid);
+
+    // Charges with outstanding > 0 for delinquent unit analysis
+    const chargesWithOutstanding = chargesAnnotated.filter(
+      (item) => item.outstanding > 0,
     );
 
     // 4. Find delinquent units by real outstanding

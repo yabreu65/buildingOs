@@ -45,35 +45,39 @@ export function FinanceSummaryCards({
     {
       label: 'Total Cargos',
       value: formatCurrencyValue(summary.totalCharges),
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
+      color: 'text-blue-600 dark:text-blue-400',
+      bgColor: 'bg-blue-50 dark:bg-blue-950/40',
+      iconColor: 'text-blue-500',
     },
     {
       label: 'Total Pagado',
       value: formatCurrencyValue(summary.totalPaid),
-      color: 'text-green-600',
-      bgColor: 'bg-green-50',
+      color: 'text-green-600 dark:text-green-400',
+      bgColor: 'bg-green-50 dark:bg-green-950/40',
+      iconColor: 'text-green-500',
     },
     {
       label: 'Saldo Pendiente',
       value: formatCurrencyValue(summary.totalOutstanding),
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-50',
+      color: 'text-orange-600 dark:text-orange-400',
+      bgColor: 'bg-orange-50 dark:bg-orange-950/40',
+      iconColor: 'text-orange-500',
     },
     {
       label: 'Unidades Morosas',
       value: summary.delinquentUnitsCount.toString(),
-      color: 'text-red-600',
-      bgColor: 'bg-red-50',
+      color: 'text-red-600 dark:text-red-400',
+      bgColor: 'bg-red-50 dark:bg-red-950/40',
+      iconColor: 'text-red-500',
     },
   ];
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.label} className={`p-6 ${card.bgColor} rounded-lg border border-gray-200`}>
+        <Card key={card.label} className={`p-6 ${card.bgColor} rounded-lg border border-border`}>
           <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium text-gray-500">{card.label}</p>
+            <p className="text-sm font-medium text-muted-foreground">{card.label}</p>
             <p className="text-xs text-gray-400">{card.label === 'Unidades Morosas' ? 'unid.' : ''}</p>
           </div>
           <p className={`text-3xl font-bold ${card.color} mb-1`}>{card.value}</p>

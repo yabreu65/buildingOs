@@ -39,7 +39,8 @@ type TabType =
  */
 export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps) {
   const [activeTab, setActiveTab] = useState<TabType>('rubros');
-  const [period, setPeriod] = useState<string>('');
+  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const [period, setPeriod] = useState<string>(currentMonth);
 
   // Load data from hooks
   const { data: summary, isPending: summaryLoading, error: summaryError, refetch: refetchSummaryRaw } = useFinanceSummary(buildingId, period);
@@ -137,7 +138,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
       {/* Tabs */}
       <div className="border-b mb-6">
-        <nav className="flex gap-1">
+        <nav className="flex gap-1 overflow-x-auto whitespace-nowrap pb-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -151,7 +152,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             >
               {tab.label}
               {tab.count !== undefined && (
-                <span className="inline-block px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-full">
+                <span className="inline-block px-2 py-1 bg-muted text-muted-foreground text-xs font-semibold rounded-full">
                   {tab.count}
                 </span>
               )}

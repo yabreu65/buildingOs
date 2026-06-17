@@ -1,4 +1,4 @@
-import { PrismaClient, TenantType, Role, ScopeType, TicketCategory, TicketPriority, TicketStatus, CommunicationChannel, CommunicationStatus, CommunicationTargetType, ChargeType, ChargeStatus, UnitOccupantRole, PaymentMethod, PaymentStatus } from '@prisma/client';
+import { PrismaClient, TenantType, Role, ScopeType, TicketCategory, TicketPriority, TicketStatus, CommunicationChannel, CommunicationStatus, CommunicationTargetType, ChargeType, ChargeStatus, UnitOccupantRole, PaymentMethod, PaymentStatus, MovementType, CatalogScope } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
@@ -290,6 +290,40 @@ async function main() {
       ),
     );
     console.log(`  ✓ ${communications.length} communication targets created\n`);
+
+    // ── 10b. Expense Ledger Categories (Rubros) ─────────────────────────
+    console.log('→ Upserting expense categories (rubros)...');
+    const categories = [
+      { code: 'MANTENIMIENTO', name: 'Mantenimiento', description: 'Reparaciones y mantenimiento general', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 1 },
+      { code: 'LIMPIEZA', name: 'Limpieza', description: 'Servicio de limpieza de áreas comunes', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 2 },
+      { code: 'SEGURIDAD', name: 'Seguridad', description: 'Vigilancia y sistemas de seguridad', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 3 },
+      { code: 'ASCENSORES', name: 'Ascensores', description: 'Mantenimiento de ascensores', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 4 },
+      { code: 'ADMINISTRACION', name: 'Administración', description: 'Gastos administrativos y gestión', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.CONDOMINIUM_COMMON, sortOrder: 5 },
+      { code: 'AGUA', name: 'Agua', description: 'Servicio de agua potable', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 6 },
+      { code: 'ELECTRICIDAD', name: 'Electricidad', description: 'Servicio eléctrico de áreas comunes', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 7 },
+      { code: 'JARDINERIA', name: 'Jardinería', description: 'Mantenimiento de jardines y espacios verdes', movementType: MovementType.EXPENSE, catalogScope: CatalogScope.BUILDING, sortOrder: 8 },
+    ];
+
+    await Promise.all(
+      categories.map((cat, i) =>
+        prisma.expenseLedgerCategory.upsert({
+          where: { id: `demo-cat-${cat.code}` },
+          update: {},
+          create: {
+            id: `demo-cat-${cat.code}`,
+            tenantId: tenant.id,
+            code: cat.code,
+            name: cat.name,
+            description: cat.description,
+            movementType: cat.movementType,
+            catalogScope: cat.catalogScope,
+            sortOrder: cat.sortOrder,
+            isActive: true,
+          },
+        }),
+      ),
+    );
+    console.log(`  ✓ ${categories.length} categories created\n`);
 
     // ── 11. Generate 24 Months of Charges ───────────────────────────────
     console.log('→ Generating 24 months of charges...');
