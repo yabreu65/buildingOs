@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppConfigModule } from './config/config.module';
+import { DemoTenantGuard } from './tenancy/demo-tenant.guard';
 import { SecurityModule } from './security/security.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth.module';
@@ -80,6 +82,11 @@ import { ReceiptsModule } from './receipts/receipts.module';
     ReceiptsModule,
   ],
   controllers: [PushController],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: DemoTenantGuard,
+    },
+  ],
 })
 export class AppModule {}

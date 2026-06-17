@@ -170,6 +170,9 @@ model Tenant {
   // Building alias generation sequence
   nextBuildingAliasIndex Int @default(1)
 
+  // Demo tenant flag
+  isDemo                Boolean  @default(false)
+
   // Relations
   memberships           Membership[]
   buildings             Building[]
