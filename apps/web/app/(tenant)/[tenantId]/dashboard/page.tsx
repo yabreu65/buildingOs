@@ -170,7 +170,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const [period, setPeriod] = useState<DashboardPeriod>(DashboardPeriod.CURRENT_MONTH);
   const [buildingFilter, setBuildingFilter] = useState<string | undefined>(undefined);
 
-  const { data: summary, isPending: loading, error, refetch } = useDashboardSummary({
+  const { data: summary, isPending: loading, error, refetch } = useDashboardSummary(tenantId, {
     period,
     buildingId: buildingFilter,
   });

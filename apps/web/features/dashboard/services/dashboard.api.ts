@@ -81,6 +81,7 @@ export interface DashboardQuery {
 }
 
 export async function getDashboardSummary(
+  tenantId: string,
   query: DashboardQuery = {},
 ): Promise<DashboardSummary> {
   const params = new URLSearchParams();
@@ -89,7 +90,7 @@ export async function getDashboardSummary(
 
   const queryString = params.toString();
   return apiClient<DashboardSummary>({
-    path: `/dashboard/admin${queryString ? `?${queryString}` : ''}`,
+    path: `/tenants/${tenantId}/dashboard/admin${queryString ? `?${queryString}` : ''}`,
     method: 'GET',
   });
 }

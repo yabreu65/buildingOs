@@ -7,7 +7,7 @@ import { AuthenticatedRequest } from '../common/types/request.types';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 @ApiTags('Dashboard')
-@Controller('dashboard')
+@Controller('tenants/:tenantId/dashboard')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
