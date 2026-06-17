@@ -87,7 +87,7 @@ export default function AuthBootstrap() {
 
     const redirectToLoginIfPrivate = () => {
       // Public routes que no necesitan redirigir
-      const publicPaths = ['/', '/login', '/signup', '/health'];
+      const publicPaths = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact'];
       const isPublicPath = publicPaths.includes(pathname);
 
       if (!isPublicPath) {

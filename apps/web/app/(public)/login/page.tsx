@@ -1,7 +1,7 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect } from 'react';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -12,15 +12,38 @@ import Card from '../../../shared/components/ui/Card';
 import Button from '../../../shared/components/ui/Button';
 
 const loginSchema = z.object({
-  email: z.string().email('Email inválido'),
+  email: z.string().email('Correo electrónico inválido'),
   password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres'),
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageContent />
+    </Suspense>
+  );
+}
+
+function LoginPageFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md">
+        <Card className="p-6">
+          <h1 className="text-2xl font-semibold tracking-tight">BuildingOS</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Cargando...</p>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function LoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const loginMutation = useLogin();
+  const showDemoHelp = searchParams.get('demo') === 'true';
   const {
     register,
     handleSubmit,
@@ -32,10 +55,10 @@ export default function LoginPage() {
   useEffect(() => {
     const s = getSession();
     const last = getLastTenant();
-    if (s && last) {
+    if (!showDemoHelp && s && last) {
       router.replace(`/${last}/dashboard`);
     }
-  }, [router]);
+  }, [router, showDemoHelp]);
 
   const onSubmit = async (data: LoginFormData) => {
     try {
@@ -57,16 +80,48 @@ export default function LoginPage() {
             </p>
           </div>
 
+          {showDemoHelp && (
+            <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+              <p className="font-semibold">Acceso a la demo interactiva</p>
+              <p className="mt-2 text-blue-900/90">
+                Usá estas credenciales de ejemplo para explorar el producto.
+              </p>
+              <div className="mt-3 grid gap-2 rounded-md bg-white/70 p-3 font-mono text-sm">
+                <div>
+                  <span className="font-semibold font-sans text-blue-900">Correo electrónico: </span>
+                  demo@buildingos.app
+                </div>
+                <div>
+                  <span className="font-semibold font-sans text-blue-900">Contraseña: </span>
+                  DemoPass!123
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-blue-900/80">
+                Este entorno es de prueba y los datos pueden reiniciarse periódicamente.
+              </p>
+              <div className="mt-4 flex flex-col sm:flex-row gap-3">
+                <Link href="/demo">
+                  <Button variant="secondary" size="sm">
+                    Ver la demo
+                  </Button>
+                </Link>
+                <Link href="/demo-guiada" className="text-sm font-medium text-blue-700 hover:underline self-center">
+                  Solicitar demo guiada
+                </Link>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4" data-testid="login-form">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium mb-1">
-                Email
-              </label>
+                <label htmlFor="email" className="block text-sm font-medium mb-1">
+                Correo electrónico
+                </label>
               <input
                 {...register('email')}
                 type="email"
                 id="email"
-                placeholder="tu@email.com"
+                placeholder="tu@correo.com"
                 className="w-full px-3 py-2 border border-input rounded-md text-sm"
                 data-testid="login-email"
               />

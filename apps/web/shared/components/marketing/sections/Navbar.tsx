@@ -20,7 +20,7 @@ export default function Navbar() {
               Módulos
             </a>
             <a href="#faq" className="hover:text-foreground transition-colors">
-              FAQ
+              Preguntas frecuentes
             </a>
           </div>
         </div>
@@ -28,9 +28,12 @@ export default function Navbar() {
           <Link href="/login" className="text-sm font-medium text-muted-foreground hover:text-foreground hidden sm:block">
             Ingresar
           </Link>
-          <a href="#demo">
-            <Button size="sm">Pedir demo</Button>
-          </a>
+          <Link href="/demo" className="text-sm font-medium text-muted-foreground hover:text-foreground hidden sm:block">
+            Explorar demo
+          </Link>
+          <Link href="/demo-guiada">
+            <Button size="sm">Solicitar demo guiada</Button>
+          </Link>
         </div>
       </div>
     </nav>

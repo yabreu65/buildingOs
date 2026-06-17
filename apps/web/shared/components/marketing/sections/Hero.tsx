@@ -1,17 +1,18 @@
 import Button from "@/shared/components/ui/Button";
 import Card from "@/shared/components/ui/Card";
 import Badge from "@/shared/components/ui/Badge";
+import Link from "next/link";
 
 export default function Hero() {
   return (
-    <section className="relative overflow-hidden bg-linear-to-b from-muted/60 to-background pt-24 pb-20 lg:pt-32 lg:pb-28">
+    <section className="relative overflow-hidden bg-linear-to-b from-muted/60 to-background pt-20 pb-20 lg:pt-28 lg:pb-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="grid lg:grid-cols-2 gap-12 items-center">
           {/* Left Content */}
           <div className="flex flex-col gap-6 text-center lg:text-left">
             <div className="inline-flex items-center justify-center lg:justify-start">
               <Badge className="bg-accent/15 text-accent border border-accent/30 hover:bg-accent/15">
-                MVP: Pagos por transferencia + comprobante
+                Disponible: Pagos por transferencia + comprobante
               </Badge>
             </div>
 
@@ -21,25 +22,25 @@ export default function Hero() {
             </h1>
 
             <p className="text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto lg:mx-0">
-              Pagos, reclamos, comunicaciones y control por edificio. La plataforma multi-tenant
-              diseñada para administradoras que buscan orden y confianza.
+              Gestioná pagos, reclamos y comunicación en un solo lugar con una plataforma pensada
+              para múltiples administraciones que necesitan orden, visibilidad y confianza.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <a href="#demo" className="w-full sm:w-auto">
+              <Link href="/demo-guiada" className="w-full sm:w-auto">
                 <Button size="md" className="w-full h-12 px-8 text-base">
-                  Pedir demo
+                  Solicitar demo guiada
                 </Button>
-              </a>
-              <a href="#como-funciona" className="w-full sm:w-auto">
+              </Link>
+              <Link href="/demo" className="w-full sm:w-auto">
                 <Button
                   variant="secondary"
                   size="md"
                   className="w-full h-12 px-8 text-base"
                 >
-                  Ver cómo funciona
+                  Explorar demo
                 </Button>
-              </a>
+              </Link>
             </div>
           </div>
 
@@ -54,7 +55,7 @@ export default function Hero() {
                   <div className="w-3 h-3 rounded-full bg-success/80" />
                 </div>
                 <div className="text-xs font-medium text-muted-foreground">
-                  BuildingOS Preview
+                  Resumen operativo en tiempo real
                 </div>
               </div>
 

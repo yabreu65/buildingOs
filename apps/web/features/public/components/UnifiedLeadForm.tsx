@@ -20,32 +20,32 @@ interface UnifiedLeadFormProps {
 
 // Zod validation schema
 const leadFormSchema = z.object({
-  fullName: z.string().min(2, 'Name must be at least 2 characters').max(100),
-  email: z.string().email('Invalid email address'),
+  fullName: z.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(100),
+  email: z.string().email('Correo electrónico inválido'),
   phoneWhatsapp: z
     .string()
-    .max(20, 'Phone must be max 20 characters')
+    .max(20, 'El teléfono debe tener como máximo 20 caracteres')
     .optional()
     .or(z.literal('')),
   tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
   tenantName: z
     .string()
-    .min(2, 'Nombre debe tener al menos 2 caracteres')
+    .min(2, 'El nombre debe tener al menos 2 caracteres')
     .max(100)
     .optional()
     .or(z.literal('')),
-  unitsEstimate: z.number().min(1, 'Must be at least 1').optional().or(z.undefined()),
+  unitsEstimate: z.number().min(1, 'Debe ser al menos 1').optional().or(z.undefined()),
   countryCity: z
     .string()
-    .max(100, 'Location must be max 100 characters')
+    .max(100, 'La ubicación debe tener como máximo 100 caracteres')
     .optional()
     .or(z.literal('')),
   message: z
     .string()
-    .max(1000, 'Message must be max 1000 characters')
+    .max(1000, 'El mensaje debe tener como máximo 1000 caracteres')
     .optional()
     .or(z.literal('')),
-  website: z.string().max(0, 'Invalid submission').optional().or(z.literal('')),
+  website: z.string().max(0, 'Envío inválido').optional().or(z.literal('')),
 });
 
 type LeadFormData = z.infer<typeof leadFormSchema>;
@@ -84,7 +84,7 @@ export function UnifiedLeadForm({
     try {
       // SIGNUP flow - register user
       if (intent === 'SIGNUP' && data.tenantName) {
-        console.log(`📤 Submitting SIGNUP registration:`, data);
+        console.log('📤 Enviando registro SIGNUP:', data);
         await registerUser({
           fullName: data.fullName,
           email: data.email,
@@ -92,7 +92,7 @@ export function UnifiedLeadForm({
           tenantType: data.tenantType,
           phoneWhatsapp: data.phoneWhatsapp || undefined,
         });
-        console.log(`✅ SIGNUP registration submitted successfully`);
+        console.log('✅ Registro SIGNUP enviado correctamente');
       } else {
         // DEMO/CONTACT flow - submit as lead
         const submitData = {
@@ -107,9 +107,9 @@ export function UnifiedLeadForm({
           intent,
         };
 
-        console.log(`📤 Submitting ${intent} lead:`, submitData);
+        console.log(`📤 Enviando lead ${intent}:`, submitData);
         await submitLead(submitData);
-        console.log(`✅ ${intent} lead submitted successfully`);
+        console.log(`✅ Lead ${intent} enviado correctamente`);
       }
 
       setSubmitStatus('success');
@@ -117,10 +117,10 @@ export function UnifiedLeadForm({
 
       setTimeout(() => setSubmitStatus('idle'), 5000);
     } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to submit ${intent.toLowerCase()} request`;
+      const message = error instanceof Error ? error.message : `No se pudo enviar la solicitud ${intent.toLowerCase()}`;
       setSubmitError(message);
       setSubmitStatus('error');
-      console.error(`❌ ${intent} submission error:`, error);
+      console.error(`❌ Error al enviar ${intent}:`, error);
     } finally {
       setIsSubmitting(false);
     }
@@ -131,7 +131,7 @@ export function UnifiedLeadForm({
     const defaultSuccessTitle = intent === 'SIGNUP' ? '¡Cuenta creada!' : '¡Solicitud recibida!';
     const defaultSuccessMessage =
       intent === 'SIGNUP'
-        ? 'Revisá tu email — enviamos el link para crear tu contraseña. El link expira en 24 horas.'
+        ? 'Revisá tu correo electrónico: enviamos el enlace para crear tu contraseña. El enlace expira en 24 horas.'
         : 'Te contactaremos pronto. Gracias por tu interés en BuildingOS.';
 
     return (
@@ -161,16 +161,16 @@ export function UnifiedLeadForm({
           <h2 className="text-2xl font-bold text-gray-900">
             {title ||
               (intent === 'SIGNUP'
-                ? 'Crear mi Cuenta'
+                ? 'Crear mi cuenta'
                 : intent === 'DEMO'
-                ? 'Solicitar Demo'
-                : 'Get Started')}
+                ? 'Solicitar demo'
+                : 'Comenzar')}
           </h2>
           <p className="text-sm text-gray-600 mt-2">
             {subtitle ||
               (intent === 'SIGNUP'
                 ? 'Comenzá a usar BuildingOS hoy mismo.'
-                : 'Completa el formulario y nos pondremos en contacto.')}
+                : 'Completá el formulario y nos pondremos en contacto.')}
           </p>
         </div>
 
@@ -201,12 +201,12 @@ export function UnifiedLeadForm({
           {/* Email */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email <span className="text-red-500">*</span>
+              Correo electrónico <span className="text-red-500">*</span>
             </label>
             <Input
               {...register('email')}
               type="email"
-              placeholder="juan@example.com"
+              placeholder="tu@correo.com"
               disabled={isSubmitting}
               className={errors.email ? 'border-red-500' : ''}
             />
@@ -222,7 +222,7 @@ export function UnifiedLeadForm({
             </label>
             <Input
               {...register('phoneWhatsapp')}
-              placeholder="+58 412 000 0000"
+              placeholder="+54 11 0000 0000"
               disabled={isSubmitting}
               className={errors.phoneWhatsapp ? 'border-red-500' : ''}
             />
@@ -314,7 +314,7 @@ export function UnifiedLeadForm({
               </label>
               <textarea
                 {...register('message')}
-                placeholder="Cuéntanos más sobre tu propiedad..."
+                placeholder="Contanos más sobre tu propiedad..."
                 disabled={isSubmitting}
                 rows={4}
                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none ${
@@ -343,11 +343,11 @@ export function UnifiedLeadForm({
                 Enviando...
               </>
             ) : intent === 'SIGNUP' ? (
-              'Crear Cuenta'
+              'Crear cuenta'
             ) : intent === 'DEMO' ? (
               'Solicitar demo'
             ) : (
-              'Get Started'
+              'Comenzar'
             )}
           </Button>
 
@@ -355,7 +355,7 @@ export function UnifiedLeadForm({
             {intent === 'SIGNUP'
               ? 'Respetamos tu privacidad. Tu información será usada solo para crear tu cuenta.'
               : intent === 'DEMO'
-              ? 'Sumate a la lista de espera de BuildingOS.'
+              ? 'Respetamos tu privacidad. Tu información será usada solo para coordinar la demo.'
               : 'Respetamos tu privacidad. Tu información será usada solo para contactarte.'}
           </p>
         </form>

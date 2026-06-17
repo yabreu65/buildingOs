@@ -1,6 +1,6 @@
 import Badge from "@/shared/components/ui/Badge";
 
-type Status = "mvp" | "next";
+type Status = "available" | "next";
 
 export default function Modules() {
   const categories: Array<{
@@ -10,15 +10,15 @@ export default function Modules() {
     {
       name: "Administración",
       items: [
-        { name: "Propiedades", status: "mvp" },
-        { name: "Unidades", status: "mvp" },
-        { name: "Residentes", status: "mvp" },
+        { name: "Propiedades", status: "available" },
+        { name: "Unidades", status: "available" },
+        { name: "Residentes", status: "available" },
       ],
     },
     {
       name: "Finanzas",
       items: [
-        { name: "Pagos", status: "mvp" },
+        { name: "Pagos", status: "available" },
         { name: "Expensas", status: "next" },
         { name: "Cuenta corriente", status: "next" },
       ],
@@ -26,22 +26,22 @@ export default function Modules() {
     {
       name: "Operación",
       items: [
-        { name: "Reclamos/Tickets", status: "mvp" },
+        { name: "Reclamos/Tickets", status: "available" },
         { name: "Proveedores", status: "next" },
       ],
     },
     {
       name: "Comunicación",
       items: [
-        { name: "Avisos", status: "mvp" },
-        { name: "Documentos", status: "mvp" },
+        { name: "Avisos", status: "available" },
+        { name: "Documentos", status: "available" },
       ],
     },
   ];
 
   const badgeClass =
     {
-      mvp: "bg-accent/15 text-accent border border-accent/30",
+      available: "bg-accent/15 text-accent border border-accent/30",
       next: "bg-muted text-muted-foreground border border-border",
     } as const;
 
@@ -74,8 +74,8 @@ export default function Modules() {
                       {item.name}
                     </span>
 
-                    {item.status === "mvp" ? (
-                      <Badge className={badgeClass.mvp}>MVP</Badge>
+                    {item.status === "available" ? (
+                      <Badge className={badgeClass.available}>Disponible</Badge>
                     ) : (
                       <Badge className={badgeClass.next}>Próximo</Badge>
                     )}

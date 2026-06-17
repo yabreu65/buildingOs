@@ -14,7 +14,7 @@ import Button from '../../../shared/components/ui/Button';
 const signupSchema = z
   .object({
     name: z.string().min(2, 'El nombre debe tener al menos 2 caracteres'),
-    email: z.string().email('Email inválido'),
+    email: z.string().email('Correo electrónico inválido'),
     password: z
       .string()
       .min(8, 'La contraseña debe tener al menos 8 caracteres'),
@@ -72,7 +72,7 @@ export default function SignupPage() {
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold tracking-tight">BuildingOS</h1>
             <p className="text-sm text-muted-foreground">
-              Crea una nueva cuenta
+              Creá una nueva cuenta
             </p>
           </div>
 
@@ -95,13 +95,13 @@ export default function SignupPage() {
 
             <div>
               <label htmlFor="email" className="block text-sm font-medium mb-1">
-                Email
+                Correo electrónico
               </label>
               <input
                 {...register('email')}
                 type="email"
                 id="email"
-                placeholder="tu@email.com"
+                placeholder="tu@correo.com"
                 className="w-full px-3 py-2 border border-input rounded-md text-sm"
               />
               {errors.email && (
@@ -149,12 +149,12 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label
-                htmlFor="tenantName"
-                className="block text-sm font-medium mb-1"
-              >
-                Nombre del edificio/condominio
-              </label>
+                <label
+                  htmlFor="tenantName"
+                  className="block text-sm font-medium mb-1"
+                >
+                Nombre del edificio o condominio
+                </label>
               <input
                 {...register('tenantName')}
                 type="text"
@@ -170,19 +170,19 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label
-                htmlFor="tenantType"
-                className="block text-sm font-medium mb-1"
-              >
+                <label
+                  htmlFor="tenantType"
+                  className="block text-sm font-medium mb-1"
+                >
                 Tipo de organización
-              </label>
+                </label>
               <select
                 {...register('tenantType')}
                 id="tenantType"
                 className="w-full px-3 py-2 border border-input rounded-md text-sm"
               >
                 <option value="EDIFICIO_AUTOGESTION">
-                  Edificio/Condominio (auto-gestión)
+                  Edificio/Condominio (autogestión)
                 </option>
                 <option value="ADMINISTRADORA">
                   Administradora (múltiples edificios)
@@ -195,11 +195,11 @@ export default function SignupPage() {
               )}
             </div>
 
-            {signupMutation.error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-md text-sm">
+              {signupMutation.error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-md text-sm">
                 {signupMutation.error instanceof Error
                   ? signupMutation.error.message
-                  : 'Error al crear cuenta'}
+                  : 'Error al crear la cuenta'}
               </div>
             )}
 
@@ -214,9 +214,9 @@ export default function SignupPage() {
 
           <div className="mt-4 text-center text-sm">
             <p className="text-muted-foreground">
-              ¿Ya tienes cuenta?{' '}
+              ¿Ya tenés cuenta?{' '}
               <Link href="/login" className="text-blue-600 hover:underline">
-                Inicia sesión
+                Iniciá sesión
               </Link>
             </p>
           </div>

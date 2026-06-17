@@ -10,34 +10,34 @@ import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { StorageService } from '@/shared/lib/storage';
 
-// Zod validation schema
+// Esquema de validación Zod
 const leadFormSchema = z.object({
-  fullName: z.string().min(2, 'Name must be at least 2 characters').max(100),
-  email: z.string().email('Invalid email address'),
+  fullName: z.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(100),
+  email: z.string().email('Correo electrónico inválido'),
   phoneWhatsapp: z
     .string()
-    .max(20, 'Phone must be max 20 characters')
+    .max(20, 'El teléfono debe tener como máximo 20 caracteres')
     .optional()
     .or(z.literal('')),
   tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
   buildingsCount: z
     .number()
-    .min(1, 'Must be at least 1')
+    .min(1, 'Debe ser al menos 1')
     .optional()
     .or(z.undefined()),
-  unitsEstimate: z.number().min(1, 'Must be at least 1'),
+  unitsEstimate: z.number().min(1, 'Debe ser al menos 1'),
   countryCity: z
     .string()
-    .max(100, 'Location must be max 100 characters')
+    .max(100, 'La ubicación debe tener como máximo 100 caracteres')
     .optional()
     .or(z.literal('')),
   message: z
     .string()
-    .max(1000, 'Message must be max 1000 characters')
+    .max(1000, 'El mensaje debe tener como máximo 1000 caracteres')
     .optional()
     .or(z.literal('')),
-  // Honeypot: must remain empty
-  website: z.string().max(0, 'Invalid submission').optional().or(z.literal('')),
+  // Honeypot: debe permanecer vacío
+  website: z.string().max(0, 'Envío inválido').optional().or(z.literal('')),
 });
 
 type LeadFormData = z.infer<typeof leadFormSchema>;
@@ -70,14 +70,14 @@ export function LeadCaptureForm() {
     mode: 'onChange',
   });
 
-  // Debug: log validation errors
+  // Debug: registrar errores de validación
   React.useEffect(() => {
     if (Object.keys(errors).length > 0) {
-      console.log('🔴 Validation errors:', errors);
+      console.log('🔴 Errores de validación:', errors);
     }
   }, [errors]);
 
-  // Check rate limiting (client-side)
+  // Verificar límite de envíos (lado cliente)
   const checkRateLimit = useCallback((): boolean => {
     const now = Date.now();
     const data = StorageService.get<{ count: number; resetTime: number }>(
@@ -87,11 +87,11 @@ export function LeadCaptureForm() {
     ) || { count: 0, resetTime: now + 60000 };
 
     if (now > data.resetTime) {
-      // Reset window
+      // Reiniciar ventana
       data.count = 1;
       data.resetTime = now + 60000;
     } else if (data.count >= 3) {
-      // Rate limit exceeded
+      // Límite de envíos excedido
       return false;
     } else {
       data.count += 1;
@@ -101,17 +101,17 @@ export function LeadCaptureForm() {
     return true;
   }, []);
 
-  // Handle form submission
+  // Manejar envío del formulario
   const onSubmit = async (data: LeadFormData) => {
-    // Check honeypot
+    // Verificar honeypot
     if (data.website) {
-      console.warn('Honeypot field filled, ignoring submission');
+      console.warn('Campo honeypot completado, se ignora el envío');
       return;
     }
 
-    // Check rate limit
+    // Verificar límite de envíos
     if (!checkRateLimit()) {
-      setSubmitError('Too many submissions. Please try again in 60 seconds.');
+      setSubmitError('Demasiados envíos. Probá de nuevo en 60 segundos.');
       setSubmitStatus('error');
       setTimeout(() => setSubmitStatus('idle'), 5000);
       return;
@@ -122,18 +122,18 @@ export function LeadCaptureForm() {
     setSubmitError('');
 
     try {
-      // Parse number fields
+      // Parsear campos numéricos
       const buildingsCountValue = data.buildingsCount
         ? parseInt(String(data.buildingsCount), 10)
         : undefined;
       const unitsEstimateValue = parseInt(String(data.unitsEstimate), 10);
 
-      // Validate numbers
+      // Validar números
       if (isNaN(unitsEstimateValue) || unitsEstimateValue < 1) {
-        throw new Error('Units estimate must be a number greater than 0');
+        throw new Error('La estimación de unidades debe ser un número mayor que 0');
       }
       if (buildingsCountValue !== undefined && (isNaN(buildingsCountValue) || buildingsCountValue < 1)) {
-        throw new Error('Buildings count must be a number greater than 0');
+        throw new Error('La cantidad de edificios debe ser un número mayor que 0');
       }
 
       const submitData = {
@@ -145,14 +145,14 @@ export function LeadCaptureForm() {
         unitsEstimate: unitsEstimateValue,
         countryCity: data.countryCity || undefined,
         message: data.message || undefined,
-        source: 'lead-form-web',
+        source: 'formulario-web-leads',
       };
 
-      console.log('📤 Submitting lead:', submitData);
+      console.log('📤 Enviando lead:', submitData);
       const response = await submitLead(submitData);
-      console.log('✅ Lead submitted successfully:', response);
+      console.log('✅ Solicitud enviada correctamente:', response);
 
-      // Track analytics event
+      // Registrar evento de analítica
       if (typeof window !== 'undefined' && window.gtag) {
         window.gtag('event', 'lead_submitted', {
           tenant_type: data.tenantType,
@@ -164,16 +164,16 @@ export function LeadCaptureForm() {
       setSubmitStatus('success');
       reset();
 
-      // Auto-clear success state
+      // Limpiar estado de éxito automáticamente
       setTimeout(() => setSubmitStatus('idle'), 5000);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Failed to submit lead. Please try again.';
+        error instanceof Error ? error.message : 'No se pudo enviar el lead. Probá de nuevo.';
       setSubmitError(message);
       setSubmitStatus('error');
-      console.error('❌ Lead submission error:', error);
+      console.error('❌ Error al enviar el lead:', error);
 
-      // Log detailed error info for debugging
+      // Registrar detalle del error para depuración
       if (error instanceof Error) {
         console.error('Error details:', {
           name: error.name,
@@ -186,7 +186,7 @@ export function LeadCaptureForm() {
     }
   };
 
-  // Success state
+  // Estado de éxito
   if (submitStatus === 'success') {
     return (
       <ErrorBoundary level="feature">
@@ -194,9 +194,9 @@ export function LeadCaptureForm() {
           <div className="flex flex-col items-center text-center space-y-4">
           <CheckCircle className="w-16 h-16 text-green-600" />
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Lead Submitted Successfully!</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Solicitud enviada correctamente</h3>
             <p className="text-sm text-gray-600 mt-2">
-              Our sales team will contact you shortly. Thank you for your interest in BuildingOS.
+              Nuestro equipo comercial se va a contactar pronto. Gracias por tu interés en BuildingOS.
             </p>
           </div>
           <Button
@@ -206,7 +206,7 @@ export function LeadCaptureForm() {
             }}
             className="mt-4"
           >
-            Submit Another
+            Enviar otra solicitud
           </Button>
           </div>
         </Card>
@@ -219,9 +219,9 @@ export function LeadCaptureForm() {
       <Card className="w-full max-w-md mx-auto p-6">
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Get Started</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Comenzar</h2>
           <p className="text-sm text-gray-600 mt-2">
-            Tell us about your property. Our team will get back to you within 24 hours.
+            Contanos sobre tu propiedad. Nuestro equipo te va a responder dentro de 24 horas.
           </p>
         </div>
 
@@ -233,14 +233,14 @@ export function LeadCaptureForm() {
         )}
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
-          {/* Full Name */}
+          {/* Nombre completo */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Full Name <span className="text-red-500">*</span>
+              Nombre completo <span className="text-red-500">*</span>
             </label>
             <Input
               {...register('fullName')}
-              placeholder="John Doe"
+              placeholder="Juan Pérez"
               disabled={isSubmitting}
               className={errors.fullName ? 'border-red-500' : ''}
             />
@@ -249,15 +249,15 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Email */}
+          {/* Correo electrónico */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email <span className="text-red-500">*</span>
+              Correo electrónico <span className="text-red-500">*</span>
             </label>
             <Input
               {...register('email')}
               type="email"
-              placeholder="john@example.com"
+              placeholder="tu@correo.com"
               disabled={isSubmitting}
               className={errors.email ? 'border-red-500' : ''}
             />
@@ -266,14 +266,14 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Phone/WhatsApp */}
+          {/* Teléfono / WhatsApp */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Phone / WhatsApp
+              Teléfono / WhatsApp
             </label>
             <Input
               {...register('phoneWhatsapp')}
-              placeholder="+1 (555) 000-0000"
+              placeholder="+54 11 0000 0000"
               disabled={isSubmitting}
               className={errors.phoneWhatsapp ? 'border-red-500' : ''}
             />
@@ -282,10 +282,10 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Tenant Type */}
+          {/* Tipo de administración */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Tenant Type <span className="text-red-500">*</span>
+              Tipo de administración <span className="text-red-500">*</span>
             </label>
             <select
               {...register('tenantType')}
@@ -294,19 +294,19 @@ export function LeadCaptureForm() {
                 errors.tenantType ? 'border-red-500' : 'border-gray-300'
               }`}
             >
-              <option value="">Select property type</option>
-              <option value="ADMINISTRADORA">Management Company</option>
-              <option value="EDIFICIO_AUTOGESTION">Self-Managed Building</option>
+              <option value="">Seleccionar</option>
+              <option value="ADMINISTRADORA">Administradora</option>
+              <option value="EDIFICIO_AUTOGESTION">Edificio autogestionado</option>
             </select>
             {errors.tenantType && (
               <p className="text-sm text-red-600 mt-1">{errors.tenantType.message}</p>
             )}
           </div>
 
-          {/* Buildings Count */}
+          {/* Cantidad de edificios */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Number of Buildings (optional)
+              Cantidad de edificios (opcional)
             </label>
             <Input
               {...register('buildingsCount', { valueAsNumber: true })}
@@ -321,10 +321,10 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Units Estimate */}
+          {/* Estimación de unidades */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Estimated Number of Units <span className="text-red-500">*</span>
+              Cantidad estimada de unidades <span className="text-red-500">*</span>
             </label>
             <Input
               {...register('unitsEstimate', { valueAsNumber: true })}
@@ -339,10 +339,10 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Country / City */}
+          {/* País / ciudad */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Location (Country, City) (optional)
+              Ubicación (País, Ciudad) (opcional)
             </label>
             <Input
               {...register('countryCity')}
@@ -355,14 +355,14 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Message */}
+          {/* Mensaje */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Additional Information (optional)
+              Información adicional (opcional)
             </label>
             <textarea
               {...register('message')}
-              placeholder="Tell us more about your property and any specific needs..."
+              placeholder="Contanos más sobre tu propiedad y tus necesidades específicas..."
               disabled={isSubmitting}
               rows={4}
               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none ${
@@ -374,37 +374,37 @@ export function LeadCaptureForm() {
             )}
           </div>
 
-          {/* Honeypot field - hidden from users */}
+          {/* Campo honeypot - oculto para usuarios */}
           <input type="hidden" {...register('website')} />
 
-          {/* Submit Button */}
+          {/* Botón de envío */}
           <Button
             type="submit"
             disabled={isSubmitting || !isValid || isValidating}
             className="w-full"
             size="md"
-            title={!isValid ? 'Please fill all required fields correctly' : ''}
+            title={!isValid ? 'Completá correctamente todos los campos obligatorios' : ''}
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Submitting...
+                Enviando...
               </>
             ) : isValidating ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Validating...
+                Validando...
               </>
             ) : !isValid ? (
-              'Complete the form to submit'
+              'Completá el formulario para enviar'
             ) : (
-              'Submit Lead'
+              'Enviar solicitud'
             )}
           </Button>
 
-          {/* Privacy note */}
+          {/* Aviso de privacidad */}
           <p className="text-xs text-gray-500 text-center">
-            We respect your privacy. Your information will only be used to contact you about our services.
+            Respetamos tu privacidad. Tu información se usará solo para contactarte sobre nuestros servicios.
           </p>
         </form>
       </div>
