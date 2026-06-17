@@ -1263,12 +1263,13 @@ export class FinanzasService {
       orderBy: { dueDate: 'desc' },
     });
 
-    // 5. Get payments for this unit
+    // 5. Get payments for this unit (only approved/reconciled for history)
     const payments = await this.prisma.payment.findMany({
       where: {
         tenantId,
         unitId,
-        canceledAt: null, // Exclude soft-deleted payments
+        status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
+        canceledAt: null,
       },
       include: {
         paymentAllocations: true,
@@ -1335,6 +1336,8 @@ export class FinanzasService {
       })),
       totals: {
         totalCharges,
+        totalPaid: totalAllocated,
+        // Keep totalAllocated for backward compatibility
         totalAllocated,
         balance,
         currency: tenant.currency,

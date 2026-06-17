@@ -375,6 +375,7 @@ export interface UnitLedgerDto {
   }>;
   totals: {
     totalCharges: number;
+    totalPaid: number;
     totalAllocated: number;
     balance: number;
     currency: string;

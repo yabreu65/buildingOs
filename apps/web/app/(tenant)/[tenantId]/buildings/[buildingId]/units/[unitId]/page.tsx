@@ -272,9 +272,9 @@ const UnitDashboardPage = () => {
                   </div>
                 </div>
               </div>
-              {(ledger.totals.totalPaid ?? 0) > 0 && (
+              {((ledger.totals.totalPaid ?? ledger.totals.totalAllocated ?? 0) > 0) && (
                 <p className="text-xs text-muted-foreground">
-                  {t('finanzas.paid')}: {formatCurrency(ledger.totals.totalPaid ?? 0, ledger.totals.currency || 'USD')}
+                  {t('finanzas.paid')}: {formatCurrency(ledger.totals.totalPaid ?? ledger.totals.totalAllocated ?? 0, ledger.totals.currency || 'USD')}
                 </p>
               )}
             </div>

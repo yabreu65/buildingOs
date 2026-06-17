@@ -93,7 +93,10 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
             <div>
               <p className="text-sm text-muted-foreground">Total Pagado</p>
               <p className="text-2xl font-bold text-green-600">
-                {ledger.totals?.totalPaid ? formatCurrency(ledger.totals.totalPaid, ledger.totals.currency || 'USD') : '$0.00'}
+                {(() => {
+                  const paid = ledger.totals?.totalPaid ?? ledger.totals?.totalAllocated;
+                  return paid ? formatCurrency(paid, ledger.totals?.currency || 'ARS') : '$0.00';
+                })()}
               </p>
             </div>
             <TrendingUp className="w-5 h-5 text-green-600" />
