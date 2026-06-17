@@ -55,7 +55,7 @@ export default function TenantAiAnalyticsPage() {
       {!limitsLoading && (
         <div className="mb-8">
           <AiPlanLimitsCard
-            planName="Current Plan"
+            planName="Plan actual"
             limits={limits}
             usage={usage}
           />

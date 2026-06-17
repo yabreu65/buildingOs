@@ -35,8 +35,8 @@ export default function OverviewPage() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Dashboard Overview</h1>
-        <p className="text-muted-foreground">Visión general del SaaS</p>
+        <h1 className="text-3xl font-bold">Visión General</h1>
+        <p className="text-muted-foreground">Panel de control del SaaS</p>
       </div>
 
       {/* Quick Actions */}
@@ -51,15 +51,15 @@ export default function OverviewPage() {
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <OverviewMetricWidget label="Total Tenants" value={stats.totalTenants} />
+        <OverviewMetricWidget label="Total Administraciones" value={stats.totalTenants} />
         <OverviewMetricWidget
-          label="Tenants Activos"
+          label="Administraciones Activas"
           value={stats.activeTenants}
           color="green"
         />
-        <OverviewMetricWidget label="Tenants Trial" value={stats.trialTenants} color="blue" />
+        <OverviewMetricWidget label="En Prueba" value={stats.trialTenants} color="blue" />
         <OverviewMetricWidget
-          label="Tenants Suspendidos"
+          label="Administraciones Suspendidas"
           value={stats.suspendedTenants}
           color="red"
         />

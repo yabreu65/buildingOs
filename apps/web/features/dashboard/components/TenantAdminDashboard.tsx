@@ -117,8 +117,8 @@ export default function TenantAdminDashboard({
         ) : buildings.length === 0 ? (
           <EmptyState
             icon={<Link className="w-8 h-8 text-muted-foreground" />}
-            title="No Buildings Yet"
-            description="Create your first building to get started"
+            title="Sin edificios aún"
+            description="Creá tu primer edificio para empezar"
           />
         ) : (
           <Table>

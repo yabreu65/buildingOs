@@ -217,7 +217,7 @@ const UnitsPage = () => {
   if (!building) {
     return (
       <ErrorState
-        message="Building not found. It may have been deleted or you don't have access."
+        message="Edificio no encontrado. Puede haber sido eliminado o no tenés acceso."
         onRetry={() => refetchBuildings()}
       />
     );
@@ -427,7 +427,7 @@ const UnitsPage = () => {
         /* Empty State */
         <EmptyState
           icon={<LayoutGrid className="w-12 h-12 text-muted-foreground" />}
-          title="No units yet"
+          title="Sin unidades todavía"
         description={t('units.empty')}
         cta={{
           text: t('units.createFirst'),

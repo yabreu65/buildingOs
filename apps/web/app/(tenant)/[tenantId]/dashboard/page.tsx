@@ -239,7 +239,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
     <div className="space-y-6">
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Dashboard Admin</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Panel de Administración</h1>
         <p className="text-muted-foreground mt-1">Resumen operativo de tus edificios</p>
       </div>
 

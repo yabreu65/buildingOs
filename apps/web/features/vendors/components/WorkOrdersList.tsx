@@ -215,7 +215,7 @@ export default function WorkOrdersList({ buildingId }: WorkOrdersListProps) {
       {/* Cancel Confirmation */}
       <DeleteConfirmDialog
         isOpen={!!selectedForCancel}
-        title="Cancel Work Order"
+        title="Cancelar orden de trabajo"
         description="Are you sure you want to cancel this work order?"
         onConfirm={() => handleCancelConfirm(selectedForCancel || '')}
         onCancel={() => setSelectedForCancel(null)}

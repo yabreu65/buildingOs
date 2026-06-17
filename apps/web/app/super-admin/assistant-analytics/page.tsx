@@ -376,8 +376,8 @@ export default function AssistantAnalyticsPage() {
             </div>
           ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <MetricCard label="Total Events" value={overview?.totalEvents ?? 0} loading={loading && !overview} />
-            <MetricCard label="Tenants" value={overview?.uniqueTenants ?? 0} loading={loading && !overview} />
+            <MetricCard label="Total Eventos" value={overview?.totalEvents ?? 0} loading={loading && !overview} />
+            <MetricCard label="Administraciones" value={overview?.uniqueTenants ?? 0} loading={loading && !overview} />
             <MetricCard label="Sessions" value={overview?.uniqueSessions ?? 0} loading={loading && !overview} />
             <MetricCard label="Avg Actions" value={overview?.avgActionsPerMessage ?? 0} unit="%" loading={loading && !overview} />
             <MetricCard label="Mapped Clicks" value={overview?.mappedClicks ?? 0} loading={loading && !overview} />

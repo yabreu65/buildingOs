@@ -213,11 +213,11 @@ const TenantSupportPage = () => {
               }}
               className="w-full px-3 py-2 border rounded-md"
             >
-              <option value="">All Statuses</option>
-              <option value="OPEN">Open</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="RESOLVED">Resolved</option>
-              <option value="CLOSED">Closed</option>
+              <option value="">Todos los estados</option>
+              <option value="OPEN">Abierto</option>
+              <option value="IN_PROGRESS">En progreso</option>
+              <option value="RESOLVED">Resuelto</option>
+              <option value="CLOSED">Cerrado</option>
             </select>
           </div>
         </div>

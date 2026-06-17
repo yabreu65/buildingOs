@@ -225,7 +225,7 @@ export function AssistantWidget({
         <button
           onClick={() => setExpanded(true)}
           className="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
-          title="Open AI Assistant"
+          title="Abrir Asistente IA"
         >
           <svg
             className="w-6 h-6"

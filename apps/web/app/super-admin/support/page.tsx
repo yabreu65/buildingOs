@@ -84,7 +84,7 @@ export default function SupportTicketsPage() {
       <div className="p-6">
         <h1 className="text-3xl font-bold mb-6">Support Tickets</h1>
         <EmptyState
-          title="No support tickets"
+          title="Sin tickets de soporte"
           description="There are no support tickets to display"
         />
       </div>
@@ -111,11 +111,11 @@ export default function SupportTicketsPage() {
               }}
               className="w-full px-3 py-2 border rounded-md"
             >
-              <option value="">All Statuses</option>
-              <option value="OPEN">Open</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="RESOLVED">Resolved</option>
-              <option value="CLOSED">Closed</option>
+              <option value="">Todos los estados</option>
+              <option value="OPEN">Abierto</option>
+              <option value="IN_PROGRESS">En progreso</option>
+              <option value="RESOLVED">Resuelto</option>
+              <option value="CLOSED">Cerrado</option>
             </select>
           </div>
         </div>
@@ -155,25 +155,25 @@ export default function SupportTicketsPage() {
                   }}
                   className="px-3 py-1 text-sm border rounded"
                 >
-                  <option value="">Change Status</option>
+                  <option value="">Cambiar estado</option>
                   {ticket.status === 'OPEN' && (
                     <>
-                      <option value="IN_PROGRESS">Move to In Progress</option>
-                      <option value="CLOSED">Close</option>
+                      <option value="IN_PROGRESS">Mover a En progreso</option>
+                      <option value="CLOSED">Cerrar</option>
                     </>
                   )}
                   {ticket.status === 'IN_PROGRESS' && (
                     <>
-                      <option value="RESOLVED">Mark Resolved</option>
-                      <option value="CLOSED">Close</option>
+                      <option value="RESOLVED">Marcar Resuelto</option>
+                      <option value="CLOSED">Cerrar</option>
                     </>
                   )}
                   {ticket.status === 'RESOLVED' && (
-                    <option value="CLOSED">Close</option>
+                    <option value="CLOSED">Cerrar</option>
                   )}
                 </select>
               )}
-              <Button variant="secondary" size="sm">View Details</Button>
+              <Button variant="secondary" size="sm">Ver detalles</Button>
             </div>
           </Card>
         ))}
@@ -181,7 +181,7 @@ export default function SupportTicketsPage() {
 
       {/* Pagination Info */}
       <div className="text-sm text-gray-600 text-center py-4">
-        Showing {skip + 1} to {Math.min(skip + take, total)} of {total} tickets
+        Mostrando {skip + 1} a {Math.min(skip + take, total)} de {total} tickets
       </div>
     </div>
   );

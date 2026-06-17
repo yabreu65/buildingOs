@@ -47,7 +47,7 @@ export function InboxList({ buildingId }: InboxListProps) {
     return (
       <EmptyState
         icon={<Bell className="w-12 h-12 text-muted-foreground" />}
-        title="No Communications"
+        title="Sin comunicados"
         description="You haven't received any communications yet."
       />
     );

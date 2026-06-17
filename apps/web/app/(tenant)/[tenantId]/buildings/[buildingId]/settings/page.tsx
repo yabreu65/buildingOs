@@ -199,7 +199,7 @@ const SettingsPage = () => {
       {/* Delete Confirmation Dialog */}
       <DeleteConfirmDialog
         isOpen={showDeleteDialog}
-        title="Delete Building"
+        title="Eliminar edificio"
         description="This action cannot be undone. The building and all associated data will be permanently deleted."
         onConfirm={handleDeleteConfirm}
         onCancel={() => setShowDeleteDialog(false)}

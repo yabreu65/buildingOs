@@ -142,7 +142,7 @@ const NotificationsPage = () => {
       {/* Notifications List */}
       {notifications.length === 0 ? (
         <EmptyState
-          title="No notifications"
+          title="Sin notificaciones"
           description={isRead === false ? 'You have read all notifications' : 'No notifications to display'}
         />
       ) : (

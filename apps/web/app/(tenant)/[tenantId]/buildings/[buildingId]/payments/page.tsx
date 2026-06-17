@@ -70,8 +70,8 @@ export default function PaymentsPage() {
       {payments.length === 0 ? (
         <EmptyState
           icon={<CreditCard className="w-12 h-12 text-muted-foreground" />}
-          title="No Payment Records"
-          description="No payment records yet for this building."
+          title="Sin registros de pago"
+          description="No hay pagos registrados en este edificio."
         />
       ) : (
         <Card>

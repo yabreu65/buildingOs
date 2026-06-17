@@ -82,7 +82,7 @@ export default function OperatorDashboard({ tenantId }: OperatorDashboardProps) 
         ) : buildings.length === 0 ? (
           <EmptyState
             icon={<Building2 className="w-8 h-8 text-muted-foreground" />}
-            title="No Buildings"
+            title="Sin edificios"
             description="Contact your administrator to create buildings"
           />
         ) : (
