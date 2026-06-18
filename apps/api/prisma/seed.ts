@@ -251,6 +251,20 @@ async function main() {
     },
   });
 
+  const localSuperAdminEmail = process.env.LOCAL_SUPER_ADMIN_EMAIL || "superadmin@buildingos.local";
+  const localSuperAdminName = process.env.LOCAL_SUPER_ADMIN_NAME || "Super Admin Local";
+  const localSuperAdminPasswordPlain = process.env.LOCAL_SUPER_ADMIN_PASSWORD || "LocalSuperAdmin!2026";
+  const localSuperAdminPassword = await bcrypt.hash(localSuperAdminPasswordPlain, 10);
+  const localSuperAdminUser = await prisma.user.upsert({
+    where: { email: localSuperAdminEmail },
+    update: { name: localSuperAdminName },
+    create: {
+      email: localSuperAdminEmail,
+      name: localSuperAdminName,
+      passwordHash: localSuperAdminPassword,
+    },
+  });
+
   const adminPassword = await bcrypt.hash("Admin123!", 10);
   const adminUser = await prisma.user.upsert({
     where: { email: "admin@demo.com" },
@@ -427,6 +441,29 @@ async function main() {
       data: {
         tenantId: tenantAdmin.id,
         membershipId: superAdminMembership.id,
+        role: Role.SUPER_ADMIN,
+        scopeType: 'TENANT',
+      },
+    });
+  } catch (e) {
+    // Ignore if it already exists
+  }
+
+  const localSuperAdminMembership = await prisma.membership.upsert({
+    where: {
+      userId_tenantId: {
+        userId: localSuperAdminUser.id,
+        tenantId: tenantAdmin.id,
+      },
+    },
+    update: {},
+    create: { tenantId: tenantAdmin.id, userId: localSuperAdminUser.id },
+  });
+  try {
+    await prisma.membershipRole.create({
+      data: {
+        tenantId: tenantAdmin.id,
+        membershipId: localSuperAdminMembership.id,
         role: Role.SUPER_ADMIN,
         scopeType: 'TENANT',
       },
