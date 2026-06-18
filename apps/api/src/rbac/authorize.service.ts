@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Permission, PERMISSIONS } from './permissions';
+import type { Permission, Role } from './permissions';
+import { PERMISSIONS } from './permissions';
 
 export interface AuthorizeParams {
   userId: string;
@@ -112,7 +113,7 @@ export class AuthorizeService {
    */
   private hasPermission(roles: string[], permission: Permission): boolean {
     return roles.some((role) => {
-      const rolePermissions = PERMISSIONS[role] || [];
+      const rolePermissions = PERMISSIONS[role as Role] || [];
       return rolePermissions.includes(permission);
     });
   }

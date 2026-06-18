@@ -10,6 +10,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { AlertCircle } from 'lucide-react';
+import type { Role } from '@buildingos/contracts';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
 import Input from '@/shared/components/ui/Input';
@@ -29,7 +30,7 @@ type AcceptFormData = z.infer<typeof acceptSchema>;
 interface AcceptInvitationResponse {
   accessToken: string;
   user: { id: string; name: string; email: string };
-  memberships: Array<{ id: string; tenantId: string; roles: string[] }>;
+  memberships: Array<{ id: string; tenantId: string; roles: Role[] }>;
   membershipExisted?: boolean;
 }
 
@@ -46,7 +47,7 @@ function InvitePageContent() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [tenantName, setTenantName] = useState<string | null>(null);
-  const [roles, setRoles] = useState<string[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
 
   const {
@@ -74,7 +75,7 @@ function InvitePageContent() {
           tenantId: string;
           tenantName: string;
           email: string;
-          roles: string[];
+          roles: Role[];
           expiresAt: string;
         }
         const response = await apiClient<ValidateInvitationResponse>({

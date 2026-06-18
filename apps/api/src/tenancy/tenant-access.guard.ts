@@ -7,6 +7,7 @@ import {
   Inject,
 } from '@nestjs/common';
 import { Request } from 'express';
+import type { TenantMembershipRoles } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface RequestWithUser extends Request {
@@ -17,10 +18,7 @@ export interface RequestWithUser extends Request {
     name: string;
     isImpersonating?: boolean;
     impersonatedTenantId?: string;
-    memberships: Array<{
-      tenantId: string;
-      roles: string[];
-    }>;
+    memberships: TenantMembershipRoles[];
   };
 }
 

@@ -1,9 +1,11 @@
 import { Request } from 'express';
+import type { Role, ScopedRole } from '@buildingos/contracts';
 
 export interface AuthenticatedMembership {
   id?: string;
   tenantId: string;
-  roles: string[];
+  roles: Role[];
+  scopedRoles?: ScopedRole[];
 }
 
 export interface AuthenticatedUser {
@@ -12,7 +14,7 @@ export interface AuthenticatedUser {
   email: string;
   name?: string;
   isSuperAdmin?: boolean;
-  roles?: string[];
+  roles?: Role[];
   membershipId?: string;
   permissions?: string[];
   tenantId?: string; // From JWT context for tenant-level routes

@@ -10,6 +10,7 @@ import {
   Request,
   ForbiddenException,
 } from '@nestjs/common';
+import type { Role } from '@buildingos/contracts';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { RecurringExpenseService } from './recurring-expense.service';
@@ -27,6 +28,12 @@ import {
 @Controller('buildings/:buildingId/recurring-expenses')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class RecurringExpenseController {
+  private readonly adminRoles: readonly Role[] = [
+    'TENANT_ADMIN',
+    'TENANT_OWNER',
+    'OPERATOR',
+  ];
+
   constructor(private recurringExpenseService: RecurringExpenseService) {}
 
   /**
@@ -43,11 +50,7 @@ export class RecurringExpenseController {
     const userRoles = req.user?.roles || [];
 
     // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can create
-    if (
-      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
-        userRoles.includes(role),
-      )
-    ) {
+    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
       throw new ForbiddenException('Solo administradores pueden crear gastos recurrentes');
     }
 
@@ -90,11 +93,7 @@ export class RecurringExpenseController {
     const userRoles = req.user?.roles || [];
 
     // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can update
-    if (
-      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
-        userRoles.includes(role),
-      )
-    ) {
+    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
       throw new ForbiddenException('Solo administradores pueden modificar gastos recurrentes');
     }
 

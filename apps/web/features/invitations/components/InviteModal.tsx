@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { Role } from '@buildingos/contracts';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -26,9 +27,10 @@ export default function InviteModal({
   onOpenChange,
   onSubmit,
 }: InviteModalProps) {
+  const availableRoles: readonly Role[] = ['TENANT_ADMIN', 'OPERATOR', 'RESIDENT'];
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [selectedRoles, setSelectedRoles] = useState<Role[]>([]);
 
   const {
     register,
@@ -58,8 +60,8 @@ export default function InviteModal({
       reset();
       setSelectedRoles([]);
       onOpenChange(false);
-    } catch (err: any) {
-      const message = err?.message || 'Erro ao enviar convite';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro ao enviar convite';
       setError(message);
     } finally {
       setLoading(false);
@@ -96,7 +98,7 @@ export default function InviteModal({
           <div>
             <label className="block text-sm font-medium mb-2">Papéis</label>
             <div className="space-y-2">
-              {['TENANT_ADMIN', 'OPERATOR', 'RESIDENT'].map((role) => (
+              {availableRoles.map((role) => (
                 <label
                   key={role}
                   className="flex items-center gap-2 cursor-pointer"

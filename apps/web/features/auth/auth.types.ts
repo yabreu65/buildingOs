@@ -1,23 +1,11 @@
-export type Role =
-  | "SUPER_ADMIN"
-  | "TENANT_OWNER"
-  | "TENANT_ADMIN"
-  | "OPERATOR"
-  | "RESIDENT";
+import type { Role, ScopeType, ScopedRole } from '@buildingos/contracts';
 
-export type ScopeType = "TENANT" | "BUILDING" | "UNIT";
-
-export type ScopedRole = {
-  id: string;
-  role: Role;
-  scopeType: ScopeType;
-  scopeBuildingId: string | null;
-  scopeUnitId: string | null;
-};
+export type { Role, ScopeType, ScopedRole };
 
 export type Membership = {
+  id?: string;
   tenantId: string;
-  roles: string[];
+  roles: Role[];
   scopedRoles?: ScopedRole[];
 };
 

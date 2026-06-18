@@ -1,8 +1,9 @@
 import { apiClient } from '@/shared/lib/http/client';
+import type { Role } from '@buildingos/contracts';
 
 export interface CreateInvitationRequest {
   email: string;
-  roles: string[];
+  roles: Role[];
 }
 
 export interface CreateInvitationResponse {
@@ -28,13 +29,13 @@ export interface Member {
   email: string;
   name: string;
   createdAt: string;
-  roles: string[];
+  roles: Role[];
 }
 
 export interface PendingInvitation {
   id: string;
   email: string;
-  roles: string[];
+  roles: Role[];
   expiresAt: string;
   createdAt: string;
 }

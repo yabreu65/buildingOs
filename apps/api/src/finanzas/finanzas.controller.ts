@@ -12,6 +12,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import type { Role } from '@buildingos/contracts';
 import { Payment, PaymentAllocation } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
@@ -80,6 +81,12 @@ import {
 @Controller('buildings/:buildingId')
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class FinanzasController {
+  private readonly adminRoles: readonly Role[] = [
+    'TENANT_ADMIN',
+    'TENANT_OWNER',
+    'OPERATOR',
+  ];
+
   constructor(
     private finanzasService: FinanzasService,
     private expenseImportService: ExpenseImportService,
@@ -463,11 +470,7 @@ export class FinanzasController {
     const userRoles = req!.user?.roles || [];
 
     // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can validate
-    if (
-      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
-        userRoles.includes(role),
-      )
-    ) {
+    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
       throw new ForbiddenException(
         'Solo administradores pueden validar gastos en lote',
       );
@@ -498,11 +501,7 @@ export class FinanzasController {
     const userRoles = req.user?.roles || [];
 
     // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can import
-    if (
-      !['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].some((role) =>
-        userRoles.includes(role),
-      )
-    ) {
+    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
       throw new ForbiddenException(
         'Solo administradores pueden importar gastos',
       );

@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Request } from 'express';
+import type { Role, TenantMembershipRoles } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface RequestWithUser extends Request {
@@ -14,11 +15,8 @@ export interface RequestWithUser extends Request {
     id: string;
     email: string;
     name: string;
-    roles?: string[];
-    memberships: Array<{
-      tenantId: string;
-      roles: string[];
-    }>;
+    roles?: Role[];
+    memberships: TenantMembershipRoles[];
   };
   tenantId?: string; // Populated by this guard
 }
@@ -132,8 +130,8 @@ export class BuildingAccessGuard implements CanActivate {
     // Los controllers usan req.user.roles para validar permisos (RBAC)
     const tenantRoles = membership.roles
       .filter(r => r.scopeType === 'TENANT' || (r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId))
-      .map(r => r.role as string);
-    (request.user as RequestWithUser['user'] & { roles?: string[] }).roles = tenantRoles;
+      .map(r => r.role as Role);
+    request.user.roles = tenantRoles;
 
     return true;
   }

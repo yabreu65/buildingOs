@@ -1,4 +1,6 @@
- export type Role = "SUPER_ADMIN" | "TENANT_OWNER" | "TENANT_ADMIN" | "OPERATOR" | "RESIDENT";
+import type { Role } from '@buildingos/contracts';
+
+export type { Role };
  
  export type Session = {
    userId: string;

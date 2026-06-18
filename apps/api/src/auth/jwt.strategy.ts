@@ -2,42 +2,29 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Role, TenantMembershipRoles } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
+import type { AuthenticatedUser } from '../common/types/request.types';
 
 interface JwtPayload {
   email: string;
   sub: string;
   isSuperAdmin: boolean;
-  roles?: string[];
+  roles?: Role[];
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
 }
 
-interface ScopedRole {
-  id: string;
-  role: string;
-  scopeType: string;
-  scopeBuildingId: string | null;
-  scopeUnitId: string | null;
-}
-
-interface ValidatedUser {
-  id: string;
-  email: string;
-  name: string;
+interface ValidatedUser extends AuthenticatedUser {
   isSuperAdmin?: boolean;
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
-  roles?: string[]; // Roles from first membership (active tenant)
+  roles?: Role[]; // Roles from first membership (active tenant)
   membershipId?: string; // ID of first membership (active tenant)
-  memberships: Array<{
-    tenantId: string;
-    roles: string[];
-    scopedRoles?: ScopedRole[];
-  }>;
+  memberships: TenantMembershipRoles[];
 }
 
 @Injectable()
