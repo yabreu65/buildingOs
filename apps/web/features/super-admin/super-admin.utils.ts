@@ -27,6 +27,20 @@ export function getTenantStatusLabel(status: string): string {
 }
 
 /**
+ * Obtiene etiqueta visible para distinguir demo vs real.
+ */
+export function getTenantDemoLabel(isDemo?: boolean): string {
+  return isDemo ? 'Demo' : 'Real';
+}
+
+/**
+ * Obtiene clase CSS para el badge demo/real.
+ */
+export function getTenantDemoBadgeClass(isDemo?: boolean): string {
+  return isDemo ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800';
+}
+
+/**
  * Obtiene clase CSS para badge de status
  */
 export function getStatusBadgeClass(status: string): string {
@@ -48,6 +62,9 @@ export function getStatusBadgeClass(status: string): string {
 export function formatDate(dateString: string): string {
   try {
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return dateString;
+    }
     return date.toLocaleDateString('es-ES', {
       year: 'numeric',
       month: '2-digit',

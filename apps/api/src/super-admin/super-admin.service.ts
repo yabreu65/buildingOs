@@ -29,6 +29,7 @@ export interface TenantResponse {
   id: string;
   name: string;
   type: string;
+  isDemo: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -237,6 +238,12 @@ export class SuperAdminService {
     });
     if (!tenant) {
       throw new NotFoundException(`Tenant with ID "${tenantId}" not found`);
+    }
+
+    if (!tenant.isDemo) {
+      throw new ForbiddenException(
+        'Este cliente es real y no puede eliminarse físicamente. Archívalo o suspéndelo cuando esa opción esté disponible.',
+      );
     }
 
     // Audit: TENANT_DELETE (fire-and-forget, before deletion)
@@ -742,6 +749,7 @@ export class SuperAdminService {
       id: tenant.id,
       name: tenant.name,
       type: tenant.type,
+      isDemo: tenant.isDemo,
       createdAt: tenant.createdAt.toISOString(),
       updatedAt: tenant.updatedAt.toISOString(),
     };

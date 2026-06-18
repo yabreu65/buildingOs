@@ -2,7 +2,14 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
   roots: ['<rootDir>'],
-  testMatch: ['**/shared/components/assistant/__tests__/**/*.test.ts', '**/shared/components/assistant/__tests__/**/*.test.tsx'],
+  testMatch: [
+    '**/shared/components/assistant/__tests__/**/*.test.ts',
+    '**/shared/components/assistant/__tests__/**/*.test.tsx',
+    '**/features/super-admin/__tests__/**/*.test.ts',
+    '**/features/super-admin/__tests__/**/*.test.tsx',
+    '**/features/super-admin/components/__tests__/**/*.test.ts',
+    '**/features/super-admin/components/__tests__/**/*.test.tsx',
+  ],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
   },

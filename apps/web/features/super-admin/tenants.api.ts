@@ -9,6 +9,7 @@ export interface TenantFromAPI {
   id: string;
   name: string;
   type: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
+  isDemo: boolean;
   createdAt: string;
   updatedAt: string;
   branding?: {
@@ -98,5 +99,15 @@ export async function changeTenantPlan(
     path: `/api/super-admin/tenants/${tenantId}/subscription`,
     method: 'PATCH',
     body: { newPlanId },
+  });
+}
+
+/**
+ * Delete tenant (demo only)
+ */
+export async function deleteTenant(tenantId: string): Promise<void> {
+  return apiClient<void>({
+    path: `/api/super-admin/tenants/${tenantId}`,
+    method: 'DELETE',
   });
 }

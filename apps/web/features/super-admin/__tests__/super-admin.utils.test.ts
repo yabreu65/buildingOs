@@ -3,6 +3,8 @@ import {
   getTenantTypeLabel,
   getTenantStatusLabel,
   getStatusBadgeClass,
+  getTenantDemoLabel,
+  getTenantDemoBadgeClass,
   formatDate,
   getPlanDescription,
   validateTenantName,
@@ -45,6 +47,21 @@ describe('Super Admin Utils - Labels & Formatting', () => {
       expect(getTenantStatusLabel('TRIAL')).toBe('Prueba');
       expect(getTenantStatusLabel('ACTIVE')).toBe('Activo');
       expect(getTenantStatusLabel('SUSPENDED')).toBe('Suspendido');
+    });
+  });
+
+  describe('getTenantDemoLabel', () => {
+    it('should return Demo for demo tenants and Real otherwise', () => {
+      expect(getTenantDemoLabel(true)).toBe('Demo');
+      expect(getTenantDemoLabel(false)).toBe('Real');
+      expect(getTenantDemoLabel(undefined)).toBe('Real');
+    });
+  });
+
+  describe('getTenantDemoBadgeClass', () => {
+    it('should return a distinct badge style for demo and real tenants', () => {
+      expect(getTenantDemoBadgeClass(true)).toContain('amber');
+      expect(getTenantDemoBadgeClass(false)).toContain('slate');
     });
   });
 

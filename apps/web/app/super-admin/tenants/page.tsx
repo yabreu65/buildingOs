@@ -4,10 +4,14 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Button from '@/shared/components/ui/Button';
 import Badge from '@/shared/components/ui/Badge';
-import { listTenants } from '@/features/super-admin/tenants.api';
+import { deleteTenant, listTenants } from '@/features/super-admin/tenants.api';
 import TenantActions from '@/features/super-admin/components/TenantActions';
 import type { TenantFromAPI } from '@/features/super-admin/tenants.api';
 import type { Tenant } from '@/features/super-admin/super-admin.types';
+import {
+  getTenantDemoBadgeClass,
+  getTenantDemoLabel,
+} from '@/features/super-admin/super-admin.utils';
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<TenantFromAPI[]>([]);
@@ -34,6 +38,13 @@ export default function TenantsPage() {
   const handleToggleSuspend = (tenant: Tenant) => {
     // TODO: Implement suspend/activate functionality
     console.log('Toggle suspend for tenant:', tenant.id);
+  };
+
+  const handleDeleteDemo = async (tenant: Tenant) => {
+    await deleteTenant(tenant.id);
+    const response = await listTenants();
+    setTenants(response.data);
+    setFeedback({ type: 'success', message: `Tenant de prueba "${tenant.name}" eliminado` });
   };
 
   const filteredTenants = tenants.filter((tenant) => {
@@ -104,6 +115,7 @@ export default function TenantsPage() {
               <tr>
                 <th className="px-6 py-3 text-left text-sm font-semibold">Nombre</th>
                 <th className="px-6 py-3 text-left text-sm font-semibold">Tipo</th>
+                <th className="px-6 py-3 text-left text-sm font-semibold">Entorno</th>
                 <th className="px-6 py-3 text-left text-sm font-semibold">Estado</th>
                 <th className="px-6 py-3 text-left text-sm font-semibold">Plan</th>
                 <th className="px-6 py-3 text-left text-sm font-semibold">Creado</th>
@@ -121,6 +133,7 @@ export default function TenantsPage() {
                   id: tenant.id,
                   name: tenant.name,
                   type: tenant.type,
+                  isDemo: tenant.isDemo,
                   status: status as 'TRIAL' | 'ACTIVE' | 'SUSPENDED',
                   plan: planId as 'FREE' | 'BASIC' | 'PRO' | 'ENTERPRISE',
                   createdAt: tenant.createdAt,
@@ -130,6 +143,11 @@ export default function TenantsPage() {
                   <tr key={tenant.id} className="hover:bg-muted/50">
                     <td className="px-6 py-4 text-sm font-medium">{tenant.name}</td>
                     <td className="px-6 py-4 text-sm">{tenant.type === 'ADMINISTRADORA' ? 'ADM' : 'EDIF'}</td>
+                    <td className="px-6 py-4 text-sm">
+                      <Badge className={getTenantDemoBadgeClass(tenant.isDemo)}>
+                        {getTenantDemoLabel(tenant.isDemo)}
+                      </Badge>
+                    </td>
                     <td className="px-6 py-4 text-sm">
                       <Badge className={`${
                         status === 'TRIAL' ? 'bg-blue-100 text-blue-800' :
@@ -153,6 +171,7 @@ export default function TenantsPage() {
                         <TenantActions
                           tenant={tenantForActions}
                           onToggleSuspend={handleToggleSuspend}
+                          onDeleteDemo={handleDeleteDemo}
                         />
                       </div>
                     </td>

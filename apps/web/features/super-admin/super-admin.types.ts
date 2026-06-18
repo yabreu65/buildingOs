@@ -9,6 +9,7 @@ export type Tenant = {
   id: string;
   name: string;
   type: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
+  isDemo?: boolean;
   status: 'TRIAL' | 'ACTIVE' | 'SUSPENDED';
   plan: 'FREE' | 'BASIC' | 'PRO' | 'ENTERPRISE';
   ownerId?: string; // user ID del TENANT_OWNER
