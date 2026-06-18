@@ -1,6 +1,8 @@
 node_modules
 dist
 .next
+playwright-report
+test-results
 .env
 .env.*
 !infra/docker/.env.api.example
