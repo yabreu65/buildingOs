@@ -193,4 +193,36 @@ describe('Production Readiness Config Validation', () => {
       expect(result.OPENAI_API_KEY).toBeUndefined();
     });
   });
+
+  describe('Production: optional services', () => {
+    const prodEnv: Record<string, string> = {
+      ...baseEnv,
+      NODE_ENV: 'production',
+      JWT_SECRET: 'a'.repeat(64),
+      DATABASE_URL: 'postgresql://test:test@db.example.com:5432/test',
+      WEB_ORIGIN: 'https://app.example.com',
+      APP_BASE_URL: 'https://app.example.com',
+      S3_ENDPOINT: 'https://s3.example.com',
+      REDIS_URL: 'redis://redis.example.com:6379',
+    };
+
+    it('allows SENTRY_DSN to be empty', () => {
+      const schema = createConfigSchema('production');
+      const result = schema.safeParse({ ...prodEnv, SENTRY_DSN: '' });
+      expect(result.success).toBe(true);
+    });
+
+    it('allows SENTRY_DSN to be missing', () => {
+      const schema = createConfigSchema('production');
+      const { SENTRY_DSN: _, ...envWithoutSentry } = prodEnv;
+      const result = schema.safeParse(envWithoutSentry);
+      expect(result.success).toBe(true);
+    });
+
+    it('allows MAIL_PROVIDER none', () => {
+      const schema = createConfigSchema('production');
+      const result = schema.safeParse({ ...prodEnv, MAIL_PROVIDER: 'none' });
+      expect(result.success).toBe(true);
+    });
+  });
 });

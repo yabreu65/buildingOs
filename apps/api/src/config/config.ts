@@ -428,12 +428,8 @@ function validateConditionalConfig(config: ParsedConfig, nodeEnv: NodeEnv): void
     ) {
       errors.push('REDIS_URL in production cannot use localhost');
     }
-    if (!config.SENTRY_DSN) {
-      errors.push('SENTRY_DSN is required in production');
-    }
-    if (config.MAIL_PROVIDER === 'none') {
-      errors.push('MAIL_PROVIDER cannot be none in production');
-    }
+    // NOTE: SENTRY_DSN is optional — SentryService self-disables when absent.
+    // NOTE: MAIL_PROVIDER=none is valid — NoOpAdapter handles graceful degradation.
   }
 
   // Staging: similar to production but slightly relaxed

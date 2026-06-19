@@ -22,7 +22,7 @@ COPY packages ./packages
 RUN npm ci
 
 # Build shared workspace packages first
-RUN npm run build -w packages/contracts
+RUN npm run build -w packages/contracts && npm run build -w packages/permissions
 
 # Copy Prisma schema and generate client
 COPY apps/api/prisma ./apps/api/prisma
@@ -77,6 +77,7 @@ COPY apps/api/prisma ./apps/api/prisma
 
 # Copy compiled contracts from builder (workspace dependency)
 COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=builder /app/packages/permissions/dist ./packages/permissions/dist
 
 # Copy compiled application from builder
 COPY --from=builder /app/apps/api/dist ./apps/api/dist

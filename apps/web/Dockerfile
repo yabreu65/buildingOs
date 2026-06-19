@@ -22,8 +22,8 @@ COPY packages ./packages
 # Install all dependencies (dev + prod)
 RUN npm ci
 
-# Build shared workspace packages (contracts is used by web)
-RUN npm run build -w packages/contracts
+# Build shared workspace packages
+RUN npm run build -w packages/contracts && npm run build -w packages/permissions
 
 # Copy web source code
 COPY apps/web ./apps/web
