@@ -27,8 +27,10 @@ export interface ChatResponse {
 export interface ChatRequest {
   message: string;
   page: string;
+   currentPage?: string;
   buildingId?: string;
   unitId?: string;
+   financePeriod?: string;
   conversationId?: string;
 }
 

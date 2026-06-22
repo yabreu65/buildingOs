@@ -50,6 +50,7 @@ import { ResponseFormatterService } from './formatter/response-formatter.service
 import { AssistantFeedbackService } from './feedback/assistant-feedback.service';
 import { AssistantLlmHealthController } from './llm-health.controller';
 import { AssistantLlmHealthService } from './llm-health.service';
+import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 
 // Intent definitions
 import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
@@ -160,6 +161,7 @@ AssistantDebtCalculatorService,
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
+    IntentSemanticValidatorService,
   ],
   exports: [
     AssistantService,
@@ -190,6 +192,7 @@ AssistantDebtCalculatorService,
     QueryExecutorService,
     ResponseFormatterService,
     AssistantFeedbackService,
+    IntentSemanticValidatorService,
   ],
 })
 export class AssistantModule {}

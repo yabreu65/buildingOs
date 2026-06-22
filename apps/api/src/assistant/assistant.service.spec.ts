@@ -23,6 +23,7 @@ import { ResponseFormatterService } from './formatter/response-formatter.service
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
+import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 
 /**
  * Suite exhaustiva de tests para TODAS las preguntas operativas
@@ -76,6 +77,7 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockResponseFormatter = { formatV1: jest.fn(), formatV2: jest.fn() };
   const mockIntentRegistry = { register: jest.fn(), get: jest.fn(), has: jest.fn(), list: jest.fn() };
   const mockFilterCoverageValidator = { analyze: jest.fn() };
+  const mockIntentSemanticValidator = { evaluate: jest.fn() };
 
   const ADMIN_ROLES = ['TENANT_ADMIN'];
 
@@ -112,6 +114,10 @@ describe('AssistantService - Strict Operational Questions', () => {
       detectedSignals: [],
       missingFields: [],
     });
+    mockIntentSemanticValidator.evaluate.mockResolvedValue({
+      status: 'accepted',
+      reason: 'default_accept',
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -139,6 +145,7 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: ResponseFormatterService, useValue: mockResponseFormatter },
         { provide: IntentRegistry, useValue: mockIntentRegistry },
         { provide: FilterCoverageValidator, useValue: mockFilterCoverageValidator },
+        { provide: IntentSemanticValidatorService, useValue: mockIntentSemanticValidator },
       ],
     }).compile();
 
@@ -206,6 +213,140 @@ describe('AssistantService - Strict Operational Questions', () => {
         'user-1',
         ADMIN_ROLES,
       );
+    });
+  });
+
+  describe('chatV2 semantic validation', () => {
+    it('asks for clarification instead of executing historical building debt without period', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'B', buildingToken: 'B' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'B' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'needs_clarification',
+        reason: 'period_ambiguous',
+        question: '¿Querés la deuda de este mes o la deuda acumulada?',
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: '¿Querés la deuda de este mes o la deuda acumulada?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'deuda total edificio B', page: 'charges', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalled();
+      expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
+    });
+
+    it('uses finance period context before executing building debt', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'B', buildingToken: 'B' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'B' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'override_suggested',
+        reason: 'finance_context_period',
+        filterOverrides: { period: '2026-06', financePeriod: '2026-06' },
+      });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-B',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'deuda total edificio B',
+          page: 'charges',
+          currentPage: '/tenant-1/buildings/demo-B/finance',
+          financePeriod: '2026-06',
+          buildingId: 'demo-B',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'building_debt',
+          filters: expect.objectContaining({ period: '2026-06', financePeriod: '2026-06' }),
+        }),
+        expect.objectContaining({
+          building: expect.objectContaining({ id: 'demo-B' }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalled();
     });
   });
 

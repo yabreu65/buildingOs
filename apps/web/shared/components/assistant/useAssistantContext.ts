@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { getSession } from '@/features/auth/session.storage';
 import type { AssistantContext } from '../assistant';
@@ -31,6 +32,18 @@ export function useAssistantContext(options: UseAssistantContextOptions = {}) {
   const route = pathname || '/';
   
   const currentModule = inferCurrentModule(route, moduleMap);
+  const financePeriod = useMemo(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const isFinanceRoute = route.toLowerCase().includes('/finance') || route.toLowerCase().includes('/finanzas');
+    if (!isFinanceRoute) {
+      return undefined;
+    }
+
+    return document.querySelector<HTMLInputElement>('input[type="month"]')?.value || undefined;
+  }, [route]);
 
   const context: AssistantContext = {
     appId: 'buildingos',
@@ -38,7 +51,11 @@ export function useAssistantContext(options: UseAssistantContextOptions = {}) {
     userId,
     role,
     route,
+    page: currentModule || route,
+    currentPage: route,
+    buildingId,
     currentModule,
+    financePeriod,
     permissions,
     unitOccupantRole: undefined,
   };

@@ -53,6 +53,7 @@ import { buildingDocumentsIntent } from './intent-engine/allowed-intents/buildin
 import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
 import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
+import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
   'expenses_summary',
@@ -64,8 +65,10 @@ const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
 export interface ChatRequest {
   readonly message: string;
   readonly page: string;
+  readonly currentPage?: string;
   readonly buildingId?: string;
   readonly unitId?: string;
+  readonly financePeriod?: string;
   readonly conversationId?: string;
   readonly sessionId?: string;
   readonly debug?: boolean;
@@ -217,6 +220,7 @@ export class AssistantService implements OnModuleInit {
     private readonly queryExecutor: QueryExecutorService,
     private readonly responseFormatter: ResponseFormatterService,
     private readonly filterCoverageValidator: FilterCoverageValidator,
+    private readonly intentSemanticValidator: IntentSemanticValidatorService,
   ) {
     this.dailyLimit = parseInt(process.env.AI_DAILY_LIMIT_PER_TENANT || '100', 10);
     this.intentEngineEnabled = process.env.AI_INTENT_ENGINE_ENABLED !== 'false';
@@ -601,6 +605,8 @@ export class AssistantService implements OnModuleInit {
     const contextForExtraction = {
       buildingId: request.buildingId || lastResolved.buildingId,
       unitId: request.unitId || lastResolved.unitId,
+      currentPage: request.currentPage || request.page,
+      financePeriod: request.financePeriod,
       userId,
       previousTurns: conversationContext as ConversationTurn[],
     };
@@ -776,6 +782,64 @@ export class AssistantService implements OnModuleInit {
     debugInfo.zodValidationPassed = true;
     debugInfo.finalIntent = extractedIntent.intent;
     debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
+
+    const semanticValidation = await this.intentSemanticValidator.evaluate({
+      userText: request.message,
+      deterministicPlan,
+      extractedIntent,
+      assistantContext: {
+        page: request.page,
+        currentPage: request.currentPage,
+        buildingId: request.buildingId,
+        unitId: request.unitId,
+        financePeriod: request.financePeriod,
+      },
+    });
+    debugInfo.semanticValidationStatus = semanticValidation.status;
+    debugInfo.semanticValidationReason = semanticValidation.reason;
+
+    if (semanticValidation.status === 'needs_clarification') {
+      const clarificationResponse = this.responseFormatter.formatV2(
+        {
+          isAmbiguous: true,
+          alternatives: [],
+          clarificationMessage:
+            semanticValidation.question ||
+            'Necesito más contexto para responder con precisión.',
+        },
+        'ambiguous',
+        extractedIntent.confidence,
+      );
+      if (debugEnabled) {
+        (clarificationResponse as StructuredResponse).debug = debugInfo;
+      }
+      return clarificationResponse;
+    }
+
+    if (semanticValidation.status === 'override_suggested') {
+      if (semanticValidation.intentOverride) {
+        extractedIntent.intent = semanticValidation.intentOverride;
+      }
+      if (semanticValidation.entityOverride) {
+        extractedIntent.entity = {
+          ...extractedIntent.entity,
+          ...semanticValidation.entityOverride,
+        };
+      }
+      if (semanticValidation.filterOverrides) {
+        extractedIntent.filters = {
+          ...extractedIntent.filters,
+          ...semanticValidation.filterOverrides,
+        };
+      }
+      if (semanticValidation.llmProvider) {
+        extractedIntent.llmProvider = semanticValidation.llmProvider;
+        extractedIntent.source = 'hybrid';
+        debugInfo.llmProvider = semanticValidation.llmProvider;
+      }
+      debugInfo.finalIntent = extractedIntent.intent;
+      debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
+    }
 
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';

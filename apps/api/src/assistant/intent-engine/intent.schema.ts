@@ -39,6 +39,7 @@ const intentFiltersSchema: z.ZodType<{
     maxAmount: z.number().optional(),
     minDebt: z.number().optional(),
     period: z.string().optional(),
+    financePeriod: z.string().optional(),
     status: z.string().optional(),
     method: z.string().optional(),
     minAgeDays: z.number().optional(),
@@ -74,7 +75,7 @@ export const extractedIntentSchema = z.object({
   limit: z.number().max(100).optional(),
   confidence: z.number().min(0, 'Confidence must be at least 0').max(1, 'Confidence must be at most 1'),
   source: z.enum(['deterministic', 'llm', 'hybrid']).optional().default('llm'),
-  llmProvider: z.enum(['ollama', 'opencode', 'none']).optional(),
+  llmProvider: z.enum(['ollama', 'opencode', 'gemini', 'none']).optional(),
   requiresClarification: z.boolean().optional().default(false),
   missingFields: z.array(z.string()).optional().default([]),
 }).strict();

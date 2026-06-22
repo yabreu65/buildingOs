@@ -30,6 +30,7 @@ export interface IntentFilters {
   maxAmount?: number;
   minDebt?: number;
   period?: string;
+  financePeriod?: string;
   status?: string;
   method?: string;
   minAgeDays?: number;
@@ -132,7 +133,7 @@ export interface ExtractedIntent {
   /** Extraction source */
   source?: 'deterministic' | 'llm' | 'hybrid';
   /** LLM provider that produced this extraction when source involves LLM */
-  llmProvider?: 'ollama' | 'opencode' | 'none';
+  llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none';
   /** Whether clarification should be asked before execution */
   requiresClarification?: boolean;
   /** Missing semantic fields when extraction is incomplete */
@@ -268,6 +269,8 @@ export interface ConversationContext {
   buildingId?: string;
   /** Current unit ID if known */
   unitId?: string;
+  currentPage?: string;
+  financePeriod?: string;
   /** Current user ID */
   userId?: string;
   /** Previous conversation turns */

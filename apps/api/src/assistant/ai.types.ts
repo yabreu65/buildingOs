@@ -101,7 +101,7 @@ export interface StructuredResponse {
     coverageStatus?: 'complete' | 'incomplete' | 'failed';
     coverageMissing?: string[];
     usedLLM?: boolean;
-    llmProvider?: 'ollama' | 'opencode' | 'none' | 'unknown';
+    llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none' | 'unknown';
     llmBaseUrl?: string;
     llmModel?: string;
     llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'none';

@@ -62,8 +62,10 @@ export interface AssistantContext {
   readonly role: string;
   readonly route: string;
   readonly page?: string;
+  readonly currentPage?: string;
   readonly buildingId?: string;
   readonly unitId?: string;
+  readonly financePeriod?: string;
   readonly currentModule?: string;
   readonly permissions?: readonly string[];
   readonly unitOccupantRole?: 'OWNER' | 'RESIDENT';

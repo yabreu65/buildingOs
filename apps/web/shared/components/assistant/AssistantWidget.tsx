@@ -70,8 +70,10 @@ export function AssistantWidget({
       const response = await assistantApi.chatV2(tenantId, {
         message: userMessage.content,
         page: context.page || 'dashboard',
+        currentPage: context.currentPage,
         buildingId: context.buildingId,
         unitId: context.unitId,
+        financePeriod: context.financePeriod,
         conversationId,
       });
 
