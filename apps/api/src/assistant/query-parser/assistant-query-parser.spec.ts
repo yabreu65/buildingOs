@@ -35,6 +35,7 @@ describe('AssistantQueryParser', () => {
     it.each([
       ['torre A', 'A'],
       ['edificio B', 'B'],
+      ['condominio H', 'H'],
       ['bloque C', 'C'],
       ['tower D', 'D'],
       ['building E', 'E'],

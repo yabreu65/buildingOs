@@ -26,6 +26,14 @@ describe('FilterCoverageValidator', () => {
     expect(result.missingFields).toHaveLength(0);
   });
 
+  it('detects period when mes actual is mentioned', () => {
+    const result = validator.analyze('deuda del edificio B del mes actual', {});
+
+    expect(result.complete).toBe(false);
+    expect(result.detectedSignals).toContain('period');
+    expect(result.missingFields).toContain('period');
+  });
+
   it('detects amount comparisons and requires numeric filters', () => {
     const result = validator.analyze('Hay deuda mayor a 500', {});
 

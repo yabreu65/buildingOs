@@ -64,8 +64,9 @@ export class FilterCoverageValidator {
     return (
       /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/.test(value) ||
       /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/.test(value) ||
-      /\b(este mes|mes pasado|ultimo mes|último mes|hoy|ayer)\b/.test(value) ||
-      /\b\d{4}-\d{2}\b/.test(value)
+      /\b(este mes|mes actual|mes pasado|ultimo mes|último mes|hoy|ayer)\b/.test(value) ||
+      /\b\d{4}-\d{2}\b/.test(value) ||
+      /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b/.test(value)
     );
   }
 

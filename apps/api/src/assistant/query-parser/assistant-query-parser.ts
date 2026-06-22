@@ -47,6 +47,7 @@ export interface MatchResult<T> {
 export const BUILDING_SYNONYMS = [
   'torre',
   'edificio',
+  'condominio',
   'bloque',
   'tower',
   'building',

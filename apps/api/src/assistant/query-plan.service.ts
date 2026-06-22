@@ -15,6 +15,7 @@ export class AssistantQueryPlanService {
   createPlan(message: string): AssistantQueryPlan | null {
     const normalized = this.normalize(message);
     const parsedUnitToken = this.parser.parseUnitReference(message);
+    const buildingToken = this.parser.extractBuildingToken(message);
     const extractedFilters = this.extractCommonFilters(normalized);
     const personName = this.extractPersonName(message, normalized);
     const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
@@ -29,6 +30,11 @@ export class AssistantQueryPlanService {
         (typeof extractedFilters.minAmount === 'number' || typeof extractedFilters.minDebt === 'number') &&
         referencesSomeone &&
         !hasExplicitUnitSyntax
+      ) &&
+      !(
+        Boolean(buildingToken) &&
+        typeof extractedFilters.period === 'string' &&
+        /^\d{4}$/.test(parsedUnitToken.unitCodeRaw ?? parsedUnitToken.unitCode)
       )
         ? parsedUnitToken
         : null;
@@ -44,6 +50,7 @@ export class AssistantQueryPlanService {
         executor: unitIntent,
         filters: {
           unitCode: unitToken.unitCode,
+          unitCodeRaw: unitToken.unitCodeRaw,
           buildingAlias: unitToken.buildingAlias,
           buildingName: unitToken.buildingName,
           ...extractedFilters,
@@ -70,8 +77,6 @@ export class AssistantQueryPlanService {
     if (!buildingIntent) {
       return null;
     }
-
-    const buildingToken = this.parser.extractBuildingToken(message);
 
     // Intent detected but no explicit building – return plan anyway.
     // chatV2 will resolve the building from request.buildingId or context.
@@ -221,6 +226,18 @@ export class AssistantQueryPlanService {
       december: 12,
     };
 
+    const explicitMonthYear = normalized.match(
+      /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b/,
+    );
+    if (explicitMonthYear?.[1] && explicitMonthYear?.[2]) {
+      const rawMonthToken = explicitMonthYear[1];
+      const monthToken = rawMonthToken === 'may' ? 'may_en' : rawMonthToken;
+      const month = monthMap[monthToken];
+      if (month) {
+        return `${explicitMonthYear[2]}-${String(month).padStart(2, '0')}`;
+      }
+    }
+
     for (const [token, month] of Object.entries(monthMap)) {
       const needle = token === 'may_en' ? 'may' : token;
       if (new RegExp(`\\b${needle}\\b`).test(normalized)) {
@@ -228,7 +245,7 @@ export class AssistantQueryPlanService {
       }
     }
 
-    if (normalized.includes('este mes')) {
+    if (normalized.includes('este mes') || normalized.includes('mes actual')) {
       return `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     }
 

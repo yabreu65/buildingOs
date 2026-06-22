@@ -112,6 +112,59 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.method).toBe('TRANSFER');
   });
 
+  it('treats mes actual as the current period for building debt', () => {
+    const plan = service.createPlan('deuda del edificio B, del mes actual');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+  });
+
+  it('parses explicit month and year for building debt', () => {
+    const plan = service.createPlan('deuda del edificio B, junio 2026');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBe('2026-06');
+  });
+
+  it('keeps este mes behavior unchanged for building debt', () => {
+    const plan = service.createPlan('deuda del edificio B este mes');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+  });
+
+  it('keeps building-level debt queries with month and year out of unit_debt parsing', () => {
+    const plan = service.createPlan('deuda del edificio B, junio 2026');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBe('2026-06');
+    expect(plan?.filters.unitCode).toBeUndefined();
+    expect(plan?.filters.unitCodeRaw).toBeUndefined();
+  });
+
+  it('keeps building-level payments queries with month and year out of unit parsing', () => {
+    const plan = service.createPlan('pagos pendientes edificio B junio 2026');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBe('2026-06');
+    expect(plan?.filters.unitCode).toBeUndefined();
+  });
+
   it('detects bank-income phrasing and maps it to building_payments with transfer method', () => {
     const plan = service.createPlan('Mostrame la plata que entró por banco el mes pasado');
 
@@ -130,6 +183,25 @@ describe('AssistantQueryPlanService', () => {
     }));
     expect(plan?.filters.buildingAlias).toBe('A');
     expect(plan?.filters.buildingToken).toBe('A');
+  });
+
+  it('keeps valid unit queries working when the unit code is real', () => {
+    const plan = service.createPlan('deuda unidad 2-B');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'unit_debt',
+    }));
+    expect(plan?.filters.unitCode).toBe('2-B');
+  });
+
+  it('keeps accumulated building debt without a period filter', () => {
+    const plan = service.createPlan('deuda acumulada edificio B');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('B');
+    expect(plan?.filters.period).toBeUndefined();
   });
 
   it('extracts status and minAgeDays from ticket aging query', () => {

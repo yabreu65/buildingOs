@@ -20,6 +20,7 @@ export type AssistantQueryScope = 'unit' | 'building';
 export interface AssistantQueryPlanFilters {
   buildingToken?: string;
   unitCode?: string;
+  unitCodeRaw?: string;
   buildingAlias?: string;
   buildingName?: string;
   personName?: string;
