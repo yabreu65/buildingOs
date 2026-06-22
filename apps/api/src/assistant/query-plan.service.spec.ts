@@ -85,6 +85,34 @@ describe('AssistantQueryPlanService', () => {
     }));
   });
 
+  it.each([
+    'deuda de la administracion',
+    'deuda total de la administracion',
+    'deuda del condominio completo',
+    'saldo pendiente general',
+    'cuanto deben todos los edificios',
+    'deuda de todos los edificios',
+  ])('maps "%s" to tenant_debt', (phrase) => {
+    const plan = service.createPlan(phrase);
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'tenant_debt',
+      module: 'payments',
+      scope: 'tenant',
+      requiredPermission: 'payments.review',
+      executor: 'tenant_debt',
+    }));
+  });
+
+  it('does not fall back to building_debt for tenant-wide debt phrases', () => {
+    const plan = service.createPlan('deuda total de la administracion');
+
+    expect(plan?.intent).toBe('tenant_debt');
+    expect(plan?.scope).toBe('tenant');
+    expect(plan?.filters.buildingAlias).toBeUndefined();
+    expect(plan?.filters.buildingToken).toBeUndefined();
+  });
+
   it('returns null for non-allowlisted or ambiguous questions', () => {
     expect(service.createPlan('hola como estas')).toBeNull();
   });

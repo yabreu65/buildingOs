@@ -16,6 +16,7 @@ describe('AssistantQueryExecutorsService', () => {
   };
   const policy = { assertCanExecute: jest.fn() };
   const unitResolver = { resolve: jest.fn() };
+  const tenantDebtService = { resolveTenantDebtSummary: jest.fn() };
   let service: AssistantQueryExecutorsService;
 
   const resolvedUnit = {
@@ -31,6 +32,7 @@ describe('AssistantQueryExecutorsService', () => {
       policy as never,
       unitResolver as never,
       new AssistantDebtCalculatorService(),
+      tenantDebtService as never,
     );
     unitResolver.resolve.mockResolvedValue({ resolved: resolvedUnit, errorResponse: null });
     policy.assertCanExecute.mockResolvedValue(undefined);
@@ -162,6 +164,31 @@ describe('AssistantQueryExecutorsService', () => {
       where: { tenantId: 'tenant-1', buildingId: 'building-1', canceledAt: null },
     }));
     expect(result?.answer).toContain('deuda pendiente total');
+  });
+
+  it('executes tenant_debt with a tenant-wide outstanding debt summary', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'tenant_debt',
+      module: 'payments',
+      scope: 'tenant',
+      requiredPermission: 'payments.review',
+      executor: 'tenant_debt',
+      filters: {},
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    tenantDebtService.resolveTenantDebtSummary.mockResolvedValue({
+      totalDebt: 15801,
+      currency: 'ARS',
+      chargeCount: 12,
+    });
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', plan }));
+    expect(tenantDebtService.resolveTenantDebtSummary).toHaveBeenCalledWith('tenant-1');
+    expect(result?.answer).toContain('administración');
+    expect(result?.suggestedActions[0].type).toBe('VIEW_PAYMENTS');
   });
 
   it('executes building_payments and resolves payment unit labels inside the same tenant', async () => {

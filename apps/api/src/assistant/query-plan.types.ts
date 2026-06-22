@@ -9,13 +9,14 @@ export type AssistantQueryIntent =
   | 'unit_tickets'
   | 'unit_payments'
   | 'building_debt'
+  | 'tenant_debt'
   | 'building_delinquents'
   | 'building_documents'
   | 'building_tickets'
   | 'building_payments'
   | 'building_stats';
 
-export type AssistantQueryScope = 'unit' | 'building';
+export type AssistantQueryScope = 'unit' | 'building' | 'tenant';
 
 export interface AssistantQueryPlanFilters {
   buildingToken?: string;

@@ -113,6 +113,14 @@ describe('ResponseFormatterService', () => {
       expect(result.summary).toContain('2 pagos encontrados');
       expect(result.summary).toContain('Monto total');
     });
+
+    it('renders tenant_debt summaries as administration debt', () => {
+      const data = { totalDebt: 474568, currency: 'ARS' };
+      const result = service.formatV2(data, 'tenant_debt', 0.9);
+
+      expect(result.title).toBe('Tenant Debt');
+      expect(result.summary).toContain('Deuda total de la administración');
+    });
   });
 
   describe('formatter support', () => {

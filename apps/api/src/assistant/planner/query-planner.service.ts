@@ -12,6 +12,7 @@ type QueryShape =
   | 'unit_tickets'
   | 'unit_payments'
   | 'building_debt'
+  | 'tenant_debt'
   | 'building_delinquents'
   | 'building_documents'
   | 'building_tickets'
@@ -37,6 +38,7 @@ const INTENT_TO_SHAPE: Record<string, QueryShape> = {
   unit_payments: 'unit_payments',
   building_debt: 'building_debt',
   get_building_debt: 'building_debt',
+  tenant_debt: 'tenant_debt',
   building_delinquents: 'building_delinquents',
   top_debtors: 'building_delinquents',
   building_documents: 'building_documents',
@@ -57,6 +59,7 @@ const ALLOWED_SHAPES = new Set<QueryShape>([
   'unit_tickets',
   'unit_payments',
   'building_debt',
+  'tenant_debt',
   'building_delinquents',
   'building_documents',
   'building_tickets',

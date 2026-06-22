@@ -37,7 +37,12 @@ import { RedisConversationContextService } from './context/redis-conversation-co
 import { QueryPlannerService } from './planner/query-planner.service';
 import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
-import { ExtractedIntent, EntityResolution, ConversationTurn } from './intent-engine/intent.types';
+import {
+  ExtractedIntent,
+  EntityResolution,
+  ConversationTurn,
+  PendingClarificationContext,
+} from './intent-engine/intent.types';
 import { validateExtractedIntent } from './intent-engine/intent.schema';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 
@@ -53,6 +58,7 @@ import { buildingDocumentsIntent } from './intent-engine/allowed-intents/buildin
 import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
 import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
+import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.intent';
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
@@ -265,6 +271,7 @@ export class AssistantService implements OnModuleInit {
       buildingTicketsIntent,
       buildingPaymentsIntent,
       buildingStatsIntent,
+      tenantDebtIntent,
       // Temporarily unavailable intents are intentionally excluded from the
       // active routing registry until their executors are implemented.
       // expensesSummaryIntent,
@@ -600,11 +607,23 @@ export class AssistantService implements OnModuleInit {
     // Step 1: Get conversation context
     const conversationContext = await this.conversationContext.getContext(tenantId, userId, sessionId);
     const lastResolved = await this.conversationContext.getLastResolved(tenantId, userId, sessionId);
+    const pendingClarification = await this.conversationContext.getPendingClarification(
+      tenantId,
+      userId,
+      sessionId,
+    );
+    const shouldUsePendingClarification =
+      !!pendingClarification && this.isClarificationFollowUpAnswer(request.message);
+    let usedPendingClarification = false;
 
     // Build context for intent extraction
     const contextForExtraction = {
-      buildingId: request.buildingId || lastResolved.buildingId,
-      unitId: request.unitId || lastResolved.unitId,
+      buildingId: shouldUsePendingClarification
+        ? pendingClarification.resolvedEntityIds?.buildingId || lastResolved.buildingId || request.buildingId
+        : request.buildingId || lastResolved.buildingId,
+      unitId: shouldUsePendingClarification
+        ? pendingClarification.resolvedEntityIds?.unitId || lastResolved.unitId || request.unitId
+        : request.unitId || lastResolved.unitId,
       currentPage: request.currentPage || request.page,
       financePeriod: request.financePeriod,
       userId,
@@ -638,81 +657,99 @@ export class AssistantService implements OnModuleInit {
     let extractedIntent: ExtractedIntent;
     let contextResolvedEntities: EntityResolution | undefined;
     this.logger.log(`[chatV2] Step 2: Extracting intent for message: "${request.message}"`);
-    try {
-      extractedIntent = await this.intentExtractor.extractIntent(
+    if (shouldUsePendingClarification && pendingClarification) {
+      extractedIntent = this.buildIntentFromPendingClarification(
+        pendingClarification,
         request.message,
-        contextForExtraction,
       );
-      if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
-        debugInfo.usedLLM = true;
-        if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
-          debugInfo.llmProvider = extractedIntent.llmProvider;
-          if (extractedIntent.llmProvider === 'opencode') {
-            debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
-            debugInfo.llmModel = 'qwen3.6-plus';
-          }
-        } else {
-          debugInfo.llmProvider = 'unknown';
-        }
-      }
-      this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
-    } catch (error) {
-      this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
-
-      // Fallback: use conversation context for follow-up questions
-      const isFollowUp = await this.detectFollowUp(
-        request.message,
+      contextResolvedEntities = this.buildResolvedEntitiesFromPendingClarification(
+        pendingClarification,
         conversationContext,
-        tenantId,
-        userId,
-        sessionId,
       );
-
-      if (isFollowUp) {
-        const lastTurn = conversationContext.length > 0
-          ? conversationContext[conversationContext.length - 1]
-          : null;
-
-        if (lastTurn?.resolvedEntities) {
-          contextResolvedEntities = lastTurn.resolvedEntities;
-
-          // Try to infer intent from the follow-up message using last context
-          let inferredIntent = this.inferIntentFromFollowUp(request.message);
-
-          // Fallback: if we can't infer a new intent, reuse the last one
-          if (!inferredIntent) {
-            const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
-            if (lastIntent) {
-              inferredIntent = lastIntent;
-              this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+      usedPendingClarification = true;
+      debugInfo.usedLLM = false;
+      debugInfo.llmReason = 'pending_clarification';
+      this.logger.log(
+        `[chatV2] Rehydrated pending clarification for intent: ${pendingClarification.intent}`,
+      );
+    } else {
+      try {
+        extractedIntent = await this.intentExtractor.extractIntent(
+          request.message,
+          contextForExtraction,
+        );
+        if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
+          debugInfo.usedLLM = true;
+          if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
+            debugInfo.llmProvider = extractedIntent.llmProvider;
+            if (extractedIntent.llmProvider === 'opencode') {
+              debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
+              debugInfo.llmModel = 'qwen3.6-plus';
             }
+          } else {
+            debugInfo.llmProvider = 'unknown';
           }
+        }
+        this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
+      } catch (error) {
+        this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
-          if (inferredIntent) {
-            extractedIntent = {
-              intent: inferredIntent,
-              entity: {
-                type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
-                buildingAlias: undefined,
-                unitCode: undefined,
-              },
-              filters: {},
-              confidence: 0.6,
-              source: 'hybrid',
-              requiresClarification: false,
-              missingFields: [],
-            };
-            debugInfo.usedLLM = false;
-            debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
-            this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+        // Fallback: use conversation context for follow-up questions
+        const isFollowUp = await this.detectFollowUp(
+          request.message,
+          conversationContext,
+          tenantId,
+          userId,
+          sessionId,
+        );
+
+        if (isFollowUp) {
+          const lastTurn = conversationContext.length > 0
+            ? conversationContext[conversationContext.length - 1]
+            : null;
+
+          if (lastTurn?.resolvedEntities) {
+            contextResolvedEntities = lastTurn.resolvedEntities;
+
+            // Try to infer intent from the follow-up message using last context
+            let inferredIntent = this.inferIntentFromFollowUp(request.message);
+            const inferredFilters = this.inferFiltersFromFollowUp(request.message);
+
+            // Fallback: if we can't infer a new intent, reuse the last one
+            if (!inferredIntent) {
+              const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+              if (lastIntent) {
+                inferredIntent = lastIntent;
+                this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+              }
+            }
+
+            if (inferredIntent) {
+              extractedIntent = {
+                intent: inferredIntent,
+                entity: {
+                  type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
+                  buildingAlias: undefined,
+                  unitCode: undefined,
+                },
+                filters: inferredFilters,
+                confidence: 0.6,
+                source: 'hybrid',
+                requiresClarification: false,
+                missingFields: [],
+              };
+              debugInfo.usedLLM = false;
+              debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
+              this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+            } else {
+              throw new BadRequestException('Could not understand your message. Please rephrase.');
+            }
           } else {
             throw new BadRequestException('Could not understand your message. Please rephrase.');
           }
         } else {
           throw new BadRequestException('Could not understand your message. Please rephrase.');
         }
-      } else {
-        throw new BadRequestException('Could not understand your message. Please rephrase.');
       }
     }
 
@@ -733,7 +770,7 @@ export class AssistantService implements OnModuleInit {
         extractedIntent = {
           intent: plan.intent,
           entity: {
-            type: plan.scope === 'unit' ? 'unit' : plan.scope === 'building' ? 'building' : 'person',
+            type: plan.scope === 'unit' ? 'unit' : 'building',
             buildingAlias: plan.filters.buildingAlias ?? plan.filters.buildingToken,
             unitCode: plan.filters.unitCode,
             personName: plan.filters.personName,
@@ -799,6 +836,30 @@ export class AssistantService implements OnModuleInit {
     debugInfo.semanticValidationReason = semanticValidation.reason;
 
     if (semanticValidation.status === 'needs_clarification') {
+      const clarificationResolvedEntities = await this.resolveClarificationContext(
+        extractedIntent,
+        contextResolvedEntities,
+        tenantId,
+        request.buildingId,
+      );
+      await this.conversationContext.setPendingClarification(
+        tenantId,
+        userId,
+        sessionId,
+        this.createPendingClarificationContext(
+          extractedIntent,
+          clarificationResolvedEntities,
+          semanticValidation.question,
+        ),
+      );
+      await this.storeConversationTurn(
+        tenantId,
+        userId,
+        sessionId,
+        request.message,
+        clarificationResolvedEntities,
+        { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
+      );
       const clarificationResponse = this.responseFormatter.formatV2(
         {
           isAmbiguous: true,
@@ -843,6 +904,30 @@ export class AssistantService implements OnModuleInit {
 
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
+      const clarificationResolvedEntities = await this.resolveClarificationContext(
+        extractedIntent,
+        contextResolvedEntities,
+        tenantId,
+        request.buildingId,
+      );
+      await this.conversationContext.setPendingClarification(
+        tenantId,
+        userId,
+        sessionId,
+        this.createPendingClarificationContext(
+          extractedIntent,
+          clarificationResolvedEntities,
+          `Necesito más contexto para responder con precisión (${missing}).`,
+        ),
+      );
+      await this.storeConversationTurn(
+        tenantId,
+        userId,
+        sessionId,
+        request.message,
+        clarificationResolvedEntities,
+        { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
+      );
       const clarificationResponse = this.responseFormatter.formatV2(
         {
           isAmbiguous: true,
@@ -1126,18 +1211,17 @@ export class AssistantService implements OnModuleInit {
     }
 
     // Step 8: Store turn in conversation context
-    await this.conversationContext.storeTurn(
+    await this.storeConversationTurn(
       tenantId,
       userId,
       sessionId,
-      {
-        role: 'user',
-        message: request.message,
-        timestamp: new Date(),
-        resolvedEntities: entityResolution,
-      },
+      request.message,
+      entityResolution,
       { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
     );
+    if (usedPendingClarification) {
+      await this.conversationContext.clearPendingClarification(tenantId, userId, sessionId);
+    }
 
     // Log interaction (fire-and-forget)
     const interactionModelSize = request.routeSource === 'legacy_chat'
@@ -1209,6 +1293,14 @@ export class AssistantService implements OnModuleInit {
       /^cuantas\b/,                  // "cuántas" (standalone follow-up)
       /^cuanto\b/,                   // "cuánto" (standalone follow-up)
       /^quien\b/,                    // "quién" (standalone follow-up)
+      /^este\s+mes\b/,
+      /^mes\s+actual\b/,
+      /^del\s+mes\s+actual\b/,
+      /^acumulad[ao]s?\b/,
+      /^historic[ao]s?\b/,
+      /^historica\b/,
+      /^toda\b/,
+      /^deuda\s+acumulada\b/,
     ];
 
     const hasContinuity = continuityPatterns.some((pattern) => pattern.test(normalized));
@@ -1259,12 +1351,18 @@ export class AssistantService implements OnModuleInit {
   ): Promise<boolean> {
     const lastResolved = await this.conversationContext.getLastResolved(tenantId, userId, sessionId);
     const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+    const pendingClarification = await this.conversationContext.getPendingClarification(
+      tenantId,
+      userId,
+      sessionId,
+    );
 
     return !!(
       lastResolved?.buildingId ||
       lastResolved?.unitId ||
       lastResolved?.personId ||
-      lastIntent
+      lastIntent ||
+      pendingClarification
     );
   }
 
@@ -1302,6 +1400,215 @@ export class AssistantService implements OnModuleInit {
     }
 
     return null;
+  }
+
+  private isClarificationFollowUpAnswer(message: string): boolean {
+    const normalized = message
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+    return (
+      normalized.includes('este mes') ||
+      normalized.includes('mes actual') ||
+      /^acumulad[ao]s?\b/.test(normalized) ||
+      /^historic[ao]s?\b/.test(normalized) ||
+      /^historica\b/.test(normalized) ||
+      /^toda\b/.test(normalized)
+    );
+  }
+
+  private inferFiltersFromFollowUp(message: string): ExtractedIntent['filters'] {
+    const normalized = message
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+    if (normalized.includes('este mes') || normalized.includes('mes actual')) {
+      return {
+        period: new Date().toISOString().slice(0, 7),
+      };
+    }
+
+    const monthYearMatch = normalized.match(
+      /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+(\d{4})\b/,
+    );
+    if (monthYearMatch?.[1] && monthYearMatch?.[2]) {
+      const monthMap: Record<string, number> = {
+        enero: 1,
+        febrero: 2,
+        marzo: 3,
+        abril: 4,
+        mayo: 5,
+        junio: 6,
+        julio: 7,
+        agosto: 8,
+        septiembre: 9,
+        setiembre: 9,
+        octubre: 10,
+        noviembre: 11,
+        diciembre: 12,
+      };
+      const month = monthMap[monthYearMatch[1]];
+      if (month) {
+        return {
+          period: `${monthYearMatch[2]}-${String(month).padStart(2, '0')}`,
+        };
+      }
+    }
+
+    return {};
+  }
+
+  private buildIntentFromPendingClarification(
+    pendingClarification: PendingClarificationContext,
+    message: string,
+  ): ExtractedIntent {
+    return {
+      intent: pendingClarification.intent,
+      entity: pendingClarification.entity,
+      filters: {
+        ...pendingClarification.filters,
+        ...this.inferFiltersFromFollowUp(message),
+      },
+      confidence: 0.85,
+      source: 'hybrid',
+      requiresClarification: false,
+      missingFields: [],
+    };
+  }
+
+  private buildResolvedEntitiesFromPendingClarification(
+    pendingClarification: PendingClarificationContext,
+    conversationContext: ConversationTurn[],
+  ): EntityResolution | undefined {
+    const lastTurn = conversationContext.length > 0
+      ? conversationContext[conversationContext.length - 1]
+      : null;
+
+    const resolvedEntities: EntityResolution = {
+      alternatives: lastTurn?.resolvedEntities?.alternatives ?? [],
+    };
+
+    if (pendingClarification.resolvedEntityIds?.buildingId) {
+      resolvedEntities.building = {
+        id: pendingClarification.resolvedEntityIds.buildingId,
+        name:
+          lastTurn?.resolvedEntities?.building?.id === pendingClarification.resolvedEntityIds.buildingId
+            ? lastTurn.resolvedEntities.building.name
+            : pendingClarification.entity.buildingAlias || pendingClarification.resolvedEntityIds.buildingId,
+        alias:
+          lastTurn?.resolvedEntities?.building?.id === pendingClarification.resolvedEntityIds.buildingId
+            ? lastTurn.resolvedEntities.building.alias
+            : pendingClarification.entity.buildingAlias,
+      };
+    } else if (lastTurn?.resolvedEntities?.building) {
+      resolvedEntities.building = lastTurn.resolvedEntities.building;
+    }
+
+    if (pendingClarification.resolvedEntityIds?.unitId && lastTurn?.resolvedEntities?.unit) {
+      resolvedEntities.unit = lastTurn.resolvedEntities.unit;
+    } else if (lastTurn?.resolvedEntities?.unit) {
+      resolvedEntities.unit = lastTurn.resolvedEntities.unit;
+    }
+
+    if (pendingClarification.resolvedEntityIds?.personId && lastTurn?.resolvedEntities?.person) {
+      resolvedEntities.person = lastTurn.resolvedEntities.person;
+    } else if (lastTurn?.resolvedEntities?.person) {
+      resolvedEntities.person = lastTurn.resolvedEntities.person;
+    }
+
+    if (!resolvedEntities.building && !resolvedEntities.unit && !resolvedEntities.person) {
+      return undefined;
+    }
+
+    return resolvedEntities;
+  }
+
+  private async resolveClarificationContext(
+    extractedIntent: ExtractedIntent,
+    contextResolvedEntities: EntityResolution | undefined,
+    tenantId: string,
+    requestBuildingId?: string,
+  ): Promise<EntityResolution | undefined> {
+    let clarificationResolvedEntities = contextResolvedEntities;
+
+    if (!clarificationResolvedEntities?.building && extractedIntent.entity.buildingAlias) {
+      const buildingResolution = await this.entityResolver.resolveBuilding(
+        extractedIntent.entity.buildingAlias,
+        tenantId,
+      );
+      if (buildingResolution) {
+        clarificationResolvedEntities = {
+          ...(clarificationResolvedEntities ?? { alternatives: [] }),
+          ...buildingResolution,
+        };
+      }
+    }
+
+    if (!clarificationResolvedEntities?.building && extractedIntent.entity.type === 'building' && requestBuildingId) {
+      const building = await this.prisma.building.findFirst({
+        where: { id: requestBuildingId, tenantId, deletedAt: null },
+      });
+      if (building) {
+        clarificationResolvedEntities = {
+          ...(clarificationResolvedEntities ?? { alternatives: [] }),
+          building: {
+            id: building.id,
+            name: building.name,
+            alias: building.alias || undefined,
+          },
+        };
+      }
+    }
+
+    return clarificationResolvedEntities;
+  }
+
+  private createPendingClarificationContext(
+    extractedIntent: ExtractedIntent,
+    resolvedEntities: EntityResolution | undefined,
+    question?: string,
+  ): PendingClarificationContext {
+    return {
+      intent: extractedIntent.intent,
+      entity: extractedIntent.entity,
+      filters: extractedIntent.filters,
+      missingFields:
+        extractedIntent.missingFields && extractedIntent.missingFields.length > 0
+          ? extractedIntent.missingFields
+          : ['period'],
+      question,
+      resolvedEntityIds: {
+        buildingId: resolvedEntities?.building?.id,
+        unitId: resolvedEntities?.unit?.id,
+        personId: resolvedEntities?.person?.id,
+      },
+    };
+  }
+
+  private async storeConversationTurn(
+    tenantId: string,
+    userId: string,
+    sessionId: string,
+    message: string,
+    resolvedEntities: EntityResolution | undefined,
+    metadata?: { intent?: string; filters?: Record<string, unknown> },
+  ): Promise<void> {
+    await this.conversationContext.storeTurn(
+      tenantId,
+      userId,
+      sessionId,
+      {
+        role: 'user',
+        message,
+        timestamp: new Date(),
+        resolvedEntities,
+      },
+      metadata,
+    );
   }
 
   /**

@@ -42,6 +42,7 @@ const semanticGeminiSchema = z.object({
     'unit_tickets',
     'unit_payments',
     'building_debt',
+    'tenant_debt',
     'building_delinquents',
     'building_documents',
     'building_tickets',

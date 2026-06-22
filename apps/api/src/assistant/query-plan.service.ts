@@ -60,6 +60,18 @@ export class AssistantQueryPlanService {
       };
     }
 
+    const tenantIntent = this.pickTenantDebtIntent(normalized);
+    if (tenantIntent && (!buildingToken || this.isGenericBuildingToken(buildingToken))) {
+      const definition = this.semanticLayer.getDefinition(tenantIntent);
+      return {
+        ...definition,
+        executor: tenantIntent,
+        filters: { ...extractedFilters },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      };
+    }
+
     const buildingIntent = this.pickBuildingIntent(normalized);
     if (!buildingIntent && personName && this.hasAny(normalized, ['debe', 'deuda', 'saldo', 'adeuda'])) {
       const definition = this.semanticLayer.getDefinition('unit_debt');
@@ -146,6 +158,38 @@ export class AssistantQueryPlanService {
       return 'building_stats';
     }
     return null;
+  }
+
+  private pickTenantDebtIntent(normalized: string): AssistantQueryIntent | null {
+    if (
+      this.hasAny(normalized, [
+        'deuda de la administracion',
+        'deuda total de la administracion',
+        'deuda de la administracion total',
+        'deuda del condominio completo',
+        'saldo pendiente general',
+        'cuanto deben todos los edificios',
+        'cuanto deben todos los inmuebles',
+        'deuda de todos los edificios',
+        'deuda general',
+        'deuda global',
+        'deuda total administracion',
+        'portfolio debt',
+        'administration debt',
+        'admin debt',
+        'tenant debt',
+        'general debt',
+        'administration_debt',
+        'portfolio_debt',
+      ])
+    ) {
+      return 'tenant_debt';
+    }
+    return null;
+  }
+
+  private isGenericBuildingToken(token: string): boolean {
+    return this.hasAny(token, ['completo', 'general', 'global', 'total', 'todos', 'administracion', 'administración']);
   }
 
   private hasAny(value: string, needles: string[]): boolean {

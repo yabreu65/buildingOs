@@ -24,6 +24,7 @@ const INTENT_TO_ACTION: Record<string, SuggestedActionType> = {
   list_payments: 'VIEW_PAYMENTS',
   building_debt: 'VIEW_PAYMENTS',
   get_building_debt: 'VIEW_PAYMENTS',
+  tenant_debt: 'VIEW_PAYMENTS',
   building_delinquents: 'VIEW_PAYMENTS',
   top_debtors: 'VIEW_PAYMENTS',
   building_documents: 'VIEW_DOCUMENTS',
@@ -51,6 +52,7 @@ const INTENT_TO_TITLE: Record<string, string> = {
   list_payments: 'Payments',
   building_debt: 'Building Debt',
   get_building_debt: 'Building Debt',
+  tenant_debt: 'Tenant Debt',
   building_delinquents: 'Top Debtors',
   top_debtors: 'Top Debtors',
   building_documents: 'Building Documents',
@@ -390,6 +392,15 @@ export class ResponseFormatterService {
           const currency = (record.currency as string) || 'VES';
           if (totalDebt !== undefined) {
             return `Deuda total: ${this.formatMoney(totalDebt, currency)}`;
+          }
+          break;
+        }
+
+        case 'tenant_debt': {
+          const totalDebt = record.totalDebt as number;
+          const currency = (record.currency as string) || 'VES';
+          if (totalDebt !== undefined) {
+            return `Deuda total de la administración: ${this.formatMoney(totalDebt, currency)}`;
           }
           break;
         }

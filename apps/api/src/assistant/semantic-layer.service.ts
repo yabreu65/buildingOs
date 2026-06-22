@@ -46,6 +46,12 @@ const SEMANTIC_DEFINITIONS: Record<AssistantQueryIntent, AssistantSemanticDefini
     scope: 'building',
     requiredPermission: 'payments.review',
   },
+  tenant_debt: {
+    intent: 'tenant_debt',
+    module: 'payments',
+    scope: 'tenant',
+    requiredPermission: 'payments.review',
+  },
   building_delinquents: {
     intent: 'building_delinquents',
     module: 'payments',

@@ -5,6 +5,7 @@ import { AssistantQueryParser, UnitToken } from './query-parser/assistant-query-
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantUnitResolverService, ResolvedUnit } from './unit-resolver/assistant-unit-resolver.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { AssistantTenantDebtService } from './tenant-debt.service';
 import type { ChatResponse } from './ai.types';
 import type { AssistantQueryExecutionContext } from './query-plan.types';
 
@@ -17,6 +18,7 @@ export class AssistantQueryExecutorsService {
     private readonly policy: AssistantPolicyEnforcerService,
     private readonly unitResolver: AssistantUnitResolverService,
     private readonly debtCalculator: AssistantDebtCalculatorService,
+    private readonly tenantDebtService: AssistantTenantDebtService,
   ) {}
 
   /**
@@ -46,6 +48,8 @@ export class AssistantQueryExecutorsService {
         return this.executeBuildingPayments(context);
       case 'building_stats':
         return this.executeBuildingStats(context);
+      case 'tenant_debt':
+        return this.executeTenantDebt(context);
       default:
         return null;
     }
@@ -294,6 +298,23 @@ export class AssistantQueryExecutorsService {
         ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, tenant.currency)}.`
         : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, tenant.currency)}.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
+    };
+  }
+
+  private async executeTenantDebt(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    await this.policy.assertCanExecute({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userRoles: context.userRoles,
+      plan: context.plan,
+    });
+
+    const tenantDebt = await this.tenantDebtService.resolveTenantDebtSummary(context.tenantId);
+    return {
+      answer: tenantDebt.totalDebt > 0
+        ? `La administración tiene una deuda pendiente total de ${this.formatMoney(tenantDebt.totalDebt, tenantDebt.currency)}.`
+        : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(tenantDebt.totalDebt, tenantDebt.currency)}.`,
+      suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
     };
   }
 

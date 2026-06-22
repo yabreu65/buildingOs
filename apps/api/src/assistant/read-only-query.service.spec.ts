@@ -37,8 +37,16 @@ describe('AssistantReadOnlyQueryService', () => {
       },
     } as any;
 
-    const service = new AssistantReadOnlyQueryService(prisma, new AssistantDebtCalculatorService());
-    return { service, prisma };
+    const tenantDebtService = {
+      resolveTenantDebtSummary: jest.fn(),
+    };
+
+    const service = new AssistantReadOnlyQueryService(
+      prisma,
+      new AssistantDebtCalculatorService(),
+      tenantDebtService as never,
+    );
+    return { service, prisma, tenantDebtService };
   };
 
   it('maps legacy intents to canonical intent and executes one resolver', async () => {
@@ -179,6 +187,42 @@ describe('AssistantReadOnlyQueryService', () => {
     expect(prisma.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ tenantId: 'tenant-1', occupancyStatus: 'VACANT' }),
     }));
+  });
+
+  it('resolves tenant_debt aliases to the tenant-wide debt resolver', async () => {
+    const { service, prisma, tenantDebtService } = makeService();
+
+    prisma.membership.findUnique.mockResolvedValue({
+      roles: [{ role: 'TENANT_ADMIN' }],
+    });
+    tenantDebtService.resolveTenantDebtSummary.mockResolvedValue({
+      totalDebt: 474568,
+      currency: 'ARS',
+      chargeCount: 18,
+    });
+
+    const result = await service.execute(
+      {
+        intent: 'admin_debt',
+        question: 'deuda total de la administracion',
+        context: {
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          role: 'TENANT_ADMIN',
+        },
+      },
+      {
+        apiKey: 'test-readonly-key',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        role: 'TENANT_ADMIN',
+      },
+    );
+
+    expect(tenantDebtService.resolveTenantDebtSummary).toHaveBeenCalledWith('tenant-1');
+    expect(result.metadata.intentCode).toBe('GET_TENANT_DEBT');
+    expect(result.responseType).toBe('summary');
+    expect(result.answer).toContain('Deuda total de la administración');
   });
 
 });

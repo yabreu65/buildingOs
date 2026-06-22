@@ -24,6 +24,11 @@ describe('IntentExtractorService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.AI_PROVIDER;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_MODEL;
+    delete process.env.AI_GEMINI_MODEL;
+    delete process.env.OPENCODE_API_KEY;
     service = new IntentExtractorService(
       undefined as any, // ollamaProvider no longer used
       mockQueryPlanServiceInstance as any,
@@ -112,6 +117,73 @@ describe('IntentExtractorService', () => {
       expect(result.entity.buildingAlias).toBe('A');
     });
 
+    it('keeps tenant_debt as a deterministic extraction result', async () => {
+      mockCreatePlan.mockReturnValue({
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        executor: 'tenant_debt',
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+
+      const result = await service.extractIntent('deuda total de la administracion');
+
+      expect(result.intent).toBe('tenant_debt');
+      expect(result.entity.type).toBe('building');
+      expect(result.confidence).toBe(0.9);
+    });
+
+    it('uses Gemini first when deterministic confidence is below 90%', async () => {
+      mockCreatePlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        executor: 'building_debt',
+        filters: { buildingToken: 'B' },
+        confidence: 0.89,
+        source: 'deterministic_rules',
+      });
+      process.env.GEMINI_API_KEY = 'test-key';
+      process.env.GEMINI_MODEL = 'gemini-2.5-flash-lite';
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url.includes('generativelanguage.googleapis.com')) {
+          return {
+            ok: true,
+            json: async () => ({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          intent: 'building_debt',
+                          entity: { type: 'building', buildingAlias: 'B' },
+                          filters: { period: '2026-06' },
+                          confidence: 0.95,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          };
+        }
+
+        throw new Error(`Unexpected non-Gemini URL: ${url}`);
+      });
+
+      const result = await service.extractIntent('deuda del edificio B');
+
+      expect(result.intent).toBe('building_debt');
+      expect(result.llmProvider).toBe('gemini');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0]?.[0]).toContain('generativelanguage.googleapis.com');
+    });
+
     it('calls LLM when deterministic intent exists but filter coverage is incomplete', async () => {
       mockCreatePlan.mockReturnValue({
         intent: 'building_payments',
@@ -153,8 +225,6 @@ describe('IntentExtractorService', () => {
 
     it('rejects LLM response when confidence is below threshold', async () => {
       mockCreatePlan.mockReturnValue(null); // Force LLM path
-      process.env.OPENCODE_API_KEY = 'test-key';
-
       const ollamaResponse = {
         message: {
           content: JSON.stringify({
@@ -166,29 +236,11 @@ describe('IntentExtractorService', () => {
         },
       };
 
-      const opencodeResponse = {
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              intent: 'list_payments',
-              entity: { type: 'unit', buildingAlias: 'A', unitCode: '0101' },
-              filters: {},
-              confidence: 0.5, // Below 0.70 threshold
-            }),
-          },
-        }],
-      };
-
       mockFetch.mockImplementation(async (url: string) => {
-        if (url.includes('opencode')) {
-          return { ok: true, json: async () => opencodeResponse };
-        }
         return { ok: true, json: async () => ollamaResponse };
       });
 
       await expect(service.extractIntent('¿Cuánto debe A-0101?')).rejects.toThrow(/Confidence 0.5 below threshold 0.7/);
-
-      delete process.env.OPENCODE_API_KEY;
     });
 
     it('tracks opencode as provider when ollama fails and opencode succeeds', async () => {
@@ -222,8 +274,88 @@ describe('IntentExtractorService', () => {
 
       expect(result.intent).toBe('building_tickets');
       expect(result.llmProvider).toBe('opencode');
+    });
 
-      delete process.env.OPENCODE_API_KEY;
+    it('uses Gemini fallback when AI_PROVIDER=gemini without requiring Opencode', async () => {
+      mockCreatePlan.mockReturnValue(null);
+      process.env.AI_PROVIDER = 'gemini';
+      process.env.GEMINI_API_KEY = 'test-key';
+      process.env.GEMINI_MODEL = 'gemini-2.5-flash-lite';
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url.includes('generativelanguage.googleapis.com')) {
+          return {
+            ok: true,
+            json: async () => ({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          intent: 'building_debt',
+                          entity: { type: 'building', buildingAlias: 'B' },
+                          filters: { period: '2026-06' },
+                          confidence: 0.91,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          };
+        }
+
+        throw new Error('Ollama unavailable');
+      });
+
+      const result = await service.extractIntent('deuda del edificio B, del mes actual');
+
+      expect(result.intent).toBe('building_debt');
+      expect(result.filters.period).toBe('2026-06');
+      expect(result.llmProvider).toBe('gemini');
+    });
+
+    it('does not require Opencode when Gemini is configured and Ollama fails', async () => {
+      mockCreatePlan.mockReturnValue(null);
+      process.env.AI_PROVIDER = 'gemini';
+      process.env.GEMINI_API_KEY = 'test-key';
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url.includes('/api/chat')) {
+          throw new Error('Ollama unavailable');
+        }
+        if (url.includes('generativelanguage.googleapis.com')) {
+          return {
+            ok: true,
+            json: async () => ({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          intent: 'building_tickets',
+                          entity: { type: 'building', buildingAlias: 'A' },
+                          filters: { status: 'OPEN' },
+                          confidence: 0.88,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      });
+
+      const result = await service.extractIntent('Tickets abiertos del edificio A');
+
+      expect(result.intent).toBe('building_tickets');
+      expect(result.llmProvider).toBe('gemini');
     });
 
     it('logs execution via AssistantFeedbackService', async () => {

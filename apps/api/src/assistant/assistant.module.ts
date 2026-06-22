@@ -64,6 +64,8 @@ import { buildingDocumentsIntent } from './intent-engine/allowed-intents/buildin
 import { buildingTicketsIntent } from './intent-engine/allowed-intents/building-tickets.intent';
 import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building-payments.intent';
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
+import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.intent';
+import { AssistantTenantDebtService } from './tenant-debt.service';
 
 /**
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
@@ -149,7 +151,8 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
     AssistantQueryPlanService,
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
-AssistantDebtCalculatorService,
+    AssistantDebtCalculatorService,
+    AssistantTenantDebtService,
     // Intent Engine services
     IntentRegistry,
     IntentExtractorService,
@@ -182,6 +185,7 @@ AssistantDebtCalculatorService,
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
     AssistantDebtCalculatorService,
+    AssistantTenantDebtService,
     IntentRegistry,
     IntentExtractorService,
     FilterCoverageValidator,

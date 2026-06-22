@@ -7,6 +7,7 @@ import {
 import { ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { AssistantTenantDebtService } from './tenant-debt.service';
 import {
   ASSISTANT_READ_ONLY_INTENTS,
   AssistantReadOnlyAction,
@@ -30,6 +31,7 @@ export class AssistantReadOnlyQueryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly debtCalculator: AssistantDebtCalculatorService,
+    private readonly tenantDebtService: AssistantTenantDebtService,
   ) {}
 
   /**
@@ -108,6 +110,8 @@ export class AssistantReadOnlyQueryService {
         return this.openTicketsResolver(context);
       case 'GET_VACANT_UNITS':
         return this.vacantUnitsResolver(context);
+      case 'GET_TENANT_DEBT':
+        return this.tenantDebtResolver(context);
       case 'GET_COLLECTIONS_SUMMARY':
         return this.collectionsSummaryResolver(context);
       default:
@@ -500,6 +504,37 @@ export class AssistantReadOnlyQueryService {
     };
   }
 
+  private async tenantDebtResolver(
+    context: AssistantReadOnlyQueryContext,
+  ): Promise<ResolverResult> {
+    const summary = await this.tenantDebtService.resolveTenantDebtSummary(context.tenantId);
+
+    if (summary.totalDebt === 0) {
+      return {
+        answer: 'La administración no tiene deuda pendiente.',
+        responseType: 'no_data',
+        actions: [{ key: 'open-charges', label: 'Open Charges' }],
+        metadata: {
+          noData: true,
+          totalDebt: summary.totalDebt,
+          currency: summary.currency,
+          chargeCount: summary.chargeCount,
+        },
+      };
+    }
+
+    return {
+      answer: `Deuda total de la administración: ${this.formatCurrency(summary.totalDebt, summary.currency)}.`,
+      responseType: 'summary',
+      actions: [{ key: 'open-charges', label: 'Open Charges' }],
+      metadata: {
+        totalDebt: summary.totalDebt,
+        currency: summary.currency,
+        chargeCount: summary.chargeCount,
+      },
+    };
+  }
+
   private normalizeContext(context: AssistantReadOnlyQueryContext): AssistantReadOnlyQueryContext {
     const tenantId = (context.tenantId ?? '').trim();
     const userId = (context.userId ?? '').trim();
@@ -619,10 +654,10 @@ export class AssistantReadOnlyQueryService {
     };
   }
 
-  private formatCurrency(cents: number): string {
+  private formatCurrency(cents: number, currency = 'ARS'): string {
     return new Intl.NumberFormat('es-AR', {
       style: 'currency',
-      currency: 'ARS',
+      currency,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(cents / 100);

@@ -3,6 +3,7 @@ export type AssistantReadOnlyIntentCode =
   | 'GET_PENDING_PAYMENTS'
   | 'GET_OPEN_TICKETS'
   | 'GET_VACANT_UNITS'
+  | 'GET_TENANT_DEBT'
   | 'GET_COLLECTIONS_SUMMARY';
 
 export type AssistantReadOnlyLegacyIntent =
@@ -10,6 +11,11 @@ export type AssistantReadOnlyLegacyIntent =
   | 'admin_pending_payments_month'
   | 'admin_open_tickets_by_building'
   | 'admin_vacant_units'
+  | 'tenant_debt'
+  | 'admin_debt'
+  | 'administration_debt'
+  | 'portfolio_debt'
+  | 'general_debt'
   | 'admin_collections_summary_month';
 
 export type AssistantReadOnlyResponseType =
@@ -61,6 +67,7 @@ export type AssistantReadOnlyIntentDefinition = {
     | 'pendingPaymentsResolver'
     | 'openTicketsResolver'
     | 'vacantUnitsResolver'
+    | 'tenantDebtResolver'
     | 'collectionsSummaryResolver';
   rolesAllowed: string[];
   responseType: 'list' | 'summary';
@@ -104,6 +111,14 @@ export const ASSISTANT_READ_ONLY_INTENTS: Record<
     answerSource: 'live_data',
     legacyAliases: ['admin_vacant_units'],
   },
+  GET_TENANT_DEBT: {
+    code: 'GET_TENANT_DEBT',
+    resolverKey: 'tenantDebtResolver',
+    rolesAllowed: ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN'],
+    responseType: 'summary',
+    answerSource: 'live_data',
+    legacyAliases: ['tenant_debt', 'admin_debt', 'administration_debt', 'portfolio_debt', 'general_debt'],
+  },
   GET_COLLECTIONS_SUMMARY: {
     code: 'GET_COLLECTIONS_SUMMARY',
     resolverKey: 'collectionsSummaryResolver',
@@ -119,6 +134,11 @@ const ALIAS_MAP: Record<AssistantReadOnlyLegacyIntent, AssistantReadOnlyIntentCo
   admin_pending_payments_month: 'GET_PENDING_PAYMENTS',
   admin_open_tickets_by_building: 'GET_OPEN_TICKETS',
   admin_vacant_units: 'GET_VACANT_UNITS',
+  tenant_debt: 'GET_TENANT_DEBT',
+  admin_debt: 'GET_TENANT_DEBT',
+  administration_debt: 'GET_TENANT_DEBT',
+  portfolio_debt: 'GET_TENANT_DEBT',
+  general_debt: 'GET_TENANT_DEBT',
   admin_collections_summary_month: 'GET_COLLECTIONS_SUMMARY',
 };
 

@@ -55,6 +55,38 @@ describe('IntentSemanticValidatorService', () => {
     });
   });
 
+  it('accepts tenant_debt without requiring a building context', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda total de la administracion',
+      deterministicPlan: {
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        requiredPermission: 'payments.review',
+        executor: 'tenant_debt',
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      },
+      extractedIntent: {
+        intent: 'tenant_debt',
+        entity: { type: 'building' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      },
+      assistantContext: {},
+    });
+
+    expect(result).toEqual({
+      status: 'accepted',
+      reason: 'non_building_debt',
+    });
+  });
+
   it('asks for clarification when total building debt has no period or safe context', async () => {
     const result = await service.evaluate({
       userText: 'deuda total edificio B',

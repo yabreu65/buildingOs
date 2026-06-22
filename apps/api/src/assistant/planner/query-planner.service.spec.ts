@@ -215,6 +215,24 @@ describe('QueryPlannerService', () => {
       expect(plan.intent).toBe('building_debt');
     });
 
+    it('maps tenant_debt intent to correct query shape', () => {
+      const intent: ExtractedIntent = {
+        intent: 'tenant_debt',
+        entity: { type: 'building' },
+        filters: {},
+        confidence: 0.9,
+      };
+      const resolved: EntityResolution = {
+        alternatives: [],
+      };
+
+      const plan = service.buildPlan(intent, resolved);
+
+      expect(plan.intent).toBe('tenant_debt');
+      expect(plan.entityIds?.buildingId).toBeUndefined();
+      expect(plan.entityIds?.unitId).toBeUndefined();
+    });
+
     it('maps building_delinquents intent to correct query shape', () => {
       const intent: ExtractedIntent = {
         intent: 'top_debtors',
