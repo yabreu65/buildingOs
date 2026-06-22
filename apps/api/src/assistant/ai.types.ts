@@ -105,6 +105,8 @@ export interface StructuredResponse {
     llmBaseUrl?: string;
     llmModel?: string;
     llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'none';
+    semanticValidationStatus?: 'accepted' | 'needs_clarification' | 'override_suggested';
+    semanticValidationReason?: string;
     zodValidationPassed?: boolean;
     finalIntent?: string;
     finalFilters?: Record<string, unknown>;

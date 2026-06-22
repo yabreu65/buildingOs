@@ -234,6 +234,7 @@ export class IntentSemanticValidatorService {
       }
 
       const suggestion = parsed.data;
+      this.logger.log('[IntentSemanticValidator] Gemini semantic fallback used');
       const deterministicIntent = input.deterministicPlan?.intent ?? input.extractedIntent.intent;
       if (suggestion.intent && suggestion.intent !== deterministicIntent) {
         return {

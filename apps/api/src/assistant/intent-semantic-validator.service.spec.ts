@@ -130,6 +130,42 @@ describe('IntentSemanticValidatorService', () => {
     expect(result.reason).toBe('parser_llm_conflict');
   });
 
+  it('logs a safe message when Gemini semantic fallback is used', async () => {
+    process.env.AI_PROVIDER = 'gemini';
+    process.env.GEMINI_API_KEY = 'test-key';
+    const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+
+    jest.spyOn(global, 'fetch' as never).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    status: 'needs_clarification',
+                    reason: 'period_ambiguous',
+                    question: '¿Querés la deuda de este mes o la deuda acumulada?',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await service.evaluate({
+      userText: 'deuda del edificio B, del mes actual',
+      deterministicPlan: buildPlan(),
+      extractedIntent: buildExtractedIntent(),
+      assistantContext: {},
+    });
+
+    expect(logSpy).toHaveBeenCalledWith('[IntentSemanticValidator] Gemini semantic fallback used');
+  });
+
   it('ignores Gemini payloads that try to introduce numeric debt calculations', async () => {
     process.env.AI_PROVIDER = 'gemini';
     process.env.GEMINI_API_KEY = 'test-key';

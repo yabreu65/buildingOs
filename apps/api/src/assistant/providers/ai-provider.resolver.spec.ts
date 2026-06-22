@@ -83,6 +83,17 @@ describe('resolveAiProvider', () => {
       expect(result.geminiModel).toBe('gemini-2.0-flash');
     });
 
+    it('prefers GEMINI_MODEL when provided', () => {
+      const result = resolveAiProvider({
+        AI_PROVIDER: 'gemini',
+        GEMINI_API_KEY: 'AIza-test',
+        GEMINI_MODEL: 'gemini-2.5-flash-lite',
+        AI_GEMINI_MODEL: 'gemini-2.0-flash',
+      });
+      expect(result.provider).toBe('gemini');
+      expect(result.geminiModel).toBe('gemini-2.5-flash-lite');
+    });
+
     it('fails when GEMINI_API_KEY is missing', () => {
       expect(() =>
         resolveAiProvider({ AI_PROVIDER: 'gemini' }),

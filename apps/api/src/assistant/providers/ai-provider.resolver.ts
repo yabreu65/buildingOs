@@ -50,7 +50,7 @@ export function resolveAiProvider(env: NodeJS.ProcessEnv = process.env): AiProvi
       );
     }
     options.geminiApiKey = env.GEMINI_API_KEY;
-    options.geminiModel = env.AI_GEMINI_MODEL || undefined;
+    options.geminiModel = env.GEMINI_MODEL || env.AI_GEMINI_MODEL || undefined;
     return options;
   }
 
