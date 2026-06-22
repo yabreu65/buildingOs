@@ -21,6 +21,10 @@ export class AiEntitlementsService {
    * @throws BadRequestException if tenant/subscription not found
    */
   async getAiLimit(tenantId: string): Promise<number> {
+    if (await this.isDemoTenant(tenantId)) {
+      return 999999;
+    }
+
     const subscription = await this.prisma.subscription.findFirst({
       where: { tenantId },
       include: { plan: true },
@@ -46,6 +50,10 @@ export class AiEntitlementsService {
   async trackConsumption(tenantId: string, count: number = 1): Promise<void> {
     if (count < 1) {
       throw new BadRequestException('Consumption count must be at least 1');
+    }
+
+    if (await this.isDemoTenant(tenantId)) {
+      return;
     }
 
     const subscription = await this.prisma.subscription.findFirst({
@@ -92,6 +100,10 @@ export class AiEntitlementsService {
    * @throws BadRequestException if tenant/subscription not found
    */
   async hasRemainingConsultations(tenantId: string): Promise<boolean> {
+    if (await this.isDemoTenant(tenantId)) {
+      return true;
+    }
+
     const subscription = await this.prisma.subscription.findFirst({
       where: { tenantId },
       include: { plan: true },
@@ -142,6 +154,15 @@ export class AiEntitlementsService {
     percentageUsed: number;
     remaining: number;
   }> {
+    if (await this.isDemoTenant(tenantId)) {
+      return {
+        used: 0,
+        limit: Infinity,
+        percentageUsed: 0,
+        remaining: Infinity,
+      };
+    }
+
     const subscription = await this.prisma.subscription.findFirst({
       where: { tenantId },
       include: { plan: true },
@@ -192,6 +213,10 @@ export class AiEntitlementsService {
    * @throws BadRequestException if tenant/subscription not found
    */
   async resetMonthlyCounter(tenantId: string): Promise<void> {
+    if (await this.isDemoTenant(tenantId)) {
+      return;
+    }
+
     const subscription = await this.prisma.subscription.findFirst({
       where: { tenantId },
     });
@@ -230,5 +255,14 @@ export class AiEntitlementsService {
     const daysSinceReset = (now.getTime() - lastResetAt.getTime()) / (1000 * 60 * 60 * 24);
 
     return daysSinceReset >= 30;
+  }
+
+  private async isDemoTenant(tenantId: string): Promise<boolean> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { isDemo: true },
+    });
+
+    return tenant?.isDemo === true;
   }
 }

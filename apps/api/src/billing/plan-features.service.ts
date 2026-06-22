@@ -60,6 +60,15 @@ export class PlanFeaturesService {
     const features = await this.getTenantFeatures(tenantId);
 
     if (!features) {
+      if (featureKey === 'canUseAI') {
+        const tenant = await this.prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { isDemo: true },
+        });
+
+        return tenant?.isDemo === true;
+      }
+
       return false;
     }
 

@@ -33,6 +33,10 @@ export class DemoTenantGuard implements CanActivate {
       return true;
     }
 
+    if (this.isAllowedDemoAssistantMutation(request)) {
+      return true;
+    }
+
     // Resolve tenantId from params or from previously-set request.tenantId
     const tenantId =
       (request.params as Record<string, string | undefined>)?.tenantId ??
@@ -56,5 +60,15 @@ export class DemoTenantGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  private isAllowedDemoAssistantMutation(request: Request): boolean {
+    if (request.method.toUpperCase() !== 'POST') {
+      return false;
+    }
+
+    const path = (request.originalUrl || request.url || '').split('?')[0] || '';
+
+    return /^\/tenants\/[^/]+\/assistant\/(chat(?:\/v2)?|ticket-replies|action-events)$/.test(path);
   }
 }
