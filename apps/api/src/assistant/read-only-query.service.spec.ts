@@ -225,4 +225,48 @@ describe('AssistantReadOnlyQueryService', () => {
     expect(result.answer).toContain('Deuda total de la administración');
   });
 
+  it('uses finance source of truth for collections summary without touching write paths', async () => {
+    const { service, prisma, finanzasService } = makeService();
+
+    prisma.membership.findUnique.mockResolvedValue({
+      roles: [{ role: 'TENANT_ADMIN' }],
+    });
+    finanzasService.getTenantFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 90000,
+      totalOutstanding: 60000,
+      delinquentUnitsCount: 2,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+    finanzasService.getPaymentMetrics.mockResolvedValue({
+      backlogCount: 3,
+    });
+
+    const result = await service.execute(
+      {
+        intentCode: 'GET_COLLECTIONS_SUMMARY',
+        question: 'resumen de cobranzas del mes',
+        context: {
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          role: 'TENANT_ADMIN',
+        },
+      },
+      {
+        apiKey: 'test-readonly-key',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        role: 'TENANT_ADMIN',
+      },
+    );
+
+    expect(result.metadata.intentCode).toBe('GET_COLLECTIONS_SUMMARY');
+    expect(result.responseType).toBe('summary');
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1', expect.any(String));
+    expect(finanzasService.getPaymentMetrics).toHaveBeenCalledWith('tenant-1', {});
+    expect(prisma.charge.findMany).not.toHaveBeenCalled();
+    expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
+
 });
