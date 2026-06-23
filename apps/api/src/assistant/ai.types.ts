@@ -16,6 +16,11 @@ export interface SuggestedAction {
   payload: Record<string, string | undefined>;
 }
 
+export interface AiProviderChatOptions {
+  model?: string;
+  maxTokens?: number;
+}
+
 export interface ChatResponse {
   answer: string;
   suggestedActions: SuggestedAction[];
@@ -38,7 +43,7 @@ export interface AiProvider {
   chat(
     message: string,
     context: AiProviderContext,
-    options?: { model?: string; maxTokens?: number },
+    options?: AiProviderChatOptions,
   ): Promise<ChatResponse>;
 
   /**
@@ -77,43 +82,49 @@ export interface StructuredResponse {
   /** Response data (format depends on type) */
   data?: unknown;
   /** Suggested actions */
-  actions?: Array<{
-    /** Action type identifier */
-    action: string;
-    /** Human-readable label */
-    label: string;
-    /** Action payload */
-    payload?: Record<string, unknown>;
-  }>;
+  actions?: StructuredResponseAction[];
   /** Metadata */
-  meta?: {
-    /** Intent that produced this response */
-    intent?: string;
-    /** Confidence score from extraction */
-    confidence?: number;
-    /** Additional metadata */
-    [key: string]: unknown;
-  };
+  meta?: StructuredResponseMeta;
   /**
    * Optional diagnostics for /chat/v2 debug mode.
    */
-  debug?: {
-    usedDeterministic?: boolean;
-    deterministicIntent?: string | null;
-    deterministicConfidence?: number | null;
-    coverageStatus?: 'complete' | 'incomplete' | 'failed';
-    coverageMissing?: string[];
-    usedLLM?: boolean;
-    llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none' | 'unknown';
-    llmBaseUrl?: string;
-    llmModel?: string;
-    llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'pending_clarification' | 'none';
-    semanticValidationStatus?: 'accepted' | 'needs_clarification' | 'override_suggested';
-    semanticValidationReason?: string;
-    zodValidationPassed?: boolean;
-    finalIntent?: string;
-    finalFilters?: Record<string, unknown>;
-    rbacChecked?: boolean;
-    tenantScoped?: boolean;
-  };
+  debug?: StructuredResponseDebug;
+}
+
+export interface StructuredResponseAction {
+  /** Action type identifier */
+  action: string;
+  /** Human-readable label */
+  label: string;
+  /** Action payload */
+  payload?: Record<string, unknown>;
+}
+
+export interface StructuredResponseMeta {
+  /** Intent that produced this response */
+  intent?: string;
+  /** Confidence score from extraction */
+  confidence?: number;
+  /** Additional metadata */
+  [key: string]: unknown;
+}
+
+export interface StructuredResponseDebug {
+  usedDeterministic?: boolean;
+  deterministicIntent?: string | null;
+  deterministicConfidence?: number | null;
+  coverageStatus?: 'complete' | 'incomplete' | 'failed';
+  coverageMissing?: string[];
+  usedLLM?: boolean;
+  llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none' | 'unknown';
+  llmBaseUrl?: string;
+  llmModel?: string;
+  llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'pending_clarification' | 'none';
+  semanticValidationStatus?: 'accepted' | 'needs_clarification' | 'override_suggested';
+  semanticValidationReason?: string;
+  zodValidationPassed?: boolean;
+  finalIntent?: string;
+  finalFilters?: Record<string, unknown>;
+  rbacChecked?: boolean;
+  tenantScoped?: boolean;
 }
