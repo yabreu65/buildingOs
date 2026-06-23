@@ -17,6 +17,122 @@ const OPENCODE_MODEL = 'qwen3.6-plus';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
+export interface GeminiGenerateContentResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+}
+
+const geminiExtractionResponseSchema = {
+  type: 'object',
+  properties: {
+    intent: { type: 'string' },
+    entity: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['unit', 'building', 'person'] },
+        buildingAlias: { type: 'string' },
+        unitCode: { type: 'string' },
+        personName: { type: 'string' },
+      },
+      required: ['type'],
+      additionalProperties: false,
+    },
+    filters: {
+      type: 'object',
+      properties: {
+        minAmount: { type: 'number' },
+        maxAmount: { type: 'number' },
+        minDebt: { type: 'number' },
+        period: { type: 'string' },
+        financePeriod: { type: 'string' },
+        status: { type: 'string' },
+        method: { type: 'string' },
+        minAgeDays: { type: 'number' },
+        category: { type: 'string' },
+        sortField: { type: 'string' },
+        sortOrder: { type: 'string', enum: ['asc', 'desc'] },
+        limit: { type: 'number', maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    sort: {
+      type: 'object',
+      properties: {
+        field: { type: 'string' },
+        order: { type: 'string', enum: ['asc', 'desc'] },
+      },
+      additionalProperties: false,
+    },
+    limit: { type: 'number', maximum: 100 },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    source: { type: 'string', enum: ['deterministic', 'llm', 'hybrid'] },
+    llmProvider: { type: 'string', enum: ['ollama', 'opencode', 'gemini', 'none'] },
+    requiresClarification: { type: 'boolean' },
+    missingFields: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['intent', 'entity', 'filters', 'confidence'],
+  additionalProperties: false,
+} as const;
+
+export function parseGeminiStructuredIntentResponse(response: unknown): ExtractedIntent {
+  const rawText = extractGeminiStructuredIntentText(response);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new Error('Gemini returned non-JSON structured intent response');
+  }
+
+  const validation = validateExtractedIntent(parsed);
+  if (!validation.success || !validation.data) {
+    const issues = validation.error?.issues.map((issue) => issue.message).join(', ') ?? 'unknown validation error';
+    throw new Error(`Gemini structured intent validation failed: ${issues}`);
+  }
+
+  if (validation.data.confidence < CONFIDENCE_THRESHOLD) {
+    throw new Error(`Confidence ${validation.data.confidence} below threshold ${CONFIDENCE_THRESHOLD}`);
+  }
+
+  return validation.data;
+}
+
+export function extractGeminiStructuredIntentText(response: unknown): string {
+  if (!response || typeof response !== 'object') {
+    throw new Error('Gemini returned no parseable structured intent response');
+  }
+
+  const payload = response as GeminiGenerateContentResponse;
+  const candidates = payload.candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error('Gemini returned no parseable structured intent response');
+  }
+
+  const parts = candidates[0]?.content?.parts;
+  if (!Array.isArray(parts) || parts.length === 0) {
+    throw new Error('Gemini returned no parseable structured intent response');
+  }
+
+  const text = parts
+    .map((part) => part?.text ?? '')
+    .join('')
+    .trim();
+
+  if (!text) {
+    throw new Error('Gemini returned no parseable structured intent response');
+  }
+
+  return text;
+}
+
 interface OllamaChatResponse {
   message?: {
     content?: string;
@@ -215,6 +331,7 @@ export class IntentExtractorService {
               temperature: 0,
               maxOutputTokens: 220,
               responseMimeType: 'application/json',
+              responseSchema: geminiExtractionResponseSchema,
             },
           }),
         },
@@ -224,11 +341,8 @@ export class IntentExtractorService {
         throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
       }
 
-      const payload = (await response.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const answer = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      const parsed = this.parseAndValidate(answer);
+      const payload: unknown = await response.json();
+      const parsed = parseGeminiStructuredIntentResponse(payload);
       return { ...parsed, llmProvider: 'gemini' };
     } finally {
       clearTimeout(timeoutId);

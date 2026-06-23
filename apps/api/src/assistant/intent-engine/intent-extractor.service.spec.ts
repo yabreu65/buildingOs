@@ -1,4 +1,7 @@
-import { IntentExtractorService } from './intent-extractor.service';
+import {
+  IntentExtractorService,
+  parseGeminiStructuredIntentResponse,
+} from './intent-extractor.service';
 
 // Create mock functions at the top level
 const mockCreatePlan = jest.fn();
@@ -182,6 +185,82 @@ describe('IntentExtractorService', () => {
       expect(result.llmProvider).toBe('gemini');
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch.mock.calls[0]?.[0]).toContain('generativelanguage.googleapis.com');
+      const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body ?? '{}');
+      expect(requestBody.generationConfig.responseMimeType).toBe('application/json');
+      expect(requestBody.generationConfig.responseSchema).toBeDefined();
+    });
+
+    it('uses Gemini structured output parser for valid structured responses', () => {
+      const result = parseGeminiStructuredIntentResponse({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    intent: 'building_payments',
+                    entity: { type: 'building', buildingAlias: 'A' },
+                    filters: { period: '2026-06', method: 'TRANSFER' },
+                    confidence: 0.92,
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      expect(result.intent).toBe('building_payments');
+      expect(result.entity.type).toBe('building');
+      expect(result.filters.period).toBe('2026-06');
+      expect(result.confidence).toBe(0.92);
+    });
+
+    it.each([
+      ['no candidates', {}],
+      ['candidates without text', { candidates: [{ content: { parts: [{}] } }] }],
+    ])('fails gracefully when Gemini response has %s', (_, payload) => {
+      expect(() => parseGeminiStructuredIntentResponse(payload)).toThrow(
+        'Gemini returned no parseable structured intent response',
+      );
+    });
+
+    it('fails gracefully when Gemini text is not JSON', () => {
+      expect(() =>
+        parseGeminiStructuredIntentResponse({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: 'not json' }],
+              },
+            },
+          ],
+        }),
+      ).toThrow('Gemini returned non-JSON structured intent response');
+    });
+
+    it('fails gracefully when Gemini JSON does not satisfy the backend schema', () => {
+      expect(() =>
+        parseGeminiStructuredIntentResponse({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      intent: 'building_payments',
+                      entity: { type: 'building' },
+                      filters: {},
+                      confidence: 0.92,
+                      unexpected: true,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ).toThrow('Gemini structured intent validation failed:');
     });
 
     it('calls LLM when deterministic intent exists but filter coverage is incomplete', async () => {
@@ -358,6 +437,45 @@ describe('IntentExtractorService', () => {
       expect(result.llmProvider).toBe('gemini');
     });
 
+    it('does not map structured tenant cobro responses to missing data', async () => {
+      mockCreatePlan.mockReturnValue(null);
+      process.env.AI_PROVIDER = 'gemini';
+      process.env.GEMINI_API_KEY = 'test-key';
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url.includes('generativelanguage.googleapis.com')) {
+          return {
+            ok: true,
+            json: async () => ({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          intent: 'building_payments',
+                          entity: { type: 'building' },
+                          filters: { period: '2026-06', method: 'TRANSFER' },
+                          confidence: 0.91,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          };
+        }
+
+        throw new Error('Ollama unavailable');
+      });
+
+      await expect(service.extractIntent('lo cobrado del mes en curso de la administracion')).resolves.toMatchObject({
+        intent: 'building_payments',
+        filters: expect.objectContaining({ period: '2026-06' }),
+      });
+    });
+
     it('logs execution via AssistantFeedbackService', async () => {
       mockCreatePlan.mockReturnValue(null); // Force LLM path
 
@@ -402,10 +520,10 @@ describe('IntentExtractorService', () => {
       };
 
       let capturedUrl = '';
-      let capturedBody: any = null;
-      mockFetch.mockImplementation(async (url: string, init: any) => {
+      let capturedBody: { messages?: Array<{ content?: string }> } | null = null;
+      mockFetch.mockImplementation(async (url: string, init?: { body?: string }) => {
         capturedUrl = url;
-        capturedBody = JSON.parse(init.body);
+        capturedBody = JSON.parse(init?.body ?? '{}') as { messages?: Array<{ content?: string }> };
         return {
           ok: true,
           json: async () => mockResponse,
@@ -416,7 +534,7 @@ describe('IntentExtractorService', () => {
         userId: 'user-456',
       });
 
-      const systemPrompt = capturedBody.messages[0].content;
+      const systemPrompt = capturedBody?.messages?.[0]?.content ?? '';
       expect(systemPrompt).not.toContain('tenant-123');
       expect(systemPrompt).not.toContain('tenantId');
       expect(systemPrompt).not.toContain('roles');
