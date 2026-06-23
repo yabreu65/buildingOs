@@ -37,8 +37,6 @@ export class AssistantDebtIntentInterpreter {
       'morosos',
       'pendiente',
       'pendientes',
-      'cobrar',
-      'cobro',
     ]);
 
     if (!hasDebtSignal) {

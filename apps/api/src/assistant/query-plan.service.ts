@@ -16,12 +16,17 @@ export class AssistantQueryPlanService {
    */
   createPlan(message: string): AssistantQueryPlan | null {
     const normalized = this.normalize(message);
+    if (this.hasWriteIntentSignal(normalized)) {
+      return null;
+    }
+
     const parsedUnitToken = this.parser.parseUnitReference(message);
     const buildingToken = this.parser.extractBuildingToken(message);
     const extractedFilters = this.extractCommonFilters(normalized);
     const personName = this.extractPersonName(message, normalized);
     const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
     const debtInterpretation = this.debtInterpreter.interpret(message);
+    const tenantDebtPeriod = this.extractTenantDebtPeriod(normalized);
 
     const hasExplicitUnitSyntax =
       /\b(unidad|apartamento|departamento|depto|apto|local|cochera|garage)\b/.test(normalized) ||
@@ -68,7 +73,10 @@ export class AssistantQueryPlanService {
       return {
         ...definition,
         executor: 'tenant_debt',
-        filters: { ...extractedFilters },
+        filters: {
+          ...extractedFilters,
+          ...(tenantDebtPeriod ? { period: tenantDebtPeriod } : {}),
+        },
         confidence: 0.9,
         source: 'deterministic_rules',
       };
@@ -170,6 +178,29 @@ export class AssistantQueryPlanService {
     return needles.some((needle) => value.includes(needle));
   }
 
+  private hasWriteIntentSignal(normalized: string): boolean {
+    const writeVerbPattern = /\b(anular|cancelar|crear|editar|eliminar|borrar|registrar|cargar|subir|marcar)\b/;
+    const writeTargetPattern = /\b(pago|pagos|gasto|gastos|egreso|egresos|comprobante|comprobantes|recibo|recibos|pagado|pagada|pagados|pagadas)\b/;
+
+    if (writeVerbPattern.test(normalized) && writeTargetPattern.test(normalized)) {
+      return true;
+    }
+
+    if (/\bmarcar\b/.test(normalized) && /\bpagad[oa]s?\b/.test(normalized)) {
+      return true;
+    }
+
+    if (/\b(anular|cancelar)\b/.test(normalized) && /\b(pago|pagos|comprobante|comprobantes)\b/.test(normalized)) {
+      return true;
+    }
+
+    if (/\b(crear|editar|eliminar|borrar|registrar|cargar|subir)\b/.test(normalized) && /\b(gasto|gastos|egreso|egresos|pago|pagos|comprobante|comprobantes)\b/.test(normalized)) {
+      return true;
+    }
+
+    return false;
+  }
+
   private normalize(value: string): string {
     return value
       .normalize('NFD')
@@ -206,6 +237,18 @@ export class AssistantQueryPlanService {
       ...filters,
       ...amountFilters,
     };
+  }
+
+  private extractTenantDebtPeriod(normalized: string): string | undefined {
+    if (normalized.includes('este mes') || normalized.includes('mes actual') || normalized.includes('del mes actual')) {
+      return 'current_month';
+    }
+
+    if (/acumulad[ao]s?/.test(normalized) || /hist[oó]ric[ao]s?/.test(normalized) || /\btoda\b/.test(normalized) || /\btodo\b/.test(normalized)) {
+      return 'accumulated';
+    }
+
+    return undefined;
   }
 
   private extractPeriod(normalized: string): string | undefined {
