@@ -32,6 +32,8 @@ jobs:
       S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
       S3_FORCE_PATH_STYLE: true
       MAIL_PROVIDER: none
+      FEATURE_PORTAL_RESIDENT: "true"
+      FEATURE_PAYMENTS_MVP: "true"
       PORT: 4000
 
     services:
