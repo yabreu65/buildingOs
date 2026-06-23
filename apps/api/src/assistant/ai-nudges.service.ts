@@ -61,6 +61,10 @@ interface OptionalPlanChangeRequestDelegate {
   create?: (args: Prisma.PlanChangeRequestCreateArgs) => Promise<PlanChangeRequest>;
 }
 
+type PrismaWithOptionalPlanChangeRequest = PrismaService & {
+  planChangeRequest?: OptionalPlanChangeRequestDelegate;
+};
+
 @Injectable()
 export class AiNudgesService {
   private readonly dismissCooldownMs = 7 * 24 * 60 * 60 * 1000;
@@ -657,9 +661,7 @@ export class AiNudgesService {
   }
 
   private getOptionalPlanChangeRequestDelegate(): OptionalPlanChangeRequestDelegate | undefined {
-    const prismaWithOptionalPlanChangeRequest = this.prisma as unknown as {
-      planChangeRequest?: OptionalPlanChangeRequestDelegate;
-    };
+    const prismaWithOptionalPlanChangeRequest = this.prisma as PrismaWithOptionalPlanChangeRequest;
 
     return prismaWithOptionalPlanChangeRequest.planChangeRequest;
   }
