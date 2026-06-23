@@ -92,6 +92,12 @@ describe('AssistantQueryPlanService', () => {
     'saldo pendiente general',
     'cuanto deben todos los edificios',
     'deuda de todos los edificios',
+    'deuda administracion',
+    'deuda condominio',
+    'deuda total de todo',
+    'cuanto deben todos',
+    'morosidad global',
+    'saldo general',
   ])('maps "%s" to tenant_debt', (phrase) => {
     const plan = service.createPlan(phrase);
 
@@ -115,6 +121,7 @@ describe('AssistantQueryPlanService', () => {
 
   it('returns null for non-allowlisted or ambiguous questions', () => {
     expect(service.createPlan('hola como estas')).toBeNull();
+    expect(service.createPlan('deuda')).toBeNull();
   });
 
   it('detects building-level intent without explicit building token', () => {

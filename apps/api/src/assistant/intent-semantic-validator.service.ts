@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
+import { AssistantDebtIntentInterpreter } from './debt-intent-interpreter';
 import type { ExtractedIntent } from './intent-engine/intent.types';
 import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.types';
 
@@ -64,6 +65,7 @@ const semanticGeminiSchema = z.object({
 export class IntentSemanticValidatorService {
   private readonly logger = new Logger(IntentSemanticValidatorService.name);
   private readonly geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  private readonly debtInterpreter = new AssistantDebtIntentInterpreter();
 
   async evaluate(input: IntentSemanticValidationInput): Promise<IntentSemanticValidationResult> {
     const normalized = this.normalize(input.userText);
@@ -73,6 +75,7 @@ export class IntentSemanticValidatorService {
       input.deterministicPlan?.filters.buildingAlias ??
       input.deterministicPlan?.filters.buildingToken;
     const period = input.extractedIntent.filters.period ?? input.deterministicPlan?.filters.period;
+    const debtInterpretation = this.debtInterpreter.interpret(input.userText);
     const isBuildingDebt = input.extractedIntent.intent === 'building_debt';
     const wantsAccumulatedDebt = /\b(acumulad[ao]s?|historic[ao]s?|hist[oó]rica|hist[oó]rico)\b/.test(normalized);
     const hasTemporalSignals = this.detectTemporalSignals(normalized);
@@ -94,6 +97,44 @@ export class IntentSemanticValidatorService {
           filterOverrides: period ? { period } : undefined,
         };
       }
+    }
+
+    if (debtInterpretation.scope === 'tenant') {
+      if (input.extractedIntent.intent !== 'tenant_debt') {
+        return {
+          status: 'override_suggested',
+          reason: 'global_debt_scope',
+          intentOverride: 'tenant_debt',
+          entityOverride: { type: 'building', buildingAlias: undefined, unitCode: undefined },
+        };
+      }
+
+      return { status: 'accepted', reason: 'global_debt_scope' };
+    }
+
+    if (debtInterpretation.scope === 'unit') {
+      if (input.extractedIntent.intent !== 'unit_debt') {
+        return {
+          status: 'override_suggested',
+          reason: 'unit_debt_scope',
+          intentOverride: 'unit_debt',
+          entityOverride: {
+            type: 'unit',
+            buildingAlias: debtInterpretation.buildingToken ?? explicitBuildingAlias,
+            unitCode: debtInterpretation.unitToken?.unitCode,
+          },
+        };
+      }
+
+      return { status: 'accepted', reason: 'unit_debt_scope' };
+    }
+
+    if (debtInterpretation.scope === 'ambiguous') {
+      return {
+        status: 'needs_clarification',
+        reason: 'debt_scope_ambiguous',
+        question: '¿Te referís a una unidad, un edificio o a la administración?',
+      };
     }
 
     if (!isBuildingDebt) {
