@@ -4,10 +4,9 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ChargeStatus, PaymentStatus, TicketStatus } from '@prisma/client';
+import { PaymentStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
-import { AssistantTenantDebtService } from './tenant-debt.service';
+import { FinanzasService } from '../finanzas/finanzas.service';
 import {
   ASSISTANT_READ_ONLY_INTENTS,
   AssistantReadOnlyAction,
@@ -30,8 +29,7 @@ interface ResolverResult {
 export class AssistantReadOnlyQueryService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly debtCalculator: AssistantDebtCalculatorService,
-    private readonly tenantDebtService: AssistantTenantDebtService,
+    private readonly finanzasService: FinanzasService,
   ) {}
 
   /**
@@ -127,62 +125,14 @@ export class AssistantReadOnlyQueryService {
   private async overdueUnitsResolver(
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
-    const now = new Date();
-
-    const overdueCharges = await this.prisma.charge.findMany({
-      where: {
-        tenantId: context.tenantId,
-        canceledAt: null,
-        dueDate: { lt: now },
-        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
-      },
-      include: {
-        unit: {
-          select: {
-            id: true,
-            label: true,
-            building: {
-              select: {
-                name: true,
-              },
-            },
-          },
-        },
-        paymentAllocations: {
-          include: {
-            payment: {
-              select: {
-                status: true,
-              },
-            },
-          },
-        },
-      },
-      take: 5000,
-    });
-
-    const debtByUnit = new Map<
-      string,
-      { unitLabel: string; buildingName: string; outstanding: number }
-    >();
-
-    for (const charge of overdueCharges) {
-      const outstanding = this.debtCalculator.calculateChargeOutstanding(charge);
-      if (outstanding <= 0) {
-        continue;
-      }
-
-      const existing = debtByUnit.get(charge.unitId) ?? {
-        unitLabel: charge.unit?.label || charge.unitId,
-        buildingName: charge.unit?.building?.name || 'N/A',
-        outstanding: 0,
-      };
-      existing.outstanding += outstanding;
-      debtByUnit.set(charge.unitId, existing);
-    }
-
-    const rows = [...debtByUnit.entries()]
-      .map(([unitId, info]) => ({ unitId, ...info }))
+    const summary = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
+    const rows = summary.topDelinquentUnits
+      .map((item) => ({
+        unitId: item.unitId,
+        unitLabel: item.unitLabel,
+        buildingName: item.buildingName,
+        outstanding: item.outstanding,
+      }))
       .sort((a, b) => b.outstanding - a.outstanding);
 
     if (rows.length === 0) {
@@ -216,7 +166,7 @@ export class AssistantReadOnlyQueryService {
         { key: 'open-units', label: 'Open Units' },
       ],
       metadata: {
-        itemCount: rows.length,
+        itemCount: summary.delinquentUnitsCount,
         top: rows.slice(0, 10),
       },
     };
@@ -225,36 +175,19 @@ export class AssistantReadOnlyQueryService {
   private async pendingPaymentsResolver(
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
-    const [count, pending] = await Promise.all([
-      this.prisma.payment.count({
-        where: {
-          tenantId: context.tenantId,
+    const [metrics, pending] = await Promise.all([
+      this.finanzasService.getPaymentMetrics(context.tenantId, {}),
+      this.finanzasService.listPendingPayments(
+        context.tenantId,
+        [context.role],
+        context.userId,
+        {
           status: PaymentStatus.SUBMITTED,
-          canceledAt: null,
+          limit: 10,
         },
-      }),
-      this.prisma.payment.findMany({
-        where: {
-          tenantId: context.tenantId,
-          status: PaymentStatus.SUBMITTED,
-          canceledAt: null,
-        },
-        include: {
-          unit: {
-            select: {
-              label: true,
-              building: {
-                select: {
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-        orderBy: { createdAt: 'asc' },
-        take: 10,
-      }),
+      ),
     ]);
+    const count = metrics.backlogCount;
 
     if (count === 0) {
       return {
@@ -272,7 +205,7 @@ export class AssistantReadOnlyQueryService {
       .slice(0, 5)
       .map((payment) => {
         const unitLabel = payment.unit?.label || 'Sin unidad';
-        const buildingName = payment.unit?.building?.name || 'N/A';
+        const buildingName = payment.building?.name || 'N/A';
         return `${unitLabel} (${buildingName}): ${this.formatCurrency(payment.amount)}`;
       })
       .join(' | ');
@@ -413,63 +346,19 @@ export class AssistantReadOnlyQueryService {
   private async collectionsSummaryResolver(
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
-    const now = new Date();
-    const period = this.toPeriod(now);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-
-    const charges = await this.prisma.charge.findMany({
-      where: {
-        tenantId: context.tenantId,
-        period,
-        canceledAt: null,
-      },
-      include: {
-        paymentAllocations: {
-          include: {
-            payment: {
-              select: {
-                status: true,
-              },
-            },
-          },
-        },
-      },
-      take: 10000,
-    });
-
-    const emitted = charges.reduce((sum, charge) => sum + charge.amount, 0);
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
-    const collectedApplied = Math.max(0, emitted - outstanding);
-
-    const [pendingApprovals, approvedInMonth] = await Promise.all([
-      this.prisma.payment.count({
-        where: {
-          tenantId: context.tenantId,
-          status: PaymentStatus.SUBMITTED,
-          canceledAt: null,
-        },
-      }),
-      this.prisma.payment.aggregate({
-        where: {
-          tenantId: context.tenantId,
-          status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
-          updatedAt: {
-            gte: monthStart,
-            lt: nextMonthStart,
-          },
-          canceledAt: null,
-        },
-        _sum: {
-          amount: true,
-        },
-      }),
+    const period = this.toPeriod(new Date());
+    const [summary, metrics] = await Promise.all([
+      this.finanzasService.getTenantFinancialSummary(context.tenantId, period),
+      this.finanzasService.getPaymentMetrics(context.tenantId, {}),
     ]);
 
-    const approvedTotal = approvedInMonth._sum.amount || 0;
+    const emitted = summary.totalCharges;
+    const outstanding = summary.totalOutstanding;
+    const collectedApplied = Math.max(0, emitted - outstanding);
+    const pendingApprovals = metrics.backlogCount;
     const collectionRate = emitted > 0 ? collectedApplied / emitted : 0;
 
-    if (emitted === 0 && approvedTotal === 0) {
+    if (emitted === 0 && summary.totalPaid === 0) {
       return {
         answer: `No hay movimientos de cobranzas para el período ${period}.`,
         responseType: 'no_data',
@@ -499,7 +388,7 @@ export class AssistantReadOnlyQueryService {
         collectedApplied,
         outstanding,
         pendingApprovals,
-        approvedTotal,
+        approvedTotal: summary.totalPaid,
       },
     };
   }
@@ -507,30 +396,31 @@ export class AssistantReadOnlyQueryService {
   private async tenantDebtResolver(
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
-    const summary = await this.tenantDebtService.resolveTenantDebtSummary(context.tenantId);
+    const summary = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
+    const totalDebt = summary.totalOutstanding;
 
-    if (summary.totalDebt === 0) {
+    if (totalDebt === 0) {
       return {
         answer: 'La administración no tiene deuda pendiente.',
         responseType: 'no_data',
         actions: [{ key: 'open-charges', label: 'Open Charges' }],
         metadata: {
           noData: true,
-          totalDebt: summary.totalDebt,
+          totalDebt,
           currency: summary.currency,
-          chargeCount: summary.chargeCount,
+          chargeCount: summary.delinquentUnitsCount,
         },
       };
     }
 
     return {
-      answer: `Deuda total de la administración: ${this.formatCurrency(summary.totalDebt, summary.currency)}.`,
+      answer: `Deuda total de la administración: ${this.formatCurrency(totalDebt, summary.currency)}.`,
       responseType: 'summary',
       actions: [{ key: 'open-charges', label: 'Open Charges' }],
       metadata: {
-        totalDebt: summary.totalDebt,
+        totalDebt,
         currency: summary.currency,
-        chargeCount: summary.chargeCount,
+        chargeCount: summary.delinquentUnitsCount,
       },
     };
   }

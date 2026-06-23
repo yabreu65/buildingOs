@@ -25,6 +25,15 @@ import {
   MonthlyTrendDto,
 } from './finanzas.dto';
 
+export interface PendingPaymentListItem extends Payment {
+  building?: { id: string; name: string } | null;
+  unit?: { id: string; label: string } | null;
+  createdByUser?: { id: string; name: string; email: string } | null;
+  reviewedByMembership?: { id: string; user?: { name: string } | null } | null;
+  proofFile?: { id: string } | null;
+  proofDocumentId?: string | null;
+}
+
 @Injectable()
 export class FinanzasService {
   private readonly logger = new Logger(FinanzasService.name);
@@ -1788,7 +1797,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     query: ListPendingPaymentsQueryDto,
-  ): Promise<Payment[]> {
+  ): Promise<PendingPaymentListItem[]> {
     // Build where clause
     const where: Prisma.PaymentWhereInput = {
       tenantId,
@@ -1880,7 +1889,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments as Payment[];
+    return resolvedPayments as PendingPaymentListItem[];
   }
 
   /**

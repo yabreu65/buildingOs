@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
+import { FinanzasModule } from '../finanzas/finanzas.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { RedisModule } from '../redis/redis.module';
 import { AssistantService, MockAiProvider } from './assistant.service';
@@ -118,7 +119,7 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
  * - AuditModule: Audit logging
  */
 @Module({
-  imports: [PrismaModule, TenancyModule, BillingModule, AuditModule, RedisModule, AiProviderModule.register(aiOptions)],
+  imports: [PrismaModule, TenancyModule, BillingModule, FinanzasModule, AuditModule, RedisModule, AiProviderModule.register(aiOptions)],
   controllers: [
     AssistantController,
     AiBudgetController,
