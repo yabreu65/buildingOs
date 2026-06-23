@@ -11,6 +11,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@buildingos/contracts": "workspace:*"
+    "@buildingos/contracts": "file:../contracts"
   }
 }
