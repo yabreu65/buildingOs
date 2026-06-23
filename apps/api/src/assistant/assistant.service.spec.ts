@@ -71,7 +71,15 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockIntentExtractor = { extractIntent: jest.fn() };
   const mockEntityResolver = { resolveBuilding: jest.fn(), resolveUnit: jest.fn(), resolvePerson: jest.fn() };
   const mockAmbiguityService = { detectAmbiguity: jest.fn(), generateClarification: jest.fn() };
-  const mockConversationContext = { storeTurn: jest.fn(), getContext: jest.fn(), getLastResolved: jest.fn(), getLastIntent: jest.fn() };
+  const mockConversationContext = {
+    storeTurn: jest.fn(),
+    getContext: jest.fn(),
+    getLastResolved: jest.fn(),
+    getLastIntent: jest.fn(),
+    getPendingClarification: jest.fn(),
+    setPendingClarification: jest.fn(),
+    clearPendingClarification: jest.fn(),
+  };
   const mockQueryPlannerService = { buildPlan: jest.fn() };
   const mockQueryExecutorService = { execute: jest.fn() };
   const mockResponseFormatter = { formatV1: jest.fn(), formatV2: jest.fn() };
@@ -101,6 +109,7 @@ describe('AssistantService - Strict Operational Questions', () => {
     mockConversationContext.getContext.mockResolvedValue([]);
     mockConversationContext.getLastResolved.mockResolvedValue({});
     mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+    mockConversationContext.getPendingClarification.mockResolvedValue(undefined);
     mockUnitResolver.resolve.mockResolvedValue({
       resolved: {
         building: { id: 'b1', name: 'Edificio A', alias: 'A' },
@@ -214,6 +223,215 @@ describe('AssistantService - Strict Operational Questions', () => {
         ADMIN_ROLES,
       );
     });
+
+    it('interpreta "mes actual" como respuesta de aclaración para deuda de edificio', async () => {
+      const previousResolvedEntities = {
+        building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+        alternatives: [],
+      };
+
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda total edificio B',
+          timestamp: new Date(),
+          resolvedEntities: previousResolvedEntities,
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'demo-B' });
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockIntentExtractor.extractIntent.mockRejectedValue(new Error('Need clarification')); 
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: {
+          buildingId: resolved.building?.id,
+          unitId: resolved.unit?.id,
+          personId: resolved.person?.id,
+        },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'mes actual', page: 'charges', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'building_debt',
+          filters: expect.objectContaining({ period: new Date().toISOString().slice(0, 7) }),
+        }),
+        previousResolvedEntities,
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-B' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
+    });
+
+    it('rehidrata aclaración pendiente para "acumulada" usando el edificio original', async () => {
+      const previousResolvedEntities = {
+        building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+        alternatives: [],
+      };
+
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda total edificio B',
+          timestamp: new Date(),
+          resolvedEntities: previousResolvedEntities,
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'demo-B' });
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockConversationContext.getPendingClarification.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'B' },
+        filters: {},
+        missingFields: ['period'],
+        question: '¿Querés la deuda de este mes o la deuda acumulada?',
+        resolvedEntityIds: { buildingId: 'demo-B' },
+      });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'building-a',
+        tenantId: 'tenant-1',
+        name: 'Edificio A',
+        alias: 'A',
+        deletedAt: null,
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: {
+          buildingId: resolved.building?.id,
+          unitId: resolved.unit?.id,
+          personId: resolved.person?.id,
+        },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 474568, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 4.745,68',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'acumulada',
+          page: 'charges',
+          buildingId: 'building-a',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'building_debt',
+          filters: {},
+        }),
+        expect.objectContaining({
+          building: expect.objectContaining({ id: 'demo-B', alias: 'B' }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-B' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
+      expect(mockConversationContext.clearPendingClarification).toHaveBeenCalledWith(
+        'tenant-1',
+        'user-1',
+        'conv-1',
+      );
+    });
+
+    it.each(['histórica', 'toda'])(
+      'rehidrata aclaración pendiente para "%s" sin perder el edificio original',
+      async (followUpMessage) => {
+        const previousResolvedEntities = {
+          building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+          alternatives: [],
+        };
+
+        mockConversationContext.getContext.mockResolvedValue([
+          {
+            role: 'user',
+            message: 'deuda total edificio B',
+            timestamp: new Date(),
+            resolvedEntities: previousResolvedEntities,
+          },
+        ]);
+        mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'demo-B' });
+        mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+        mockConversationContext.getPendingClarification.mockResolvedValue({
+          intent: 'building_debt',
+          entity: { type: 'building', buildingAlias: 'B' },
+          filters: {},
+          missingFields: ['period'],
+          question: '¿Querés la deuda de este mes o la deuda acumulada?',
+          resolvedEntityIds: { buildingId: 'demo-B' },
+        });
+        mockIntentRegistry.has.mockReturnValue(true);
+        mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+        mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+          intent: intent.intent,
+          entityIds: {
+            buildingId: resolved.building?.id,
+            unitId: resolved.unit?.id,
+            personId: resolved.person?.id,
+          },
+          filters: intent.filters,
+          pagination: { limit: 20 },
+        }));
+        mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 474568, currency: 'ARS' });
+        mockResponseFormatter.formatV2.mockReturnValue({
+          type: 'kpi',
+          title: 'Deuda',
+          summary: 'Deuda total: ARS 4.745,68',
+          meta: {},
+        });
+
+        await service.chatV2(
+          'tenant-1',
+          'user-1',
+          'membership-1',
+          { message: followUpMessage, page: 'charges', conversationId: 'conv-1' },
+          ADMIN_ROLES,
+        );
+
+        expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-B' }) }),
+          'tenant-1',
+          'user-1',
+          ADMIN_ROLES,
+        );
+      },
+    );
   });
 
   describe('chatV2 semantic validation', () => {
@@ -247,6 +465,10 @@ describe('AssistantService - Strict Operational Questions', () => {
         reason: 'period_ambiguous',
         question: '¿Querés la deuda de este mes o la deuda acumulada?',
       });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+        alternatives: [],
+      });
       mockResponseFormatter.formatV2.mockReturnValue({
         type: 'clarification',
         title: 'Aclaración',
@@ -265,6 +487,29 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalled();
       expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
       expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(mockConversationContext.storeTurn).toHaveBeenCalledWith(
+        'tenant-1',
+        'user-1',
+        'conv-1',
+        expect.objectContaining({
+          message: 'deuda total edificio B',
+          resolvedEntities: expect.objectContaining({
+            building: expect.objectContaining({ id: 'demo-B', alias: 'B' }),
+          }),
+        }),
+        expect.objectContaining({ intent: 'building_debt' }),
+      );
+      expect(mockConversationContext.setPendingClarification).toHaveBeenCalledWith(
+        'tenant-1',
+        'user-1',
+        'conv-1',
+        expect.objectContaining({
+          intent: 'building_debt',
+          entity: expect.objectContaining({ buildingAlias: 'B' }),
+          missingFields: ['period'],
+          resolvedEntityIds: expect.objectContaining({ buildingId: 'demo-B' }),
+        }),
+      );
       expect(result.type).toBe('clarification');
     });
 

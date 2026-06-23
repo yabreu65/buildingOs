@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '../../redis/redis.service';
-import { ConversationTurn, EntityResolution } from '../intent-engine/intent.types';
+import {
+  ConversationTurn,
+  EntityResolution,
+  PendingClarificationContext,
+} from '../intent-engine/intent.types';
 
 /**
  * Conversation session stored in Redis
@@ -18,6 +22,8 @@ interface ConversationSession {
   lastIntent?: string;
   /** Last filters applied */
   lastFilters?: Record<string, unknown>;
+  /** Pending clarification awaiting a short follow-up answer */
+  pendingClarification?: PendingClarificationContext;
 }
 
 /**
@@ -97,13 +103,7 @@ export class RedisConversationContextService {
       session.lastFilters = metadata.filters;
     }
 
-    // Write to Redis (best effort) and always keep in memory
-    try {
-      await this.redis.set(key, JSON.stringify(session), this.ttlSeconds);
-    } catch {
-      this.logger.debug(`Redis unavailable, using memory fallback for ${key}`);
-    }
-    this.memoryStore.set(key, session);
+    await this.saveSession(key, session);
   }
 
   /**
@@ -161,6 +161,51 @@ export class RedisConversationContextService {
   }
 
   /**
+   * Persist a pending clarification state for the conversation.
+   */
+  async setPendingClarification(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+    clarification: PendingClarificationContext,
+  ): Promise<void> {
+    const key = this.getKey(tenantId, userId, conversationId);
+    const session = await this.getSession(key);
+    session.pendingClarification = clarification;
+    await this.saveSession(key, session);
+  }
+
+  /**
+   * Get pending clarification state, if any.
+   */
+  async getPendingClarification(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+  ): Promise<PendingClarificationContext | undefined> {
+    const key = this.getKey(tenantId, userId, conversationId);
+    const session = await this.getSession(key);
+    return session.pendingClarification;
+  }
+
+  /**
+   * Clear any pending clarification state for the conversation.
+   */
+  async clearPendingClarification(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+  ): Promise<void> {
+    const key = this.getKey(tenantId, userId, conversationId);
+    const session = await this.getSession(key);
+    if (!session.pendingClarification) {
+      return;
+    }
+    delete session.pendingClarification;
+    await this.saveSession(key, session);
+  }
+
+  /**
    * Resolve anaphoric references in a message
    *
    * @param tenantId - Tenant ID
@@ -212,5 +257,17 @@ export class RedisConversationContextService {
     }
 
     return { turns: [] };
+  }
+
+  /**
+   * Persist session state to Redis and memory fallback.
+   */
+  private async saveSession(key: string, session: ConversationSession): Promise<void> {
+    try {
+      await this.redis.set(key, JSON.stringify(session), this.ttlSeconds);
+    } catch {
+      this.logger.debug(`Redis unavailable, using memory fallback for ${key}`);
+    }
+    this.memoryStore.set(key, session);
   }
 }

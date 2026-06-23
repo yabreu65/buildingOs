@@ -1,6 +1,6 @@
 import { RedisConversationContextService } from './redis-conversation-context.service';
 import { RedisService } from '../../redis/redis.service';
-import { ConversationTurn } from '../intent-engine/intent.types';
+import { ConversationTurn, PendingClarificationContext } from '../intent-engine/intent.types';
 
 // Mock RedisService
 const mockRedisService = {
@@ -190,6 +190,55 @@ describe('RedisConversationContextService', () => {
       const result = await service.resolveAnaphora('tenant-1', 'user-1', 'conv-1', '¿Cuánto debe A-0101?');
 
       expect(result).toBe('¿Cuánto debe A-0101?');
+    });
+  });
+
+  describe('pending clarification', () => {
+    it('stores and retrieves pending clarification state', async () => {
+      let storedJson: string | null = null;
+      const clarification: PendingClarificationContext = {
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'B' },
+        filters: {},
+        missingFields: ['period'],
+        question: '¿Querés la deuda de este mes o la deuda acumulada?',
+        resolvedEntityIds: { buildingId: 'demo-B' },
+      };
+
+      mockRedisService.get.mockImplementation(() => Promise.resolve(storedJson));
+      mockRedisService.set.mockImplementation((_key, value: string) => {
+        storedJson = value;
+        return Promise.resolve();
+      });
+
+      await service.setPendingClarification('tenant-1', 'user-1', 'conv-1', clarification);
+
+      const result = await service.getPendingClarification('tenant-1', 'user-1', 'conv-1');
+
+      expect(result).toEqual(clarification);
+    });
+
+    it('clears pending clarification state', async () => {
+      let storedJson = JSON.stringify({
+        turns: [],
+        pendingClarification: {
+          intent: 'building_debt',
+          entity: { type: 'building', buildingAlias: 'B' },
+          filters: {},
+          missingFields: ['period'],
+        },
+      });
+
+      mockRedisService.get.mockImplementation(() => Promise.resolve(storedJson));
+      mockRedisService.set.mockImplementation((_key, value: string) => {
+        storedJson = value;
+        return Promise.resolve();
+      });
+
+      await service.clearPendingClarification('tenant-1', 'user-1', 'conv-1');
+
+      const result = await service.getPendingClarification('tenant-1', 'user-1', 'conv-1');
+      expect(result).toBeUndefined();
     });
   });
 });

@@ -104,7 +104,7 @@ export interface StructuredResponse {
     llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none' | 'unknown';
     llmBaseUrl?: string;
     llmModel?: string;
-    llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'none';
+    llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'pending_clarification' | 'none';
     semanticValidationStatus?: 'accepted' | 'needs_clarification' | 'override_suggested';
     semanticValidationReason?: string;
     zodValidationPassed?: boolean;

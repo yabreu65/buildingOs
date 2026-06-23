@@ -262,6 +262,28 @@ export interface ConversationTurn {
 }
 
 /**
+ * Pending clarification state persisted between turns.
+ */
+export interface PendingClarificationContext {
+  /** Original intent awaiting clarification */
+  intent: string;
+  /** Partial entity reference extracted from the original turn */
+  entity: EntityReference;
+  /** Filters extracted before clarification */
+  filters: IntentFilters;
+  /** Missing semantic fields that the follow-up must complete */
+  missingFields: string[];
+  /** Clarification question shown to the user */
+  question?: string;
+  /** Resolved entity ids already known at clarification time */
+  resolvedEntityIds?: {
+    buildingId?: string;
+    unitId?: string;
+    personId?: string;
+  };
+}
+
+/**
  * Conversation context for intent extraction
  */
 export interface ConversationContext {
