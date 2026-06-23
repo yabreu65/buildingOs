@@ -129,6 +129,30 @@ export class IntentSemanticValidatorService {
       return { status: 'accepted', reason: 'unit_debt_scope' };
     }
 
+    if (debtInterpretation.scope === 'building') {
+      if (!explicitBuildingAlias && !assistantContext.buildingId) {
+        return {
+          status: 'needs_clarification',
+          reason: 'building_scope_missing_context',
+          question: '¿De cuál condominio/edificio quieres consultar la deuda?',
+        };
+      }
+
+      if (input.extractedIntent.intent !== 'building_debt') {
+        return {
+          status: 'override_suggested',
+          reason: 'building_debt_scope',
+          intentOverride: 'building_debt',
+          entityOverride: {
+            type: 'building',
+            buildingAlias: explicitBuildingAlias,
+            unitCode: undefined,
+          },
+          filterOverrides: period ? { period } : undefined,
+        };
+      }
+    }
+
     if (debtInterpretation.scope === 'ambiguous') {
       return {
         status: 'needs_clarification',
@@ -336,6 +360,7 @@ export class IntentSemanticValidatorService {
       'You ONLY decide whether the extracted intent/filters are safe, need clarification, or should be overridden with safer filters.',
       'Return JSON only.',
       'Allowed filter overrides: period, financePeriod.',
+      'condominio, edificio, torre, bloque, building mean building scope; administracion, administradora, tenant, todos los edificios and todos los condominios mean tenant scope.',
       'If the extracted meaning conflicts with the parser, prefer clarification instead of execution.',
       'If the user clearly asks for current month debt, add a YYYY-MM period override when possible.',
       `Current analysis context: ${planSummary}`,

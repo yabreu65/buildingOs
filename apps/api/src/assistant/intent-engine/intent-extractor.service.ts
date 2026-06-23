@@ -424,9 +424,10 @@ Intenciones disponibles:
 - unit_payments: listar pagos de una unidad
 - building_debt: consultar deuda total de un edificio
 - tenant_debt: consultar deuda total de la administracion
-- tenant_debt tambien aplica a frases globales como: deuda administracion, deuda condominio, deuda de todo, morosidad global, saldo general, cuanto deben todos
+- building / condominio / edificio / torre / bloque / building => building_debt
+- tenant_debt tambien aplica a frases globales como: deuda administracion, deuda de la administracion, deuda de todos los edificios, deuda de todos los condominios, deuda de todo, morosidad global, saldo general, cuanto deben todos
 - Si hay una unidad explicita, prioriza unit_debt.
-- Si hay un edificio explicito, prioriza building_debt.
+- Si hay una referencia clara a edificio/condominio, prioriza building_debt.
 - Si la frase es ambigua, responde con confianza baja y no inventes el scope.
 - building_delinquents: listar morosos de un edificio
 - building_documents: listar documentos de un edificio

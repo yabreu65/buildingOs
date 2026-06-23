@@ -67,7 +67,22 @@ export class AssistantDebtIntentInterpreter {
       };
     }
 
-    if (buildingToken && !genericBuildingToken) {
+    const hasExplicitTenantSignal = this.hasExplicitTenantScope(normalized);
+    if (hasExplicitTenantSignal) {
+      return {
+        scope: 'tenant',
+        hasDebtSignal: true,
+        hasGlobalSignal: true,
+        hasUnitSignal: false,
+        hasBuildingSignal: false,
+        normalized,
+        buildingToken,
+        unitToken,
+        reason: 'global_scope',
+      };
+    }
+
+    if (buildingToken || genericBuildingToken || this.hasBuildingScope(normalized)) {
       return {
         scope: 'building',
         hasDebtSignal: true,
@@ -81,8 +96,7 @@ export class AssistantDebtIntentInterpreter {
       };
     }
 
-    const hasGlobalSignal = genericBuildingToken || this.hasGlobalScope(normalized);
-    if (hasGlobalSignal) {
+    if (this.hasStandaloneTenantScope(normalized)) {
       return {
         scope: 'tenant',
         hasDebtSignal: true,
@@ -119,24 +133,22 @@ export class AssistantDebtIntentInterpreter {
       .trim();
   }
 
-  private hasGlobalScope(normalized: string): boolean {
+  private hasExplicitTenantScope(normalized: string): boolean {
     if (this.hasAnyWord(normalized, [
-      'todo',
-      'todos',
-      'global',
-      'general',
-      'total',
       'administracion',
       'administradora',
-      'condominio',
+      'tenant',
       'consorcio',
       'comunidad',
+      'global',
+      'general',
     ])) {
       return true;
     }
 
     return (
       normalized.includes('todos los edificios') ||
+      normalized.includes('todos los condominios') ||
       normalized.includes('todos los inmuebles') ||
       normalized.includes('todos los departamentos') ||
       normalized.includes('todos los apartamentos') ||
@@ -146,6 +158,26 @@ export class AssistantDebtIntentInterpreter {
 
   private isGenericBuildingToken(token: string): boolean {
     return this.hasAnyWord(token, ['completo', 'general', 'global', 'total', 'todos', 'administracion', 'administradora']);
+  }
+
+  private hasStandaloneTenantScope(normalized: string): boolean {
+    return this.hasAnyWord(normalized, ['todo', 'todos', 'total']);
+  }
+
+  private hasBuildingScope(normalized: string): boolean {
+    return this.hasAnyWord(normalized, [
+      'condominio',
+      'edificio',
+      'building',
+      'torre',
+      'bloque',
+      'sector',
+      'pabellon',
+      'pabellón',
+      'residencia',
+      'conjunto',
+      'complejo',
+    ]);
   }
 
   private hasAnyWord(normalized: string, words: string[]): boolean {

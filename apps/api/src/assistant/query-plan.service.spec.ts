@@ -103,12 +103,11 @@ describe('AssistantQueryPlanService', () => {
   it.each([
     'deuda de la administracion',
     'deuda total de la administracion',
-    'deuda del condominio completo',
     'saldo pendiente general',
     'cuanto deben todos los edificios',
     'deuda de todos los edificios',
+    'deuda de todos los condominios',
     'deuda administracion',
-    'deuda condominio',
     'deuda total de todo',
     'cuanto deben todos',
     'morosidad global',
@@ -126,8 +125,26 @@ describe('AssistantQueryPlanService', () => {
   });
 
   it.each([
-    ['deuda de este mes del condominio', 'current_month'],
-    ['deuda acumulada del condominio', 'accumulated'],
+    'deuda del condominio',
+    'deuda del condominio completo',
+    'deuda total del condominio',
+    'deuda del edificio',
+    'deuda del building',
+  ])('maps "%s" to building_debt', (phrase) => {
+    const plan = service.createPlan(phrase);
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+    }));
+  });
+
+  it.each([
+    ['deuda de este mes de la administracion', 'current_month'],
+    ['deuda acumulada de la administracion', 'accumulated'],
     ['deuda total de este mes', 'current_month'],
   ])('preserves tenant debt period for "%s"', (phrase, expectedPeriod) => {
     const plan = service.createPlan(phrase);
@@ -139,11 +156,21 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.period).toBe(expectedPeriod);
   });
 
-  it('does not fall back to building_debt for tenant-wide debt phrases', () => {
-    const plan = service.createPlan('deuda total de la administracion');
+  it('preserves current month for building debt on a condominio phrase', () => {
+    const plan = service.createPlan('deuda del mes actual del condominio');
 
-    expect(plan?.intent).toBe('tenant_debt');
-    expect(plan?.scope).toBe('tenant');
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      scope: 'building',
+    }));
+    expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+  });
+
+  it('does not fall back to tenant_debt for condominio phrases', () => {
+    const plan = service.createPlan('deuda del condominio');
+
+    expect(plan?.intent).toBe('building_debt');
+    expect(plan?.scope).toBe('building');
     expect(plan?.filters.buildingAlias).toBeUndefined();
     expect(plan?.filters.buildingToken).toBeUndefined();
   });

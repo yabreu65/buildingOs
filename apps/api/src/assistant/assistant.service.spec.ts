@@ -2464,12 +2464,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(result).toBeNull();
     });
 
-    it('resuelve deuda global del condominio como tenant debt', async () => {
-      mockQueryExecutors.execute.mockResolvedValue({
-        answer: 'La administración tiene una deuda pendiente total de ARS 10.270,15.',
-        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
-      });
-
+    it('pide aclaración cuando la deuda es de un condominio sin edificio concreto', async () => {
       const result = await (service as any).tryResolveStrictOperationalQuestion(
         'tenant-1',
         'deuda condominio',
@@ -2478,13 +2473,8 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('administración');
-      expect(mockQueryExecutors.execute).toHaveBeenCalledWith(expect.objectContaining({
-        tenantId: 'tenant-1',
-        userId: 'admin-user',
-        userRoles: ADMIN_ROLES,
-        plan: expect.objectContaining({ executor: 'tenant_debt' }),
-      }));
+      expect(result.answer).toContain('condominio o edificio');
+      expect(mockQueryExecutors.execute).not.toHaveBeenCalled();
     });
 
     it('asks for clarification when debt scope is ambiguous', async () => {

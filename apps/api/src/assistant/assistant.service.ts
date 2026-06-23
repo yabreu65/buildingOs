@@ -1635,6 +1635,13 @@ export class AssistantService implements OnModuleInit {
       }
     }
 
+    if (debtInterpretation.scope === 'building' && !this.queryParser.extractBuildingToken(message)) {
+      return {
+        answer: '¿De cuál condominio o edificio quieres consultar la deuda?',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
     if (debtInterpretation.scope === 'ambiguous') {
       return {
         answer: '¿Te referís a una unidad, un edificio o a la administración?',

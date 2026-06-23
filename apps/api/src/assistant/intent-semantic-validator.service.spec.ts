@@ -87,36 +87,41 @@ describe('IntentSemanticValidatorService', () => {
     });
   });
 
-  it('overrides building debt to tenant debt for global debt wording', async () => {
+  it('asks for clarification when condominio debt has no building context', async () => {
     const result = await service.evaluate({
-      userText: 'deuda condominio',
-      deterministicPlan: {
-        intent: 'building_debt',
-        module: 'payments',
-        scope: 'building',
-        requiredPermission: 'payments.review',
-        executor: 'building_debt',
-        filters: {},
-        confidence: 0.9,
-        source: 'deterministic_rules',
-      },
-      extractedIntent: {
-        intent: 'building_debt',
+      userText: 'deuda del condominio',
+      deterministicPlan: buildPlan({ filters: {} }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'tenant_debt',
         entity: { type: 'building' },
-        filters: {},
-        confidence: 0.9,
-        source: 'deterministic',
-        llmProvider: 'none',
-        requiresClarification: false,
-        missingFields: [],
-      },
+      }),
       assistantContext: {},
     });
 
     expect(result).toEqual({
+      status: 'needs_clarification',
+      reason: 'building_scope_missing_context',
+      question: '¿De cuál condominio/edificio quieres consultar la deuda?',
+    });
+  });
+
+  it('overrides tenant_debt to building_debt when condominio resolves in context', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda del condominio',
+      deterministicPlan: buildPlan({ filters: {} }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'tenant_debt',
+        entity: { type: 'building' },
+      }),
+      assistantContext: {
+        buildingId: 'demo-B',
+      },
+    });
+
+    expect(result).toEqual({
       status: 'override_suggested',
-      reason: 'global_debt_scope',
-      intentOverride: 'tenant_debt',
+      reason: 'building_debt_scope',
+      intentOverride: 'building_debt',
       entityOverride: {
         type: 'building',
         buildingAlias: undefined,
