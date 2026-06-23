@@ -32,6 +32,9 @@ export interface AiProviderContext {
 }
 
 export interface AiProvider {
+  /**
+   * Generate a chat response for the given message and context.
+   */
   chat(
     message: string,
     context: AiProviderContext,
