@@ -61,9 +61,9 @@ interface OptionalPlanChangeRequestDelegate {
   create?: (args: Prisma.PlanChangeRequestCreateArgs) => Promise<PlanChangeRequest>;
 }
 
-type PrismaWithOptionalPlanChangeRequest = PrismaService & {
+interface PrismaWithOptionalPlanChangeRequest {
   planChangeRequest?: OptionalPlanChangeRequestDelegate;
-};
+}
 
 @Injectable()
 export class AiNudgesService {
@@ -76,6 +76,9 @@ export class AiNudgesService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Resolves the active tenant for the current user.
+   */
   resolveTenantId(user: UserLike, requestedTenantId?: string): string {
     const memberships = user.memberships ?? [];
     if (requestedTenantId) {
@@ -95,6 +98,9 @@ export class AiNudgesService {
     );
   }
 
+  /**
+   * Returns the active AI nudges for the current tenant.
+   */
   async getActiveNudges(user: UserLike, tenantId: string): Promise<AiNudge[]> {
     const membership = await this.getMembership(user.id, tenantId);
     const month = getCurrentMonth();
@@ -340,6 +346,9 @@ export class AiNudgesService {
     return nudges.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
   }
 
+  /**
+   * Dismisses a nudge for the current user and tenant.
+   */
   async dismissNudge(
     user: UserLike,
     tenantId: string,
@@ -382,6 +391,9 @@ export class AiNudgesService {
     };
   }
 
+  /**
+   * Creates or returns a pending AI-driven plan upgrade request.
+   */
   async createRecommendedUpgradeRequest(
     user: UserLike,
     tenantId: string,
@@ -661,7 +673,8 @@ export class AiNudgesService {
   }
 
   private getOptionalPlanChangeRequestDelegate(): OptionalPlanChangeRequestDelegate | undefined {
-    const prismaWithOptionalPlanChangeRequest = this.prisma as PrismaWithOptionalPlanChangeRequest;
+    const prismaWithOptionalPlanChangeRequest = this.prisma as PrismaService &
+      PrismaWithOptionalPlanChangeRequest;
 
     return prismaWithOptionalPlanChangeRequest.planChangeRequest;
   }
