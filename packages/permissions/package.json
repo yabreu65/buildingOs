@@ -9,5 +9,8 @@
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@buildingos/contracts": "workspace:*"
   }
 }
