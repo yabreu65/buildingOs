@@ -120,6 +120,8 @@ jobs:
         run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
+          PORT: 3000
+          NEXT_PUBLIC_API_URL: http://localhost:4000
 
       - name: Stop API server
         if: always()
