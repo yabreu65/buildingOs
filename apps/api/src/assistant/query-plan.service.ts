@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AssistantDebtIntentInterpreter } from './debt-intent-interpreter';
 import { AssistantQueryParser } from './query-parser/assistant-query-parser';
 import { AssistantSemanticLayerService } from './semantic-layer.service';
 import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.types';
@@ -6,6 +7,7 @@ import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.type
 @Injectable()
 export class AssistantQueryPlanService {
   private readonly parser = new AssistantQueryParser();
+  private readonly debtInterpreter = new AssistantDebtIntentInterpreter();
 
   constructor(private readonly semanticLayer: AssistantSemanticLayerService) {}
 
@@ -14,11 +16,17 @@ export class AssistantQueryPlanService {
    */
   createPlan(message: string): AssistantQueryPlan | null {
     const normalized = this.normalize(message);
+    if (this.hasWriteIntentSignal(normalized)) {
+      return null;
+    }
+
     const parsedUnitToken = this.parser.parseUnitReference(message);
     const buildingToken = this.parser.extractBuildingToken(message);
     const extractedFilters = this.extractCommonFilters(normalized);
     const personName = this.extractPersonName(message, normalized);
     const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
+    const debtInterpretation = this.debtInterpreter.interpret(message);
+    const tenantDebtPeriod = this.extractTenantDebtPeriod(normalized);
 
     const hasExplicitUnitSyntax =
       /\b(unidad|apartamento|departamento|depto|apto|local|cochera|garage)\b/.test(normalized) ||
@@ -60,16 +68,22 @@ export class AssistantQueryPlanService {
       };
     }
 
-    const tenantIntent = this.pickTenantDebtIntent(normalized);
-    if (tenantIntent && (!buildingToken || this.isGenericBuildingToken(buildingToken))) {
-      const definition = this.semanticLayer.getDefinition(tenantIntent);
+    if (debtInterpretation.scope === 'tenant') {
+      const definition = this.semanticLayer.getDefinition('tenant_debt');
       return {
         ...definition,
-        executor: tenantIntent,
-        filters: { ...extractedFilters },
+        executor: 'tenant_debt',
+        filters: {
+          ...extractedFilters,
+          ...(tenantDebtPeriod ? { period: tenantDebtPeriod } : {}),
+        },
         confidence: 0.9,
         source: 'deterministic_rules',
       };
+    }
+
+    if (debtInterpretation.scope === 'ambiguous' && debtInterpretation.hasDebtSignal) {
+      return null;
     }
 
     const buildingIntent = this.pickBuildingIntent(normalized);
@@ -160,40 +174,31 @@ export class AssistantQueryPlanService {
     return null;
   }
 
-  private pickTenantDebtIntent(normalized: string): AssistantQueryIntent | null {
-    if (
-      this.hasAny(normalized, [
-        'deuda de la administracion',
-        'deuda total de la administracion',
-        'deuda de la administracion total',
-        'deuda del condominio completo',
-        'saldo pendiente general',
-        'cuanto deben todos los edificios',
-        'cuanto deben todos los inmuebles',
-        'deuda de todos los edificios',
-        'deuda general',
-        'deuda global',
-        'deuda total administracion',
-        'portfolio debt',
-        'administration debt',
-        'admin debt',
-        'tenant debt',
-        'general debt',
-        'administration_debt',
-        'portfolio_debt',
-      ])
-    ) {
-      return 'tenant_debt';
-    }
-    return null;
-  }
-
-  private isGenericBuildingToken(token: string): boolean {
-    return this.hasAny(token, ['completo', 'general', 'global', 'total', 'todos', 'administracion', 'administración']);
-  }
-
   private hasAny(value: string, needles: string[]): boolean {
     return needles.some((needle) => value.includes(needle));
+  }
+
+  private hasWriteIntentSignal(normalized: string): boolean {
+    const writeVerbPattern = /\b(anular|cancelar|crear|editar|eliminar|borrar|registrar|cargar|subir|marcar)\b/;
+    const writeTargetPattern = /\b(pago|pagos|gasto|gastos|egreso|egresos|comprobante|comprobantes|recibo|recibos|pagado|pagada|pagados|pagadas)\b/;
+
+    if (writeVerbPattern.test(normalized) && writeTargetPattern.test(normalized)) {
+      return true;
+    }
+
+    if (/\bmarcar\b/.test(normalized) && /\bpagad[oa]s?\b/.test(normalized)) {
+      return true;
+    }
+
+    if (/\b(anular|cancelar)\b/.test(normalized) && /\b(pago|pagos|comprobante|comprobantes)\b/.test(normalized)) {
+      return true;
+    }
+
+    if (/\b(crear|editar|eliminar|borrar|registrar|cargar|subir)\b/.test(normalized) && /\b(gasto|gastos|egreso|egresos|pago|pagos|comprobante|comprobantes)\b/.test(normalized)) {
+      return true;
+    }
+
+    return false;
   }
 
   private normalize(value: string): string {
@@ -232,6 +237,18 @@ export class AssistantQueryPlanService {
       ...filters,
       ...amountFilters,
     };
+  }
+
+  private extractTenantDebtPeriod(normalized: string): string | undefined {
+    if (normalized.includes('este mes') || normalized.includes('mes actual') || normalized.includes('del mes actual')) {
+      return 'current_month';
+    }
+
+    if (/acumulad[ao]s?/.test(normalized) || /hist[oó]ric[ao]s?/.test(normalized) || /\btoda\b/.test(normalized) || /\btodo\b/.test(normalized)) {
+      return 'accumulated';
+    }
+
+    return undefined;
   }
 
   private extractPeriod(normalized: string): string | undefined {

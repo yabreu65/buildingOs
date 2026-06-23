@@ -2463,6 +2463,41 @@ describe('AssistantService - Strict Operational Questions', () => {
 
       expect(result).toBeNull();
     });
+
+    it('resuelve deuda global del condominio como tenant debt', async () => {
+      mockQueryExecutors.execute.mockResolvedValue({
+        answer: 'La administración tiene una deuda pendiente total de ARS 10.270,15.',
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+      });
+
+      const result = await (service as any).tryResolveStrictOperationalQuestion(
+        'tenant-1',
+        'deuda condominio',
+        ADMIN_ROLES,
+        'admin-user',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result.answer).toContain('administración');
+      expect(mockQueryExecutors.execute).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-1',
+        userId: 'admin-user',
+        userRoles: ADMIN_ROLES,
+        plan: expect.objectContaining({ executor: 'tenant_debt' }),
+      }));
+    });
+
+    it('asks for clarification when debt scope is ambiguous', async () => {
+      const result = await (service as any).tryResolveStrictOperationalQuestion(
+        'tenant-1',
+        'deuda',
+        ADMIN_ROLES,
+        'admin-user',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result.answer).toContain('unidad, un edificio o a la administración');
+    });
   });
 
   // ============================================================

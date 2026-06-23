@@ -15,6 +15,7 @@ import type { Permission } from '../rbac/permissions';
 import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { AssistantDebtIntentInterpreter } from './debt-intent-interpreter';
 import {
   SuggestedActionType,
   SuggestedAction,
@@ -200,6 +201,7 @@ export class AssistantService implements OnModuleInit {
   private readonly _queryPlanner: QueryPlannerService;
   private readonly _queryExecutor: QueryExecutorService;
   private readonly _responseFormatter: ResponseFormatterService;
+  private readonly debtIntentInterpreter = new AssistantDebtIntentInterpreter();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1624,6 +1626,22 @@ export class AssistantService implements OnModuleInit {
     userRoles: string[],
     userId?: string,
   ): Promise<ChatResponse | null> {
+    const debtInterpretation = this.debtIntentInterpreter.interpret(message);
+
+    if (debtInterpretation.scope === 'tenant') {
+      const response = await this.tryResolveStrictTenantDebtQuestion(tenantId, userRoles, userId);
+      if (response) {
+        return response;
+      }
+    }
+
+    if (debtInterpretation.scope === 'ambiguous') {
+      return {
+        answer: '¿Te referís a una unidad, un edificio o a la administración?',
+        suggestedActions: [{ type: 'VIEW_REPORTS', payload: {} }],
+      };
+    }
+
     // Building-level queries first (when no unit is specified)
     const buildingChecks = [
       this.tryResolveStrictBuildingDebtQuestion(tenantId, message, userRoles, userId),
@@ -2356,6 +2374,34 @@ export class AssistantService implements OnModuleInit {
       answer: `El edificio ${building.name} no tiene deuda pendiente. Todas las unidades están al día.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
+  }
+
+  private async tryResolveStrictTenantDebtQuestion(
+    tenantId: string,
+    userRoles: string[],
+    userId?: string,
+  ): Promise<ChatResponse | null> {
+    if (!this.canAccessOperationalData(userRoles)) {
+      return null;
+    }
+
+    const response = await this.queryExecutors.execute({
+      tenantId,
+      userId: userId ?? '',
+      userRoles,
+      plan: {
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        requiredPermission: 'payments.review',
+        executor: 'tenant_debt',
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      },
+    });
+
+    return response;
   }
 
   private async tryResolveStrictBuildingTicketsQuestion(

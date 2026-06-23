@@ -86,12 +86,33 @@ describe('AssistantQueryPlanService', () => {
   });
 
   it.each([
+    'anular pago',
+    'cancelar pago',
+    'crear gasto',
+    'editar gasto',
+    'eliminar gasto',
+    'borrar gasto',
+    'marcar apartamento 101 como pagado',
+    'registrar pago apartamento 101 por 50000',
+    'subir comprobante',
+    'cargar comprobante',
+  ])('rejects write phrase "%s"', (phrase) => {
+    expect(service.createPlan(phrase)).toBeNull();
+  });
+
+  it.each([
     'deuda de la administracion',
     'deuda total de la administracion',
     'deuda del condominio completo',
     'saldo pendiente general',
     'cuanto deben todos los edificios',
     'deuda de todos los edificios',
+    'deuda administracion',
+    'deuda condominio',
+    'deuda total de todo',
+    'cuanto deben todos',
+    'morosidad global',
+    'saldo general',
   ])('maps "%s" to tenant_debt', (phrase) => {
     const plan = service.createPlan(phrase);
 
@@ -102,6 +123,20 @@ describe('AssistantQueryPlanService', () => {
       requiredPermission: 'payments.review',
       executor: 'tenant_debt',
     }));
+  });
+
+  it.each([
+    ['deuda de este mes del condominio', 'current_month'],
+    ['deuda acumulada del condominio', 'accumulated'],
+    ['deuda total de este mes', 'current_month'],
+  ])('preserves tenant debt period for "%s"', (phrase, expectedPeriod) => {
+    const plan = service.createPlan(phrase);
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'tenant_debt',
+      scope: 'tenant',
+    }));
+    expect(plan?.filters.period).toBe(expectedPeriod);
   });
 
   it('does not fall back to building_debt for tenant-wide debt phrases', () => {
@@ -115,6 +150,18 @@ describe('AssistantQueryPlanService', () => {
 
   it('returns null for non-allowlisted or ambiguous questions', () => {
     expect(service.createPlan('hola como estas')).toBeNull();
+    expect(service.createPlan('deuda')).toBeNull();
+  });
+
+  it.each([
+    'cuanto se cobro hoy',
+    'recaudacion del mes',
+    'ingresos del condominio',
+  ])('does not classify "%s" as debt', (phrase) => {
+    const plan = service.createPlan(phrase);
+
+    expect(plan?.intent).not.toBe('tenant_debt');
+    expect(plan?.intent).not.toBe('building_debt');
   });
 
   it('detects building-level intent without explicit building token', () => {

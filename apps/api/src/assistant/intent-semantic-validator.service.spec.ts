@@ -83,7 +83,60 @@ describe('IntentSemanticValidatorService', () => {
 
     expect(result).toEqual({
       status: 'accepted',
-      reason: 'non_building_debt',
+      reason: 'global_debt_scope',
+    });
+  });
+
+  it('overrides building debt to tenant debt for global debt wording', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda condominio',
+      deterministicPlan: {
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      },
+      extractedIntent: {
+        intent: 'building_debt',
+        entity: { type: 'building' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      },
+      assistantContext: {},
+    });
+
+    expect(result).toEqual({
+      status: 'override_suggested',
+      reason: 'global_debt_scope',
+      intentOverride: 'tenant_debt',
+      entityOverride: {
+        type: 'building',
+        buildingAlias: undefined,
+        unitCode: undefined,
+      },
+    });
+  });
+
+  it('asks for scope clarification when the debt question is ambiguous', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda',
+      deterministicPlan: buildPlan(),
+      extractedIntent: buildExtractedIntent(),
+      assistantContext: {},
+    });
+
+    expect(result).toEqual({
+      status: 'needs_clarification',
+      reason: 'debt_scope_ambiguous',
+      question: '¿Te referís a una unidad, un edificio o a la administración?',
     });
   });
 
