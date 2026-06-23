@@ -179,8 +179,8 @@ export class AssistantQueryPlanService {
   }
 
   private hasWriteIntentSignal(normalized: string): boolean {
-    const writeVerbPattern = /\b(anular|cancelar|crear|editar|eliminar|borrar|registrar|cargar|subir|marcar)\b/;
-    const writeTargetPattern = /\b(pago|pagos|gasto|gastos|egreso|egresos|comprobante|comprobantes|recibo|recibos|pagado|pagada|pagados|pagadas)\b/;
+    const writeVerbPattern = /\b(anular|cancelar|crear|editar|eliminar|borrar|registrar|cargar|subir|marcar|actualizar|modificar|cambiar|dar de baja|agregar|anadir)\b/;
+    const writeTargetPattern = /\b(pago|pagos|gasto|gastos|egreso|egresos|comprobante|comprobantes|recibo|recibos|pagado|pagada|pagados|pagadas|deuda|deudas|saldo|saldos|cobro|cobros|cobranza|cobranzas|ticket|tickets|reclamo|reclamos|documento|documentos|unidad|unidades|edificio|edificios|moroso|morosos|administracion|condominio)\b/;
 
     if (writeVerbPattern.test(normalized) && writeTargetPattern.test(normalized)) {
       return true;
@@ -207,13 +207,6 @@ export class AssistantQueryPlanService {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .trim();
-  }
-
-  private hasWriteIntentSignal(normalized: string): boolean {
-    const writeVerbPattern = /\b(crear|agregar|anadir|editar|actualizar|modificar|eliminar|borrar|registrar|cargar|subir|cambiar|dar de baja)\b/;
-    const financeTargetPattern = /\b(pago|pagos|deuda|deudas|saldo|saldos|cobro|cobros|cobranza|cobranzas|ticket|tickets|reclamo|reclamos|documento|documentos|unidad|unidades|edificio|edificios|moroso|morosos|administracion|condominio)\b/;
-
-    return writeVerbPattern.test(normalized) && financeTargetPattern.test(normalized);
   }
 
   private extractCommonFilters(normalized: string): AssistantQueryPlan['filters'] {
