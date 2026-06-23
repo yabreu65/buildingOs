@@ -61,6 +61,7 @@ import { buildingPaymentsIntent } from './intent-engine/allowed-intents/building
 import { buildingStatsIntent } from './intent-engine/allowed-intents/building-stats.intent';
 import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.intent';
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
+import type { IntentSemanticValidationResult } from './intent-semantic-validator.service';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
   'expenses_summary',
@@ -615,7 +616,7 @@ export class AssistantService implements OnModuleInit {
       sessionId,
     );
     const shouldUsePendingClarification =
-      !!pendingClarification && this.isClarificationFollowUpAnswer(request.message);
+      !!pendingClarification && this.isClarificationFollowUpAnswer(request.message, pendingClarification);
     let usedPendingClarification = false;
 
     // Build context for intent extraction
@@ -851,6 +852,7 @@ export class AssistantService implements OnModuleInit {
         this.createPendingClarificationContext(
           extractedIntent,
           clarificationResolvedEntities,
+          this.resolveClarificationMissingFields(semanticValidation, extractedIntent),
           semanticValidation.question,
         ),
       );
@@ -919,6 +921,7 @@ export class AssistantService implements OnModuleInit {
         this.createPendingClarificationContext(
           extractedIntent,
           clarificationResolvedEntities,
+          this.resolveClarificationMissingFields(undefined, extractedIntent),
           `Necesito más contexto para responder con precisión (${missing}).`,
         ),
       );
@@ -1404,21 +1407,64 @@ export class AssistantService implements OnModuleInit {
     return null;
   }
 
-  private isClarificationFollowUpAnswer(message: string): boolean {
+  private isClarificationFollowUpAnswer(
+    message: string,
+    pendingClarification: PendingClarificationContext,
+  ): boolean {
     const normalized = message
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-    return (
-      normalized.includes('este mes') ||
-      normalized.includes('mes actual') ||
-      /^acumulad[ao]s?\b/.test(normalized) ||
-      /^historic[ao]s?\b/.test(normalized) ||
-      /^historica\b/.test(normalized) ||
-      /^toda\b/.test(normalized)
-    );
+    const expectsPeriod = pendingClarification.missingFields.includes('period');
+    const expectsBuilding = pendingClarification.missingFields.includes('building');
+
+    if (expectsPeriod) {
+      return (
+        normalized.includes('este mes') ||
+        normalized.includes('mes actual') ||
+        /^acumulad[ao]s?\b/.test(normalized) ||
+        /^historic[ao]s?\b/.test(normalized) ||
+        /^historica\b/.test(normalized) ||
+        /^toda\b/.test(normalized)
+      );
+    }
+
+    if (expectsBuilding) {
+      return (
+        Boolean(this.queryParser.extractBuildingToken(message)) ||
+        /^(?:torre|edificio|bloque|condominio|building)?\s*[a-z0-9]{1,3}$/i.test(normalized)
+      );
+    }
+
+    return false;
+  }
+
+  private inferEntityFromFollowUp(message: string): Partial<ExtractedIntent['entity']> {
+    const normalized = message
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+    const buildingToken = this.queryParser.extractBuildingToken(message);
+    if (buildingToken) {
+      return {
+        type: 'building',
+        buildingAlias: buildingToken,
+      };
+    }
+
+    const aliasMatch = normalized.match(/^(?:torre|edificio|bloque|condominio|building)?\s*([a-z0-9]{1,3})$/i);
+    if (aliasMatch?.[1]) {
+      return {
+        type: 'building',
+        buildingAlias: aliasMatch[1].toUpperCase(),
+      };
+    }
+
+    return {};
   }
 
   private inferFiltersFromFollowUp(message: string): ExtractedIntent['filters'] {
@@ -1468,9 +1514,13 @@ export class AssistantService implements OnModuleInit {
     pendingClarification: PendingClarificationContext,
     message: string,
   ): ExtractedIntent {
+    const inferredEntity = this.inferEntityFromFollowUp(message);
     return {
       intent: pendingClarification.intent,
-      entity: pendingClarification.entity,
+      entity: {
+        ...pendingClarification.entity,
+        ...inferredEntity,
+      },
       filters: {
         ...pendingClarification.filters,
         ...this.inferFiltersFromFollowUp(message),
@@ -1529,6 +1579,29 @@ export class AssistantService implements OnModuleInit {
     return resolvedEntities;
   }
 
+  private resolveClarificationMissingFields(
+    semanticValidation: IntentSemanticValidationResult | undefined,
+    extractedIntent: ExtractedIntent,
+  ): string[] {
+    if (semanticValidation?.reason === 'building_scope_missing_context') {
+      return ['building'];
+    }
+
+    if (
+      semanticValidation?.reason === 'period_ambiguous' ||
+      semanticValidation?.reason === 'period_signal_missing' ||
+      semanticValidation?.reason === 'explicit_accumulated_debt'
+    ) {
+      return ['period'];
+    }
+
+    if (extractedIntent.missingFields && extractedIntent.missingFields.length > 0) {
+      return extractedIntent.missingFields;
+    }
+
+    return ['period'];
+  }
+
   private async resolveClarificationContext(
     extractedIntent: ExtractedIntent,
     contextResolvedEntities: EntityResolution | undefined,
@@ -1572,6 +1645,7 @@ export class AssistantService implements OnModuleInit {
   private createPendingClarificationContext(
     extractedIntent: ExtractedIntent,
     resolvedEntities: EntityResolution | undefined,
+    missingFields: string[] | undefined,
     question?: string,
   ): PendingClarificationContext {
     return {
@@ -1579,9 +1653,11 @@ export class AssistantService implements OnModuleInit {
       entity: extractedIntent.entity,
       filters: extractedIntent.filters,
       missingFields:
-        extractedIntent.missingFields && extractedIntent.missingFields.length > 0
-          ? extractedIntent.missingFields
-          : ['period'],
+        missingFields && missingFields.length > 0
+          ? missingFields
+          : extractedIntent.missingFields && extractedIntent.missingFields.length > 0
+            ? extractedIntent.missingFields
+            : ['period'],
       question,
       resolvedEntityIds: {
         buildingId: resolvedEntities?.building?.id,

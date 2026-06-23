@@ -370,6 +370,103 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
     });
 
+    it.each(['torre A', 'edificio A', 'A'])(
+      'rehidrata aclaración pendiente para "%s" usando el período acumulado ya confirmado',
+      async (followUpMessage) => {
+        mockConversationContext.getContext.mockResolvedValue([]);
+        mockConversationContext.getLastResolved.mockResolvedValue({});
+        mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+        mockConversationContext.getPendingClarification.mockResolvedValue({
+          intent: 'building_debt',
+          entity: { type: 'building' },
+          filters: { period: 'accumulated' },
+          missingFields: ['building'],
+          question: 'Necesito que me indiques el edificio/torre para esa consulta.',
+        });
+        mockIntentRegistry.has.mockReturnValue(true);
+        mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+        mockEntityResolver.resolveBuilding.mockResolvedValue({
+          building: { id: 'demo-A', name: 'Torre A', alias: 'A' },
+          alternatives: [],
+        });
+        mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+          intent: intent.intent,
+          entityIds: {
+            buildingId: resolved.building?.id,
+            unitId: resolved.unit?.id,
+            personId: resolved.person?.id,
+          },
+          filters: intent.filters,
+          pagination: { limit: 20 },
+        }));
+        mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 474568, currency: 'ARS' });
+        mockResponseFormatter.formatV2.mockReturnValue({
+          type: 'kpi',
+          title: 'Deuda',
+          summary: 'Deuda total: ARS 4.745,68',
+          meta: {},
+        });
+
+        await service.chatV2(
+          'tenant-1',
+          'user-1',
+          'membership-1',
+          { message: followUpMessage, page: 'charges', conversationId: 'conv-1' },
+          ADMIN_ROLES,
+        );
+
+        expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+          expect.objectContaining({
+            intent: 'building_debt',
+            filters: expect.objectContaining({ period: 'accumulated' }),
+          }),
+          expect.objectContaining({
+            building: expect.objectContaining({ id: 'demo-A', alias: 'A' }),
+          }),
+        );
+        expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-A' }) }),
+          'tenant-1',
+          'user-1',
+          ADMIN_ROLES,
+        );
+      },
+    );
+
+    it('preserva el período cuando un follow-up de edificio no se puede resolver', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockConversationContext.getPendingClarification.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building' },
+        filters: { period: 'accumulated' },
+        missingFields: ['building'],
+        question: 'Necesito que me indiques el edificio/torre para esa consulta.',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockEntityResolver.resolveBuilding.mockResolvedValue(null);
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: 'No encontré el edificio/torre "torre inexistente". ¿Podés elegir uno de estos: ...?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'torre inexistente', page: 'charges', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
+    });
+
     it.each(['histórica', 'toda'])(
       'rehidrata aclaración pendiente para "%s" sin perder el edificio original',
       async (followUpMessage) => {
