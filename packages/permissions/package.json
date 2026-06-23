@@ -5,9 +5,12 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "lint": "tsc --noEmit -p tsconfig.lint.json",
+    "typecheck": "tsc --noEmit -p tsconfig.lint.json"
+  },
+  "dependencies": {
+    "@buildingos/contracts": "file:../contracts"
   }
 }

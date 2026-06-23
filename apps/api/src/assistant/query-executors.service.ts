@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { UnitOccupantRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FinanzasService } from '../finanzas/finanzas.service';
 import { AssistantQueryParser, UnitToken } from './query-parser/assistant-query-parser';
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantUnitResolverService, ResolvedUnit } from './unit-resolver/assistant-unit-resolver.service';
-import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
-import { AssistantTenantDebtService } from './tenant-debt.service';
 import type { ChatResponse } from './ai.types';
 import type { AssistantQueryExecutionContext } from './query-plan.types';
 
@@ -17,8 +16,7 @@ export class AssistantQueryExecutorsService {
     private readonly prisma: PrismaService,
     private readonly policy: AssistantPolicyEnforcerService,
     private readonly unitResolver: AssistantUnitResolverService,
-    private readonly debtCalculator: AssistantDebtCalculatorService,
-    private readonly tenantDebtService: AssistantTenantDebtService,
+    private readonly finanzasService: FinanzasService,
   ) {}
 
   /**
@@ -128,17 +126,16 @@ export class AssistantQueryExecutorsService {
       unitId: resolved.unit.id,
     });
 
-    const [tenant, charges] = await Promise.all([
-      this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
-      this.prisma.charge.findMany({
-        where: { tenantId: context.tenantId, unitId: resolved.unit.id, canceledAt: null },
-        include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
-      }),
-    ]);
-
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
-
-    const amountText = this.formatMoney(outstanding, tenant.currency);
+    const ledger = await this.finanzasService.getUnitLedger(
+      context.tenantId,
+      resolved.unit.id,
+      undefined,
+      undefined,
+      context.userRoles,
+      context.userId,
+    );
+    const outstanding = ledger.totals.balance;
+    const amountText = this.formatMoney(outstanding, ledger.totals.currency);
     return this.response(
       outstanding > 0
         ? `La unidad ${resolved.displayCode} (${resolved.building.name}) tiene una deuda pendiente de ${amountText}.`
@@ -284,19 +281,16 @@ export class AssistantQueryExecutorsService {
       buildingId: building.id,
     });
 
-    const [tenant, charges] = await Promise.all([
-      this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
-      this.prisma.charge.findMany({
-        where: { tenantId: context.tenantId, buildingId: building.id, canceledAt: null },
-        include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
-      }),
-    ]);
-
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
+    const summary = await this.finanzasService.getBuildingFinancialSummary(
+      context.tenantId,
+      building.id,
+      context.plan.filters.period,
+    );
+    const outstanding = summary.totalOutstanding;
     return {
       answer: outstanding > 0
-        ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, tenant.currency)}.`
-        : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, tenant.currency)}.`,
+        ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, summary.currency)}.`
+        : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, summary.currency)}.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
@@ -309,11 +303,12 @@ export class AssistantQueryExecutorsService {
       plan: context.plan,
     });
 
-    const tenantDebt = await this.tenantDebtService.resolveTenantDebtSummary(context.tenantId);
+    const tenantDebt = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
+    const totalDebt = tenantDebt.totalOutstanding;
     return {
-      answer: tenantDebt.totalDebt > 0
-        ? `La administración tiene una deuda pendiente total de ${this.formatMoney(tenantDebt.totalDebt, tenantDebt.currency)}.`
-        : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(tenantDebt.totalDebt, tenantDebt.currency)}.`,
+      answer: totalDebt > 0
+        ? `La administración tiene una deuda pendiente total de ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
+        : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
     };
   }
@@ -332,47 +327,25 @@ export class AssistantQueryExecutorsService {
       buildingId: building.id,
     });
 
-    const [tenant, units] = await Promise.all([
-      this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
-      this.prisma.unit.findMany({
-        where: { tenantId: context.tenantId, buildingId: building.id },
-        select: { id: true, code: true, label: true },
-      }),
-    ]);
+    const summary = await this.finanzasService.getBuildingFinancialSummary(
+      context.tenantId,
+      building.id,
+      context.plan.filters.period,
+    );
 
-    const unitIds = units.map((unit) => unit.id);
-    const charges = await this.prisma.charge.findMany({
-      where: { tenantId: context.tenantId, unitId: { in: unitIds }, canceledAt: null },
-      include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
-    });
-
-    const debtByUnit = new Map<string, number>();
-    for (const charge of charges) {
-      const debt = this.debtCalculator.calculateChargeOutstanding(charge);
-      debtByUnit.set(charge.unitId, (debtByUnit.get(charge.unitId) ?? 0) + debt);
-    }
-
-    const topDebtors = Array.from(debtByUnit.entries())
-      .filter(([, debt]) => debt > 0)
-      .sort(([, left], [, right]) => right - left)
-      .slice(0, 10);
-
-    if (topDebtors.length === 0) {
+    if (summary.delinquentUnitsCount === 0) {
       return {
         answer: `El edificio ${building.name} no tiene unidades con deuda pendiente. Todas las unidades están al día.`,
         suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
       };
     }
 
-    const debtorList = topDebtors.map(([unitId, debt], index) => {
-      const unit = units.find((item) => item.id === unitId);
-      const unitLabel = unit ? (unit.label || unit.code) : 'Desconocida';
-      return `${index + 1}. ${unitLabel}: ${this.formatMoney(debt, tenant.currency)}`;
+    const debtorList = summary.topDelinquentUnits.map((unit, index) => {
+      return `${index + 1}. ${unit.unitLabel}: ${this.formatMoney(unit.outstanding, summary.currency)}`;
     }).join('\n');
-    const totalDebt = topDebtors.reduce((sum, [, debt]) => sum + debt, 0);
 
     return {
-      answer: `Top deudores del edificio ${building.name} (deuda total: ${this.formatMoney(totalDebt, tenant.currency)}):\n${debtorList}`,
+      answer: `Top deudores del edificio ${building.name} (deuda total: ${this.formatMoney(summary.totalOutstanding, summary.currency)}):\n${debtorList}`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
@@ -506,19 +479,15 @@ export class AssistantQueryExecutorsService {
       buildingId: building.id,
     });
 
-    const [tenant, units, openTickets, totalTickets, charges] = await Promise.all([
+    const [tenant, units, openTickets, totalTickets, summary] = await Promise.all([
       this.prisma.tenant.findUniqueOrThrow({ where: { id: context.tenantId }, select: { currency: true } }),
       this.prisma.unit.findMany({ where: { tenantId: context.tenantId, buildingId: building.id }, select: { id: true } }),
       this.prisma.ticket.count({ where: { tenantId: context.tenantId, buildingId: building.id, status: 'OPEN' } }),
       this.prisma.ticket.count({ where: { tenantId: context.tenantId, buildingId: building.id } }),
-      this.prisma.charge.findMany({
-        where: { tenantId: context.tenantId, buildingId: building.id, canceledAt: null },
-        include: { paymentAllocations: { include: { payment: { select: { status: true } } } } },
-      }),
+      this.finanzasService.getBuildingFinancialSummary(context.tenantId, building.id, context.plan.filters.period),
     ]);
 
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
-
+    const outstanding = summary.totalOutstanding;
     const averageDebt = units.length > 0 ? Math.round(outstanding / units.length) : 0;
     return {
       answer: `Estadísticas del edificio ${building.name}:\n- Unidades: ${units.length}\n- Tickets abiertos: ${openTickets} de ${totalTickets} totales\n- Deuda total: ${this.formatMoney(outstanding, tenant.currency)}\n- Deuda promedio por unidad: ${this.formatMoney(averageDebt, tenant.currency)}`,

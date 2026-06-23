@@ -1,7 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { PaymentStatus } from '@prisma/client';
 import { AssistantReadOnlyQueryService } from './read-only-query.service';
-import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantReadOnlyQueryService', () => {
   const previousApiKeys = process.env.ASSISTANT_READONLY_API_KEYS;
@@ -37,42 +35,41 @@ describe('AssistantReadOnlyQueryService', () => {
       },
     } as any;
 
-    const tenantDebtService = {
-      resolveTenantDebtSummary: jest.fn(),
+    const finanzasService = {
+      getTenantFinancialSummary: jest.fn(),
+      listPendingPayments: jest.fn(),
+      getPaymentMetrics: jest.fn(),
     };
 
     const service = new AssistantReadOnlyQueryService(
       prisma,
-      new AssistantDebtCalculatorService(),
-      tenantDebtService as never,
+      finanzasService as never,
     );
-    return { service, prisma, tenantDebtService };
+    return { service, prisma, finanzasService };
   };
 
   it('maps legacy intents to canonical intent and executes one resolver', async () => {
-    const { service, prisma } = makeService();
+    const { service, prisma, finanzasService } = makeService();
 
     prisma.membership.findUnique.mockResolvedValue({
       roles: [{ role: 'TENANT_ADMIN' }],
     });
-    prisma.charge.findMany.mockResolvedValue([
-      {
-        id: 'c-1',
-        unitId: 'u-1',
-        amount: 10000,
-        paymentAllocations: [
-          {
-            amount: 2500,
-            payment: { status: PaymentStatus.APPROVED },
-          },
-        ],
-        unit: {
-          id: 'u-1',
-          label: 'A-101',
-          building: { name: 'Torre Norte' },
+    finanzasService.getTenantFinancialSummary.mockResolvedValue({
+      totalCharges: 10000,
+      totalPaid: 2500,
+      totalOutstanding: 7500,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [
+        {
+          unitId: 'u-1',
+          unitLabel: 'A-101',
+          buildingId: 'b-1',
+          buildingName: 'Torre Norte',
+          outstanding: 7500,
         },
-      },
-    ]);
+      ],
+      currency: 'ARS',
+    });
 
     const result = await service.execute(
       {
@@ -95,8 +92,8 @@ describe('AssistantReadOnlyQueryService', () => {
     expect(result.answerSource).toBe('live_data');
     expect(result.metadata.intentCode).toBe('GET_OVERDUE_UNITS');
     expect(result.responseType).toBe('list');
-    expect(prisma.charge.findMany).toHaveBeenCalledTimes(1);
-    expect(prisma.payment.count).not.toHaveBeenCalled();
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1');
+    expect(prisma.charge.findMany).not.toHaveBeenCalled();
   });
 
   it('blocks tenant spoofing mismatch between headers and body context', async () => {
@@ -190,15 +187,18 @@ describe('AssistantReadOnlyQueryService', () => {
   });
 
   it('resolves tenant_debt aliases to the tenant-wide debt resolver', async () => {
-    const { service, prisma, tenantDebtService } = makeService();
+    const { service, prisma, finanzasService } = makeService();
 
     prisma.membership.findUnique.mockResolvedValue({
       roles: [{ role: 'TENANT_ADMIN' }],
     });
-    tenantDebtService.resolveTenantDebtSummary.mockResolvedValue({
-      totalDebt: 474568,
+    finanzasService.getTenantFinancialSummary.mockResolvedValue({
+      totalCharges: 600000,
+      totalPaid: 125432,
+      totalOutstanding: 474568,
+      delinquentUnitsCount: 18,
+      topDelinquentUnits: [],
       currency: 'ARS',
-      chargeCount: 18,
     });
 
     const result = await service.execute(
@@ -219,7 +219,7 @@ describe('AssistantReadOnlyQueryService', () => {
       },
     );
 
-    expect(tenantDebtService.resolveTenantDebtSummary).toHaveBeenCalledWith('tenant-1');
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1');
     expect(result.metadata.intentCode).toBe('GET_TENANT_DEBT');
     expect(result.responseType).toBe('summary');
     expect(result.answer).toContain('Deuda total de la administración');

@@ -16,6 +16,8 @@ module.exports = {
   testEnvironment: 'node',
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/$1',
+    '^@buildingos/contracts$': '<rootDir>/../../../packages/contracts/src/index.ts',
+    '^@buildingos/permissions$': '<rootDir>/../../../packages/permissions/src/index.ts',
   },
   testTimeout: 10000,
   globals: {

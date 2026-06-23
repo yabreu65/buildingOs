@@ -32,6 +32,8 @@ jobs:
       S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
       S3_FORCE_PATH_STYLE: true
       MAIL_PROVIDER: none
+      FEATURE_PORTAL_RESIDENT: "true"
+      FEATURE_PAYMENTS_MVP: "true"
       PORT: 4000
 
     services:
@@ -120,6 +122,8 @@ jobs:
         run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
+          PORT: 3000
+          NEXT_PUBLIC_API_URL: http://localhost:4000
 
       - name: Stop API server
         if: always()

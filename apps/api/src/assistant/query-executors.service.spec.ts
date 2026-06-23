@@ -1,7 +1,6 @@
 import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import type { AssistantQueryPlan } from './query-plan.types';
-import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantQueryExecutorsService', () => {
   const prisma = {
@@ -16,7 +15,11 @@ describe('AssistantQueryExecutorsService', () => {
   };
   const policy = { assertCanExecute: jest.fn() };
   const unitResolver = { resolve: jest.fn() };
-  const tenantDebtService = { resolveTenantDebtSummary: jest.fn() };
+  const finanzasService = {
+    getUnitLedger: jest.fn(),
+    getBuildingFinancialSummary: jest.fn(),
+    getTenantFinancialSummary: jest.fn(),
+  };
   let service: AssistantQueryExecutorsService;
 
   const resolvedUnit = {
@@ -31,8 +34,7 @@ describe('AssistantQueryExecutorsService', () => {
       prisma as never,
       policy as never,
       unitResolver as never,
-      new AssistantDebtCalculatorService(),
-      tenantDebtService as never,
+      finanzasService as never,
     );
     unitResolver.resolve.mockResolvedValue({ resolved: resolvedUnit, errorResponse: null });
     policy.assertCanExecute.mockResolvedValue(undefined);
@@ -50,15 +52,12 @@ describe('AssistantQueryExecutorsService', () => {
       source: 'deterministic_rules',
     };
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
-    prisma.charge.findMany.mockResolvedValue([
-      {
-        amount: 100000,
-        paymentAllocations: [
-          { amount: 25000, payment: { status: PaymentStatus.APPROVED } },
-          { amount: 30000, payment: { status: PaymentStatus.SUBMITTED } },
-        ],
+    finanzasService.getUnitLedger.mockResolvedValue({
+      totals: {
+        balance: 75000,
+        currency: 'ARS',
       },
-    ]);
+    });
 
     const result = await service.execute({
       tenantId: 'tenant-1',
@@ -74,9 +73,14 @@ describe('AssistantQueryExecutorsService', () => {
       unitId: 'unit-1',
       plan,
     }));
-    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 'tenant-1', unitId: 'unit-1', canceledAt: null },
-    }));
+    expect(finanzasService.getUnitLedger).toHaveBeenCalledWith(
+      'tenant-1',
+      'unit-1',
+      undefined,
+      undefined,
+      ['OPERATOR'],
+      'operator-1',
+    );
     expect(result?.answer).toContain('deuda pendiente');
     expect(result?.suggestedActions[0].type).toBe('VIEW_PAYMENTS');
   });
@@ -149,20 +153,19 @@ describe('AssistantQueryExecutorsService', () => {
     };
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
-    prisma.charge.findMany.mockResolvedValue([
-      {
-        amount: 150000,
-        unitId: 'unit-1',
-        paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.RECONCILED } }],
-      },
-    ]);
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 50000,
+      totalOutstanding: 100000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
 
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 
     expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ buildingId: 'building-1' }));
-    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 'tenant-1', buildingId: 'building-1', canceledAt: null },
-    }));
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith('tenant-1', 'building-1', undefined);
     expect(result?.answer).toContain('deuda pendiente total');
   });
 
@@ -177,18 +180,53 @@ describe('AssistantQueryExecutorsService', () => {
       confidence: 0.9,
       source: 'deterministic_rules',
     };
-    tenantDebtService.resolveTenantDebtSummary.mockResolvedValue({
-      totalDebt: 15801,
+    finanzasService.getTenantFinancialSummary.mockResolvedValue({
+      totalCharges: 30000,
+      totalPaid: 14199,
+      totalOutstanding: 15801,
+      delinquentUnitsCount: 2,
+      topDelinquentUnits: [],
       currency: 'ARS',
-      chargeCount: 12,
     });
 
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 
     expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', plan }));
-    expect(tenantDebtService.resolveTenantDebtSummary).toHaveBeenCalledWith('tenant-1');
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1');
     expect(result?.answer).toContain('administración');
     expect(result?.suggestedActions[0].type).toBe('VIEW_PAYMENTS');
+  });
+
+  it('executes building_delinquents through finance summary source of truth', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_delinquents',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_delinquents',
+      filters: { buildingToken: 'A' },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 200000,
+      totalPaid: 50000,
+      totalOutstanding: 150000,
+      delinquentUnitsCount: 2,
+      topDelinquentUnits: [
+        { unitId: 'unit-1', unitLabel: 'Unidad 0101', buildingId: 'building-1', buildingName: 'Edificio A', outstanding: 90000 },
+        { unitId: 'unit-2', unitLabel: 'Unidad 0202', buildingId: 'building-1', buildingName: 'Edificio A', outstanding: 60000 },
+      ],
+      currency: 'ARS',
+    });
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith('tenant-1', 'building-1', undefined);
+    expect(result?.answer).toContain('Top deudores');
+    expect(result?.answer).toContain('Unidad 0101');
+    expect(prisma.charge.findMany).not.toHaveBeenCalled();
   });
 
   it('executes building_payments and resolves payment unit labels inside the same tenant', async () => {
@@ -207,6 +245,14 @@ describe('AssistantQueryExecutorsService', () => {
       { id: 'payment-1', amount: 100000, currency: 'ARS', status: PaymentStatus.APPROVED, method: 'TRANSFER', paidAt: new Date('2026-05-01'), createdAt: new Date(), unitId: 'unit-1' },
     ]);
     prisma.unit.findMany.mockResolvedValue([{ id: 'unit-1', code: '0101', label: 'Unidad 0101' }]);
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 100000,
+      totalOutstanding: 50000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
 
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 
@@ -233,6 +279,14 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     prisma.ticket.count.mockResolvedValue(1);
     prisma.ticket.findMany.mockResolvedValue([{ id: 'ticket-1', title: 'Ascensor', status: 'OPEN', priority: 'HIGH', unitId: null, createdAt: new Date() }]);
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 160000,
+      totalPaid: 90000,
+      totalOutstanding: 70000,
+      delinquentUnitsCount: 2,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
 
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 

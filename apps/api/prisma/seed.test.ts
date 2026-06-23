@@ -292,6 +292,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenantA.id,
+      alias: "A",
       name: "Torre A Test",
       address: "Av. Test 1234, Ciudad A",
     },
@@ -302,6 +303,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenantA.id,
+      alias: "B",
       name: "Torre B Test",
       address: "Calle Test 567, Ciudad A",
     },
@@ -312,6 +314,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenantB.id,
+      alias: "A",
       name: "Edificio Test B",
       address: "Av. Demo 999, Ciudad B",
     },
