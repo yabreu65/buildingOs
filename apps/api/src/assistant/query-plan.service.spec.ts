@@ -164,6 +164,14 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.intent).not.toBe('building_debt');
   });
 
+  it.each([
+    'crear pago de la unidad A-0101',
+    'actualizar deuda del edificio B',
+    'eliminar ticket del Edificio Norte',
+  ])('blocks write-intent finance phrases like "%s"', (phrase) => {
+    expect(service.createPlan(phrase)).toBeNull();
+  });
+
   it('detects building-level intent without explicit building token', () => {
     const plan = service.createPlan('Hay alguien que este tardando en pagar el mantenimiento');
 

@@ -209,6 +209,13 @@ export class AssistantQueryPlanService {
       .trim();
   }
 
+  private hasWriteIntentSignal(normalized: string): boolean {
+    const writeVerbPattern = /\b(crear|agregar|anadir|editar|actualizar|modificar|eliminar|borrar|registrar|cargar|subir|cambiar|dar de baja)\b/;
+    const financeTargetPattern = /\b(pago|pagos|deuda|deudas|saldo|saldos|cobro|cobros|cobranza|cobranzas|ticket|tickets|reclamo|reclamos|documento|documentos|unidad|unidades|edificio|edificios|moroso|morosos|administracion|condominio)\b/;
+
+    return writeVerbPattern.test(normalized) && financeTargetPattern.test(normalized);
+  }
+
   private extractCommonFilters(normalized: string): AssistantQueryPlan['filters'] {
     const filters: AssistantQueryPlan['filters'] = {};
 
