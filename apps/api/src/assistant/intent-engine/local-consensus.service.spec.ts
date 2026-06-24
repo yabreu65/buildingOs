@@ -102,6 +102,58 @@ describe('AssistantLocalConsensusService', () => {
     expect(requestBody.format).toBeDefined();
   });
 
+  it('hardens the tenant_debt prompt against building aliases', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: {
+          content: JSON.stringify({
+            intent: 'tenant_debt',
+            scope: 'tenant',
+            entity: {
+              buildingAlias: null,
+              unitAlias: null,
+            },
+            period: {
+              kind: 'current_month',
+              month: 6,
+              year: 2026,
+              offset: 0,
+              amount: null,
+              unit: 'month',
+              mode: 'including_current',
+            },
+            confidence: 0.99,
+            requiresClarification: false,
+            missingFields: [],
+          }),
+        },
+      }),
+    });
+
+    await service.evaluate(
+      'deuda de la administracion',
+      {
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        requiredPermission: 'payments.review',
+        executor: 'tenant_debt',
+        filters: { period: 'accumulated' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      },
+      {
+        buildingId: 'building-A',
+      },
+    );
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body ?? '{}');
+    const prompt = requestBody.messages?.[0]?.content ?? '';
+    expect(prompt).toContain('For tenant_debt, entity.buildingAlias and entity.unitAlias must always be null.');
+    expect(prompt).toContain('For tenant_debt without an explicit period, default to accumulated debt.');
+  });
+
   it('uses the configured Ollama timeout when provided', async () => {
     process.env.AI_OLLAMA_TIMEOUT_MS = '30000';
     service = new AssistantLocalConsensusService();
@@ -204,26 +256,26 @@ describe('AssistantLocalConsensusService', () => {
     expect(result.modelPlan?.period.kind).toBe('current_month');
   });
 
-  it('marks tenant_debt with building scope as semantically invalid', async () => {
+  it('normalizes tenant_debt aliases when buildingId is present and keeps consensus', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
         message: {
           content: JSON.stringify({
             intent: 'tenant_debt',
-            scope: 'building',
+            scope: 'tenant',
             entity: {
-              buildingAlias: 'A',
+              buildingAlias: 'building-A',
               unitAlias: null,
             },
             period: {
-              kind: 'current_month',
-              month: 6,
-              year: 2026,
-              offset: 0,
+              kind: 'accumulated',
+              month: null,
+              year: null,
+              offset: null,
               amount: null,
-              unit: 'month',
-              mode: 'including_current',
+              unit: null,
+              mode: 'unknown',
             },
             confidence: 0.92,
             requiresClarification: false,
@@ -234,15 +286,30 @@ describe('AssistantLocalConsensusService', () => {
     });
 
     const result = await service.evaluate(
-      'dame la deuda del mes que está corriendo del edificio A',
-      buildDeterministicPlan(),
-      {},
+      'deuda de la administracion',
+      {
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        requiredPermission: 'payments.review',
+        executor: 'tenant_debt',
+        filters: {
+          period: 'accumulated',
+        },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      },
+      {
+        buildingId: 'building-A',
+      },
     );
 
-    expect(result.consensus).toBe(false);
-    expect(result.mismatchReason).toBe('model_intent_scope_conflict');
-    expect(result.modelValid).toBe(false);
-    expect(result.modelInvalidReason).toBe('model_intent_scope_conflict');
+    expect(result.consensus).toBe(true);
+    expect(result.mismatchReason).toBeUndefined();
+    expect(result.modelValid).toBe(true);
+    expect(result.modelInvalidReason).toBeUndefined();
+    expect(result.modelPlan?.entity.buildingAlias).toBeNull();
+    expect(result.modelPlan?.period.kind).toBe('accumulated');
   });
 
   it('asks for clarification when the local model marks the query as incomplete', async () => {

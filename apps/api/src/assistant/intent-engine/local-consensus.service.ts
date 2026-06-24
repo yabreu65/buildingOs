@@ -135,7 +135,7 @@ export class AssistantLocalConsensusService {
 
     try {
       const modelPlan = await this.callOllama(message, context);
-      const normalizedModelPlan = this.normalizeModelPlan(modelPlan);
+      const normalizedModelPlan = this.normalizeModelPlan(modelPlan, deterministicConsensusPlan);
       const modelValidation = this.validateModelPlan(normalizedModelPlan);
       if (!modelValidation.valid) {
         const invalidReason = modelValidation.reason ?? 'model_semantic_invalid';
@@ -306,6 +306,9 @@ export class AssistantLocalConsensusService {
       'You NEVER answer the user, calculate debt, query databases, or invent business data.',
       'Return only valid JSON matching the provided schema.',
       'Use tenant_debt for administration/global debt questions.',
+      'For tenant_debt, entity.buildingAlias and entity.unitAlias must always be null.',
+      'Never use buildingId from context to populate tenant_debt aliases.',
+      'For tenant_debt without an explicit period, default to accumulated debt.',
       'Use building_debt for building/condominio/edificio debt questions.',
       'Use unit_debt for apartment/unit debt questions.',
       'Use scope tenant/building/unit to match the intent.',
@@ -395,7 +398,7 @@ export class AssistantLocalConsensusService {
       };
     }
 
-    if (!this.periodsAreCompatible(deterministic.period, model.period)) {
+    if (!this.periodsAreCompatible(deterministic.period, model.period, deterministic.intent)) {
       return {
         consensus: false,
         mismatchReason: 'period',
@@ -490,12 +493,23 @@ export class AssistantLocalConsensusService {
   private periodsAreCompatible(
     deterministic: AssistantConsensusModelPlan['period'],
     model: AssistantConsensusModelPlan['period'],
+    intent?: AssistantConsensusIntent,
   ): boolean {
     if (deterministic.kind === model.kind) {
       return true;
     }
 
     if (deterministic.kind === 'unknown' || model.kind === 'unknown') {
+      return true;
+    }
+
+    if (
+      intent === 'tenant_debt' &&
+      (
+        (deterministic.kind === 'accumulated' && model.kind === 'current_month') ||
+        (deterministic.kind === 'current_month' && model.kind === 'accumulated')
+      )
+    ) {
       return true;
     }
 
@@ -710,20 +724,45 @@ export class AssistantLocalConsensusService {
     };
   }
 
-  private normalizeModelPlan(model: AssistantConsensusModelPlan): AssistantConsensusModelPlan {
-    if (model.period.kind !== 'relative_range') {
-      return model;
-    }
-
-    const normalizedMissingFields = this.normalizeRelativeRangeMissingFields(model);
-    if (normalizedMissingFields.length === model.missingFields.length && normalizedMissingFields.every((item, index) => item === model.missingFields[index])) {
-      return model;
-    }
-
-    return {
+  private normalizeModelPlan(
+    model: AssistantConsensusModelPlan,
+    deterministicPlan: AssistantConsensusModelPlan,
+  ): AssistantConsensusModelPlan {
+    const normalized: AssistantConsensusModelPlan = {
       ...model,
-      missingFields: normalizedMissingFields,
+      entity: {
+        buildingAlias: model.intent === 'tenant_debt' || model.scope === 'tenant'
+          ? null
+          : model.entity.buildingAlias,
+        unitAlias: model.intent === 'tenant_debt' || model.scope === 'tenant'
+          ? null
+          : model.entity.unitAlias,
+      },
     };
+
+    if (normalized.period.kind === 'relative_range') {
+      normalized.missingFields = this.normalizeRelativeRangeMissingFields(normalized);
+    }
+
+    if (
+      deterministicPlan.intent === 'tenant_debt' &&
+      deterministicPlan.period.kind === 'accumulated' &&
+      normalized.intent === 'tenant_debt' &&
+      normalized.scope === 'tenant' &&
+      normalized.period.kind === 'current_month'
+    ) {
+      normalized.period = {
+        kind: 'accumulated',
+        month: null,
+        year: null,
+        offset: null,
+        amount: null,
+        unit: null,
+        mode: 'unknown',
+      };
+    }
+
+    return normalized;
   }
 
   private normalizeRelativeRangeMissingFields(model: AssistantConsensusModelPlan): string[] {

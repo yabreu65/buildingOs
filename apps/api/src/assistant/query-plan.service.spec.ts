@@ -122,6 +122,7 @@ describe('AssistantQueryPlanService', () => {
       requiredPermission: 'payments.review',
       executor: 'tenant_debt',
     }));
+    expect(plan?.filters.period).toBe('accumulated');
   });
 
   it.each([
@@ -154,6 +155,11 @@ describe('AssistantQueryPlanService', () => {
       intent: 'tenant_debt',
       scope: 'tenant',
     }));
+    if (expectedPeriod === 'current_month') {
+      expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+      return;
+    }
+
     expect(plan?.filters.period).toBe(expectedPeriod);
   });
 

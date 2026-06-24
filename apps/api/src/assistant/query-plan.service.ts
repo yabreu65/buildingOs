@@ -80,7 +80,7 @@ export class AssistantQueryPlanService {
         ? this.mergeRelativeRangePeriod(extractedFilters, canonicalPeriod)
         : {
             ...extractedFilters,
-            ...(tenantDebtPeriod ? { period: tenantDebtPeriod } : {}),
+            period: extractedFilters.period ?? tenantDebtPeriod ?? 'accumulated',
           };
       return {
         ...definition,
