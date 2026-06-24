@@ -34,6 +34,11 @@ export interface PendingPaymentListItem extends Payment {
   proofDocumentId?: string | null;
 }
 
+export interface BuildingFinancialSummaryPeriodFilter {
+  period?: string;
+  periods?: string[];
+}
+
 @Injectable()
 export class FinanzasService {
   private readonly logger = new Logger(FinanzasService.name);
@@ -1084,7 +1089,7 @@ export class FinanzasService {
   async getBuildingFinancialSummary(
     tenantId: string,
     buildingId: string,
-    period?: string,
+    period?: string | BuildingFinancialSummaryPeriodFilter,
   ): Promise<FinancialSummaryDto> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
@@ -1105,8 +1110,12 @@ export class FinanzasService {
       canceledAt: null,
     };
 
-    if (period) {
+    if (typeof period === 'string') {
       where.period = period;
+    } else if (period?.periods?.length) {
+      where.period = { in: period.periods };
+    } else if (period?.period) {
+      where.period = period.period;
     }
 
     // 2. Get all charges and allocations
@@ -1582,7 +1591,7 @@ export class FinanzasService {
    */
   async getTenantFinancialSummary(
     tenantId: string,
-    period?: string,
+    period?: string | BuildingFinancialSummaryPeriodFilter,
   ): Promise<FinancialSummaryDto> {
     // Load tenant to get currency
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
@@ -1595,8 +1604,12 @@ export class FinanzasService {
       tenantId,
       canceledAt: null,
     };
-    if (period) {
+    if (typeof period === 'string') {
       chargeWhere.period = period;
+    } else if (period?.periods?.length) {
+      chargeWhere.period = { in: period.periods };
+    } else if (period?.period) {
+      chargeWhere.period = period.period;
     }
 
     // 2. Get all charges (aggregate by status, sum amounts)

@@ -32,6 +32,7 @@ import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import { PeriodResolverService } from './period-resolver.service';
 import { CircuitBreaker } from './providers/circuit-breaker';
 import { AiProviderModule, AI_PROVIDER_TOKEN } from './providers/ai-provider.module';
 import { resolveAiProvider } from './providers/ai-provider.resolver';
@@ -41,6 +42,7 @@ const aiOptions = resolveAiProvider();
 // Intent Engine services
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { AssistantLocalConsensusService } from './intent-engine/local-consensus.service';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
@@ -153,10 +155,12 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
     AssistantDebtCalculatorService,
+    PeriodResolverService,
     AssistantTenantDebtService,
     // Intent Engine services
     IntentRegistry,
     IntentExtractorService,
+    AssistantLocalConsensusService,
     FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,
@@ -186,9 +190,11 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
     AssistantPolicyEnforcerService,
     AssistantQueryExecutorsService,
     AssistantDebtCalculatorService,
+    PeriodResolverService,
     AssistantTenantDebtService,
     IntentRegistry,
     IntentExtractorService,
+    AssistantLocalConsensusService,
     FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,

@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AssistantDebtIntentInterpreter } from './debt-intent-interpreter';
+import { PeriodNormalizerService } from './period-normalizer.service';
+import type { CanonicalFinancePeriod } from './finance-period.types';
 import { AssistantQueryParser } from './query-parser/assistant-query-parser';
 import { AssistantSemanticLayerService } from './semantic-layer.service';
 import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.types';
@@ -8,6 +10,7 @@ import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.type
 export class AssistantQueryPlanService {
   private readonly parser = new AssistantQueryParser();
   private readonly debtInterpreter = new AssistantDebtIntentInterpreter();
+  private readonly periodNormalizer = new PeriodNormalizerService();
 
   constructor(private readonly semanticLayer: AssistantSemanticLayerService) {}
 
@@ -22,11 +25,13 @@ export class AssistantQueryPlanService {
 
     const parsedUnitToken = this.parser.parseUnitReference(message);
     const buildingToken = this.parser.extractBuildingToken(message);
+    const buildingReference = this.extractBuildingReference(message);
     const extractedFilters = this.extractCommonFilters(normalized);
     const personName = this.extractPersonName(message, normalized);
     const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
     const debtInterpretation = this.debtInterpreter.interpret(message);
     const tenantDebtPeriod = this.extractTenantDebtPeriod(normalized);
+    const canonicalPeriod = this.periodNormalizer.normalize(message);
 
     const hasExplicitUnitSyntax =
       /\b(unidad|apartamento|departamento|depto|apto|local|cochera|garage)\b/.test(normalized) ||
@@ -61,6 +66,7 @@ export class AssistantQueryPlanService {
           unitCodeRaw: unitToken.unitCodeRaw,
           buildingAlias: unitToken.buildingAlias,
           buildingName: unitToken.buildingName,
+          ...(buildingReference ? { buildingAlias: buildingReference.alias ?? buildingReference.name, buildingName: buildingReference.name } : {}),
           ...extractedFilters,
         },
         confidence: 0.92,
@@ -70,13 +76,16 @@ export class AssistantQueryPlanService {
 
     if (debtInterpretation.scope === 'tenant') {
       const definition = this.semanticLayer.getDefinition('tenant_debt');
+      const tenantPeriod = canonicalPeriod?.kind === 'relative_range'
+        ? this.mergeRelativeRangePeriod(extractedFilters, canonicalPeriod)
+        : {
+            ...extractedFilters,
+            ...(tenantDebtPeriod ? { period: tenantDebtPeriod } : {}),
+          };
       return {
         ...definition,
         executor: 'tenant_debt',
-        filters: {
-          ...extractedFilters,
-          ...(tenantDebtPeriod ? { period: tenantDebtPeriod } : {}),
-        },
+        filters: tenantPeriod,
         confidence: 0.9,
         source: 'deterministic_rules',
       };
@@ -111,7 +120,10 @@ export class AssistantQueryPlanService {
       return {
         ...definition,
         executor: buildingIntent,
-        filters: { ...extractedFilters },
+        filters: {
+          ...(buildingReference ? { buildingAlias: buildingReference.alias ?? buildingReference.name, buildingName: buildingReference.name } : {}),
+          ...this.mergeRelativeRangePeriod(extractedFilters, canonicalPeriod),
+        },
         confidence: 0.85,
         source: 'deterministic_rules',
       };
@@ -121,7 +133,12 @@ export class AssistantQueryPlanService {
     return {
       ...definition,
       executor: buildingIntent,
-      filters: { buildingToken, buildingAlias: buildingToken, ...extractedFilters },
+      filters: {
+        buildingToken,
+        buildingAlias: buildingReference?.alias ?? buildingToken,
+        ...(buildingReference?.name ? { buildingName: buildingReference.name } : {}),
+        ...this.mergeRelativeRangePeriod(extractedFilters, canonicalPeriod),
+      },
       confidence: 0.9,
       source: 'deterministic_rules',
     };
@@ -239,8 +256,22 @@ export class AssistantQueryPlanService {
     };
   }
 
+  private mergeRelativeRangePeriod(
+    filters: AssistantQueryPlan['filters'],
+    canonicalPeriod: CanonicalFinancePeriod | null,
+  ): AssistantQueryPlan['filters'] {
+    if (!canonicalPeriod || canonicalPeriod.kind !== 'relative_range') {
+      return filters;
+    }
+
+    return {
+      ...filters,
+      period: canonicalPeriod,
+    };
+  }
+
   private extractTenantDebtPeriod(normalized: string): string | undefined {
-    if (normalized.includes('este mes') || normalized.includes('mes actual') || normalized.includes('del mes actual')) {
+    if (this.isCurrentMonthAlias(normalized)) {
       return 'current_month';
     }
 
@@ -252,6 +283,11 @@ export class AssistantQueryPlanService {
   }
 
   private extractPeriod(normalized: string): string | undefined {
+    const canonical = this.periodNormalizer.normalize(normalized);
+    if (canonical?.kind === 'relative_range') {
+      return undefined;
+    }
+
     const direct = normalized.match(/\b(\d{4}-\d{2})\b/);
     if (direct?.[1]) {
       return direct[1];
@@ -306,7 +342,7 @@ export class AssistantQueryPlanService {
       }
     }
 
-    if (normalized.includes('este mes') || normalized.includes('mes actual')) {
+    if (this.isCurrentMonthAlias(normalized)) {
       return `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     }
 
@@ -315,7 +351,59 @@ export class AssistantQueryPlanService {
       return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
     }
 
+    if (/acumulad[ao]s?/.test(normalized) || /hist[oó]ric[ao]s?/.test(normalized) || /\btoda\b/.test(normalized) || /\btodo\b/.test(normalized)) {
+      return 'accumulated';
+    }
+
     return undefined;
+  }
+
+  private extractBuildingReference(message: string): { alias?: string; name?: string } | null {
+    const normalized = this.normalize(message);
+    const buildingMatch = normalized.match(
+      /\b(?:torre|edificio|bloque|condominio|building)\s+([a-z0-9]+(?:\s+[a-z0-9]+)*)/,
+    );
+
+    if (!buildingMatch?.[1]) {
+      return null;
+    }
+
+    const raw = buildingMatch[1].trim();
+    if (!raw) {
+      return null;
+    }
+
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    const trimmedTokens: string[] = [];
+    for (const token of tokens) {
+      if (this.isBuildingReferenceStopToken(token)) {
+        break;
+      }
+      trimmedTokens.push(token);
+    }
+
+    const normalizedReference = trimmedTokens.join(' ').trim();
+    if (!normalizedReference) {
+      return null;
+    }
+
+    if (/^[a-z0-9]{1,3}$/.test(normalizedReference)) {
+      return { alias: normalizedReference.toUpperCase() };
+    }
+
+    return {
+      alias: normalizedReference,
+      name: normalizedReference,
+    };
+  }
+
+  private isBuildingReferenceStopToken(token: string): boolean {
+    return (
+      /^(este|esta|estos|estas|actual|actuales|corriente|corrientes|en|curso|pasado|pasada|pasados|pasadas|ultimo|ultimos|último|últimos|acumulada|acumulado|historica|historico|histórica|histórico|total|toda|todo|deuda|deudas|saldo|pago|pagos|recaudacion|recaudación|ingreso|ingresos|documento|documentos|archivo|archivos|mes|meses|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|enero|febrero|marzo|abril|mayo)$/u.test(
+        token,
+      ) ||
+      /^\d{4}$/.test(token)
+    );
   }
 
   private extractMethod(normalized: string): string | undefined {
@@ -386,5 +474,27 @@ export class AssistantQueryPlanService {
       }
     }
     return undefined;
+  }
+
+  private isCurrentMonthAlias(normalized: string): boolean {
+    const isPastMonth =
+      normalized.includes('mes pasado') ||
+      normalized.includes('ultimo mes') ||
+      normalized.includes('último mes');
+
+    return (
+      !isPastMonth &&
+      (
+        normalized.includes('este mes') ||
+        normalized.includes('mes actual') ||
+        normalized.includes('mes en curso') ||
+        normalized.includes('mes corriente') ||
+        normalized.includes('mes que esta corriendo') ||
+        normalized.includes('del mes actual') ||
+        normalized.includes('del mes en curso') ||
+        normalized.includes('deuda del mes') ||
+        /\bdel mes\b/.test(normalized)
+      )
+    );
   }
 }

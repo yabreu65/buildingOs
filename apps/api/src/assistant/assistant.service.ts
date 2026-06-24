@@ -24,7 +24,9 @@ import {
   AiProviderContext,
   AiProviderStatus,
   StructuredResponse,
+  type AssistantConsensusPeriod,
 } from './ai.types';
+import type { AssistantConsensusEvaluation } from './ai.types';
 
 // Re-export types for backward compatibility
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
@@ -32,6 +34,7 @@ export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
 // Intent Engine imports
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { AssistantLocalConsensusService } from './intent-engine/local-consensus.service';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
 import { RedisConversationContextService } from './context/redis-conversation-context.service';
@@ -46,6 +49,7 @@ import {
 } from './intent-engine/intent.types';
 import { validateExtractedIntent } from './intent-engine/intent.schema';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
+import type { AssistantQueryPlan } from './query-plan.types';
 
 // Intent definitions
 import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
@@ -62,6 +66,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
 import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.intent';
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 import type { IntentSemanticValidationResult } from './intent-semantic-validator.service';
+import type { CanonicalFinancePeriod } from './finance-period.types';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
   'expenses_summary',
@@ -222,6 +227,7 @@ export class AssistantService implements OnModuleInit {
     // Intent Engine services injected
     private readonly intentRegistry: IntentRegistry,
     private readonly intentExtractor: IntentExtractorService,
+    private readonly localConsensusService: AssistantLocalConsensusService,
     private readonly entityResolver: EntityResolverService,
     private readonly ambiguityService: AmbiguityService,
     private readonly conversationContext: RedisConversationContextService,
@@ -676,82 +682,150 @@ export class AssistantService implements OnModuleInit {
         `[chatV2] Rehydrated pending clarification for intent: ${pendingClarification.intent}`,
       );
     } else {
-      try {
-        extractedIntent = await this.intentExtractor.extractIntent(
+      const localConsensusEnabled = this.localConsensusService.isEnabled();
+      const localConsensusEligible = Boolean(
+        deterministicPlan &&
+        ['tenant_debt', 'building_debt', 'unit_debt'].includes(deterministicPlan.intent),
+      );
+
+      if (localConsensusEnabled && localConsensusEligible) {
+        const consensusResult = await this.localConsensusService.evaluate(
           request.message,
+          deterministicPlan,
           contextForExtraction,
         );
-        if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
-          debugInfo.usedLLM = true;
-          if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
-            debugInfo.llmProvider = extractedIntent.llmProvider;
-            if (extractedIntent.llmProvider === 'opencode') {
-              debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
-              debugInfo.llmModel = 'qwen3.6-plus';
-            }
+
+        debugInfo.consensusMode = true;
+        debugInfo.usedLLM = consensusResult.usedLocalModel;
+        debugInfo.llmProvider = consensusResult.localProvider;
+        debugInfo.llmBaseUrl = consensusResult.localBaseUrl;
+        debugInfo.llmModel = consensusResult.localModel;
+        debugInfo.consensusResult = consensusResult.consensus
+          ? 'matched'
+          : consensusResult.mismatchReason === 'local_model_failed'
+            ? 'failed'
+            : 'mismatch';
+        debugInfo.consensusReason = consensusResult.mismatchReason;
+        debugInfo.llmReason = consensusResult.consensus
+          ? 'none'
+          : consensusResult.mismatchReason === 'local_model_failed'
+            ? 'local_model_failed'
+            : 'consensus_mismatch';
+
+        if (consensusResult.consensus && deterministicPlan) {
+          extractedIntent = this.buildExtractedIntentFromPlan(
+            this.mergeConsensusPlanWithModel(deterministicPlan, consensusResult.modelPlan),
+          );
+        } else if (
+          (consensusResult.mismatchReason === 'model_semantic_invalid' ||
+            consensusResult.mismatchReason === 'model_intent_scope_conflict') &&
+          deterministicPlan
+        ) {
+          if (this.isDeterministicPlanExecutable(deterministicPlan)) {
+            extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
           } else {
-            debugInfo.llmProvider = 'unknown';
+            extractedIntent = this.buildClarificationIntentFromConsensus(
+              deterministicPlan,
+              consensusResult,
+            );
           }
+        } else {
+          extractedIntent = this.buildClarificationIntentFromConsensus(
+            deterministicPlan,
+            consensusResult,
+          );
         }
-        this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
-      } catch (error) {
-        this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
-        // Fallback: use conversation context for follow-up questions
-        const isFollowUp = await this.detectFollowUp(
-          request.message,
-          conversationContext,
-          tenantId,
-          userId,
-          sessionId,
+        this.logger.log(
+          `[chatV2] Local consensus ${consensusResult.consensus ? 'matched' : 'mismatch'} for "${request.message}"`,
         );
-
-        if (isFollowUp) {
-          const lastTurn = conversationContext.length > 0
-            ? conversationContext[conversationContext.length - 1]
-            : null;
-
-          if (lastTurn?.resolvedEntities) {
-            contextResolvedEntities = lastTurn.resolvedEntities;
-
-            // Try to infer intent from the follow-up message using last context
-            let inferredIntent = this.inferIntentFromFollowUp(request.message);
-            const inferredFilters = this.inferFiltersFromFollowUp(request.message);
-
-            // Fallback: if we can't infer a new intent, reuse the last one
-            if (!inferredIntent) {
-              const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
-              if (lastIntent) {
-                inferredIntent = lastIntent;
-                this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+      } else {
+        try {
+          extractedIntent = await this.intentExtractor.extractIntent(
+            request.message,
+            contextForExtraction,
+          );
+          if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
+            debugInfo.usedLLM = true;
+            if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
+              debugInfo.llmProvider = extractedIntent.llmProvider;
+              if (extractedIntent.llmProvider === 'opencode') {
+                debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
+                debugInfo.llmModel = 'qwen3.6-plus';
               }
+            } else {
+              debugInfo.llmProvider = 'unknown';
             }
+          }
+          this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
+        } catch (error) {
+          this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
-            if (inferredIntent) {
-              extractedIntent = {
-                intent: inferredIntent,
-                entity: {
-                  type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
-                  buildingAlias: undefined,
-                  unitCode: undefined,
-                },
-                filters: inferredFilters,
-                confidence: 0.6,
-                source: 'hybrid',
-                requiresClarification: false,
-                missingFields: [],
-              };
-              debugInfo.usedLLM = false;
-              debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
-              this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+          if (deterministicPlan) {
+            extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
+            debugInfo.usedLLM = false;
+            debugInfo.llmReason = deterministicPlan.confidence >= 0.9 ? 'none' : 'low_confidence';
+            this.logger.warn(
+              `[chatV2] Falling back to deterministic plan after intent extraction failure: ${deterministicPlan.intent}`,
+            );
+          } else {
+          // Fallback: use conversation context for follow-up questions
+          const isFollowUp = await this.detectFollowUp(
+            request.message,
+            conversationContext,
+            tenantId,
+            userId,
+            sessionId,
+          );
+
+          if (isFollowUp) {
+            const lastTurn = conversationContext.length > 0
+              ? conversationContext[conversationContext.length - 1]
+              : null;
+
+            if (lastTurn?.resolvedEntities) {
+              contextResolvedEntities = lastTurn.resolvedEntities;
+
+              // Try to infer intent from the follow-up message using last context
+              let inferredIntent = this.inferIntentFromFollowUp(request.message);
+              const inferredFilters = this.inferFiltersFromFollowUp(request.message);
+
+              // Fallback: if we can't infer a new intent, reuse the last one
+              if (!inferredIntent) {
+                const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+                if (lastIntent) {
+                  inferredIntent = lastIntent;
+                  this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+                }
+              }
+
+              if (inferredIntent) {
+                extractedIntent = {
+                  intent: inferredIntent,
+                  entity: {
+                    type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
+                    buildingAlias: undefined,
+                    unitCode: undefined,
+                  },
+                  filters: inferredFilters,
+                  confidence: 0.6,
+                  source: 'hybrid',
+                  requiresClarification: false,
+                  missingFields: [],
+                };
+                debugInfo.usedLLM = false;
+                debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
+                this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+              } else {
+                throw new BadRequestException('Could not understand your message. Please rephrase.');
+              }
             } else {
               throw new BadRequestException('Could not understand your message. Please rephrase.');
             }
           } else {
             throw new BadRequestException('Could not understand your message. Please rephrase.');
           }
-        } else {
-          throw new BadRequestException('Could not understand your message. Please rephrase.');
+          }
         }
       }
     }
@@ -833,6 +907,7 @@ export class AssistantService implements OnModuleInit {
         buildingId: request.buildingId,
         unitId: request.unitId,
         financePeriod: request.financePeriod,
+        pendingClarification: shouldUsePendingClarification ? pendingClarification : undefined,
       },
     });
     debugInfo.semanticValidationStatus = semanticValidation.status;
@@ -854,6 +929,7 @@ export class AssistantService implements OnModuleInit {
           clarificationResolvedEntities,
           this.resolveClarificationMissingFields(semanticValidation, extractedIntent),
           semanticValidation.question,
+          this.extractCanonicalPeriod(deterministicPlan?.filters.period),
         ),
       );
       await this.storeConversationTurn(
@@ -906,8 +982,38 @@ export class AssistantService implements OnModuleInit {
       debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
     }
 
+    const canonicalRequestedPeriod = this.extractCanonicalPeriod(extractedIntent.filters.period);
+    if (
+      canonicalRequestedPeriod?.kind === 'relative_range' &&
+      semanticValidation.status === 'accepted' &&
+      extractedIntent.intent === 'building_debt'
+    ) {
+      const relativeRangeResponse = this.buildRelativeRangeAcknowledgementResponse(
+        extractedIntent,
+        canonicalRequestedPeriod,
+      );
+      if (debugEnabled) {
+        (relativeRangeResponse as StructuredResponse).debug = debugInfo;
+      }
+      await this.storeConversationTurn(
+        tenantId,
+        userId,
+        sessionId,
+        request.message,
+        contextResolvedEntities,
+        { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
+      );
+      if (usedPendingClarification) {
+        await this.conversationContext.clearPendingClarification(tenantId, userId, sessionId);
+      }
+      return relativeRangeResponse;
+    }
+
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
+      const clarificationMessage =
+        extractedIntent.clarificationMessage ||
+        `Necesito más contexto para responder con precisión (${missing}).`;
       const clarificationResolvedEntities = await this.resolveClarificationContext(
         extractedIntent,
         contextResolvedEntities,
@@ -922,7 +1028,9 @@ export class AssistantService implements OnModuleInit {
           extractedIntent,
           clarificationResolvedEntities,
           this.resolveClarificationMissingFields(undefined, extractedIntent),
-          `Necesito más contexto para responder con precisión (${missing}).`,
+          clarificationMessage,
+          this.extractCanonicalPeriod(extractedIntent.filters.period) ??
+            this.extractCanonicalPeriod(deterministicPlan?.filters.period),
         ),
       );
       await this.storeConversationTurn(
@@ -937,7 +1045,7 @@ export class AssistantService implements OnModuleInit {
         {
           isAmbiguous: true,
           alternatives: [],
-          clarificationMessage: `Necesito más contexto para responder con precisión (${missing}).`,
+          clarificationMessage,
         },
         'ambiguous',
         extractedIntent.confidence,
@@ -1382,10 +1490,11 @@ export class AssistantService implements OnModuleInit {
       .trim();
 
     // Map follow-up keywords to intents
-    if (/\bmes(es)?\b.*\bdeuda\b|\bdeuda\b.*\bmes(es)?\b/.test(normalized)) {
-      return 'unit_debt';
+    if (this.isPeriodClarificationReply(normalized)) {
+      return null;
     }
-    if (/\bmes(es)?\b.*\bdebe\b|\bdebe\b.*\bmes(es)?\b/.test(normalized)) {
+
+    if (/\bunidad\b|\bapartamento\b|\bdepto\b|\bdepartamento\b/.test(normalized) && /\bdeuda\b|\bdebe\b/.test(normalized)) {
       return 'unit_debt';
     }
     if (/\bticket(s)?\b/.test(normalized)) {
@@ -1418,12 +1527,16 @@ export class AssistantService implements OnModuleInit {
       .trim();
 
     const expectsPeriod = pendingClarification.missingFields.includes('period');
+    const expectsPeriodMode = pendingClarification.missingFields.includes('period.mode');
     const expectsBuilding = pendingClarification.missingFields.includes('building');
+
+    if (expectsPeriodMode) {
+      return this.isRelativeRangeModeFollowUp(normalized);
+    }
 
     if (expectsPeriod) {
       return (
-        normalized.includes('este mes') ||
-        normalized.includes('mes actual') ||
+        this.isCurrentMonthFollowUpAlias(normalized) ||
         /^acumulad[ao]s?\b/.test(normalized) ||
         /^historic[ao]s?\b/.test(normalized) ||
         /^historica\b/.test(normalized) ||
@@ -1467,14 +1580,37 @@ export class AssistantService implements OnModuleInit {
     return {};
   }
 
-  private inferFiltersFromFollowUp(message: string): ExtractedIntent['filters'] {
+  private inferFiltersFromFollowUp(
+    message: string,
+    pendingClarification?: PendingClarificationContext,
+  ): ExtractedIntent['filters'] {
     const normalized = message
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-    if (normalized.includes('este mes') || normalized.includes('mes actual')) {
+    if (pendingClarification?.period?.kind === 'relative_range') {
+      if (this.isIncludingCurrentRangeFollowUp(normalized)) {
+        return {
+          period: {
+            ...pendingClarification.period,
+            mode: 'including_current',
+          },
+        };
+      }
+
+      if (this.isClosedRangeFollowUp(normalized)) {
+        return {
+          period: {
+            ...pendingClarification.period,
+            mode: 'closed_months',
+          },
+        };
+      }
+    }
+
+    if (this.isCurrentMonthFollowUpAlias(normalized)) {
       return {
         period: new Date().toISOString().slice(0, 7),
       };
@@ -1523,13 +1659,266 @@ export class AssistantService implements OnModuleInit {
       },
       filters: {
         ...pendingClarification.filters,
-        ...this.inferFiltersFromFollowUp(message),
+        ...this.inferFiltersFromFollowUp(message, pendingClarification),
       },
       confidence: 0.85,
       source: 'hybrid',
       requiresClarification: false,
       missingFields: [],
     };
+  }
+
+  private buildExtractedIntentFromPlan(plan: AssistantQueryPlan): ExtractedIntent {
+    return {
+      intent: plan.intent,
+      entity: {
+        type: plan.scope === 'unit' ? 'unit' : 'building',
+        buildingAlias: plan.filters.buildingAlias ?? plan.filters.buildingToken,
+        unitCode: plan.filters.unitCode,
+        personName: plan.filters.personName,
+      },
+      filters: {
+        minAmount: plan.filters.minAmount,
+        maxAmount: plan.filters.maxAmount,
+        minDebt: plan.filters.minDebt,
+        period: plan.filters.period,
+        status: plan.filters.status,
+        method: plan.filters.method,
+        minAgeDays: plan.filters.minAgeDays,
+      },
+      confidence: plan.confidence,
+      source: 'hybrid',
+      llmProvider: 'none',
+      requiresClarification: false,
+      missingFields: [],
+    };
+  }
+
+  private mergeConsensusPlanWithModel(
+    deterministicPlan: AssistantQueryPlan,
+    modelPlan: AssistantConsensusEvaluation['modelPlan'],
+  ): AssistantQueryPlan {
+    if (!modelPlan) {
+      return deterministicPlan;
+    }
+
+    const mergedFilters: AssistantQueryPlan['filters'] = {
+      ...deterministicPlan.filters,
+    };
+
+    if (!mergedFilters.period) {
+      const mergedPeriod = this.resolveConsensusPeriod(modelPlan.period);
+      if (mergedPeriod) {
+        mergedFilters.period = mergedPeriod;
+      }
+    }
+
+    if (!mergedFilters.buildingAlias && modelPlan.entity.buildingAlias) {
+      mergedFilters.buildingAlias = modelPlan.entity.buildingAlias;
+    }
+
+    if (!mergedFilters.unitCode && modelPlan.entity.unitAlias) {
+      mergedFilters.unitCode = modelPlan.entity.unitAlias;
+    }
+
+    return {
+      ...deterministicPlan,
+      filters: mergedFilters,
+      confidence: Math.max(deterministicPlan.confidence, modelPlan.confidence ?? deterministicPlan.confidence),
+    };
+  }
+
+  private resolveConsensusPeriod(period: AssistantConsensusPeriod | null | undefined): string | undefined {
+    if (!period || period.kind === 'unknown') {
+      return undefined;
+    }
+
+    if (period.kind === 'accumulated') {
+      return 'accumulated';
+    }
+
+    if (period.kind === 'current_month') {
+      const current = new Date();
+      return current.toISOString().slice(0, 7);
+    }
+
+    if (period.kind === 'previous_month') {
+      const current = new Date();
+      const previous = new Date(current.getFullYear(), current.getMonth() - 1, 1);
+      return previous.toISOString().slice(0, 7);
+    }
+
+    if (period.kind === 'named_month' && period.year && period.month) {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    return undefined;
+  }
+
+  private isCurrentMonthFollowUpAlias(normalized: string): boolean {
+    const isPastMonth = normalized.includes('mes pasado') || normalized.includes('ultimo mes') || normalized.includes('último mes');
+
+    return (
+      !isPastMonth &&
+      (
+        normalized.includes('este mes') ||
+        normalized.includes('mes actual') ||
+        normalized.includes('mes en curso') ||
+        normalized.includes('mes corriente') ||
+        normalized.includes('mes que esta corriendo') ||
+        normalized.includes('mes que corre') ||
+        normalized.includes('del mes actual') ||
+        normalized.includes('del mes en curso') ||
+        normalized.includes('deuda del mes') ||
+        /\bdel mes\b/.test(normalized)
+      )
+    );
+  }
+
+  private isPeriodClarificationReply(normalized: string): boolean {
+    return this.isCurrentMonthFollowUpAlias(normalized) ||
+      /^acumulad[ao]s?\b/.test(normalized) ||
+      /^historic[ao]s?\b/.test(normalized) ||
+      /^historica\b/.test(normalized) ||
+      /^toda\b/.test(normalized);
+  }
+
+  private buildClarificationIntentFromConsensus(
+    deterministicPlan: AssistantQueryPlan | null,
+    consensusResult: AssistantConsensusEvaluation,
+  ): ExtractedIntent {
+    const intent = deterministicPlan?.intent ?? 'unknown';
+    const entityType = deterministicPlan?.scope === 'unit' ? 'unit' : 'building';
+    const missingFields = this.resolveConsensusMissingFields(consensusResult, deterministicPlan);
+
+    return {
+      intent,
+      entity: {
+        type: entityType,
+        buildingAlias: deterministicPlan?.filters.buildingAlias ?? deterministicPlan?.filters.buildingToken,
+        unitCode: deterministicPlan?.filters.unitCode,
+        personName: deterministicPlan?.filters.personName,
+      },
+      filters: {
+        minAmount: deterministicPlan?.filters.minAmount,
+        maxAmount: deterministicPlan?.filters.maxAmount,
+        minDebt: deterministicPlan?.filters.minDebt,
+        period: deterministicPlan?.filters.period,
+        status: deterministicPlan?.filters.status,
+        method: deterministicPlan?.filters.method,
+        minAgeDays: deterministicPlan?.filters.minAgeDays,
+      },
+      confidence: deterministicPlan?.confidence ?? 0,
+      source: 'hybrid',
+      llmProvider: consensusResult.localProvider,
+      requiresClarification: true,
+      missingFields: missingFields.length > 0 ? missingFields : ['period'],
+      clarificationMessage: consensusResult.clarificationMessage,
+    };
+  }
+
+  private resolveConsensusMissingFields(
+    consensusResult: AssistantConsensusEvaluation,
+    deterministicPlan: AssistantQueryPlan | null,
+  ): string[] {
+    if (consensusResult.modelPlan?.period.kind === 'relative_range') {
+      return ['period.mode'];
+    }
+
+    if (
+      consensusResult.mismatchReason === 'model_semantic_invalid' ||
+      consensusResult.mismatchReason === 'model_intent_scope_conflict'
+    ) {
+      return this.resolveDeterministicMissingFields(deterministicPlan);
+    }
+
+    if (consensusResult.mismatchReason === 'period') {
+      return ['period'];
+    }
+
+    if (consensusResult.mismatchReason === 'clarification') {
+      if (consensusResult.modelPlan?.missingFields?.length) {
+        return consensusResult.modelPlan.missingFields;
+      }
+      return ['period'];
+    }
+
+    if (consensusResult.mismatchReason === 'unit_alias') {
+      return ['unit'];
+    }
+
+    if (consensusResult.mismatchReason === 'building_alias' || consensusResult.mismatchReason === 'entity') {
+      return ['building'];
+    }
+
+    if (consensusResult.mismatchReason === 'intent' || consensusResult.mismatchReason === 'scope') {
+      return ['scope'];
+    }
+
+    if (consensusResult.mismatchReason === 'local_model_failed' || consensusResult.mismatchReason === 'no_deterministic_plan') {
+      if (deterministicPlan?.scope === 'unit') {
+        return ['unit'];
+      }
+      if (deterministicPlan?.scope === 'building') {
+        return ['building', 'period'];
+      }
+      return ['scope'];
+    }
+
+    return [];
+  }
+
+  private resolveDeterministicMissingFields(deterministicPlan: AssistantQueryPlan | null): string[] {
+    if (!deterministicPlan) {
+      return ['scope'];
+    }
+
+    const missingFields: string[] = [];
+    const hasBuildingAlias = Boolean(deterministicPlan.filters.buildingAlias || deterministicPlan.filters.buildingToken);
+    const hasUnitCode = Boolean(deterministicPlan.filters.unitCode || deterministicPlan.filters.unitCodeRaw);
+    const hasPeriod = Boolean(deterministicPlan.filters.period);
+    const canonicalPeriod = this.extractCanonicalPeriod(deterministicPlan.filters.period);
+
+    if (deterministicPlan.scope === 'building') {
+      if (!hasBuildingAlias) {
+        missingFields.push('building');
+      }
+      if (!hasPeriod && deterministicPlan.intent === 'building_debt') {
+        missingFields.push('period');
+      }
+      if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+        missingFields.push('period.mode');
+      }
+      return missingFields.length > 0 ? missingFields : [];
+    }
+
+    if (deterministicPlan.scope === 'unit') {
+      if (!hasUnitCode) {
+        missingFields.push('unit');
+      }
+      if (!hasPeriod && deterministicPlan.intent === 'unit_debt') {
+        missingFields.push('period');
+      }
+      if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+        missingFields.push('period.mode');
+      }
+      return missingFields.length > 0 ? missingFields : [];
+    }
+
+    if (deterministicPlan.scope === 'tenant' && !hasPeriod && deterministicPlan.intent === 'tenant_debt') {
+      return ['period'];
+    }
+
+    if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+      return ['period.mode'];
+    }
+
+    return missingFields;
+  }
+
+  private isDeterministicPlanExecutable(deterministicPlan: AssistantQueryPlan): boolean {
+    const missingFields = this.resolveDeterministicMissingFields(deterministicPlan);
+    return missingFields.length === 0;
   }
 
   private buildResolvedEntitiesFromPendingClarification(
@@ -1583,6 +1972,10 @@ export class AssistantService implements OnModuleInit {
     semanticValidation: IntentSemanticValidationResult | undefined,
     extractedIntent: ExtractedIntent,
   ): string[] {
+    if (semanticValidation?.reason === 'relative_range_mode_ambiguous') {
+      return ['period.mode'];
+    }
+
     if (semanticValidation?.reason === 'building_scope_missing_context') {
       return ['building'];
     }
@@ -1600,6 +1993,48 @@ export class AssistantService implements OnModuleInit {
     }
 
     return ['period'];
+  }
+
+  private buildRelativeRangeAcknowledgementResponse(
+    extractedIntent: ExtractedIntent,
+    period: CanonicalFinancePeriod,
+  ): StructuredResponse {
+    return {
+      type: 'text',
+      title: 'Periodo identificado',
+      summary: `Entendido. Tomé el período relativo como ${this.describeRelativeRangePeriod(period)}.`,
+      actions: [],
+      meta: {
+        confidence: extractedIntent.confidence,
+        periodKind: period.kind,
+      },
+    };
+  }
+
+  private describeRelativeRangePeriod(period: CanonicalFinancePeriod): string {
+    const amount = period.amount ?? 0;
+    if (period.mode === 'including_current') {
+      return `los últimos ${amount} meses incluyendo el mes actual`;
+    }
+    if (period.mode === 'closed_months') {
+      return `los últimos ${amount} meses cerrados`;
+    }
+    return `los últimos ${amount} meses`;
+  }
+
+  private isRelativeRangeModeFollowUp(normalized: string): boolean {
+    return this.isIncludingCurrentRangeFollowUp(normalized) || this.isClosedRangeFollowUp(normalized);
+  }
+
+  private isIncludingCurrentRangeFollowUp(normalized: string): boolean {
+    return (
+      /\b(incluyendo este mes|incluye este mes|con este mes|incluyendo el mes actual|sumando este mes|mas este mes|más este mes)\b/.test(normalized) ||
+      this.isCurrentMonthFollowUpAlias(normalized)
+    );
+  }
+
+  private isClosedRangeFollowUp(normalized: string): boolean {
+    return /\b(cerrados|solo meses cerrados|sin incluir este mes|sin contar este mes|solo los meses cerrados)\b/.test(normalized);
   }
 
   private async resolveClarificationContext(
@@ -1647,11 +2082,13 @@ export class AssistantService implements OnModuleInit {
     resolvedEntities: EntityResolution | undefined,
     missingFields: string[] | undefined,
     question?: string,
+    period?: CanonicalFinancePeriod | null,
   ): PendingClarificationContext {
     return {
       intent: extractedIntent.intent,
       entity: extractedIntent.entity,
       filters: extractedIntent.filters,
+      period: period ?? this.extractCanonicalPeriod(extractedIntent.filters.period),
       missingFields:
         missingFields && missingFields.length > 0
           ? missingFields
@@ -1665,6 +2102,14 @@ export class AssistantService implements OnModuleInit {
         personId: resolvedEntities?.person?.id,
       },
     };
+  }
+
+  private extractCanonicalPeriod(period: string | CanonicalFinancePeriod | undefined): CanonicalFinancePeriod | undefined {
+    if (!period || typeof period === 'string') {
+      return undefined;
+    }
+
+    return period;
   }
 
   private async storeConversationTurn(
@@ -1705,7 +2150,7 @@ export class AssistantService implements OnModuleInit {
     const debtInterpretation = this.debtIntentInterpreter.interpret(message);
 
     if (debtInterpretation.scope === 'tenant') {
-      const response = await this.tryResolveStrictTenantDebtQuestion(tenantId, userRoles, userId);
+      const response = await this.tryResolveStrictTenantDebtQuestion(tenantId, userRoles, userId, message);
       if (response) {
         return response;
       }
@@ -2463,9 +2908,19 @@ export class AssistantService implements OnModuleInit {
     tenantId: string,
     userRoles: string[],
     userId?: string,
+    message?: string,
   ): Promise<ChatResponse | null> {
     if (!this.canAccessOperationalData(userRoles)) {
       return null;
+    }
+
+    const plan = message ? this.queryPlanService.createPlan(message) : null;
+    const canonicalPeriod = this.extractCanonicalPeriod(plan?.filters.period);
+    if (plan?.intent === 'tenant_debt' && canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+      return {
+        answer: `¿Querés incluir el mes actual o consultar solo los últimos ${canonicalPeriod.amount ?? 0} meses cerrados?`,
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+      };
     }
 
     const response = await this.queryExecutors.execute({
@@ -2478,7 +2933,7 @@ export class AssistantService implements OnModuleInit {
         scope: 'tenant',
         requiredPermission: 'payments.review',
         executor: 'tenant_debt',
-        filters: {},
+        filters: plan?.intent === 'tenant_debt' && plan.filters ? plan.filters : {},
         confidence: 0.9,
         source: 'deterministic_rules',
       },

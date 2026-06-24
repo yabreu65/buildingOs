@@ -27,12 +27,19 @@ describe('FinanzasService', () => {
         {
           provide: PrismaService,
           useValue: {
+            tenant: {
+              findUniqueOrThrow: jest.fn(),
+            },
             charge: {
               create: jest.fn(),
               findFirst: jest.fn(),
               findUnique: jest.fn(),
               findMany: jest.fn(),
               update: jest.fn(),
+            },
+            unit: {
+              findMany: jest.fn(),
+              findFirst: jest.fn(),
             },
             payment: {
               create: jest.fn(),
@@ -579,6 +586,151 @@ describe('FinanzasService', () => {
       // These tests require complex mocks for FinanzasValidators
       // that are beyond unit test scope. Integration tests recommended.
       expect(true).toBe(true);
+    });
+  });
+
+  // ========== TESTS: BUILDING FINANCIAL SUMMARY ==========
+  describe('getBuildingFinancialSummary', () => {
+    it('uses Charge.period IN when periods are provided', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-1',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          amount: 1000,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-1',
+          label: '0101',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      await service.getBuildingFinancialSummary('tenant-1', 'building-1', {
+        periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+      });
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          canceledAt: null,
+          period: {
+            in: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+          },
+        }),
+      }));
+      expect(prismaService.charge.findMany).not.toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.anything(),
+        }),
+      }));
+    });
+
+    it('keeps the legacy period string path compatible', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-1',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          amount: 1000,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-1',
+          label: '0101',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      await service.getBuildingFinancialSummary('tenant-1', 'building-1', '2026-06');
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          period: '2026-06',
+        }),
+      }));
+    });
+  });
+
+  describe('getTenantFinancialSummary', () => {
+    it('uses Charge.period IN when tenant periods are provided', async () => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-1',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          amount: 1000,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-1',
+          label: '0101',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      await service.getTenantFinancialSummary('tenant-1', {
+        periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+      });
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 'tenant-1',
+          canceledAt: null,
+          period: {
+            in: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+          },
+        }),
+      }));
+    });
+
+    it('keeps the legacy tenant period string path compatible', async () => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-1',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          amount: 1000,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-1',
+          label: '0101',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      await service.getTenantFinancialSummary('tenant-1', '2026-06');
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          period: '2026-06',
+        }),
+      }));
     });
   });
 });

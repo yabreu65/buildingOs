@@ -1,5 +1,6 @@
 import { Permission } from '../../rbac/permissions';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { CanonicalFinancePeriod } from '../finance-period.types';
 
 /**
  * Supported response types for intent execution
@@ -29,7 +30,7 @@ export interface IntentFilters {
   minAmount?: number;
   maxAmount?: number;
   minDebt?: number;
-  period?: string;
+  period?: string | CanonicalFinancePeriod;
   financePeriod?: string;
   status?: string;
   method?: string;
@@ -138,6 +139,8 @@ export interface ExtractedIntent {
   requiresClarification?: boolean;
   /** Missing semantic fields when extraction is incomplete */
   missingFields?: string[];
+  /** Suggested clarification message when the extractor needs a follow-up */
+  clarificationMessage?: string;
 }
 
 /**
@@ -271,6 +274,8 @@ export interface PendingClarificationContext {
   entity: EntityReference;
   /** Filters extracted before clarification */
   filters: IntentFilters;
+  /** Canonical period captured during clarification, when available */
+  period?: CanonicalFinancePeriod;
   /** Missing semantic fields that the follow-up must complete */
   missingFields: string[];
   /** Clarification question shown to the user */

@@ -41,6 +41,22 @@ describe('IntentSemanticValidatorService', () => {
     };
   }
 
+  function buildRelativeRangePeriod(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: 'relative_range',
+      amount: 5,
+      unit: 'month',
+      mode: 'unknown',
+      month: null,
+      year: null,
+      startMonth: null,
+      startYear: null,
+      endMonth: null,
+      endYear: null,
+      ...overrides,
+    } as const;
+  }
+
   it('accepts explicit accumulated debt without forcing a period', async () => {
     const result = await service.evaluate({
       userText: 'deuda acumulada edificio B',
@@ -156,6 +172,149 @@ describe('IntentSemanticValidatorService', () => {
     expect(result.status).toBe('needs_clarification');
     expect(result.reason).toBe('period_ambiguous');
     expect(result.question).toContain('este mes');
+  });
+
+  it('asks for period.mode when relative range period is incomplete', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda de los ultimos 5 meses de la torre el parque',
+      deterministicPlan: buildPlan({
+        filters: {
+          buildingAlias: 'torre el parque',
+          buildingToken: 'torre el parque',
+          period: buildRelativeRangePeriod(),
+        },
+      }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: buildRelativeRangePeriod(),
+        },
+        missingFields: ['startMonth', 'endMonth'],
+      }),
+      assistantContext: {},
+    });
+
+    expect(result).toEqual({
+      status: 'needs_clarification',
+      reason: 'relative_range_mode_ambiguous',
+      question: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+    });
+  });
+
+  it('asks for period.mode when tenant debt relative range is incomplete', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda de los ultimos 5 meses de la administracion',
+      deterministicPlan: buildPlan({
+        intent: 'tenant_debt',
+        scope: 'tenant',
+        filters: {
+          period: buildRelativeRangePeriod(),
+        },
+      }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'tenant_debt',
+        entity: { type: 'building' },
+        filters: {
+          period: buildRelativeRangePeriod(),
+        },
+        missingFields: ['startMonth', 'endMonth'],
+      }),
+      assistantContext: {},
+    });
+
+    expect(result).toEqual({
+      status: 'needs_clarification',
+      reason: 'relative_range_mode_ambiguous',
+      question: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+    });
+  });
+
+  it('accepts relative range with including_current mode', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda de los ultimos 5 meses incluyendo este mes de la torre el parque',
+      deterministicPlan: buildPlan({
+        filters: {
+          buildingAlias: 'torre el parque',
+          buildingToken: 'torre el parque',
+          period: buildRelativeRangePeriod({ mode: 'including_current' }),
+        },
+      }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: buildRelativeRangePeriod({ mode: 'including_current' }),
+        },
+      }),
+      assistantContext: {},
+    });
+
+    expect(result.status).toBe('accepted');
+  });
+
+  it('accepts relative range with closed_months mode', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda de los ultimos 5 meses cerrados de la torre el parque',
+      deterministicPlan: buildPlan({
+        filters: {
+          buildingAlias: 'torre el parque',
+          buildingToken: 'torre el parque',
+          period: buildRelativeRangePeriod({ mode: 'closed_months' }),
+        },
+      }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: buildRelativeRangePeriod({ mode: 'closed_months' }),
+        },
+      }),
+      assistantContext: {},
+    });
+
+    expect(result.status).toBe('accepted');
+  });
+
+  it('normalizes startMonth and endMonth errors to period.mode', async () => {
+    const result = await service.evaluate({
+      userText: 'deuda de los ultimos 5 meses de la torre el parque',
+      deterministicPlan: buildPlan({
+        filters: {
+          buildingAlias: 'torre el parque',
+          buildingToken: 'torre el parque',
+          period: buildRelativeRangePeriod(),
+        },
+      }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: buildRelativeRangePeriod(),
+        },
+        missingFields: ['startMonth', 'endMonth'],
+      }),
+      assistantContext: {},
+    });
+
+    expect(result.reason).toBe('relative_range_mode_ambiguous');
+    expect(result.question).toContain('últimos 5 meses cerrados');
+  });
+
+  it('detects mes que esta corriendo as a temporal signal', async () => {
+    const result = await service.evaluate({
+      userText: 'dame la deuda del mes que está corriendo del edificio B',
+      deterministicPlan: buildPlan({ filters: { buildingAlias: 'B', buildingToken: 'B' } }),
+      extractedIntent: buildExtractedIntent({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'B' },
+        filters: {},
+      }),
+      assistantContext: {},
+    });
+
+    expect(result.status).toBe('needs_clarification');
+    expect(result.reason).toBe('period_signal_missing');
   });
 
   it('uses finance context period instead of historical debt when available', async () => {

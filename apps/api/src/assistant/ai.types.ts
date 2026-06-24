@@ -21,6 +21,78 @@ export interface AiProviderChatOptions {
   maxTokens?: number;
 }
 
+export type AssistantConsensusIntent = 'tenant_debt' | 'building_debt' | 'unit_debt' | 'unknown';
+
+export type AssistantConsensusScope = 'tenant' | 'building' | 'unit' | 'unknown';
+
+export type AssistantConsensusPeriodKind =
+  | 'current_month'
+  | 'previous_month'
+  | 'named_month'
+  | 'relative_month'
+  | 'relative_range'
+  | 'month_range'
+  | 'year_to_date'
+  | 'accumulated'
+  | 'unknown';
+
+export interface AssistantConsensusEntity {
+  buildingAlias: string | null;
+  unitAlias: string | null;
+}
+
+export interface AssistantConsensusPeriod {
+  kind: AssistantConsensusPeriodKind;
+  month: number | null;
+  year: number | null;
+  offset: number | null;
+  amount: number | null;
+  unit: 'month' | null;
+  mode: 'including_current' | 'closed_months' | 'unknown' | null;
+}
+
+export interface AssistantConsensusModelPlan {
+  intent: AssistantConsensusIntent;
+  scope: AssistantConsensusScope;
+  entity: AssistantConsensusEntity;
+  period: AssistantConsensusPeriod;
+  confidence: number;
+  requiresClarification: boolean;
+  missingFields: string[];
+}
+
+export interface AssistantConsensusResult {
+  consensus: boolean;
+  deterministicIntent: AssistantConsensusIntent;
+  modelIntent: AssistantConsensusIntent;
+  mismatchReason?: string;
+  clarificationMessage?: string;
+}
+
+export interface AssistantConsensusModeConfig {
+  provider: 'none' | 'hybrid' | 'openai' | 'opencode' | 'ollama' | 'gemini';
+  localProvider: 'ollama';
+  alwaysCallLocalModel: boolean;
+  consensusMode: boolean;
+  geminiFallbackEnabled: boolean;
+  ollamaBaseUrl?: string;
+  ollamaModel?: string;
+}
+
+export interface AssistantConsensusEvaluation {
+  consensus: boolean;
+  deterministicPlan: AssistantConsensusModelPlan | null;
+  modelPlan: AssistantConsensusModelPlan | null;
+  mismatchReason?: string;
+  modelValid?: boolean;
+  modelInvalidReason?: 'model_semantic_invalid' | 'model_intent_scope_conflict';
+  clarificationMessage?: string;
+  usedLocalModel: boolean;
+  localProvider: 'ollama';
+  localBaseUrl: string;
+  localModel: string;
+}
+
 export interface ChatResponse {
   answer: string;
   suggestedActions: SuggestedAction[];
@@ -119,7 +191,10 @@ export interface StructuredResponseDebug {
   llmProvider?: 'ollama' | 'opencode' | 'gemini' | 'none' | 'unknown';
   llmBaseUrl?: string;
   llmModel?: string;
-  llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'pending_clarification' | 'none';
+  llmReason?: 'no_intent' | 'missing_filters' | 'low_confidence' | 'multi_intent' | 'pending_clarification' | 'consensus_mismatch' | 'local_model_failed' | 'none';
+  consensusMode?: boolean;
+  consensusResult?: 'matched' | 'mismatch' | 'failed';
+  consensusReason?: string;
   semanticValidationStatus?: 'accepted' | 'needs_clarification' | 'override_suggested';
   semanticValidationReason?: string;
   zodValidationPassed?: boolean;

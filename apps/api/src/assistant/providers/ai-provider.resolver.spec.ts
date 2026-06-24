@@ -3,7 +3,7 @@
  * Verifies: default=none, reads env vars, missing creds fail with clear error
  */
 
-import { resolveAiProvider } from './ai-provider.resolver';
+import { resolveAiConsensusModeConfig, resolveAiProvider } from './ai-provider.resolver';
 
 describe('resolveAiProvider', () => {
   const originalEnv = process.env;
@@ -12,9 +12,14 @@ describe('resolveAiProvider', () => {
     jest.resetModules();
     process.env = { ...originalEnv };
     delete process.env.AI_PROVIDER;
+    delete process.env.AI_CONSENSUS_MODE;
+    delete process.env.AI_ALWAYS_CALL_LOCAL_MODEL;
+    delete process.env.AI_GEMINI_FALLBACK_ENABLED;
     delete process.env.OPENAI_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.AI_OLLAMA_URL;
+    delete process.env.OLLAMA_BASE_URL;
+    delete process.env.OLLAMA_MODEL;
     delete process.env.OPENCODE_API_KEY;
     delete process.env.OPENCODE_URL;
   });
@@ -71,6 +76,18 @@ describe('resolveAiProvider', () => {
     });
   });
 
+  describe('hybrid provider', () => {
+    it('reads OLLAMA_BASE_URL from env', () => {
+      const result = resolveAiProvider({
+        AI_PROVIDER: 'hybrid',
+        OLLAMA_BASE_URL: 'http://localhost:11434',
+      });
+
+      expect(result.provider).toBe('ollama');
+      expect(result.ollamaUrl).toBe('http://localhost:11434');
+    });
+  });
+
   describe('gemini provider', () => {
     it('reads GEMINI_API_KEY from env', () => {
       const result = resolveAiProvider({
@@ -106,6 +123,29 @@ describe('resolveAiProvider', () => {
       const result = resolveAiProvider({ AI_PROVIDER: 'opencode' });
       expect(result.provider).toBe('opencode');
       // opencode creds are optional — no throw
+    });
+  });
+
+  describe('consensus mode config', () => {
+    it('reads hybrid mode flags and local ollama settings', () => {
+      const result = resolveAiConsensusModeConfig({
+        AI_PROVIDER: 'hybrid',
+        AI_CONSENSUS_MODE: 'true',
+        AI_ALWAYS_CALL_LOCAL_MODEL: '1',
+        AI_GEMINI_FALLBACK_ENABLED: 'false',
+        OLLAMA_BASE_URL: 'http://localhost:11434',
+        OLLAMA_MODEL: 'qwen2.5:3b',
+      });
+
+      expect(result).toEqual(expect.objectContaining({
+        provider: 'hybrid',
+        localProvider: 'ollama',
+        consensusMode: true,
+        alwaysCallLocalModel: true,
+        geminiFallbackEnabled: false,
+        ollamaBaseUrl: 'http://localhost:11434',
+        ollamaModel: 'qwen2.5:3b',
+      }));
     });
   });
 });
