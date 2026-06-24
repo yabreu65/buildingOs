@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { AssistantDebtIntentInterpreter } from './debt-intent-interpreter';
+import { PeriodSemanticValidatorService } from './period-semantic-validator.service';
+import type { CanonicalFinancePeriod } from './finance-period.types';
 import type { ExtractedIntent } from './intent-engine/intent.types';
+import type { PendingClarificationContext } from './intent-engine/intent.types';
 import type { AssistantQueryIntent, AssistantQueryPlan } from './query-plan.types';
 
 export interface AssistantSemanticContext {
@@ -10,6 +13,7 @@ export interface AssistantSemanticContext {
   readonly buildingId?: string;
   readonly unitId?: string;
   readonly financePeriod?: string;
+  readonly pendingClarification?: PendingClarificationContext;
 }
 
 export interface IntentSemanticValidationInput {
@@ -66,6 +70,7 @@ export class IntentSemanticValidatorService {
   private readonly logger = new Logger(IntentSemanticValidatorService.name);
   private readonly geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
   private readonly debtInterpreter = new AssistantDebtIntentInterpreter();
+  private readonly periodValidator = new PeriodSemanticValidatorService();
 
   async evaluate(input: IntentSemanticValidationInput): Promise<IntentSemanticValidationResult> {
     const normalized = this.normalize(input.userText);
@@ -77,6 +82,9 @@ export class IntentSemanticValidatorService {
     const period = input.extractedIntent.filters.period ?? input.deterministicPlan?.filters.period;
     const debtInterpretation = this.debtInterpreter.interpret(input.userText);
     const isBuildingDebt = input.extractedIntent.intent === 'building_debt';
+    const canonicalPeriod = this.getCanonicalPeriod(
+      input.extractedIntent.filters.period ?? input.deterministicPlan?.filters.period,
+    );
     const wantsAccumulatedDebt = /\b(acumulad[ao]s?|historic[ao]s?|hist[oó]rica|hist[oó]rico)\b/.test(normalized);
     const hasTemporalSignals = this.detectTemporalSignals(normalized);
     const isFinanceContext = this.isFinanceContext(assistantContext);
@@ -107,6 +115,23 @@ export class IntentSemanticValidatorService {
           intentOverride: 'tenant_debt',
           entityOverride: { type: 'building', buildingAlias: undefined, unitCode: undefined },
         };
+      }
+
+      if (canonicalPeriod?.kind === 'relative_range') {
+        const relativeRangeValidation = this.periodValidator.validate({
+          period: canonicalPeriod,
+          missingFields: input.extractedIntent.missingFields,
+        });
+
+        if (!relativeRangeValidation.valid) {
+          return {
+            status: 'needs_clarification',
+            reason: 'relative_range_mode_ambiguous',
+            question:
+              relativeRangeValidation.clarificationMessage ||
+              '¿Querés incluir el mes actual o consultar solo los últimos meses cerrados?',
+          };
+        }
       }
 
       return { status: 'accepted', reason: 'global_debt_scope' };
@@ -150,6 +175,23 @@ export class IntentSemanticValidatorService {
           },
           filterOverrides: period ? { period } : undefined,
         };
+      }
+
+      if (canonicalPeriod?.kind === 'relative_range') {
+        const relativeRangeValidation = this.periodValidator.validate({
+          period: canonicalPeriod,
+          missingFields: input.extractedIntent.missingFields,
+        });
+
+        if (!relativeRangeValidation.valid) {
+          return {
+            status: 'needs_clarification',
+            reason: 'relative_range_mode_ambiguous',
+            question:
+              relativeRangeValidation.clarificationMessage ||
+              '¿Querés incluir el mes actual o consultar solo los últimos meses cerrados?',
+          };
+        }
       }
     }
 
@@ -206,7 +248,7 @@ export class IntentSemanticValidatorService {
 
   private detectTemporalSignals(normalized: string): boolean {
     return (
-      /\b(este mes|mes actual|mes pasado|ultimo mes|último mes|hoy|ayer)\b/.test(normalized) ||
+      /\b(este mes|mes actual|mes en curso|mes corriente|mes que esta corriendo|del mes actual|del mes en curso|deuda del mes|del mes|mes pasado|ultimo mes|último mes|hoy|ayer)\b/.test(normalized) ||
       /\b\d{4}-\d{2}\b/.test(normalized) ||
       /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december)(\s+\d{4})?\b/.test(normalized)
     );
@@ -220,7 +262,7 @@ export class IntentSemanticValidatorService {
   private detectYearAsUnitConflict(
     input: IntentSemanticValidationInput,
     explicitBuildingAlias: string | undefined,
-    period: string | undefined,
+    period: string | CanonicalFinancePeriod | undefined,
   ): boolean {
     const unitCode =
       input.extractedIntent.entity.unitCode ||
@@ -234,6 +276,14 @@ export class IntentSemanticValidatorService {
       /^\d{4}$/.test(unitCode) &&
       input.extractedIntent.entity.type === 'unit',
     );
+  }
+
+  private getCanonicalPeriod(period?: string | CanonicalFinancePeriod): CanonicalFinancePeriod | null {
+    if (!period || typeof period === 'string') {
+      return null;
+    }
+
+    return period;
   }
 
   private mapToBuildingIntent(intent: string): AssistantQueryIntent | undefined {

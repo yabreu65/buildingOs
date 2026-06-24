@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ExecutionPlan, ExtractedIntent, IntentFilters } from '../intent-engine/intent.types';
 import { EntityResolution } from '../intent-engine/intent.types';
+import type { CanonicalFinancePeriod } from '../finance-period.types';
 
 /**
  * Supported query shapes for the allowlist
@@ -159,9 +160,9 @@ export class QueryPlannerService {
     }
 
     if (filters.period !== undefined) {
-      // Validate period format YYYY-MM
-      if (/^\d{4}-\d{2}$/.test(filters.period)) {
-        applied.period = filters.period;
+      const normalizedPeriod = this.normalizePeriod(filters.period);
+      if (normalizedPeriod) {
+        applied.period = normalizedPeriod;
       }
     }
 
@@ -196,6 +197,34 @@ export class QueryPlannerService {
     }
 
     return applied;
+  }
+
+  private normalizePeriod(period: string | CanonicalFinancePeriod): string | CanonicalFinancePeriod | undefined {
+    if (typeof period === 'string') {
+      return /^\d{4}-\d{2}$/.test(period) ? period : undefined;
+    }
+
+    if (period.kind === 'relative_range') {
+      return period;
+    }
+
+    if (period.kind === 'current_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    if (period.kind === 'previous_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    if (period.kind === 'named_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    if (period.kind === 'year_to_date' && typeof period.year === 'number') {
+      return `${period.year}`;
+    }
+
+    return undefined;
   }
 
   /**

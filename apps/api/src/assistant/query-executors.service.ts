@@ -6,7 +6,10 @@ import { AssistantQueryParser, UnitToken } from './query-parser/assistant-query-
 import { AssistantPolicyEnforcerService } from './policy-enforcer.service';
 import { AssistantUnitResolverService, ResolvedUnit } from './unit-resolver/assistant-unit-resolver.service';
 import type { ChatResponse } from './ai.types';
+import type { CanonicalFinancePeriod, ResolvedFinancePeriod } from './finance-period.types';
+import { PeriodResolverService } from './period-resolver.service';
 import type { AssistantQueryExecutionContext } from './query-plan.types';
+import type { BuildingFinancialSummaryPeriodFilter } from '../finanzas/finanzas.service';
 
 @Injectable()
 export class AssistantQueryExecutorsService {
@@ -17,7 +20,106 @@ export class AssistantQueryExecutorsService {
     private readonly policy: AssistantPolicyEnforcerService,
     private readonly unitResolver: AssistantUnitResolverService,
     private readonly finanzasService: FinanzasService,
+    private readonly periodResolver: PeriodResolverService,
   ) {}
+
+  private normalizeExecutionPeriod(period: string | CanonicalFinancePeriod | undefined): string | undefined {
+    if (!period) {
+      return undefined;
+    }
+
+    if (typeof period === 'string') {
+      return period;
+    }
+
+    if (period.kind === 'current_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    if (period.kind === 'previous_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    if (period.kind === 'named_month' && typeof period.year === 'number' && typeof period.month === 'number') {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    return undefined;
+  }
+
+  private resolveBuildingSummaryPeriod(
+    period: string | CanonicalFinancePeriod | undefined,
+  ): { filter?: BuildingFinancialSummaryPeriodFilter; resolved?: ResolvedFinancePeriod } {
+    if (!period) {
+      return {};
+    }
+
+    if (typeof period === 'string') {
+      if (period === 'accumulated') {
+        return {};
+      }
+
+      return {
+        filter: { period: this.normalizeExecutionPeriod(period) },
+      };
+    }
+
+    if (period.kind === 'relative_range') {
+      if (period.mode === 'unknown') {
+        return {};
+      }
+
+      const resolved = this.periodResolver.resolve(period);
+      if (resolved.kind !== 'period_range' || resolved.periods.length === 0) {
+        return {};
+      }
+
+      return {
+        filter: { periods: resolved.periods },
+        resolved,
+      };
+    }
+
+    const normalized = this.normalizeExecutionPeriod(period);
+    return normalized ? { filter: { period: normalized } } : {};
+  }
+
+  private resolveTenantSummaryPeriod(
+    period: string | CanonicalFinancePeriod | undefined,
+  ): { filter?: BuildingFinancialSummaryPeriodFilter; resolved?: ResolvedFinancePeriod; needsClarification?: boolean } {
+    if (!period) {
+      return {};
+    }
+
+    if (typeof period === 'string') {
+      if (period === 'accumulated') {
+        return {};
+      }
+
+      return {
+        filter: { period: this.normalizeExecutionPeriod(period) },
+      };
+    }
+
+    if (period.kind === 'relative_range') {
+      if (period.mode === 'unknown') {
+        return { needsClarification: true };
+      }
+
+      const resolved = this.periodResolver.resolve(period);
+      if (resolved.kind !== 'period_range' || resolved.periods.length === 0) {
+        return {};
+      }
+
+      return {
+        filter: { periods: resolved.periods },
+        resolved,
+      };
+    }
+
+    const normalized = this.normalizeExecutionPeriod(period);
+    return normalized ? { filter: { period: normalized } } : {};
+  }
 
   /**
    * Execute an allowlisted QueryPlan. This method never accepts SQL from the model.
@@ -273,6 +375,8 @@ export class AssistantQueryExecutorsService {
       return null;
     }
 
+    const periodResolution = this.resolveBuildingSummaryPeriod(context.plan.filters.period);
+
     await this.policy.assertCanExecute({
       tenantId: context.tenantId,
       userId: context.userId,
@@ -284,18 +388,29 @@ export class AssistantQueryExecutorsService {
     const summary = await this.finanzasService.getBuildingFinancialSummary(
       context.tenantId,
       building.id,
-      context.plan.filters.period,
+      periodResolution.filter,
     );
     const outstanding = summary.totalOutstanding;
+    const rangeLabel = periodResolution.resolved?.label;
     return {
       answer: outstanding > 0
-        ? `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, summary.currency)}.`
-        : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, summary.currency)}.`,
+        ? rangeLabel
+          ? `Deuda de ${building.name}, ${rangeLabel}: ${this.formatMoney(outstanding, summary.currency)}.`
+          : `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, summary.currency)}.`
+        : rangeLabel
+          ? `Deuda de ${building.name}, ${rangeLabel}: ${this.formatMoney(outstanding, summary.currency)}.`
+          : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, summary.currency)}.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
 
   private async executeTenantDebt(context: AssistantQueryExecutionContext): Promise<ChatResponse | null> {
+    const periodResolution = this.resolveTenantSummaryPeriod(context.plan.filters.period);
+
+    if (periodResolution.needsClarification) {
+      return null;
+    }
+
     await this.policy.assertCanExecute({
       tenantId: context.tenantId,
       userId: context.userId,
@@ -303,12 +418,19 @@ export class AssistantQueryExecutorsService {
       plan: context.plan,
     });
 
-    const tenantDebt = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
+    const tenantDebt = await this.finanzasService.getTenantFinancialSummary(
+      context.tenantId,
+      periodResolution.filter,
+    );
     const totalDebt = tenantDebt.totalOutstanding;
     return {
       answer: totalDebt > 0
-        ? `La administración tiene una deuda pendiente total de ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
-        : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`,
+        ? periodResolution.resolved?.label
+          ? `Deuda global de la administración, ${periodResolution.resolved.label}: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
+          : `La administración tiene una deuda pendiente total de ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
+        : periodResolution.resolved?.label
+          ? `Deuda global de la administración, ${periodResolution.resolved.label}: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
+          : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
     };
   }
@@ -319,6 +441,8 @@ export class AssistantQueryExecutorsService {
       return null;
     }
 
+    const periodResolution = this.resolveBuildingSummaryPeriod(context.plan.filters.period);
+
     await this.policy.assertCanExecute({
       tenantId: context.tenantId,
       userId: context.userId,
@@ -330,7 +454,7 @@ export class AssistantQueryExecutorsService {
     const summary = await this.finanzasService.getBuildingFinancialSummary(
       context.tenantId,
       building.id,
-      context.plan.filters.period,
+      periodResolution.filter,
     );
 
     if (summary.delinquentUnitsCount === 0) {
@@ -471,6 +595,8 @@ export class AssistantQueryExecutorsService {
       return null;
     }
 
+    const periodResolution = this.resolveBuildingSummaryPeriod(context.plan.filters.period);
+
     await this.policy.assertCanExecute({
       tenantId: context.tenantId,
       userId: context.userId,
@@ -484,7 +610,11 @@ export class AssistantQueryExecutorsService {
       this.prisma.unit.findMany({ where: { tenantId: context.tenantId, buildingId: building.id }, select: { id: true } }),
       this.prisma.ticket.count({ where: { tenantId: context.tenantId, buildingId: building.id, status: 'OPEN' } }),
       this.prisma.ticket.count({ where: { tenantId: context.tenantId, buildingId: building.id } }),
-      this.finanzasService.getBuildingFinancialSummary(context.tenantId, building.id, context.plan.filters.period),
+      this.finanzasService.getBuildingFinancialSummary(
+        context.tenantId,
+        building.id,
+        periodResolution.filter,
+      ),
     ]);
 
     const outstanding = summary.totalOutstanding;

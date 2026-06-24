@@ -1,4 +1,5 @@
 import type { Permission } from '../rbac/permissions';
+import type { CanonicalFinancePeriod } from './finance-period.types';
 
 export type AssistantQueryModule = 'units' | 'payments' | 'tickets' | 'documents' | 'buildings';
 
@@ -25,7 +26,7 @@ export interface AssistantQueryPlanFilters {
   buildingAlias?: string;
   buildingName?: string;
   personName?: string;
-  period?: string;
+  period?: string | CanonicalFinancePeriod;
   status?: string;
   method?: string;
   minAmount?: number;

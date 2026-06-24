@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { resolveAiConsensusModeConfig } from '../providers/ai-provider.resolver';
+import type { CanonicalFinancePeriod } from '../finance-period.types';
 import type {
   AssistantConsensusEvaluation,
   AssistantConsensusIntent,
@@ -9,8 +10,19 @@ import type {
 import type { ConversationTurn } from './intent.types';
 import type { AssistantQueryPlan } from '../query-plan.types';
 
-const OLLAMA_TIMEOUT_MS = 8000;
+const DEFAULT_OLLAMA_TIMEOUT_MS = 20000;
 const DEFAULT_OLLAMA_MODEL = 'qwen2.5:3b';
+
+function resolveOllamaTimeoutMs(): number {
+  const raw = process.env.AI_OLLAMA_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : DEFAULT_OLLAMA_TIMEOUT_MS;
+
+  if (!Number.isFinite(parsed) || parsed < 1000) {
+    return DEFAULT_OLLAMA_TIMEOUT_MS;
+  }
+
+  return parsed;
+}
 
 const assistantConsensusSchema = z.object({
   intent: z.enum(['tenant_debt', 'building_debt', 'unit_debt', 'unknown']),
@@ -24,12 +36,13 @@ const assistantConsensusSchema = z.object({
       'current_month',
       'previous_month',
       'named_month',
-      'relative_month',
-      'relative_range',
-      'month_range',
-      'accumulated',
-      'unknown',
-    ]),
+    'relative_month',
+    'relative_range',
+    'month_range',
+    'year_to_date',
+    'accumulated',
+    'unknown',
+  ]),
     month: z.number().int().nullable(),
     year: z.number().int().nullable(),
     offset: z.number().int().nullable(),
@@ -81,6 +94,8 @@ export class AssistantLocalConsensusService {
   private readonly config = resolveAiConsensusModeConfig();
   private readonly baseUrl = this.config.ollamaBaseUrl || process.env.OLLAMA_BASE_URL || process.env.AI_OLLAMA_URL || 'http://localhost:11434';
   private readonly model = this.config.ollamaModel || process.env.OLLAMA_MODEL || process.env.AI_OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
+  private readonly timeoutMs = resolveOllamaTimeoutMs();
+  private readonly traceEnabled = process.env.ASSISTANT_TRACE === 'true';
 
   isEnabled(): boolean {
     return this.config.consensusMode || this.config.alwaysCallLocalModel;
@@ -92,6 +107,10 @@ export class AssistantLocalConsensusService {
 
   getModel(): string {
     return this.model;
+  }
+
+  getTimeoutMs(): number {
+    return this.timeoutMs;
   }
 
   async evaluate(
@@ -116,10 +135,30 @@ export class AssistantLocalConsensusService {
 
     try {
       const modelPlan = await this.callOllama(message, context);
-      const comparison = this.comparePlans(deterministicConsensusPlan, modelPlan);
+      const normalizedModelPlan = this.normalizeModelPlan(modelPlan);
+      const modelValidation = this.validateModelPlan(normalizedModelPlan);
+      if (!modelValidation.valid) {
+        const invalidReason = modelValidation.reason ?? 'model_semantic_invalid';
+        this.logger.warn(`[AssistantConsensus] model invalid=${invalidReason}${modelValidation.details ? ` details=${modelValidation.details.join('|')}` : ''}`);
+        return {
+          consensus: false,
+          deterministicPlan: deterministicConsensusPlan,
+          modelPlan: normalizedModelPlan,
+          mismatchReason: invalidReason,
+          modelValid: false,
+          modelInvalidReason: invalidReason,
+          clarificationMessage: this.buildClarificationMessage(invalidReason, deterministicConsensusPlan, normalizedModelPlan),
+          usedLocalModel: true,
+          localProvider: 'ollama',
+          localBaseUrl: this.baseUrl,
+          localModel: this.model,
+        };
+      }
+
+      const comparison = this.comparePlans(deterministicConsensusPlan, normalizedModelPlan);
 
       this.logger.log(
-        `[AssistantConsensus] deterministic=${this.summarizePlan(deterministicConsensusPlan)} model=${this.summarizePlan(modelPlan)} consensus=${comparison.consensus}`,
+        `[AssistantConsensus] deterministic=${this.summarizePlan(deterministicConsensusPlan)} model=${this.summarizePlan(normalizedModelPlan)} consensus=${comparison.consensus}`,
       );
 
       if (!comparison.consensus && comparison.mismatchReason) {
@@ -129,8 +168,9 @@ export class AssistantLocalConsensusService {
       return {
         consensus: comparison.consensus,
         deterministicPlan: deterministicConsensusPlan,
-        modelPlan,
+        modelPlan: normalizedModelPlan,
         mismatchReason: comparison.mismatchReason,
+        modelValid: true,
         clarificationMessage: comparison.clarificationMessage,
         usedLocalModel: true,
         localProvider: 'ollama',
@@ -145,6 +185,7 @@ export class AssistantLocalConsensusService {
         deterministicPlan: deterministicConsensusPlan,
         modelPlan: null,
         mismatchReason: 'local_model_failed',
+        modelValid: false,
         clarificationMessage: this.buildClarificationMessage('local_model_failed', deterministicConsensusPlan),
         usedLocalModel: true,
         localProvider: 'ollama',
@@ -156,7 +197,12 @@ export class AssistantLocalConsensusService {
 
   private async callOllama(message: string, context: LocalConsensusContext): Promise<AssistantConsensusModelPlan> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+    const startedAt = Date.now();
+    let abortedByTimeout = false;
+    const timeoutId = setTimeout(() => {
+      abortedByTimeout = true;
+      controller.abort();
+    }, this.timeoutMs);
     const endpoint = `${this.baseUrl.replace(/\/$/, '')}/api/chat`;
     const requestBody = {
       model: this.model,
@@ -178,8 +224,8 @@ export class AssistantLocalConsensusService {
       format: this.buildSchema(),
     };
 
-    this.logger.debug(
-      `[AssistantConsensus] endpoint=${endpoint} model=${this.model} payload=${JSON.stringify({
+    this.trace(
+      `[AssistantConsensus] endpoint=${endpoint} model=${this.model} timeoutMs=${this.timeoutMs} payload=${JSON.stringify({
         messageLength: message.length,
         hasBuildingId: Boolean(context.buildingId),
         hasUnitId: Boolean(context.unitId),
@@ -195,6 +241,8 @@ export class AssistantLocalConsensusService {
         body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
+      const durationMs = Date.now() - startedAt;
+      this.trace(`[AssistantConsensus] response.ok=${response.ok} durationMs=${durationMs} abortedByTimeout=${abortedByTimeout}`);
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
@@ -204,6 +252,7 @@ export class AssistantLocalConsensusService {
       const raw: unknown = await response.json();
       const parsedResponse = ollamaChatSchema.parse(raw);
       const content = parsedResponse.message?.content?.trim();
+      this.trace(`[AssistantConsensus] receivedContent=${Boolean(content)} contentLength=${content?.length ?? 0}`);
       if (!content) {
         throw new Error('Invalid Ollama response format: missing message.content');
       }
@@ -214,13 +263,33 @@ export class AssistantLocalConsensusService {
         jsonStr = codeBlockMatch[1];
       }
 
-      const parsed = assistantConsensusSchema.safeParse(JSON.parse(jsonStr));
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(jsonStr);
+        this.trace('[AssistantConsensus] jsonParse=ok');
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.trace(`[AssistantConsensus] jsonParse=failed reason=${reason}`);
+        throw error;
+      }
+
+      const parsed = assistantConsensusSchema.safeParse(parsedJson);
       if (!parsed.success) {
         const issues = parsed.error.issues.map((issue) => issue.message).join(', ');
+        this.trace(`[AssistantConsensus] zod=failed issues=${issues}`);
         throw new Error(`Invalid consensus JSON: ${issues}`);
       }
 
+      this.trace(`[AssistantConsensus] zod=ok durationMs=${Date.now() - startedAt}`);
+
       return parsed.data;
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const reason = error instanceof Error ? error.message : String(error);
+      this.trace(
+        `[AssistantConsensus] failed durationMs=${durationMs} abortedByTimeout=${abortedByTimeout} reason=${reason}`,
+      );
+      throw error;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -240,7 +309,7 @@ export class AssistantLocalConsensusService {
       'Use building_debt for building/condominio/edificio debt questions.',
       'Use unit_debt for apartment/unit debt questions.',
       'Use scope tenant/building/unit to match the intent.',
-      'Use period.kind = current_month for "este mes", "mes actual", "mes en curso", or "del mes actual".',
+      'Use period.kind = current_month for "este mes", "mes actual", "mes en curso", "mes corriente", "mes que está corriendo", "del mes actual", "del mes en curso", or "deuda del mes".',
       'Use period.kind = accumulated for "acumulada", "histórica", "total", or "toda" when the user asks for total outstanding debt.',
       'If the query is unclear or missing a critical field, set requiresClarification=true and list the missing fields.',
       `Current date: ${new Date().toISOString().slice(0, 10)}`,
@@ -326,7 +395,7 @@ export class AssistantLocalConsensusService {
       };
     }
 
-    if (deterministic.period.kind !== model.period.kind) {
+    if (!this.periodsAreCompatible(deterministic.period, model.period)) {
       return {
         consensus: false,
         mismatchReason: 'period',
@@ -343,6 +412,60 @@ export class AssistantLocalConsensusService {
     }
 
     return { consensus: true };
+  }
+
+  private validateModelPlan(
+    model: AssistantConsensusModelPlan,
+  ): { valid: boolean; reason?: 'model_semantic_invalid' | 'model_intent_scope_conflict'; details?: string[] } {
+    const details: string[] = [];
+
+    if (model.intent === 'tenant_debt') {
+      if (model.scope !== 'tenant') {
+        details.push('tenant_debt_scope');
+      }
+      if (normalizeAlias(model.entity.buildingAlias) || normalizeAlias(model.entity.unitAlias)) {
+        details.push('tenant_debt_entity');
+      }
+    }
+
+    if (model.intent === 'building_debt') {
+      if (model.scope !== 'building') {
+        details.push('building_debt_scope');
+      }
+      if (!normalizeAlias(model.entity.buildingAlias)) {
+        details.push('building_debt_building_alias');
+      }
+      if (normalizeAlias(model.entity.unitAlias)) {
+        details.push('building_debt_unit_alias');
+      }
+    }
+
+    if (model.intent === 'unit_debt') {
+      if (model.scope !== 'unit') {
+        details.push('unit_debt_scope');
+      }
+      if (!normalizeAlias(model.entity.unitAlias)) {
+        details.push('unit_debt_unit_alias');
+      }
+    }
+
+    if (model.period.kind === 'month_range' && typeof model.period.amount === 'number' && model.period.amount <= 0) {
+      details.push('month_range_amount');
+    }
+
+    if (details.length === 0) {
+      return { valid: true };
+    }
+
+    const intentScopeConflict = details.some((detail) =>
+      detail.endsWith('_scope') || detail.endsWith('_entity'),
+    );
+
+    return {
+      valid: false,
+      reason: intentScopeConflict ? 'model_intent_scope_conflict' : 'model_semantic_invalid',
+      details,
+    };
   }
 
   private matchEntity(deterministic: AssistantConsensusModelPlan, model: AssistantConsensusModelPlan): boolean {
@@ -364,6 +487,38 @@ export class AssistantLocalConsensusService {
     return true;
   }
 
+  private periodsAreCompatible(
+    deterministic: AssistantConsensusModelPlan['period'],
+    model: AssistantConsensusModelPlan['period'],
+  ): boolean {
+    if (deterministic.kind === model.kind) {
+      return true;
+    }
+
+    if (deterministic.kind === 'unknown' || model.kind === 'unknown') {
+      return true;
+    }
+
+    if (this.isCurrentMonthPeriod(deterministic) && this.isCurrentMonthPeriod(model)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private isCurrentMonthPeriod(period: AssistantConsensusModelPlan['period']): boolean {
+    if (period.kind === 'current_month') {
+      return true;
+    }
+
+    if (period.kind === 'named_month' && period.month && period.year) {
+      const current = new Date();
+      return period.year === current.getFullYear() && period.month === current.getMonth() + 1;
+    }
+
+    return false;
+  }
+
   private entityMismatchReason(deterministic: AssistantConsensusModelPlan, model: AssistantConsensusModelPlan): string {
     if (deterministic.scope === 'unit' && !isSameAlias(deterministic.entity.unitAlias, model.entity.unitAlias)) {
       return 'unit_alias';
@@ -382,7 +537,34 @@ export class AssistantLocalConsensusService {
     model?: AssistantConsensusModelPlan | null,
   ): string {
     if (mismatch === 'local_model_failed') {
+      if (deterministic?.scope === 'building') {
+        const buildingAlias = deterministic.entity.buildingAlias || model?.entity.buildingAlias;
+        if (buildingAlias) {
+          return `No pude validar esa consulta con el modelo local para el edificio ${buildingAlias}. ¿Querés la deuda de este mes o la deuda acumulada?`;
+        }
+        return 'No pude validar esa consulta con el modelo local. ¿Querés aclarar si se trata de una deuda de la administración, de un edificio o de una unidad?';
+      }
       return 'No pude validar esa consulta con el modelo local. ¿Querés aclarar si se trata de una deuda de la administración, de un edificio o de una unidad?';
+    }
+
+    if (mismatch === 'model_semantic_invalid' || mismatch === 'model_intent_scope_conflict') {
+      if (deterministic?.scope === 'building') {
+        const buildingAlias = deterministic.entity.buildingAlias || model?.entity.buildingAlias;
+        if (buildingAlias) {
+          return `El modelo local devolvió una combinación inválida para el edificio ${buildingAlias}. ¿Querés la deuda de este mes o la deuda acumulada?`;
+        }
+        return 'El modelo local devolvió una combinación inválida. ¿De cuál condominio o edificio querés consultar la deuda?';
+      }
+
+      if (deterministic?.scope === 'unit') {
+        return 'El modelo local devolvió una combinación inválida. ¿De qué unidad querés consultar la deuda?';
+      }
+
+      if (deterministic?.scope === 'tenant') {
+        return 'El modelo local devolvió una combinación inválida. ¿Querés la deuda de la administración o la deuda total?';
+      }
+
+      return 'El modelo local devolvió una combinación inválida. ¿Querés aclarar la consulta?';
     }
 
     if (mismatch === 'no_deterministic_plan') {
@@ -390,6 +572,10 @@ export class AssistantLocalConsensusService {
     }
 
     if (mismatch === 'period') {
+      if (deterministic?.period.kind === 'relative_range') {
+        const amount = deterministic.period.amount ?? model?.period.amount ?? 0;
+        return `¿Querés incluir el mes actual o consultar solo los últimos ${amount} meses cerrados?`;
+      }
       const buildingAlias = deterministic?.entity.buildingAlias || model?.entity.buildingAlias;
       if (buildingAlias) {
         return `Entiendo que quieres consultar la deuda del edificio ${buildingAlias}. ¿Te refieres a este mes o a la deuda acumulada?`;
@@ -399,6 +585,10 @@ export class AssistantLocalConsensusService {
 
     if (mismatch === 'clarification') {
       const missingFields = model?.missingFields ?? [];
+      if (deterministic?.period.kind === 'relative_range' || missingFields.includes('period.mode')) {
+        const amount = deterministic?.period.amount ?? model?.period.amount ?? 0;
+        return `¿Querés incluir el mes actual o consultar solo los últimos ${amount} meses cerrados?`;
+      }
       if (missingFields.includes('period')) {
         return '¿Te refieres a la deuda de este mes o a la deuda acumulada?';
       }
@@ -441,7 +631,7 @@ export class AssistantLocalConsensusService {
     };
   }
 
-  private mapDeterministicPeriod(period?: string): AssistantConsensusModelPlan['period'] {
+  private mapDeterministicPeriod(period?: string | CanonicalFinancePeriod): AssistantConsensusModelPlan['period'] {
     if (!period) {
       return {
         kind: 'unknown',
@@ -451,6 +641,18 @@ export class AssistantLocalConsensusService {
         amount: null,
         unit: null,
         mode: null,
+      };
+    }
+
+    if (typeof period !== 'string') {
+      return {
+        kind: period.kind,
+        month: period.month,
+        year: period.year,
+        offset: period.kind === 'relative_range' ? 0 : null,
+        amount: period.amount,
+        unit: period.unit,
+        mode: period.mode,
       };
     }
 
@@ -508,6 +710,39 @@ export class AssistantLocalConsensusService {
     };
   }
 
+  private normalizeModelPlan(model: AssistantConsensusModelPlan): AssistantConsensusModelPlan {
+    if (model.period.kind !== 'relative_range') {
+      return model;
+    }
+
+    const normalizedMissingFields = this.normalizeRelativeRangeMissingFields(model);
+    if (normalizedMissingFields.length === model.missingFields.length && normalizedMissingFields.every((item, index) => item === model.missingFields[index])) {
+      return model;
+    }
+
+    return {
+      ...model,
+      missingFields: normalizedMissingFields,
+    };
+  }
+
+  private normalizeRelativeRangeMissingFields(model: AssistantConsensusModelPlan): string[] {
+    const normalized = new Set<string>();
+    for (const field of model.missingFields) {
+      if (field === 'startMonth' || field === 'endMonth' || field === 'period.mode') {
+        normalized.add('period.mode');
+        continue;
+      }
+      normalized.add(field);
+    }
+
+    if (model.period.mode === 'unknown' && normalized.size === 0) {
+      normalized.add('period.mode');
+    }
+
+    return Array.from(normalized);
+  }
+
   private summarizePlan(plan: AssistantConsensusModelPlan | null): string {
     if (!plan) {
       return 'none';
@@ -516,5 +751,11 @@ export class AssistantLocalConsensusService {
     const building = plan.entity.buildingAlias ?? '-';
     const unit = plan.entity.unitAlias ?? '-';
     return `${plan.intent}/${plan.scope}/${plan.period.kind}/${building}/${unit}`;
+  }
+
+  private trace(message: string): void {
+    if (this.traceEnabled) {
+      this.logger.debug(message);
+    }
   }
 }

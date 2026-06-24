@@ -24,6 +24,7 @@ import {
   AiProviderContext,
   AiProviderStatus,
   StructuredResponse,
+  type AssistantConsensusPeriod,
 } from './ai.types';
 import type { AssistantConsensusEvaluation } from './ai.types';
 
@@ -65,6 +66,7 @@ import { buildingStatsIntent } from './intent-engine/allowed-intents/building-st
 import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.intent';
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 import type { IntentSemanticValidationResult } from './intent-semantic-validator.service';
+import type { CanonicalFinancePeriod } from './finance-period.types';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
   'expenses_summary',
@@ -711,7 +713,22 @@ export class AssistantService implements OnModuleInit {
             : 'consensus_mismatch';
 
         if (consensusResult.consensus && deterministicPlan) {
-          extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
+          extractedIntent = this.buildExtractedIntentFromPlan(
+            this.mergeConsensusPlanWithModel(deterministicPlan, consensusResult.modelPlan),
+          );
+        } else if (
+          (consensusResult.mismatchReason === 'model_semantic_invalid' ||
+            consensusResult.mismatchReason === 'model_intent_scope_conflict') &&
+          deterministicPlan
+        ) {
+          if (this.isDeterministicPlanExecutable(deterministicPlan)) {
+            extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
+          } else {
+            extractedIntent = this.buildClarificationIntentFromConsensus(
+              deterministicPlan,
+              consensusResult,
+            );
+          }
         } else {
           extractedIntent = this.buildClarificationIntentFromConsensus(
             deterministicPlan,
@@ -890,6 +907,7 @@ export class AssistantService implements OnModuleInit {
         buildingId: request.buildingId,
         unitId: request.unitId,
         financePeriod: request.financePeriod,
+        pendingClarification: shouldUsePendingClarification ? pendingClarification : undefined,
       },
     });
     debugInfo.semanticValidationStatus = semanticValidation.status;
@@ -911,6 +929,7 @@ export class AssistantService implements OnModuleInit {
           clarificationResolvedEntities,
           this.resolveClarificationMissingFields(semanticValidation, extractedIntent),
           semanticValidation.question,
+          this.extractCanonicalPeriod(deterministicPlan?.filters.period),
         ),
       );
       await this.storeConversationTurn(
@@ -963,6 +982,33 @@ export class AssistantService implements OnModuleInit {
       debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
     }
 
+    const canonicalRequestedPeriod = this.extractCanonicalPeriod(extractedIntent.filters.period);
+    if (
+      canonicalRequestedPeriod?.kind === 'relative_range' &&
+      semanticValidation.status === 'accepted' &&
+      extractedIntent.intent === 'building_debt'
+    ) {
+      const relativeRangeResponse = this.buildRelativeRangeAcknowledgementResponse(
+        extractedIntent,
+        canonicalRequestedPeriod,
+      );
+      if (debugEnabled) {
+        (relativeRangeResponse as StructuredResponse).debug = debugInfo;
+      }
+      await this.storeConversationTurn(
+        tenantId,
+        userId,
+        sessionId,
+        request.message,
+        contextResolvedEntities,
+        { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
+      );
+      if (usedPendingClarification) {
+        await this.conversationContext.clearPendingClarification(tenantId, userId, sessionId);
+      }
+      return relativeRangeResponse;
+    }
+
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
       const clarificationMessage =
@@ -983,6 +1029,8 @@ export class AssistantService implements OnModuleInit {
           clarificationResolvedEntities,
           this.resolveClarificationMissingFields(undefined, extractedIntent),
           clarificationMessage,
+          this.extractCanonicalPeriod(extractedIntent.filters.period) ??
+            this.extractCanonicalPeriod(deterministicPlan?.filters.period),
         ),
       );
       await this.storeConversationTurn(
@@ -1442,10 +1490,11 @@ export class AssistantService implements OnModuleInit {
       .trim();
 
     // Map follow-up keywords to intents
-    if (/\bmes(es)?\b.*\bdeuda\b|\bdeuda\b.*\bmes(es)?\b/.test(normalized)) {
-      return 'unit_debt';
+    if (this.isPeriodClarificationReply(normalized)) {
+      return null;
     }
-    if (/\bmes(es)?\b.*\bdebe\b|\bdebe\b.*\bmes(es)?\b/.test(normalized)) {
+
+    if (/\bunidad\b|\bapartamento\b|\bdepto\b|\bdepartamento\b/.test(normalized) && /\bdeuda\b|\bdebe\b/.test(normalized)) {
       return 'unit_debt';
     }
     if (/\bticket(s)?\b/.test(normalized)) {
@@ -1478,12 +1527,16 @@ export class AssistantService implements OnModuleInit {
       .trim();
 
     const expectsPeriod = pendingClarification.missingFields.includes('period');
+    const expectsPeriodMode = pendingClarification.missingFields.includes('period.mode');
     const expectsBuilding = pendingClarification.missingFields.includes('building');
+
+    if (expectsPeriodMode) {
+      return this.isRelativeRangeModeFollowUp(normalized);
+    }
 
     if (expectsPeriod) {
       return (
-        normalized.includes('este mes') ||
-        normalized.includes('mes actual') ||
+        this.isCurrentMonthFollowUpAlias(normalized) ||
         /^acumulad[ao]s?\b/.test(normalized) ||
         /^historic[ao]s?\b/.test(normalized) ||
         /^historica\b/.test(normalized) ||
@@ -1527,14 +1580,37 @@ export class AssistantService implements OnModuleInit {
     return {};
   }
 
-  private inferFiltersFromFollowUp(message: string): ExtractedIntent['filters'] {
+  private inferFiltersFromFollowUp(
+    message: string,
+    pendingClarification?: PendingClarificationContext,
+  ): ExtractedIntent['filters'] {
     const normalized = message
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-    if (normalized.includes('este mes') || normalized.includes('mes actual')) {
+    if (pendingClarification?.period?.kind === 'relative_range') {
+      if (this.isIncludingCurrentRangeFollowUp(normalized)) {
+        return {
+          period: {
+            ...pendingClarification.period,
+            mode: 'including_current',
+          },
+        };
+      }
+
+      if (this.isClosedRangeFollowUp(normalized)) {
+        return {
+          period: {
+            ...pendingClarification.period,
+            mode: 'closed_months',
+          },
+        };
+      }
+    }
+
+    if (this.isCurrentMonthFollowUpAlias(normalized)) {
       return {
         period: new Date().toISOString().slice(0, 7),
       };
@@ -1583,7 +1659,7 @@ export class AssistantService implements OnModuleInit {
       },
       filters: {
         ...pendingClarification.filters,
-        ...this.inferFiltersFromFollowUp(message),
+        ...this.inferFiltersFromFollowUp(message, pendingClarification),
       },
       confidence: 0.85,
       source: 'hybrid',
@@ -1616,6 +1692,95 @@ export class AssistantService implements OnModuleInit {
       requiresClarification: false,
       missingFields: [],
     };
+  }
+
+  private mergeConsensusPlanWithModel(
+    deterministicPlan: AssistantQueryPlan,
+    modelPlan: AssistantConsensusEvaluation['modelPlan'],
+  ): AssistantQueryPlan {
+    if (!modelPlan) {
+      return deterministicPlan;
+    }
+
+    const mergedFilters: AssistantQueryPlan['filters'] = {
+      ...deterministicPlan.filters,
+    };
+
+    if (!mergedFilters.period) {
+      const mergedPeriod = this.resolveConsensusPeriod(modelPlan.period);
+      if (mergedPeriod) {
+        mergedFilters.period = mergedPeriod;
+      }
+    }
+
+    if (!mergedFilters.buildingAlias && modelPlan.entity.buildingAlias) {
+      mergedFilters.buildingAlias = modelPlan.entity.buildingAlias;
+    }
+
+    if (!mergedFilters.unitCode && modelPlan.entity.unitAlias) {
+      mergedFilters.unitCode = modelPlan.entity.unitAlias;
+    }
+
+    return {
+      ...deterministicPlan,
+      filters: mergedFilters,
+      confidence: Math.max(deterministicPlan.confidence, modelPlan.confidence ?? deterministicPlan.confidence),
+    };
+  }
+
+  private resolveConsensusPeriod(period: AssistantConsensusPeriod | null | undefined): string | undefined {
+    if (!period || period.kind === 'unknown') {
+      return undefined;
+    }
+
+    if (period.kind === 'accumulated') {
+      return 'accumulated';
+    }
+
+    if (period.kind === 'current_month') {
+      const current = new Date();
+      return current.toISOString().slice(0, 7);
+    }
+
+    if (period.kind === 'previous_month') {
+      const current = new Date();
+      const previous = new Date(current.getFullYear(), current.getMonth() - 1, 1);
+      return previous.toISOString().slice(0, 7);
+    }
+
+    if (period.kind === 'named_month' && period.year && period.month) {
+      return `${period.year}-${String(period.month).padStart(2, '0')}`;
+    }
+
+    return undefined;
+  }
+
+  private isCurrentMonthFollowUpAlias(normalized: string): boolean {
+    const isPastMonth = normalized.includes('mes pasado') || normalized.includes('ultimo mes') || normalized.includes('último mes');
+
+    return (
+      !isPastMonth &&
+      (
+        normalized.includes('este mes') ||
+        normalized.includes('mes actual') ||
+        normalized.includes('mes en curso') ||
+        normalized.includes('mes corriente') ||
+        normalized.includes('mes que esta corriendo') ||
+        normalized.includes('mes que corre') ||
+        normalized.includes('del mes actual') ||
+        normalized.includes('del mes en curso') ||
+        normalized.includes('deuda del mes') ||
+        /\bdel mes\b/.test(normalized)
+      )
+    );
+  }
+
+  private isPeriodClarificationReply(normalized: string): boolean {
+    return this.isCurrentMonthFollowUpAlias(normalized) ||
+      /^acumulad[ao]s?\b/.test(normalized) ||
+      /^historic[ao]s?\b/.test(normalized) ||
+      /^historica\b/.test(normalized) ||
+      /^toda\b/.test(normalized);
   }
 
   private buildClarificationIntentFromConsensus(
@@ -1656,6 +1821,17 @@ export class AssistantService implements OnModuleInit {
     consensusResult: AssistantConsensusEvaluation,
     deterministicPlan: AssistantQueryPlan | null,
   ): string[] {
+    if (consensusResult.modelPlan?.period.kind === 'relative_range') {
+      return ['period.mode'];
+    }
+
+    if (
+      consensusResult.mismatchReason === 'model_semantic_invalid' ||
+      consensusResult.mismatchReason === 'model_intent_scope_conflict'
+    ) {
+      return this.resolveDeterministicMissingFields(deterministicPlan);
+    }
+
     if (consensusResult.mismatchReason === 'period') {
       return ['period'];
     }
@@ -1690,6 +1866,59 @@ export class AssistantService implements OnModuleInit {
     }
 
     return [];
+  }
+
+  private resolveDeterministicMissingFields(deterministicPlan: AssistantQueryPlan | null): string[] {
+    if (!deterministicPlan) {
+      return ['scope'];
+    }
+
+    const missingFields: string[] = [];
+    const hasBuildingAlias = Boolean(deterministicPlan.filters.buildingAlias || deterministicPlan.filters.buildingToken);
+    const hasUnitCode = Boolean(deterministicPlan.filters.unitCode || deterministicPlan.filters.unitCodeRaw);
+    const hasPeriod = Boolean(deterministicPlan.filters.period);
+    const canonicalPeriod = this.extractCanonicalPeriod(deterministicPlan.filters.period);
+
+    if (deterministicPlan.scope === 'building') {
+      if (!hasBuildingAlias) {
+        missingFields.push('building');
+      }
+      if (!hasPeriod && deterministicPlan.intent === 'building_debt') {
+        missingFields.push('period');
+      }
+      if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+        missingFields.push('period.mode');
+      }
+      return missingFields.length > 0 ? missingFields : [];
+    }
+
+    if (deterministicPlan.scope === 'unit') {
+      if (!hasUnitCode) {
+        missingFields.push('unit');
+      }
+      if (!hasPeriod && deterministicPlan.intent === 'unit_debt') {
+        missingFields.push('period');
+      }
+      if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+        missingFields.push('period.mode');
+      }
+      return missingFields.length > 0 ? missingFields : [];
+    }
+
+    if (deterministicPlan.scope === 'tenant' && !hasPeriod && deterministicPlan.intent === 'tenant_debt') {
+      return ['period'];
+    }
+
+    if (canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+      return ['period.mode'];
+    }
+
+    return missingFields;
+  }
+
+  private isDeterministicPlanExecutable(deterministicPlan: AssistantQueryPlan): boolean {
+    const missingFields = this.resolveDeterministicMissingFields(deterministicPlan);
+    return missingFields.length === 0;
   }
 
   private buildResolvedEntitiesFromPendingClarification(
@@ -1743,6 +1972,10 @@ export class AssistantService implements OnModuleInit {
     semanticValidation: IntentSemanticValidationResult | undefined,
     extractedIntent: ExtractedIntent,
   ): string[] {
+    if (semanticValidation?.reason === 'relative_range_mode_ambiguous') {
+      return ['period.mode'];
+    }
+
     if (semanticValidation?.reason === 'building_scope_missing_context') {
       return ['building'];
     }
@@ -1760,6 +1993,48 @@ export class AssistantService implements OnModuleInit {
     }
 
     return ['period'];
+  }
+
+  private buildRelativeRangeAcknowledgementResponse(
+    extractedIntent: ExtractedIntent,
+    period: CanonicalFinancePeriod,
+  ): StructuredResponse {
+    return {
+      type: 'text',
+      title: 'Periodo identificado',
+      summary: `Entendido. Tomé el período relativo como ${this.describeRelativeRangePeriod(period)}.`,
+      actions: [],
+      meta: {
+        confidence: extractedIntent.confidence,
+        periodKind: period.kind,
+      },
+    };
+  }
+
+  private describeRelativeRangePeriod(period: CanonicalFinancePeriod): string {
+    const amount = period.amount ?? 0;
+    if (period.mode === 'including_current') {
+      return `los últimos ${amount} meses incluyendo el mes actual`;
+    }
+    if (period.mode === 'closed_months') {
+      return `los últimos ${amount} meses cerrados`;
+    }
+    return `los últimos ${amount} meses`;
+  }
+
+  private isRelativeRangeModeFollowUp(normalized: string): boolean {
+    return this.isIncludingCurrentRangeFollowUp(normalized) || this.isClosedRangeFollowUp(normalized);
+  }
+
+  private isIncludingCurrentRangeFollowUp(normalized: string): boolean {
+    return (
+      /\b(incluyendo este mes|incluye este mes|con este mes|incluyendo el mes actual|sumando este mes|mas este mes|más este mes)\b/.test(normalized) ||
+      this.isCurrentMonthFollowUpAlias(normalized)
+    );
+  }
+
+  private isClosedRangeFollowUp(normalized: string): boolean {
+    return /\b(cerrados|solo meses cerrados|sin incluir este mes|sin contar este mes|solo los meses cerrados)\b/.test(normalized);
   }
 
   private async resolveClarificationContext(
@@ -1807,11 +2082,13 @@ export class AssistantService implements OnModuleInit {
     resolvedEntities: EntityResolution | undefined,
     missingFields: string[] | undefined,
     question?: string,
+    period?: CanonicalFinancePeriod | null,
   ): PendingClarificationContext {
     return {
       intent: extractedIntent.intent,
       entity: extractedIntent.entity,
       filters: extractedIntent.filters,
+      period: period ?? this.extractCanonicalPeriod(extractedIntent.filters.period),
       missingFields:
         missingFields && missingFields.length > 0
           ? missingFields
@@ -1825,6 +2102,14 @@ export class AssistantService implements OnModuleInit {
         personId: resolvedEntities?.person?.id,
       },
     };
+  }
+
+  private extractCanonicalPeriod(period: string | CanonicalFinancePeriod | undefined): CanonicalFinancePeriod | undefined {
+    if (!period || typeof period === 'string') {
+      return undefined;
+    }
+
+    return period;
   }
 
   private async storeConversationTurn(
@@ -1865,7 +2150,7 @@ export class AssistantService implements OnModuleInit {
     const debtInterpretation = this.debtIntentInterpreter.interpret(message);
 
     if (debtInterpretation.scope === 'tenant') {
-      const response = await this.tryResolveStrictTenantDebtQuestion(tenantId, userRoles, userId);
+      const response = await this.tryResolveStrictTenantDebtQuestion(tenantId, userRoles, userId, message);
       if (response) {
         return response;
       }
@@ -2623,9 +2908,19 @@ export class AssistantService implements OnModuleInit {
     tenantId: string,
     userRoles: string[],
     userId?: string,
+    message?: string,
   ): Promise<ChatResponse | null> {
     if (!this.canAccessOperationalData(userRoles)) {
       return null;
+    }
+
+    const plan = message ? this.queryPlanService.createPlan(message) : null;
+    const canonicalPeriod = this.extractCanonicalPeriod(plan?.filters.period);
+    if (plan?.intent === 'tenant_debt' && canonicalPeriod?.kind === 'relative_range' && canonicalPeriod.mode === 'unknown') {
+      return {
+        answer: `¿Querés incluir el mes actual o consultar solo los últimos ${canonicalPeriod.amount ?? 0} meses cerrados?`,
+        suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
+      };
     }
 
     const response = await this.queryExecutors.execute({
@@ -2638,7 +2933,7 @@ export class AssistantService implements OnModuleInit {
         scope: 'tenant',
         requiredPermission: 'payments.review',
         executor: 'tenant_debt',
-        filters: {},
+        filters: plan?.intent === 'tenant_debt' && plan.filters ? plan.filters : {},
         confidence: 0.9,
         source: 'deterministic_rules',
       },

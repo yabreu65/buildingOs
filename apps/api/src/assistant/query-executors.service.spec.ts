@@ -15,6 +15,7 @@ describe('AssistantQueryExecutorsService', () => {
   };
   const policy = { assertCanExecute: jest.fn() };
   const unitResolver = { resolve: jest.fn() };
+  const periodResolver = { resolve: jest.fn() };
   const finanzasService = {
     getUnitLedger: jest.fn(),
     getBuildingFinancialSummary: jest.fn(),
@@ -35,9 +36,20 @@ describe('AssistantQueryExecutorsService', () => {
       policy as never,
       unitResolver as never,
       finanzasService as never,
+      periodResolver as never,
     );
     unitResolver.resolve.mockResolvedValue({ resolved: resolvedUnit, errorResponse: null });
     policy.assertCanExecute.mockResolvedValue(undefined);
+    periodResolver.resolve.mockReturnValue({
+      kind: 'period_range',
+      periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+      period: null,
+      startPeriod: '2026-02',
+      endPeriod: '2026-06',
+      startDate: new Date('2026-02-01'),
+      endDate: new Date('2026-06-30T23:59:59.999Z'),
+      label: 'febrero 2026 a junio 2026',
+    });
   });
 
   it('executes unit_debt through allowlisted Prisma reads after policy enforcement', async () => {
@@ -169,6 +181,163 @@ describe('AssistantQueryExecutorsService', () => {
     expect(result?.answer).toContain('deuda pendiente total');
   });
 
+  it('executes building_debt with relative-range periods and a labeled range response', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+      filters: {
+        buildingToken: 'A',
+        buildingAlias: 'torre el parque',
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'including_current',
+          month: null,
+          year: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+      },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Torre El Parque' }]);
+    prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 50000,
+      totalOutstanding: 100000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(periodResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'relative_range',
+      amount: 5,
+      unit: 'month',
+      mode: 'including_current',
+    }));
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith(
+      'tenant-1',
+      'building-1',
+      { periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'] },
+    );
+    expect(result?.answer).toContain('febrero 2026 a junio 2026');
+  });
+
+  it('keeps accumulated building debt unfiltered while preserving the legacy flow', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+      filters: { buildingToken: 'A', period: 'accumulated' },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
+    prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 50000,
+      totalOutstanding: 100000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+
+    await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith('tenant-1', 'building-1', undefined);
+  });
+
+  it('keeps the YYYY-MM building debt path compatible', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+      filters: { buildingToken: 'A', period: '2026-06' },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
+    prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 50000,
+      totalOutstanding: 100000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+
+    await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith(
+      'tenant-1',
+      'building-1',
+      { period: '2026-06' },
+    );
+  });
+
+  it('executes building_debt with closed-month relative ranges', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'building_debt',
+      module: 'payments',
+      scope: 'building',
+      requiredPermission: 'payments.review',
+      executor: 'building_debt',
+      filters: {
+        buildingToken: 'A',
+        buildingAlias: 'torre el parque',
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'closed_months',
+          month: null,
+          year: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+      },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Torre El Parque' }]);
+    prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
+    finanzasService.getBuildingFinancialSummary.mockResolvedValue({
+      totalCharges: 150000,
+      totalPaid: 50000,
+      totalOutstanding: 100000,
+      delinquentUnitsCount: 1,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+
+    await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith(
+      'tenant-1',
+      'building-1',
+      { periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'] },
+    );
+  });
+
   it('executes tenant_debt with a tenant-wide outstanding debt summary', async () => {
     const plan: AssistantQueryPlan = {
       intent: 'tenant_debt',
@@ -192,9 +361,85 @@ describe('AssistantQueryExecutorsService', () => {
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 
     expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', plan }));
-    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1');
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1', undefined);
     expect(result?.answer).toContain('administración');
     expect(result?.suggestedActions[0].type).toBe('VIEW_PAYMENTS');
+  });
+
+  it('executes tenant_debt with relative-range periods and a labeled range response', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'tenant_debt',
+      module: 'payments',
+      scope: 'tenant',
+      requiredPermission: 'payments.review',
+      executor: 'tenant_debt',
+      filters: {
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'including_current',
+          month: null,
+          year: null,
+          offset: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+      },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+    finanzasService.getTenantFinancialSummary.mockResolvedValue({
+      totalCharges: 200000,
+      totalPaid: 50000,
+      totalOutstanding: 150000,
+      delinquentUnitsCount: 2,
+      topDelinquentUnits: [],
+      currency: 'ARS',
+    });
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith(
+      'tenant-1',
+      { periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'] },
+    );
+    expect(result?.answer).toContain('Deuda global de la administración');
+    expect(result?.answer).toContain('febrero 2026 a junio 2026');
+  });
+
+  it('returns null for tenant_debt relative ranges when mode is still unknown', async () => {
+    const plan: AssistantQueryPlan = {
+      intent: 'tenant_debt',
+      module: 'payments',
+      scope: 'tenant',
+      requiredPermission: 'payments.review',
+      executor: 'tenant_debt',
+      filters: {
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'unknown',
+          month: null,
+          year: null,
+          offset: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+      },
+      confidence: 0.9,
+      source: 'deterministic_rules',
+    };
+
+    const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
+
+    expect(result).toBeNull();
+    expect(finanzasService.getTenantFinancialSummary).not.toHaveBeenCalled();
   });
 
   it('executes building_delinquents through finance summary source of truth', async () => {

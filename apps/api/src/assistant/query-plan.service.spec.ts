@@ -157,6 +157,36 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.period).toBe(expectedPeriod);
   });
 
+  it('preserves relative-range tenant debt with unknown mode', () => {
+    const plan = service.createPlan('deuda de los ultimos 5 meses de la administracion');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'tenant_debt',
+      scope: 'tenant',
+    }));
+    expect(plan?.filters.period).toEqual(expect.objectContaining({
+      kind: 'relative_range',
+      amount: 5,
+      unit: 'month',
+      mode: 'unknown',
+    }));
+  });
+
+  it('preserves relative-range tenant debt for including_current follow-up phrasing', () => {
+    const plan = service.createPlan('deuda de los ultimos 5 meses incluyendo este mes de la administracion');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'tenant_debt',
+      scope: 'tenant',
+    }));
+    expect(plan?.filters.period).toEqual(expect.objectContaining({
+      kind: 'relative_range',
+      amount: 5,
+      unit: 'month',
+      mode: 'including_current',
+    }));
+  });
+
   it('preserves current month for building debt on a condominio phrase', () => {
     const plan = service.createPlan('deuda del mes actual del condominio');
 
@@ -174,6 +204,17 @@ describe('AssistantQueryPlanService', () => {
       intent: 'building_debt',
       scope: 'building',
     }));
+    expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+  });
+
+  it('preserves current month for building debt with mes que esta corriendo', () => {
+    const plan = service.createPlan('dame la deuda del mes que está corriendo del edificio A');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      scope: 'building',
+    }));
+    expect(plan?.filters.buildingAlias).toBe('A');
     expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
   });
 
@@ -273,6 +314,22 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.period).toBe('2026-06');
     expect(plan?.filters.unitCode).toBeUndefined();
     expect(plan?.filters.unitCodeRaw).toBeUndefined();
+  });
+
+  it('preserves relative range debt queries for a named building', () => {
+    const plan = service.createPlan('deuda de los ultimos 5 meses de la torre el parque');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      scope: 'building',
+    }));
+    expect(plan?.filters.buildingAlias).toEqual(expect.stringContaining('parque'));
+    expect(plan?.filters.period).toEqual(expect.objectContaining({
+      kind: 'relative_range',
+      amount: 5,
+      unit: 'month',
+      mode: 'unknown',
+    }));
   });
 
   it('keeps building-level payments queries with month and year out of unit parsing', () => {

@@ -15,6 +15,8 @@ describe('AssistantLocalConsensusService', () => {
     process.env.AI_GEMINI_FALLBACK_ENABLED = 'false';
     process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
     process.env.OLLAMA_MODEL = 'qwen2.5:3b';
+    delete process.env.AI_OLLAMA_TIMEOUT_MS;
+    delete process.env.ASSISTANT_TRACE;
     service = new AssistantLocalConsensusService();
   });
 
@@ -25,6 +27,8 @@ describe('AssistantLocalConsensusService', () => {
     delete process.env.AI_GEMINI_FALLBACK_ENABLED;
     delete process.env.OLLAMA_BASE_URL;
     delete process.env.OLLAMA_MODEL;
+    delete process.env.AI_OLLAMA_TIMEOUT_MS;
+    delete process.env.ASSISTANT_TRACE;
     mockFetch.mockReset();
   });
 
@@ -98,6 +102,23 @@ describe('AssistantLocalConsensusService', () => {
     expect(requestBody.format).toBeDefined();
   });
 
+  it('uses the configured Ollama timeout when provided', async () => {
+    process.env.AI_OLLAMA_TIMEOUT_MS = '30000';
+    service = new AssistantLocalConsensusService();
+
+    expect(service.getTimeoutMs()).toBe(30000);
+  });
+
+  it('falls back to 20000ms when the configured Ollama timeout is invalid', async () => {
+    process.env.AI_OLLAMA_TIMEOUT_MS = 'abc';
+    service = new AssistantLocalConsensusService();
+    expect(service.getTimeoutMs()).toBe(20000);
+
+    process.env.AI_OLLAMA_TIMEOUT_MS = '999';
+    service = new AssistantLocalConsensusService();
+    expect(service.getTimeoutMs()).toBe(20000);
+  });
+
   it('asks for clarification on period mismatch', async () => {
     const currentDate = new Date();
     mockFetch.mockResolvedValue({
@@ -140,6 +161,88 @@ describe('AssistantLocalConsensusService', () => {
     expect(result.mismatchReason).toBe('period');
     expect(result.clarificationMessage).toContain('este mes');
     expect(result.usedLocalModel).toBe(true);
+  });
+
+  it('accepts model-enriched current month when deterministic period is missing', async () => {
+    const currentDate = new Date();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: {
+          content: JSON.stringify({
+            intent: 'building_debt',
+            scope: 'building',
+            entity: {
+              buildingAlias: 'A',
+              unitAlias: null,
+            },
+            period: {
+              kind: 'current_month',
+              month: currentDate.getMonth() + 1,
+              year: currentDate.getFullYear(),
+              offset: 0,
+              amount: null,
+              unit: 'month',
+              mode: 'including_current',
+            },
+            confidence: 0.97,
+            requiresClarification: false,
+            missingFields: [],
+          }),
+        },
+      }),
+    });
+
+    const result = await service.evaluate(
+      'dame la deuda del mes que está corriendo del edificio A',
+      buildDeterministicPlan({ filters: { buildingAlias: 'A', buildingToken: 'A', period: undefined } }),
+      {},
+    );
+
+    expect(result.consensus).toBe(true);
+    expect(result.mismatchReason).toBeUndefined();
+    expect(result.modelPlan?.period.kind).toBe('current_month');
+  });
+
+  it('marks tenant_debt with building scope as semantically invalid', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: {
+          content: JSON.stringify({
+            intent: 'tenant_debt',
+            scope: 'building',
+            entity: {
+              buildingAlias: 'A',
+              unitAlias: null,
+            },
+            period: {
+              kind: 'current_month',
+              month: 6,
+              year: 2026,
+              offset: 0,
+              amount: null,
+              unit: 'month',
+              mode: 'including_current',
+            },
+            confidence: 0.92,
+            requiresClarification: false,
+            missingFields: [],
+          }),
+        },
+      }),
+    });
+
+    const result = await service.evaluate(
+      'dame la deuda del mes que está corriendo del edificio A',
+      buildDeterministicPlan(),
+      {},
+    );
+
+    expect(result.consensus).toBe(false);
+    expect(result.mismatchReason).toBe('model_intent_scope_conflict');
+    expect(result.modelValid).toBe(false);
+    expect(result.modelInvalidReason).toBe('model_intent_scope_conflict');
   });
 
   it('asks for clarification when the local model marks the query as incomplete', async () => {
@@ -193,6 +296,21 @@ describe('AssistantLocalConsensusService', () => {
 
     expect(result.consensus).toBe(false);
     expect(result.mismatchReason).toBe('local_model_failed');
-    expect(result.clarificationMessage).toContain('administración');
+    expect(result.clarificationMessage).toContain('administración, de un edificio o de una unidad');
+  });
+
+  it('asks only for the period when the local model fails but building context exists', async () => {
+    mockFetch.mockRejectedValue(new Error('AbortError'));
+
+    const result = await service.evaluate(
+      'dame la deuda del mes que está corriendo del edificio A',
+      buildDeterministicPlan({ filters: { buildingAlias: 'A', buildingToken: 'A', period: undefined } }),
+      {},
+    );
+
+    expect(result.consensus).toBe(false);
+    expect(result.mismatchReason).toBe('local_model_failed');
+    expect(result.clarificationMessage).toContain('este mes o la deuda acumulada');
+    expect(result.clarificationMessage).not.toContain('administración, de un edificio o de una unidad');
   });
 });

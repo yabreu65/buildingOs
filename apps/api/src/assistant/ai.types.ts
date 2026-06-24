@@ -32,6 +32,7 @@ export type AssistantConsensusPeriodKind =
   | 'relative_month'
   | 'relative_range'
   | 'month_range'
+  | 'year_to_date'
   | 'accumulated'
   | 'unknown';
 
@@ -83,6 +84,8 @@ export interface AssistantConsensusEvaluation {
   deterministicPlan: AssistantConsensusModelPlan | null;
   modelPlan: AssistantConsensusModelPlan | null;
   mismatchReason?: string;
+  modelValid?: boolean;
+  modelInvalidReason?: 'model_semantic_invalid' | 'model_intent_scope_conflict';
   clarificationMessage?: string;
   usedLocalModel: boolean;
   localProvider: 'ollama';

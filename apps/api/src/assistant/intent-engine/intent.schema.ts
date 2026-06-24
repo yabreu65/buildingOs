@@ -5,6 +5,28 @@ import { z } from 'zod';
  * Strict validation - rejects unknown fields with detailed error messages
  */
 
+const canonicalFinancePeriodSchema = z.object({
+  kind: z.enum([
+    'current_month',
+    'previous_month',
+    'named_month',
+    'relative_range',
+    'month_range',
+    'year_to_date',
+    'accumulated',
+    'unknown',
+  ]),
+  amount: z.number().nullable(),
+  unit: z.enum(['month']).nullable(),
+  mode: z.enum(['including_current', 'closed_months', 'unknown']).nullable(),
+  month: z.number().nullable(),
+  year: z.number().nullable(),
+  startMonth: z.number().nullable(),
+  startYear: z.number().nullable(),
+  endMonth: z.number().nullable(),
+  endYear: z.number().nullable(),
+}).strict();
+
 // Entity reference schema - strict to reject unknown fields
 const entityReferenceSchema: z.ZodType<{
   type: 'unit' | 'building' | 'person';
@@ -25,7 +47,7 @@ const intentFiltersSchema: z.ZodType<{
   minAmount?: number;
   maxAmount?: number;
   minDebt?: number;
-  period?: string;
+  period?: string | z.infer<typeof canonicalFinancePeriodSchema>;
   status?: string;
   method?: string;
   minAgeDays?: number;
@@ -38,7 +60,7 @@ const intentFiltersSchema: z.ZodType<{
     minAmount: z.number().optional(),
     maxAmount: z.number().optional(),
     minDebt: z.number().optional(),
-    period: z.string().optional(),
+    period: z.union([z.string(), canonicalFinancePeriodSchema]).optional(),
     financePeriod: z.string().optional(),
     status: z.string().optional(),
     method: z.string().optional(),

@@ -295,6 +295,76 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
     });
 
+    it('rehidrata la aclaración pendiente para "deuda de este mes" sin perder el edificio original', async () => {
+      const previousResolvedEntities = {
+        building: { id: 'demo-A', name: 'Edificio A', alias: 'A' },
+        alternatives: [],
+      };
+
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda del edificio A',
+          timestamp: new Date(),
+          resolvedEntities: previousResolvedEntities,
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'demo-A' });
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockConversationContext.getPendingClarification.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'A' },
+        filters: {},
+        missingFields: ['period'],
+        question: '¿Querés la deuda de este mes o la deuda acumulada?',
+        resolvedEntityIds: { buildingId: 'demo-A' },
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: {
+          buildingId: resolved.building?.id,
+          unitId: resolved.unit?.id,
+          personId: resolved.person?.id,
+        },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'deuda de este mes', page: 'charges', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentExtractor.extractIntent).not.toHaveBeenCalled();
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'building_debt',
+          filters: expect.objectContaining({ period: new Date().toISOString().slice(0, 7) }),
+        }),
+        expect.objectContaining({
+          building: expect.objectContaining({ id: 'demo-A', alias: 'A' }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-A' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
+    });
+
     it('rehidrata aclaración pendiente para "acumulada" usando el edificio original', async () => {
       const previousResolvedEntities = {
         building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
@@ -621,6 +691,316 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(result.type).toBe('clarification');
     });
 
+    it('asks for period.mode on relative range debt queries and preserves the building context', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: {
+          buildingAlias: 'torre el parque',
+          buildingToken: 'torre el parque',
+          period: {
+            kind: 'relative_range',
+            amount: 5,
+            unit: 'month',
+            mode: 'unknown',
+            month: null,
+            year: null,
+            startMonth: null,
+            startYear: null,
+            endMonth: null,
+            endYear: null,
+          },
+        },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentExtractor.extractIntent.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {},
+        confidence: 0.9,
+        source: 'deterministic',
+        llmProvider: 'none',
+        requiresClarification: false,
+        missingFields: [],
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'needs_clarification',
+        reason: 'relative_range_mode_ambiguous',
+        question: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'deuda de los ultimos 5 meses de la torre el parque',
+          page: 'charges',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deterministicPlan: expect.objectContaining({
+            intent: 'building_debt',
+            filters: expect.objectContaining({
+              period: expect.objectContaining({
+                kind: 'relative_range',
+                amount: 5,
+                unit: 'month',
+                mode: 'unknown',
+              }),
+            }),
+          }),
+        }),
+      );
+      expect(mockConversationContext.setPendingClarification).toHaveBeenCalledWith(
+        'tenant-1',
+        'user-1',
+        'conv-1',
+        expect.objectContaining({
+          intent: 'building_debt',
+          entity: expect.objectContaining({ buildingAlias: 'torre el parque' }),
+          period: expect.objectContaining({
+            kind: 'relative_range',
+            amount: 5,
+            unit: 'month',
+            mode: 'unknown',
+          }),
+          missingFields: ['period.mode'],
+        }),
+      );
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
+    });
+
+    it('updates the relative-range mode on follow-up without asking again for month vs accumulated', async () => {
+      mockConversationContext.getContext.mockResolvedValue([
+        {
+          role: 'user',
+          message: 'deuda de los ultimos 5 meses de la torre el parque',
+          timestamp: new Date(),
+          resolvedEntities: {
+            building: { id: 'demo-A', name: 'Torre El Parque', alias: 'torre el parque' },
+            alternatives: [],
+          },
+        },
+      ]);
+      mockConversationContext.getLastResolved.mockResolvedValue({ buildingId: 'demo-A' });
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockConversationContext.getPendingClarification.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: {
+            kind: 'relative_range',
+            amount: 5,
+            unit: 'month',
+            mode: 'unknown',
+            month: null,
+            year: null,
+            startMonth: null,
+            startYear: null,
+            endMonth: null,
+            endYear: null,
+          },
+        },
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'unknown',
+          month: null,
+          year: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+        missingFields: ['period.mode'],
+        question: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+        resolvedEntityIds: { buildingId: 'demo-A' },
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'accepted',
+        reason: 'period_present',
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'incluyendo este mes',
+          page: 'charges',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentExtractor.extractIntent).not.toHaveBeenCalled();
+      expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extractedIntent: expect.objectContaining({
+            filters: expect.objectContaining({
+              period: expect.objectContaining({
+                kind: 'relative_range',
+                amount: 5,
+                unit: 'month',
+                mode: 'including_current',
+              }),
+            }),
+          }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(mockConversationContext.clearPendingClarification).toHaveBeenCalledWith('tenant-1', 'user-1', 'conv-1');
+      expect(result.type).toBe('text');
+      expect(result.summary).toContain('últimos 5 meses incluyendo el mes actual');
+      expect(result.summary).not.toContain('este mes o la deuda acumulada');
+    });
+
+    it('updates the relative-range mode to closed_months on follow-up', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue('building_debt');
+      mockConversationContext.getPendingClarification.mockResolvedValue({
+        intent: 'building_debt',
+        entity: { type: 'building', buildingAlias: 'torre el parque' },
+        filters: {
+          period: {
+            kind: 'relative_range',
+            amount: 5,
+            unit: 'month',
+            mode: 'unknown',
+            month: null,
+            year: null,
+            startMonth: null,
+            startYear: null,
+            endMonth: null,
+            endYear: null,
+          },
+        },
+        period: {
+          kind: 'relative_range',
+          amount: 5,
+          unit: 'month',
+          mode: 'unknown',
+          month: null,
+          year: null,
+          startMonth: null,
+          startYear: null,
+          endMonth: null,
+          endYear: null,
+        },
+        missingFields: ['period.mode'],
+        question: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'accepted',
+        reason: 'period_present',
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'meses cerrados',
+          page: 'charges',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extractedIntent: expect.objectContaining({
+            filters: expect.objectContaining({
+              period: expect.objectContaining({
+                kind: 'relative_range',
+                amount: 5,
+                unit: 'month',
+                mode: 'closed_months',
+              }),
+            }),
+          }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(result.type).toBe('text');
+      expect(result.summary).toContain('últimos 5 meses cerrados');
+    });
+
+    it('asks for period.mode on tenant debt relative range queries', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'tenant_debt',
+        module: 'payments',
+        scope: 'tenant',
+        requiredPermission: 'payments.review',
+        executor: 'tenant_debt',
+        filters: {
+          period: {
+            kind: 'relative_range',
+            amount: 5,
+            unit: 'month',
+            mode: 'unknown',
+            month: null,
+            year: null,
+            startMonth: null,
+            startYear: null,
+            endMonth: null,
+            endYear: null,
+          },
+        },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: '¿Querés incluir el mes actual o consultar solo los últimos 5 meses cerrados?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'deuda de los ultimos 5 meses de la administracion',
+          page: 'charges',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(result.summary).toContain('incluir el mes actual');
+      expect(result.summary).toContain('últimos 5 meses cerrados');
+    });
+
     it('falls back to deterministic debt plan when Gemini fails for condominio debt', async () => {
       mockConversationContext.getContext.mockResolvedValue([]);
       mockConversationContext.getLastResolved.mockResolvedValue({});
@@ -785,6 +1165,352 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(mockLocalConsensus.evaluate).toHaveBeenCalled();
       expect(mockIntentExtractor.extractIntent).not.toHaveBeenCalled();
       expect(mockQueryExecutorService.execute).toHaveBeenCalled();
+    });
+
+    it('executes deterministic building debt when the local model is semantically invalid', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockLocalConsensus.isEnabled.mockReturnValue(true);
+      mockLocalConsensus.evaluate.mockResolvedValue({
+        consensus: false,
+        deterministicPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.9,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        modelPlan: {
+          intent: 'tenant_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.96,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        mismatchReason: 'model_intent_scope_conflict',
+        modelValid: false,
+        modelInvalidReason: 'model_intent_scope_conflict',
+        usedLocalModel: true,
+        localProvider: 'ollama',
+        localBaseUrl: 'http://localhost:11434',
+        localModel: 'qwen2.5:7b',
+      });
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'A', buildingToken: 'A', period: '2026-06' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'accepted',
+        reason: 'default_accept',
+      });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-A',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-A', name: 'Edificio A', alias: 'A' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'dame la deuda del mes que está corriendo del edificio A',
+          page: 'charges',
+          currentPage: '/tenant-1/buildings/demo-A/finance',
+          buildingId: 'demo-A',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-A' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
+      expect(mockResponseFormatter.formatV2).not.toHaveBeenCalledWith(
+        expect.objectContaining({ clarificationMessage: expect.stringContaining('contexto') }),
+        expect.any(String),
+        expect.any(Number),
+      );
+    });
+
+    it('asks only for the missing period when the model is semantically invalid and the building is already known', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockLocalConsensus.isEnabled.mockReturnValue(true);
+      mockLocalConsensus.evaluate.mockResolvedValue({
+        consensus: false,
+        deterministicPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'unknown',
+            month: null,
+            year: null,
+            offset: null,
+            amount: null,
+            unit: null,
+            mode: null,
+          },
+          confidence: 0.9,
+          requiresClarification: false,
+          missingFields: ['period'],
+        },
+        modelPlan: {
+          intent: 'tenant_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.96,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        mismatchReason: 'model_intent_scope_conflict',
+        modelValid: false,
+        modelInvalidReason: 'model_intent_scope_conflict',
+        usedLocalModel: true,
+        localProvider: 'ollama',
+        localBaseUrl: 'http://localhost:11434',
+        localModel: 'qwen2.5:7b',
+      });
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'A', buildingToken: 'A' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'needs_clarification',
+        reason: 'period_ambiguous',
+        question: '¿Querés la deuda de este mes o la deuda acumulada?',
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-A', name: 'Edificio A', alias: 'A' },
+        alternatives: [],
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: '¿Querés la deuda de este mes o la deuda acumulada?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'deuda del edificio A',
+          page: 'charges',
+          buildingId: 'demo-A',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
+      expect(result.summary).toContain('este mes o la deuda acumulada');
+      expect(result.summary).not.toContain('administración, un edificio o una unidad');
+    });
+
+    it('executes building debt when the local model enriches a missing current-month period', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockLocalConsensus.isEnabled.mockReturnValue(true);
+      mockLocalConsensus.evaluate.mockResolvedValue({
+        consensus: true,
+        deterministicPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'unknown',
+            month: null,
+            year: null,
+            offset: null,
+            amount: null,
+            unit: null,
+            mode: null,
+          },
+          confidence: 0.85,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        modelPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'A',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.97,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        usedLocalModel: true,
+        localProvider: 'ollama',
+        localBaseUrl: 'http://localhost:11434',
+        localModel: 'qwen2.5:7b',
+      });
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'A', buildingToken: 'A' },
+        confidence: 0.85,
+        source: 'deterministic_rules',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'accepted',
+        reason: 'default_accept',
+      });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-A',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-A', name: 'Edificio A', alias: 'A' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'dame la deuda del mes que está corriendo del edificio A',
+          page: 'charges',
+          currentPage: '/tenant-1/buildings/demo-A/finance',
+          buildingId: 'demo-A',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockLocalConsensus.evaluate).toHaveBeenCalled();
+      expect(mockIntentExtractor.extractIntent).not.toHaveBeenCalled();
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'building_debt',
+          filters: expect.objectContaining({ period: new Date().toISOString().slice(0, 7) }),
+        }),
+        expect.objectContaining({
+          building: expect.objectContaining({ id: 'demo-A', alias: 'A' }),
+        }),
+      );
+      expect(mockQueryExecutorService.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: expect.objectContaining({ buildingId: 'demo-A' }) }),
+        'tenant-1',
+        'user-1',
+        ADMIN_ROLES,
+      );
     });
 
     it('uses finance period context before executing building debt', async () => {
