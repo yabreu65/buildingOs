@@ -198,6 +198,7 @@ describe('IntentExtractorService', () => {
       const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body ?? '{}');
       expect(requestBody.generationConfig.responseMimeType).toBe('application/json');
       expect(requestBody.generationConfig.responseSchema).toBeDefined();
+      expect(JSON.stringify(requestBody.generationConfig.responseSchema)).not.toContain('additionalProperties');
     });
 
     it('uses Gemini structured output parser for valid structured responses', () => {

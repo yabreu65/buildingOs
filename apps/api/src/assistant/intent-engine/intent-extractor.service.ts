@@ -28,23 +28,22 @@ export interface GeminiGenerateContentResponse {
 }
 
 const geminiExtractionResponseSchema = {
-  type: 'object',
-  properties: {
-    intent: { type: 'string' },
-    entity: {
       type: 'object',
+      properties: {
+        intent: { type: 'string' },
+        entity: {
+          type: 'object',
       properties: {
         type: { type: 'string', enum: ['unit', 'building', 'person'] },
         buildingAlias: { type: 'string' },
         unitCode: { type: 'string' },
         personName: { type: 'string' },
-      },
-      required: ['type'],
-      additionalProperties: false,
-    },
-    filters: {
-      type: 'object',
-      properties: {
+          },
+          required: ['type'],
+        },
+        filters: {
+          type: 'object',
+          properties: {
         minAmount: { type: 'number' },
         maxAmount: { type: 'number' },
         minDebt: { type: 'number' },
@@ -56,31 +55,28 @@ const geminiExtractionResponseSchema = {
         category: { type: 'string' },
         sortField: { type: 'string' },
         sortOrder: { type: 'string', enum: ['asc', 'desc'] },
+            limit: { type: 'number', maximum: 100 },
+          },
+        },
+        sort: {
+          type: 'object',
+          properties: {
+            field: { type: 'string' },
+            order: { type: 'string', enum: ['asc', 'desc'] },
+          },
+        },
         limit: { type: 'number', maximum: 100 },
-      },
-      additionalProperties: false,
-    },
-    sort: {
-      type: 'object',
-      properties: {
-        field: { type: 'string' },
-        order: { type: 'string', enum: ['asc', 'desc'] },
-      },
-      additionalProperties: false,
-    },
-    limit: { type: 'number', maximum: 100 },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
-    source: { type: 'string', enum: ['deterministic', 'llm', 'hybrid'] },
-    llmProvider: { type: 'string', enum: ['ollama', 'opencode', 'gemini', 'none'] },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        source: { type: 'string', enum: ['deterministic', 'llm', 'hybrid'] },
+        llmProvider: { type: 'string', enum: ['ollama', 'opencode', 'gemini', 'none'] },
     requiresClarification: { type: 'boolean' },
     missingFields: {
       type: 'array',
       items: { type: 'string' },
     },
-  },
-  required: ['intent', 'entity', 'filters', 'confidence'],
-  additionalProperties: false,
-} as const;
+      },
+      required: ['intent', 'entity', 'filters', 'confidence'],
+    } as const;
 
 export function parseGeminiStructuredIntentResponse(response: unknown): ExtractedIntent {
   const rawText = extractGeminiStructuredIntentText(response);

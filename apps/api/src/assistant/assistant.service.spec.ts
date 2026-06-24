@@ -610,6 +610,61 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(result.type).toBe('clarification');
     });
 
+    it('falls back to deterministic debt plan when Gemini fails for condominio debt', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: {},
+        confidence: 0.85,
+        source: 'deterministic_rules',
+      });
+      mockIntentExtractor.extractIntent.mockRejectedValue(new Error('Gemini API error: 400 Bad Request'));
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'needs_clarification',
+        reason: 'building_scope_missing_context',
+        question: '¿De cuál condominio/edificio quieres consultar la deuda?',
+      });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'clarification',
+        title: 'Aclaración',
+        summary: '¿De cuál condominio/edificio quieres consultar la deuda?',
+        meta: {},
+      });
+
+      const result = await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        { message: 'deuda del condominio', page: 'charges', conversationId: 'conv-1' },
+        ADMIN_ROLES,
+      );
+
+      expect(mockIntentSemanticValidator.evaluate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deterministicPlan: expect.objectContaining({
+            intent: 'building_debt',
+            confidence: 0.85,
+          }),
+          extractedIntent: expect.objectContaining({
+            intent: 'building_debt',
+            confidence: 0.85,
+            source: 'hybrid',
+            llmProvider: 'none',
+          }),
+        }),
+      );
+      expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(result.type).toBe('clarification');
+    });
+
     it('uses finance period context before executing building debt', async () => {
       mockConversationContext.getContext.mockResolvedValue([]);
       mockConversationContext.getLastResolved.mockResolvedValue({});

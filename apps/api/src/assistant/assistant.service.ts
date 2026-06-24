@@ -697,6 +697,36 @@ export class AssistantService implements OnModuleInit {
       } catch (error) {
         this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
+        if (deterministicPlan) {
+          extractedIntent = {
+            intent: deterministicPlan.intent,
+            entity: {
+              type: deterministicPlan.scope === 'unit' ? 'unit' : 'building',
+              buildingAlias: deterministicPlan.filters.buildingAlias ?? deterministicPlan.filters.buildingToken,
+              unitCode: deterministicPlan.filters.unitCode,
+              personName: deterministicPlan.filters.personName,
+            },
+            filters: {
+              minAmount: deterministicPlan.filters.minAmount,
+              maxAmount: deterministicPlan.filters.maxAmount,
+              minDebt: deterministicPlan.filters.minDebt,
+              period: deterministicPlan.filters.period,
+              status: deterministicPlan.filters.status,
+              method: deterministicPlan.filters.method,
+              minAgeDays: deterministicPlan.filters.minAgeDays,
+            },
+            confidence: deterministicPlan.confidence,
+            source: 'hybrid',
+            llmProvider: 'none',
+            requiresClarification: false,
+            missingFields: [],
+          };
+          debugInfo.usedLLM = false;
+          debugInfo.llmReason = deterministicPlan.confidence >= 0.9 ? 'none' : 'low_confidence';
+          this.logger.warn(
+            `[chatV2] Falling back to deterministic plan after intent extraction failure: ${deterministicPlan.intent}`,
+          );
+        } else {
         // Fallback: use conversation context for follow-up questions
         const isFollowUp = await this.detectFollowUp(
           request.message,
@@ -752,6 +782,7 @@ export class AssistantService implements OnModuleInit {
           }
         } else {
           throw new BadRequestException('Could not understand your message. Please rephrase.');
+        }
         }
       }
     }
