@@ -1,21 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OllamaProvider } from '../ollama.provider';
 import { AssistantQueryPlanService } from '../query-plan.service';
 import { AssistantFeedbackService } from '../feedback/assistant-feedback.service';
 import { ExtractedIntent, ConversationContext, ConversationTurn } from './intent.types';
-import { extractedIntentSchema, validateExtractedIntent } from './intent.schema';
+import { validateExtractedIntent } from './intent.schema';
 import { FilterCoverageValidator } from './filter-coverage.validator';
 
 /**
  * Timeout configuration for LLM calls
  */
-const OLLAMA_TIMEOUT_MS = 15000;
 const GEMINI_TIMEOUT_MS = 5000;
-const OPENCODE_TIMEOUT_MS = 5000;
-const OPENCODE_BASE_URL = 'https://api.opencode.ai/v1/chat/completions';
-const OPENCODE_MODEL = 'qwen3.6-plus';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+
+function normalizeGeminiModel(model: string): string {
+  const trimmed = model.trim();
+  return trimmed.startsWith('models/') ? trimmed.slice('models/'.length) : trimmed;
+}
 
 export interface GeminiGenerateContentResponse {
   candidates?: Array<{
@@ -133,20 +133,6 @@ export function extractGeminiStructuredIntentText(response: unknown): string {
   return text;
 }
 
-interface OllamaChatResponse {
-  message?: {
-    content?: string;
-  };
-}
-
-interface OpencodeChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-}
-
 /**
  * Minimum confidence threshold for LLM extraction
  */
@@ -163,19 +149,15 @@ const BACKEND_CONFIDENCE_THRESHOLD = 0.9;
  *
  * Fallback chain:
  * 1. Deterministic keyword matching
- * 2. Configured semantic LLM fallback (Gemini when AI_PROVIDER=gemini, otherwise Ollama)
- * 3. Secondary fallback provider (Ollama or Opencode when configured)
+ * 2. Gemini structured fallback when confidence is below the backend threshold
  *
  * NEVER includes tenantId, roles, or permissions in LLM prompts.
  */
 @Injectable()
 export class IntentExtractorService {
   private readonly logger = new Logger(IntentExtractorService.name);
-  private readonly ollamaUrl = process.env.AI_OLLAMA_URL || 'http://localhost:11434';
-  private readonly ollamaModel = process.env.AI_OLLAMA_MODEL || 'llama3:latest';
 
   constructor(
-    private readonly ollamaProvider: OllamaProvider,
     private readonly queryPlanService: AssistantQueryPlanService,
     private readonly feedbackService: AssistantFeedbackService,
     private readonly filterCoverageValidator: FilterCoverageValidator,
@@ -196,9 +178,6 @@ export class IntentExtractorService {
     let backendBelowThreshold = false;
 
     this.logger.log(`[EXTRACTOR] Starting extraction for: "${message}"`);
-    const primaryFallback = this.getPrimaryFallbackProvider();
-    const secondaryFallback = this.getSecondaryFallbackProvider(primaryFallback);
-
     // Step 1: Try deterministic keyword matching first (fast, reliable, no hallucinations)
     try {
       this.logger.log(`[EXTRACTOR] Step 1: Trying deterministic...`);
@@ -220,23 +199,20 @@ export class IntentExtractorService {
       this.logger.warn(`[EXTRACTOR] Deterministic FAILED: ${lastError.message}`);
     }
 
-    const fallbackProviders = this.buildFallbackProviderOrder(primaryFallback, backendBelowThreshold);
-
-    // Step 2+: Fallback to the best available LLM providers
-    for (const [index, provider] of fallbackProviders.entries()) {
+    if ((backendBelowThreshold || lastError) && process.env.GEMINI_API_KEY) {
       try {
-        this.logger.log(`[EXTRACTOR] Step ${index + 2}: Trying ${provider}...`);
-        const result = await this.tryProvider(provider, message, context);
+        this.logger.log('[EXTRACTOR] Step 2: Trying Gemini...');
+        const result = await this.tryGemini(message, context);
         const durationMs = performance.now() - startTime;
-        this.logSuccess(result.intent, durationMs, provider);
-        if (backendResult && provider === 'gemini') {
+        this.logSuccess(result.intent, durationMs, 'gemini');
+        if (backendResult) {
           this.logBackendComparison(backendResult, result);
         }
-        this.logger.log(`[EXTRACTOR] ${this.formatProviderLabel(provider)} SUCCESS: intent=${result.intent} in ${durationMs.toFixed(0)}ms`);
+        this.logger.log(`[EXTRACTOR] Gemini SUCCESS: intent=${result.intent} in ${durationMs.toFixed(0)}ms`);
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(`[EXTRACTOR] ${this.formatProviderLabel(provider)} FAILED: ${lastError.message}`);
+        this.logger.warn(`[EXTRACTOR] Gemini FAILED: ${lastError.message}`);
       }
     }
 
@@ -247,156 +223,63 @@ export class IntentExtractorService {
     throw new Error(`Failed to extract intent: ${lastError?.message ?? 'All extraction methods failed'}`);
   }
 
-  /**
-   * Try extraction via Ollama with timeout
-   *
-   * Calls Ollama directly instead of OllamaProvider.chat() to use the
-   * extractor's system prompt without the provider's general chat wrapper.
-   */
-  private async tryOllama(message: string, context?: ConversationContext): Promise<ExtractedIntent> {
-    const systemPrompt = this.buildPrompt(message, context);
-    this.logger.log(`[OLLAMA] Calling Ollama at ${this.ollamaUrl} with timeout ${OLLAMA_TIMEOUT_MS}ms`);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      this.logger.error(`[OLLAMA] TIMEOUT after ${OLLAMA_TIMEOUT_MS}ms`);
-      controller.abort();
-    }, OLLAMA_TIMEOUT_MS);
-
-    const fetchStart = performance.now();
-
-    try {
-      const response = await fetch(`${this.ollamaUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.ollamaModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: message },
-          ],
-          stream: false,
-          options: { num_predict: 120 },
-        }),
-        signal: controller.signal,
-      });
-
-      const fetchDuration = performance.now() - fetchStart;
-      this.logger.log(`[OLLAMA] HTTP response in ${fetchDuration.toFixed(0)}ms: status=${response.status}`);
-
-      if (!response.ok) {
-        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-      }
-
-      const raw: unknown = await response.json();
-      const data = raw as OllamaChatResponse;
-      const answer = data.message?.content ?? '';
-      this.logger.log(`[OLLAMA] Raw answer: ${answer.substring(0, 200)}`);
-
-      const parsed = this.parseAndValidate(answer);
-      return { ...parsed, llmProvider: 'ollama' };
-    } catch (error) {
-      const fetchDuration = performance.now() - fetchStart;
-      this.logger.error(`[OLLAMA] Error after ${fetchDuration.toFixed(0)}ms: ${error instanceof Error ? error.message : String(error)}`);
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
   private async tryGemini(message: string, context?: ConversationContext): Promise<ExtractedIntent> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY not configured');
     }
 
-    const model = process.env.GEMINI_MODEL || process.env.AI_GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+    const model = normalizeGeminiModel(
+      process.env.GEMINI_MODEL || process.env.AI_GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    );
     const prompt = this.buildPrompt(message, context);
+    const endpoint = `${GEMINI_BASE_URL}/models/${model}:generateContent`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+    const requestBody = {
+      systemInstruction: {
+        parts: [{ text: prompt }],
+      },
+      contents: [{ parts: [{ text: message }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 220,
+        responseMimeType: 'application/json',
+        responseSchema: geminiExtractionResponseSchema,
+      },
+    };
+
+    this.logger.debug(
+      `[GeminiExtractor] endpoint=${endpoint} model=${model} payload=${JSON.stringify({
+        systemInstruction: { parts: [{ textLength: prompt.length }] },
+        contents: [{ parts: [{ textLength: message.length }] }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 220,
+          responseMimeType: 'application/json',
+          responseSchemaKeys: Object.keys(geminiExtractionResponseSchema.properties ?? {}),
+        },
+      })}`,
+    );
 
     try {
-      const response = await fetch(
-        `${GEMINI_BASE_URL}/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: prompt }],
-            },
-            contents: [{ parts: [{ text: message }] }],
-            generationConfig: {
-              temperature: 0,
-              maxOutputTokens: 220,
-              responseMimeType: 'application/json',
-              responseSchema: geminiExtractionResponseSchema,
-            },
-          }),
-        },
-      );
+      const response = await fetch(`${endpoint}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(requestBody),
+      });
 
       if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(
+          `Gemini API error: ${response.status} ${response.statusText}${errorBody ? ` | body=${errorBody}` : ''}`,
+        );
       }
 
       const payload: unknown = await response.json();
       const parsed = parseGeminiStructuredIntentResponse(payload);
       return { ...parsed, llmProvider: 'gemini' };
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  /**
-   * Try extraction via Opencode Go API
-   */
-  private async tryOpencode(message: string, context?: ConversationContext): Promise<ExtractedIntent> {
-    const apiKey = process.env.OPENCODE_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENCODE_API_KEY not configured');
-    }
-
-    const prompt = this.buildPrompt(message, context);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), OPENCODE_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(OPENCODE_BASE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: OPENCODE_MODEL,
-          messages: [
-            {
-              role: 'system',
-              content: prompt,
-            },
-            {
-              role: 'user',
-              content: message,
-            },
-          ],
-          max_tokens: 200,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Opencode API error: ${response.status} ${response.statusText}`);
-      }
-
-      const raw: unknown = await response.json();
-      const data = raw as OpencodeChatCompletionResponse;
-      const answer = data.choices?.[0]?.message?.content ?? '';
-
-      const parsed = this.parseAndValidate(answer);
-      return { ...parsed, llmProvider: 'opencode' };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -450,77 +333,6 @@ export class IntentExtractorService {
     return this.parseAndValidate(JSON.stringify(extracted));
   }
 
-  private async tryProvider(
-    provider: 'ollama' | 'opencode' | 'gemini',
-    message: string,
-    context?: ConversationContext,
-  ): Promise<ExtractedIntent> {
-    switch (provider) {
-      case 'gemini':
-        return this.tryGemini(message, context);
-      case 'opencode':
-        return this.tryOpencode(message, context);
-      default:
-        return this.tryOllama(message, context);
-    }
-  }
-
-  private getPrimaryFallbackProvider(): 'ollama' | 'opencode' | 'gemini' {
-    const configured = (process.env.AI_PROVIDER || '').trim().toLowerCase();
-    if (configured === 'gemini') {
-      return 'gemini';
-    }
-    if (configured === 'opencode') {
-      return 'opencode';
-    }
-    return 'ollama';
-  }
-
-  private getSecondaryFallbackProvider(
-    primary: 'ollama' | 'opencode' | 'gemini',
-  ): 'ollama' | 'opencode' | 'gemini' | null {
-    if (primary === 'gemini') {
-      return process.env.OPENCODE_API_KEY ? 'opencode' : 'ollama';
-    }
-    if (primary === 'opencode') {
-      return 'ollama';
-    }
-    if (process.env.OPENCODE_API_KEY) {
-      return 'opencode';
-    }
-    return null;
-  }
-
-  private buildFallbackProviderOrder(
-    primary: 'ollama' | 'opencode' | 'gemini',
-    backendBelowThreshold: boolean,
-  ): Array<'ollama' | 'opencode' | 'gemini'> {
-    const providers: Array<'ollama' | 'opencode' | 'gemini'> = [];
-
-    if (backendBelowThreshold && process.env.GEMINI_API_KEY) {
-      providers.push('gemini');
-    }
-
-    providers.push(primary);
-
-    const secondary = this.getSecondaryFallbackProvider(primary);
-    if (secondary) {
-      providers.push(secondary);
-    }
-
-    return [...new Set(providers)];
-  }
-
-  private formatProviderLabel(provider: 'ollama' | 'opencode' | 'gemini'): string {
-    switch (provider) {
-      case 'gemini':
-        return 'Gemini';
-      case 'opencode':
-        return 'Opencode';
-      default:
-        return 'Ollama';
-    }
-  }
 
   /**
    * Build LLM prompt for intent extraction

@@ -30,7 +30,7 @@ export interface IntentSemanticValidationResult {
 }
 
 const GEMINI_TIMEOUT_MS = 4000;
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 const semanticGeminiSchema = z.object({
   status: z.enum(['accepted', 'needs_clarification', 'override_suggested']),
