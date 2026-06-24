@@ -20,7 +20,7 @@ import { AssistantLlmHealthController } from '../llm-health.controller';
 export const AI_PROVIDER_TOKEN = 'AI_PROVIDER';
 
 export interface AiProviderOptions {
-  provider: 'none' | 'openai' | 'opencode' | 'ollama' | 'gemini';
+  provider: 'none' | 'hybrid' | 'openai' | 'opencode' | 'ollama' | 'gemini';
   ollamaUrl?: string;
   openaiApiKey?: string;
   opencodeApiKey?: string;

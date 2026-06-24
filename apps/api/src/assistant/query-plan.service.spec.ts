@@ -144,6 +144,7 @@ describe('AssistantQueryPlanService', () => {
 
   it.each([
     ['deuda de este mes de la administracion', 'current_month'],
+    ['deuda de mes en curso de la administracion', 'current_month'],
     ['deuda acumulada de la administracion', 'accumulated'],
     ['deuda total de este mes', 'current_month'],
   ])('preserves tenant debt period for "%s"', (phrase, expectedPeriod) => {
@@ -158,6 +159,16 @@ describe('AssistantQueryPlanService', () => {
 
   it('preserves current month for building debt on a condominio phrase', () => {
     const plan = service.createPlan('deuda del mes actual del condominio');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_debt',
+      scope: 'building',
+    }));
+    expect(plan?.filters.period).toBe(new Date().toISOString().slice(0, 7));
+  });
+
+  it('preserves current month for building debt with mes en curso', () => {
+    const plan = service.createPlan('deuda del mes en curso del edificio A');
 
     expect(plan).toEqual(expect.objectContaining({
       intent: 'building_debt',
@@ -311,7 +322,7 @@ describe('AssistantQueryPlanService', () => {
       intent: 'building_debt',
     }));
     expect(plan?.filters.buildingAlias).toBe('B');
-    expect(plan?.filters.period).toBeUndefined();
+    expect(plan?.filters.period).toBe('accumulated');
   });
 
   it('extracts status and minAgeDays from ticket aging query', () => {

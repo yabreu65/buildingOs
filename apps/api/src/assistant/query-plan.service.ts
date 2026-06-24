@@ -240,7 +240,13 @@ export class AssistantQueryPlanService {
   }
 
   private extractTenantDebtPeriod(normalized: string): string | undefined {
-    if (normalized.includes('este mes') || normalized.includes('mes actual') || normalized.includes('del mes actual')) {
+    if (
+      normalized.includes('este mes') ||
+      normalized.includes('mes actual') ||
+      normalized.includes('mes en curso') ||
+      normalized.includes('del mes actual') ||
+      normalized.includes('del mes en curso')
+    ) {
       return 'current_month';
     }
 
@@ -310,9 +316,17 @@ export class AssistantQueryPlanService {
       return `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     }
 
+    if (normalized.includes('mes en curso') || normalized.includes('del mes en curso')) {
+      return `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+
     if (normalized.includes('mes pasado') || normalized.includes('ultimo mes') || normalized.includes('último mes')) {
       const previous = new Date(currentYear, now.getMonth() - 1, 1);
       return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    if (/acumulad[ao]s?/.test(normalized) || /hist[oó]ric[ao]s?/.test(normalized) || /\btoda\b/.test(normalized) || /\btodo\b/.test(normalized)) {
+      return 'accumulated';
     }
 
     return undefined;

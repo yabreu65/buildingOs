@@ -14,6 +14,7 @@ import { AssistantQueryPlanService } from './query-plan.service';
 import { AssistantQueryExecutorsService } from './query-executors.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { AssistantLocalConsensusService } from './intent-engine/local-consensus.service';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
 import { RedisConversationContextService } from './context/redis-conversation-context.service';
@@ -69,6 +70,12 @@ describe('AssistantService - Strict Operational Questions', () => {
   const mockQueryExecutors = { execute: jest.fn() };
   const mockDebtCalculator = new AssistantDebtCalculatorService();
   const mockIntentExtractor = { extractIntent: jest.fn() };
+  const mockLocalConsensus = {
+    isEnabled: jest.fn(),
+    evaluate: jest.fn(),
+    getBaseUrl: jest.fn(),
+    getModel: jest.fn(),
+  };
   const mockEntityResolver = { resolveBuilding: jest.fn(), resolveUnit: jest.fn(), resolvePerson: jest.fn() };
   const mockAmbiguityService = { detectAmbiguity: jest.fn(), generateClarification: jest.fn() };
   const mockConversationContext = {
@@ -106,6 +113,9 @@ describe('AssistantService - Strict Operational Questions', () => {
     mockAuthorize.authorize.mockResolvedValue(true);
     mockQueryPlanService.createPlan.mockReturnValue(null);
     mockQueryExecutors.execute.mockResolvedValue(null);
+    mockLocalConsensus.isEnabled.mockReturnValue(false);
+    mockLocalConsensus.getBaseUrl.mockReturnValue('http://localhost:11434');
+    mockLocalConsensus.getModel.mockReturnValue('qwen2.5:3b');
     mockConversationContext.getContext.mockResolvedValue([]);
     mockConversationContext.getLastResolved.mockResolvedValue({});
     mockConversationContext.getLastIntent.mockResolvedValue(undefined);
@@ -146,6 +156,7 @@ describe('AssistantService - Strict Operational Questions', () => {
         { provide: AssistantQueryExecutorsService, useValue: mockQueryExecutors },
         { provide: AssistantDebtCalculatorService, useValue: mockDebtCalculator },
         { provide: IntentExtractorService, useValue: mockIntentExtractor },
+        { provide: AssistantLocalConsensusService, useValue: mockLocalConsensus },
         { provide: EntityResolverService, useValue: mockEntityResolver },
         { provide: AmbiguityService, useValue: mockAmbiguityService },
         { provide: RedisConversationContextService, useValue: mockConversationContext },
@@ -663,6 +674,117 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(mockQueryPlannerService.buildPlan).not.toHaveBeenCalled();
       expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
       expect(result.type).toBe('clarification');
+    });
+
+    it('uses local consensus mode and bypasses the intent extractor when enabled', async () => {
+      mockConversationContext.getContext.mockResolvedValue([]);
+      mockConversationContext.getLastResolved.mockResolvedValue({});
+      mockConversationContext.getLastIntent.mockResolvedValue(undefined);
+      mockLocalConsensus.isEnabled.mockReturnValue(true);
+      mockLocalConsensus.evaluate.mockResolvedValue({
+        consensus: true,
+        deterministicPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'B',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.9,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        modelPlan: {
+          intent: 'building_debt',
+          scope: 'building',
+          entity: {
+            buildingAlias: 'B',
+            unitAlias: null,
+          },
+          period: {
+            kind: 'current_month',
+            month: 6,
+            year: 2026,
+            offset: 0,
+            amount: null,
+            unit: 'month',
+            mode: 'including_current',
+          },
+          confidence: 0.96,
+          requiresClarification: false,
+          missingFields: [],
+        },
+        usedLocalModel: true,
+        localProvider: 'ollama',
+        localBaseUrl: 'http://localhost:11434',
+        localModel: 'qwen2.5:3b',
+      });
+      mockQueryPlanService.createPlan.mockReturnValue({
+        intent: 'building_debt',
+        module: 'payments',
+        scope: 'building',
+        requiredPermission: 'payments.review',
+        executor: 'building_debt',
+        filters: { buildingAlias: 'B', buildingToken: 'B', period: '2026-06' },
+        confidence: 0.9,
+        source: 'deterministic_rules',
+      });
+      mockIntentRegistry.has.mockReturnValue(true);
+      mockIntentSemanticValidator.evaluate.mockResolvedValue({
+        status: 'accepted',
+        reason: 'default_accept',
+      });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-B',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-B', name: 'Edificio del Río', alias: 'B' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda total: ARS 1.158,01',
+        meta: {},
+      });
+
+      await service.chatV2(
+        'tenant-1',
+        'user-1',
+        'membership-1',
+        {
+          message: 'deuda de este mes del edificio B',
+          page: 'charges',
+          currentPage: '/tenant-1/buildings/demo-B/finance',
+          financePeriod: '2026-06',
+          buildingId: 'demo-B',
+          conversationId: 'conv-1',
+        },
+        ADMIN_ROLES,
+      );
+
+      expect(mockLocalConsensus.evaluate).toHaveBeenCalled();
+      expect(mockIntentExtractor.extractIntent).not.toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).toHaveBeenCalled();
     });
 
     it('uses finance period context before executing building debt', async () => {

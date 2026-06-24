@@ -78,6 +78,7 @@ export const extractedIntentSchema = z.object({
   llmProvider: z.enum(['ollama', 'opencode', 'gemini', 'none']).optional(),
   requiresClarification: z.boolean().optional().default(false),
   missingFields: z.array(z.string()).optional().default([]),
+  clarificationMessage: z.string().optional(),
 }).strict();
 
 export const normalizedIntentSchema = extractedIntentSchema;

@@ -25,6 +25,7 @@ import {
   AiProviderStatus,
   StructuredResponse,
 } from './ai.types';
+import type { AssistantConsensusEvaluation } from './ai.types';
 
 // Re-export types for backward compatibility
 export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
@@ -32,6 +33,7 @@ export type { SuggestedActionType, SuggestedAction, ChatResponse, AiProvider };
 // Intent Engine imports
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { AssistantLocalConsensusService } from './intent-engine/local-consensus.service';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
 import { RedisConversationContextService } from './context/redis-conversation-context.service';
@@ -46,6 +48,7 @@ import {
 } from './intent-engine/intent.types';
 import { validateExtractedIntent } from './intent-engine/intent.schema';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
+import type { AssistantQueryPlan } from './query-plan.types';
 
 // Intent definitions
 import { unitDebtIntent } from './intent-engine/allowed-intents/unit-debt.intent';
@@ -222,6 +225,7 @@ export class AssistantService implements OnModuleInit {
     // Intent Engine services injected
     private readonly intentRegistry: IntentRegistry,
     private readonly intentExtractor: IntentExtractorService,
+    private readonly localConsensusService: AssistantLocalConsensusService,
     private readonly entityResolver: EntityResolverService,
     private readonly ambiguityService: AmbiguityService,
     private readonly conversationContext: RedisConversationContextService,
@@ -676,113 +680,135 @@ export class AssistantService implements OnModuleInit {
         `[chatV2] Rehydrated pending clarification for intent: ${pendingClarification.intent}`,
       );
     } else {
-      try {
-        extractedIntent = await this.intentExtractor.extractIntent(
+      const localConsensusEnabled = this.localConsensusService.isEnabled();
+      const localConsensusEligible = Boolean(
+        deterministicPlan &&
+        ['tenant_debt', 'building_debt', 'unit_debt'].includes(deterministicPlan.intent),
+      );
+
+      if (localConsensusEnabled && localConsensusEligible) {
+        const consensusResult = await this.localConsensusService.evaluate(
           request.message,
+          deterministicPlan,
           contextForExtraction,
         );
-        if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
-          debugInfo.usedLLM = true;
-          if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
-            debugInfo.llmProvider = extractedIntent.llmProvider;
-            if (extractedIntent.llmProvider === 'opencode') {
-              debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
-              debugInfo.llmModel = 'qwen3.6-plus';
-            }
-          } else {
-            debugInfo.llmProvider = 'unknown';
-          }
-        }
-        this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
-      } catch (error) {
-        this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
-        if (deterministicPlan) {
-          extractedIntent = {
-            intent: deterministicPlan.intent,
-            entity: {
-              type: deterministicPlan.scope === 'unit' ? 'unit' : 'building',
-              buildingAlias: deterministicPlan.filters.buildingAlias ?? deterministicPlan.filters.buildingToken,
-              unitCode: deterministicPlan.filters.unitCode,
-              personName: deterministicPlan.filters.personName,
-            },
-            filters: {
-              minAmount: deterministicPlan.filters.minAmount,
-              maxAmount: deterministicPlan.filters.maxAmount,
-              minDebt: deterministicPlan.filters.minDebt,
-              period: deterministicPlan.filters.period,
-              status: deterministicPlan.filters.status,
-              method: deterministicPlan.filters.method,
-              minAgeDays: deterministicPlan.filters.minAgeDays,
-            },
-            confidence: deterministicPlan.confidence,
-            source: 'hybrid',
-            llmProvider: 'none',
-            requiresClarification: false,
-            missingFields: [],
-          };
-          debugInfo.usedLLM = false;
-          debugInfo.llmReason = deterministicPlan.confidence >= 0.9 ? 'none' : 'low_confidence';
-          this.logger.warn(
-            `[chatV2] Falling back to deterministic plan after intent extraction failure: ${deterministicPlan.intent}`,
-          );
+        debugInfo.consensusMode = true;
+        debugInfo.usedLLM = consensusResult.usedLocalModel;
+        debugInfo.llmProvider = consensusResult.localProvider;
+        debugInfo.llmBaseUrl = consensusResult.localBaseUrl;
+        debugInfo.llmModel = consensusResult.localModel;
+        debugInfo.consensusResult = consensusResult.consensus
+          ? 'matched'
+          : consensusResult.mismatchReason === 'local_model_failed'
+            ? 'failed'
+            : 'mismatch';
+        debugInfo.consensusReason = consensusResult.mismatchReason;
+        debugInfo.llmReason = consensusResult.consensus
+          ? 'none'
+          : consensusResult.mismatchReason === 'local_model_failed'
+            ? 'local_model_failed'
+            : 'consensus_mismatch';
+
+        if (consensusResult.consensus && deterministicPlan) {
+          extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
         } else {
-        // Fallback: use conversation context for follow-up questions
-        const isFollowUp = await this.detectFollowUp(
-          request.message,
-          conversationContext,
-          tenantId,
-          userId,
-          sessionId,
+          extractedIntent = this.buildClarificationIntentFromConsensus(
+            deterministicPlan,
+            consensusResult,
+          );
+        }
+
+        this.logger.log(
+          `[chatV2] Local consensus ${consensusResult.consensus ? 'matched' : 'mismatch'} for "${request.message}"`,
         );
-
-        if (isFollowUp) {
-          const lastTurn = conversationContext.length > 0
-            ? conversationContext[conversationContext.length - 1]
-            : null;
-
-          if (lastTurn?.resolvedEntities) {
-            contextResolvedEntities = lastTurn.resolvedEntities;
-
-            // Try to infer intent from the follow-up message using last context
-            let inferredIntent = this.inferIntentFromFollowUp(request.message);
-            const inferredFilters = this.inferFiltersFromFollowUp(request.message);
-
-            // Fallback: if we can't infer a new intent, reuse the last one
-            if (!inferredIntent) {
-              const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
-              if (lastIntent) {
-                inferredIntent = lastIntent;
-                this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+      } else {
+        try {
+          extractedIntent = await this.intentExtractor.extractIntent(
+            request.message,
+            contextForExtraction,
+          );
+          if (extractedIntent.source === 'llm' || extractedIntent.source === 'hybrid') {
+            debugInfo.usedLLM = true;
+            if (extractedIntent.llmProvider && extractedIntent.llmProvider !== 'none') {
+              debugInfo.llmProvider = extractedIntent.llmProvider;
+              if (extractedIntent.llmProvider === 'opencode') {
+                debugInfo.llmBaseUrl = 'https://api.opencode.ai/v1/chat/completions';
+                debugInfo.llmModel = 'qwen3.6-plus';
               }
+            } else {
+              debugInfo.llmProvider = 'unknown';
             }
+          }
+          this.logger.log(`[chatV2] Intent extracted: ${extractedIntent.intent} (confidence: ${extractedIntent.confidence})`);
+        } catch (error) {
+          this.logger.warn(`[chatV2] Intent extraction failed: ${error}`);
 
-            if (inferredIntent) {
-              extractedIntent = {
-                intent: inferredIntent,
-                entity: {
-                  type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
-                  buildingAlias: undefined,
-                  unitCode: undefined,
-                },
-                filters: inferredFilters,
-                confidence: 0.6,
-                source: 'hybrid',
-                requiresClarification: false,
-                missingFields: [],
-              };
-              debugInfo.usedLLM = false;
-              debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
-              this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+          if (deterministicPlan) {
+            extractedIntent = this.buildExtractedIntentFromPlan(deterministicPlan);
+            debugInfo.usedLLM = false;
+            debugInfo.llmReason = deterministicPlan.confidence >= 0.9 ? 'none' : 'low_confidence';
+            this.logger.warn(
+              `[chatV2] Falling back to deterministic plan after intent extraction failure: ${deterministicPlan.intent}`,
+            );
+          } else {
+          // Fallback: use conversation context for follow-up questions
+          const isFollowUp = await this.detectFollowUp(
+            request.message,
+            conversationContext,
+            tenantId,
+            userId,
+            sessionId,
+          );
+
+          if (isFollowUp) {
+            const lastTurn = conversationContext.length > 0
+              ? conversationContext[conversationContext.length - 1]
+              : null;
+
+            if (lastTurn?.resolvedEntities) {
+              contextResolvedEntities = lastTurn.resolvedEntities;
+
+              // Try to infer intent from the follow-up message using last context
+              let inferredIntent = this.inferIntentFromFollowUp(request.message);
+              const inferredFilters = this.inferFiltersFromFollowUp(request.message);
+
+              // Fallback: if we can't infer a new intent, reuse the last one
+              if (!inferredIntent) {
+                const lastIntent = await this.conversationContext.getLastIntent(tenantId, userId, sessionId);
+                if (lastIntent) {
+                  inferredIntent = lastIntent;
+                  this.logger.log(`[chatV2] Reusing last intent: ${lastIntent}`);
+                }
+              }
+
+              if (inferredIntent) {
+                extractedIntent = {
+                  intent: inferredIntent,
+                  entity: {
+                    type: lastTurn.resolvedEntities.unit?.id ? 'unit' : 'building',
+                    buildingAlias: undefined,
+                    unitCode: undefined,
+                  },
+                  filters: inferredFilters,
+                  confidence: 0.6,
+                  source: 'hybrid',
+                  requiresClarification: false,
+                  missingFields: [],
+                };
+                debugInfo.usedLLM = false;
+                debugInfo.llmReason = debugInfo.llmReason === 'none' ? 'low_confidence' : debugInfo.llmReason;
+                this.logger.log(`[chatV2] Follow-up detected, using intent: ${inferredIntent}`);
+              } else {
+                throw new BadRequestException('Could not understand your message. Please rephrase.');
+              }
             } else {
               throw new BadRequestException('Could not understand your message. Please rephrase.');
             }
           } else {
             throw new BadRequestException('Could not understand your message. Please rephrase.');
           }
-        } else {
-          throw new BadRequestException('Could not understand your message. Please rephrase.');
-        }
+          }
         }
       }
     }
@@ -939,6 +965,9 @@ export class AssistantService implements OnModuleInit {
 
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
+      const clarificationMessage =
+        extractedIntent.clarificationMessage ||
+        `Necesito más contexto para responder con precisión (${missing}).`;
       const clarificationResolvedEntities = await this.resolveClarificationContext(
         extractedIntent,
         contextResolvedEntities,
@@ -953,7 +982,7 @@ export class AssistantService implements OnModuleInit {
           extractedIntent,
           clarificationResolvedEntities,
           this.resolveClarificationMissingFields(undefined, extractedIntent),
-          `Necesito más contexto para responder con precisión (${missing}).`,
+          clarificationMessage,
         ),
       );
       await this.storeConversationTurn(
@@ -968,7 +997,7 @@ export class AssistantService implements OnModuleInit {
         {
           isAmbiguous: true,
           alternatives: [],
-          clarificationMessage: `Necesito más contexto para responder con precisión (${missing}).`,
+          clarificationMessage,
         },
         'ambiguous',
         extractedIntent.confidence,
@@ -1561,6 +1590,106 @@ export class AssistantService implements OnModuleInit {
       requiresClarification: false,
       missingFields: [],
     };
+  }
+
+  private buildExtractedIntentFromPlan(plan: AssistantQueryPlan): ExtractedIntent {
+    return {
+      intent: plan.intent,
+      entity: {
+        type: plan.scope === 'unit' ? 'unit' : 'building',
+        buildingAlias: plan.filters.buildingAlias ?? plan.filters.buildingToken,
+        unitCode: plan.filters.unitCode,
+        personName: plan.filters.personName,
+      },
+      filters: {
+        minAmount: plan.filters.minAmount,
+        maxAmount: plan.filters.maxAmount,
+        minDebt: plan.filters.minDebt,
+        period: plan.filters.period,
+        status: plan.filters.status,
+        method: plan.filters.method,
+        minAgeDays: plan.filters.minAgeDays,
+      },
+      confidence: plan.confidence,
+      source: 'hybrid',
+      llmProvider: 'none',
+      requiresClarification: false,
+      missingFields: [],
+    };
+  }
+
+  private buildClarificationIntentFromConsensus(
+    deterministicPlan: AssistantQueryPlan | null,
+    consensusResult: AssistantConsensusEvaluation,
+  ): ExtractedIntent {
+    const intent = deterministicPlan?.intent ?? 'unknown';
+    const entityType = deterministicPlan?.scope === 'unit' ? 'unit' : 'building';
+    const missingFields = this.resolveConsensusMissingFields(consensusResult, deterministicPlan);
+
+    return {
+      intent,
+      entity: {
+        type: entityType,
+        buildingAlias: deterministicPlan?.filters.buildingAlias ?? deterministicPlan?.filters.buildingToken,
+        unitCode: deterministicPlan?.filters.unitCode,
+        personName: deterministicPlan?.filters.personName,
+      },
+      filters: {
+        minAmount: deterministicPlan?.filters.minAmount,
+        maxAmount: deterministicPlan?.filters.maxAmount,
+        minDebt: deterministicPlan?.filters.minDebt,
+        period: deterministicPlan?.filters.period,
+        status: deterministicPlan?.filters.status,
+        method: deterministicPlan?.filters.method,
+        minAgeDays: deterministicPlan?.filters.minAgeDays,
+      },
+      confidence: deterministicPlan?.confidence ?? 0,
+      source: 'hybrid',
+      llmProvider: consensusResult.localProvider,
+      requiresClarification: true,
+      missingFields: missingFields.length > 0 ? missingFields : ['period'],
+      clarificationMessage: consensusResult.clarificationMessage,
+    };
+  }
+
+  private resolveConsensusMissingFields(
+    consensusResult: AssistantConsensusEvaluation,
+    deterministicPlan: AssistantQueryPlan | null,
+  ): string[] {
+    if (consensusResult.mismatchReason === 'period') {
+      return ['period'];
+    }
+
+    if (consensusResult.mismatchReason === 'clarification') {
+      if (consensusResult.modelPlan?.missingFields?.length) {
+        return consensusResult.modelPlan.missingFields;
+      }
+      return ['period'];
+    }
+
+    if (consensusResult.mismatchReason === 'unit_alias') {
+      return ['unit'];
+    }
+
+    if (consensusResult.mismatchReason === 'building_alias' || consensusResult.mismatchReason === 'entity') {
+      return ['building'];
+    }
+
+    if (consensusResult.mismatchReason === 'intent' || consensusResult.mismatchReason === 'scope') {
+      return ['scope'];
+    }
+
+    if (consensusResult.mismatchReason === 'local_model_failed' || consensusResult.mismatchReason === 'no_deterministic_plan') {
+      if (deterministicPlan?.scope === 'unit') {
+        return ['unit'];
+      }
+      if (deterministicPlan?.scope === 'building') {
+        return ['building', 'period'];
+      }
+      return ['scope'];
+    }
+
+    return [];
   }
 
   private buildResolvedEntitiesFromPendingClarification(

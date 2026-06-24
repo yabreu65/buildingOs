@@ -41,6 +41,7 @@ const aiOptions = resolveAiProvider();
 // Intent Engine services
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { IntentExtractorService } from './intent-engine/intent-extractor.service';
+import { AssistantLocalConsensusService } from './intent-engine/local-consensus.service';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
 import { EntityResolverService } from './resolver/entity-resolver.service';
 import { AmbiguityService } from './resolver/ambiguity.service';
@@ -157,6 +158,7 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
     // Intent Engine services
     IntentRegistry,
     IntentExtractorService,
+    AssistantLocalConsensusService,
     FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,
@@ -189,6 +191,7 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
     AssistantTenantDebtService,
     IntentRegistry,
     IntentExtractorService,
+    AssistantLocalConsensusService,
     FilterCoverageValidator,
     EntityResolverService,
     AmbiguityService,

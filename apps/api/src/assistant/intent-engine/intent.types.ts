@@ -138,6 +138,8 @@ export interface ExtractedIntent {
   requiresClarification?: boolean;
   /** Missing semantic fields when extraction is incomplete */
   missingFields?: string[];
+  /** Suggested clarification message when the extractor needs a follow-up */
+  clarificationMessage?: string;
 }
 
 /**
