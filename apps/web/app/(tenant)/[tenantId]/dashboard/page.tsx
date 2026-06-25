@@ -9,8 +9,9 @@ import { useContextAware } from "@/features/buildings/hooks/useContextAware";
 import { useAuthSession, useIsSuperAdmin } from "@/features/auth/useAuthSession";
 import { useEffectiveRole } from "@/features/tenancy/hooks/useEffectiveRole";
 import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks/useDashboardSummary";
-import { DashboardPeriod } from "@/features/dashboard/services/dashboard.api";
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
+import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
+import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
 import {
   AlertCircle,
   CheckCircle,
@@ -43,12 +44,6 @@ const formatARS = (cents: number) =>
   }).format(cents / 100);
 
 const formatPercentage = (value: number) => `${Math.round(value * 100)}%`;
-
-const PERIOD_LABELS: Record<string, string> = {
-  CURRENT_MONTH: 'Mes actual',
-  PREVIOUS_MONTH: 'Mes anterior',
-  LAST_30_DAYS: 'Últimos 30 días',
-};
 
 const QUICK_ACTION_LABELS: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
   CREATE_CHARGE: { label: 'Crear expensa', icon: <DollarSign className="w-5 h-5" />, desc: 'Nuevo cargo mensual' },
@@ -167,7 +162,7 @@ interface AdminDashboardProps { tenantId: string }
 
 const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const router = useRouter();
-  const [period, setPeriod] = useState<DashboardPeriod>(DashboardPeriod.CURRENT_MONTH);
+  const [period, setPeriod] = useState<string>(getCurrentAccountingPeriod());
   const [buildingFilter, setBuildingFilter] = useState<string | undefined>(undefined);
 
   const { data: summary, isPending: loading, error, refetch } = useDashboardSummary(tenantId, {
@@ -229,6 +224,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const kpis = summary?.kpis;
   const queues = summary?.queues;
   const buildingAlerts = summary?.buildingAlerts || [];
+  const totalAccumulatedDebt = getTotalAccumulatedDebt(buildingAlerts);
   const quickActions = summary?.quickActions || [];
 
   const cr = kpis?.collectionRate ?? 0;
@@ -246,16 +242,16 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
       {/* ── Filters ────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Período</span>
-          <select
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Período:</span>
+          <input
+            type="month"
             value={period}
-            onChange={(e) => setPeriod(e.target.value as DashboardPeriod)}
+            onChange={(e) => setPeriod(e.target.value)}
             className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
-          >
-            {Object.entries(PERIOD_LABELS).map(([value, label]) => (
-              <option key={value} value={value} className="bg-card text-foreground">{label}</option>
-            ))}
-          </select>
+          />
+          <span className="text-sm text-muted-foreground whitespace-nowrap">
+            {formatAccountingPeriodLabel(period)}
+          </span>
         </div>
         <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Edificio</span>
@@ -445,9 +441,14 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
 
       {/* ── Building Alerts ────────────────────────────────────────── */}
       <Card className="p-4">
-        <div className="flex items-center gap-2 mb-4">
-          <Building className="w-5 h-5 text-muted-foreground" />
-          <h3 className="font-semibold">Alertas por edificio</h3>
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div className="flex items-start gap-2">
+            <Building className="w-5 h-5 text-muted-foreground mt-0.5" />
+            <div>
+              <h3 className="font-semibold">Deuda acumulada por edificio</h3>
+              <p className="text-xs text-muted-foreground mt-1">Incluye saldos pendientes de todos los períodos.</p>
+            </div>
+          </div>
         </div>
         {buildingAlerts.length > 0 ? (
           <div className="overflow-x-auto">
@@ -455,7 +456,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
               <THead>
                 <TR>
                   <TH>Edificio</TH>
-                  <TH className="text-right">Deuda</TH>
+                  <TH className="text-right">Deuda acumulada</TH>
                   <TH className="text-right">Tickets</TH>
                   <TH className="text-right">Sin responsable</TH>
                   <TH className="text-center">Riesgo</TH>
@@ -501,6 +502,13 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           </div>
         ) : (
           <EmptyState message="Sin alertas activas" sub="Todos los edificios están al día" icon={<CheckCircle className="w-8 h-8" />} />
+        )}
+        {buildingAlerts.length > 0 && (
+          <div className="flex justify-end mt-4 pt-4 border-t border-border">
+            <p className="text-sm text-muted-foreground">
+              Total deuda acumulada: <span className="font-semibold text-foreground">{formatARS(totalAccumulatedDebt)}</span>
+            </p>
+          </div>
         )}
       </Card>
 

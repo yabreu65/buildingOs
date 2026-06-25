@@ -41,7 +41,8 @@ export class DashboardService {
     const startTime = Date.now();
     const { period, buildingId } = query;
     const now = new Date();
-    const { startDate, endDate } = this.getPeriodDates(period, now);
+    const resolvedPeriod = this.resolveDashboardPeriod(period, now);
+    const { accountingPeriod, startDate, endDate } = resolvedPeriod;
 
     try {
       // Build building filter
@@ -58,7 +59,7 @@ export class DashboardService {
       const buildingMap = new Map(buildings.map((b) => [b.id, b.name]));
 
       // Calculate KPIs
-      const kpis = await this.calculateKpis(tenantId, buildingIds, startDate, endDate);
+      const kpis = await this.calculateKpis(tenantId, buildingIds, accountingPeriod);
 
       // Calculate queues
       const queues = await this.calculateQueues(tenantId, buildingIds, startDate, endDate);
@@ -82,7 +83,7 @@ export class DashboardService {
         buildingAlerts,
         quickActions,
         metadata: {
-          period: period || DashboardPeriod.CURRENT_MONTH,
+          period: accountingPeriod,
           buildingId: buildingId || null,
           generatedAt: new Date().toISOString(),
         },
@@ -98,31 +99,43 @@ export class DashboardService {
     }
   }
 
-  private getPeriodDates(
-    period: DashboardPeriod | undefined,
+  private resolveDashboardPeriod(
+    period: string | undefined,
     now: Date,
-  ): { startDate: Date; endDate: Date } {
+  ): { accountingPeriod: string; startDate: Date; endDate: Date } {
     const year = now.getFullYear();
     const month = now.getMonth();
+    const currentPeriod = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+    if (period && /^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
+      const periodYear = Number(period.slice(0, 4));
+      const periodMonth = Number(period.slice(5, 7));
+      return {
+        accountingPeriod: period,
+        startDate: new Date(periodYear, periodMonth - 1, 1),
+        endDate: new Date(periodYear, periodMonth, 0, 23, 59, 59),
+      };
+    }
 
     switch (period) {
-      case DashboardPeriod.CURRENT_MONTH:
+      case DashboardPeriod.PREVIOUS_MONTH: {
+        const previousMonthDate = new Date(year, month - 1, 1);
         return {
-          startDate: new Date(year, month, 1),
-          endDate: new Date(year, month + 1, 0, 23, 59, 59),
+          accountingPeriod: `${previousMonthDate.getFullYear()}-${String(previousMonthDate.getMonth() + 1).padStart(2, '0')}`,
+          startDate: new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth(), 1),
+          endDate: new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth() + 1, 0, 23, 59, 59),
         };
-      case DashboardPeriod.PREVIOUS_MONTH:
-        return {
-          startDate: new Date(year, month - 1, 1),
-          endDate: new Date(year, month, 0, 23, 59, 59),
-        };
+      }
       case DashboardPeriod.LAST_30_DAYS:
         return {
+          accountingPeriod: currentPeriod,
           startDate: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
           endDate: now,
         };
+      case DashboardPeriod.CURRENT_MONTH:
       default:
         return {
+          accountingPeriod: currentPeriod,
           startDate: new Date(year, month, 1),
           endDate: new Date(year, month + 1, 0, 23, 59, 59),
         };
@@ -132,15 +145,14 @@ export class DashboardService {
   private async calculateKpis(
     tenantId: string,
     buildingIds: string[],
-    startDate: Date,
-    endDate: Date,
+    accountingPeriod: string,
   ): Promise<DashboardKpis> {
-    // Get charges for the period
+    // Get charges for the accounting period
     const charges = await this.prisma.charge.findMany({
       where: {
         tenantId,
         buildingId: { in: buildingIds },
-        createdAt: { gte: startDate, lte: endDate },
+        period: accountingPeriod,
         canceledAt: null,
       },
       include: {
@@ -151,7 +163,6 @@ export class DashboardService {
     });
 
     // Calculate outstanding amount using REAL allocations from APPROVED/RECONCILED payments
-    // Debt is determined by actual paid allocations, NOT by Charge.status
     const chargesWithOutstanding = charges.map((charge) => {
       const approvedAllocated = charge.paymentAllocations.reduce((aSum, a) => {
         const status = a.payment?.status;
@@ -165,31 +176,16 @@ export class DashboardService {
         allocated: approvedAllocated,
         outstanding: Math.max(0, charge.amount - approvedAllocated),
       };
-    }).filter((item) => item.outstanding > 0);
-
-    const outstandingAmount = chargesWithOutstanding.reduce((sum, item) => sum + item.outstanding, 0);
-
-    // Calculate collected amount (from APPROVED payments in period)
-    const collectedAmount = await this.prisma.payment.aggregate({
-      where: {
-        tenantId,
-        buildingId: { in: buildingIds },
-        status: PaymentStatus.APPROVED,
-        updatedAt: { gte: startDate, lte: endDate },
-      },
-      _sum: { amount: true },
     });
 
-    // Total charges emitted in period
-    const totalChargesEmitted = charges.reduce((sum, c) => sum + c.amount, 0);
-
-    // Collection rate
-    const collected = collectedAmount._sum.amount || 0;
+    const totalChargesEmitted = chargesWithOutstanding.reduce((sum, item) => sum + item.charge.amount, 0);
+    const collected = chargesWithOutstanding.reduce((sum, item) => sum + item.allocated, 0);
+    const outstandingAmount = chargesWithOutstanding.reduce((sum, item) => sum + item.outstanding, 0);
     const collectionRate = totalChargesEmitted > 0 ? collected / totalChargesEmitted : 0;
 
-    // Delinquent units (units with outstanding > 0) - use precalculated chargesWithOutstanding
+    // Delinquent units (units with outstanding > 0)
     const delinquentUnitsMap = new Map<string, number>();
-    for (const item of chargesWithOutstanding) {
+    for (const item of chargesWithOutstanding.filter((entry) => entry.outstanding > 0)) {
       delinquentUnitsMap.set(
         item.charge.unitId,
         (delinquentUnitsMap.get(item.charge.unitId) || 0) + item.outstanding,

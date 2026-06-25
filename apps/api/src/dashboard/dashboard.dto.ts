@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEnum } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum DashboardPeriod {
@@ -9,12 +9,13 @@ export enum DashboardPeriod {
 
 export class DashboardQueryDto {
   @ApiPropertyOptional({
-    enum: DashboardPeriod,
-    default: DashboardPeriod.CURRENT_MONTH,
+    description:
+      'Accounting period in YYYY-MM. Legacy values CURRENT_MONTH, PREVIOUS_MONTH and LAST_30_DAYS are still accepted.',
+    example: '2026-05',
   })
   @IsOptional()
-  @IsEnum(DashboardPeriod)
-  period?: DashboardPeriod = DashboardPeriod.CURRENT_MONTH;
+  @IsString()
+  period?: string = DashboardPeriod.CURRENT_MONTH;
 
   @ApiPropertyOptional()
   @IsOptional()

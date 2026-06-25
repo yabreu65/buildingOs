@@ -76,7 +76,7 @@ export interface DashboardSummary {
 }
 
 export interface DashboardQuery {
-  period?: DashboardPeriod;
+  period?: string;
   buildingId?: string;
 }
 
