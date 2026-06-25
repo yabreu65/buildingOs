@@ -1,6 +1,7 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
+import type { ReactNode } from 'react';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import ErrorState from '@/shared/components/ui/ErrorState';
@@ -21,6 +22,78 @@ interface BuildingParams {
   tenantId: string;
   buildingId: string;
   [key: string]: string | string[];
+}
+
+interface SectionHeaderProps {
+  title: string;
+  description: string;
+}
+
+interface MetricCardProps {
+  icon: ReactNode;
+  title: string;
+  value: ReactNode;
+  subtitle: string;
+  valueClassName?: string;
+}
+
+interface ActionCardProps {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}
+
+function SectionHeader({ title, description }: SectionHeaderProps) {
+  return (
+    <div className="space-y-1">
+      <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+      <p className="text-sm text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+function MetricCard({ icon, title, value, subtitle, valueClassName }: MetricCardProps) {
+  return (
+    <Card>
+      <div className="pb-3">
+        <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+          {icon}
+          {title}
+        </p>
+      </div>
+      <div className={`text-2xl font-bold ${valueClassName ?? ''}`.trim()}>
+        {value}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{subtitle}</p>
+    </Card>
+  );
+}
+
+function ActionCard({ icon, title, description, onClick, disabled = false }: ActionCardProps) {
+  const interactive = Boolean(onClick) && !disabled;
+
+  return (
+    <div
+      className={interactive ? 'cursor-pointer' : ''}
+      onClick={interactive ? onClick : undefined}
+    >
+      <Card
+        className={[
+          'h-full',
+          interactive ? 'hover:border-primary transition' : '',
+          disabled ? 'opacity-60 cursor-not-allowed' : '',
+        ].join(' ')}
+      >
+        <div className="flex items-start justify-between mb-3">
+          {icon}
+        </div>
+        <h3 className="font-semibold text-foreground mb-1">{title}</h3>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </Card>
+    </div>
+  );
 }
 
 /**
@@ -137,140 +210,99 @@ const BuildingHubPage = () => {
         />
       )}
 
-      {/* KPI Cards */}
+      <SectionHeader
+        title="Resumen operativo"
+        description="Esta vista resume la ocupación del edificio y te lleva a los módulos operativos más usados."
+      />
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <div className="pb-3">
-            <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Grid3x3 className="w-4 h-4" />
-              Total de unidades
-            </p>
-          </div>
-          <div className="text-2xl font-bold">
-            {unitsLoading ? (
-              <Skeleton width="48px" height="32px" />
-            ) : (
-              totalUnits
-            )}
-          </div>
-        </Card>
+        <MetricCard
+          icon={<Grid3x3 className="w-4 h-4" />}
+          title="Total de unidades"
+          value={unitsLoading ? <Skeleton width="48px" height="32px" /> : totalUnits}
+          subtitle="Cantidad total de unidades registradas en este edificio."
+        />
 
-        <Card>
-          <div className="pb-3">
-            <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Home className="w-4 h-4" />
-              Ocupadas
-            </p>
-          </div>
-          <div className="text-2xl font-bold text-green-600">
-            {unitsLoading ? (
-              <Skeleton width="48px" height="32px" />
-            ) : (
-              occupiedUnits
-            )}
-          </div>
-        </Card>
+        <MetricCard
+          icon={<Home className="w-4 h-4" />}
+          title="Ocupadas"
+          value={unitsLoading ? <Skeleton width="48px" height="32px" /> : occupiedUnits}
+          subtitle="Unidades que ya tienen ocupante asignado."
+          valueClassName="text-green-600"
+        />
 
-        <Card>
-          <div className="pb-3">
-            <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Home className="w-4 h-4" />
-              Vacantes
-            </p>
-          </div>
-          <div className="text-2xl font-bold text-orange-600">
-            {unitsLoading ? (
-              <Skeleton width="48px" height="32px" />
-            ) : (
-              vacantUnits
-            )}
-          </div>
-        </Card>
+        <MetricCard
+          icon={<Home className="w-4 h-4" />}
+          title="Vacantes"
+          value={unitsLoading ? <Skeleton width="48px" height="32px" /> : vacantUnits}
+          subtitle="Unidades disponibles para asignar."
+          valueClassName="text-orange-600"
+        />
 
-        <Card>
-          <div className="pb-3">
-            <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Grid3x3 className="w-4 h-4" />
-              Tasa de ocupación
-            </p>
-          </div>
-          <div className="text-2xl font-bold text-blue-600">
-            {unitsLoading ? (
-              <Skeleton width="48px" height="32px" />
-            ) : (
-              `${occupancyRate}%`
-            )}
-          </div>
-        </Card>
+        <MetricCard
+          icon={<Grid3x3 className="w-4 h-4" />}
+          title="Tasa de ocupación"
+          value={unitsLoading ? <Skeleton width="48px" height="32px" /> : `${occupancyRate}%`}
+          subtitle="Porcentaje de unidades ocupadas sobre el total."
+          valueClassName="text-blue-600"
+        />
       </div>
 
-      {/* Section Cards - Quick Navigation */}
+      <SectionHeader
+        title="Accesos rápidos"
+        description="Cada tarjeta abre un módulo distinto para administrar el edificio."
+      />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Units Card */}
-        <div
-          className="cursor-pointer"
+        <ActionCard
+          icon={<Grid3x3 className="w-5 h-5 text-blue-600" />}
+          title='Unidades'
+          description={
+            unitsLoading
+              ? 'Cargando...'
+              : `${totalUnits} unidades · Administrar unidades, ocupación y asignaciones`
+          }
           onClick={() => router.push(routes.buildingUnits(tenantId, buildingId))}
-        >
-          <Card className="hover:border-primary transition h-full">
-            <div className="flex items-start justify-between mb-3">
-              <Grid3x3 className="w-5 h-5 text-blue-600" />
-            </div>
-            <h3 className="font-semibold text-foreground mb-1">{t('navigation.units')}</h3>
-            <p className="text-sm text-muted-foreground">
-              {unitsLoading ? t('common.loading') : `${totalUnits} ${t('navigation.units')} · Administrar`}
-            </p>
-          </Card>
-        </div>
+        />
 
-        {/* Residents Card - Coming Soon */}
-        <div>
-          <Card className="opacity-60 cursor-not-allowed h-full">
-            <div className="flex items-start justify-between mb-3">
-              <Users className="w-5 h-5 text-gray-400" />
-            </div>
-            <h3 className="font-semibold text-foreground mb-1">{t('navigation.residents')}</h3>
-            <p className="text-sm text-muted-foreground">Próximamente</p>
-          </Card>
-        </div>
+        <ActionCard
+          icon={<Users className="w-5 h-5 text-gray-400" />}
+          title='Residentes'
+          description="Gestión de residentes y contactos."
+          disabled
+        />
 
-        {/* Payments Card */}
-        <div
-          className={!paymentsLoading && totalPayments > 0 ? 'cursor-pointer' : ''}
+        <ActionCard
+          icon={
+            <CreditCard
+              className={!paymentsLoading && totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'}
+            />
+          }
+          title="Pagos y cobranzas"
+          description={
+            paymentsLoading
+              ? 'Cargando pagos...'
+              : paymentsError
+              ? 'No se pudieron cargar los pagos'
+              : totalPayments === 0
+              ? 'Sin pagos registrados'
+              : pendingPayments > 0
+              ? `${pendingPayments} pagos pendientes de revisión`
+              : 'Todos los pagos están al día'
+          }
           onClick={() => {
             if (!paymentsLoading && totalPayments > 0) {
               router.push(routes.buildingPayments(tenantId, buildingId));
             }
           }}
-        >
-          <Card className={!paymentsLoading && totalPayments > 0 ? 'hover:border-primary transition h-full' : 'h-full'}>
-            <div className="flex items-start justify-between mb-3">
-              <CreditCard className={!paymentsLoading && totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'} />
-            </div>
-            <h3 className="font-semibold text-foreground mb-1">Pagos</h3>
-            <p className="text-sm text-muted-foreground">
-              {paymentsLoading
-                ? 'Cargando pagos...'
-                : paymentsError
-                ? 'No se pudieron cargar los pagos'
-                : totalPayments === 0
-                ? 'Sin pagos registrados'
-                : pendingPayments > 0
-                ? `${pendingPayments} pagos pendientes`
-                : 'Todos los pagos están al día'}
-            </p>
-          </Card>
-        </div>
+        />
 
-        {/* Tickets Card - Coming Soon */}
-        <div>
-          <Card className="opacity-60 cursor-not-allowed h-full">
-            <div className="flex items-start justify-between mb-3">
-              <Ticket className="w-5 h-5 text-gray-400" />
-            </div>
-            <h3 className="font-semibold text-foreground mb-1">{t('navigation.tickets')}</h3>
-            <p className="text-sm text-muted-foreground">Próximamente</p>
-          </Card>
-        </div>
+        <ActionCard
+          icon={<Ticket className="w-5 h-5 text-gray-400" />}
+          title='Solicitudes'
+          description="Seguimiento de solicitudes y casos operativos."
+          disabled
+        />
       </div>
 
     </div>
