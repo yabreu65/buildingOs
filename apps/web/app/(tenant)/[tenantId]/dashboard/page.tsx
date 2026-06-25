@@ -97,6 +97,7 @@ function delinquentSeverity(count: number): { bg: string; text: string } {
 interface KPICardProps {
   label: string;
   value: string;
+  subtitle?: string;
   subValue?: string;
   badge?: { label: string; color: string };
   color: string;
@@ -106,10 +107,13 @@ interface KPICardProps {
   children?: React.ReactNode;
 }
 
-const KPICard = ({ label, value, subValue, badge, color, icon, cta, onClick, children }: KPICardProps) => (
+const KPICard = ({ label, value, subtitle, subValue, badge, color, icon, cta, onClick, children }: KPICardProps) => (
   <Card className="p-5 hover:shadow-md transition-shadow duration-200">
     <div className="flex items-start justify-between mb-3">
-      <p className="text-sm font-medium text-muted-foreground tracking-tight">{label}</p>
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-muted-foreground tracking-tight">{label}</p>
+        {subtitle && <p className="text-xs text-muted-foreground/80 max-w-[18rem]">{subtitle}</p>}
+      </div>
       <div className={`p-2.5 rounded-xl ${color.replace('text-', 'bg-').replace('400', '500/10').replace('500', '500/10')}`}>
         {icon}
       </div>
@@ -131,6 +135,22 @@ const KPICard = ({ label, value, subValue, badge, color, icon, cta, onClick, chi
       </button>
     )}
   </Card>
+);
+
+interface SectionHeaderProps {
+  title: string;
+  subtitle: string;
+  action?: React.ReactNode;
+}
+
+const SectionHeader = ({ title, subtitle, action }: SectionHeaderProps) => (
+  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+    <div>
+      <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+      <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
+    </div>
+    {action && <div className="shrink-0">{action}</div>}
+  </div>
 );
 
 // ── Empty State ─────────────────────────────────────────────────────────────
@@ -177,6 +197,11 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
     if (!buildings) return [];
     return [{ id: '', name: 'Todos los edificios' }, ...buildings];
   }, [buildings]);
+
+  const selectedScopeLabel = useMemo(() => {
+    if (!buildingFilter) return 'Todos los edificios';
+    return buildingOptions.find((building) => building.id === buildingFilter)?.name || 'Todos los edificios';
+  }, [buildingFilter, buildingOptions]);
 
   const handleQuickAction = (action: string) => {
     const routes: Record<string, string> = {
@@ -236,44 +261,69 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Panel de Administración</h1>
-        <p className="text-muted-foreground mt-1">Resumen operativo de tus edificios</p>
+        <p className="text-muted-foreground mt-1">Resumen operativo del tenant y atajos para administrar los edificios.</p>
       </div>
 
       {/* ── Filters ────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Período:</span>
-          <input
-            type="month"
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
-          />
-          <span className="text-sm text-muted-foreground whitespace-nowrap">
-            {formatAccountingPeriodLabel(period)}
+      <div className="rounded-2xl border bg-muted/20 p-4 space-y-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Contexto del panel</p>
+            <h3 className="text-lg font-semibold tracking-tight">Resumen del período seleccionado</h3>
+            <p className="text-sm text-muted-foreground max-w-2xl">
+              Las métricas superiores muestran el período contable actual. La sección inferior de edificios muestra deuda acumulada, independiente del mes seleccionado.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center rounded-full bg-card px-3 py-1.5 text-sm font-medium text-foreground border">
+              Período: {formatAccountingPeriodLabel(period)}
+            </span>
+            <span className="inline-flex items-center rounded-full bg-card px-3 py-1.5 text-sm font-medium text-foreground border">
+              Alcance: {selectedScopeLabel}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="flex items-center gap-2 bg-card rounded-lg px-3 py-2 border">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Período contable</span>
+            <input
+              type="month"
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
+            />
+            <span className="text-sm text-muted-foreground whitespace-nowrap">
+              {formatAccountingPeriodLabel(period)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 bg-card rounded-lg px-3 py-2 border">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ámbito</span>
+            <select
+              value={buildingFilter || ''}
+              onChange={(e) => setBuildingFilter(e.target.value || undefined)}
+              className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
+            >
+              {buildingOptions.map((b) => (
+                <option key={b.id} value={b.id} className="bg-card text-foreground">{b.name}</option>
+              ))}
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground/60 ml-auto">
+            {summary?.metadata?.generatedAt ? `Actualizado ${new Date(summary.metadata.generatedAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}` : ''}
           </span>
         </div>
-        <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Edificio</span>
-          <select
-            value={buildingFilter || ''}
-            onChange={(e) => setBuildingFilter(e.target.value || undefined)}
-            className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
-          >
-            {buildingOptions.map((b) => (
-              <option key={b.id} value={b.id} className="bg-card text-foreground">{b.name}</option>
-            ))}
-          </select>
-        </div>
-        <span className="text-xs text-muted-foreground/60 ml-auto">
-          {summary?.metadata?.generatedAt ? `Actualizado ${new Date(summary.metadata.generatedAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}` : ''}
-        </span>
       </div>
 
       {/* ── KPIs ───────────────────────────────────────────────────── */}
+      <SectionHeader
+        title="Resumen del período"
+        subtitle="Las métricas superiores reflejan el período contable y el alcance seleccionados."
+      />
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <KPICard
-          label="Saldo Pendiente"
+          label="Saldo pendiente del período"
+          subtitle="Lo que queda por cobrar del período seleccionado."
           value={kpis?.outstandingAmount != null ? formatARS(kpis.outstandingAmount) : '$0'}
           badge={kpis?.outstandingAmount != null && kpis.outstandingAmount > 0
             ? { label: `${(kpis.delinquentUnits ?? 0)} unidades`, color: sev.text }
@@ -284,7 +334,8 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           onClick={() => router.push(`/${tenantId}/finanzas`)}
         />
         <KPICard
-          label="Cobrado en el mes"
+          label="Cobrado del período"
+          subtitle="Monto cobrado o aplicado durante el período seleccionado."
           value={kpis?.collectedAmount != null ? formatARS(kpis.collectedAmount) : '$0'}
           subValue={
             kpis?.collectedAmount != null && (kpis.outstandingAmount ?? 0) + kpis.collectedAmount > 0
@@ -297,7 +348,8 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           onClick={() => router.push(`/${tenantId}/finanzas`)}
         />
         <KPICard
-          label="Tasa de Cobranza"
+          label="Tasa de cobranza del período"
+          subtitle="Porcentaje cobrado sobre el total esperado del período."
           value={kpis?.collectionRate != null ? formatPercentage(kpis.collectionRate) : '0%'}
           badge={{ label: collectionRateLabel(cr), color: collectionRateIcon(cr).props.className || '' }}
           color={cr >= 0.8 ? 'text-green-400' : cr >= 0.5 ? 'text-yellow-400' : 'text-red-400'}
@@ -314,7 +366,8 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           </div>
         </KPICard>
         <KPICard
-          label="Unidades Morosas"
+          label="Unidades morosas del período"
+          subtitle="Unidades con saldo abierto dentro del período seleccionado."
           value={kpis?.delinquentUnits != null ? kpis.delinquentUnits.toString() : '0'}
           badge={
             kpis?.delinquentUnits != null && kpis.delinquentUnits > 0
@@ -329,16 +382,23 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
       </div>
 
       {/* ── Queues ─────────────────────────────────────────────────── */}
+      <SectionHeader
+        title="Tareas operativas"
+        subtitle="Atajos y colas que requieren revisión o acción inmediata."
+      />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Tickets */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Ticket className="w-5 h-5 text-muted-foreground" />
-              <h3 className="font-semibold">Tickets</h3>
+              <div>
+                <h3 className="font-semibold">Solicitudes</h3>
+                <p className="text-xs text-muted-foreground">Tickets abiertos y en progreso.</p>
+              </div>
             </div>
             <button onClick={() => router.push(`/${tenantId}/tickets`)} className="text-sm font-medium text-blue-600 hover:text-blue-500 transition">
-              Ver todos
+              Ver solicitudes
             </button>
           </div>
           {(queues?.tickets.open ?? 0) > 0 || (queues?.tickets.inProgress ?? 0) > 0 ? (
@@ -375,7 +435,10 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <CreditCard className="w-5 h-5 text-muted-foreground" />
-              <h3 className="font-semibold">Pagos a validar</h3>
+              <div>
+                <h3 className="font-semibold">Pagos por revisar</h3>
+                <p className="text-xs text-muted-foreground">Pagos enviados que esperan validación.</p>
+              </div>
             </div>
             <button onClick={() => router.push(`/${tenantId}/finanzas`)} className="text-sm font-medium text-blue-600 hover:text-blue-500 transition">
               Validar
@@ -409,7 +472,10 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <UserX className="w-5 h-5 text-muted-foreground" />
-              <h3 className="font-semibold">Sin responsable</h3>
+              <div>
+                <h3 className="font-semibold">Unidades sin responsable</h3>
+                <p className="text-xs text-muted-foreground">Unidades que aún no tienen residente asignado.</p>
+              </div>
             </div>
             <button onClick={() => router.push(`/${tenantId}/units`)} className="text-sm font-medium text-blue-600 hover:text-blue-500 transition">
               Asignar
@@ -514,9 +580,12 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
 
       {/* ── Quick Actions ──────────────────────────────────────────── */}
       <Card className="p-4">
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-start gap-2 mb-4">
           <Sparkles className="w-5 h-5 text-muted-foreground" />
-          <h3 className="font-semibold">Acciones rápidas</h3>
+          <div>
+            <h3 className="font-semibold">Acciones rápidas</h3>
+            <p className="text-xs text-muted-foreground mt-1">Atajos para tareas frecuentes del administrador.</p>
+          </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
           {quickActions.map((action) => {
