@@ -268,8 +268,8 @@ const BuildingHubPage = () => {
         <ActionCard
           icon={<Users className="w-5 h-5 text-gray-400" />}
           title='Residentes del edificio'
-          description="Próximamente: ver y gestionar residentes y contactos del edificio."
-          disabled
+          description="Gestiona ocupantes, vínculos con unidades y datos de contacto."
+          onClick={() => router.push(routes.buildingResidents(tenantId, buildingId))}
         />
 
         <ActionCard
