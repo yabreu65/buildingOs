@@ -212,7 +212,7 @@ const BuildingHubPage = () => {
 
       <SectionHeader
         title="Resumen operativo"
-        description="Esta vista resume la ocupación del edificio y te lleva a los módulos operativos más usados."
+        description="Todo lo que ves aquí corresponde al edificio actual y te ayuda a administrar su operación diaria."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -256,19 +256,19 @@ const BuildingHubPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <ActionCard
           icon={<Grid3x3 className="w-5 h-5 text-blue-600" />}
-          title='Unidades'
+          title='Unidades del edificio'
           description={
             unitsLoading
-              ? 'Cargando...'
-              : `${totalUnits} unidades · Administrar unidades, ocupación y asignaciones`
+              ? 'Cargando unidades...'
+              : `${totalUnits} unidades · Administrar ocupación, asignaciones y estados`
           }
           onClick={() => router.push(routes.buildingUnits(tenantId, buildingId))}
         />
 
         <ActionCard
           icon={<Users className="w-5 h-5 text-gray-400" />}
-          title='Residentes'
-          description="Gestión de residentes y contactos."
+          title='Residentes del edificio'
+          description="Gestión de residentes y contactos del edificio."
           disabled
         />
 
@@ -278,17 +278,17 @@ const BuildingHubPage = () => {
               className={!paymentsLoading && totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'}
             />
           }
-          title="Pagos y cobranzas"
+          title="Pagos registrados"
           description={
             paymentsLoading
-              ? 'Cargando pagos...'
+              ? 'Cargando pagos registrados...'
               : paymentsError
               ? 'No se pudieron cargar los pagos'
               : totalPayments === 0
               ? 'Sin pagos registrados'
               : pendingPayments > 0
               ? `${pendingPayments} pagos pendientes de revisión`
-              : 'Todos los pagos están al día'
+              : 'Pagos al día en este edificio'
           }
           onClick={() => {
             if (!paymentsLoading && totalPayments > 0) {
@@ -299,8 +299,8 @@ const BuildingHubPage = () => {
 
         <ActionCard
           icon={<Ticket className="w-5 h-5 text-gray-400" />}
-          title='Solicitudes'
-          description="Seguimiento de solicitudes y casos operativos."
+          title='Solicitudes operativas'
+          description="Seguimiento de pedidos, incidencias y casos del edificio."
           disabled
         />
       </div>

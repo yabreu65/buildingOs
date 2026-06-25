@@ -65,6 +65,18 @@ export default function BuildingOnboardingCard({
   }
 
   const completedSteps = steps.filter((s) => s.status === 'DONE').length;
+  const translateStepLabel = (label: string) => {
+    const normalized = label.trim().toLowerCase();
+
+    const translations: Record<string, string> = {
+      'assign unit residents': 'Asignar residentes a las unidades',
+      'upload documents': 'Subir documentos',
+      'create charges': 'Crear cargos',
+      'assign service providers': 'Asignar proveedores de servicio',
+    };
+
+    return translations[normalized] ?? label;
+  };
 
   return (
     <Card className={`p-6 mb-6 border-l-4 border-l-amber-500 ${className}`}>
@@ -74,7 +86,7 @@ export default function BuildingOnboardingCard({
             Configuración de {buildingName}
           </h3>
           <p className="text-sm text-muted-foreground mt-1">
-            {completedSteps} de {steps.length} pasos completados
+            Progreso de activación del edificio. {completedSteps} de {steps.length} pasos completados.
           </p>
         </div>
 
@@ -125,7 +137,7 @@ export default function BuildingOnboardingCard({
             </div>
 
             {/* Step label */}
-            <span className="text-sm font-medium">{step.label}</span>
+            <span className="text-sm font-medium">{translateStepLabel(step.label)}</span>
           </div>
         ))}
       </div>
