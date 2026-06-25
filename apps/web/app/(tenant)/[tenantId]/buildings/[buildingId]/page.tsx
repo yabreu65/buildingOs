@@ -212,7 +212,7 @@ const BuildingHubPage = () => {
 
       <SectionHeader
         title="Resumen operativo"
-        description="Todo lo que ves aquí corresponde al edificio actual y te ayuda a administrar su operación diaria."
+        description="Todo lo que ves aquí corresponde al edificio actual. Cada tarjeta abre un módulo específico de gestión."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -268,7 +268,7 @@ const BuildingHubPage = () => {
         <ActionCard
           icon={<Users className="w-5 h-5 text-gray-400" />}
           title='Residentes del edificio'
-          description="Gestión de residentes y contactos del edificio."
+          description="Ver y gestionar residentes y contactos del edificio."
           disabled
         />
 
@@ -278,7 +278,7 @@ const BuildingHubPage = () => {
               className={!paymentsLoading && totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'}
             />
           }
-          title="Pagos registrados"
+          title="Pagos del edificio"
           description={
             paymentsLoading
               ? 'Cargando pagos registrados...'
@@ -288,7 +288,7 @@ const BuildingHubPage = () => {
               ? 'Sin pagos registrados'
               : pendingPayments > 0
               ? `${pendingPayments} pagos pendientes de revisión`
-              : 'Pagos al día en este edificio'
+              : 'Ver pagos cargados y su estado de revisión'
           }
           onClick={() => {
             if (!paymentsLoading && totalPayments > 0) {
@@ -300,7 +300,7 @@ const BuildingHubPage = () => {
         <ActionCard
           icon={<Ticket className="w-5 h-5 text-gray-400" />}
           title='Solicitudes operativas'
-          description="Seguimiento de pedidos, incidencias y casos del edificio."
+          description="Ver pedidos, incidencias y casos operativos del edificio."
           disabled
         />
       </div>
