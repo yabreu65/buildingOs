@@ -1,10 +1,43 @@
 import { BadRequestException } from '@nestjs/common';
-import { ChargeStatus } from '@prisma/client';
+import { ChargeStatus, Prisma } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
 import { AssistantDebtCalculatorService } from '../../assistant-debt-calculator.service';
+import { PeriodResolverService } from '../../period-resolver.service';
+import type { CanonicalFinancePeriod } from '../../finance-period.types';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
 
 const debtCalculator = new AssistantDebtCalculatorService();
+const periodResolver = new PeriodResolverService();
+
+export function buildChargePeriodFilter(
+  period: string | CanonicalFinancePeriod | undefined,
+  referenceDate: Date = new Date(),
+): Prisma.ChargeWhereInput['period'] | undefined {
+  if (!period) {
+    return undefined;
+  }
+
+  if (typeof period === 'string') {
+    return period === 'accumulated' ? undefined : period;
+  }
+
+  if (period.kind === 'accumulated') {
+    return undefined;
+  }
+
+  if (period.kind === 'relative_range' && period.mode === 'unknown') {
+    throw new BadRequestException('period.mode required for relative_range building_debt queries');
+  }
+
+  const resolved = periodResolver.resolve(period, referenceDate);
+  if (resolved.kind === 'unknown' || resolved.periods.length === 0) {
+    return undefined;
+  }
+
+  return resolved.periods.length === 1
+    ? resolved.periods[0]
+    : { in: resolved.periods };
+}
 
 export const buildingDebtIntent: IntentDefinition = {
   name: 'building_debt',
@@ -26,8 +59,9 @@ export const buildingDebtIntent: IntentDefinition = {
       canceledAt: null,
     };
 
-    if (filters?.period) {
-      whereClause.period = filters.period;
+    const periodFilter = buildChargePeriodFilter(filters?.period);
+    if (periodFilter !== undefined) {
+      whereClause.period = periodFilter;
     }
 
     const [tenant, charges] = await Promise.all([
