@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
@@ -13,8 +12,8 @@ import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { t } from '@/i18n';
 
 import { Home, Grid3x3, Plus, Settings, Users, Ticket, CreditCard } from 'lucide-react';
-import { StorageService } from '@/shared/lib/storage';
-import type { Payment } from '@/features/payments/payments.types';
+import { PaymentStatus } from '@/features/finance/services/finance.api';
+import { useBuildingPayments } from '@/features/payments/hooks/useBuildingPayments';
 
 import BuildingOnboardingCard from '@/features/onboarding/BuildingOnboardingCard';
 
@@ -35,28 +34,18 @@ const BuildingHubPage = () => {
 
   const { buildings, loading: buildingsLoading, error: buildingsError, refetch: refetchBuildings } = useBuildings(tenantId);
   const { units, loading: unitsLoading, error: unitsError, refetch: refetchUnits } = useUnits(tenantId, buildingId);
-
-  const [pendingPayments, setPendingPayments] = useState(0);
-  const [totalPayments, setTotalPayments] = useState(0);
+  const {
+    data: payments = [],
+    isLoading: paymentsLoading,
+    error: paymentsError,
+  } = useBuildingPayments(buildingId);
 
   const building = buildings.find((b) => b.id === buildingId);
-
-  // Load payment data from localStorage
-  useEffect(() => {
-    if (tenantId) {
-      try {
-        const payments = StorageService.get<Payment[]>('payments', tenantId, []);
-        const pending = payments.filter((p) => p.status === 'PENDING').length;
-        setPendingPayments(pending);
-        setTotalPayments(payments.length);
-      } catch (err) {
-        // Silently ignore localStorage errors
-      }
-    }
-  }, [tenantId]);
+  const totalPayments = payments.length;
+  const pendingPayments = payments.filter((payment) => payment.status === PaymentStatus.SUBMITTED).length;
 
   if (!tenantId || !buildingId) {
-    return <div>Invalid parameters</div>;
+    return <div>Parámetros inválidos</div>;
   }
 
   if (buildingsError) {
@@ -124,7 +113,7 @@ const BuildingHubPage = () => {
             size="sm"
           >
             <Plus className="w-4 h-4 mr-2" />
-            Add Unit
+            Agregar unidad
           </Button>
           <Button
             onClick={() => router.push(routes.buildingSettings(tenantId, buildingId))}
@@ -132,7 +121,7 @@ const BuildingHubPage = () => {
             size="sm"
           >
             <Settings className="w-4 h-4 mr-2" />
-            Settings
+            Configuración
           </Button>
         </div>
       </div>
@@ -154,7 +143,7 @@ const BuildingHubPage = () => {
           <div className="pb-3">
             <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Grid3x3 className="w-4 h-4" />
-              Total Units
+              Total de unidades
             </p>
           </div>
           <div className="text-2xl font-bold">
@@ -170,7 +159,7 @@ const BuildingHubPage = () => {
           <div className="pb-3">
             <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Home className="w-4 h-4" />
-              Occupied
+              Ocupadas
             </p>
           </div>
           <div className="text-2xl font-bold text-green-600">
@@ -186,7 +175,7 @@ const BuildingHubPage = () => {
           <div className="pb-3">
             <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Home className="w-4 h-4" />
-              Vacant
+              Vacantes
             </p>
           </div>
           <div className="text-2xl font-bold text-orange-600">
@@ -202,7 +191,7 @@ const BuildingHubPage = () => {
           <div className="pb-3">
             <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Grid3x3 className="w-4 h-4" />
-              Occupancy Rate
+              Tasa de ocupación
             </p>
           </div>
           <div className="text-2xl font-bold text-blue-600">
@@ -228,7 +217,7 @@ const BuildingHubPage = () => {
             </div>
             <h3 className="font-semibold text-foreground mb-1">{t('navigation.units')}</h3>
             <p className="text-sm text-muted-foreground">
-              {unitsLoading ? t('common.loading') : `${totalUnits} ${t('navigation.units')} · ${t('common.manage')}`}
+              {unitsLoading ? t('common.loading') : `${totalUnits} ${t('navigation.units')} · Administrar`}
             </p>
           </Card>
         </div>
@@ -246,24 +235,28 @@ const BuildingHubPage = () => {
 
         {/* Payments Card */}
         <div
-          className={totalPayments > 0 ? 'cursor-pointer' : ''}
+          className={!paymentsLoading && totalPayments > 0 ? 'cursor-pointer' : ''}
           onClick={() => {
-            if (totalPayments > 0) {
+            if (!paymentsLoading && totalPayments > 0) {
               router.push(routes.buildingPayments(tenantId, buildingId));
             }
           }}
         >
-          <Card className={totalPayments > 0 ? 'hover:border-primary transition h-full' : 'h-full'}>
+          <Card className={!paymentsLoading && totalPayments > 0 ? 'hover:border-primary transition h-full' : 'h-full'}>
             <div className="flex items-start justify-between mb-3">
-              <CreditCard className={totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'} />
+              <CreditCard className={!paymentsLoading && totalPayments > 0 ? 'w-5 h-5 text-orange-600' : 'w-5 h-5 text-gray-400'} />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">{t('finance.payments')}</h3>
+            <h3 className="font-semibold text-foreground mb-1">Pagos</h3>
             <p className="text-sm text-muted-foreground">
-              {totalPayments === 0
-                ? t('finance.noPaymentRecords')
+              {paymentsLoading
+                ? 'Cargando pagos...'
+                : paymentsError
+                ? 'No se pudieron cargar los pagos'
+                : totalPayments === 0
+                ? 'Sin pagos registrados'
                 : pendingPayments > 0
-                ? `${pendingPayments} ${t('finance.pending')}`
-                : t('finance.allPaid')}
+                ? `${pendingPayments} pagos pendientes`
+                : 'Todos los pagos están al día'}
             </p>
           </Card>
         </div>
@@ -275,7 +268,7 @@ const BuildingHubPage = () => {
               <Ticket className="w-5 h-5 text-gray-400" />
             </div>
             <h3 className="font-semibold text-foreground mb-1">{t('navigation.tickets')}</h3>
-            <p className="text-sm text-muted-foreground">Coming soon</p>
+            <p className="text-sm text-muted-foreground">Próximamente</p>
           </Card>
         </div>
       </div>

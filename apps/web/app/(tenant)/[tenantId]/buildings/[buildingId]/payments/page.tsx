@@ -6,8 +6,9 @@ import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
 import { CreditCard } from 'lucide-react';
-import { StorageService } from '@/shared/lib/storage';
 import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
+import { PaymentStatus } from '@/features/finance/services/finance.api';
+import { useBuildingPayments } from '@/features/payments/hooks/useBuildingPayments';
 
 interface BuildingParams {
   tenantId: string;
@@ -15,35 +16,20 @@ interface BuildingParams {
   [key: string]: string | string[];
 }
 
-interface Payment {
-  id: string;
-  amount: number;
-  status: 'PENDING' | 'PAID' | 'OVERDUE';
-  createdAt: string;
-}
-
 /**
- * PaymentsPage: Show payment records from localStorage
+ * PaymentsPage: Show building payments from the finance API
  */
 export default function PaymentsPage() {
   const params = useParams<BuildingParams>();
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
 
-  const [payments, setPayments] = useState<Payment[]>([]);
   const [buildingName, setBuildingName] = useState<string>('');
-
-  // Load payments from localStorage
-  useEffect(() => {
-    if (tenantId) {
-      try {
-        const data = StorageService.get<Payment[]>('payments', tenantId, []);
-        setPayments(data);
-      } catch (err) {
-        // Silently ignore localStorage errors
-      }
-    }
-  }, [tenantId]);
+  const {
+    data: payments = [],
+    isLoading: paymentsLoading,
+    error: paymentsError,
+  } = useBuildingPayments(buildingId);
 
   useEffect(() => {
     if (!tenantId || !buildingId) return;
@@ -53,8 +39,23 @@ export default function PaymentsPage() {
   }, [tenantId, buildingId]);
 
   if (!tenantId || !buildingId) {
-    return <div>Invalid parameters</div>;
+    return <div>Parámetros inválidos</div>;
   }
+
+  if (paymentsLoading) {
+    return <div className="text-sm text-muted-foreground">Cargando pagos...</div>;
+  }
+
+  if (paymentsError) {
+    return <div className="text-sm text-red-600">No se pudieron cargar los pagos</div>;
+  }
+
+  const statusLabelMap: Record<PaymentStatus, string> = {
+    [PaymentStatus.SUBMITTED]: 'Pendiente',
+    [PaymentStatus.APPROVED]: 'Aprobado',
+    [PaymentStatus.REJECTED]: 'Rechazado',
+    [PaymentStatus.RECONCILED]: 'Conciliado',
+  };
 
   return (
     <div className="space-y-6">
@@ -76,15 +77,15 @@ export default function PaymentsPage() {
       ) : (
         <Card>
           <div className="mb-4">
-            <h3 className="text-lg font-semibold">Payment Records</h3>
+            <h3 className="text-lg font-semibold">Registros de pago</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b">
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Amount</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Status</th>
-                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Created</th>
+                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Monto</th>
+                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Estado</th>
+                  <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Creado</th>
                 </tr>
               </thead>
               <tbody>
@@ -94,14 +95,14 @@ export default function PaymentsPage() {
                     <td className="py-3 px-4">
                       <span
                         className={`text-xs font-medium px-2 py-1 rounded-full ${
-                          payment.status === 'PAID'
+                          payment.status === PaymentStatus.APPROVED
                             ? 'bg-green-100 text-green-700'
-                            : payment.status === 'OVERDUE'
+                            : payment.status === PaymentStatus.REJECTED
                             ? 'bg-red-100 text-red-700'
                             : 'bg-orange-100 text-orange-700'
                         }`}
                       >
-                        {payment.status}
+                        {statusLabelMap[payment.status]}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">

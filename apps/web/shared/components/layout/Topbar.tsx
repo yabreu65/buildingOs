@@ -284,6 +284,17 @@ export default function Topbar() {
   const activeMembership = session?.memberships.find((m) => m.tenantId === activeTenantId);
   const role = activeMembership?.roles[0] || 'Guest';
 
+  const roleLabelMap: Record<string, string> = {
+    TENANT_ADMIN: 'Administrador',
+    TENANT_OWNER: 'Propietario',
+    OPERATOR: 'Operador',
+    RESIDENT: 'Residente',
+    SUPER_ADMIN: 'Superadministrador',
+    Guest: 'Invitado',
+  };
+
+  const roleLabel = roleLabelMap[role] || role;
+
   const handleTenantChange = (nextTenantId: string) => {
     if (!session) return;
 
@@ -309,7 +320,7 @@ export default function Topbar() {
   if (!session) {
     return (
       <header className="h-14 border-b border-border bg-card text-card-foreground flex items-center justify-between px-4">
-        <div className="text-sm text-muted-foreground">Loading...</div>
+        <div className="text-sm text-muted-foreground">Cargando...</div>
       </header>
     );
   }
@@ -363,14 +374,14 @@ export default function Topbar() {
       <div className="flex items-center gap-3">
         {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} />}
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium">
-          {role}
+          {roleLabel}
         </span>
 
         <button
           className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 transition"
           onClick={handleLogout}
         >
-          Logout
+          Cerrar sesión
         </button>
       </div>
     </header>

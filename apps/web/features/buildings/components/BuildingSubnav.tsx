@@ -16,7 +16,7 @@ interface NavItem {
 
 /**
  * BuildingSubnav: Tabs for building sections
- * Overview, Units, Residents, Tickets, Payments, Settings
+ * Resumen, Unidades, Residentes, Solicitudes, Pagos y Configuración
  */
 export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) => {
   const pathname = usePathname();
@@ -71,7 +71,7 @@ export const BuildingSubnav = ({ tenantId, buildingId }: BuildingSubnavProps) =>
       href: `/${tenantId}/buildings/${buildingId}/expense-allocation`,
     },
     {
-      label: 'Automation QA',
+      label: 'QA automatizada',
       href: `/${tenantId}/buildings/${buildingId}/automation-qa`,
     },
     {

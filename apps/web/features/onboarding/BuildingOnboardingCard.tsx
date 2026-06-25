@@ -38,7 +38,7 @@ export default function BuildingOnboardingCard({
         setBuildingName(data.buildingName);
         setCompletionPercentage(data.completionPercentage);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch building steps');
+        setError(err instanceof Error ? err.message : 'Error al cargar los pasos del edificio');
       } finally {
         setLoading(false);
       }
