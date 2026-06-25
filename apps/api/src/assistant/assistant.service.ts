@@ -982,33 +982,6 @@ export class AssistantService implements OnModuleInit {
       debugInfo.finalFilters = extractedIntent.filters as Record<string, unknown>;
     }
 
-    const canonicalRequestedPeriod = this.extractCanonicalPeriod(extractedIntent.filters.period);
-    if (
-      canonicalRequestedPeriod?.kind === 'relative_range' &&
-      semanticValidation.status === 'accepted' &&
-      extractedIntent.intent === 'building_debt'
-    ) {
-      const relativeRangeResponse = this.buildRelativeRangeAcknowledgementResponse(
-        extractedIntent,
-        canonicalRequestedPeriod,
-      );
-      if (debugEnabled) {
-        (relativeRangeResponse as StructuredResponse).debug = debugInfo;
-      }
-      await this.storeConversationTurn(
-        tenantId,
-        userId,
-        sessionId,
-        request.message,
-        contextResolvedEntities,
-        { intent: extractedIntent.intent, filters: extractedIntent.filters as Record<string, unknown> },
-      );
-      if (usedPendingClarification) {
-        await this.conversationContext.clearPendingClarification(tenantId, userId, sessionId);
-      }
-      return relativeRangeResponse;
-    }
-
     if (extractedIntent.requiresClarification) {
       const missing = extractedIntent.missingFields?.join(', ') || 'contexto adicional';
       const clarificationMessage =

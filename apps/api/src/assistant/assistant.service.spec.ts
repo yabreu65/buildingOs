@@ -842,6 +842,29 @@ describe('AssistantService - Strict Operational Questions', () => {
         status: 'accepted',
         reason: 'period_present',
       });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-A',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-A', name: 'Torre El Parque', alias: 'torre el parque' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda de la torre El Parque, febrero 2026 a junio 2026: ARS 1.158,01',
+        meta: {},
+      });
 
       const result = await service.chatV2(
         'tenant-1',
@@ -870,11 +893,12 @@ describe('AssistantService - Strict Operational Questions', () => {
           }),
         }),
       );
-      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).toHaveBeenCalled();
       expect(mockConversationContext.clearPendingClarification).toHaveBeenCalledWith('tenant-1', 'user-1', 'conv-1');
-      expect(result.type).toBe('text');
-      expect(result.summary).toContain('últimos 5 meses incluyendo el mes actual');
-      expect(result.summary).not.toContain('este mes o la deuda acumulada');
+      expect(result.type).toBe('kpi');
+      expect(result.summary).toContain('febrero 2026 a junio 2026');
+      expect(result.summary).toContain('Deuda de la torre El Parque');
     });
 
     it('updates the relative-range mode to closed_months on follow-up', async () => {
@@ -918,6 +942,29 @@ describe('AssistantService - Strict Operational Questions', () => {
         status: 'accepted',
         reason: 'period_present',
       });
+      mockPrisma.building.findFirst.mockResolvedValue({
+        id: 'demo-A',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      mockEntityResolver.resolveBuilding.mockResolvedValue({
+        building: { id: 'demo-A', name: 'Torre El Parque', alias: 'torre el parque' },
+        alternatives: [],
+      });
+      mockAmbiguityService.detectAmbiguity.mockReturnValue(false);
+      mockQueryPlannerService.buildPlan.mockImplementation((intent, resolved) => ({
+        intent: intent.intent,
+        entityIds: { buildingId: resolved.building?.id },
+        filters: intent.filters,
+        pagination: { limit: 20 },
+      }));
+      mockQueryExecutorService.execute.mockResolvedValue({ totalDebt: 115801, currency: 'ARS' });
+      mockResponseFormatter.formatV2.mockReturnValue({
+        type: 'kpi',
+        title: 'Deuda',
+        summary: 'Deuda de la torre El Parque, enero 2026 a mayo 2026: ARS 1.158,01',
+        meta: {},
+      });
 
       const result = await service.chatV2(
         'tenant-1',
@@ -945,9 +992,11 @@ describe('AssistantService - Strict Operational Questions', () => {
           }),
         }),
       );
-      expect(mockQueryExecutorService.execute).not.toHaveBeenCalled();
-      expect(result.type).toBe('text');
-      expect(result.summary).toContain('últimos 5 meses cerrados');
+      expect(mockQueryPlannerService.buildPlan).toHaveBeenCalled();
+      expect(mockQueryExecutorService.execute).toHaveBeenCalled();
+      expect(result.type).toBe('kpi');
+      expect(result.summary).toContain('enero 2026 a mayo 2026');
+      expect(result.summary).toContain('Deuda de la torre El Parque');
     });
 
     it('asks for period.mode on tenant debt relative range queries', async () => {
