@@ -43,29 +43,33 @@ export function FinanceSummaryCards({
 
   const cards = [
     {
-      label: 'Total Cargos',
+      label: 'Total cargado del período',
       value: formatCurrencyValue(summary.totalCharges),
+      description: 'Suma de los cargos generados para el mes seleccionado.',
       color: 'text-blue-600 dark:text-blue-400',
       bgColor: 'bg-blue-50 dark:bg-blue-950/40',
       iconColor: 'text-blue-500',
     },
     {
-      label: 'Total Pagado',
+      label: 'Total cobrado del período',
       value: formatCurrencyValue(summary.totalPaid),
+      description: 'Pagos aplicados a los cargos del mes seleccionado.',
       color: 'text-green-600 dark:text-green-400',
       bgColor: 'bg-green-50 dark:bg-green-950/40',
       iconColor: 'text-green-500',
     },
     {
-      label: 'Saldo Pendiente',
+      label: 'Saldo pendiente del período',
       value: formatCurrencyValue(summary.totalOutstanding),
+      description: 'Deuda pendiente de los cargos del mes seleccionado.',
       color: 'text-orange-600 dark:text-orange-400',
       bgColor: 'bg-orange-50 dark:bg-orange-950/40',
       iconColor: 'text-orange-500',
     },
     {
-      label: 'Unidades Morosas',
+      label: 'Unidades morosas del período',
       value: summary.delinquentUnitsCount.toString(),
+      description: 'Unidades con saldo pendiente en el mes seleccionado.',
       color: 'text-red-600 dark:text-red-400',
       bgColor: 'bg-red-50 dark:bg-red-950/40',
       iconColor: 'text-red-500',
@@ -78,9 +82,10 @@ export function FinanceSummaryCards({
         <Card key={card.label} className={`p-6 ${card.bgColor} rounded-lg border border-border`}>
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-medium text-muted-foreground">{card.label}</p>
-            <p className="text-xs text-gray-400">{card.label === 'Unidades Morosas' ? 'unid.' : ''}</p>
+            <p className="text-xs text-gray-400">{card.label.includes('Unidades morosas') ? 'unid.' : ''}</p>
           </div>
           <p className={`text-3xl font-bold ${card.color} mb-1`}>{card.value}</p>
+          <p className="text-xs text-muted-foreground">{card.description}</p>
         </Card>
       ))}
     </div>

@@ -102,13 +102,13 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
   const tabs: Array<{ id: TabType; label: string; count?: number }> = [
     { id: 'rubros', label: 'Rubros' },
-    { id: 'expenses', label: 'Gastos', count: buildingVisibleExpenses.length },
-    { id: 'recurring', label: 'Recurrentes' },
+    { id: 'expenses', label: 'Gastos del edificio', count: buildingVisibleExpenses.length },
+    { id: 'recurring', label: 'Gastos recurrentes' },
     { id: 'liquidations', label: 'Liquidaciones' },
-    { id: 'payments', label: 'Pagos Pendientes', count: payments?.length },
-    { id: 'payments-history', label: 'Historial de Pagos', count: paymentHistory?.length },
-    { id: 'charges', label: 'Cargos' },
-    { id: 'delinquent', label: 'Unidades Morosas', count: summary?.delinquentUnitsCount },
+    { id: 'payments', label: 'Pagos pendientes de revisión', count: payments?.length },
+    { id: 'payments-history', label: 'Historial de pagos', count: paymentHistory?.length },
+    { id: 'charges', label: 'Cargos del período' },
+    { id: 'delinquent', label: 'Morosidad', count: summary?.delinquentUnitsCount },
     { id: 'analysis', label: 'Análisis' },
   ];
 
@@ -116,7 +116,12 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
     <div className="space-y-6">
       {/* Header with period selector */}
       <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">Finanzas</h1>
+        <div>
+          <h1 className="text-3xl font-bold">Finanzas</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Todo lo que ves aquí corresponde al período seleccionado del edificio actual.
+          </p>
+        </div>
         <div>
           <label className="text-sm font-medium text-gray-600 mr-2">Período:</label>
           <input
