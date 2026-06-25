@@ -178,6 +178,9 @@ const BuildingHubPage = () => {
           {building.address && (
             <p className="text-muted-foreground mt-1">{building.address}</p>
           )}
+          <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
+            Este es el hub operativo del edificio. Desde aquí puedes revisar su estado, administrar unidades, residentes, pagos y tareas frecuentes.
+          </p>
         </div>
         <div className="flex gap-2">
           <Button
@@ -212,7 +215,7 @@ const BuildingHubPage = () => {
 
       <SectionHeader
         title="Resumen operativo"
-        description="Todo lo que ves aquí corresponde al edificio actual. Cada tarjeta abre un módulo específico de gestión."
+        description="Indicadores principales del edificio seleccionado."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -220,20 +223,20 @@ const BuildingHubPage = () => {
           icon={<Grid3x3 className="w-4 h-4" />}
           title="Total de unidades"
           value={unitsLoading ? <Skeleton width="48px" height="32px" /> : totalUnits}
-          subtitle="Cantidad total de unidades registradas en este edificio."
+          subtitle="Unidades registradas en este edificio."
         />
 
         <MetricCard
           icon={<Home className="w-4 h-4" />}
-          title="Ocupadas"
+          title="Unidades ocupadas"
           value={unitsLoading ? <Skeleton width="48px" height="32px" /> : occupiedUnits}
-          subtitle="Unidades que ya tienen ocupante asignado."
+          subtitle="Unidades con residente u ocupante asignado."
           valueClassName="text-green-600"
         />
 
         <MetricCard
           icon={<Home className="w-4 h-4" />}
-          title="Vacantes"
+          title="Unidades vacantes"
           value={unitsLoading ? <Skeleton width="48px" height="32px" /> : vacantUnits}
           subtitle="Unidades disponibles para asignar."
           valueClassName="text-orange-600"
@@ -249,8 +252,8 @@ const BuildingHubPage = () => {
       </div>
 
       <SectionHeader
-        title="Accesos rápidos"
-        description="Cada tarjeta abre un módulo distinto para administrar el edificio."
+        title="Tareas frecuentes"
+        description="Acciones principales para administrar este edificio."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -260,7 +263,7 @@ const BuildingHubPage = () => {
           description={
             unitsLoading
               ? 'Cargando unidades...'
-              : `${totalUnits} unidades · Administrar ocupación, asignaciones y estados`
+              : `${totalUnits} unidades · Administra unidades, ocupación, asignaciones y estados`
           }
           onClick={() => router.push(routes.buildingUnits(tenantId, buildingId))}
         />
@@ -288,7 +291,7 @@ const BuildingHubPage = () => {
               ? 'Sin pagos registrados'
               : pendingPayments > 0
               ? `${pendingPayments} pagos pendientes de revisión`
-              : 'Ver pagos cargados y su estado de revisión'
+              : 'Revisa pagos cargados, deuda y estado de revisión'
           }
           onClick={() => {
             if (!paymentsLoading && totalPayments > 0) {
@@ -300,8 +303,8 @@ const BuildingHubPage = () => {
         <ActionCard
           icon={<Ticket className="w-5 h-5 text-gray-400" />}
           title='Solicitudes operativas'
-          description="Próximamente: ver pedidos, incidencias y casos operativos del edificio."
-          disabled
+          description="Reclamos, incidencias y casos operativos del edificio."
+          onClick={() => router.push(routes.buildingTickets(tenantId, buildingId))}
         />
       </div>
 

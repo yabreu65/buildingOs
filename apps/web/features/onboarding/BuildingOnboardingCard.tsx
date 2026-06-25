@@ -70,8 +70,8 @@ export default function BuildingOnboardingCard({
 
     const translations: Record<string, string> = {
       'assign unit residents': 'Asignar residentes a las unidades',
-      'upload documents': 'Subir documentos',
-      'create charges': 'Crear cargos',
+      'upload documents': 'Subir documentos iniciales',
+      'create charges': 'Crear cargos del período',
       'assign service providers': 'Asignar proveedores de servicio',
     };
 
@@ -83,10 +83,15 @@ export default function BuildingOnboardingCard({
       <div className="flex justify-between items-start mb-4">
         <div>
           <h3 className="text-lg font-bold text-foreground">
-            Configuración de {buildingName}
+            Activación del edificio
           </h3>
+          {buildingName && (
+            <p className="text-sm text-muted-foreground mt-1">
+              {buildingName}
+            </p>
+          )}
           <p className="text-sm text-muted-foreground mt-1">
-            Progreso de activación del edificio. {completedSteps} de {steps.length} pasos completados.
+            Completa estos pasos para dejar el edificio listo para operar. {completedSteps} de {steps.length} pasos completados.
           </p>
         </div>
 
