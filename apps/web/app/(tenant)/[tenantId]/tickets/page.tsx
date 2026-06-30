@@ -15,7 +15,7 @@ export default function AliasTicketsPage() {
 
   useEffect(() => {
     if (tenantId) {
-      router.replace(`/${tenantId}/resident/tickets`);
+      router.replace(`/${tenantId}/support`);
     }
   }, [tenantId, router]);
 
