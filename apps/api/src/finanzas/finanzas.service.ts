@@ -1708,6 +1708,63 @@ export class FinanzasService {
   }
 
   /**
+   * List charges across all buildings for a tenant.
+   *
+   * Security:
+   * - RESIDENT/OWNER: only charges from their assigned units
+   * - ADMIN/OPERATOR: all tenant charges
+   */
+  async listTenantCharges(
+    tenantId: string,
+    userRoles: string[],
+    userId: string,
+    query: {
+      buildingId?: string;
+      period?: string;
+      status?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ) {
+    const where: Prisma.ChargeWhereInput = {
+      tenantId,
+      canceledAt: null,
+    };
+
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      const userUnitIds = await this.validators.getUserUnitIds(tenantId, userId);
+      if (userUnitIds.length === 0) {
+        return [];
+      }
+      where.unitId = { in: userUnitIds };
+    }
+
+    if (query.buildingId) {
+      where.buildingId = query.buildingId;
+    }
+    if (query.period) {
+      where.period = query.period;
+    }
+    if (query.status) {
+      where.status = query.status as ChargeStatus;
+    }
+
+    const limit = Math.min(query.limit || 50, 500);
+    const offset = query.offset || 0;
+
+    return this.prisma.charge.findMany({
+      where,
+      include: {
+        building: { select: { id: true, name: true } },
+        unit: { select: { id: true, label: true } },
+      },
+      orderBy: { dueDate: 'desc' },
+      take: limit,
+      skip: offset,
+    });
+  }
+
+  /**
    * Get financial trend for building or tenant over N months
    * Returns array of MonthlyTrendDto with collectionRate calculated
    */

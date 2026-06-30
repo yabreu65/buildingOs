@@ -249,6 +249,31 @@ export class ListChargesQueryDto {
   offset?: number;
 }
 
+export class ListTenantChargesQueryDto {
+  @IsOptional()
+  @IsString()
+  buildingId?: string;
+
+  @IsOptional()
+  @IsString()
+  period?: string; // YYYY-MM format
+
+  @IsOptional()
+  @IsEnum(ChargeStatus)
+  status?: ChargeStatus;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  limit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  offset?: number;
+}
+
 export class ListPaymentsQueryDto {
   @IsOptional()
   @IsEnum(PaymentStatus)

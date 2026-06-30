@@ -38,6 +38,7 @@ export interface Expense {
   attachmentFileKey: string | null;
   status: ExpenseStatus;
   scopeType: ExpenseScopeType;
+  unitGroupId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -310,6 +311,48 @@ export async function bulkValidateExpenses(
   return apiClient<BulkValidateExpensesResult>({
     path: `/buildings/${buildingId}/expenses/validate-all${queryStr ? '?' + queryStr : ''}`,
     method: 'PATCH',
+  });
+}
+
+// ── Tenant Charges ─────────────────────────────────────────────────────────
+
+export interface TenantCharge {
+  id: string;
+  buildingId: string;
+  building: { id: string; name: string };
+  unitId: string;
+  unit: { id: string; label: string };
+  amount: number;
+  currency: string;
+  dueDate: string;
+  status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELED';
+  concept: string;
+  createdAt: string;
+}
+
+export interface ListTenantChargesParams {
+  buildingId?: string;
+  period?: string;
+  status?: TenantCharge['status'];
+  limit?: number;
+  offset?: number;
+}
+
+export async function listTenantCharges(
+  tenantId: string,
+  params: ListTenantChargesParams = {},
+): Promise<TenantCharge[]> {
+  const qs = new URLSearchParams();
+  if (params.buildingId) qs.append('buildingId', params.buildingId);
+  if (params.period) qs.append('period', params.period);
+  if (params.status) qs.append('status', params.status);
+  if (params.limit) qs.append('limit', String(params.limit));
+  if (params.offset) qs.append('offset', String(params.offset));
+
+  const queryStr = qs.toString();
+  return apiClient<TenantCharge[]>({
+    path: `/tenants/${tenantId}/finance/charges${queryStr ? '?' + queryStr : ''}`,
+    method: 'GET',
   });
 }
 

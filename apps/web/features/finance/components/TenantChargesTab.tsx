@@ -5,39 +5,21 @@ import Card from '@/shared/components/ui/Card';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
 import { formatCurrency } from '@/shared/lib/format/money';
-
-interface Charge {
-  id: string;
-  buildingId: string;
-  building?: {
-    id: string;
-    name: string;
-  };
-  unitId: string;
-  unit?: {
-    id: string;
-    label: string;
-  };
-  amount: number;
-  currency?: string;
-  dueDate: string;
-  status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELED';
-  createdAt: string;
-}
+import { listTenantCharges, type TenantCharge } from '../services/expense-ledger.api';
 
 interface TenantChargesTabProps {
   tenantId: string;
   buildingNames: Record<string, string>;
 }
 
-const statusColors: Record<Charge['status'], string> = {
+const statusColors: Record<TenantCharge['status'], string> = {
   PENDING: 'text-orange-600 bg-orange-50',
   PARTIAL: 'text-blue-600 bg-blue-50',
   PAID: 'text-green-600 bg-green-50',
   CANCELED: 'text-gray-600 bg-gray-50',
 };
 
-const statusLabels: Record<Charge['status'], string> = {
+const statusLabels: Record<TenantCharge['status'], string> = {
   PENDING: 'Pendiente',
   PARTIAL: 'Parcial',
   PAID: 'Pagado',
@@ -45,14 +27,9 @@ const statusLabels: Record<Charge['status'], string> = {
 };
 
 export const TenantChargesTab = ({ tenantId, buildingNames }: TenantChargesTabProps) => {
-  // TODO: Replace with actual API call when endpoint is available
-  // For now, using empty state pattern
-  const { data: charges = [], isLoading } = useQuery<Charge[]>({
+  const { data: charges = [], isLoading } = useQuery<TenantCharge[]>({
     queryKey: ['tenantCharges', tenantId],
-    queryFn: async () => {
-      // Placeholder until GET /tenants/:tenantId/finance/charges is implemented
-      return [];
-    },
+    queryFn: () => listTenantCharges(tenantId),
     enabled: !!tenantId,
     staleTime: 2 * 60 * 1000,
   });

@@ -15,6 +15,7 @@ import {
   PaymentMetricsDto,
   PaymentAuditLogDto,
   PaymentDuplicateCheckResultDto,
+  ListTenantChargesQueryDto,
 } from './finanzas.dto';
 import { Payment } from '@prisma/client';
 
@@ -58,6 +59,28 @@ export class TenantFinanceController {
     return this.finanzasService.getTenantFinancialSummary(
       tenantId,
       query.period || undefined,
+    );
+  }
+
+  /**
+   * GET /finance/charges
+   * List charges across all buildings for the tenant.
+   * Admin/Operator: all tenant charges
+   * Resident/Owner: only charges from their assigned units
+   */
+  @Get('charges')
+  async listTenantCharges(
+    @Query() query: ListTenantChargesQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    const tenantId = req.tenantId!;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    return this.finanzasService.listTenantCharges(
+      tenantId,
+      userRoles,
+      userId,
+      query,
     );
   }
 
