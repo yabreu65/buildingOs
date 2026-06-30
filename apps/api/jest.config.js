@@ -14,6 +14,7 @@ module.exports = {
   ],
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
+  setupFilesAfterEnv: ['<rootDir>/../jest.setup.js'],
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/$1',
     '^@buildingos/contracts$': '<rootDir>/../../../packages/contracts/src/index.ts',
