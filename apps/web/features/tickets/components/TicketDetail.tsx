@@ -9,10 +9,10 @@ import type { Ticket } from '../services/tickets.api';
 import { getTicketReplySuggestions } from '../services/tickets.api';
 import { useAuth } from '@/features/auth';
 import { useQuotes, useWorkOrders, QuoteCreateModal, WorkOrderCreateModal } from '@/features/vendors';
-import { useTenantMembers } from '@/features/tenant-members';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { formatCurrency } from '@/shared/lib/format/money';
+import { useAssignableTicketMembers } from '@/features/memberships/useAssignableTicketMembers';
 
 interface TicketDetailProps {
   buildingId: string;
@@ -54,7 +54,7 @@ export default function TicketDetail({
 
   const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r)) ?? false;
 
-  const { data: members } = useTenantMembers(tenantId, 'ACTIVE');
+  const { data: members = [], isLoading: loadingAssignableMembers } = useAssignableTicketMembers(tenantId);
   const [assigning, setAssigning] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState(ticket.assignedTo?.id || '');
 
@@ -112,9 +112,9 @@ export default function TicketDetail({
     setAssigning(true);
     try {
       await onAssign(ticket.id, selectedMemberId || '');
-      toast(selectedMemberId ? 'Responsable asignado' : 'Responsable removido', 'success');
+      toast(selectedMemberId ? 'Asignación actualizada' : 'Asignación removida', 'success');
     } catch {
-      toast('Error al asignar responsable', 'error');
+      toast('Error al asignar a', 'error');
     } finally {
       setAssigning(false);
     }
@@ -186,10 +186,15 @@ export default function TicketDetail({
         {/* Body - Scrollable */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Status & Priority */}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-2">
+              Acciones
+            </label>
+          </div>
           <div className="flex gap-4">
             <div>
               <label className="block text-sm font-medium text-muted-foreground mb-1">
-                {t('tickets.status')}
+                Estado
               </label>
               <div className="space-y-2">
                 <div className={`inline-block px-3 py-1 rounded text-sm font-medium ${
@@ -228,7 +233,7 @@ export default function TicketDetail({
 
             <div>
               <label className="block text-sm font-medium text-muted-foreground mb-1">
-                {t('tickets.priority')}
+                Prioridad
               </label>
               <span className={`text-sm font-medium px-2 py-1 rounded ${
                 ticket.priority === 'LOW' ? 'bg-green-50 text-green-700' :
@@ -247,7 +252,7 @@ export default function TicketDetail({
           {/* Timestamps */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-2">
-              {t('tickets.timeline')}
+              Historial
             </label>
             <div className="text-sm space-y-1 text-muted-foreground">
               <div>Creado: {new Date(ticket.createdAt).toLocaleString('es-AR')}</div>
@@ -261,25 +266,33 @@ export default function TicketDetail({
           {/* Description */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-2">
-              {t('tickets.description')}
+              Descripción
             </label>
             <p className="text-sm text-foreground">{ticket.description}</p>
           </div>
 
-          {/* Unit & Assignee */}
+          {/* Unit, Reporter & Assignee */}
           <div className="grid grid-cols-2 gap-4">
             {ticket.unit && (
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  {t('tickets.unit')}
+                  Unidad afectada
                 </label>
                 <p className="text-sm">{ticket.unit.label} ({ticket.unit.code})</p>
+              </div>
+            )}
+            {ticket.createdBy && (
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground mb-1">
+                  Reportado por
+                </label>
+                <p className="text-sm">{ticket.createdBy.name}</p>
               </div>
             )}
             {ticket.assignedTo && (
               <div>
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  {t('tickets.assignedTo')}
+                  Asignado a
                 </label>
                 <p className="text-sm">{ticket.assignedTo.user.name}</p>
               </div>
@@ -291,29 +304,40 @@ export default function TicketDetail({
             <div>
               <label className="block text-sm font-medium text-muted-foreground mb-1 flex items-center gap-2">
                 <UserPlus className="w-4 h-4" />
-                Asignar responsable
+                Asignar a
               </label>
-              <div className="flex gap-2">
-                <select
-                  value={selectedMemberId}
-                  onChange={(e) => setSelectedMemberId(e.target.value)}
-                  className="flex-1 px-3 py-2 border rounded-md text-sm"
-                >
-                  <option value="">Sin asignar</option>
-                  {members?.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  size="sm"
-                  onClick={handleAssign}
-                  disabled={assigning}
-                >
-                  {assigning ? 'Asignando...' : 'Asignar'}
-                </Button>
-              </div>
+              {loadingAssignableMembers ? (
+                <p className="text-sm text-muted-foreground">Cargando personal operativo...</p>
+                ) : members.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 p-3 text-sm text-muted-foreground">
+                    <p>No hay personal operativo disponible para asignar.</p>
+                    <p className="mt-1">
+                    Agrega administradores u operadores desde Configuración → Mi equipo.
+                    </p>
+                  </div>
+                ) : (
+                <div className="flex gap-2">
+                  <select
+                    value={selectedMemberId}
+                    onChange={(e) => setSelectedMemberId(e.target.value)}
+                    className="flex-1 px-3 py-2 border rounded-md text-sm"
+                  >
+                    <option value="">Sin asignar</option>
+                    {members.map((member) => (
+                      <option key={member.membershipId} value={member.membershipId}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    onClick={handleAssign}
+                    disabled={assigning}
+                  >
+                    {assigning ? 'Asignando...' : 'Asignar a'}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

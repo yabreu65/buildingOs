@@ -23,7 +23,7 @@ export const MembersList = ({ tenantId, onCreateClick }: MembersListProps) => {
 
   const getStatusBadge = (status: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
-      DRAFT: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Borrador' },
+      DRAFT: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'Borrador' },
       PENDING_INVITE: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Invitación Pendiente' },
       ACTIVE: { bg: 'bg-green-100', text: 'text-green-700', label: 'Activo' },
       DISABLED: { bg: 'bg-red-100', text: 'text-red-700', label: 'Deshabilitado' },
@@ -75,14 +75,19 @@ export const MembersList = ({ tenantId, onCreateClick }: MembersListProps) => {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Miembros del Tenant</h2>
-        <Button onClick={onCreateClick}>+ Crear Miembro</Button>
+        <div className="space-y-1">
+          <h2 className="text-xl font-semibold">Residentes registrados</h2>
+          <p className="text-sm text-muted-foreground">
+            Personas vinculadas a unidades, con estado de acceso e invitación.
+          </p>
+        </div>
+        <Button onClick={onCreateClick}>+ Registrar residente</Button>
       </div>
 
       {members.length === 0 ? (
         <Card className="py-8 text-center">
-          <p className="text-muted-foreground mb-4">No hay miembros creados</p>
-          <Button onClick={onCreateClick}>Crear Primer Miembro</Button>
+          <p className="text-muted-foreground mb-4">No hay residentes registrados</p>
+          <Button onClick={onCreateClick}>Registrar primer residente</Button>
         </Card>
       ) : (
         <div className="grid gap-4">
@@ -102,14 +107,23 @@ export const MembersList = ({ tenantId, onCreateClick }: MembersListProps) => {
                         {member.email}
                       </div>
                     )}
-                    {member.phone && (
-                      <div className="flex items-center gap-2">
-                        <Phone className="w-4 h-4" />
-                        {member.phone}
-                      </div>
+                  {member.phone && (
+                    <div className="flex items-center gap-2">
+                      <Phone className="w-4 h-4" />
+                      {member.phone}
+                    </div>
                     )}
                     <div>
-                      <strong>Rol:</strong> {member.role}
+                      <strong>Perfil:</strong>{' '}
+                      {member.role === 'RESIDENT'
+                        ? 'Residente'
+                        : member.role === 'OPERATOR'
+                          ? 'Operador'
+                          : member.role === 'TENANT_ADMIN'
+                            ? 'Administrador'
+                            : member.role === 'TENANT_OWNER'
+                              ? 'Propietario'
+                              : member.role}
                     </div>
                     {member.notes && (
                       <div>
@@ -137,7 +151,7 @@ export const MembersList = ({ tenantId, onCreateClick }: MembersListProps) => {
                     variant="secondary"
                     onClick={() => handleDelete(member.id)}
                     disabled={deletingId === member.id}
-                    className="text-red-600 hover:bg-red-50"
+                    className="text-red-500 hover:bg-red-500/10"
                   >
                     <Trash2 className="w-4 h-4" />
                   </Button>

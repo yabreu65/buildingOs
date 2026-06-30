@@ -29,13 +29,13 @@ interface RolesModalProps {
 type ScopeType = 'TENANT' | 'BUILDING' | 'UNIT';
 
 /**
- * RolesModal: Manage scoped roles for a team member
+ * RolesModal: administrar roles con alcance para un miembro operativo
  *
- * Features:
- * - List existing roles with scope badges
- * - Add new roles with scope selection
- * - Cascading building/unit selection
- * - Remove roles with confirmation
+ * Funcionalidades:
+ * - Listar roles existentes con alcance
+ * - Agregar nuevos roles con selección de alcance
+ * - Selección encadenada de edificio/unidad
+ * - Eliminar roles con confirmación
  */
 export function RolesModal({
   isOpen,
@@ -117,36 +117,36 @@ export function RolesModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full mx-4 max-h-96 overflow-y-auto">
-        <div className="p-6 border-b">
-          <h2 className="text-lg font-semibold">Manage Roles: {memberName}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-background text-foreground shadow-2xl">
+        <div className="border-b border-border p-6">
+          <h2 className="text-lg font-semibold">Gestionar roles: {memberName}</h2>
         </div>
 
         <div className="p-6 space-y-6">
           {/* Existing Roles List */}
           <div>
-            <h3 className="text-sm font-medium mb-3">Current Roles</h3>
+            <h3 className="text-sm font-medium mb-3">Roles actuales</h3>
             {loading ? (
-              <div className="text-sm text-gray-500">Loading roles...</div>
+              <div className="text-sm text-muted-foreground">Cargando roles...</div>
             ) : roles.length === 0 ? (
-              <div className="text-sm text-gray-500">No roles assigned yet</div>
+              <div className="text-sm text-muted-foreground">Todavía no hay roles asignados</div>
             ) : (
               <div className="space-y-2">
                 {roles.map((r) => (
                   <div
                     key={r.id}
-                    className="flex items-center justify-between bg-gray-100 p-3 rounded"
+                    className="flex items-center justify-between rounded-md border border-border bg-muted/50 p-3"
                   >
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{r.role}</span>
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                      <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">
                         {formatScope(r, buildings, fetchedUnits)}
                       </span>
                     </div>
                     <button
                       onClick={() => handleRemoveRole(r.id)}
-                      className="text-red-600 hover:text-red-800 text-sm"
+                      className="text-red-500 hover:text-red-400 text-sm"
                     >
                       ×
                     </button>
@@ -158,65 +158,65 @@ export function RolesModal({
 
           {/* Add Role Form */}
           <div className="border-t pt-6">
-            <h3 className="text-sm font-medium mb-3">Add Role</h3>
+            <h3 className="text-sm font-medium mb-3">Agregar rol</h3>
             <div className="space-y-4">
               {formError && (
-                <div className="text-sm text-red-600 bg-red-50 p-2 rounded">
+                <div className="text-sm text-red-500 bg-red-500/10 p-2 rounded">
                   {formError}
                 </div>
               )}
               {addError && (
-                <div className="text-sm text-red-600 bg-red-50 p-2 rounded">
+                <div className="text-sm text-red-500 bg-red-500/10 p-2 rounded">
                   {addError}
                 </div>
               )}
               {error && (
-                <div className="text-sm text-red-600 bg-red-50 p-2 rounded">
+                <div className="text-sm text-red-500 bg-red-500/10 p-2 rounded">
                   {error}
                 </div>
               )}
 
               {/* Role Select */}
               <div>
-                <label className="block text-xs font-medium mb-1">Role</label>
+                <label className="mb-1 block text-xs font-medium">Rol</label>
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
-                  className="w-full px-3 py-2 border rounded text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none ring-0 focus:border-primary"
                 >
-                  <option value="TENANT_OWNER">Tenant Owner</option>
-                  <option value="TENANT_ADMIN">Tenant Admin</option>
-                  <option value="OPERATOR">Operator</option>
-                  <option value="RESIDENT">Resident</option>
+                  <option value="TENANT_OWNER">Propietario</option>
+                  <option value="TENANT_ADMIN">Administrador</option>
+                  <option value="OPERATOR">Operador</option>
+                  <option value="RESIDENT">Residente</option>
                 </select>
               </div>
 
               {/* Scope Type Select */}
               <div>
-                <label className="block text-xs font-medium mb-1">Scope</label>
+                <label className="mb-1 block text-xs font-medium">Alcance</label>
                 <select
                   value={scopeType}
                   onChange={(e) => setScopeType(e.target.value as ScopeType)}
-                  className="w-full px-3 py-2 border rounded text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none focus:border-primary"
                 >
-                  <option value="TENANT">Whole Tenant</option>
-                  <option value="BUILDING">Specific Building</option>
-                  <option value="UNIT">Specific Unit</option>
+                  <option value="TENANT">Todo el condominio</option>
+                  <option value="BUILDING">Edificio específico</option>
+                  <option value="UNIT">Unidad específica</option>
                 </select>
               </div>
 
               {/* Building Select (for BUILDING or UNIT scope) */}
               {(scopeType === 'BUILDING' || scopeType === 'UNIT') && (
                 <div>
-                  <label className="block text-xs font-medium mb-1">
-                    Building
+                  <label className="mb-1 block text-xs font-medium">
+                    Edificio
                   </label>
                   <select
                     value={selectedBuildingId}
                     onChange={(e) => setSelectedBuildingId(e.target.value)}
-                    className="w-full px-3 py-2 border rounded text-sm"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none focus:border-primary"
                   >
-                    <option value="">Select a building...</option>
+                    <option value="">Selecciona un edificio...</option>
                     {buildings.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
@@ -229,15 +229,15 @@ export function RolesModal({
               {/* Unit Select (for UNIT scope) */}
               {scopeType === 'UNIT' && (
                 <div>
-                  <label className="block text-xs font-medium mb-1">Unit</label>
+                  <label className="mb-1 block text-xs font-medium">Unidad</label>
                   <select
                     value={selectedUnitId}
                     onChange={(e) => setSelectedUnitId(e.target.value)}
                     disabled={!selectedBuildingId || unitsLoading}
-                    className="w-full px-3 py-2 border rounded text-sm disabled:bg-gray-100"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-primary"
                   >
                     <option value="">
-                      {unitsLoading ? 'Loading units...' : 'Select a unit...'}
+                      {unitsLoading ? 'Cargando unidades...' : 'Selecciona una unidad...'}
                     </option>
                     {fetchedUnits.map((u) => (
                       <option key={u.id} value={u.id}>
@@ -252,21 +252,21 @@ export function RolesModal({
               <button
                 onClick={handleAddRole}
                 disabled={isAdding}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white py-2 rounded text-sm font-medium"
+                className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isAdding ? 'Adding...' : 'Add Role'}
+                {isAdding ? 'Agregando...' : 'Agregar rol'}
               </button>
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t flex justify-end gap-2">
+        <div className="border-t border-border p-6 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium border rounded hover:bg-gray-50"
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
           >
-            Close
+            Cerrar
           </button>
         </div>
       </div>
@@ -275,16 +275,16 @@ export function RolesModal({
 }
 
 function formatScope(role: ScopedRole, buildings: Building[] = [], units: Unit[] = []): string {
-  if (role.scopeType === 'TENANT') return 'Tenant-wide';
+  if (role.scopeType === 'TENANT') return 'Todo el condominio';
 
   if (role.scopeType === 'BUILDING' && role.scopeBuildingId) {
     const building = buildings.find((b) => b.id === role.scopeBuildingId);
-    return `Building: ${building?.name || role.scopeBuildingId}`;
+    return `Edificio: ${building?.name || role.scopeBuildingId}`;
   }
 
   if (role.scopeType === 'UNIT' && role.scopeUnitId) {
     const unit = units.find((u) => u.id === role.scopeUnitId);
-    return `Unit: ${unit?.label || unit?.unitCode || role.scopeUnitId}`;
+    return `Unidad: ${unit?.label || unit?.unitCode || role.scopeUnitId}`;
   }
 
   return role.scopeType;

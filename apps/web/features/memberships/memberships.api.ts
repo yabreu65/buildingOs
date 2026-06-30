@@ -8,6 +8,14 @@ export interface AddRoleInput {
   scopeUnitId?: string;
 }
 
+export interface AssignableTicketMember {
+  id: string;
+  membershipId: string;
+  name: string;
+  email: string;
+  roles: string[];
+}
+
 /**
  * Get all scoped roles for a membership
  */
@@ -47,5 +55,17 @@ export async function removeMemberRole(
   await apiClient<void>({
     path: `/tenants/${tenantId}/memberships/${membershipId}/roles/${roleId}`,
     method: 'DELETE',
+  });
+}
+
+/**
+ * Get active operational members eligible for ticket assignment
+ */
+export async function listAssignableTicketMembers(
+  tenantId: string,
+): Promise<AssignableTicketMember[]> {
+  return apiClient<AssignableTicketMember[]>({
+    path: `/tenants/${tenantId}/memberships/assignable-tickets`,
+    method: 'GET',
   });
 }

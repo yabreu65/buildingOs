@@ -80,7 +80,8 @@ export const Sidebar = () => {
               {t('navigation.settings')}
             </div>
             <NavItem href={`/${tenantId}/settings/general`} label={t('settings.general')} />
-            <NavItem href={`/${tenantId}/settings/members`} label={t('sidebar.myTeam')} />
+            <NavItem href={`/${tenantId}/settings/members`} label={t('navigation.residents')} />
+            <NavItem href={`/${tenantId}/settings/team`} label={t('sidebar.team')} />
           </>
         )}
       </nav>
@@ -89,4 +90,3 @@ export const Sidebar = () => {
 };
 
 export default Sidebar;
-

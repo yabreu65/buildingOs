@@ -77,7 +77,7 @@ export const CreateMemberModal = ({
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <Card className="max-w-lg w-full border-blue-200 bg-blue-50">
         <div className="mb-4 flex justify-between items-center">
-          <h3 className="text-lg font-semibold">Crear Nuevo Miembro</h3>
+          <h3 className="text-lg font-semibold">Registrar residente</h3>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground"
@@ -97,7 +97,7 @@ export const CreateMemberModal = ({
           {/* Name - Required */}
           <div>
             <label htmlFor="name" className="block text-sm font-medium mb-1">
-              Nombre *
+              Nombre del residente *
             </label>
             <Input
               id="name"
@@ -114,7 +114,7 @@ export const CreateMemberModal = ({
           {/* Email - Required */}
           <div>
             <label htmlFor="email" className="block text-sm font-medium mb-1">
-              Email *
+              Email de contacto *
             </label>
             <Input
               id="email"
@@ -132,7 +132,7 @@ export const CreateMemberModal = ({
           {/* Phone - Required */}
           <div>
             <label htmlFor="phone" className="block text-sm font-medium mb-1">
-              Teléfono *
+              Teléfono de contacto *
             </label>
             <Input
               id="phone"
@@ -149,7 +149,7 @@ export const CreateMemberModal = ({
           {/* Notes - Optional */}
           <div>
             <label htmlFor="notes" className="block text-sm font-medium mb-1">
-              Notas (opcional)
+              Observaciones (opcional)
             </label>
             <textarea
               id="notes"
@@ -163,7 +163,7 @@ export const CreateMemberModal = ({
 
           {/* Info Box */}
           <div className="p-3 bg-blue-100 border border-blue-300 rounded-md text-sm text-blue-800">
-            El miembro se creará en estado <strong>PENDIENTE</strong> y recibirá una invitación por email.
+            El residente se creará en estado <strong>PENDIENTE</strong> y recibirá una invitación por email.
           </div>
 
           {/* Actions */}
@@ -180,10 +180,10 @@ export const CreateMemberModal = ({
               {createMutation.isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creando...
+                  Registrando...
                 </>
               ) : (
-                'Crear Miembro'
+                'Registrar residente'
               )}
             </Button>
           </div>

@@ -3,7 +3,6 @@
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
-import { useBuildings } from '@/features/buildings/hooks';
 import { TicketsList } from '@/features/tickets';
 import { fetchBuildingById } from '@/features/buildings/services/buildings.api';
 
@@ -18,9 +17,6 @@ export default function TicketsPage() {
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
   const [buildingName, setBuildingName] = useState<string>('');
-
-  const { buildings } = useBuildings(tenantId);
-  const building = buildings.find((b) => b.id === buildingId);
 
   useEffect(() => {
     if (!tenantId || !buildingId) return;
@@ -43,6 +39,13 @@ export default function TicketsPage() {
       />
 
       <BuildingSubnav tenantId={tenantId} buildingId={buildingId} />
+
+      <div className="space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">Tickets del edificio</h1>
+        <p className="text-sm text-muted-foreground">
+          Solicitudes y problemas reportados en este edificio.
+        </p>
+      </div>
 
       <TicketsList buildingId={buildingId} tenantId={tenantId} />
     </div>

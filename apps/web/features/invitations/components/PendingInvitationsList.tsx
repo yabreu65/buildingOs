@@ -15,6 +15,13 @@ interface PendingInvitationsListProps {
   onResend?: (invitationId: string) => Promise<void>;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  TENANT_OWNER: 'Propietario',
+  TENANT_ADMIN: 'Administrador',
+  OPERATOR: 'Operador',
+  RESIDENT: 'Residente',
+};
+
 export default function PendingInvitationsList({
   invitations,
   loading,
@@ -27,8 +34,11 @@ export default function PendingInvitationsList({
   if (loading) {
     return (
       <Card>
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold">Convites Pendentes</h3>
+        <div className="mb-4 space-y-1">
+          <h3 className="text-lg font-semibold">Invitaciones del equipo operativo</h3>
+          <p className="text-sm text-muted-foreground">
+            Invitaciones enviadas y todavía no aceptadas.
+          </p>
         </div>
         <div className="space-y-4">
           {[1, 2].map((i) => (
@@ -42,12 +52,15 @@ export default function PendingInvitationsList({
   if (invitations.length === 0) {
     return (
       <Card>
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold">Convites Pendentes</h3>
+        <div className="mb-4 space-y-1">
+          <h3 className="text-lg font-semibold">Invitaciones del equipo operativo</h3>
+          <p className="text-sm text-muted-foreground">
+            Invitaciones enviadas y todavía no aceptadas.
+          </p>
         </div>
         <EmptyState
-          title="Nenhum convite pendente"
-          description="Todos os convites foram aceitos ou expirados"
+          title="No hay invitaciones pendientes"
+          description="Todas las invitaciones fueron aceptadas o ya expiraron."
         />
       </Card>
     );
@@ -89,51 +102,60 @@ export default function PendingInvitationsList({
 
   return (
     <Card>
-      <div className="mb-4 flex justify-between items-center">
+      <div className="mb-4 space-y-1">
         <h3 className="text-lg font-semibold">
-          Convites Pendentes ({invitations.length})
+          Invitaciones del equipo operativo ({invitations.length})
         </h3>
+        <p className="text-sm text-muted-foreground">
+          Invitaciones enviadas y todavía no aceptadas.
+        </p>
       </div>
       <div className="space-y-4">
         {invitations.map((invitation) => (
           <div
             key={invitation.id}
-            className="flex items-center justify-between p-3 border rounded-lg"
+            className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3"
           >
-            <div className="flex-1">
-              <p className="font-medium">{invitation.email}</p>
-              <div className="flex gap-2 mt-2">
-                {invitation.roles.map((role) => (
-                  <Badge key={role} className="bg-blue-100 text-blue-700 border border-blue-300">
-                    {role}
-                  </Badge>
-                ))}
-              </div>
-              <p className="text-sm text-gray-500 mt-2">
-                {formatTimeUntilExpiry(invitation.expiresAt)} (
-                {new Date(invitation.expiresAt).toLocaleDateString()})
-              </p>
+          <div className="flex-1">
+            <p className="font-medium">{invitation.email}</p>
+            <p className="text-sm text-muted-foreground mt-1">Pendiente de aceptación</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {invitation.roles.map((role) => (
+                <Badge key={role} className="border border-border bg-primary/10 text-primary">
+                  {ROLE_LABELS[role] ?? role}
+                </Badge>
+              ))}
             </div>
-            <div className="flex gap-2">
-              {onResend && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => handleResend(invitation.id)}
-                  disabled={resending === invitation.id || revoking === invitation.id}
-                >
-                  {resending === invitation.id ? 'Reenviando...' : 'Reenviar'}
-                </Button>
-              )}
+            <p className="text-sm text-muted-foreground mt-2">
+              Invitado como:{' '}
+              {invitation.roles.map((role) => ROLE_LABELS[role] ?? role).join(', ')}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {formatTimeUntilExpiry(invitation.expiresAt)} (
+              {new Date(invitation.expiresAt).toLocaleDateString()})
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {onResend && (
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => handleRevoke(invitation.id)}
-                disabled={revoking === invitation.id || resending === invitation.id}
+                onClick={() => handleResend(invitation.id)}
+                disabled={resending === invitation.id || revoking === invitation.id}
               >
-                {revoking === invitation.id ? 'Revogando...' : 'Revogar'}
+                {resending === invitation.id ? 'Reenviando...' : 'Reenviar'}
               </Button>
-            </div>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => handleRevoke(invitation.id)}
+              disabled={revoking === invitation.id || resending === invitation.id}
+              className="text-red-500 hover:bg-red-500/10"
+            >
+              {revoking === invitation.id ? 'Revocando...' : 'Revocar'}
+            </Button>
+          </div>
           </div>
         ))}
       </div>

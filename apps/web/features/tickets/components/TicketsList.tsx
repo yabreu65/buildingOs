@@ -128,14 +128,14 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
       await update(ticketId, { 
         assignedToMembershipId: membershipId || null 
       });
-      toast('Responsable actualizado', 'success');
+      toast('Asignación actualizada', 'success');
       await refetch();
       const updated = tickets.find((tk) => tk.id === ticketId);
       if (updated) {
         setSelectedTicket(updated);
       }
     } catch {
-      toast('Error al asignar responsable', 'error');
+      toast('Error al asignar a', 'error');
     }
   }, [update, refetch, tickets, toast]);
 
@@ -196,17 +196,17 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">{t('tickets.title')}</h2>
+        <h2 className="text-2xl font-bold">Tickets del edificio</h2>
         <Button onClick={() => setShowCreateForm(true)}>
           <Plus className="w-4 h-4 mr-2" />
-          {t('tickets.createTicket')}
+          Crear solicitud
         </Button>
       </div>
 
       {showCreateForm && (
         <Card className="border-blue-200 bg-blue-50">
           <div className="mb-4 flex justify-between items-center">
-            <h3 className="text-lg font-semibold">{t('tickets.create')}</h3>
+            <h3 className="text-lg font-semibold">Crear solicitud</h3>
             <button
               onClick={() => setShowCreateForm(false)}
               className="text-gray-500 hover:text-gray-700"
@@ -265,7 +265,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
 
       <div className="flex gap-4 flex-wrap">
         <div>
-          <label className="block text-sm font-medium mb-1">{t('tickets.status')}</label>
+          <label className="block text-sm font-medium mb-1">Estado</label>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilterValue)}
@@ -281,7 +281,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">{t('tickets.priority')}</label>
+          <label className="block text-sm font-medium mb-1">Prioridad</label>
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
@@ -296,7 +296,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">{t('tickets.unit')}</label>
+          <label className="block text-sm font-medium mb-1">Unidad afectada</label>
           <select
             value={unitIdFilter}
             onChange={(e) => setUnitIdFilter(e.target.value)}
@@ -317,7 +317,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 type="text"
-                placeholder="Buscar tickets..."
+                placeholder="Buscar solicitudes"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 className="pl-9"
@@ -364,10 +364,10 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
       {!loading && visibleTickets.length === 0 && (
         <EmptyState
           icon={<TicketIcon className="w-12 h-12 text-muted-foreground" />}
-          title={t('tickets.noTickets')}
-          description={t('tickets.emptyDescription')}
+          title="No hay solicitudes registradas para este edificio."
+          description="Cuando residentes o propietarios reporten un problema, aparecerá aquí."
           cta={{
-            text: t('tickets.createTicket'),
+            text: 'Crear solicitud',
             onClick: () => setShowCreateForm(true),
           }}
         />
@@ -394,27 +394,44 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
                 </div>
                 {getStatusBadge(ticket.status)}
               </div>
-              <div className="flex justify-between items-center text-xs text-muted-foreground mt-3 pt-2 border-t">
-                <div className="flex items-center gap-3">
+              <div className="mt-3 pt-3 border-t text-xs text-muted-foreground space-y-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                   <span className="bg-muted px-2 py-0.5 rounded">
                     {getCategoryLabel(ticket.category)}
                   </span>
-                  {ticket.unit && (
-                    <span className="text-blue-600">
-                      {ticket.unit.label}
-                    </span>
-                  )}
-                  {ticket.assignedTo && (
-                    <span className="text-muted-foreground">
-                      → {ticket.assignedTo.user.name}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span>{formatDate(ticket.createdAt)}</span>
-                  <span className="flex items-center gap-1">
-                    💬 {ticket.comments?.length || 0}
+                  <span>
+                    <span className="font-medium text-foreground/80">Unidad afectada:</span>{' '}
+                    {ticket.unit ? ticket.unit.label : 'Sin unidad asociada'}
                   </span>
+                  <span>
+                    <span className="font-medium text-foreground/80">Reportado por:</span>{' '}
+                    {ticket.createdBy?.name || 'Sin dato'}
+                  </span>
+                  <span>
+                    <span className="font-medium text-foreground/80">Asignado a:</span>{' '}
+                    {ticket.assignedTo ? ticket.assignedTo.user.name : 'Sin asignar'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-4">
+                    <span>
+                      <span className="font-medium text-foreground/80">Estado:</span>{' '}
+                      {getStatusBadge(ticket.status)}
+                    </span>
+                    <span>
+                      <span className="font-medium text-foreground/80">Prioridad:</span>{' '}
+                      {getPriorityBadge(ticket.priority)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span>
+                      <span className="font-medium text-foreground/80">Fecha:</span>{' '}
+                      {formatDate(ticket.createdAt)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      💬 {ticket.comments?.length || 0}
+                    </span>
+                  </div>
                 </div>
               </div>
             </Card>

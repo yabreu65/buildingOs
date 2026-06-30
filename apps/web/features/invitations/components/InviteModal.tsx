@@ -20,14 +20,21 @@ interface InviteModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (dto: CreateInvitationRequest) => Promise<void>;
+  availableRoles?: readonly Role[];
+  title?: string;
+  subtitle?: string;
+  submitLabel?: string;
 }
 
 export default function InviteModal({
   open,
   onOpenChange,
   onSubmit,
+  availableRoles = ['TENANT_ADMIN', 'OPERATOR', 'RESIDENT'],
+  title = 'Invitar miembro',
+  subtitle = 'Envía una invitación para agregar un nuevo miembro al equipo operativo.',
+  submitLabel = 'Enviar invitación',
 }: InviteModalProps) {
-  const availableRoles: readonly Role[] = ['TENANT_ADMIN', 'OPERATOR', 'RESIDENT'];
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRoles, setSelectedRoles] = useState<Role[]>([]);
@@ -75,10 +82,10 @@ export default function InviteModal({
       <Card className="w-full max-w-md">
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-foreground">
-            Convidar Membro
+            {title}
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Envie um convite para adicionar um novo membro à sua equipe
+            {subtitle}
           </p>
         </div>
 
@@ -144,7 +151,7 @@ export default function InviteModal({
               Cancelar
             </Button>
             <Button type="submit" size="sm" disabled={loading || selectedRoles.length === 0}>
-              {loading ? 'Enviando...' : 'Enviar Convite'}
+              {loading ? 'Enviando...' : submitLabel}
             </Button>
           </div>
         </form>
