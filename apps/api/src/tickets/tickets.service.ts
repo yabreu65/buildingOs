@@ -10,6 +10,7 @@ import {
   Prisma,
   AuditAction,
   Role,
+  TicketCategory,
   TicketPriority,
   TicketStatus,
 } from '@prisma/client';
@@ -75,7 +76,36 @@ const VALID_TICKET_STATUSES: readonly TicketStatus[] = [
   'CLOSED',
 ];
 
+const VALID_TICKET_PRIORITIES: readonly TicketPriority[] = [
+  'LOW',
+  'MEDIUM',
+  'HIGH',
+  'URGENT',
+];
+
+const VALID_TICKET_CATEGORIES: readonly TicketCategory[] = [
+  'MAINTENANCE',
+  'REPAIR',
+  'CLEANING',
+  'COMPLAINT',
+  'SAFETY',
+  'BILLING',
+  'OTHER',
+];
+
 const ASSIGNABLE_TICKET_ROLE_SET = new Set<Role>(ASSIGNABLE_TICKET_ROLES);
+
+function isTicketPriority(value: string): value is TicketPriority {
+  return VALID_TICKET_PRIORITIES.includes(value as TicketPriority);
+}
+
+function isTicketCategory(value: string): value is TicketCategory {
+  return VALID_TICKET_CATEGORIES.includes(value as TicketCategory);
+}
+
+function isTicketStatus(value: string): value is TicketStatus {
+  return VALID_TICKET_STATUSES.includes(value as TicketStatus);
+}
 
 @Injectable()
 export class TicketsService {
@@ -317,8 +347,7 @@ export class TicketsService {
       const statusValues = filters.status
         .split(',')
         .filter(
-          (status): status is TicketStatus =>
-            VALID_TICKET_STATUSES.includes(status as TicketStatus),
+          (status): status is TicketStatus => isTicketStatus(status),
         );
 
       if (statusValues.length === 1) {
@@ -327,7 +356,14 @@ export class TicketsService {
         where.status = { in: statusValues };
       }
     }
-    if (filters?.priority) where.priority = filters.priority as TicketPriority;
+    if (filters?.priority) {
+      if (!isTicketPriority(filters.priority)) {
+        throw new BadRequestException(
+          `Invalid ticket priority filter: ${filters.priority}`,
+        );
+      }
+      where.priority = filters.priority;
+    }
     if (filters?.unitId) where.unitId = filters.unitId;
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
@@ -470,12 +506,23 @@ export class TicketsService {
       );
     }
 
-    // 2. Validate status transition if changing
+    // 2. Validate ticket fields if changing
+    if (dto.category && !isTicketCategory(dto.category)) {
+      throw new BadRequestException(`Invalid ticket category: ${dto.category}`);
+    }
+    if (dto.priority && !isTicketPriority(dto.priority)) {
+      throw new BadRequestException(`Invalid ticket priority: ${dto.priority}`);
+    }
+    if (dto.status && !isTicketStatus(dto.status)) {
+      throw new BadRequestException(`Invalid ticket status: ${dto.status}`);
+    }
+
+    // 3. Validate status transition if changing
     if (dto.status && dto.status !== currentTicket.status) {
       TicketStateMachine.validateTransition(currentTicket.status, dto.status);
     }
 
-    // 3. Validate new unit if provided
+    // 4. Validate new unit if provided
     if (dto.unitId !== undefined) {
       if (dto.unitId) {
         await this.validators.validateUnitBelongsToBuildingAndTenant(
@@ -486,7 +533,7 @@ export class TicketsService {
       }
     }
 
-    // 4. Validate new assignee if provided
+    // 5. Validate new assignee if provided
     if (dto.assignedToMembershipId !== undefined) {
       if (dto.assignedToMembershipId) {
         const membership = await this.validateAssignableTicketMembership(
@@ -502,14 +549,14 @@ export class TicketsService {
       }
     }
 
-    // 5. Build update data
+    // 6. Build update data
     const data: Prisma.TicketUpdateInput = {};
     if (dto.title) data.title = dto.title;
     if (dto.description) data.description = dto.description;
-    if (dto.category) data.category = dto.category as Prisma.EnumTicketCategoryFieldUpdateOperationsInput;
-    if (dto.priority) data.priority = dto.priority as Prisma.EnumTicketPriorityFieldUpdateOperationsInput;
+    if (dto.category) data.category = dto.category;
+    if (dto.priority) data.priority = dto.priority;
     if (dto.status) {
-      data.status = dto.status as Prisma.EnumTicketStatusFieldUpdateOperationsInput;
+      data.status = dto.status;
       // Set closedAt when transitioning to CLOSED
       if (dto.status === 'CLOSED' && currentTicket.status !== 'CLOSED') {
         data.closedAt = new Date();

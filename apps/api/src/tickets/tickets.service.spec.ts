@@ -412,10 +412,16 @@ describe('TicketsService', () => {
 
   // ========== TESTS: GET ALL ==========
   describe('findAll', () => {
-    it('should skip findAll tests - complex validator dependencies', () => {
-      // These tests require complex mocks for TicketsValidators
-      // that are beyond unit test scope. Integration tests recommended.
-      expect(true).toBe(true);
+    it('rejects invalid priority filters instead of casting them', async () => {
+      jest
+        .spyOn(validators, 'validateBuildingBelongsToTenant')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        service.findAll('tenant-123', 'building-123', {
+          priority: 'ULTRA' as any,
+        }),
+      ).rejects.toThrow('Invalid ticket priority filter: ULTRA');
     });
   });
 
@@ -454,7 +460,30 @@ describe('TicketsService', () => {
         'No se puede asignar un ticket a un residente. Selecciona un miembro operativo del equipo.',
       );
     });
-  });;
+
+    it.each([
+      ['category', { category: 'NOT_A_CATEGORY' }, 'Invalid ticket category: NOT_A_CATEGORY'],
+      ['priority', { priority: 'SUPER_HIGH' }, 'Invalid ticket priority: SUPER_HIGH'],
+      ['status', { status: 'BROKEN' }, 'Invalid ticket status: BROKEN'],
+    ] as const)('rejects invalid %s values before persisting', async (_, dto, message) => {
+      const tenantId = 'tenant-123';
+      const buildingId = 'building-123';
+      const ticketId = 'ticket-123';
+
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+        id: ticketId,
+        tenantId,
+        buildingId,
+        status: 'OPEN',
+        createdByUserId: 'creator-1',
+      } as any);
+
+      await expect(
+        service.update(tenantId, buildingId, ticketId, dto as UpdateTicketDto),
+      ).rejects.toThrow(message);
+      expect(prismaService.ticket.update).not.toHaveBeenCalled();
+    });
+  });
 
   // ========== TESTS: ADD COMMENT ==========
   describe('addComment', () => {
