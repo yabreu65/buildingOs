@@ -553,10 +553,10 @@ export class TicketsService {
     const data: Prisma.TicketUpdateInput = {};
     if (dto.title) data.title = dto.title;
     if (dto.description) data.description = dto.description;
-    if (dto.category) data.category = dto.category;
-    if (dto.priority) data.priority = dto.priority;
+    if (dto.category) data.category = dto.category as TicketCategory;
+    if (dto.priority) data.priority = dto.priority as TicketPriority;
     if (dto.status) {
-      data.status = dto.status;
+      data.status = dto.status as TicketStatus;
       // Set closedAt when transitioning to CLOSED
       if (dto.status === 'CLOSED' && currentTicket.status !== 'CLOSED') {
         data.closedAt = new Date();
