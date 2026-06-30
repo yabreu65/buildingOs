@@ -361,6 +361,30 @@ describe('ExpensesService', () => {
         service.createExpense('tenant-1', 'member-1', ['TENANT_ADMIN'], defaultCreateDto),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('returns PERIOD_PUBLISHED error with adjustment metadata', async () => {
+      jest.spyOn(prisma.expenseLedgerCategory, 'findFirst').mockResolvedValue({
+        id: 'cat-1', name: 'Maintenance', catalogScope: 'BUILDING',
+      } as any);
+      jest.spyOn(prisma.vendor, 'findFirst').mockResolvedValue({ id: 'vendor-1' } as any);
+      jest.spyOn(prisma.liquidation, 'findFirst').mockResolvedValue({
+        id: 'liq-1', period: '2026-05', status: 'PUBLISHED',
+      } as any);
+
+      try {
+        await service.createExpense('tenant-1', 'member-1', ['TENANT_ADMIN'], defaultCreateDto);
+        fail('Expected BadRequestException');
+      } catch (err) {
+        expect(err).toBeInstanceOf(BadRequestException);
+        const response = (err as BadRequestException).getResponse() as Record<string, unknown>;
+        expect(response).toMatchObject({
+          code: 'PERIOD_PUBLISHED',
+          publishedPeriod: '2026-05',
+          canCreateAdjustment: true,
+        });
+        expect(response.suggestedTargetPeriod).toBeDefined();
+      }
+    });
   });
 
   // ── UPDATE EXPENSE ─────────────────────────────────────────────────────
