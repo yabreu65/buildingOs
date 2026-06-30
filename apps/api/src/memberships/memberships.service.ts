@@ -2,7 +2,8 @@ import { Injectable, ConflictException, NotFoundException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AddRoleDto, ScopeTypeDto } from './dto/add-role.dto';
-import { MembershipRole, Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
+import { ASSIGNABLE_TICKET_ROLES } from './memberships.constants';
 
 export interface ScopedRoleResponse {
   id: string;
@@ -17,6 +18,35 @@ export interface AssignableResidentResponse {
   name: string;
   email: string;
 }
+
+export interface AssignableTicketMemberResponse {
+  id: string;
+  membershipId: string;
+  name: string;
+  email: string;
+  roles: Role[];
+}
+
+const assignableTicketMembersArgs = Prisma.validator<Prisma.MembershipDefaultArgs>()({
+  include: {
+    user: {
+      select: {
+        id: true,
+        name: true,
+        email: true,
+      },
+    },
+    roles: {
+      select: {
+        role: true,
+      },
+    },
+  },
+});
+
+type AssignableTicketMembership = Prisma.MembershipGetPayload<
+  typeof assignableTicketMembersArgs
+>;
 
 @Injectable()
 export class MembershipsService {
@@ -286,6 +316,45 @@ export class MembershipsService {
         id: m.user.id,
         name: m.user.name,
         email: m.user.email,
+      }));
+  }
+
+  /**
+   * Get members who can be assigned to tickets
+   *
+   * Rules:
+   * - Must belong to tenant
+   * - Must have at least one operational role
+   * - Must not be resident-only
+   */
+  async getAssignableTicketMembers(tenantId: string): Promise<AssignableTicketMemberResponse[]> {
+    const memberships = await this.prisma.membership.findMany({
+      where: {
+        tenantId,
+        roles: {
+          some: {
+            role: { in: [...ASSIGNABLE_TICKET_ROLES] },
+          },
+        },
+      },
+      ...assignableTicketMembersArgs,
+    });
+
+    return memberships
+      .filter((membership) =>
+        membership.roles.some((role) =>
+          ASSIGNABLE_TICKET_ROLES.includes(
+            role.role as (typeof ASSIGNABLE_TICKET_ROLES)[number],
+          ),
+        ),
+      )
+      .sort((a, b) => a.user.name.localeCompare(b.user.name, 'es-AR'))
+      .map((membership: AssignableTicketMembership) => ({
+        id: membership.user.id,
+        membershipId: membership.id,
+        name: membership.user.name,
+        email: membership.user.email,
+        roles: membership.roles.map((role) => role.role),
       }));
   }
 

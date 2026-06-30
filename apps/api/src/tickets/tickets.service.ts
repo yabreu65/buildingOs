@@ -9,6 +9,7 @@ import {
   TicketComment,
   Prisma,
   AuditAction,
+  Role,
   TicketPriority,
   TicketStatus,
 } from '@prisma/client';
@@ -21,6 +22,7 @@ import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
+import { ASSIGNABLE_TICKET_ROLES } from '../memberships/memberships.constants';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -72,6 +74,8 @@ const VALID_TICKET_STATUSES: readonly TicketStatus[] = [
   'RESOLVED',
   'CLOSED',
 ];
+
+const ASSIGNABLE_TICKET_ROLE_SET = new Set<Role>(ASSIGNABLE_TICKET_ROLES);
 
 @Injectable()
 export class TicketsService {
@@ -176,16 +180,14 @@ export class TicketsService {
 
     // 3. Validate assignedToMembershipId if provided
     if (dto.assignedToMembershipId) {
-      const membership = await this.prisma.membership.findFirst({
-        where: {
-          id: dto.assignedToMembershipId,
-          tenantId,
-        },
-      });
+      const membership = await this.validateAssignableTicketMembership(
+        tenantId,
+        dto.assignedToMembershipId,
+      );
 
       if (!membership) {
         throw new BadRequestException(
-          `Membership not found or does not belong to this tenant`,
+          'No se puede asignar un ticket a un residente. Selecciona un miembro operativo del equipo.',
         );
       }
     }
@@ -487,16 +489,14 @@ export class TicketsService {
     // 4. Validate new assignee if provided
     if (dto.assignedToMembershipId !== undefined) {
       if (dto.assignedToMembershipId) {
-        const membership = await this.prisma.membership.findFirst({
-          where: {
-            id: dto.assignedToMembershipId,
-            tenantId,
-          },
-        });
+        const membership = await this.validateAssignableTicketMembership(
+          tenantId,
+          dto.assignedToMembershipId,
+        );
 
         if (!membership) {
           throw new BadRequestException(
-            `Membership not found or does not belong to this tenant`,
+            'No se puede asignar un ticket a un residente. Selecciona un miembro operativo del equipo.',
           );
         }
       }
@@ -566,6 +566,33 @@ export class TicketsService {
     }
 
     return ticket;
+  }
+
+  private async validateAssignableTicketMembership(
+    tenantId: string,
+    membershipId: string,
+  ) {
+    const membership = await this.prisma.membership.findFirst({
+      where: {
+        id: membershipId,
+        tenantId,
+        roles: {
+          some: {
+            role: { in: [...ASSIGNABLE_TICKET_ROLE_SET] },
+          },
+        },
+      },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true },
+        },
+        roles: {
+          select: { role: true },
+        },
+      },
+    });
+
+    return membership;
   }
 
   /**

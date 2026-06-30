@@ -12,7 +12,12 @@ import {
 import type { AuthenticatedRequest } from '../common/types/request.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
-import { MembershipsService, ScopedRoleResponse, AssignableResidentResponse } from './memberships.service';
+import {
+  MembershipsService,
+  ScopedRoleResponse,
+  AssignableResidentResponse,
+  AssignableTicketMemberResponse,
+} from './memberships.service';
 import { AddRoleDto } from './dto/add-role.dto';
 
 @Controller('tenants/:tenantId/memberships')
@@ -29,6 +34,17 @@ export class MembershipsController {
     @Param('tenantId') tenantId: string,
   ): Promise<AssignableResidentResponse[]> {
     return this.membershipsService.getAssignableResidents(tenantId);
+  }
+
+  /**
+   * GET /tenants/:tenantId/memberships/assignable-tickets
+   * List active members eligible to be assigned to tickets
+   */
+  @Get('assignable-tickets')
+  async getAssignableTicketMembers(
+    @Param('tenantId') tenantId: string,
+  ): Promise<AssignableTicketMemberResponse[]> {
+    return this.membershipsService.getAssignableTicketMembers(tenantId);
   }
 
   /**

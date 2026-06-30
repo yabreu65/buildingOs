@@ -356,6 +356,58 @@ describe('TicketsService', () => {
         service.create(tenantId, buildingId, userId, dto),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('should allow assignment to an operational membership', async () => {
+      const tenantId = 'tenant-123';
+      const buildingId = 'building-123';
+      const userId = 'user-123';
+      const membershipId = 'membership-operator';
+
+      const dto: CreateTicketDto = {
+        title: 'Issue',
+        description: 'Description',
+        category: 'MAINTENANCE',
+        assignedToMembershipId: membershipId,
+      };
+
+      const expectedTicket = {
+        id: 'ticket-789',
+        tenantId,
+        buildingId,
+        unitId: null,
+        createdByUserId: userId,
+        assignedToMembershipId: membershipId,
+        title: 'Issue',
+        description: 'Description',
+        category: 'MAINTENANCE',
+        priority: 'MEDIUM',
+        status: 'OPEN',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        createdBy: { id: userId, name: 'User Name', email: 'user@example.com' },
+        assignedTo: {
+          id: membershipId,
+          user: { id: 'user-operator', name: 'Operator User', email: 'operator@demo.local' },
+        },
+        building: { id: buildingId, name: 'Building A' },
+        unit: null,
+        comments: [],
+      };
+
+      jest
+        .spyOn(validators, 'validateBuildingBelongsToTenant')
+        .mockResolvedValue(undefined);
+      jest.spyOn(prismaService.membership, 'findFirst').mockResolvedValue({
+        id: membershipId,
+        roles: [{ role: 'OPERATOR' }],
+      } as any);
+      jest.spyOn(prismaService.ticket, 'create').mockResolvedValue(expectedTicket as any);
+      jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+      await expect(
+        service.create(tenantId, buildingId, userId, dto),
+      ).resolves.toEqual(expectedTicket);
+    });
   });
 
   // ========== TESTS: GET ALL ==========
@@ -378,10 +430,29 @@ describe('TicketsService', () => {
 
   // ========== TESTS: UPDATE ==========
   describe('update', () => {
-    it('should skip update tests - complex validator dependencies', () => {
-      // These tests require complex mocks for TicketsValidators
-      // that are beyond unit test scope. Integration tests recommended.
-      expect(true).toBe(true);
+    it('should reject assignment to a resident-only membership', async () => {
+      const tenantId = 'tenant-123';
+      const buildingId = 'building-123';
+      const ticketId = 'ticket-123';
+
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+        id: ticketId,
+        tenantId,
+        buildingId,
+        status: 'OPEN',
+        createdByUserId: 'creator-1',
+      } as any);
+      jest
+        .spyOn(prismaService.membership, 'findFirst')
+        .mockResolvedValue(null);
+
+      await expect(
+        service.update(tenantId, buildingId, ticketId, {
+          assignedToMembershipId: 'membership-resident',
+        } as UpdateTicketDto),
+      ).rejects.toThrow(
+        'No se puede asignar un ticket a un residente. Selecciona un miembro operativo del equipo.',
+      );
     });
   });;
 
