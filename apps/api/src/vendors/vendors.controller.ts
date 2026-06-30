@@ -93,7 +93,8 @@ export class VendorsController {
   }
 
   private getTenantId(req: AuthenticatedRequest): string {
-    const tenantId = req.tenantId ?? req.user?.tenantId ?? this.getTenantIdFromHeader(req);
+    const tenantId =
+      req.tenantId ?? this.getTenantIdFromHeader(req) ?? req.user?.tenantId;
 
     if (!tenantId) {
       throw new BadRequestException('TenantId not found in request context');
@@ -107,10 +108,11 @@ export class VendorsController {
       throw new ForbiddenException(`No tiene acceso al tenant ${tenantId}`);
     }
 
-    // Ensure tenant-scoped roles are available for downstream RBAC checks
-    if (!req.user.roles || req.user.roles.length === 0) {
-      req.user.roles = targetMembership.roles;
-    }
+    req.user.tenantId = tenantId;
+    req.user.membershipId = targetMembership.id;
+    req.user.roles = targetMembership.roles;
+    req.user.role = targetMembership.roles[0];
+    req.user.effectiveMembership = targetMembership;
 
     return tenantId;
   }

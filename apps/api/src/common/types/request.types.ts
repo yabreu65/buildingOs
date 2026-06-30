@@ -14,11 +14,13 @@ export interface AuthenticatedUser {
   email: string;
   name?: string;
   isSuperAdmin?: boolean;
+  role?: Role;
   roles?: Role[];
   membershipId?: string;
   permissions?: string[];
   tenantId?: string; // From JWT context for tenant-level routes
   memberships?: AuthenticatedMembership[];
+  effectiveMembership?: AuthenticatedMembership;
 }
 
 export interface AuthenticatedServiceActor
