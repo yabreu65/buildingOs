@@ -24,6 +24,89 @@ export class ExpensesService {
     private readonly movementAllocationService: MovementAllocationService,
   ) {}
 
+  private getAccountingPeriodFromInvoiceDate(invoiceDate: Date): string {
+    const year = invoiceDate.getUTCFullYear();
+    const month = String(invoiceDate.getUTCMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }
+
+  private accountingPeriodWhere(period?: string):
+    | {
+        OR: Array<{ liquidationPeriod: string } | { liquidationPeriod: null; period: string }>;
+      }
+    | Record<string, never> {
+    if (!period) {
+      return {};
+    }
+
+    return {
+      OR: [
+        { liquidationPeriod: period },
+        { liquidationPeriod: null, period },
+      ],
+    };
+  }
+
+  private async assertBuildingPeriodIsOpen(
+    tenantId: string,
+    buildingId: string,
+    liquidationPeriod: string,
+  ): Promise<void> {
+    const publishedLiq = await this.prisma.liquidation.findFirst({
+      where: {
+        tenantId,
+        buildingId,
+        period: liquidationPeriod,
+        status: 'PUBLISHED',
+      },
+      select: { id: true, period: true },
+    });
+
+    if (!publishedLiq) {
+      return;
+    }
+
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const targetPeriod = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+    throw new BadRequestException({
+      code: 'PERIOD_PUBLISHED',
+      message: `El período ${liquidationPeriod} ya está liquidado y publicado. Registre este gasto como Ajuste para cobrarse en ${targetPeriod}.`,
+      publishedPeriod: liquidationPeriod,
+      suggestedTargetPeriod: targetPeriod,
+      canCreateAdjustment: true,
+    });
+  }
+
+  private assertExpenseCanBeValidated(expense: {
+    status: 'DRAFT' | 'VALIDATED' | 'VOID';
+    amountMinor: number;
+    currencyCode: string;
+    categoryId: string;
+    period: string;
+    invoiceDate: Date;
+    vendorId: string | null;
+  }): void {
+    if (expense.status !== 'DRAFT') {
+      throw new BadRequestException(
+        `Solo se pueden validar gastos en DRAFT. Estado actual: ${expense.status}`,
+      );
+    }
+
+    if (!expense.amountMinor || !expense.currencyCode || !expense.categoryId || !expense.period || !expense.invoiceDate) {
+      throw new BadRequestException(
+        'Para validar un gasto se requiere: amountMinor, currencyCode, categoryId, period, invoiceDate',
+      );
+    }
+
+    if (!expense.vendorId) {
+      throw new BadRequestException(
+        'Para validar un gasto debés asignar un proveedor. Seleccioná el proveedor en el gasto e intentá nuevamente.',
+      );
+    }
+  }
+
   async listExpenses(
     tenantId: string,
     userRoles: string[],
@@ -47,7 +130,7 @@ export class ExpensesService {
       where: {
         tenantId,
         buildingId: query.buildingId,
-        period: query.period,
+        ...this.accountingPeriodWhere(query.period),
         status: query.status as 'DRAFT' | 'VALIDATED' | 'VOID' | undefined,
         categoryId: query.categoryId,
         ...(query.scopeType && { scopeType: query.scopeType }),
@@ -170,46 +253,19 @@ export class ExpensesService {
       }
     }
 
-    // Derivar liquidationPeriod desde invoiceDate (nueva semántica)
     const invoiceDate = new Date(dto.invoiceDate);
-    const year = invoiceDate.getFullYear();
-    const month = String(invoiceDate.getMonth() + 1).padStart(2, '0');
-    const liquidationPeriod = `${year}-${month}`;
+    const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
 
-    // Verificar si el período de devengo está publicado para este edificio (solo para BUILDING scope)
     if (scopeType === 'BUILDING' && dto.buildingId) {
-      const publishedLiq = await this.prisma.liquidation.findFirst({
-        where: {
-          tenantId,
-          buildingId: dto.buildingId,
-          period: liquidationPeriod,
-          status: 'PUBLISHED',
-        },
-        select: { id: true, period: true },
-      });
-
-      if (publishedLiq) {
-        // Calcular período objetivo (próximo mes abierto o actual)
-        const currentYear = new Date().getFullYear();
-        const currentMonth = new Date().getMonth() + 1;
-        const targetPeriod = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
-
-        throw new BadRequestException({
-          code: 'PERIOD_PUBLISHED',
-          message: `El período ${liquidationPeriod} ya está liquidado y publicado. Registre este gasto como Ajuste para cobrarse en ${targetPeriod}.`,
-          publishedPeriod: liquidationPeriod,
-          suggestedTargetPeriod: targetPeriod,
-          canCreateAdjustment: true,
-        });
-      }
+      await this.assertBuildingPeriodIsOpen(tenantId, dto.buildingId, liquidationPeriod);
     }
 
     const expense = await this.prisma.expense.create({
       data: {
         tenantId,
         buildingId: dto.buildingId ?? null,
-        period: dto.period, // LEGACY: mantener por compatibilidad
-        liquidationPeriod, // NUEVO: período de devengo derivado de invoiceDate
+        period: liquidationPeriod,
+        liquidationPeriod,
         categoryId: dto.categoryId,
         vendorId: dto.vendorId ?? null,
         amountMinor: dto.amountMinor,
@@ -246,7 +302,8 @@ export class ExpensesService {
       entityType: 'Expense',
       entityId: expense.id,
       metadata: {
-        period: dto.period,
+        period: liquidationPeriod,
+        requestedPeriod: dto.period,
         liquidationPeriod,
         buildingId: dto.buildingId ?? null,
         scopeType,
@@ -301,12 +358,21 @@ export class ExpensesService {
       }
     }
 
+    const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : expense.invoiceDate;
+    const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
+
+    if (expense.scopeType === 'BUILDING' && expense.buildingId) {
+      await this.assertBuildingPeriodIsOpen(tenantId, expense.buildingId, liquidationPeriod);
+    }
+
     const updated = await this.prisma.expense.update({
       where: { id: expenseId },
       data: {
         amountMinor: dto.amountMinor ?? expense.amountMinor,
         currencyCode: dto.currencyCode ?? expense.currencyCode,
-        invoiceDate: dto.invoiceDate ? new Date(dto.invoiceDate) : expense.invoiceDate,
+        invoiceDate,
+        period: liquidationPeriod,
+        liquidationPeriod,
         categoryId: dto.categoryId ?? expense.categoryId,
         vendorId: dto.vendorId !== undefined ? dto.vendorId : expense.vendorId,
         description: dto.description !== undefined ? dto.description : expense.description,
@@ -351,25 +417,7 @@ export class ExpensesService {
       throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
     }
 
-    if (expense.status !== 'DRAFT') {
-      throw new BadRequestException(
-        `Solo se pueden validar gastos en DRAFT. Estado actual: ${expense.status}`,
-      );
-    }
-
-    // Verificar campos requeridos para VALIDATED
-    if (!expense.amountMinor || !expense.currencyCode || !expense.categoryId || !expense.period || !expense.invoiceDate) {
-      throw new BadRequestException(
-        'Para validar un gasto se requiere: amountMinor, currencyCode, categoryId, period, invoiceDate',
-      );
-    }
-
-    // Verificar que tenga proveedor asignado (obligatorio desde ahora)
-    if (!expense.vendorId) {
-      throw new BadRequestException(
-        'Para validar un gasto debés asignar un proveedor. Seleccioná el proveedor en el gasto e intentá nuevamente.',
-      );
-    }
+    this.assertExpenseCanBeValidated(expense);
 
     const updated = await this.prisma.expense.update({
       where: { id: expenseId },
@@ -394,6 +442,52 @@ export class ExpensesService {
         period: expense.period,
         amountMinor: expense.amountMinor,
         currencyCode: expense.currencyCode,
+      },
+    });
+
+    return this.toDto(updated);
+  }
+
+  async validateExpenseFromBulk(
+    tenantId: string,
+    expenseId: string,
+    membershipId?: string,
+  ): Promise<ExpenseResponseDto> {
+    const expense = await this.prisma.expense.findFirst({
+      where: { id: expenseId, tenantId },
+    });
+
+    if (!expense) {
+      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+    }
+
+    this.assertExpenseCanBeValidated(expense);
+
+    const updated = await this.prisma.expense.update({
+      where: { id: expenseId },
+      data: {
+        status: 'VALIDATED',
+        validatedByMembershipId: membershipId ?? null,
+        validatedAt: new Date(),
+      },
+      include: {
+        category: { select: { name: true } },
+        vendor: { select: { name: true } },
+      },
+    });
+
+    void this.auditService.createLog({
+      tenantId,
+      actorMembershipId: membershipId,
+      action: 'EXPENSE_VALIDATE',
+      entityType: 'Expense',
+      entityId: expenseId,
+      metadata: {
+        period: expense.period,
+        liquidationPeriod: expense.liquidationPeriod,
+        amountMinor: expense.amountMinor,
+        currencyCode: expense.currencyCode,
+        bulkOperation: true,
       },
     });
 

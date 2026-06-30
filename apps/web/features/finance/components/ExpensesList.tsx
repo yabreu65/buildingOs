@@ -183,7 +183,7 @@ export function ExpensesList({
             onClick={() => setShowCreateModal(true)}
           >
             <Plus className="h-4 w-4 mr-1" />
-            Nuevo gasto
+            Registrar gasto
           </Button>
           <Button
             variant="secondary"
@@ -201,7 +201,7 @@ export function ExpensesList({
           No hay gastos registrados para este período.
           <br />
           <span className="text-xs">
-            Registrá los comprobantes antes de generar la liquidación.
+            Registrá los comprobantes antes de publicar la liquidación.
           </span>
         </div>
       ) : (

@@ -480,6 +480,7 @@ export class FinanzasController {
       tenantId,
       buildingId,
       periodId,
+      req!.user?.membershipId,
     );
   }
 

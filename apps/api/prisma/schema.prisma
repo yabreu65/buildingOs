@@ -1412,6 +1412,7 @@ model Charge {
   @@index([periodId])
   @@index([liquidationId])
   @@index([paymentExternalId])
+  @@unique([tenantId, liquidationId, unitId, period])
 }
 
 // ============================================================================

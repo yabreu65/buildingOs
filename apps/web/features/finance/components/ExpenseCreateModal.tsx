@@ -376,7 +376,7 @@ export function ExpenseCreateModal({
         toast('Gasto borrador actualizado', 'success');
       } else {
         await createMutation.mutateAsync(expenseData);
-        toast('Gasto registrado en DRAFT', 'success');
+        toast('Gasto registrado en borrador', 'success');
       }
 
       onCreated();
@@ -396,7 +396,7 @@ export function ExpenseCreateModal({
           ? err.message
           : isEditMode
             ? 'Error al actualizar el gasto'
-            : 'Error al crear el gasto';
+            : 'Error al registrar el gasto';
       toast(msg, 'error');
     }
   };
@@ -846,8 +846,8 @@ export function ExpenseCreateModal({
 
           <p className="text-xs text-muted-foreground">
             {isEditMode
-              ? 'Solo podés editar gastos en DRAFT. Guardá cambios y luego validá.'
-              : 'El gasto se crea en DRAFT. Validalo para que cuente en la liquidación.'}
+              ? 'Solo podés editar gastos en borrador. Guardá cambios y luego validá.'
+              : 'El gasto queda en borrador. Los cargos y la deuda se generan al publicar la liquidación.'}
           </p>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -857,11 +857,11 @@ export function ExpenseCreateModal({
             <Button
               type="submit"
               disabled={createMutation.isPending || updateMutation.isPending || createAdjustmentMutation.isPending}
-            >
-              {(createMutation.isPending || updateMutation.isPending || createAdjustmentMutation.isPending) && (
-                <Loader2 className="h-4 w-4 animate-spin mr-1" />
-              )}
-              {isEditMode ? 'Guardar cambios' : isAdjustmentMode ? 'Registrar Ajuste' : 'Registrar'}
+              >
+                {(createMutation.isPending || updateMutation.isPending || createAdjustmentMutation.isPending) && (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                )}
+              {isEditMode ? 'Guardar cambios' : isAdjustmentMode ? 'Registrar ajuste' : 'Registrar gasto'}
             </Button>
           </div>
         </form>

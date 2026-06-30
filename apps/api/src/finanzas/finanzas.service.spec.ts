@@ -11,6 +11,7 @@ import { FinanzasValidators } from './finanzas.validators';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import { CreateChargeDto, UpdateChargeDto } from './finanzas.dto';
+import { ExpensesService } from './expenses.service';
 import { ChargeStatus, PaymentStatus, PaymentMethod, AuditAction } from '@prisma/client';
 
 describe('FinanzasService', () => {
@@ -18,6 +19,7 @@ describe('FinanzasService', () => {
   let prismaService: PrismaService;
   let auditService: AuditService;
   let validators: FinanzasValidators;
+  let expensesService: ExpensesService;
 
   // ========== SETUP ==========
   beforeEach(async () => {
@@ -53,6 +55,9 @@ describe('FinanzasService', () => {
               findMany: jest.fn(),
               delete: jest.fn(),
             },
+            expense: {
+              findMany: jest.fn(),
+            },
           },
         },
         {
@@ -74,6 +79,12 @@ describe('FinanzasService', () => {
           useValue: {
             generateForApprovedPayment: jest.fn(),
             ensureReceiptForPayment: jest.fn(),
+          },
+        },
+        {
+          provide: ExpensesService,
+          useValue: {
+            validateExpenseFromBulk: jest.fn(),
           },
         },
         {
@@ -99,6 +110,7 @@ describe('FinanzasService', () => {
     prismaService = module.get<PrismaService>(PrismaService);
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<FinanzasValidators>(FinanzasValidators);
+    expensesService = module.get<ExpensesService>(ExpensesService);
   });
 
   // ========== CLEANUP ==========
@@ -731,6 +743,48 @@ describe('FinanzasService', () => {
           period: '2026-06',
         }),
       }));
+    });
+  });
+
+  describe('bulkValidateExpenses', () => {
+    it('filters draft expenses by accounting period fallback and validates as the current actor', async () => {
+      jest.spyOn(prismaService.expense, 'findMany').mockResolvedValue([
+        { id: 'expense-1' },
+        { id: 'expense-2' },
+      ] as never);
+      jest.spyOn(expensesService, 'validateExpenseFromBulk').mockResolvedValue({} as never);
+
+      const result = await service.bulkValidateExpenses(
+        'tenant-1',
+        'building-1',
+        '2026-05',
+        'member-admin',
+      );
+
+      expect(result).toEqual({ validatedCount: 2, errorCount: 0 });
+      expect(prismaService.expense.findMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          status: 'DRAFT',
+          OR: [
+            { liquidationPeriod: '2026-05' },
+            { liquidationPeriod: null, period: '2026-05' },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(expensesService.validateExpenseFromBulk).toHaveBeenCalledWith(
+        'tenant-1',
+        'expense-1',
+        'member-admin',
+      );
+      expect(auditService.createLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorMembershipId: 'member-admin',
+          metadata: expect.objectContaining({ validatedCount: 2, errorCount: 0 }),
+        }),
+      );
     });
   });
 });

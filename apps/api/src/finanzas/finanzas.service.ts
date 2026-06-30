@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { ExpensesService } from './expenses.service';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -49,6 +50,7 @@ export class FinanzasService {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     private readonly receiptService: PaymentReceiptService,
+    private readonly expensesService: ExpensesService,
   ) {}
 
   // ============================================================================
@@ -2715,16 +2717,23 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     periodId?: string,
+    membershipId?: string,
   ): Promise<{ validatedCount: number; errorCount: number }> {
     // Build query for DRAFT expenses
     const where: Prisma.ExpenseWhereInput = {
       tenantId,
       buildingId,
       status: 'DRAFT',
-      ...(periodId ? { period: periodId } : {}),
+      ...(periodId
+        ? {
+            OR: [
+              { liquidationPeriod: periodId },
+              { liquidationPeriod: null, period: periodId },
+            ],
+          }
+        : {}),
     };
 
-    // Find all DRAFT expenses
     const draftExpenses = await this.prisma.expense.findMany({
       where,
       select: { id: true },
@@ -2733,25 +2742,19 @@ export class FinanzasService {
     let validatedCount = 0;
     let errorCount = 0;
 
-    // Validate all in parallel using Promise.allSettled
-    const updatePromises = draftExpenses.map((exp) =>
-      this.prisma.expense.update({
-        where: { id: exp.id },
-        data: { status: 'VALIDATED' },
-      }),
-    );
-
-    const results = await Promise.allSettled(updatePromises);
-
-    // Count successes and failures
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
+    for (const expense of draftExpenses) {
+      try {
+        await this.expensesService.validateExpenseFromBulk(
+          tenantId,
+          expense.id,
+          membershipId,
+        );
         validatedCount++;
-      } else {
+      } catch (error) {
         errorCount++;
         this.logger.error(
           'Failed to validate expense during bulk operation',
-          result.reason instanceof Error ? result.reason.stack : String(result.reason),
+          error instanceof Error ? error.stack : String(error),
         );
       }
     }
@@ -2759,6 +2762,7 @@ export class FinanzasService {
     // Audit the bulk operation (fire-and-forget)
     void this.auditService.createLog({
       tenantId,
+      actorMembershipId: membershipId,
       action: AuditAction.EXPENSE_VALIDATE,
       entityType: 'EXPENSE',
       entityId: buildingId,

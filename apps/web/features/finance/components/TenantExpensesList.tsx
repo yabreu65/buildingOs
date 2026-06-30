@@ -135,7 +135,7 @@ export function TenantExpensesList({
             onClick={() => setShowCreateModal(true)}
           >
             <Plus className="h-4 w-4 mr-1" />
-            Nuevo gasto común
+            Registrar gasto común
           </Button>
           <Button
             variant="secondary"
@@ -153,7 +153,7 @@ export function TenantExpensesList({
           No hay gastos comunes registrados para este período.
           <br />
           <span className="text-xs">
-            Los gastos comunes del conjunto se prorratean entre los edificios.
+            Los gastos comunes del conjunto se prorratean entre los edificios y se convierten en cargos al publicar la liquidación.
           </span>
         </div>
       ) : (

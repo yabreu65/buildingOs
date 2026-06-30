@@ -73,6 +73,30 @@ describe('MovementAllocationService', () => {
       ).resolves.not.toThrow();
     });
 
+    it('debería aceptar porcentajes decimales que suman 100%', async () => {
+      const buildings = [
+        { id: 'building-1', name: 'Edificio A' },
+        { id: 'building-2', name: 'Edificio B' },
+        { id: 'building-3', name: 'Edificio C' },
+      ];
+      jest.spyOn(prisma.building, 'findMany').mockResolvedValue(buildings as any);
+
+      const allocations = [
+        { buildingId: 'building-1', percentage: 33.33 },
+        { buildingId: 'building-2', percentage: 33.33 },
+        { buildingId: 'building-3', percentage: 33.34 },
+      ];
+
+      await expect(
+        service.validateAllocations(
+          tenantId,
+          allocations,
+          100000,
+          'ARS',
+        ),
+      ).resolves.not.toThrow();
+    });
+
     it('debería lanzar error si porcentajes no suman 100%', async () => {
       const buildings = [
         { id: 'building-1', name: 'Edificio A' },
@@ -83,6 +107,28 @@ describe('MovementAllocationService', () => {
       const allocations = [
         { buildingId: 'building-1', percentage: 60 },
         { buildingId: 'building-2', percentage: 30 }, // suma 90, no 100
+      ];
+
+      await expect(
+        service.validateAllocations(
+          tenantId,
+          allocations,
+          100000,
+          'ARS',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('debería rechazar porcentajes decimales que no suman exactamente 100%', async () => {
+      const buildings = [
+        { id: 'building-1', name: 'Edificio A' },
+        { id: 'building-2', name: 'Edificio B' },
+      ];
+      jest.spyOn(prisma.building, 'findMany').mockResolvedValue(buildings as any);
+
+      const allocations = [
+        { buildingId: 'building-1', percentage: 50.0045 },
+        { buildingId: 'building-2', percentage: 50.0045 },
       ];
 
       await expect(
@@ -235,6 +281,37 @@ describe('MovementAllocationService', () => {
       expect(auditService.createLog).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'EXPENSE_ALLOCATION_CREATE',
+        }),
+      );
+    });
+    it('debería distribuir centavos restantes por largest remainder al crear allocations por porcentaje', async () => {
+      const allocations = [
+        { buildingId: 'building-1', percentage: 33.33 },
+        { buildingId: 'building-2', percentage: 33.33 },
+        { buildingId: 'building-3', percentage: 33.34 },
+      ];
+
+      jest.spyOn(service, 'validateAllocations').mockResolvedValue(undefined);
+      jest
+        .spyOn(prisma.movementAllocation, 'createMany')
+        .mockResolvedValue({ count: 3 });
+
+      await service.createForExpense(
+        tenantId,
+        'exp-1',
+        100,
+        'ARS',
+        allocations,
+        membershipId,
+      );
+
+      expect(prisma.movementAllocation.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: [
+            expect.objectContaining({ buildingId: 'building-1', amountMinor: 33 }),
+            expect.objectContaining({ buildingId: 'building-2', amountMinor: 33 }),
+            expect.objectContaining({ buildingId: 'building-3', amountMinor: 34 }),
+          ],
         }),
       );
     });

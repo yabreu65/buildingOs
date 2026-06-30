@@ -2,6 +2,7 @@ import {
   IsString,
   IsOptional,
   IsInt,
+  IsNumber,
   IsISO8601,
   IsBoolean,
   IsEnum,
@@ -9,6 +10,7 @@ import {
   ValidateNested,
   MinLength,
   Min,
+  Max,
   Length,
   Matches,
 } from 'class-validator';
@@ -20,9 +22,10 @@ export class AllocationInputDto {
   @IsString()
   buildingId!: string;
 
-  @IsInt()
+  @IsNumber({ maxDecimalPlaces: 4 })
   @IsOptional()
   @Min(0)
+  @Max(100)
   percentage?: number; // 0-100
 
   @IsInt()

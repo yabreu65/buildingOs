@@ -41,6 +41,17 @@ export class LiquidationsService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
+  private expenseAccountingPeriodWhere(period: string): {
+    OR: Array<{ liquidationPeriod: string } | { liquidationPeriod: null; period: string }>;
+  } {
+    return {
+      OR: [
+        { liquidationPeriod: period },
+        { liquidationPeriod: null, period },
+      ],
+    };
+  }
+
   async listLiquidations(
     tenantId: string,
     userRoles: string[],
@@ -144,7 +155,7 @@ export class LiquidationsService {
     const pendingSharedExpenses = await this.prisma.expense.count({
       where: {
         tenantId,
-        period: dto.period,
+        ...this.expenseAccountingPeriodWhere(dto.period),
         scopeType: 'TENANT_SHARED',
         status: 'DRAFT',
       },
@@ -162,7 +173,7 @@ export class LiquidationsService {
       where: {
         tenantId,
         buildingId: dto.buildingId,
-        period: dto.period,
+        ...this.expenseAccountingPeriodWhere(dto.period),
         status: 'VALIDATED',
         scopeType: 'BUILDING',
       },
@@ -176,7 +187,7 @@ export class LiquidationsService {
     const sharedExpenses = await this.prisma.expense.findMany({
       where: {
         tenantId,
-        period: dto.period,
+        ...this.expenseAccountingPeriodWhere(dto.period),
         status: 'VALIDATED',
         scopeType: 'TENANT_SHARED',
       },
@@ -389,6 +400,10 @@ export class LiquidationsService {
       throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
     }
 
+    if (liq.status === 'PUBLISHED') {
+      return this.toDto(liq);
+    }
+
     if (liq.status !== 'DRAFT' && liq.status !== 'REVIEWED') {
       throw new BadRequestException(
         `Solo se puede publicar una liquidación en DRAFT o REVIEWED. Estado actual: ${liq.status}`,
@@ -431,56 +446,131 @@ export class LiquidationsService {
       liq.buildingId,
     );
 
-    await this.prisma.$transaction(async (tx) => {
-      // Crear un Charge por unidad
-      const chargeData = distribution.map((d) => ({
+    let shouldSendPublishedNotifications = false;
+
+    try {
+      const publishResult = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.liquidation.findFirst({
+          where: { id: liquidationId, tenantId },
+          select: { status: true },
+        });
+
+        if (!current) {
+          throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+        }
+
+        if (current.status === 'PUBLISHED') {
+          return { publishedNow: false };
+        }
+
+        if (current.status !== 'DRAFT' && current.status !== 'REVIEWED') {
+          throw new BadRequestException(
+            `Solo se puede publicar una liquidación en DRAFT o REVIEWED. Estado actual: ${current.status}`,
+          );
+        }
+
+        const duplicateCharges = await tx.charge.count({
+          where: {
+            tenantId,
+            liquidationId,
+            period: liq.period,
+            unitId: { in: distribution.map((d) => d.unitId) },
+          },
+        });
+
+        if (duplicateCharges === distribution.length) {
+          await tx.liquidation.update({
+            where: { id: liquidationId },
+            data: {
+              status: 'PUBLISHED',
+              publishedByMembershipId: membershipId,
+              publishedAt: new Date(),
+            },
+          });
+
+          return { publishedNow: true };
+        }
+
+        if (duplicateCharges > 0) {
+          throw new ConflictException(
+            `La liquidación ${liquidationId} tiene cargos parciales generados para ${liq.period}`,
+          );
+        }
+
+        const chargeData = distribution.map((d) => ({
+          tenantId,
+          buildingId: liq.buildingId,
+          unitId: d.unitId,
+          period: liq.period,
+          type: 'COMMON_EXPENSE' as const,
+          concept,
+          amount: d.amountMinor,
+          currency: liq.baseCurrency,
+          dueDate,
+          status: ChargeStatus.PENDING,
+          liquidationId,
+          createdByMembershipId: membershipId,
+        }));
+
+        await tx.charge.createMany({ data: chargeData });
+
+        await tx.liquidation.update({
+          where: { id: liquidationId },
+          data: {
+            status: 'PUBLISHED',
+            publishedByMembershipId: membershipId,
+            publishedAt: new Date(),
+          },
+        });
+
+        return { publishedNow: true };
+      });
+
+      shouldSendPublishedNotifications = publishResult.publishedNow;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const current = await this.prisma.liquidation.findFirst({
+          where: { id: liquidationId, tenantId },
+        });
+
+        if (current?.status === 'PUBLISHED') {
+          return this.toDto(current);
+        }
+
+        throw new ConflictException(
+          `La liquidación ${liquidationId} ya tiene cargos generados para ${liq.period}`,
+        );
+      }
+
+      throw error;
+    }
+
+    if (shouldSendPublishedNotifications) {
+      void this.auditService.createLog({
         tenantId,
-        buildingId: liq.buildingId,
-        unitId: d.unitId,
-        period: liq.period,
-        type: 'COMMON_EXPENSE' as const,
-        concept,
-        amount: d.amountMinor,
-        currency: liq.baseCurrency,
-        dueDate,
-        status: ChargeStatus.PENDING,
-        liquidationId,
-        createdByMembershipId: membershipId,
-      }));
-
-      await tx.charge.createMany({ data: chargeData });
-
-      await tx.liquidation.update({
-        where: { id: liquidationId },
-        data: {
-          status: 'PUBLISHED',
-          publishedByMembershipId: membershipId,
-          publishedAt: new Date(),
+        actorMembershipId: membershipId,
+        action: 'LIQUIDATION_PUBLISH',
+        entityType: 'Liquidation',
+        entityId: liquidationId,
+        metadata: {
+          period: liq.period,
+          buildingId: liq.buildingId,
+          chargesCount: distribution.length,
+          totalAmountMinor: liq.totalAmountMinor,
+          baseCurrency: liq.baseCurrency,
         },
       });
-    });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_PUBLISH',
-      entityType: 'Liquidation',
-      entityId: liquidationId,
-      metadata: {
+      // [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to all residents
+      void this.sendChargePublishedNotifications(tenantId, liquidationId, {
         period: liq.period,
         buildingId: liq.buildingId,
-        chargesCount: distribution.length,
-        totalAmountMinor: liq.totalAmountMinor,
         baseCurrency: liq.baseCurrency,
-      },
-    });
-
-    // [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to all residents
-    void this.sendChargePublishedNotifications(tenantId, liquidationId, {
-      period: liq.period,
-      buildingId: liq.buildingId,
-      baseCurrency: liq.baseCurrency,
-    });
+      });
+    }
 
     const updated = await this.prisma.liquidation.findUniqueOrThrow({
       where: { id: liquidationId },

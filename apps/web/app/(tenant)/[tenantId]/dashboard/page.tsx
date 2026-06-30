@@ -46,7 +46,7 @@ const formatARS = (cents: number) =>
 const formatPercentage = (value: number) => `${Math.round(value * 100)}%`;
 
 const QUICK_ACTION_LABELS: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
-  CREATE_CHARGE: { label: 'Crear expensa', icon: <DollarSign className="w-5 h-5" />, desc: 'Nuevo cargo mensual' },
+  CREATE_CHARGE: { label: 'Registrar gasto', icon: <DollarSign className="w-5 h-5" />, desc: 'Se convierte en cargo al publicar la liquidación' },
   RECORD_PAYMENT: { label: 'Registrar pago', icon: <CreditCard className="w-5 h-5" />, desc: 'Pago de residente' },
   INVITE_RESIDENT: { label: 'Invitar residente', icon: <Users className="w-5 h-5" />, desc: 'Sumar nuevo vecino' },
   CREATE_TICKET: { label: 'Crear ticket', icon: <Wrench className="w-5 h-5" />, desc: 'Reportar problema' },

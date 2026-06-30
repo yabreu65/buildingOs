@@ -82,6 +82,16 @@ If RTK is not installed or a command fails because of RTK, fall back to the norm
 - Use soft deletes where appropriate (`deletedAt` field)
 - Create indexes for frequently queried columns
 
+## Cheap and Safe Working Rules
+
+- Work in the smallest possible slice that still produces a coherent result.
+- Read only the files needed to decide or verify.
+- Keep production code strict: no `any`, no silent casts, no type escapes unless there is a documented boundary.
+- Keep tests with the code they verify.
+- When backend finance code changes, run the slice tests first, then `prisma validate` if schema changed, then build if needed.
+- Use multi-agent only when the task is broad enough that a separate, independent subtask materially helps.
+- Before closing a slice, check the touched production files for accidental `any` usage and run `git diff --check`.
+
 ## Commits
 
 - Use conventional commits: feat, fix, refactor, test, docs, etc.
