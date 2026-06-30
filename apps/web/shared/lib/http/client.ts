@@ -7,35 +7,50 @@ export interface HttpRequestConfig<TReq = never> {
   headers?: Record<string, string>;
 }
 
+export interface ErrorResponseData {
+  code?: string;
+  message?: string | string[];
+  error?: string;
+  statusCode?: number;
+}
+
 export class HttpError extends Error {
+  public data: ErrorResponseData | null;
+
   constructor(
     public status: number,
     public statusText: string,
     message: string,
+    data?: ErrorResponseData | null,
   ) {
     super(message);
     this.name = 'HttpError';
+    this.data = data ?? null;
   }
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
-async function parseErrorMessage(response: Response): Promise<string> {
+async function parseErrorResponse(response: Response): Promise<{
+  message: string;
+  data: ErrorResponseData | null;
+}> {
   try {
-    const json = await response.json();
-    if (typeof json === 'object' && json !== null && 'message' in json) {
-      const message = json.message;
-      if (typeof message === 'string') {
-        return message;
-      }
-      if (Array.isArray(message)) {
-        return message.join(', ');
-      }
+    const json: Record<string, unknown> = await response.json();
+    if (typeof json === 'object' && json !== null) {
+      const msg = json.message;
+      const message =
+        typeof msg === 'string'
+          ? msg
+          : Array.isArray(msg)
+            ? msg.join(', ')
+            : response.statusText || 'Error desconocido';
+      return { message, data: json as ErrorResponseData };
     }
   } catch {
     // ignore parse error
   }
-  return response.statusText || 'Error desconocido';
+  return { message: response.statusText || 'Error desconocido', data: null };
 }
 
 export async function apiClient<TRes, TReq = never>(
@@ -77,8 +92,8 @@ export async function apiClient<TRes, TReq = never>(
       throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Redirigiendo a login...');
     }
 
-    const message = await parseErrorMessage(response);
-    throw new HttpError(response.status, response.statusText, message);
+    const { message, data } = await parseErrorResponse(response);
+    throw new HttpError(response.status, response.statusText, message, data);
   }
 
   if (response.status === 204) {

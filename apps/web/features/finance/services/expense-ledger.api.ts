@@ -24,9 +24,9 @@ export interface ExpenseLedgerCategory {
 export interface Expense {
   id: string;
   tenantId: string;
-  buildingId: string;
+  buildingId: string | null;
   period: string;
-  liquidationPeriod?: string; // Nuevo: período de devengo derivado de invoiceDate
+  liquidationPeriod?: string;
   categoryId: string;
   categoryName: string;
   vendorId: string | null;

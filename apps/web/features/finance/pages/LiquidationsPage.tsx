@@ -5,8 +5,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Skeleton } from '@/shared/components/ui';
 import { AlertCircle } from 'lucide-react';
 import { apiClient } from '@/shared/lib/http/client';
+import type { Building } from '@/features/units/units.types';
+import type { Liquidation } from '../services/expense-ledger.api';
 import { LiquidationDraftCard } from '../components/LiquidationDraftCard';
 import CreateLiquidationModal from '../components/CreateLiquidationModal';
+
+interface LiquidationsListItem extends Liquidation {
+  expenses?: Array<{ id: string; categoryName: string; amountMinor: number; currencyCode: string; invoiceDate: string; description: string | null; vendorName: string | null }>;
+  chargesPreview?: Array<{ unitId: string; unitCode: string; unitLabel: string | null; amountMinor: number }>;
+}
 
 interface LiquidationsPageProps {
   tenantId: string;
@@ -49,17 +56,16 @@ export default function LiquidationsPage({ tenantId }: LiquidationsPageProps) {
     setRefreshTrigger((prev) => prev + 1);
   };
 
-  const buildings = (buildingsQuery.data as any) || [];
-  const liquidations = (liquidationsQuery.data as any) || [];
+  const buildings = (buildingsQuery.data as Building[]) || [];
+  const liquidations = (liquidationsQuery.data as LiquidationsListItem[]) || [];
 
   // Group liquidations by status
-  const groupedLiquidations = statusTabs.reduce(
-    (acc, tab) => {
-      acc[tab.value] = liquidations.filter((l: any) => l.status === tab.value);
-      return acc;
-    },
-    {} as Record<string, any[]>,
-  );
+  const groupedLiquidations = statusTabs.reduce<
+    Record<string, LiquidationsListItem[]>
+  >((acc, tab) => {
+    acc[tab.value] = liquidations.filter((l) => l.status === tab.value);
+    return acc;
+  }, {});
 
   const activeTabData = groupedLiquidations[activeTab as keyof typeof groupedLiquidations] || [];
 
@@ -139,7 +145,7 @@ export default function LiquidationsPage({ tenantId }: LiquidationsPageProps) {
                 <p className="text-gray-600">No hay liquidaciones en estado {statusTabs.find(t => t.value === activeTab)?.label.toLowerCase()}</p>
               </div>
             ) : (
-              activeTabData.map((liq: any) => (
+              activeTabData.map((liq: LiquidationsListItem) => (
                 <LiquidationDraftCard
                   key={liq.id}
                   tenantId={tenantId}

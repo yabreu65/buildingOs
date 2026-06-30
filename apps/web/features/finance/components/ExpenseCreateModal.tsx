@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { X, Loader2, Plus, Trash2, Calculator, Users, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { HttpError } from '@/shared/lib/http/client';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import {
@@ -383,8 +384,8 @@ export function ExpenseCreateModal({
     } catch (err: unknown) {
       // Detectar error de período publicado y ofrecer crear ajuste
       if (
-        err instanceof Error &&
-        err.message.includes('PERIOD_PUBLISHED')
+        err instanceof HttpError &&
+        err.data?.code === 'PERIOD_PUBLISHED'
       ) {
         toast('El período ya está liquidado. ¿Querés registrarlo como ajuste?', 'error');
         setIsAdjustmentMode(true);

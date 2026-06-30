@@ -48,8 +48,8 @@ export default function CreateLiquidationModal({
       setBaseCurrency('ARS');
       setError('');
       onSuccess?.();
-    } catch (err: any) {
-      setError(err.message || 'Error al crear la liquidación');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error al crear la liquidación');
     }
   };
 
