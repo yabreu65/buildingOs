@@ -166,8 +166,13 @@ export class MembershipsService {
         throw new BadRequestException('Unit not found in this tenant');
       }
 
-      // UNIT scope also requires building context (implicit from unit.buildingId)
-      // So scopeBuildingId should be null (we'll derive it from the unit)
+      if (dto.scopeBuildingId) {
+        throw new BadRequestException(
+          'UNIT scope must not include scopeBuildingId',
+        );
+      }
+
+      // UNIT scope derives its building context from the unit itself.
     }
 
     // 6. Check for duplicates

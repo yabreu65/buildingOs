@@ -1,7 +1,9 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { MembershipsService } from './memberships.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { AddRoleDto, ScopeTypeDto } from './dto/add-role.dto';
 
 describe('MembershipsService', () => {
   let service: MembershipsService;
@@ -17,6 +19,17 @@ describe('MembershipsService', () => {
             membership: {
               findMany: jest.fn(),
               findUnique: jest.fn(),
+            },
+            membershipRole: {
+              findMany: jest.fn(),
+              findFirst: jest.fn(),
+              create: jest.fn(),
+            },
+            building: {
+              findUnique: jest.fn(),
+            },
+            unit: {
+              findFirst: jest.fn(),
             },
           },
         },
@@ -103,6 +116,83 @@ describe('MembershipsService', () => {
           roles: ['OPERATOR'],
         },
       ]);
+    });
+  });
+
+  describe('addRole', () => {
+    it('rejects UNIT scope when scopeBuildingId is provided', async () => {
+      jest.spyOn(prismaService.membership, 'findUnique').mockResolvedValue({
+        id: 'membership-target',
+        tenantId: 'tenant-123',
+        userId: 'user-target',
+        user: { name: 'Target User' },
+      } as any);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: 'unit-123',
+        buildingId: 'building-123',
+      } as any);
+
+      await expect(
+        service.addRole('tenant-123', 'membership-target', 'actor-1', {
+          role: 'OPERATOR',
+          scopeType: ScopeTypeDto.UNIT,
+          scopeUnitId: 'unit-123',
+          scopeBuildingId: 'building-123',
+        } as AddRoleDto),
+      ).rejects.toThrow(BadRequestException);
+      expect(prismaService.membershipRole.create).not.toHaveBeenCalled();
+    });
+
+    it('creates UNIT scope roles without a buildingId override', async () => {
+      jest.spyOn(prismaService.membership, 'findUnique').mockResolvedValue({
+        id: 'membership-target',
+        tenantId: 'tenant-123',
+        userId: 'user-target',
+        user: { name: 'Target User' },
+      } as any);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: 'unit-123',
+        buildingId: 'building-123',
+      } as any);
+      jest.spyOn(prismaService.membershipRole, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prismaService.membershipRole, 'create').mockResolvedValue({
+        id: 'role-1',
+        role: 'OPERATOR',
+        scopeType: 'UNIT',
+        scopeBuildingId: null,
+        scopeUnitId: 'unit-123',
+      } as any);
+
+      const result = await service.addRole('tenant-123', 'membership-target', 'actor-1', {
+        role: 'OPERATOR',
+        scopeType: ScopeTypeDto.UNIT,
+        scopeUnitId: 'unit-123',
+      } as AddRoleDto);
+
+      expect(result).toEqual({
+        id: 'role-1',
+        role: 'OPERATOR',
+        scopeType: 'UNIT',
+        scopeBuildingId: null,
+        scopeUnitId: 'unit-123',
+      });
+      expect(prismaService.membershipRole.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: 'tenant-123',
+          membershipId: 'membership-target',
+          role: 'OPERATOR',
+          scopeType: ScopeTypeDto.UNIT,
+          scopeBuildingId: null,
+          scopeUnitId: 'unit-123',
+        },
+        select: {
+          id: true,
+          role: true,
+          scopeType: true,
+          scopeBuildingId: true,
+          scopeUnitId: true,
+        },
+      });
     });
   });
 });
