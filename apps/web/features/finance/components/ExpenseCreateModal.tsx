@@ -15,6 +15,7 @@ import {
 import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 import { useBuildings } from '@/features/buildings/hooks';
 import { getAllocationSuggestions, getVendorSuggestion } from '../services/expense-ledger.api';
+import { unitGroupApi } from '../services/liquidation.api';
 import type {
   CreateExpenseData,
   ExpenseScopeType,
@@ -85,6 +86,7 @@ export function ExpenseCreateModal({
       (initialExpense?.scopeType as ExpenseScopeType | undefined) ??
       (mode === 'tenant' ? 'TENANT_SHARED' : ('BUILDING' as ExpenseScopeType)),
     buildingId: initialExpense?.buildingId ?? initialBuildingId ?? '',
+    unitGroupId: initialExpense?.unitGroupId ?? '',
   });
 
   const [showVendorCreate, setShowVendorCreate] = useState(false);
@@ -122,6 +124,14 @@ export function ExpenseCreateModal({
     'EXPENSE',
     catalogScope
   );
+
+  // Fetch unit groups for UNIT_GROUP scope
+  const { data: unitGroups = [], isLoading: unitGroupsLoading } = useQuery({
+    queryKey: ['unitGroups', tenantId, effectiveBuildingId],
+    queryFn: () => unitGroupApi.list(tenantId, effectiveBuildingId || undefined),
+    enabled: form.scopeType === 'UNIT_GROUP' && !!tenantId,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const [allocations, setAllocations] = useState<AllocationInput[]>([]);
   const [allocationMode, setAllocationMode] = useState<'manual' | 'm2' | 'equal'>('manual');
@@ -218,6 +228,7 @@ export function ExpenseCreateModal({
       description: initialExpense.description ?? '',
       scopeType: initialExpense.scopeType as ExpenseScopeType,
       buildingId: initialExpense.buildingId ?? initialBuildingId ?? '',
+      unitGroupId: initialExpense.unitGroupId ?? '',
     });
   }, [isEditMode, initialExpense, initialBuildingId]);
 
@@ -359,7 +370,8 @@ export function ExpenseCreateModal({
         invoiceDate: form.invoiceDate,
         description: form.description || undefined,
         scopeType: form.scopeType,
-        allocations: form.scopeType === 'TENANT_SHARED' ? allocations : undefined,
+        unitGroupId: form.scopeType === 'UNIT_GROUP' ? form.unitGroupId || undefined : undefined,
+        allocations: (form.scopeType === 'TENANT_SHARED' || form.scopeType === 'UNIT_GROUP') ? allocations : undefined,
       };
 
       if (isEditMode && initialExpense) {
@@ -434,14 +446,17 @@ export function ExpenseCreateModal({
               <select
                 value={form.scopeType}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, scopeType: e.target.value as ExpenseScopeType }))
+                  setForm((f) => ({ ...f, scopeType: e.target.value as ExpenseScopeType, unitGroupId: '' }))
                 }
                 className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="TENANT_SHARED">Gasto común del conjunto</option>
+                <option value="UNIT_GROUP">Grupo de unidades</option>
               </select>
               <p className="text-xs text-muted-foreground mt-1">
-                El gasto se distribuye entre los edificios del conjunto
+                {form.scopeType === 'UNIT_GROUP'
+                  ? 'El gasto se distribuye entre las unidades del grupo seleccionado'
+                  : 'El gasto se distribuye entre los edificios del conjunto'}
               </p>
             </div>
           )}
@@ -467,6 +482,35 @@ export function ExpenseCreateModal({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {/* Unit Group selector (only for UNIT_GROUP scope in create mode) */}
+          {form.scopeType === 'UNIT_GROUP' && !isEditMode && (
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Grupo de unidades <span className="text-red-500">*</span>
+              </label>
+              <select
+                required
+                value={form.unitGroupId}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, unitGroupId: e.target.value }))
+                }
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">
+                  {unitGroupsLoading ? 'Cargando...' : 'Seleccioná un grupo'}
+                </option>
+                {(unitGroups as Array<{ id: string; name: string }>).map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                El gasto se prorratea entre las unidades del grupo
+              </p>
             </div>
           )}
 
@@ -685,8 +729,8 @@ export function ExpenseCreateModal({
             </div>
           )}
 
-          {/* Allocations section - only for TENANT_SHARED create mode */}
-          {form.scopeType === 'TENANT_SHARED' && !isEditMode && (
+          {/* Allocations section - for TENANT_SHARED and UNIT_GROUP create mode */}
+          {(form.scopeType === 'TENANT_SHARED' || form.scopeType === 'UNIT_GROUP') && !isEditMode && (
             <div className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <label className="block text-sm font-medium">

@@ -100,8 +100,9 @@ export class CreateExpenseDto {
   buildingId?: string; // Optional for TENANT_SHARED scope
 
   @IsString()
+  @IsOptional()
   @Matches(/^\d{4}-\d{2}$/, { message: 'period must be in YYYY-MM format' })
-  period!: string;
+  period?: string; // Informational only — liquidationPeriod is derived from invoiceDate
 
   @IsString()
   categoryId!: string;
