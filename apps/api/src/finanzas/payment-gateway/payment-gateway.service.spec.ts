@@ -32,8 +32,8 @@ describe('PaymentGatewayService', () => {
       },
     };
     mockIdempotencyService = {
-      isProcessed: jest.fn(),
-      markProcessed: jest.fn(),
+      isProcessed: jest.fn().mockResolvedValue(false),
+      markProcessed: jest.fn().mockResolvedValue(undefined),
     };
     service = new PaymentGatewayService(mockProvider, mockPrisma, mockIdempotencyService);
   });
@@ -77,6 +77,7 @@ describe('PaymentGatewayService', () => {
       mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
       mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-1', status: 'PENDING' });
       mockPrisma.charge.update.mockResolvedValue({ id: 'charge-1', status: 'PAID' });
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
       mockPrisma.payment.update.mockResolvedValue({ id: 'pay-1', paymentEventId: 'evt-1' });
       mockIdempotencyService.isProcessed.mockResolvedValue(false);
 
@@ -96,31 +97,89 @@ describe('PaymentGatewayService', () => {
         where: { id: 'charge-1' },
         data: { status: 'PAID', paymentExternalId: 'pay-1' },
       });
+      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockPrisma.charge.update.mock.invocationCallOrder[0],
+      );
     });
 
-    it('rejects charge on REJECTED webhook', async () => {
+    it('processes PAID after an ignored PENDING webhook with the same MercadoPago payment id', async () => {
+      mockProvider.handleWebhook
+        .mockResolvedValueOnce({
+          eventId: 'mp-payment-1',
+          eventType: 'payment.pending',
+          chargeId: 'charge-1',
+          externalId: 'mp-payment-1',
+          status: 'PENDING',
+          rawPayload: {},
+        })
+        .mockResolvedValueOnce({
+          eventId: 'mp-payment-1',
+          eventType: 'payment.approved',
+          chargeId: 'charge-1',
+          externalId: 'mp-payment-1',
+          status: 'PAID',
+          rawPayload: {},
+        });
+      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-1', status: 'PENDING' });
+      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-1', status: 'PAID' });
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+      const pendingResult = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
+      const paidResult = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
+
+      expect(pendingResult.chargeUpdated).toBe(false);
+      expect(paidResult.chargeUpdated).toBe(true);
+      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledTimes(1);
+      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('mp-payment-1', 'mercadopago');
+      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledTimes(1);
+      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('mp-payment-1', 'mercadopago');
+      expect(mockPrisma.charge.update).toHaveBeenCalledWith({
+        where: { id: 'charge-1' },
+        data: { status: 'PAID', paymentExternalId: 'mp-payment-1' },
+      });
+    });
+
+    it.each(['REJECTED', 'CANCELLED', 'PENDING'] as const)(
+      'acknowledges %s without charge updates or processed markers',
+      async (status) => {
+        const webhookEvent: WebhookEvent = {
+          eventId: `evt-${status.toLowerCase()}`,
+          eventType: `payment.${status.toLowerCase()}`,
+          chargeId: 'charge-2',
+          externalId: 'pay-2',
+          status,
+          rawPayload: {},
+        };
+        mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
+
+        const result = await service.processWebhookEvent({}, { signature: 'sig' });
+
+        expect(result).toMatchObject({ status, chargeUpdated: false });
+        expect(mockIdempotencyService.isProcessed).not.toHaveBeenCalled();
+        expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+        expect(mockPrisma.charge.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+        expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('does not mark PAID as processed when the charge update fails', async () => {
       const webhookEvent: WebhookEvent = {
-        eventId: 'evt-2',
-        eventType: 'payment.rejected',
-        chargeId: 'charge-2',
-        externalId: 'pay-2',
-        status: 'REJECTED',
+        eventId: 'evt-paid-fail',
+        eventType: 'payment.approved',
+        chargeId: 'charge-fail',
+        externalId: 'pay-fail',
+        status: 'PAID',
         rawPayload: {},
       };
       mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-2', status: 'PENDING' });
-      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-2', status: 'REJECTED' });
-      mockIdempotencyService.isProcessed.mockResolvedValue(false);
+      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-fail', status: 'PENDING' });
+      mockPrisma.charge.update.mockRejectedValue(new Error('database timeout'));
 
-      const result = await service.processWebhookEvent({}, { signature: 'sig' });
+      await expect(service.processWebhookEvent({}, { signature: 'sig' })).rejects.toThrow('database timeout');
 
-      expect(result.status).toBe('REJECTED');
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-2', 'mercadopago');
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-2', 'mercadopago');
-      expect(mockPrisma.charge.update).toHaveBeenCalledWith({
-        where: { id: 'charge-2' },
-        data: { status: 'REJECTED', paymentExternalId: 'pay-2' },
-      });
+      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-paid-fail', 'mercadopago');
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
     });
 
     it('skips processing for duplicate webhook events', async () => {
@@ -140,7 +199,36 @@ describe('PaymentGatewayService', () => {
       expect(result.chargeUpdated).toBe(false);
       expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-dup', 'mercadopago');
       expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.findUnique).not.toHaveBeenCalled();
       expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+    });
+
+    it('marks successful PAID events after charge and payment side effects', async () => {
+      const webhookEvent: WebhookEvent = {
+        eventId: 'evt-paid-side-effects',
+        eventType: 'payment.approved',
+        chargeId: 'charge-side-effects',
+        externalId: 'pay-side-effects',
+        status: 'PAID',
+        rawPayload: {},
+      };
+      mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
+      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-side-effects', status: 'PENDING' });
+      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-side-effects', status: 'PAID' });
+      mockPrisma.payment.findFirst.mockResolvedValue({ id: 'payment-1' });
+      mockPrisma.payment.update.mockResolvedValue({ id: 'payment-1', paymentEventId: 'evt-paid-side-effects' });
+
+      await service.processWebhookEvent({}, { signature: 'sig' });
+
+      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-paid-side-effects', 'mercadopago');
+      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockPrisma.charge.update.mock.invocationCallOrder[0],
+      );
+      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockPrisma.payment.update.mock.invocationCallOrder[0],
+      );
     });
 
     it('rejects direct webhook processing when requested provider conflicts with active provider', async () => {

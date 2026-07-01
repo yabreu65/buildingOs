@@ -71,19 +71,21 @@ export class PaymentGatewayService {
       adapterSignatureContext,
     );
 
-    // Idempotency: check via dedicated IdempotencyService
+    if (event.status !== 'PAID') {
+      this.logger.log(`Webhook event ${event.eventId} with status ${event.status} acknowledged without charge update`);
+      return { ...event, chargeUpdated: false };
+    }
+
+    // Idempotency: check only after the event is known to require durable side effects.
     const isDuplicate = await this.idempotencyService.isProcessed(event.eventId, providerName);
     if (isDuplicate) {
       this.logger.log(`Webhook event ${event.eventId} already processed, skipping`);
       return { ...event, chargeUpdated: false };
     }
 
-    // Mark as processed
-    await this.idempotencyService.markProcessed(event.eventId, providerName);
-
     // Confirm charge status
     let chargeUpdated = false;
-    if (event.chargeId && (event.status === 'PAID' || event.status === 'REJECTED' || event.status === 'CANCELLED')) {
+    if (event.chargeId) {
       const charge = await this.prisma.charge.findUnique({
         where: { id: event.chargeId },
       });
@@ -91,10 +93,10 @@ export class PaymentGatewayService {
       if (charge && charge.status === 'PENDING') {
         await this.prisma.charge.update({
           where: { id: event.chargeId },
-          data: { status: event.status as ChargeStatus, paymentExternalId: event.externalId },
+          data: { status: ChargeStatus.PAID, paymentExternalId: event.externalId },
         });
         chargeUpdated = true;
-        this.logger.log(`Charge ${event.chargeId} updated to ${event.status}`);
+        this.logger.log(`Charge ${event.chargeId} updated to PAID`);
       }
     }
 
@@ -110,6 +112,8 @@ export class PaymentGatewayService {
         });
       }
     }
+
+    await this.idempotencyService.markProcessed(event.eventId, providerName);
 
     return { ...event, chargeUpdated };
   }
