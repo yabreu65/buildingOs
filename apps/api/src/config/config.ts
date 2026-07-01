@@ -172,6 +172,16 @@ export const createConfigSchema = (_nodeEnv: string) => {
       .string()
       .optional()
       .transform((v) => parseBoolean(v, true)),
+    ENABLE_WEB_PUSH: z
+      .string()
+      .optional()
+      .default('false')
+      .transform((v) => parseBoolean(v, false)),
+
+    // Web Push / VAPID (required whenever web push delivery is enabled)
+    VAPID_PUBLIC_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    VAPID_PRIVATE_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    VAPID_SUBJECT: z.preprocess(emptyStringToUndefined, z.string().optional()),
 
     // Development overrides (optional)
     INVITATION_EMAIL_OVERRIDE: z.preprocess(
@@ -294,8 +304,87 @@ export const createConfigSchema = (_nodeEnv: string) => {
           'MERCADOPAGO_WEBHOOK_SECRET is required when PAYMENT_PROVIDER=mercadopago and ENABLE_PAYMENT_WEBHOOKS=true',
       });
     }
+
+    if (data.ENABLE_WEB_PUSH) {
+      validateWebPushVapidConfig(data, ctx);
+    }
   });
 };
+
+interface WebPushVapidValidationInput {
+  readonly VAPID_PUBLIC_KEY?: string;
+  readonly VAPID_PRIVATE_KEY?: string;
+  readonly VAPID_SUBJECT?: string;
+}
+
+function validateWebPushVapidConfig(
+  data: WebPushVapidValidationInput,
+  ctx: z.RefinementCtx,
+): void {
+  if (!data.VAPID_PUBLIC_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_PUBLIC_KEY'],
+      message: 'VAPID_PUBLIC_KEY is required when ENABLE_WEB_PUSH=true',
+    });
+  } else if (!isValidVapidKey(data.VAPID_PUBLIC_KEY)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_PUBLIC_KEY'],
+      message: 'VAPID_PUBLIC_KEY must be URL-safe base64 without whitespace',
+    });
+  }
+
+  if (!data.VAPID_PRIVATE_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_PRIVATE_KEY'],
+      message: 'VAPID_PRIVATE_KEY is required when ENABLE_WEB_PUSH=true',
+    });
+  } else if (!isValidVapidKey(data.VAPID_PRIVATE_KEY)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_PRIVATE_KEY'],
+      message: 'VAPID_PRIVATE_KEY must be URL-safe base64 without whitespace',
+    });
+  }
+
+  if (!data.VAPID_SUBJECT) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_SUBJECT'],
+      message: 'VAPID_SUBJECT is required when ENABLE_WEB_PUSH=true',
+    });
+  } else if (!isValidVapidSubject(data.VAPID_SUBJECT)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_SUBJECT'],
+      message: 'VAPID_SUBJECT must be a mailto: address or non-localhost https URL',
+    });
+  }
+}
+
+function isValidVapidKey(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isValidVapidSubject(value: string): boolean {
+  const subject = value.trim();
+  if (subject.startsWith('mailto:')) {
+    return subject.length > 'mailto:'.length;
+  }
+
+  if (!subject.startsWith('https://')) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(subject);
+    return parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
 
 type ParsedConfig = z.infer<ReturnType<typeof createConfigSchema>>;
 
@@ -373,6 +462,12 @@ export function loadConfig(): AppConfig {
       featurePortalResident: parsed.FEATURE_PORTAL_RESIDENT,
       featurePaymentsMvp: parsed.FEATURE_PAYMENTS_MVP,
       featureEnforceUrgentForWebPush: parsed.FEATURE_ENFORCE_URGENT_FOR_WEB_PUSH,
+      enableWebPush: parsed.ENABLE_WEB_PUSH,
+
+      // Web Push
+      vapidPublicKey: parsed.VAPID_PUBLIC_KEY,
+      vapidPrivateKey: parsed.VAPID_PRIVATE_KEY,
+      vapidSubject: parsed.VAPID_SUBJECT,
 
       // Development overrides
       invitationEmailOverride: parsed.INVITATION_EMAIL_OVERRIDE,
@@ -495,6 +590,7 @@ function logConfigLoaded(config: AppConfig, nodeEnv: NodeEnv): void {
   writeStdout(`  - Frontend: ${config.webOrigin}`);
   writeStdout(`  - Storage: ${config.s3Endpoint} (bucket: ${config.s3Bucket})`);
   writeStdout(`  - Email: ${config.mailProvider}`);
+  writeStdout(`  - Web Push: ${config.enableWebPush ? 'enabled' : 'disabled'}`);
   writeStdout(`  - Payment: ${config.paymentProvider}`);
   writeStdout(`  - AI: ${config.aiProvider}`);
   if (config.redisUrl) {

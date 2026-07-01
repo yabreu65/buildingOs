@@ -128,6 +128,106 @@ describe('Production Readiness Config Validation', () => {
     });
   });
 
+  describe('Web Push VAPID config validation', () => {
+    const validVapidConfig = {
+      VAPID_PUBLIC_KEY: 'B'.repeat(87),
+      VAPID_PRIVATE_KEY: 'C'.repeat(43),
+      VAPID_SUBJECT: 'mailto:admin@example.com',
+    };
+
+    it('allows web push to stay disabled without VAPID keys in production', () => {
+      const schema = createConfigSchema('production');
+      const result = schema.safeParse({
+        ...baseEnv,
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://test:test@db.example.com:5432/test',
+        WEB_ORIGIN: 'https://app.example.com',
+        APP_BASE_URL: 'https://app.example.com',
+        S3_ENDPOINT: 'https://s3.example.com',
+        REDIS_URL: 'redis://redis.example.com:6379',
+        ENABLE_WEB_PUSH: 'false',
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ENABLE_WEB_PUSH).toBe(false);
+      }
+    });
+
+    it('requires VAPID keys and subject when enabled in staging', () => {
+      const schema = createConfigSchema('staging');
+      const result = schema.safeParse({
+        ...baseEnv,
+        NODE_ENV: 'staging',
+        JWT_SECRET: 'a'.repeat(64),
+        ENABLE_WEB_PUSH: 'true',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(issues).toContain('VAPID_PUBLIC_KEY');
+        expect(issues).toContain('VAPID_PRIVATE_KEY');
+        expect(issues).toContain('VAPID_SUBJECT');
+      }
+    });
+
+    it('requires VAPID keys and subject when enabled outside production-like envs', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        NODE_ENV: 'test',
+        ENABLE_WEB_PUSH: 'true',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(issues).toContain('VAPID_PUBLIC_KEY');
+        expect(issues).toContain('VAPID_PRIVATE_KEY');
+        expect(issues).toContain('VAPID_SUBJECT');
+      }
+    });
+
+    it('accepts valid VAPID config when web push is enabled in staging', () => {
+      const schema = createConfigSchema('staging');
+      const result = schema.safeParse({
+        ...baseEnv,
+        NODE_ENV: 'staging',
+        JWT_SECRET: 'a'.repeat(64),
+        ENABLE_WEB_PUSH: 'true',
+        ...validVapidConfig,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ENABLE_WEB_PUSH).toBe(true);
+      }
+    });
+
+    it('rejects localhost https VAPID subjects when enabled', () => {
+      const schema = createConfigSchema('production');
+      const result = schema.safeParse({
+        ...baseEnv,
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://test:test@db.example.com:5432/test',
+        WEB_ORIGIN: 'https://app.example.com',
+        APP_BASE_URL: 'https://app.example.com',
+        S3_ENDPOINT: 'https://s3.example.com',
+        REDIS_URL: 'redis://redis.example.com:6379',
+        ENABLE_WEB_PUSH: 'true',
+        ...validVapidConfig,
+        VAPID_SUBJECT: 'https://localhost/contact',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(issues).toContain('VAPID_SUBJECT');
+      }
+    });
+  });
+
   describe('SES config validation', () => {
     it('requires SES_REGION when MAIL_PROVIDER is ses', () => {
       const schema = createConfigSchema('test');

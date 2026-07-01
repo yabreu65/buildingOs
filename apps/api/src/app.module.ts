@@ -38,6 +38,7 @@ import { LeadsModule } from './leads/leads.module';
 import { TenantMembersModule } from './tenant-members/tenant-members.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PushController } from './push/push.controller';
+import { PushDeliveryService } from './push/push-delivery.service';
 import { CronJobsModule } from './shared/scheduling/cron-jobs.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 
@@ -83,6 +84,7 @@ import { ReceiptsModule } from './receipts/receipts.module';
   ],
   controllers: [PushController],
   providers: [
+    PushDeliveryService,
     {
       provide: APP_GUARD,
       useClass: DemoTenantGuard,

@@ -62,6 +62,12 @@ export interface AppConfig {
   featurePortalResident: boolean;
   featurePaymentsMvp: boolean;
   featureEnforceUrgentForWebPush: boolean;
+  enableWebPush: boolean;
+
+  // Web Push
+  vapidPublicKey?: string;
+  vapidPrivateKey?: string;
+  vapidSubject?: string;
 
   // Development overrides (optional)
   invitationEmailOverride?: string;
