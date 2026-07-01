@@ -3,7 +3,7 @@
  * Task 2.7: Processes payment webhooks; returns 503 when webhooks disabled
  */
 
-import { BadRequestException, Controller, Post, Body, Headers, HttpCode, HttpStatus, Logger, UseGuards, HttpException, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Post, Body, Headers, HttpCode, HttpStatus, Logger, UseGuards, HttpException, Query, InternalServerErrorException } from '@nestjs/common';
 import { PaymentGatewayService } from '../payment-gateway.service';
 import { ConfigService } from '../../../config/config.service';
 import { SignatureGuard } from './signature.guard';
@@ -64,10 +64,12 @@ export class PaymentWebhookController {
       };
     } catch (error) {
       this.logger.error(`Webhook processing failed: ${error instanceof Error ? error.message : String(error)}`);
-      return {
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Internal error',
-      };
+
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException('Payment webhook processing failed');
     }
   }
 

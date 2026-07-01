@@ -3,7 +3,7 @@
  * Task 2.2: Provider-agnostic payment processing via Stripe REST API
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import {
   PaymentProvider,
   CreatePreferenceInput,
@@ -56,12 +56,12 @@ export class StripeAdapter implements PaymentProvider {
     const eventType = event.type;
 
     if (!eventType) {
-      throw new Error('Stripe webhook: missing event type');
+      throw new BadRequestException('Stripe webhook: missing event type');
     }
 
     const session = event.data?.object;
     if (!session) {
-      throw new Error('Stripe webhook: missing session data');
+      throw new BadRequestException('Stripe webhook: missing session data');
     }
 
     const sessionId = String(session.id || '');

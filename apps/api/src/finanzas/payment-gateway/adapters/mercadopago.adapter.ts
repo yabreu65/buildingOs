@@ -3,7 +3,7 @@
  * Task 2.1: Provider-agnostic payment processing via MercadoPago SDK (REST API)
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 import {
   PaymentProvider,
@@ -67,7 +67,7 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const paymentId = context.dataId;
 
     if (!paymentId) {
-      throw new Error('MercadoPago webhook: missing payment ID');
+      throw new BadRequestException('MercadoPago webhook: missing payment ID');
     }
 
     this.validateWebhookSignature(context, paymentId);
@@ -90,13 +90,13 @@ export class MercadoPagoAdapter implements PaymentProvider {
 
   private validateWebhookSignature(signatureContext: WebhookSignatureContext, dataId: string): void {
     if (!this.webhookSecret) {
-      throw new Error('MercadoPago webhook: missing webhook secret');
+      throw new ServiceUnavailableException('MercadoPago webhook: missing webhook secret');
     }
     if (!signatureContext.signature) {
-      throw new Error('MercadoPago webhook: missing signature');
+      throw new UnauthorizedException('MercadoPago webhook: missing signature');
     }
     if (!signatureContext.requestId) {
-      throw new Error('MercadoPago webhook: missing request ID');
+      throw new BadRequestException('MercadoPago webhook: missing request ID');
     }
 
     const signatureParts = this.parseSignature(signatureContext.signature);
@@ -104,10 +104,10 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const receivedDigest = signatureParts.get('v1');
 
     if (!timestamp || !/^\d+$/.test(timestamp)) {
-      throw new Error('MercadoPago webhook: missing or malformed timestamp');
+      throw new BadRequestException('MercadoPago webhook: missing or malformed timestamp');
     }
     if (!receivedDigest || !/^[a-fA-F0-9]{64}$/.test(receivedDigest)) {
-      throw new Error('MercadoPago webhook: missing or malformed v1 signature');
+      throw new BadRequestException('MercadoPago webhook: missing or malformed v1 signature');
     }
 
     const manifest = `id:${dataId};request-id:${signatureContext.requestId};ts:${timestamp};`;
@@ -119,7 +119,7 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const received = Buffer.from(receivedDigest, 'hex');
 
     if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
-      throw new Error('MercadoPago webhook: invalid signature');
+      throw new UnauthorizedException('MercadoPago webhook: invalid signature');
     }
   }
 

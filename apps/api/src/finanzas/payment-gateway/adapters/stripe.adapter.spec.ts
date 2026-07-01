@@ -4,6 +4,7 @@
  */
 
 import { StripeAdapter } from './stripe.adapter';
+import { BadRequestException } from '@nestjs/common';
 
 describe('StripeAdapter', () => {
   let adapter: StripeAdapter;
@@ -120,6 +121,10 @@ describe('StripeAdapter', () => {
       const payload = { type: 'unknown.event', data: {} };
 
       await expect(adapter.handleWebhook(payload, 'sig')).rejects.toThrow();
+    });
+
+    it('surfaces malformed payloads as HTTP 400 errors', async () => {
+      await expect(adapter.handleWebhook({}, 'sig')).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

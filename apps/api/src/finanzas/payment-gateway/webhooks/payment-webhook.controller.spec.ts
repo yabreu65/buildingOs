@@ -7,7 +7,7 @@
 
 import { PaymentWebhookController } from './payment-webhook.controller';
 import { SignatureGuard } from './signature.guard';
-import { HttpException, INestApplication } from '@nestjs/common';
+import { BadRequestException, HttpException, INestApplication, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { Server } from 'http';
@@ -86,7 +86,10 @@ describe('PaymentWebhookController', () => {
 
       const result = await controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig', undefined, 'request-1', 'pay-1');
 
-      expect(result.status).toBe('PAID');
+      expect(result).toEqual({
+        status: 'PAID',
+        message: 'Webhook processed successfully',
+      });
       expect(mockGatewayService.processWebhookEvent).toHaveBeenCalledWith(
         { data: { id: 'pay-1' } },
         { signature: 'sig', requestId: 'request-1', dataId: 'pay-1', provider: 'stripe' },
@@ -152,6 +155,27 @@ describe('PaymentWebhookController', () => {
 
       expect(mockGatewayService.processWebhookEvent).not.toHaveBeenCalled();
     });
+
+    it.each([
+      [new BadRequestException('Invalid webhook payload'), 400],
+      [new UnauthorizedException('Invalid webhook signature'), 401],
+    ])('propagates service HttpException errors from webhook processing', async (exception, status) => {
+      mockConfigService.getValue.mockReturnValue(true);
+      mockGatewayService.processWebhookEvent.mockRejectedValue(exception);
+
+      await expect(
+        controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig', 'mercadopago', 'request-1', 'pay-1'),
+      ).rejects.toMatchObject({ status });
+    });
+
+    it('converts unexpected webhook processing failures to HTTP 500', async () => {
+      mockConfigService.getValue.mockReturnValue(true);
+      mockGatewayService.processWebhookEvent.mockRejectedValue(new Error('database timeout'));
+
+      await expect(
+        controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig', 'mercadopago', 'request-1', 'pay-1'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
   });
 
   describe('HTTP binding', () => {
@@ -161,6 +185,23 @@ describe('PaymentWebhookController', () => {
     afterEach(async () => {
       await app?.close();
     });
+
+    const createApp = async (gatewayService: {
+      processWebhookEvent: jest.Mock;
+      getActiveProviderName: jest.Mock;
+    }, configService: { getValue: jest.Mock }): Promise<void> => {
+      const moduleRef = await Test.createTestingModule({
+        controllers: [PaymentWebhookController],
+        providers: [
+          { provide: PaymentGatewayService, useValue: gatewayService },
+          { provide: ConfigService, useValue: configService },
+        ],
+      }).compile();
+
+      app = moduleRef.createNestApplication();
+      await app.init();
+      httpServer = app.getHttpServer() as Server;
+    };
 
     it('binds x-signature, x-request-id, and query data.id into the service signature context', async () => {
       const gatewayService = {
@@ -176,17 +217,7 @@ describe('PaymentWebhookController', () => {
       const configService = {
         getValue: jest.fn().mockReturnValue(true),
       };
-      const moduleRef = await Test.createTestingModule({
-        controllers: [PaymentWebhookController],
-        providers: [
-          { provide: PaymentGatewayService, useValue: gatewayService },
-          { provide: ConfigService, useValue: configService },
-        ],
-      }).compile();
-
-      app = moduleRef.createNestApplication();
-      await app.init();
-      httpServer = app.getHttpServer() as Server;
+      await createApp(gatewayService, configService);
 
       await request(httpServer)
         .post('/webhooks/payment')
@@ -206,6 +237,73 @@ describe('PaymentWebhookController', () => {
         },
         'mercadopago',
       );
+    });
+
+    it('returns the success body with HTTP 200 on successful webhook processing', async () => {
+      const gatewayService = {
+        processWebhookEvent: jest.fn().mockResolvedValue({
+          eventId: 'evt-http-2',
+          eventType: 'payment.approved',
+          rawPayload: { action: 'payment.updated' },
+          status: 'PAID',
+          chargeUpdated: true,
+        }),
+        getActiveProviderName: jest.fn().mockReturnValue('mercadopago'),
+      };
+      const configService = {
+        getValue: jest.fn().mockReturnValue(true),
+      };
+      await createApp(gatewayService, configService);
+
+      await request(httpServer)
+        .post('/webhooks/payment')
+        .query({ 'data.id': 'payment-123' })
+        .set('x-signature', 'ts=1678886400,v1=signature')
+        .set('x-request-id', 'request-123')
+        .send({ action: 'payment.updated' })
+        .expect(200)
+        .expect({
+          status: 'PAID',
+          message: 'Webhook processed successfully',
+        });
+    });
+
+    it('returns the service HttpException status instead of HTTP 200 error body', async () => {
+      const gatewayService = {
+        processWebhookEvent: jest.fn().mockRejectedValue(new UnauthorizedException('Invalid webhook signature')),
+        getActiveProviderName: jest.fn().mockReturnValue('mercadopago'),
+      };
+      const configService = {
+        getValue: jest.fn().mockReturnValue(true),
+      };
+      await createApp(gatewayService, configService);
+
+      await request(httpServer)
+        .post('/webhooks/payment')
+        .query({ 'data.id': 'payment-123' })
+        .set('x-signature', 'ts=1678886400,v1=bad')
+        .set('x-request-id', 'request-123')
+        .send({ action: 'payment.updated' })
+        .expect(401);
+    });
+
+    it('returns HTTP 500 instead of HTTP 200 error body for unexpected processing failures', async () => {
+      const gatewayService = {
+        processWebhookEvent: jest.fn().mockRejectedValue(new Error('database timeout')),
+        getActiveProviderName: jest.fn().mockReturnValue('mercadopago'),
+      };
+      const configService = {
+        getValue: jest.fn().mockReturnValue(true),
+      };
+      await createApp(gatewayService, configService);
+
+      await request(httpServer)
+        .post('/webhooks/payment')
+        .query({ 'data.id': 'payment-123' })
+        .set('x-signature', 'ts=1678886400,v1=signature')
+        .set('x-request-id', 'request-123')
+        .send({ action: 'payment.updated' })
+        .expect(500);
     });
   });
 });

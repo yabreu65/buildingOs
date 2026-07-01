@@ -6,6 +6,7 @@
 import { MercadoPagoAdapter } from './mercadopago.adapter';
 import { PaymentStatus } from '../interfaces/payment-provider.interface';
 import { createHmac } from 'crypto';
+import { HttpException } from '@nestjs/common';
 
 describe('MercadoPagoAdapter', () => {
   const webhookSecret = 'test-webhook-secret';
@@ -124,9 +125,18 @@ describe('MercadoPagoAdapter', () => {
           requestId: 'request-123',
           dataId: 'pay-123',
         }),
-      ).rejects.toThrow('MercadoPago webhook: invalid signature');
+      ).rejects.toMatchObject({ status: 401 });
 
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('surfaces invalid signatures as an HttpException before fetching payment details', async () => {
+      await expect(
+        adapter.handleWebhook({ action: 'payment.updated', data: { id: 'pay-123' } }, `ts=1678886400,v1=${'0'.repeat(64)}`, {
+          requestId: 'request-123',
+          dataId: 'pay-123',
+        }),
+      ).rejects.toBeInstanceOf(HttpException);
     });
 
     it.each([
@@ -155,7 +165,7 @@ describe('MercadoPagoAdapter', () => {
           requestId: 'request-123',
           dataId: 'pay-123',
         }),
-      ).rejects.toThrow('MercadoPago webhook: missing webhook secret');
+      ).rejects.toMatchObject({ status: 503 });
 
       expect(mockFetch).not.toHaveBeenCalled();
     });

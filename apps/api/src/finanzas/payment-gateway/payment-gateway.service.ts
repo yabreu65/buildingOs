@@ -3,7 +3,7 @@
  * Task 2.3: Orchestrates payment creation, webhook handling, and charge confirmation
  */
 
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import {
   PaymentProvider,
   CreatePreferenceInput,
@@ -52,11 +52,11 @@ export class PaymentGatewayService {
     signature: string | WebhookSignatureContext,
     requestedProviderName?: PaymentProviderName,
   ): Promise<WebhookEvent & { chargeUpdated?: boolean }> {
-    if (!this.provider) throw new Error('Payment provider not configured');
+    if (!this.provider) throw new ServiceUnavailableException('Payment provider not configured');
     const providerName = this.provider.providerName;
 
     if (requestedProviderName && requestedProviderName !== providerName) {
-      throw new Error(`Webhook provider mismatch: active provider is ${providerName}`);
+      throw new BadRequestException(`Webhook provider mismatch: active provider is ${providerName}`);
     }
 
     const signatureContext = typeof signature === 'string' ? { signature } : signature;

@@ -6,6 +6,7 @@
 
 import { PaymentGatewayService } from './payment-gateway.service';
 import { PaymentProvider, PaymentPreference, WebhookEvent, PaymentStatus } from './interfaces/payment-provider.interface';
+import { HttpException } from '@nestjs/common';
 
 describe('PaymentGatewayService', () => {
   let service: PaymentGatewayService;
@@ -149,6 +150,17 @@ describe('PaymentGatewayService', () => {
 
       expect(mockProvider.handleWebhook).not.toHaveBeenCalled();
       expect(mockIdempotencyService.isProcessed).not.toHaveBeenCalled();
+    });
+
+    it('rejects direct webhook processing with HTTP 400 when requested provider conflicts with active provider', async () => {
+      await expect(service.processWebhookEvent({}, { signature: 'sig' }, 'stripe')).rejects.toMatchObject({ status: 400 });
+    });
+
+    it('rejects direct webhook processing with HTTP 503 when no provider is configured', async () => {
+      const serviceWithoutProvider = new PaymentGatewayService(null, mockPrisma, mockIdempotencyService);
+
+      await expect(serviceWithoutProvider.processWebhookEvent({}, { signature: 'sig' })).rejects.toBeInstanceOf(HttpException);
+      await expect(serviceWithoutProvider.processWebhookEvent({}, { signature: 'sig' })).rejects.toMatchObject({ status: 503 });
     });
   });
 
