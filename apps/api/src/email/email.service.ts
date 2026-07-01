@@ -7,7 +7,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { SendEmailOptions, EmailType, TenantBranding, EmailProvider } from './email.types';
+import { SendEmailOptions, SendEmailResult, EmailType, TenantBranding, EmailProvider } from './email.types';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -75,10 +75,10 @@ export class EmailService {
   async sendEmail(
     options: SendEmailOptions,
     emailType: EmailType,
-  ): Promise<{ success: boolean; externalId?: string; error?: string }> {
+  ): Promise<SendEmailResult> {
     if (this.provider === 'none') {
       this.logger.debug(`[Email] Provider is "none", skipping: ${options.to}`);
-      return { success: true }; // Don't fail if email is disabled
+      return { success: true, skipped: true }; // Don't fail if email is disabled
     }
 
     try {

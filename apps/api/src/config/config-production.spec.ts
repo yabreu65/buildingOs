@@ -172,6 +172,75 @@ describe('Production Readiness Config Validation', () => {
     });
   });
 
+  describe('SMTP config validation', () => {
+    it('requires SMTP_USER when MAIL_PROVIDER is smtp', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_PASS: 'secret',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => i.message);
+        expect(issues.some((m) => m.includes('SMTP_USER'))).toBe(true);
+      }
+    });
+
+    it('requires SMTP_PASS when MAIL_PROVIDER is smtp', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'mailer',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => i.message);
+        expect(issues.some((m) => m.includes('SMTP_PASS'))).toBe(true);
+      }
+    });
+
+    it('rejects blank SMTP_USER and SMTP_PASS when MAIL_PROVIDER is smtp', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: '',
+        SMTP_PASS: '',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => i.message);
+        expect(issues.some((m) => m.includes('SMTP_USER'))).toBe(true);
+        expect(issues.some((m) => m.includes('SMTP_PASS'))).toBe(true);
+      }
+    });
+
+    it('accepts smtp provider with all runtime-required fields', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'mailer',
+        SMTP_PASS: 'secret',
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe('MERCADOPAGO and STRIPE keys are optional', () => {
     it('allows missing mercadopago key when provider is none', () => {
       const schema = createConfigSchema('test');

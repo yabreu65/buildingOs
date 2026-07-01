@@ -223,6 +223,20 @@ export const createConfigSchema = (_nodeEnv: string) => {
           message: 'SMTP_PORT is required when MAIL_PROVIDER=smtp',
         });
       }
+      if (!data.SMTP_USER) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SMTP_USER'],
+          message: 'SMTP_USER is required when MAIL_PROVIDER=smtp',
+        });
+      }
+      if (!data.SMTP_PASS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SMTP_PASS'],
+          message: 'SMTP_PASS is required when MAIL_PROVIDER=smtp',
+        });
+      }
     }
 
     // SES requires region, access key, and secret key
@@ -444,7 +458,7 @@ function validateConditionalConfig(config: ParsedConfig, nodeEnv: NodeEnv): void
       errors.push('REDIS_URL in production cannot use localhost');
     }
     // NOTE: SENTRY_DSN is optional — SentryService self-disables when absent.
-    // NOTE: MAIL_PROVIDER=none is valid — NoOpAdapter handles graceful degradation.
+    // NOTE: MAIL_PROVIDER=none is valid — legacy EmailService reports skipped sends.
   }
 
   // Staging: similar to production but slightly relaxed

@@ -13,6 +13,13 @@ export interface SendEmailOptions {
   tenantId?: string;
 }
 
+export interface SendEmailResult {
+  success: boolean;
+  externalId?: string;
+  error?: string;
+  skipped?: boolean;
+}
+
 export interface EmailTemplateData {
   [key: string]: string | number | boolean | null | undefined;
 }
