@@ -184,6 +184,7 @@ export const createConfigSchema = (_nodeEnv: string) => {
       .enum(['none', 'mercadopago', 'stripe'])
       .default('none'),
     MERCADOPAGO_ACCESS_TOKEN: z.preprocess(emptyStringToUndefined, z.string().optional()),
+    MERCADOPAGO_WEBHOOK_SECRET: z.preprocess(emptyStringToUndefined, z.string().optional()),
     STRIPE_SECRET_KEY: z.preprocess(emptyStringToUndefined, z.string().optional()),
     ENABLE_PAYMENT_WEBHOOKS: z
       .string()
@@ -264,6 +265,19 @@ export const createConfigSchema = (_nodeEnv: string) => {
         code: z.ZodIssueCode.custom,
         path: ['GEMINI_API_KEY'],
         message: 'GEMINI_API_KEY is required when AI_PROVIDER=gemini',
+      });
+    }
+
+    if (
+      data.PAYMENT_PROVIDER === 'mercadopago' &&
+      data.ENABLE_PAYMENT_WEBHOOKS &&
+      !data.MERCADOPAGO_WEBHOOK_SECRET
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MERCADOPAGO_WEBHOOK_SECRET'],
+        message:
+          'MERCADOPAGO_WEBHOOK_SECRET is required when PAYMENT_PROVIDER=mercadopago and ENABLE_PAYMENT_WEBHOOKS=true',
       });
     }
   });
@@ -352,6 +366,7 @@ export function loadConfig(): AppConfig {
       // Payment Gateway
       paymentProvider: parsed.PAYMENT_PROVIDER,
       mercadopagoAccessToken: parsed.MERCADOPAGO_ACCESS_TOKEN,
+      mercadopagoWebhookSecret: parsed.MERCADOPAGO_WEBHOOK_SECRET,
       stripeSecretKey: parsed.STRIPE_SECRET_KEY,
       enablePaymentWebhooks: parsed.ENABLE_PAYMENT_WEBHOOKS,
 

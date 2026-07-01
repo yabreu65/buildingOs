@@ -4,6 +4,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
+import { createHmac, timingSafeEqual } from 'crypto';
 import {
   PaymentProvider,
   CreatePreferenceInput,
@@ -11,6 +12,7 @@ import {
   WebhookEvent,
   PaymentStatus,
   PaymentProviderName,
+  WebhookSignatureContext,
 } from '../interfaces/payment-provider.interface';
 
 @Injectable()
@@ -21,7 +23,10 @@ export class MercadoPagoAdapter implements PaymentProvider {
   private readonly baseUrl = 'https://api.mercadopago.com';
   private readonly timeout = 10000;
 
-  constructor(private readonly accessToken: string) {}
+  constructor(
+    private readonly accessToken: string,
+    private readonly webhookSecret?: string,
+  ) {}
 
   async createPreference(input: CreatePreferenceInput): Promise<PaymentPreference> {
     const body = {
@@ -52,13 +57,20 @@ export class MercadoPagoAdapter implements PaymentProvider {
     };
   }
 
-  async handleWebhook(payload: unknown, _signature: string): Promise<WebhookEvent> {
+  async handleWebhook(
+    payload: unknown,
+    signature: string,
+    signatureContext: WebhookSignatureContext = {},
+  ): Promise<WebhookEvent> {
     const webhookData = payload as { action?: string; data?: { id?: string } };
-    const paymentId = webhookData?.data?.id;
+    const context = { ...signatureContext, signature };
+    const paymentId = context.dataId;
 
     if (!paymentId) {
       throw new Error('MercadoPago webhook: missing payment ID');
     }
+
+    this.validateWebhookSignature(context, paymentId);
 
     // Fetch the payment details to get the actual status
     const payment = await this.request(`/v1/payments/${paymentId}`, 'GET');
@@ -74,6 +86,57 @@ export class MercadoPagoAdapter implements PaymentProvider {
       status,
       rawPayload: payload,
     };
+  }
+
+  private validateWebhookSignature(signatureContext: WebhookSignatureContext, dataId: string): void {
+    if (!this.webhookSecret) {
+      throw new Error('MercadoPago webhook: missing webhook secret');
+    }
+    if (!signatureContext.signature) {
+      throw new Error('MercadoPago webhook: missing signature');
+    }
+    if (!signatureContext.requestId) {
+      throw new Error('MercadoPago webhook: missing request ID');
+    }
+
+    const signatureParts = this.parseSignature(signatureContext.signature);
+    const timestamp = signatureParts.get('ts');
+    const receivedDigest = signatureParts.get('v1');
+
+    if (!timestamp || !/^\d+$/.test(timestamp)) {
+      throw new Error('MercadoPago webhook: missing or malformed timestamp');
+    }
+    if (!receivedDigest || !/^[a-fA-F0-9]{64}$/.test(receivedDigest)) {
+      throw new Error('MercadoPago webhook: missing or malformed v1 signature');
+    }
+
+    const manifest = `id:${dataId};request-id:${signatureContext.requestId};ts:${timestamp};`;
+    const expectedDigest = createHmac('sha256', this.webhookSecret)
+      .update(manifest)
+      .digest('hex');
+
+    const expected = Buffer.from(expectedDigest, 'hex');
+    const received = Buffer.from(receivedDigest, 'hex');
+
+    if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+      throw new Error('MercadoPago webhook: invalid signature');
+    }
+  }
+
+  private parseSignature(signature: string): Map<string, string> {
+    const parts = new Map<string, string>();
+
+    for (const rawPart of signature.split(',')) {
+      const [rawKey, rawValue] = rawPart.split('=');
+      const key = rawKey?.trim();
+      const value = rawValue?.trim();
+
+      if (key && value) {
+        parts.set(key, value);
+      }
+    }
+
+    return parts;
   }
 
   async getChargeStatus(externalId: string): Promise<PaymentStatus> {

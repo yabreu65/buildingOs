@@ -14,6 +14,7 @@ describe('resolvePaymentGateway', () => {
     process.env = { ...originalEnv };
     delete process.env.PAYMENT_PROVIDER;
     delete process.env.MERCADOPAGO_ACCESS_TOKEN;
+    delete process.env.MERCADOPAGO_WEBHOOK_SECRET;
     delete process.env.STRIPE_SECRET_KEY;
   });
 
@@ -35,22 +36,60 @@ describe('resolvePaymentGateway', () => {
   });
 
   describe('mercadopago provider', () => {
-    it('reads MERCADOPAGO_ACCESS_TOKEN from env', () => {
+    it('reads MercadoPago credentials from env', () => {
       const result = resolvePaymentGateway({
         PAYMENT_PROVIDER: 'mercadopago',
         MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+        MERCADOPAGO_WEBHOOK_SECRET: 'WEBHOOK-SECRET',
+        ENABLE_PAYMENT_WEBHOOKS: 'true',
       });
       const activeProvider: ConfiguredPaymentProviderName = result.provider;
 
       expect(activeProvider).toBe('mercadopago');
       expect(result.provider).toBe('mercadopago');
       expect(result.options.mercadopagoAccessToken).toBe('TEST-123');
+      expect(result.options.mercadopagoWebhookSecret).toBe('WEBHOOK-SECRET');
     });
 
     it('fails with clear error when MERCADOPAGO_ACCESS_TOKEN is missing', () => {
       expect(() =>
         resolvePaymentGateway({ PAYMENT_PROVIDER: 'mercadopago' }),
       ).toThrow('MERCADOPAGO_ACCESS_TOKEN is required when PAYMENT_PROVIDER=mercadopago');
+    });
+
+    it('requires MERCADOPAGO_WEBHOOK_SECRET when mercadopago webhooks are enabled', () => {
+      expect(() =>
+        resolvePaymentGateway({
+          PAYMENT_PROVIDER: 'mercadopago',
+          MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+          ENABLE_PAYMENT_WEBHOOKS: 'true',
+        }),
+      ).toThrow(
+        'MERCADOPAGO_WEBHOOK_SECRET is required when PAYMENT_PROVIDER=mercadopago and ENABLE_PAYMENT_WEBHOOKS=true',
+      );
+    });
+
+    it('allows missing MERCADOPAGO_WEBHOOK_SECRET when mercadopago webhooks are disabled', () => {
+      const result = resolvePaymentGateway({
+        PAYMENT_PROVIDER: 'mercadopago',
+        MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+        ENABLE_PAYMENT_WEBHOOKS: 'false',
+      });
+
+      expect(result.provider).toBe('mercadopago');
+      expect(result.options.mercadopagoAccessToken).toBe('TEST-123');
+      expect(result.options.mercadopagoWebhookSecret).toBeUndefined();
+    });
+
+    it('treats blank MERCADOPAGO_WEBHOOK_SECRET as missing when mercadopago webhooks are enabled', () => {
+      expect(() =>
+        resolvePaymentGateway({
+          PAYMENT_PROVIDER: 'mercadopago',
+          MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+          MERCADOPAGO_WEBHOOK_SECRET: '   ',
+          ENABLE_PAYMENT_WEBHOOKS: 'true',
+        }),
+      ).toThrow('MERCADOPAGO_WEBHOOK_SECRET is required');
     });
   });
 

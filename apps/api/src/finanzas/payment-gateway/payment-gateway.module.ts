@@ -15,6 +15,7 @@ import { ConfiguredPaymentProviderName, PaymentProvider } from './interfaces/pay
 
 export interface PaymentGatewayOptions {
   mercadopagoAccessToken?: string;
+  mercadopagoWebhookSecret?: string;
   stripeSecretKey?: string;
 }
 
@@ -46,7 +47,7 @@ export class PaymentGatewayModule {
       useFactory: () => {
         switch (providerName) {
           case 'mercadopago':
-            return new MercadoPagoAdapter(options.mercadopagoAccessToken || '');
+            return new MercadoPagoAdapter(options.mercadopagoAccessToken || '', options.mercadopagoWebhookSecret);
           case 'stripe':
             return new StripeAdapter(options.stripeSecretKey || '');
           default:

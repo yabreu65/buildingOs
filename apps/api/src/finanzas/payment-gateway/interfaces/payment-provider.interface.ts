@@ -30,6 +30,13 @@ export interface WebhookEvent {
   rawPayload: unknown;
 }
 
+export interface WebhookSignatureContext {
+  signature?: string;
+  requestId?: string;
+  dataId?: string;
+  provider?: PaymentProviderName;
+}
+
 export type PaymentStatus = 'PENDING' | 'PAID' | 'REJECTED' | 'CANCELLED';
 
 export type PaymentProviderName = 'mercadopago' | 'stripe';
@@ -50,7 +57,11 @@ export interface PaymentProvider {
   /**
    * Process an incoming webhook payload from the provider
    */
-  handleWebhook(payload: unknown, signature: string): Promise<WebhookEvent>;
+  handleWebhook(
+    payload: unknown,
+    signature: string,
+    signatureContext?: WebhookSignatureContext,
+  ): Promise<WebhookEvent>;
 
   /**
    * Query the current status of a charge from the provider

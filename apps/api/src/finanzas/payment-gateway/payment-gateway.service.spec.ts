@@ -79,9 +79,16 @@ describe('PaymentGatewayService', () => {
       mockPrisma.payment.update.mockResolvedValue({ id: 'pay-1', paymentEventId: 'evt-1' });
       mockIdempotencyService.isProcessed.mockResolvedValue(false);
 
-      const result = await service.processWebhookEvent({}, 'sig', 'mercadopago');
+      const signatureContext = { signature: 'sig', requestId: 'req-1', dataId: 'pay-1' };
+
+      const result = await service.processWebhookEvent({}, signatureContext, 'mercadopago');
 
       expect(result.status).toBe('PAID');
+      expect(mockProvider.handleWebhook).toHaveBeenCalledWith(
+        {},
+        'sig',
+        { ...signatureContext, provider: 'mercadopago' },
+      );
       expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
       expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
       expect(mockPrisma.charge.update).toHaveBeenCalledWith({
@@ -104,7 +111,7 @@ describe('PaymentGatewayService', () => {
       mockPrisma.charge.update.mockResolvedValue({ id: 'charge-2', status: 'REJECTED' });
       mockIdempotencyService.isProcessed.mockResolvedValue(false);
 
-      const result = await service.processWebhookEvent({}, 'sig');
+      const result = await service.processWebhookEvent({}, { signature: 'sig' });
 
       expect(result.status).toBe('REJECTED');
       expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-2', 'mercadopago');
@@ -127,7 +134,7 @@ describe('PaymentGatewayService', () => {
       mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
       mockIdempotencyService.isProcessed.mockResolvedValue(true);
 
-      const result = await service.processWebhookEvent({}, 'sig', 'mercadopago');
+      const result = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
 
       expect(result.chargeUpdated).toBe(false);
       expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-dup', 'mercadopago');
@@ -136,7 +143,7 @@ describe('PaymentGatewayService', () => {
     });
 
     it('rejects direct webhook processing when requested provider conflicts with active provider', async () => {
-      await expect(service.processWebhookEvent({}, 'sig', 'stripe')).rejects.toThrow(
+      await expect(service.processWebhookEvent({}, { signature: 'sig' }, 'stripe')).rejects.toThrow(
         'Webhook provider mismatch: active provider is mercadopago',
       );
 

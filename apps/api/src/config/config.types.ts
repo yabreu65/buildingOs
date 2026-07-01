@@ -69,6 +69,7 @@ export interface AppConfig {
   // Payment Gateway
   paymentProvider: 'none' | 'mercadopago' | 'stripe';
   mercadopagoAccessToken?: string;
+  mercadopagoWebhookSecret?: string;
   stripeSecretKey?: string;
   enablePaymentWebhooks: boolean;
 

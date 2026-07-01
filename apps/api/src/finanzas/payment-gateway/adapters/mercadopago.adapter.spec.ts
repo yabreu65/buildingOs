@@ -5,15 +5,24 @@
 
 import { MercadoPagoAdapter } from './mercadopago.adapter';
 import { PaymentStatus } from '../interfaces/payment-provider.interface';
+import { createHmac } from 'crypto';
 
 describe('MercadoPagoAdapter', () => {
+  const webhookSecret = 'test-webhook-secret';
+
   let adapter: MercadoPagoAdapter;
   let mockFetch: jest.Mock;
+
+  const buildSignature = (dataId: string, requestId: string, timestamp = '1678886400'): string => {
+    const manifest = `id:${dataId};request-id:${requestId};ts:${timestamp};`;
+    const digest = createHmac('sha256', webhookSecret).update(manifest).digest('hex');
+    return `ts=${timestamp},v1=${digest}`;
+  };
 
   beforeEach(() => {
     mockFetch = jest.fn();
     global.fetch = mockFetch;
-    adapter = new MercadoPagoAdapter('test-mp-token');
+    adapter = new MercadoPagoAdapter('test-mp-token', webhookSecret);
   });
 
   afterEach(() => {
@@ -83,7 +92,7 @@ describe('MercadoPagoAdapter', () => {
   });
 
   describe('handleWebhook', () => {
-    it('parses approved payment webhook', async () => {
+    it('validates the MercadoPago signature, fetches payment details, and parses approved payment webhook', async () => {
       const payload = {
         action: 'payment.updated',
         data: { id: 'pay-123' },
@@ -98,11 +107,57 @@ describe('MercadoPagoAdapter', () => {
         }),
       });
 
-      const result = await adapter.handleWebhook(payload, 'valid-sig');
+      const result = await adapter.handleWebhook(payload, buildSignature('pay-123', 'request-123'), {
+        requestId: 'request-123',
+        dataId: 'pay-123',
+      });
 
       expect(result.eventId).toBe('pay-123');
       expect(result.status).toBe('PAID');
       expect(result.externalId).toBe('pay-123');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an invalid v1 signature before fetching payment details', async () => {
+      await expect(
+        adapter.handleWebhook({ action: 'payment.updated', data: { id: 'pay-123' } }, `ts=1678886400,v1=${'0'.repeat(64)}`, {
+          requestId: 'request-123',
+          dataId: 'pay-123',
+        }),
+      ).rejects.toThrow('MercadoPago webhook: invalid signature');
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['x-signature', { signature: undefined, requestId: 'request-123', dataId: 'pay-123' }],
+      ['x-request-id', { signature: buildSignature('pay-123', 'request-123'), requestId: undefined, dataId: 'pay-123' }],
+      ['data.id', { signature: buildSignature('pay-123', 'request-123'), requestId: 'request-123', dataId: undefined }],
+      ['ts', { signature: `v1=${buildSignature('pay-123', 'request-123').split('v1=')[1]}`, requestId: 'request-123', dataId: 'pay-123' }],
+      ['v1', { signature: 'ts=1678886400', requestId: 'request-123', dataId: 'pay-123' }],
+    ])('rejects when %s is missing before fetching payment details', async (_field, signatureContext) => {
+      await expect(
+        adapter.handleWebhook(
+          { action: 'payment.updated', data: { id: 'pay-123' } },
+          signatureContext.signature || '',
+          signatureContext,
+        ),
+      ).rejects.toThrow('MercadoPago webhook:');
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects when webhook secret is missing before fetching payment details', async () => {
+      const adapterWithoutSecret = new MercadoPagoAdapter('test-mp-token');
+
+      await expect(
+        adapterWithoutSecret.handleWebhook({ action: 'payment.updated', data: { id: 'pay-123' } }, buildSignature('pay-123', 'request-123'), {
+          requestId: 'request-123',
+          dataId: 'pay-123',
+        }),
+      ).rejects.toThrow('MercadoPago webhook: missing webhook secret');
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('parses rejected payment webhook', async () => {
@@ -120,7 +175,10 @@ describe('MercadoPagoAdapter', () => {
         }),
       });
 
-      const result = await adapter.handleWebhook(payload, 'valid-sig');
+      const result = await adapter.handleWebhook(payload, buildSignature('pay-456', 'request-456'), {
+        requestId: 'request-456',
+        dataId: 'pay-456',
+      });
 
       expect(result.status).toBe('REJECTED');
     });
@@ -137,7 +195,10 @@ describe('MercadoPagoAdapter', () => {
         }),
       });
 
-      const result = await adapter.handleWebhook(payload, 'valid-sig');
+      const result = await adapter.handleWebhook(payload, buildSignature('pay-789', 'request-789'), {
+        requestId: 'request-789',
+        dataId: 'pay-789',
+      });
       expect(result.status).toBe('PENDING');
     });
   });

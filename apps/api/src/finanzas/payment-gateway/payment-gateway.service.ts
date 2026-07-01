@@ -12,6 +12,7 @@ import {
   PaymentStatus,
   PAYMENT_PROVIDER_TOKEN,
   PaymentProviderName,
+  WebhookSignatureContext,
 } from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
@@ -48,7 +49,7 @@ export class PaymentGatewayService {
    */
   async processWebhookEvent(
     payload: unknown,
-    signature: string,
+    signature: string | WebhookSignatureContext,
     requestedProviderName?: PaymentProviderName,
   ): Promise<WebhookEvent & { chargeUpdated?: boolean }> {
     if (!this.provider) throw new Error('Payment provider not configured');
@@ -58,7 +59,17 @@ export class PaymentGatewayService {
       throw new Error(`Webhook provider mismatch: active provider is ${providerName}`);
     }
 
-    const event = await this.provider.handleWebhook(payload, signature);
+    const signatureContext = typeof signature === 'string' ? { signature } : signature;
+    const adapterSignatureContext = {
+      ...signatureContext,
+      provider: providerName,
+    };
+
+    const event = await this.provider.handleWebhook(
+      payload,
+      adapterSignatureContext.signature || '',
+      adapterSignatureContext,
+    );
 
     // Idempotency: check via dedicated IdempotencyService
     const isDuplicate = await this.idempotencyService.isProcessed(event.eventId, providerName);

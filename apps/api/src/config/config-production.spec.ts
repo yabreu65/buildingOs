@@ -179,6 +179,59 @@ describe('Production Readiness Config Validation', () => {
       expect(result.MERCADOPAGO_ACCESS_TOKEN).toBeUndefined();
     });
 
+    it('parses MERCADOPAGO_WEBHOOK_SECRET without logging or requiring it globally', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.parse({ ...baseEnv, MERCADOPAGO_WEBHOOK_SECRET: 'webhook-secret' });
+      expect(result.MERCADOPAGO_WEBHOOK_SECRET).toBe('webhook-secret');
+    });
+
+    it('requires MERCADOPAGO_WEBHOOK_SECRET when mercadopago webhooks are enabled', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        PAYMENT_PROVIDER: 'mercadopago',
+        MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+        ENABLE_PAYMENT_WEBHOOKS: 'true',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => i.message);
+        expect(
+          issues.some((message) =>
+            message.includes(
+              'MERCADOPAGO_WEBHOOK_SECRET is required when PAYMENT_PROVIDER=mercadopago and ENABLE_PAYMENT_WEBHOOKS=true',
+            ),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it('allows missing MERCADOPAGO_WEBHOOK_SECRET when mercadopago webhooks are disabled', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        PAYMENT_PROVIDER: 'mercadopago',
+        MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+        ENABLE_PAYMENT_WEBHOOKS: 'false',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('treats blank MERCADOPAGO_WEBHOOK_SECRET as missing when mercadopago webhooks are enabled', () => {
+      const schema = createConfigSchema('test');
+      const result = schema.safeParse({
+        ...baseEnv,
+        PAYMENT_PROVIDER: 'mercadopago',
+        MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
+        MERCADOPAGO_WEBHOOK_SECRET: '   ',
+        ENABLE_PAYMENT_WEBHOOKS: 'true',
+      });
+
+      expect(result.success).toBe(false);
+    });
+
     it('allows missing stripe key when provider is none', () => {
       const schema = createConfigSchema('test');
       const result = schema.parse(baseEnv);
