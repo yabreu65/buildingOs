@@ -12,6 +12,7 @@ import {
 import type { AuthenticatedRequest } from '../common/types/request.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { RequireTenantPermission } from '../rbac/tenant-permission.guard';
 import {
   MembershipsService,
   ScopedRoleResponse,
@@ -64,6 +65,7 @@ export class MembershipsController {
    * Add a scoped role to a membership
    */
   @Post(':membershipId/roles')
+  @RequireTenantPermission('members.manage')
   async addRole(
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,
@@ -95,6 +97,7 @@ export class MembershipsController {
    * Remove a role from a membership
    */
   @Delete(':membershipId/roles/:roleId')
+  @RequireTenantPermission('members.manage')
   async removeRole(
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,

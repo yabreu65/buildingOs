@@ -14,6 +14,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
+import { RequireTenantPermission } from '../rbac/tenant-permission.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvitationsService } from './invitations.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
@@ -93,6 +94,7 @@ export class InvitationsAdminController {
    * Create new invitation (TENANT_ADMIN or TENANT_OWNER only)
    */
   @Post('invitations')
+  @RequireTenantPermission('members.manage')
   async createInvitation(
     @TenantParam() tenantId: string,
     @Body() dto: CreateInvitationDto,
@@ -119,6 +121,7 @@ export class InvitationsAdminController {
    * Revoke pending invitation
    */
   @Delete('invitations/:id')
+  @RequireTenantPermission('members.manage')
   async revokeInvitation(
     @TenantParam() tenantId: string,
     @Param('id') invitationId: string,
@@ -147,6 +150,7 @@ export class InvitationsAdminController {
    * Resend pending invitation with new token
    */
   @Post('invitations/:id/resend')
+  @RequireTenantPermission('members.manage')
   async resendInvitation(
     @TenantParam() tenantId: string,
     @Param('id') invitationId: string,

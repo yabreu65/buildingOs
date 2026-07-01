@@ -14,6 +14,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
+import { RequireTenantPermission } from '../rbac/tenant-permission.guard';
 import { TenantMembersService } from './tenant-members.service';
 import {
   CreateTenantMemberDto,
@@ -39,6 +40,7 @@ export class TenantMembersController {
    * Create a new tenant member (starts in DRAFT status)
    */
   @Post()
+  @RequireTenantPermission('members.manage')
   create(
     @TenantParam() tenantId: string,
     @Body() dto: CreateTenantMemberDto,
@@ -52,6 +54,7 @@ export class TenantMembersController {
    * If email/phone is added to DRAFT → auto-transition to PENDING_INVITE
    */
   @Patch(':memberId')
+  @RequireTenantPermission('members.manage')
   update(
     @TenantParam() tenantId: string,
     @Param('memberId') memberId: string,
@@ -71,6 +74,7 @@ export class TenantMembersController {
    * Generates token and updates status to PENDING_INVITE
    */
   @Post(':memberId/invite')
+  @RequireTenantPermission('members.manage')
   invite(
     @TenantParam() tenantId: string,
     @Param('memberId') memberId: string,
@@ -89,6 +93,7 @@ export class TenantMembersController {
    * Delete a tenant member (only DRAFT or PENDING_INVITE)
    */
   @Delete(':memberId')
+  @RequireTenantPermission('members.manage')
   delete(
     @TenantParam() tenantId: string,
     @Param('memberId') memberId: string,

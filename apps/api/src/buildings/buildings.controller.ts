@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { RequireTenantPermission } from '../rbac/tenant-permission.guard';
 import { BuildingsService, BuildingWithUnits, BuildingWithUnitsDetail } from './buildings.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
@@ -24,6 +25,7 @@ export class BuildingsController {
 
   /** Create a new building for the tenant */
   @Post()
+  @RequireTenantPermission('buildings.write')
   create(
     @TenantParam() tenantId: string,
     @Body() dto: CreateBuildingDto,
@@ -46,6 +48,7 @@ export class BuildingsController {
 
   /** Update building metadata */
   @Patch(':buildingId')
+  @RequireTenantPermission('buildings.write')
   update(
     @TenantParam() tenantId: string,
     @Param('buildingId') buildingId: string,
@@ -57,6 +60,7 @@ export class BuildingsController {
 
   /** Delete a building */
   @Delete(':buildingId')
+  @RequireTenantPermission('buildings.write')
   remove(
     @TenantParam() tenantId: string,
     @Param('buildingId') buildingId: string,
