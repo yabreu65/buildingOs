@@ -1,7 +1,6 @@
 import {
   Controller,
   Post,
-  Delete,
   Body,
   UseGuards,
   Request,
@@ -10,6 +9,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscribePushDto } from './dto/subscribe-push.dto';
+import { UnsubscribePushDto } from './dto/unsubscribe-push.dto';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('push')
@@ -28,6 +28,7 @@ export class PushController {
    *
    * Creates or updates push subscription for user in tenant
    */
+  @Post('subscribe')
   async subscribe(
     @Body() dto: SubscribePushDto,
     @Request() req: AuthenticatedRequest,
@@ -73,8 +74,9 @@ export class PushController {
    * Body:
    * - endpoint: push subscription endpoint URL to revoke
    */
+  @Post('unsubscribe')
   async unsubscribe(
-    @Body() body: { endpoint: string },
+    @Body() dto: UnsubscribePushDto,
     @Request() req: AuthenticatedRequest,
   ) {
     const userMemberships = req.user?.memberships || [];
@@ -90,7 +92,7 @@ export class PushController {
       where: {
         tenantId,
         userId,
-        endpoint: body.endpoint,
+        endpoint: dto.endpoint,
         revokedAt: null,
       },
       data: {
