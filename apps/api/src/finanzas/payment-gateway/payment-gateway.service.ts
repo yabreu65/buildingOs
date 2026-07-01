@@ -4,7 +4,15 @@
  */
 
 import { Injectable, Logger, Optional } from '@nestjs/common';
-import { PaymentProvider, CreatePreferenceInput, PaymentPreference, WebhookEvent, PaymentStatus, PAYMENT_PROVIDER_TOKEN } from './interfaces/payment-provider.interface';
+import {
+  PaymentProvider,
+  CreatePreferenceInput,
+  PaymentPreference,
+  WebhookEvent,
+  PaymentStatus,
+  PAYMENT_PROVIDER_TOKEN,
+  PaymentProviderName,
+} from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
 import { ChargeStatus } from '@prisma/client';
@@ -29,14 +37,27 @@ export class PaymentGatewayService {
   }
 
   /**
+   * Return the canonical provider configured for this gateway instance.
+   */
+  getActiveProviderName(): PaymentProviderName | null {
+    return this.provider?.providerName ?? null;
+  }
+
+  /**
    * Process a webhook event after signature validation
    */
   async processWebhookEvent(
     payload: unknown,
     signature: string,
-    providerName: string,
+    requestedProviderName?: PaymentProviderName,
   ): Promise<WebhookEvent & { chargeUpdated?: boolean }> {
     if (!this.provider) throw new Error('Payment provider not configured');
+    const providerName = this.provider.providerName;
+
+    if (requestedProviderName && requestedProviderName !== providerName) {
+      throw new Error(`Webhook provider mismatch: active provider is ${providerName}`);
+    }
+
     const event = await this.provider.handleWebhook(payload, signature);
 
     // Idempotency: check via dedicated IdempotencyService

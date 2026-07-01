@@ -5,14 +5,15 @@
  */
 
 import { PaymentGatewayOptions } from './payment-gateway.module';
+import { ConfiguredPaymentProviderName } from './interfaces/payment-provider.interface';
 
 export interface ResolvedPaymentGateway {
-  provider: 'none' | 'mercadopago' | 'stripe';
+  provider: ConfiguredPaymentProviderName;
   options: PaymentGatewayOptions;
 }
 
 export function resolvePaymentGateway(env: NodeJS.ProcessEnv = process.env): ResolvedPaymentGateway {
-  const provider = (env.PAYMENT_PROVIDER || 'none') as 'none' | 'mercadopago' | 'stripe';
+  const provider = (env.PAYMENT_PROVIDER || 'none') as ConfiguredPaymentProviderName;
   const options: PaymentGatewayOptions = {};
 
   if (provider === 'none') {

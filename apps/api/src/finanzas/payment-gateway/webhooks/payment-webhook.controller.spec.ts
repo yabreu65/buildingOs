@@ -18,6 +18,7 @@ describe('PaymentWebhookController', () => {
   beforeEach(() => {
     mockGatewayService = {
       processWebhookEvent: jest.fn(),
+      getActiveProviderName: jest.fn().mockReturnValue('mercadopago'),
     };
     mockConfigService = {
       getValue: jest.fn(),
@@ -50,7 +51,38 @@ describe('PaymentWebhookController', () => {
       }
     });
 
-    it('processes webhook when webhooks are enabled', async () => {
+    it('throws HttpException with status 503 when no active provider is configured', async () => {
+      mockConfigService.getValue.mockReturnValue(true);
+      mockGatewayService.getActiveProviderName.mockReturnValue(null);
+
+      await expect(
+        controller.handleWebhook({}, 'sig', 'mercadopago'),
+      ).rejects.toMatchObject({ status: 503 });
+
+      expect(mockGatewayService.processWebhookEvent).not.toHaveBeenCalled();
+    });
+
+    it('uses the active configured provider when x-provider is missing', async () => {
+      mockConfigService.getValue.mockReturnValue(true);
+      mockGatewayService.getActiveProviderName.mockReturnValue('stripe');
+      mockGatewayService.processWebhookEvent.mockResolvedValue({
+        eventId: 'evt-1',
+        eventType: 'checkout.session.completed',
+        status: 'PAID',
+        chargeUpdated: true,
+      });
+
+      const result = await controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig');
+
+      expect(result.status).toBe('PAID');
+      expect(mockGatewayService.processWebhookEvent).toHaveBeenCalledWith(
+        { data: { id: 'pay-1' } },
+        'sig',
+        'stripe',
+      );
+    });
+
+    it('processes webhook when x-provider matches the active provider', async () => {
       mockConfigService.getValue.mockReturnValue(true);
       mockGatewayService.processWebhookEvent.mockResolvedValue({
         eventId: 'evt-1',
@@ -62,7 +94,22 @@ describe('PaymentWebhookController', () => {
       const result = await controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig', 'mercadopago');
 
       expect(result.status).toBe('PAID');
-      expect(mockGatewayService.processWebhookEvent).toHaveBeenCalled();
+      expect(mockGatewayService.processWebhookEvent).toHaveBeenCalledWith(
+        { data: { id: 'pay-1' } },
+        'sig',
+        'mercadopago',
+      );
+    });
+
+    it('rejects mismatched x-provider before service processing', async () => {
+      mockConfigService.getValue.mockReturnValue(true);
+      mockGatewayService.getActiveProviderName.mockReturnValue('mercadopago');
+
+      await expect(
+        controller.handleWebhook({ data: { id: 'pay-1' } }, 'sig', 'stripe'),
+      ).rejects.toMatchObject({ status: 400 });
+
+      expect(mockGatewayService.processWebhookEvent).not.toHaveBeenCalled();
     });
   });
 });

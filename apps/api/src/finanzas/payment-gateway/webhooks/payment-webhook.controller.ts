@@ -3,10 +3,11 @@
  * Task 2.7: Processes payment webhooks; returns 503 when webhooks disabled
  */
 
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, Logger, UseGuards, HttpException } from '@nestjs/common';
+import { BadRequestException, Controller, Post, Body, Headers, HttpCode, HttpStatus, Logger, UseGuards, HttpException } from '@nestjs/common';
 import { PaymentGatewayService } from '../payment-gateway.service';
 import { ConfigService } from '../../../config/config.service';
 import { SignatureGuard } from './signature.guard';
+import { PaymentProviderName } from '../interfaces/payment-provider.interface';
 
 @Controller('webhooks/payment')
 @UseGuards(SignatureGuard)
@@ -23,7 +24,7 @@ export class PaymentWebhookController {
   async handleWebhook(
     @Body() payload: unknown,
     @Headers('x-signature') signature: string,
-    @Headers('x-provider') provider: string,
+    @Headers('x-provider') providerHeader?: string | string[],
   ): Promise<{ status: string; message?: string }> {
     const webhooksEnabled = this.configService.getValue('enablePaymentWebhooks');
 
@@ -32,11 +33,21 @@ export class PaymentWebhookController {
       throw new HttpException('Payment webhooks are not enabled', HttpStatus.SERVICE_UNAVAILABLE);
     }
 
+    const activeProvider = this.gatewayService.getActiveProviderName();
+    if (!activeProvider) {
+      throw new HttpException('Payment provider is not configured', HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    const requestedProvider = this.normalizeProviderHeader(providerHeader);
+    if (requestedProvider && requestedProvider !== activeProvider) {
+      throw new BadRequestException('Webhook provider does not match the active payment provider');
+    }
+
     try {
       const result = await this.gatewayService.processWebhookEvent(
         payload,
         signature || '',
-        provider || 'mercadopago',
+        activeProvider,
       );
 
       this.logger.log(`Webhook processed: event=${result.eventId} status=${result.status}`);
@@ -51,5 +62,12 @@ export class PaymentWebhookController {
         message: error instanceof Error ? error.message : 'Internal error',
       };
     }
+  }
+
+  private normalizeProviderHeader(providerHeader?: string | string[]): PaymentProviderName | string | undefined {
+    const provider = Array.isArray(providerHeader) ? providerHeader[0] : providerHeader;
+    const normalized = provider?.trim();
+
+    return normalized === '' ? undefined : normalized;
   }
 }

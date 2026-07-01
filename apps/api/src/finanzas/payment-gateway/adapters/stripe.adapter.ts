@@ -10,10 +10,13 @@ import {
   PaymentPreference,
   WebhookEvent,
   PaymentStatus,
+  PaymentProviderName,
 } from '../interfaces/payment-provider.interface';
 
 @Injectable()
 export class StripeAdapter implements PaymentProvider {
+  readonly providerName: PaymentProviderName = 'stripe';
+
   private readonly logger = new Logger(StripeAdapter.name);
   private readonly baseUrl = 'https://api.stripe.com/v1';
   private readonly timeout = 10000;

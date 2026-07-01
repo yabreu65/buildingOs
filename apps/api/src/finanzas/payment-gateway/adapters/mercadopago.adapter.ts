@@ -10,10 +10,13 @@ import {
   PaymentPreference,
   WebhookEvent,
   PaymentStatus,
+  PaymentProviderName,
 } from '../interfaces/payment-provider.interface';
 
 @Injectable()
 export class MercadoPagoAdapter implements PaymentProvider {
+  readonly providerName: PaymentProviderName = 'mercadopago';
+
   private readonly logger = new Logger(MercadoPagoAdapter.name);
   private readonly baseUrl = 'https://api.mercadopago.com';
   private readonly timeout = 10000;

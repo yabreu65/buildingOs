@@ -3,6 +3,7 @@
  * Verifies: default=none, reads env vars, missing creds fail with clear error
  */
 
+import { ConfiguredPaymentProviderName } from './interfaces/payment-provider.interface';
 import { resolvePaymentGateway } from './payment-gateway.resolver';
 
 describe('resolvePaymentGateway', () => {
@@ -39,6 +40,9 @@ describe('resolvePaymentGateway', () => {
         PAYMENT_PROVIDER: 'mercadopago',
         MERCADOPAGO_ACCESS_TOKEN: 'TEST-123',
       });
+      const activeProvider: ConfiguredPaymentProviderName = result.provider;
+
+      expect(activeProvider).toBe('mercadopago');
       expect(result.provider).toBe('mercadopago');
       expect(result.options.mercadopagoAccessToken).toBe('TEST-123');
     });

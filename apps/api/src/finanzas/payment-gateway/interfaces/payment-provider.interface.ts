@@ -17,7 +17,7 @@ export interface CreatePreferenceInput {
 export interface PaymentPreference {
   preferenceId: string;
   checkoutUrl: string;
-  provider: 'mercadopago' | 'stripe';
+  provider: PaymentProviderName;
   expiresAt?: Date;
 }
 
@@ -32,7 +32,16 @@ export interface WebhookEvent {
 
 export type PaymentStatus = 'PENDING' | 'PAID' | 'REJECTED' | 'CANCELLED';
 
+export type PaymentProviderName = 'mercadopago' | 'stripe';
+
+export type ConfiguredPaymentProviderName = PaymentProviderName | 'none';
+
 export interface PaymentProvider {
+  /**
+   * Canonical provider identity for this configured adapter.
+   */
+  readonly providerName: PaymentProviderName;
+
   /**
    * Create a payment preference (checkout link) for a charge
    */

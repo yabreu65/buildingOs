@@ -9,6 +9,8 @@ import { PAYMENT_PROVIDER_TOKEN } from '../interfaces/payment-provider.interface
 
 // Mock provider for E2E testing
 class MockPaymentProvider implements PaymentProvider {
+  readonly providerName = 'mercadopago' as const;
+
   async createPreference(): Promise<PaymentPreference> {
     return { preferenceId: 'mock-pref-1', checkoutUrl: 'https://mock-pay.com/1', provider: 'mercadopago' };
   }

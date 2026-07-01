@@ -15,6 +15,7 @@ describe('PaymentGatewayService', () => {
 
   beforeEach(() => {
     mockProvider = {
+      providerName: 'mercadopago',
       createPreference: jest.fn(),
       handleWebhook: jest.fn(),
       getChargeStatus: jest.fn(),
@@ -59,6 +60,10 @@ describe('PaymentGatewayService', () => {
   });
 
   describe('processWebhookEvent', () => {
+    it('exposes the active configured provider', () => {
+      expect(service.getActiveProviderName()).toBe('mercadopago');
+    });
+
     it('delegates to the provider and confirms charge on PAID', async () => {
       const webhookEvent: WebhookEvent = {
         eventId: 'evt-1',
@@ -99,11 +104,11 @@ describe('PaymentGatewayService', () => {
       mockPrisma.charge.update.mockResolvedValue({ id: 'charge-2', status: 'REJECTED' });
       mockIdempotencyService.isProcessed.mockResolvedValue(false);
 
-      const result = await service.processWebhookEvent({}, 'sig', 'stripe');
+      const result = await service.processWebhookEvent({}, 'sig');
 
       expect(result.status).toBe('REJECTED');
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-2', 'stripe');
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-2', 'stripe');
+      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-2', 'mercadopago');
+      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-2', 'mercadopago');
       expect(mockPrisma.charge.update).toHaveBeenCalledWith({
         where: { id: 'charge-2' },
         data: { status: 'REJECTED', paymentExternalId: 'pay-2' },
@@ -128,6 +133,15 @@ describe('PaymentGatewayService', () => {
       expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-dup', 'mercadopago');
       expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
       expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects direct webhook processing when requested provider conflicts with active provider', async () => {
+      await expect(service.processWebhookEvent({}, 'sig', 'stripe')).rejects.toThrow(
+        'Webhook provider mismatch: active provider is mercadopago',
+      );
+
+      expect(mockProvider.handleWebhook).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.isProcessed).not.toHaveBeenCalled();
     });
   });
 

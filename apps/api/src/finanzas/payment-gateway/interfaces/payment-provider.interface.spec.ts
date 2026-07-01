@@ -9,6 +9,7 @@ import {
   PaymentPreference,
   WebhookEvent,
   PaymentStatus,
+  ConfiguredPaymentProviderName,
   PAYMENT_PROVIDER_TOKEN,
 } from './payment-provider.interface';
 
@@ -19,11 +20,13 @@ describe('PaymentProvider Interface', () => {
 
   it('allows implementing the interface with all required methods', () => {
     const mockProvider: PaymentProvider = {
+      providerName: 'mercadopago',
       createPreference: jest.fn(),
       handleWebhook: jest.fn(),
       getChargeStatus: jest.fn(),
     };
 
+    expect(mockProvider.providerName).toBe('mercadopago');
     expect(mockProvider.createPreference).toBeDefined();
     expect(mockProvider.handleWebhook).toBeDefined();
     expect(mockProvider.getChargeStatus).toBeDefined();
@@ -71,5 +74,13 @@ describe('PaymentProvider Interface', () => {
     expect(statuses).toHaveLength(4);
     expect(statuses).toContain('PAID');
     expect(statuses).toContain('REJECTED');
+  });
+
+  it('ConfiguredPaymentProviderName includes disabled and active provider values', () => {
+    const providers: ConfiguredPaymentProviderName[] = ['none', 'mercadopago', 'stripe'];
+
+    expect(providers).toContain('none');
+    expect(providers).toContain('mercadopago');
+    expect(providers).toContain('stripe');
   });
 });

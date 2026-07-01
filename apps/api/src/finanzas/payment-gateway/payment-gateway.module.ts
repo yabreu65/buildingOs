@@ -11,7 +11,7 @@ import { StripeAdapter } from './adapters/stripe.adapter';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { RedisModule } from '../../redis/redis.module';
 import { IdempotencyService } from './webhooks/idempotency.service';
-import { PaymentProvider } from './interfaces/payment-provider.interface';
+import { ConfiguredPaymentProviderName, PaymentProvider } from './interfaces/payment-provider.interface';
 
 export interface PaymentGatewayOptions {
   mercadopagoAccessToken?: string;
@@ -24,7 +24,7 @@ export class PaymentGatewayModule {
    * Register the payment gateway module with the specified provider
    * Uses the PAYMENT_PROVIDER config value to select the adapter
    */
-  static register(providerName: 'none' | 'mercadopago' | 'stripe', options: PaymentGatewayOptions): DynamicModule {
+  static register(providerName: ConfiguredPaymentProviderName, options: PaymentGatewayOptions): DynamicModule {
     if (providerName === 'none') {
       // When no payment provider is configured, register a NoOp PaymentGatewayService
       // so that controllers can still be instantiated (they return 503 when webhooks are disabled).
