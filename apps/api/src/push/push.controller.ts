@@ -10,6 +10,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscribePushDto } from './dto/subscribe-push.dto';
 import { UnsubscribePushDto } from './dto/unsubscribe-push.dto';
+import { assertValidPushSubscriptionEndpoint } from './push-endpoint.validator';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 
 @Controller('push')
@@ -33,6 +34,8 @@ export class PushController {
     @Body() dto: SubscribePushDto,
     @Request() req: AuthenticatedRequest,
   ) {
+    assertValidPushSubscriptionEndpoint(dto.endpoint);
+
     const userMemberships = req.user?.memberships || [];
     if (userMemberships.length === 0) {
       throw new BadRequestException('User does not have a tenant membership');
@@ -79,6 +82,8 @@ export class PushController {
     @Body() dto: UnsubscribePushDto,
     @Request() req: AuthenticatedRequest,
   ) {
+    assertValidPushSubscriptionEndpoint(dto.endpoint);
+
     const userMemberships = req.user?.memberships || [];
     if (userMemberships.length === 0) {
       throw new BadRequestException('User does not have a tenant membership');

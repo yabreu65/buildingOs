@@ -8,8 +8,11 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { SubscribePushDto } from './dto/subscribe-push.dto';
 import { UnsubscribePushDto } from './dto/unsubscribe-push.dto';
 import { PushController } from './push.controller';
+
+const validPushEndpoint = 'https://fcm.googleapis.com/fcm/send/subscription-1';
 
 interface PushSubscriptionDelegateMock {
   readonly upsert: jest.Mock<
@@ -99,7 +102,7 @@ describe('PushController', () => {
   describe('subscribe', () => {
     it('upserts a subscription for the authenticated user tenant boundary', async () => {
       const dto = {
-        endpoint: 'https://push.example/subscription-1',
+        endpoint: validPushEndpoint,
         p256dh: 'client-public-key',
         auth: 'client-auth-secret',
       };
@@ -135,7 +138,7 @@ describe('PushController', () => {
       await expect(
         controller.subscribe(
           {
-            endpoint: 'https://push.example/subscription-1',
+            endpoint: validPushEndpoint,
             p256dh: 'client-public-key',
             auth: 'client-auth-secret',
           },
@@ -145,13 +148,54 @@ describe('PushController', () => {
 
       expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
     });
+
+    it('rejects an invalid endpoint before upserting a subscription', async () => {
+      await expect(
+        controller.subscribe(
+          {
+            endpoint: 'http://fcm.googleapis.com/fcm/send/subscription-1',
+            p256dh: 'client-public-key',
+            auth: 'client-auth-secret',
+          },
+          buildRequest(),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-push HTTPS endpoints before upserting a subscription', async () => {
+      await expect(
+        controller.subscribe(
+          {
+            endpoint: 'https://example.com/push',
+            p256dh: 'client-public-key',
+            auth: 'client-auth-secret',
+          },
+          buildRequest(),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
+    });
+
+    it.each([{}, { endpoint: undefined }, { endpoint: '' }, { endpoint: '   ' }])(
+      'rejects a missing or empty endpoint before upserting a subscription',
+      async (body) => {
+        await expect(subscribeThroughValidationPipe(body)).rejects.toMatchObject({
+          status: 400,
+        });
+
+        expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('unsubscribe', () => {
     it('revokes only the authenticated user subscription in the tenant boundary', async () => {
       await expect(
         controller.unsubscribe(
-          { endpoint: 'https://push.example/subscription-1' },
+          { endpoint: validPushEndpoint },
           buildRequest(),
         ),
       ).resolves.toEqual({ success: true });
@@ -162,7 +206,7 @@ describe('PushController', () => {
       expect(updateInput.where).toEqual({
         tenantId: 'tenant-1',
         userId: 'user-1',
-        endpoint: 'https://push.example/subscription-1',
+        endpoint: validPushEndpoint,
         revokedAt: null,
       });
       expect(updateInput.data.revokedAt).toBeInstanceOf(Date);
@@ -171,8 +215,30 @@ describe('PushController', () => {
     it('rejects users without tenant memberships', async () => {
       await expect(
         controller.unsubscribe(
-          { endpoint: 'https://push.example/subscription-1' },
+          { endpoint: validPushEndpoint },
           buildRequest([]),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid endpoint before revoking subscriptions', async () => {
+      await expect(
+        controller.unsubscribe(
+          { endpoint: 'https://127.0.0.1/subscription-1' },
+          buildRequest(),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-push HTTPS endpoints before revoking subscriptions', async () => {
+      await expect(
+        controller.unsubscribe(
+          { endpoint: 'https://example.com/push' },
+          buildRequest(),
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
 
@@ -206,6 +272,26 @@ describe('PushController', () => {
     );
   });
 
+  async function subscribeThroughValidationPipe(
+    body: unknown,
+  ): Promise<{ success: true }> {
+    const dto = await validateSubscribeBody(body);
+
+    return controller.subscribe(dto, buildRequest());
+  }
+
+  async function validateSubscribeBody(body: unknown): Promise<SubscribePushDto> {
+    const pipe = buildValidationPipe();
+
+    const metadata: ArgumentMetadata = {
+      type: 'body',
+      metatype: SubscribePushDto,
+      data: undefined,
+    };
+
+    return pipe.transform(body, metadata) as Promise<SubscribePushDto>;
+  }
+
   async function unsubscribeThroughValidationPipe(
     body: unknown,
   ): Promise<{ success: true }> {
@@ -217,14 +303,7 @@ describe('PushController', () => {
   async function validateUnsubscribeBody(
     body: unknown,
   ): Promise<UnsubscribePushDto> {
-    const pipe = new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: false,
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    });
+    const pipe = buildValidationPipe();
 
     const metadata: ArgumentMetadata = {
       type: 'body',
@@ -233,6 +312,17 @@ describe('PushController', () => {
     };
 
     return pipe.transform(body, metadata) as Promise<UnsubscribePushDto>;
+  }
+
+  function buildValidationPipe(): ValidationPipe {
+    return new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
+    });
   }
 
   function getControllerMethod(

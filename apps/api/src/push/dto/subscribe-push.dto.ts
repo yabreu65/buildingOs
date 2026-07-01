@@ -1,8 +1,9 @@
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsString, IsNotEmpty, Matches } from 'class-validator';
 
 export class SubscribePushDto {
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/, { message: 'endpoint should not be empty' })
   endpoint!: string;
 
   @IsString()
