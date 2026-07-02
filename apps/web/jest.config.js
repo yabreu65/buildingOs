@@ -10,6 +10,8 @@ module.exports = {
     '**/features/super-admin/components/__tests__/**/*.test.ts',
     '**/features/super-admin/components/__tests__/**/*.test.tsx',
     '**/features/dashboard/**/*.test.ts',
+    '**/features/notifications/**/*.test.ts',
+    '**/features/notifications/**/*.test.tsx',
   ],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',

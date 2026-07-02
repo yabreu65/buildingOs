@@ -3,13 +3,16 @@
 import { useRouter, useParams } from 'next/navigation';
 import { getSession, setSession, setLastTenant, clearAuth } from '../../../features/auth/session.storage';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
+import type { TenantSummary } from '../../../features/tenants/tenants.service';
+import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
-import { Bell, CreditCard, X, Check, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Bell, CreditCard, X, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { listNotifications, getUnreadCount, markAsRead, type Notification } from '@/features/notifications/notifications.api';
+import { useState, useEffect, useRef } from 'react';
+import { listNotifications, markAsRead, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
+import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
 
 function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
@@ -19,11 +22,10 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
 
   // Get user role from session
   const session = getSession();
-  const activeMembership = session?.memberships?.find((m: any) => m.tenantId === tenantId);
+  const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const role = activeMembership?.roles?.[0] || 'RESIDENT';
   
   const isAdmin = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN'].includes(role);
-  const isResident = role === 'RESIDENT';
 
   // For admin: show pending SUBMITTED payments in badge
   const { data: pendingPayments = [] } = useQuery({
@@ -37,7 +39,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const pendingCount = pendingPayments.length;
 
   // For everyone: get notifications (different filter based on role)
-  const { data: notifications = [] } = useQuery({
+  const { data: notificationResult } = useQuery({
     queryKey: ['notificationList', tenantId],
     queryFn: () => listNotifications({ take: 20, isRead: false }),
     enabled: isOpen,
@@ -52,7 +54,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   });
 
   // Filter notifications based on role
-  const allNotifs = (notifications as any)?.notifications || [];
+  const allNotifs = notificationResult?.notifications ?? [];
   
   let filteredNotifications: Notification[] = [];
   let badgeCount = 0;
@@ -329,9 +331,9 @@ export default function Topbar() {
   const canSelectTenant = session.memberships.length > 1;
 
   // Fallback si no hay tenants cargados: mostrar por ID
-  const fallbackTenants = tenants || session.memberships.map((m: any) => ({
-    id: m.tenantId,
-    name: m.tenantId,
+  const fallbackTenants: TenantSummary[] = tenants || session.memberships.map((membership: Membership) => ({
+    id: membership.tenantId,
+    name: membership.tenantId,
     type: 'EDIFICIO_AUTOGESTION' as const,
   }));
 
@@ -352,9 +354,9 @@ export default function Topbar() {
               className="text-xs"
               disabled={isLoading}
             >
-              {fallbackTenants.map((t: any) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              {fallbackTenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
                 </option>
               ))}
             </Select>
@@ -372,6 +374,7 @@ export default function Topbar() {
       </div>
 
       <div className="flex items-center gap-3">
+        {urlTenantId && <PushPermissionControl tenantId={urlTenantId} />}
         {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} />}
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium">
           {roleLabel}
