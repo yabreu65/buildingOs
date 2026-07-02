@@ -1,0 +1,61 @@
+# Repository and tooling metadata
+.git
+.github
+.agents
+.atl
+.claude
+.engram
+.sdd
+
+# Installed dependencies and package manager caches
+node_modules
+**/node_modules
+.pnpm-store
+.npm
+.yarn
+
+# Build outputs and coverage artifacts
+coverage
+**/coverage
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+.tmp
+.tmp/**
+tmp
+**/tmp
+cache
+**/cache
+logs
+**/logs
+
+# Environment and secret files
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Editor, OS, and local scratch files
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.bak
+*.backup
+*.old
+*.pid
+*.seed
+*.log
+*.dump
+*.sql
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.gz
