@@ -10,6 +10,7 @@ import { EmailDeliveryModule } from './email/email-delivery.module';
 import { EmailBounceController } from './email/webhooks/email-bounce.controller';
 import { DeliveryTrackingService } from './email/delivery-tracking.service';
 import { resolveEmailDelivery } from './email/email-delivery.resolver';
+import { PushDeliveryService } from '../push/push-delivery.service';
 
 const emailOptions = resolveEmailDelivery();
 
@@ -22,7 +23,12 @@ const emailOptions = resolveEmailDelivery();
     ResidentCommunicationsController,
     EmailBounceController,
   ],
-  providers: [CommunicationsService, CommunicationsValidators, DeliveryTrackingService],
+  providers: [
+    CommunicationsService,
+    CommunicationsValidators,
+    DeliveryTrackingService,
+    PushDeliveryService,
+  ],
   exports: [CommunicationsService, CommunicationsValidators, DeliveryTrackingService],
 })
 export class CommunicationsModule {}

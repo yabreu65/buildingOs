@@ -28,6 +28,11 @@ import type {
   ResidentCommunicationListItem,
   ResidentCommunicationListResponse,
 } from '@buildingos/contracts';
+import {
+  PushDeliveryService,
+  type PushNotificationPayload,
+  type StoredPushSubscription,
+} from '../push/push-delivery.service';
 
 /** Include spec shared by all queries that return full communication details */
 const COMMUNICATION_INCLUDE = {
@@ -103,6 +108,10 @@ export interface PublishV2Options {
   sendWebPush: boolean;
 }
 
+interface CommunicationPushSubscription extends StoredPushSubscription {
+  readonly userId: string;
+}
+
 @Injectable()
 export class CommunicationsService {
   private readonly logger = new Logger(CommunicationsService.name);
@@ -111,6 +120,7 @@ export class CommunicationsService {
     private readonly prisma: PrismaService,
     private readonly validators: CommunicationsValidators,
     private readonly configService: ConfigService,
+    private readonly pushDeliveryService: PushDeliveryService,
   ) {}
 
   /**
@@ -425,8 +435,6 @@ export class CommunicationsService {
     communicationId: string,
     sendWebPush: boolean,
   ): Promise<CommunicationWithDetails> {
-    this.assertWebPushAvailable(sendWebPush);
-
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -463,8 +471,9 @@ export class CommunicationsService {
       include: COMMUNICATION_INCLUDE,
     });
 
-    // TODO: Send web push to subscribed users (best-effort, non-blocking)
-    // This would integrate with push subscriptions when implemented
+    if (sendWebPush) {
+      await this.dispatchWebPushNotifications(tenantId, published);
+    }
 
     return published;
   }
@@ -915,8 +924,6 @@ export class CommunicationsService {
     communicationId: string,
     sendWebPush: boolean,
   ): Promise<CommunicationWithDetails> {
-    this.assertWebPushAvailable(sendWebPush);
-
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
       communicationId,
@@ -949,18 +956,101 @@ export class CommunicationsService {
       include: COMMUNICATION_INCLUDE,
     });
 
+    if (sendWebPush) {
+      await this.dispatchWebPushNotifications(tenantId, published);
+    }
+
     return published;
   }
 
-  private assertWebPushAvailable(sendWebPush: boolean): void {
-    if (!sendWebPush) {
+  private async dispatchWebPushNotifications(
+    tenantId: string,
+    communication: CommunicationWithDetails,
+  ): Promise<void> {
+    const recipientUserIds = Array.from(
+      new Set(communication.receipts.map((receipt) => receipt.userId)),
+    );
+
+    if (recipientUserIds.length === 0) {
       return;
     }
 
-    throw new UnprocessableEntityException({
-      code: 'WEB_PUSH_NOT_AVAILABLE',
-      message: 'Web push is not available in production yet',
+    const subscriptions = await this.prisma.pushSubscription.findMany({
+      where: {
+        tenantId,
+        userId: { in: recipientUserIds },
+        revokedAt: null,
+      },
+      select: {
+        userId: true,
+        endpoint: true,
+        p256dh: true,
+        auth: true,
+      },
     });
+
+    if (subscriptions.length === 0) {
+      return;
+    }
+
+    const url = `/communications/${communication.id}`;
+    const tag = `communication:${communication.id}`;
+    const payload: PushNotificationPayload = {
+      title: 'New communication',
+      body: 'Open BuildingOS to view the latest communication.',
+      url,
+      tag,
+      data: {
+        communicationId: communication.id,
+        tenantId,
+        type: 'communication',
+        url,
+        tag,
+      },
+    };
+
+    await Promise.all(
+      subscriptions.map((subscription) =>
+        this.sendCommunicationPush(tenantId, subscription, payload),
+      ),
+    );
+  }
+
+  private async sendCommunicationPush(
+    tenantId: string,
+    subscription: CommunicationPushSubscription,
+    payload: PushNotificationPayload,
+  ): Promise<void> {
+    try {
+      const result = await this.pushDeliveryService.sendToSubscription(
+        subscription,
+        payload,
+        {
+          urgency: 'high',
+          topic: payload.tag,
+        },
+      );
+
+      if (result.status === 'expired') {
+        await this.prisma.pushSubscription.updateMany({
+          where: {
+            tenantId,
+            userId: subscription.userId,
+            endpoint: subscription.endpoint,
+            revokedAt: null,
+          },
+          data: {
+            revokedAt: new Date(),
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.warn('[CommunicationsService] Failed to send web push', {
+        tenantId,
+        userId: subscription.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
