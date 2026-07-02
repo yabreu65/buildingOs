@@ -100,7 +100,7 @@ describe('PushController', () => {
   });
 
   describe('subscribe', () => {
-    it('upserts a subscription for the authenticated user tenant boundary', async () => {
+    it('upserts a subscription for the requested tenant boundary', async () => {
       const dto = {
         endpoint: validPushEndpoint,
         p256dh: 'client-public-key',
@@ -134,6 +134,40 @@ describe('PushController', () => {
       });
     });
 
+    it('uses the tenant header instead of the first membership for subscription writes', async () => {
+      const dto = {
+        endpoint: validPushEndpoint,
+        p256dh: 'client-public-key',
+        auth: 'client-auth-secret',
+      };
+
+      await expect(
+        controller.subscribe(
+          dto,
+          buildRequest(
+            [
+              { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+              { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+            ],
+            'tenant-2',
+          ),
+        ),
+      ).resolves.toEqual({ success: true });
+
+      expect(prisma.pushSubscription.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            tenantId_userId_endpoint: {
+              tenantId: 'tenant-2',
+              userId: 'user-1',
+              endpoint: dto.endpoint,
+            },
+          },
+          create: expect.objectContaining({ tenantId: 'tenant-2' }),
+        }),
+      );
+    });
+
     it('rejects users without tenant memberships', async () => {
       await expect(
         controller.subscribe(
@@ -143,6 +177,36 @@ describe('PushController', () => {
             auth: 'client-auth-secret',
           },
           buildRequest([]),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unauthorized tenant header before upserting a subscription', async () => {
+      await expect(
+        controller.subscribe(
+          {
+            endpoint: validPushEndpoint,
+            p256dh: 'client-public-key',
+            auth: 'client-auth-secret',
+          },
+          buildRequest(undefined, 'tenant-2'),
+        ),
+      ).rejects.toThrow('No tiene acceso al tenant tenant-2');
+
+      expect(prisma.pushSubscription.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing tenant header before upserting a subscription', async () => {
+      await expect(
+        controller.subscribe(
+          {
+            endpoint: validPushEndpoint,
+            p256dh: 'client-public-key',
+            auth: 'client-auth-secret',
+          },
+          buildRequest(undefined, null),
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
 
@@ -192,7 +256,7 @@ describe('PushController', () => {
   });
 
   describe('unsubscribe', () => {
-    it('revokes only the authenticated user subscription in the tenant boundary', async () => {
+    it('revokes only the authenticated user subscription in the requested tenant boundary', async () => {
       await expect(
         controller.unsubscribe(
           { endpoint: validPushEndpoint },
@@ -212,11 +276,58 @@ describe('PushController', () => {
       expect(updateInput.data.revokedAt).toBeInstanceOf(Date);
     });
 
+    it('uses the tenant header instead of the first membership for subscription revokes', async () => {
+      await expect(
+        controller.unsubscribe(
+          { endpoint: validPushEndpoint },
+          buildRequest(
+            [
+              { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+              { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+            ],
+            'tenant-2',
+          ),
+        ),
+      ).resolves.toEqual({ success: true });
+
+      expect(prisma.pushSubscription.updateMany).toHaveBeenCalledTimes(1);
+      const [updateInput] = prisma.pushSubscription.updateMany.mock.calls[0]!;
+
+      expect(updateInput.where).toEqual({
+        tenantId: 'tenant-2',
+        userId: 'user-1',
+        endpoint: validPushEndpoint,
+        revokedAt: null,
+      });
+    });
+
     it('rejects users without tenant memberships', async () => {
       await expect(
         controller.unsubscribe(
           { endpoint: validPushEndpoint },
           buildRequest([]),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.pushSubscription.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unauthorized tenant header before revoking subscriptions', async () => {
+      await expect(
+        controller.unsubscribe(
+          { endpoint: validPushEndpoint },
+          buildRequest(undefined, 'tenant-2'),
+        ),
+      ).rejects.toThrow('No tiene acceso al tenant tenant-2');
+
+      expect(prisma.pushSubscription.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing tenant header before revoking subscriptions', async () => {
+      await expect(
+        controller.unsubscribe(
+          { endpoint: validPushEndpoint },
+          buildRequest(undefined, null),
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
 
@@ -340,8 +451,10 @@ describe('PushController', () => {
     memberships: AuthenticatedRequest['user']['memberships'] = [
       { tenantId: 'tenant-1', roles: ['RESIDENT'] },
     ],
+    tenantId: string | null = 'tenant-1',
   ): AuthenticatedRequest {
     return {
+      headers: tenantId ? { 'x-tenant-id': tenantId } : {},
       user: {
         id: 'user-1',
         email: 'user@example.com',

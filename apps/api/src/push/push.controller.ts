@@ -5,6 +5,7 @@ import {
   UseGuards,
   Request,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,6 +18,37 @@ import type { AuthenticatedRequest } from '../common/types/request.types';
 @UseGuards(JwtAuthGuard)
 export class PushController {
   constructor(private readonly prisma: PrismaService) {}
+
+  private getRequestedTenantId(req: AuthenticatedRequest): string {
+    const rawTenantHeader = req.headers['x-tenant-id'];
+    const tenantId = Array.isArray(rawTenantHeader)
+      ? rawTenantHeader[0]
+      : rawTenantHeader;
+
+    if (typeof tenantId !== 'string' || tenantId.trim() === '') {
+      throw new BadRequestException('TenantId not found in request context');
+    }
+
+    return tenantId.trim();
+  }
+
+  private getAuthorizedTenantId(req: AuthenticatedRequest): string {
+    const userMemberships = req.user?.memberships || [];
+    if (userMemberships.length === 0) {
+      throw new BadRequestException('User does not have a tenant membership');
+    }
+
+    const tenantId = this.getRequestedTenantId(req);
+    const matchingMembership = userMemberships.find(
+      (membership) => membership.tenantId === tenantId,
+    );
+
+    if (!matchingMembership) {
+      throw new ForbiddenException(`No tiene acceso al tenant ${tenantId}`);
+    }
+
+    return tenantId;
+  }
 
   /**
    * POST /push/subscribe
@@ -36,12 +68,7 @@ export class PushController {
   ) {
     assertValidPushSubscriptionEndpoint(dto.endpoint);
 
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0]!.tenantId;
+    const tenantId = this.getAuthorizedTenantId(req);
     const userId = req.user.id;
 
     // Upsert push subscription
@@ -84,12 +111,7 @@ export class PushController {
   ) {
     assertValidPushSubscriptionEndpoint(dto.endpoint);
 
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0]!.tenantId;
+    const tenantId = this.getAuthorizedTenantId(req);
     const userId = req.user.id;
 
     // Revoke push subscription

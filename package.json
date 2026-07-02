@@ -23,7 +23,7 @@
     "build:packages": "npm run build -w packages/contracts && npm run build -w packages/permissions",
     "build:ci": "npm run build:packages && npm run build -w apps/api && npm run build -w apps/web",
     "lint:ci": "npm run lint:ci -w apps/api && npm run lint --if-present -w packages/contracts && npm run lint --if-present -w packages/permissions",
-    "test:ci": "npm run test:forbid-only -w apps/api && npm run test -w apps/api -- --runInBand --no-coverage",
+    "test:ci": "npm run test:forbid-only -w apps/api && npm run test:forbid-only -w apps/web && npm run test -w apps/api -- --runInBand --no-coverage && npm run test -w apps/web -- --runInBand --no-coverage",
     "test:e2e:ci": "npm run test:forbid-only -w apps/api && npm run test:e2e -w apps/api -- --runInBand test/config-validation.e2e-spec.ts"
   },
   "prisma": {
