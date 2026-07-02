@@ -11,6 +11,25 @@ Use this checklist before every production deployment.
 - [ ] `cd apps/api && npx prisma validate`
 - [ ] `docker compose -f infra/docker/docker-compose.full.yml config`
 
+## Pre-deploy checklist
+
+- [ ] `docker compose -f infra/docker/docker-compose.full.yml config` reviewed before deploy
+- [ ] Public ports reviewed and match the intended exposure
+- [ ] No volume changes planned for this release
+- [ ] No shared postgres or redis container changes planned without approval
+- [ ] Database backup taken and verified
+- [ ] Rollback owner and rollback command documented
+- [ ] Deployment target and maintenance window confirmed
+
+## Post-deploy checklist
+
+- [ ] `docker compose ps` or equivalent runtime status checked
+- [ ] Deployment logs reviewed for errors or unexpected restarts
+- [ ] Health checks pass for the API, web app, and supporting services
+- [ ] Public port exposure matches the intended reverse-proxy setup
+- [ ] No unexpected volume changes or container replacements occurred
+- [ ] Rollback path remains available and tested conceptually
+
 ## Runtime contract
 
 - [ ] Production env uses `JWT_EXPIRES_IN`
@@ -26,6 +45,8 @@ Use this checklist before every production deployment.
 - [ ] `npm run migrate:deploy -w apps/api` executed successfully against staging-like database
 - [ ] Seed/backfill steps reviewed for the target environment
 - [ ] Rollback owner and rollback command documented
+- [ ] No production migration was run without a backup-confirmed plan
+- [ ] No destructive SQL was run against production
 
 ## Readiness and observability
 
