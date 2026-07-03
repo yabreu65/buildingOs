@@ -12,8 +12,10 @@ import {
   setSessionBackup,
   clearAllImpersonationData,
   isImpersonationExpired,
+  getCurrentImpersonationToken,
+  setCurrentImpersonationToken,
 } from './impersonation.storage';
-import * as sessionStorage from '../auth/session.storage';
+import { clearAuth, getSession, setSession } from '../auth/session.storage';
 import type { ImpersonationMetadata } from './impersonation.types';
 import type { AuthSession, Role } from '../auth/auth.types';
 
@@ -50,8 +52,8 @@ export function useImpersonation(): UseImpersonationReturn {
       });
 
       // 2. Backup current token + session
-      const currentToken = sessionStorage.getToken();
-      const currentSession = sessionStorage.getSession();
+      const currentToken = getCurrentImpersonationToken();
+      const currentSession = getSession();
 
       if (currentToken) {
         setTokenBackup(currentToken);
@@ -61,7 +63,7 @@ export function useImpersonation(): UseImpersonationReturn {
       }
 
       // 3. Swap token → impersonationToken
-      sessionStorage.setToken(response.impersonationToken);
+      setCurrentImpersonationToken(response.impersonationToken);
 
       // 4. Update session with synthetic membership
       if (currentSession) {
@@ -75,7 +77,7 @@ export function useImpersonation(): UseImpersonationReturn {
             },
           ],
         };
-        sessionStorage.setSession(impersonatedSession);
+        setSession(impersonatedSession);
       }
 
       // 5. Save impersonation metadata
@@ -112,10 +114,10 @@ export function useImpersonation(): UseImpersonationReturn {
       const backupSession = getSessionBackup();
 
       if (backupToken) {
-        sessionStorage.setToken(backupToken);
+        setCurrentImpersonationToken(backupToken);
       }
       if (backupSession) {
-        sessionStorage.setSession(backupSession);
+        setSession(backupSession);
       }
 
       // 3. Clear all impersonation storage
@@ -126,7 +128,8 @@ export function useImpersonation(): UseImpersonationReturn {
     } catch (error) {
       console.error('Failed to restore SA session:', error);
       // Last resort: clear everything and go to login
-      sessionStorage.clearAuth();
+      clearAllImpersonationData();
+      clearAuth();
       router.push('/login');
     }
   };

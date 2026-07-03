@@ -6,13 +6,21 @@ import {
   UseGuards,
   Request,
   UnauthorizedException,
+  Res,
 } from '@nestjs/common';
+import type { Response, Request as ExpressRequest } from 'express';
 import { AuthService, AuthResponse } from './auth.service';
 import { PlanFeaturesService } from '../billing/plan-features.service';
 import { SentryService } from '../observability/sentry.service';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import {
+  clearAuthCookies,
+  getCookie,
+  REFRESH_TOKEN_COOKIE,
+  setAuthCookies,
+} from './auth.cookies';
 
 interface ScopedRole {
   id: string;
@@ -22,7 +30,7 @@ interface ScopedRole {
   scopeUnitId: string | null;
 }
 
-interface RequestWithUser extends Request {
+interface RequestWithUser extends ExpressRequest {
   user: {
     id: string;
     email: string;
@@ -32,7 +40,13 @@ interface RequestWithUser extends Request {
       roles: string[];
       scopedRoles?: ScopedRole[];
     }>;
+    sessionId?: string;
   };
+}
+
+interface PublicAuthResponse {
+  user: AuthResponse['user'];
+  memberships: AuthResponse['memberships'];
 }
 
 @Controller('auth')
@@ -43,18 +57,32 @@ export class AuthController {
     private readonly sentryService: SentryService,
   ) {}
 
+  private buildResponse(response: AuthResponse): PublicAuthResponse {
+    return {
+      user: response.user,
+      memberships: response.memberships,
+    };
+  }
+
   @Post('signup')
-  async signup(@Body() signupDto: SignupDto): Promise<AuthResponse> {
+  async signup(
+    @Body() signupDto: SignupDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PublicAuthResponse> {
     const response = await this.authService.signup(signupDto);
+    setAuthCookies(res, response.accessToken, response.refreshToken);
 
     // Set user context in Sentry for error tracking
     this.sentryService.setUser(response.user.id, response.user.email, response.user.name);
 
-    return response;
+    return this.buildResponse(response);
   }
 
   @Post('login')
-  async login(@Body() loginDto: LoginDto): Promise<AuthResponse> {
+  async login(
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PublicAuthResponse> {
     const user = await this.authService.validateUser(
       loginDto.email,
       loginDto.password,
@@ -65,18 +93,59 @@ export class AuthController {
       throw new UnauthorizedException('Credenciales inválidas');
     }
     const response = await this.authService.login(user);
+    setAuthCookies(res, response.accessToken, response.refreshToken);
 
     // Set user context in Sentry for error tracking
     this.sentryService.setUser(user.id, user.email, user.name);
 
-    return response;
+    return this.buildResponse(response);
+  }
+
+  @Post('refresh')
+  async refresh(
+    @Request() req: ExpressRequest,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PublicAuthResponse> {
+    const refreshToken = getCookie(req, REFRESH_TOKEN_COOKIE);
+    if (!refreshToken) {
+      throw new UnauthorizedException('Sesión expirada. Vuelve a iniciar sesión.');
+    }
+
+    const response = await this.authService.refreshSession(refreshToken);
+    setAuthCookies(res, response.accessToken, response.refreshToken);
+    return this.buildResponse(response);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(
+    @Request() req: RequestWithUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ ok: true }> {
+    if (req.user.sessionId) {
+      await this.authService.logoutSession(req.user.sessionId);
+    }
+
+    clearAuthCookies(res);
+    return { ok: true };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(
+    @Request() req: RequestWithUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ ok: true }> {
+    await this.authService.logoutAllSessions(req.user.id);
+    clearAuthCookies(res);
+    return { ok: true };
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async getProfile(@Request() req: RequestWithUser): Promise<Omit<AuthResponse, 'accessToken'>> {
-    // req.user contiene { id, email, name, memberships }
-    // Retornar en formato esperado por el frontend
+  async getProfile(
+    @Request() req: RequestWithUser,
+  ): Promise<PublicAuthResponse> {
     return {
       user: {
         id: req.user.id,
@@ -95,7 +164,6 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Get('me/subscription')
   async getSubscription(@Request() req: RequestWithUser) {
-    // Get first membership's tenant (active tenant)
     const activeMembership = req.user.memberships?.[0];
 
     if (!activeMembership) {

@@ -36,3 +36,24 @@ export async function apiMe(): Promise<LoginResponse> {
     method: 'GET',
   });
 }
+
+export async function apiLogout(): Promise<{ ok: true }> {
+  return apiClient<{ ok: true }>({
+    path: '/auth/logout',
+    method: 'POST',
+  });
+}
+
+export async function apiLogoutAll(): Promise<{ ok: true }> {
+  return apiClient<{ ok: true }>({
+    path: '/auth/logout-all',
+    method: 'POST',
+  });
+}
+
+export async function apiRefresh(): Promise<LoginResponse> {
+  return apiClient<LoginResponse>({
+    path: '/auth/refresh',
+    method: 'POST',
+  });
+}

@@ -238,6 +238,7 @@ model User {
   passwordHash          String
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+  authSessions          AuthSession[]
   memberships           Membership[]
   auditLogs             AuditLog[]
   ticketsCreated        Ticket[]               @relation("TicketCreatedBy")
@@ -252,6 +253,25 @@ model User {
   reviewedPlanRequests  PlanChangeRequest[]    @relation("PlanRequestReviewedBy")
   tenantMembers        TenantMember[]
   pushSubscriptions PushSubscription[]
+}
+
+model AuthSession {
+  id               String   @id @default(cuid())
+  userId           String
+  refreshTokenHash  String   @unique
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  lastUsedAt       DateTime?
+  revokedAt       DateTime?
+  userAgent       String?
+  ipAddress       String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
 
 model Membership {

@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useHasRole, useAuthSession } from '../../../../features/auth/useAuthSession';
-import { getToken } from '../../../../features/auth/session.storage';
+import { getSession } from '../../../../features/auth/session.storage';
+import { useBoStorageTick } from '../../../../shared/lib/storage/useBoStorage';
 
 interface TenantParams { tenantId?: string; [key: string]: string | string[] | undefined; }
 
@@ -16,18 +17,28 @@ const ResidentLayout = ({ children }: ResidentLayoutProps) => {
   const tenantId = params?.tenantId ?? '';
   const session = useAuthSession();
   const isResident = useHasRole('RESIDENT');
+  const storageTick = useBoStorageTick();
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      router.replace('/login');
-      return;
-    }
     if (!session) return;
     if (!isResident) {
       router.replace(`/${tenantId}/dashboard`);
     }
-  }, [session, isResident, tenantId, router]);
+  }, [session, isResident, tenantId, router, storageTick]);
+
+  useEffect(() => {
+    if (session) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (!getSession()) {
+        router.replace('/login');
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [session, router, storageTick]);
 
   return <>{children}</>;
 };

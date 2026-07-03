@@ -6,10 +6,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
 import { AuditService } from '../audit/audit.service';
+import { AuthService, AuthResponse as SessionAuthResponse } from '../auth/auth.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
@@ -17,29 +17,16 @@ import { AuditAction, InvitationStatus, Role } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 
-export interface AuthResponse {
-  accessToken: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-  };
-  memberships: Array<{
-    tenantId: string;
-    roles: string[];
-  }>;
-}
-
 @Injectable()
 export class InvitationsService {
   private readonly logger = new Logger(InvitationsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly jwtService: JwtService,
     private readonly tenancyService: TenancyService,
     private readonly auditService: AuditService,
     private readonly planEntitlements: PlanEntitlementsService,
+    private readonly authService: AuthService,
   ) {}
 
   /**
@@ -172,9 +159,9 @@ export class InvitationsService {
   /**
    * Accept invitation: create user (or link existing) + membership + roles
    * Idempotent: allows accepting even if membership already exists
-   * Returns AuthResponse with JWT + metadata about creation
+   * Returns session auth response with cookie-ready tokens and metadata about creation
    */
-  async acceptInvitation(dto: AcceptInvitationDto): Promise<AuthResponse & { membershipExisted?: boolean; userExisted?: boolean }> {
+  async acceptInvitation(dto: AcceptInvitationDto): Promise<SessionAuthResponse & { membershipExisted?: boolean; userExisted?: boolean }> {
     const tokenHash = crypto.createHash('sha256').update(dto.token).digest('hex');
 
     const invitation = await this.prisma.invitation.findFirst({
@@ -313,18 +300,22 @@ export class InvitationsService {
       },
     });
 
-    return {
-      accessToken: this.jwtService.sign({
-        email: result.user.email,
-        sub: result.user.id,
-        isSuperAdmin: false,
-      }),
+    const session = await this.authService.createAuthResponse({
       user: {
         id: result.user.id,
         email: result.user.email,
         name: result.user.name,
       },
       memberships,
+      isSuperAdmin: false,
+      sessionContext: {
+        userAgent: null,
+        ipAddress: null,
+      },
+    });
+
+    return {
+      ...session,
       membershipExisted: result.membershipExisted,
       userExisted: result.userExisted,
     };

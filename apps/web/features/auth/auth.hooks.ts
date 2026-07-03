@@ -3,7 +3,9 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { apiLogin, apiSignup, type LoginPayload, type SignupPayload } from './auth.service';
-import { setToken, setSession, setLastTenant, clearAuth } from './session.storage';
+import { setSession, setLastTenant } from './session.storage';
+import { logout as performLogout } from './login.actions';
+import { clearAllImpersonationData } from '../impersonation/impersonation.storage';
 import type { AuthSession } from './auth.types';
 
 export const useLogin = () => {
@@ -12,7 +14,7 @@ export const useLogin = () => {
   return useMutation({
     mutationFn: apiLogin,
     onSuccess: (response) => {
-      const { accessToken, user, memberships } = response;
+      const { user, memberships } = response;
 
       if (memberships.length === 0) {
         throw new Error('No tienes membresías válidas');
@@ -25,7 +27,7 @@ export const useLogin = () => {
         activeTenantId,
       };
 
-      setToken(accessToken);
+      clearAllImpersonationData();
       setSession(session);
       setLastTenant(activeTenantId);
 
@@ -47,7 +49,7 @@ export const useSignup = () => {
   return useMutation({
     mutationFn: apiSignup,
     onSuccess: (response) => {
-      const { accessToken, user, memberships } = response;
+      const { user, memberships } = response;
 
       if (memberships.length === 0) {
         throw new Error('Error creando membresía');
@@ -60,7 +62,7 @@ export const useSignup = () => {
         activeTenantId,
       };
 
-      setToken(accessToken);
+      clearAllImpersonationData();
       setSession(session);
       setLastTenant(activeTenantId);
 
@@ -79,8 +81,8 @@ export const useSignup = () => {
 export const useLogout = () => {
   const router = useRouter();
 
-  return () => {
-    clearAuth();
+  return async () => {
+    await performLogout();
     router.push('/login');
   };
 };

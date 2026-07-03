@@ -17,7 +17,8 @@ import Input from '@/shared/components/ui/Input';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import { apiClient } from '@/shared/lib/http/client';
-import { setToken, setSession, setLastTenant } from '@/features/auth/session.storage';
+import { setSession, setLastTenant } from '@/features/auth/session.storage';
+import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
 import { t } from '@/i18n';
 
 const acceptSchema = z.object({
@@ -28,7 +29,6 @@ const acceptSchema = z.object({
 type AcceptFormData = z.infer<typeof acceptSchema>;
 
 interface AcceptInvitationResponse {
-  accessToken: string;
   user: { id: string; name: string; email: string };
   memberships: Array<{ id: string; tenantId: string; roles: Role[] }>;
   membershipExisted?: boolean;
@@ -117,25 +117,23 @@ function InvitePageContent() {
       });
 
       // Save session and redirect
-      if (response.accessToken) {
-        setToken(response.accessToken);
-        setSession({
-          user: response.user,
-          memberships: response.memberships,
-          activeTenantId: tenantId,
-        });
-        setLastTenant(tenantId);
+      clearAllImpersonationData();
+      setSession({
+        user: response.user,
+        memberships: response.memberships,
+        activeTenantId: tenantId,
+      });
+      setLastTenant(tenantId);
 
-        // If membership already existed, show neutral message before redirecting
-        if (response.membershipExisted) {
-          setSuccessMessage(t('auth.invite.alreadyMemberSuccess'));
-          setTimeout(() => {
-            router.push(`/${tenantId}/dashboard`);
-          }, 2000);
-        } else {
-          // Redirect to dashboard immediately
+      // If membership already existed, show neutral message before redirecting
+      if (response.membershipExisted) {
+        setSuccessMessage(t('auth.invite.alreadyMemberSuccess'));
+        setTimeout(() => {
           router.push(`/${tenantId}/dashboard`);
-        }
+        }, 2000);
+      } else {
+        // Redirect to dashboard immediately
+        router.push(`/${tenantId}/dashboard`);
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : t('auth.invite.acceptError');

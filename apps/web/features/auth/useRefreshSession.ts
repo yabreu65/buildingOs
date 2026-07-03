@@ -17,7 +17,8 @@
 
 import { useState, useCallback } from 'react';
 import { apiClient } from '@/shared/lib/http/client';
-import { setSession, getSession } from './session.storage';
+import { setSession } from './session.storage';
+import type { LoginResponse } from './auth.types';
 
 interface RefreshSessionResult {
   activeTenantId: string;
@@ -34,7 +35,7 @@ export function useRefreshSession() {
 
     try {
       // Call GET /auth/me to get updated memberships
-      const response = await apiClient<any>({
+      const response = await apiClient<LoginResponse>({
         path: '/auth/me',
         method: 'GET',
       });

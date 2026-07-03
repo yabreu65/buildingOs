@@ -6,12 +6,14 @@ import type { Role, TenantMembershipRoles } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
 import type { AuthenticatedUser } from '../common/types/request.types';
+import { ACCESS_TOKEN_COOKIE, getCookie } from './auth.cookies';
 
 interface JwtPayload {
   email: string;
   sub: string;
   isSuperAdmin: boolean;
   roles?: Role[];
+  sid?: string;
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
@@ -22,6 +24,7 @@ interface ValidatedUser extends AuthenticatedUser {
   isImpersonating?: boolean;
   impersonatedTenantId?: string;
   actorSuperAdminUserId?: string;
+  sessionId?: string;
   roles?: Role[]; // Roles from first membership (active tenant)
   membershipId?: string; // ID of first membership (active tenant)
   memberships: TenantMembershipRoles[];
@@ -35,7 +38,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private tenancyService: TenancyService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req) => {
+          if (!req) {
+            return null;
+          }
+          const cookieToken = getCookie(req, ACCESS_TOKEN_COOKIE);
+          return cookieToken ?? null;
+        },
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('JWT_SECRET'),
     });
@@ -95,6 +107,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const memberships = await this.tenancyService.getMembershipsForUser(user.id);
 
+    if (payload.sid) {
+      const session = await this.prisma.authSession.findFirst({
+        where: {
+          id: payload.sid,
+          userId: user.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      });
+
+      if (!session) {
+        throw new UnauthorizedException('Sesión expirada. Vuelve a iniciar sesión.');
+      }
+    }
+
     // Derive isSuperAdmin from memberships (can also trust JWT payload as hint)
     const isSuperAdmin =
       payload.isSuperAdmin ||
@@ -112,6 +140,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       isSuperAdmin,
       roles,
       membershipId,
+      sessionId: payload.sid,
       memberships,
     };
   }

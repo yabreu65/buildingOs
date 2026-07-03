@@ -11,6 +11,7 @@ import { AuditService } from '../audit/audit.service';
 import { SignupDto, TenantTypeEnum } from './dto/signup.dto';
 import { AuditAction } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 jest.mock('bcrypt');
 
@@ -32,6 +33,13 @@ describe('AuthService', () => {
             user: {
               findUnique: jest.fn(),
               create: jest.fn(),
+            },
+            authSession: {
+              create: jest.fn(),
+              update: jest.fn(),
+              updateMany: jest.fn(),
+              findUnique: jest.fn(),
+              findFirst: jest.fn(),
             },
             tenant: {
               create: jest.fn(),
@@ -120,6 +128,18 @@ describe('AuthService', () => {
           roles: ['TENANT_OWNER'],
         },
       ];
+      const createdSession = {
+        id: 'session-123',
+        userId: 'user-123',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      };
 
       (bcrypt.hash as jest.Mock).mockResolvedValue(hashedPassword);
       jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback) => {
@@ -139,6 +159,7 @@ describe('AuthService', () => {
           },
         });
       });
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue(createdSession as any);
       jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue(memberships as any);
       jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_123');
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
@@ -147,21 +168,26 @@ describe('AuthService', () => {
       const result = await service.signup(dto);
 
       // ASSERT
-      expect(result).toEqual({
-        accessToken: 'jwt_token_123',
-        user: {
-          id: 'user-123',
-          email: 'newuser@example.com',
-          name: 'New User',
-        },
-        memberships,
-      });
+      expect(result).toEqual(
+        expect.objectContaining({
+          accessToken: 'jwt_token_123',
+          user: {
+            id: 'user-123',
+            email: 'newuser@example.com',
+            name: 'New User',
+          },
+          memberships,
+        }),
+      );
+      expect(result.refreshToken).toEqual(expect.any(String));
+      expect(result.sessionId).toBe('session-123');
       expect(bcrypt.hash).toHaveBeenCalledWith(dto.password, 10);
       expect(jwtService.sign).toHaveBeenCalledWith({
         email: 'newuser@example.com',
         sub: 'user-123',
         isSuperAdmin: false,
         roles: ['TENANT_OWNER'],
+        sid: 'session-123',
       });
     });
 
@@ -196,6 +222,18 @@ describe('AuthService', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+      const createdSession = {
+        id: 'session-456',
+        userId: 'user-456',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      };
 
       (bcrypt.hash as jest.Mock).mockResolvedValue(hashedPassword);
       jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback) => {
@@ -206,6 +244,7 @@ describe('AuthService', () => {
           membershipRole: { create: jest.fn().mockResolvedValue({}) },
         });
       });
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue(createdSession as any);
       jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
         { tenantId: 'tenant-456', roles: ['TENANT_OWNER'] },
       ] as any);
@@ -388,7 +427,20 @@ describe('AuthService', () => {
           roles: ['TENANT_OWNER'],
         },
       ];
+      const createdSession = {
+        id: 'session-login-123',
+        userId: 'user-123',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      };
 
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue(createdSession as any);
       jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue(memberships as any);
       jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_123');
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
@@ -397,20 +449,25 @@ describe('AuthService', () => {
       const result = await service.login(user as any);
 
       // ASSERT
-      expect(result).toEqual({
-        accessToken: 'jwt_token_123',
-        user: {
-          id: 'user-123',
-          email: 'user@example.com',
-          name: 'User Name',
-        },
-        memberships,
-      });
+      expect(result).toEqual(
+        expect.objectContaining({
+          accessToken: 'jwt_token_123',
+          user: {
+            id: 'user-123',
+            email: 'user@example.com',
+            name: 'User Name',
+          },
+          memberships,
+        }),
+      );
+      expect(result.refreshToken).toEqual(expect.any(String));
+      expect(result.sessionId).toBe('session-login-123');
       expect(jwtService.sign).toHaveBeenCalledWith({
         email: 'user@example.com',
         sub: 'user-123',
         isSuperAdmin: false,
         roles: ['TENANT_OWNER'],
+        sid: 'session-login-123',
       });
     });
 
@@ -437,7 +494,20 @@ describe('AuthService', () => {
           roles: ['SUPER_ADMIN', 'TENANT_OWNER'],
         },
       ];
+      const createdSession = {
+        id: 'session-admin-123',
+        userId: 'super-user-123',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      };
 
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue(createdSession as any);
       jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue(memberships as any);
       jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_admin');
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
@@ -451,6 +521,7 @@ describe('AuthService', () => {
         sub: 'super-user-123',
         isSuperAdmin: true,
         roles: ['SUPER_ADMIN', 'TENANT_OWNER'],
+        sid: 'session-admin-123',
       });
     });
 
@@ -471,6 +542,18 @@ describe('AuthService', () => {
       jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
         { tenantId: 'tenant-123', roles: ['TENANT_OWNER'] },
       ] as any);
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue({
+        id: 'session-log-123',
+        userId: 'user-123',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      } as any);
       jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token');
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
@@ -487,6 +570,92 @@ describe('AuthService', () => {
           email: 'user@example.com',
           isSuperAdmin: false,
         },
+      });
+    });
+  });
+
+  // ========== TESTS: REFRESH SESSION ==========
+  describe('refreshSession', () => {
+    it('should rotate the refresh token and return a fresh auth response', async () => {
+      const refreshToken = 'refresh-token-raw';
+      const refreshTokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+
+      const session = {
+        id: 'session-refresh-123',
+        userId: 'user-123',
+        refreshTokenHash,
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      };
+
+      jest.spyOn(prismaService.authSession, 'findUnique').mockResolvedValue(session as any);
+      jest.spyOn(prismaService.authSession, 'update').mockResolvedValue({
+        ...session,
+        refreshTokenHash: 'next-refresh-hash',
+        lastUsedAt: new Date(),
+      } as any);
+      jest.spyOn(prismaService.user, 'findUnique').mockResolvedValue({
+        id: 'user-123',
+        email: 'user@example.com',
+        name: 'User Name',
+      } as any);
+      jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
+        { tenantId: 'tenant-123', roles: ['TENANT_OWNER'] },
+      ] as any);
+      jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_refreshed');
+
+      const result = await service.refreshSession(refreshToken);
+
+      expect(prismaService.authSession.findUnique).toHaveBeenCalledWith({
+        where: { refreshTokenHash },
+      });
+      expect(prismaService.authSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-refresh-123' },
+        data: expect.objectContaining({
+          refreshTokenHash: expect.any(String),
+          expiresAt: expect.any(Date),
+          lastUsedAt: expect.any(Date),
+        }),
+      });
+      expect(result.sessionId).toBe('session-refresh-123');
+      expect(result.refreshToken).toEqual(expect.any(String));
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sid: 'session-refresh-123',
+        }),
+      );
+    });
+  });
+
+  // ========== TESTS: LOGOUT ==========
+  describe('logoutSession and logoutAllSessions', () => {
+    it('should revoke the active session', async () => {
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 1 } as any);
+
+      await service.logoutSession('session-123');
+
+      expect(prismaService.authSession.updateMany).toHaveBeenCalledWith({
+        where: { id: 'session-123', revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+
+    it('should revoke all sessions for the user', async () => {
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 3 } as any);
+
+      await service.logoutAllSessions('user-123');
+
+      expect(prismaService.authSession.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123', revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
       });
     });
   });

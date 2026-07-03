@@ -1,15 +1,29 @@
-import { emitBoStorageChange } from "@/shared/lib/storage/events";
-import type { ImpersonationMetadata } from "./impersonation.types";
-import type { AuthSession } from "../auth/auth.types";
+import { emitBoStorageChange } from '@/shared/lib/storage/events';
+import type { ImpersonationMetadata } from './impersonation.types';
+import type { AuthSession } from '../auth/auth.types';
 
 const KEYS = {
-  METADATA: "bo_impersonation",
-  TOKEN_BACKUP: "bo_token_sa_backup",
-  SESSION_BACKUP: "bo_session_sa_backup",
+  METADATA: 'bo_impersonation',
+  TOKEN: 'bo_impersonation_token',
+  TOKEN_BACKUP: 'bo_impersonation_token_backup',
+  SESSION_BACKUP: 'bo_session_sa_backup',
 } as const;
 
+function readSessionStorage(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.sessionStorage.getItem(key);
+}
+
+function writeSessionStorage(key: string, value: string): void {
+  window.sessionStorage.setItem(key, value);
+}
+
+function removeSessionStorage(key: string): void {
+  window.sessionStorage.removeItem(key);
+}
+
 export function getImpersonationMetadata(): ImpersonationMetadata | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem(KEYS.METADATA);
   if (!raw) return null;
   try {
@@ -29,18 +43,29 @@ export function clearImpersonationMetadata(): void {
   emitBoStorageChange();
 }
 
+export function getCurrentImpersonationToken(): string | null {
+  return readSessionStorage(KEYS.TOKEN);
+}
+
+export function setCurrentImpersonationToken(token: string): void {
+  writeSessionStorage(KEYS.TOKEN, token);
+}
+
+export function clearCurrentImpersonationToken(): void {
+  removeSessionStorage(KEYS.TOKEN);
+}
+
 export function getTokenBackup(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(KEYS.TOKEN_BACKUP);
+  return readSessionStorage(KEYS.TOKEN_BACKUP);
 }
 
 export function setTokenBackup(token: string): void {
-  localStorage.setItem(KEYS.TOKEN_BACKUP, token);
+  writeSessionStorage(KEYS.TOKEN_BACKUP, token);
 }
 
 export function getSessionBackup(): AuthSession | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(KEYS.SESSION_BACKUP);
+  if (typeof window === 'undefined') return null;
+  const raw = window.sessionStorage.getItem(KEYS.SESSION_BACKUP);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as AuthSession;
@@ -50,13 +75,14 @@ export function getSessionBackup(): AuthSession | null {
 }
 
 export function setSessionBackup(session: AuthSession): void {
-  localStorage.setItem(KEYS.SESSION_BACKUP, JSON.stringify(session));
+  window.sessionStorage.setItem(KEYS.SESSION_BACKUP, JSON.stringify(session));
 }
 
 export function clearAllImpersonationData(): void {
+  removeSessionStorage(KEYS.TOKEN);
+  removeSessionStorage(KEYS.TOKEN_BACKUP);
+  removeSessionStorage(KEYS.SESSION_BACKUP);
   localStorage.removeItem(KEYS.METADATA);
-  localStorage.removeItem(KEYS.TOKEN_BACKUP);
-  localStorage.removeItem(KEYS.SESSION_BACKUP);
   emitBoStorageChange();
 }
 

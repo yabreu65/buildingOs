@@ -57,7 +57,7 @@ export const invitationsApi = {
   async acceptInvitation(
     dto: AcceptInvitationRequest,
   ): Promise<any> {
-    // This is like auth/login, returns { accessToken, user, memberships }
+    // This is like auth/login, returns { user, memberships } and sets auth cookies
     return apiClient({
       path: '/invitations/accept',
       method: 'POST',

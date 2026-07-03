@@ -14,8 +14,6 @@ export { useAuthSession, useHasRole, useIsSuperAdmin, useActiveTenantId } from '
 export {
   getSession,
   setSession,
-  getToken,
-  setToken,
   clearAuth,
   getLastTenant,
   setLastTenant,

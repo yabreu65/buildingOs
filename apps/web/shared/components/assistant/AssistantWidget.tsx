@@ -6,7 +6,6 @@ import { Send, Bot, Sparkles, X, Minimize2, ArrowRight, ExternalLink } from 'luc
 import type { AssistantMessage, AssistantAction, AssistantContext } from './useAssistant';
 import { getAssistantActionPath } from './action-route-map';
 import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
-import { getToken } from '@/features/auth/session.storage';
 import { assistantApi, AssistantApiError, StructuredResponse } from '@/features/assistant/services/assistant.api';
 import { AssistantResponseRenderer } from './renderers';
 

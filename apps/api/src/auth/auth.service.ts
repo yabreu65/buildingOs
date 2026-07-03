@@ -2,14 +2,16 @@ import {
   Injectable,
   ConflictException,
   BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
 import { AuditService } from '../audit/audit.service';
 import { SignupDto, TenantTypeEnum } from './dto/signup.dto';
-import { AuditAction } from '@prisma/client';
+import { AuditAction, AuthSession } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 interface UserWithMemberships {
   id: string;
@@ -23,6 +25,8 @@ interface UserWithMemberships {
 
 export interface AuthResponse {
   accessToken: string;
+  refreshToken: string;
+  sessionId: string;
   user: {
     id: string;
     email: string;
@@ -32,6 +36,10 @@ export interface AuthResponse {
     tenantId: string;
     roles: string[];
   }>;
+}
+
+interface IssueAuthResult extends AuthResponse {
+  session: AuthSession;
 }
 
 @Injectable()
@@ -46,7 +54,6 @@ export class AuthService {
   async signup(dto: SignupDto): Promise<AuthResponse> {
     const { email, name, password, tenantName, tenantType } = dto;
 
-    // Check if email already exists
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
     });
@@ -55,7 +62,6 @@ export class AuthService {
       throw new ConflictException('El email ya está registrado');
     }
 
-    // Validate passwords
     if (!password || password.length < 8) {
       throw new BadRequestException(
         'La contraseña debe tener al menos 8 caracteres',
@@ -66,9 +72,7 @@ export class AuthService {
     const finalTenantName = tenantName || 'Mi Condominio';
     const finalTenantType = tenantType || TenantTypeEnum.EDIFICIO_AUTOGESTION;
 
-    // Transaction: create user, tenant, membership, and role
     const result = await this.prisma.$transaction(async (tx) => {
-      // Create user
       const user = await tx.user.create({
         data: {
           email,
@@ -77,7 +81,6 @@ export class AuthService {
         },
       });
 
-      // Create tenant
       const tenant = await tx.tenant.create({
         data: {
           name: finalTenantName,
@@ -85,7 +88,6 @@ export class AuthService {
         },
       });
 
-      // Create membership
       const membership = await tx.membership.create({
         data: {
           userId: user.id,
@@ -93,7 +95,6 @@ export class AuthService {
         },
       });
 
-      // Create TENANT_OWNER role
       await tx.membershipRole.create({
         data: {
           tenantId: tenant.id,
@@ -105,15 +106,10 @@ export class AuthService {
       return { user, tenant, membership };
     });
 
-    // Get memberships and return auth response
     const memberships = await this.tenancyService.getMembershipsForUser(
       result.user.id,
     );
 
-    // Extract roles from the membership we just created
-    const roles = ['TENANT_OWNER']; // Newly created user is always TENANT_OWNER
-
-    // Audit: USER_CREATE
     void this.auditService.createLog({
       tenantId: result.membership.tenantId,
       actorUserId: result.user.id,
@@ -127,20 +123,19 @@ export class AuthService {
       },
     });
 
-    return {
-      accessToken: this.jwtService.sign({
-        email: result.user.email,
-        sub: result.user.id,
-        isSuperAdmin: false,
-        roles,
-      }),
+    return this.createAuthResponse({
       user: {
         id: result.user.id,
         email: result.user.email,
         name: result.user.name,
       },
       memberships,
-    };
+      isSuperAdmin: false,
+      sessionContext: {
+        userAgent: null,
+        ipAddress: null,
+      },
+    });
   }
 
   async validateUser(email: string, pass: string): Promise<UserWithMemberships | null> {
@@ -163,27 +158,11 @@ export class AuthService {
   }
 
   async login(user: UserWithMemberships): Promise<AuthResponse> {
-    const isSuperAdmin = user.memberships.some((m) =>
-      m.roles.some((r) => r.role === 'SUPER_ADMIN'),
+    const memberships = await this.tenancyService.getMembershipsForUser(user.id);
+    const isSuperAdmin = memberships.some((m) =>
+      m.roles.includes('SUPER_ADMIN'),
     );
 
-    // Extract roles from first membership (active tenant)
-    // User always has at least one membership after login
-    const firstMembership = user.memberships[0];
-    const roles = firstMembership
-      ? firstMembership.roles.map((r) => r.role)
-      : [];
-
-    const payload = {
-      email: user.email,
-      sub: user.id,
-      isSuperAdmin,
-      roles,
-    };
-
-    const memberships = await this.tenancyService.getMembershipsForUser(user.id);
-
-    // Audit: AUTH_LOGIN
     void this.auditService.createLog({
       actorUserId: user.id,
       action: AuditAction.AUTH_LOGIN,
@@ -195,29 +174,182 @@ export class AuthService {
       },
     });
 
-    return {
-      accessToken: this.jwtService.sign(payload),
+    return this.createAuthResponse({
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
       },
       memberships,
-    };
+      isSuperAdmin,
+      sessionContext: {
+        userAgent: null,
+        ipAddress: null,
+      },
+    });
   }
 
-  /**
-   * Log failed login attempt
-   * Called from controller when validateUser returns null
-   */
+  async refreshSession(refreshToken: string): Promise<AuthResponse> {
+    const tokenHash = this.hashToken(refreshToken);
+    const session = await this.prisma.authSession.findUnique({
+      where: { refreshTokenHash: tokenHash },
+    });
+
+    if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Sesión expirada. Vuelve a iniciar sesión.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: session.userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
+    }
+
+    const memberships = await this.tenancyService.getMembershipsForUser(user.id);
+    const isSuperAdmin = memberships.some((m) =>
+      m.roles.includes('SUPER_ADMIN'),
+    );
+
+    const nextRefreshToken = crypto.randomBytes(32).toString('hex');
+
+    return this.createAuthResponse({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+      memberships,
+      isSuperAdmin,
+      sessionContext: {
+        userAgent: null,
+        ipAddress: null,
+      },
+      existingSessionId: session.id,
+      existingRefreshToken: nextRefreshToken,
+    });
+  }
+
+  async logoutSession(sessionId: string): Promise<void> {
+    await this.prisma.authSession.updateMany({
+      where: {
+        id: sessionId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+  }
+
+  async logoutAllSessions(userId: string): Promise<void> {
+    await this.prisma.authSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+  }
+
+  async getSessionByAccessToken(sessionId: string): Promise<AuthSession | null> {
+    return this.prisma.authSession.findFirst({
+      where: {
+        id: sessionId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+    });
+  }
+
   async logFailedLogin(email: string): Promise<void> {
     void this.auditService.createLog({
       action: AuditAction.AUTH_FAILED_LOGIN,
       entityType: 'User',
-      entityId: email, // Use email as entityId for failed logins
+      entityId: email,
       metadata: {
         email,
       },
     });
+  }
+
+  async createAuthResponse(params: {
+    user: {
+      id: string;
+      email: string;
+      name: string;
+    };
+    memberships: Array<{
+      tenantId: string;
+      roles: string[];
+    }>;
+    isSuperAdmin: boolean;
+    sessionContext: {
+      userAgent: string | null;
+      ipAddress: string | null;
+    };
+    existingSessionId?: string;
+    existingRefreshToken?: string;
+  }): Promise<IssueAuthResult> {
+    const roles = params.memberships[0]?.roles ?? [];
+    const sessionId = params.existingSessionId ?? this.createSessionId();
+    const refreshToken =
+      params.existingRefreshToken ?? crypto.randomBytes(32).toString('hex');
+    const refreshTokenHash = this.hashToken(refreshToken);
+
+    const session = params.existingSessionId
+      ? await this.prisma.authSession.update({
+          where: { id: sessionId },
+          data: {
+            refreshTokenHash,
+            expiresAt: this.getSessionExpiresAt(),
+            lastUsedAt: new Date(),
+            userAgent: params.sessionContext.userAgent,
+            ipAddress: params.sessionContext.ipAddress,
+            revokedAt: null,
+          },
+        })
+      : await this.prisma.authSession.create({
+          data: {
+            id: sessionId,
+            userId: params.user.id,
+            refreshTokenHash,
+            expiresAt: this.getSessionExpiresAt(),
+            userAgent: params.sessionContext.userAgent,
+            ipAddress: params.sessionContext.ipAddress,
+          },
+        });
+
+    const accessToken = this.jwtService.sign({
+      email: params.user.email,
+      sub: params.user.id,
+      isSuperAdmin: params.isSuperAdmin,
+      roles,
+      sid: session.id,
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      sessionId: session.id,
+      user: params.user,
+      memberships: params.memberships,
+      session,
+    };
+  }
+
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private getSessionExpiresAt(): Date {
+    return new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+  }
+
+  private createSessionId(): string {
+    return crypto.randomBytes(16).toString('hex');
   }
 }

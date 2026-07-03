@@ -1,12 +1,13 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AppShell from '../../../shared/components/layout/AppShell';
-import { getSession, getToken, setLastTenant } from '../../../features/auth/session.storage';
+import { getSession, setLastTenant } from '../../../features/auth/session.storage';
 import { useIsSuperAdmin } from '../../../features/auth/useAuthSession';
 import { useImpersonation } from '../../../features/impersonation/useImpersonation';
+import { useBoStorageTick } from '../../../shared/lib/storage/useBoStorage';
 
 type TenantParams = {
   tenantId?: string;
@@ -21,9 +22,8 @@ type AuthState = 'loading' | 'authorized' | 'unauthorized';
  * Lógica:
  * 1. En SSR/inicial: no validar (evita SSR/localStorage issues)
  * 2. Tras hidratación:
- *    - Si NO hay token: no autorizado (ir a /login)
- *    - Si hay token pero NO hay sesión: permitir entrada (AuthBootstrap la está restaurando)
- *    - Si hay token + sesión: validar membership
+ *    - Si NO hay sesión: no autorizado (ir a /login)
+ *    - Si hay sesión: validar membership
  * 3. Nunca renderizar null: siempre mostrar UI (AppShell o loader)
  */
 export default function TenantLayout({
@@ -36,9 +36,9 @@ export default function TenantLayout({
   const tenantId = params?.tenantId;
   const isSuperAdmin = useIsSuperAdmin();
   const { isImpersonating } = useImpersonation();
+  const storageTick = useBoStorageTick();
 
   const [authState, setAuthState] = useState<AuthState>('loading');
-  const didInitialize = useRef(false);
 
   // Redirigir SUPER_ADMIN a /super-admin (but NOT if impersonating)
   useEffect(() => {
@@ -49,16 +49,28 @@ export default function TenantLayout({
 
   // Validar acceso tan pronto como se hidrata
   useEffect(() => {
-    if (didInitialize.current) return;
-    didInitialize.current = true;
-
     // Si es SUPER_ADMIN y NO está impersonando, no validar acceso de tenant (ya se está redirigiendo)
     if (isSuperAdmin && !isImpersonating) {
       return;
     }
 
     validateAccess();
-  }, [isSuperAdmin, isImpersonating]);
+  }, [isSuperAdmin, isImpersonating, tenantId, storageTick]);
+
+  useEffect(() => {
+    if (authState !== 'loading') {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const session = getSession();
+      if (!session) {
+        setAuthState('unauthorized');
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [authState, tenantId, storageTick]);
 
   const validateAccess = () => {
     // 1. Validar que tenemos tenantId
@@ -68,37 +80,23 @@ export default function TenantLayout({
       return;
     }
 
-    // 2. Validar que hay token (requisito mínimo)
-    const token = getToken();
-    if (!token) {
-      // No hay token: no autorizado
-      setAuthState('unauthorized');
-      return;
-    }
-
-    // 3. Leer sesión (puede estar vacía si AuthBootstrap aún no restauró)
+    // 2. Leer sesión (AuthBootstrap la restaura con la cookie HttpOnly)
     const session = getSession();
 
     if (!session) {
-      // Hay token pero no sesión: asumir que AuthBootstrap la está restaurando
-      // ⚠️ IMPORTANTE: Permitir acceso aunque no haya sesión en localStorage
-      // AuthBootstrap puede estar restaurando en background, o puede haber fallado
-      // En cualquier caso, si hay token válido, permitimos entrada
-      setLastTenant(tenantId);
-      setAuthState('authorized');
+      setAuthState('loading');
       return;
     }
 
-    // 4. Validar membership
+    // 3. Validar membership
     const hasMembership = session.memberships.some((m) => m.tenantId === tenantId);
 
     if (!hasMembership) {
-      // Token + sesión, pero sin access a este tenant
       setAuthState('unauthorized');
       return;
     }
 
-    // 5. OK: autorizado
+    // 4. OK: autorizado
     setLastTenant(tenantId);
     setAuthState('authorized');
   };

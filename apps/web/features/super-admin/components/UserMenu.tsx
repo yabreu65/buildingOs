@@ -13,8 +13,8 @@ export function UserMenu({ email, name }: UserMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const router = useRouter();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     router.push('/login');
   };
 

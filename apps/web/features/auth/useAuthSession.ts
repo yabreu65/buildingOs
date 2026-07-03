@@ -3,12 +3,14 @@
 import { getSession } from './session.storage';
 import type { AuthSession } from './auth.types';
 import type { UserRole } from '@/types/enums';
+import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
 
 /**
  * Synchronous hook to get the current auth session
  * Used in server or client contexts where you need immediate access
  */
 export function useAuthSession(): AuthSession | null {
+  useBoStorageTick();
   if (typeof window === 'undefined') return null;
   return getSession();
 }

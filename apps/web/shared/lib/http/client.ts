@@ -1,4 +1,5 @@
-import { getToken, clearToken } from '../../../features/auth/session.storage';
+import { getCurrentImpersonationToken, clearAllImpersonationData } from '../../../features/impersonation/impersonation.storage';
+import { clearAuth } from '../../../features/auth/session.storage';
 import { getPublicApiUrl } from '../public-api-url';
 
 export interface HttpRequestConfig<TReq = never> {
@@ -54,13 +55,28 @@ async function parseErrorResponse(response: Response): Promise<{
   return { message: response.statusText || 'Error desconocido', data: null };
 }
 
+async function tryRefreshAuthCookie(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_URL}/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function apiClient<TRes, TReq = never>(
   config: HttpRequestConfig<TReq>,
 ): Promise<TRes> {
   const { path, method = 'GET', body, headers: customHeaders } = config;
 
   const url = `${API_URL}${path}`;
-  const token = getToken();
+  const token = getCurrentImpersonationToken();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -84,9 +100,39 @@ export async function apiClient<TRes, TReq = never>(
   const response = await fetch(url, init);
 
   if (!response.ok) {
-    // Centralized 401 handler: clear token and redirect to login
+    // Centralized 401 handler: try refresh cookie once, then fall back to login.
     if (response.status === 401) {
-      clearToken();
+      const hasImpersonationToken = !!getCurrentImpersonationToken();
+      const isAuthRoute =
+        path === '/auth/refresh' ||
+        path === '/auth/login' ||
+        path === '/auth/signup';
+
+      if (!hasImpersonationToken && !isAuthRoute) {
+        const refreshed = await tryRefreshAuthCookie();
+        if (refreshed) {
+          const retryResponse = await fetch(url, init);
+          if (retryResponse.ok) {
+            if (retryResponse.status === 204) {
+              return undefined as unknown as TRes;
+            }
+            return retryResponse.json() as Promise<TRes>;
+          }
+
+          if (retryResponse.status !== 401) {
+            const retryError = await parseErrorResponse(retryResponse);
+            throw new HttpError(
+              retryResponse.status,
+              retryResponse.statusText,
+              retryError.message,
+              retryError.data,
+            );
+          }
+        }
+      }
+
+      clearAllImpersonationData();
+      clearAuth();
       if (typeof window !== 'undefined') {
         window.location.href = '/login';
       }

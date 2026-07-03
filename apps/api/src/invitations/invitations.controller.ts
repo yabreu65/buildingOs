@@ -10,7 +10,9 @@ import {
   Request,
   BadRequestException,
   ForbiddenException,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
@@ -19,6 +21,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InvitationsService } from './invitations.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import { setAuthCookies } from '../auth/auth.cookies';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -54,8 +57,18 @@ export class InvitationsPublicController {
    * Public endpoint to accept invitation
    */
   @Post('accept')
-  async acceptInvitation(@Body() dto: AcceptInvitationDto) {
-    return this.invitationsService.acceptInvitation(dto);
+  async acceptInvitation(
+    @Body() dto: AcceptInvitationDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const response = await this.invitationsService.acceptInvitation(dto);
+    setAuthCookies(res, response.accessToken, response.refreshToken);
+    return {
+      user: response.user,
+      memberships: response.memberships,
+      membershipExisted: response.membershipExisted,
+      userExisted: response.userExisted,
+    };
   }
 }
 

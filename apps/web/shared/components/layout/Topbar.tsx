@@ -2,6 +2,7 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { getSession, setSession, setLastTenant, clearAuth } from '../../../features/auth/session.storage';
+import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
@@ -314,6 +315,7 @@ export default function Topbar() {
   };
 
   const handleLogout = () => {
+    clearAllImpersonationData();
     clearAuth();
     router.replace('/login');
   };
