@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -33,6 +34,14 @@ const acceptSchema = z.object({
 type AcceptFormData = z.infer<typeof acceptSchema>;
 
 type InviteStatus = 'loading' | 'invalid' | 'ready' | 'submitting';
+
+const inviteFieldIds = {
+  name: 'invite-name',
+  password: 'invite-password',
+  passwordHint: 'invite-password-hint',
+  nameError: 'invite-name-error',
+  passwordError: 'invite-password-error',
+} as const;
 
 function InvitePageContent() {
   const router = useRouter();
@@ -162,14 +171,19 @@ function InvitePageContent() {
         <Card className="w-full max-w-md">
           <EmptyState
             title={t('auth.invite.invalidTitle')}
-            description={statusMessage ?? t('auth.invite.invalidOrExpired')}
+            description={
+              statusMessage ??
+              'La invitación no está completa o ya no es válida. Revisá el enlace o pedile a tu administrador que te envíe una nueva invitación.'
+            }
           />
-          <Button
-            className="w-full mt-6"
-            onClick={() => router.push('/login')}
-          >
-            {t('auth.invite.backToLogin')}
-          </Button>
+          <div className="mt-6 grid gap-3">
+            <Button className="w-full" onClick={() => router.push('/login')}>
+              {t('auth.invite.backToLogin')}
+            </Button>
+            <Button asChild variant="secondary" className="w-full">
+              <Link href="/contact">Solicitar ayuda</Link>
+            </Button>
+          </div>
         </Card>
       </div>
     );
@@ -181,14 +195,18 @@ function InvitePageContent() {
         <Card className="w-full max-w-md">
           <EmptyState
             title={t('auth.invite.invalidTitle')}
-            description={t('auth.invite.invalidOrExpired')}
+            description={
+              'No pudimos validar la invitación. Revisá el enlace completo o pedí una nueva invitación al administrador.'
+            }
           />
-          <Button
-            className="w-full mt-6"
-            onClick={() => router.push('/login')}
-          >
-            {t('auth.invite.backToLogin')}
-          </Button>
+          <div className="mt-6 grid gap-3">
+            <Button className="w-full" onClick={() => router.push('/login')}>
+              {t('auth.invite.backToLogin')}
+            </Button>
+            <Button asChild variant="secondary" className="w-full">
+              <Link href="/contact">Solicitar ayuda</Link>
+            </Button>
+          </div>
         </Card>
       </div>
     );
@@ -268,27 +286,41 @@ function InvitePageContent() {
 
         {/* Accept form */}
         <form onSubmit={handleSubmit(handleAcceptInvitation)} className="space-y-4">
-          <div>
-            <label className="block text-sm font-semibold mb-1">{t('auth.invite.nameLabel')}</label>
+  <div>
+            <label htmlFor={inviteFieldIds.name} className="block text-sm font-semibold mb-1">
+              {t('auth.invite.nameLabel')}
+            </label>
             <Input
+              id={inviteFieldIds.name}
               placeholder={t('auth.invite.namePlaceholder')}
+              aria-invalid={Boolean(errors.name)}
+              aria-describedby={errors.name ? inviteFieldIds.nameError : undefined}
               {...register('name')}
             />
             {errors.name && (
-              <p className="text-sm text-red-600 mt-1">{errors.name.message}</p>
+              <p id={inviteFieldIds.nameError} className="text-sm text-red-600 mt-1">
+                {errors.name.message}
+              </p>
             )}
           </div>
 
           <div>
-            <label className="block text-sm font-semibold mb-1">{t('auth.invite.passwordLabel')}</label>
+            <label htmlFor={inviteFieldIds.password} className="block text-sm font-semibold mb-1">
+              {t('auth.invite.passwordLabel')}
+            </label>
             <Input
+              id={inviteFieldIds.password}
               type="password"
               placeholder={t('auth.invite.passwordPlaceholder')}
+              aria-invalid={Boolean(errors.password)}
+              aria-describedby={`${inviteFieldIds.passwordHint}${errors.password ? ` ${inviteFieldIds.passwordError}` : ''}`}
               {...register('password')}
             />
-            <p className="text-xs text-gray-500 mt-1">{t('auth.invite.passwordHint')}</p>
+            <p id={inviteFieldIds.passwordHint} className="text-xs text-gray-500 mt-1">
+              {t('auth.invite.passwordHint')}
+            </p>
             {errors.password && (
-              <p className="text-sm text-red-600 mt-1">
+              <p id={inviteFieldIds.passwordError} className="text-sm text-red-600 mt-1">
                 {errors.password.message}
               </p>
             )}

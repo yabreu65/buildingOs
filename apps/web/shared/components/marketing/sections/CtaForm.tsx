@@ -65,25 +65,21 @@ export default function CtaForm() {
                 Un especialista te muestra el producto con foco en tu operación.
               </p>
               <div className="mt-5">
-                <Link href="/demo-guiada" className="block">
-                  <Button variant="secondary" className="w-full h-12 px-8 text-base">
-                    Solicitar demo guiada
-                  </Button>
-                </Link>
+                <Button asChild variant="secondary" className="w-full h-12 px-8 text-base">
+                  <Link href="/demo-guiada">Solicitar demo guiada</Link>
+                </Button>
               </div>
             </Card>
 
             <Card className="bg-primary-foreground/10 border-primary-foreground/15 text-primary-foreground shadow-none">
               <h3 className="text-xl font-semibold">Demo interactiva</h3>
               <p className="mt-2 text-sm text-primary-foreground/80">
-                Explorá el producto con credenciales de prueba y datos de ejemplo.
+                Explorá el producto con acceso de demo habilitado para este entorno.
               </p>
               <div className="mt-5">
-                <Link href="/demo" className="block">
-                  <Button variant="secondary" className="w-full h-12 px-8 text-base">
-                    Explorar demo
-                  </Button>
-                </Link>
+                <Button asChild variant="secondary" className="w-full h-12 px-8 text-base">
+                  <Link href="/demo">Explorar demo</Link>
+                </Button>
               </div>
             </Card>
           </div>

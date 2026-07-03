@@ -14,12 +14,9 @@ export default function Footer() {
             <Link href="/login" className="hover:text-foreground transition-colors">
               Ingreso clientes
             </Link>
-            <a href="#" className="hover:text-foreground transition-colors">
+            <Link href="/contact" className="hover:text-foreground transition-colors">
               Contacto
-            </a>
-            <a href="#" className="hover:text-foreground transition-colors">
-              Política de privacidad
-            </a>
+            </Link>
           </div>
         </div>
       </div>

@@ -27,20 +27,17 @@ export default function Hero() {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <Link href="/demo-guiada" className="w-full sm:w-auto">
-                <Button size="md" className="w-full h-12 px-8 text-base">
-                  Solicitar demo guiada
-                </Button>
-              </Link>
-              <Link href="/demo" className="w-full sm:w-auto">
-                <Button
-                  variant="secondary"
-                  size="md"
-                  className="w-full h-12 px-8 text-base"
-                >
-                  Explorar demo
-                </Button>
-              </Link>
+              <Button asChild size="md" className="w-full h-12 px-8 text-base sm:w-auto">
+                <Link href="/demo-guiada">Solicitar demo guiada</Link>
+              </Button>
+              <Button
+                asChild
+                variant="secondary"
+                size="md"
+                className="w-full h-12 px-8 text-base sm:w-auto"
+              >
+                <Link href="/demo">Explorar demo</Link>
+              </Button>
             </div>
           </div>
 

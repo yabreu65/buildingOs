@@ -31,9 +31,9 @@ export default function Navbar() {
           <Link href="/demo" className="text-sm font-medium text-muted-foreground hover:text-foreground hidden sm:block">
             Explorar demo
           </Link>
-          <Link href="/demo-guiada">
-            <Button size="sm">Solicitar demo guiada</Button>
-          </Link>
+          <Button asChild size="sm">
+            <Link href="/demo-guiada">Solicitar demo guiada</Link>
+          </Button>
         </div>
       </div>
     </nav>

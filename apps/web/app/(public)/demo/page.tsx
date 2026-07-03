@@ -98,16 +98,12 @@ export default function DemoPage() {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link href="/login?demo=true" className="w-full sm:w-auto">
-                <Button className="w-full h-12 px-8 text-base">
-                  Entrar a la demo
-                </Button>
-              </Link>
-              <Link href="/demo-guiada" className="w-full sm:w-auto">
-                <Button variant="secondary" className="w-full h-12 px-8 text-base">
-                  Solicitar demo guiada
-                </Button>
-              </Link>
+              <Button asChild className="w-full h-12 px-8 text-base sm:w-auto">
+                <Link href="/login?demo=true">Entrar a la demo</Link>
+              </Button>
+              <Button asChild variant="secondary" className="w-full h-12 px-8 text-base sm:w-auto">
+                <Link href="/demo-guiada">Solicitar demo guiada</Link>
+              </Button>
             </div>
 
             <Card className="mt-10 bg-card/90">
@@ -137,22 +133,17 @@ export default function DemoPage() {
             <div className="space-y-5">
               <div>
                 <p className="text-sm uppercase tracking-wide text-primary-foreground/70">
-                  Credenciales de ejemplo
+                  Acceso demo
                 </p>
                 <div className="mt-3 rounded-xl border border-primary-foreground/15 bg-primary-foreground/10 p-4">
-                  <div className="space-y-3 font-mono text-sm">
-                    <div>
-                      <span className="font-sans font-semibold text-primary-foreground/80">
-                        Correo electrónico:{' '}
-                      </span>
-                      demo@buildingos.app
-                    </div>
-                    <div>
-                      <span className="font-sans font-semibold text-primary-foreground/80">
-                        Contraseña:{' '}
-                      </span>
-                      DemoPass!123
-                    </div>
+                  <div className="space-y-3 text-sm text-primary-foreground/90">
+                    <p>
+                      El acceso demo está habilitado en este entorno y no se muestra en la UI pública.
+                    </p>
+                    <p>
+                      Si querés avanzar sin ayuda, ingresá desde el login demo. Si preferís,
+                      el equipo puede acompañarte en una demo guiada.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -175,11 +166,9 @@ export default function DemoPage() {
                 </ol>
               </div>
 
-              <Link href="/login?demo=true" className="block">
-                <Button variant="secondary" className="w-full h-12 px-8 text-base">
-                  Entrar a la demo
-                </Button>
-              </Link>
+              <Button asChild variant="secondary" className="w-full h-12 px-8 text-base">
+                <Link href="/login?demo=true">Entrar a la demo</Link>
+              </Button>
             </div>
           </Card>
         </div>
@@ -217,11 +206,9 @@ export default function DemoPage() {
                 BuildingOS con foco en tu tipo de operación.
               </p>
             </div>
-            <Link href="/demo-guiada">
-              <Button variant="secondary" className="w-full sm:w-auto">
-                Solicitar demo guiada
-              </Button>
-            </Link>
+            <Button asChild variant="secondary" className="w-full sm:w-auto">
+              <Link href="/demo-guiada">Solicitar demo guiada</Link>
+            </Button>
           </div>
         </Card>
       </section>

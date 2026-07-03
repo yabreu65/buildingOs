@@ -184,14 +184,12 @@ export default function DemoGuidedPage() {
             <Card className="bg-muted/40">
               <p className="text-sm font-semibold text-foreground">¿Querés ver el producto ya?</p>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Si preferís explorar por tu cuenta, entrá a la demo interactiva con credenciales de ejemplo.
+                Si preferís explorar por tu cuenta, entrá a la demo interactiva desde el login demo.
               </p>
               <div className="mt-4">
-                <Link href="/demo" className="block">
-                  <Button variant="secondary" className="w-full">
-                    Explorar demo
-                  </Button>
-                </Link>
+                <Button asChild variant="secondary" className="w-full">
+                  <Link href="/demo">Explorar demo</Link>
+                </Button>
               </div>
             </Card>
           </div>

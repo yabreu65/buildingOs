@@ -8,7 +8,7 @@ import { clearAllImpersonationData } from '../impersonation/impersonation.storag
 import { subscribeAuthUnauthorized } from '@/shared/lib/auth/events';
 import { HttpError } from '@/shared/lib/http/client';
 
-const PUBLIC_PATHS = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact'];
+const PUBLIC_PATHS = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact', '/invite'];
 
 /**
  * AuthBootstrap: intenta restaurar sesión desde el backend.

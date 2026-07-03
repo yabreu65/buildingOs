@@ -57,6 +57,18 @@ export function UnifiedLeadForm({
   successTitle,
   successMessage,
 }: UnifiedLeadFormProps) {
+  const ids = {
+    requiredNote: `lead-${intent.toLowerCase()}-required-note`,
+    fullName: `lead-${intent.toLowerCase()}-full-name`,
+    email: `lead-${intent.toLowerCase()}-email`,
+    phoneWhatsapp: `lead-${intent.toLowerCase()}-phone-whatsapp`,
+    tenantType: `lead-${intent.toLowerCase()}-tenant-type`,
+    tenantName: `lead-${intent.toLowerCase()}-tenant-name`,
+    unitsEstimate: `lead-${intent.toLowerCase()}-units-estimate`,
+    countryCity: `lead-${intent.toLowerCase()}-country-city`,
+    message: `lead-${intent.toLowerCase()}-message`,
+  } as const;
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [submitError, setSubmitError] = useState<string>('');
@@ -64,7 +76,7 @@ export function UnifiedLeadForm({
   const {
     register,
     handleSubmit,
-    formState: { errors, isValid },
+    formState: { errors },
     reset,
   } = useForm<LeadFormData>({
     resolver: zodResolver(leadFormSchema),
@@ -174,6 +186,10 @@ export function UnifiedLeadForm({
           </p>
         </div>
 
+        <p id={ids.requiredNote} className="text-xs text-gray-500">
+          Los campos marcados con * son obligatorios.
+        </p>
+
         {submitStatus === 'error' && (
           <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
             <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -184,60 +200,84 @@ export function UnifiedLeadForm({
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
           {/* Full Name */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor={ids.fullName} className="block text-sm font-medium text-gray-700 mb-1">
               Nombre completo <span className="text-red-500">*</span>
             </label>
             <Input
+              id={ids.fullName}
               {...register('fullName')}
               placeholder="Juan Pérez"
+              required
+              aria-required="true"
+              aria-invalid={Boolean(errors.fullName)}
+              aria-describedby={errors.fullName ? `${ids.fullName}-error ${ids.requiredNote}` : ids.requiredNote}
               disabled={isSubmitting}
               className={errors.fullName ? 'border-red-500' : ''}
             />
             {errors.fullName && (
-              <p className="text-sm text-red-600 mt-1">{errors.fullName.message}</p>
+              <p id={`${ids.fullName}-error`} className="text-sm text-red-600 mt-1">
+                {errors.fullName.message}
+              </p>
             )}
           </div>
 
           {/* Email */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor={ids.email} className="block text-sm font-medium text-gray-700 mb-1">
               Correo electrónico <span className="text-red-500">*</span>
             </label>
             <Input
+              id={ids.email}
               {...register('email')}
               type="email"
               placeholder="tu@correo.com"
+              required
+              aria-required="true"
+              aria-invalid={Boolean(errors.email)}
+              aria-describedby={errors.email ? `${ids.email}-error ${ids.requiredNote}` : ids.requiredNote}
               disabled={isSubmitting}
               className={errors.email ? 'border-red-500' : ''}
             />
             {errors.email && (
-              <p className="text-sm text-red-600 mt-1">{errors.email.message}</p>
+              <p id={`${ids.email}-error`} className="text-sm text-red-600 mt-1">
+                {errors.email.message}
+              </p>
             )}
           </div>
 
           {/* Phone/WhatsApp */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor={ids.phoneWhatsapp} className="block text-sm font-medium text-gray-700 mb-1">
               WhatsApp {intent !== 'DEMO' && <span>(opcional)</span>}
             </label>
             <Input
+              id={ids.phoneWhatsapp}
               {...register('phoneWhatsapp')}
               placeholder="+54 11 0000 0000"
+              aria-invalid={Boolean(errors.phoneWhatsapp)}
+              aria-describedby={errors.phoneWhatsapp ? `${ids.phoneWhatsapp}-error` : undefined}
               disabled={isSubmitting}
               className={errors.phoneWhatsapp ? 'border-red-500' : ''}
             />
             {errors.phoneWhatsapp && (
-              <p className="text-sm text-red-600 mt-1">{errors.phoneWhatsapp.message}</p>
+              <p id={`${ids.phoneWhatsapp}-error`} className="text-sm text-red-600 mt-1">
+                {errors.phoneWhatsapp.message}
+              </p>
             )}
           </div>
 
           {/* Tenant Type */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor={ids.tenantType} className="block text-sm font-medium text-gray-700 mb-1">
               ¿Qué tipo de administración? <span className="text-red-500">*</span>
             </label>
             <select
+              id={ids.tenantType}
               {...register('tenantType')}
+              required
+              aria-required="true"
+              aria-invalid={Boolean(errors.tenantType)}
+              aria-describedby={errors.tenantType ? `${ids.tenantType}-error ${ids.requiredNote}` : ids.requiredNote}
               disabled={isSubmitting}
               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                 errors.tenantType ? 'border-red-500' : 'border-gray-300'
@@ -248,24 +288,33 @@ export function UnifiedLeadForm({
               <option value="EDIFICIO_AUTOGESTION">Autogestión</option>
             </select>
             {errors.tenantType && (
-              <p className="text-sm text-red-600 mt-1">{errors.tenantType.message}</p>
+              <p id={`${ids.tenantType}-error`} className="text-sm text-red-600 mt-1">
+                {errors.tenantType.message}
+              </p>
             )}
           </div>
 
           {/* Tenant Name - Only for SIGNUP */}
           {intent === 'SIGNUP' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor={ids.tenantName} className="block text-sm font-medium text-gray-700 mb-1">
                 Nombre de tu empresa/edificio <span className="text-red-500">*</span>
               </label>
               <Input
+                id={ids.tenantName}
                 {...register('tenantName')}
                 placeholder="Ej: Edificio Flor de Ceibo"
+                required
+                aria-required="true"
+                aria-invalid={Boolean(errors.tenantName)}
+                aria-describedby={errors.tenantName ? `${ids.tenantName}-error ${ids.requiredNote}` : ids.requiredNote}
                 disabled={isSubmitting}
                 className={errors.tenantName ? 'border-red-500' : ''}
               />
               {errors.tenantName && (
-                <p className="text-sm text-red-600 mt-1">{errors.tenantName.message}</p>
+                <p id={`${ids.tenantName}-error`} className="text-sm text-red-600 mt-1">
+                  {errors.tenantName.message}
+                </p>
               )}
             </div>
           )}
@@ -273,56 +322,73 @@ export function UnifiedLeadForm({
           {/* Units Estimate - Only for CONTACT */}
           {intent === 'CONTACT' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor={ids.unitsEstimate} className="block text-sm font-medium text-gray-700 mb-1">
                 Cantidad de unidades (aprox.) <span className="text-red-500">*</span>
               </label>
               <Input
+                id={ids.unitsEstimate}
                 {...register('unitsEstimate', { valueAsNumber: true })}
                 type="number"
                 placeholder="50"
+                required
+                aria-required="true"
+                aria-invalid={Boolean(errors.unitsEstimate)}
+                aria-describedby={errors.unitsEstimate ? `${ids.unitsEstimate}-error ${ids.requiredNote}` : ids.requiredNote}
                 disabled={isSubmitting}
                 className={errors.unitsEstimate ? 'border-red-500' : ''}
                 min="1"
               />
               {errors.unitsEstimate && (
-                <p className="text-sm text-red-600 mt-1">{errors.unitsEstimate.message}</p>
+                <p id={`${ids.unitsEstimate}-error`} className="text-sm text-red-600 mt-1">
+                  {errors.unitsEstimate.message}
+                </p>
               )}
             </div>
           )}
 
           {/* Location */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor={ids.countryCity} className="block text-sm font-medium text-gray-700 mb-1">
               Ubicación (País, Ciudad) {intent !== 'DEMO' && <span className="text-gray-400">(opcional)</span>}
             </label>
             <Input
+              id={ids.countryCity}
               {...register('countryCity')}
               placeholder="Argentina, Buenos Aires"
+              aria-invalid={Boolean(errors.countryCity)}
+              aria-describedby={errors.countryCity ? `${ids.countryCity}-error` : undefined}
               disabled={isSubmitting}
               className={errors.countryCity ? 'border-red-500' : ''}
             />
             {errors.countryCity && (
-              <p className="text-sm text-red-600 mt-1">{errors.countryCity.message}</p>
+              <p id={`${ids.countryCity}-error`} className="text-sm text-red-600 mt-1">
+                {errors.countryCity.message}
+              </p>
             )}
           </div>
 
           {/* Message - Only for CONTACT */}
           {intent === 'CONTACT' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor={ids.message} className="block text-sm font-medium text-gray-700 mb-1">
                 Mensaje adicional (opcional)
               </label>
               <textarea
+                id={ids.message}
                 {...register('message')}
                 placeholder="Contanos más sobre tu propiedad..."
                 disabled={isSubmitting}
                 rows={4}
+                aria-invalid={Boolean(errors.message)}
+                aria-describedby={errors.message ? `${ids.message}-error` : undefined}
                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none ${
                   errors.message ? 'border-red-500' : 'border-gray-300'
                 }`}
               />
               {errors.message && (
-                <p className="text-sm text-red-600 mt-1">{errors.message.message}</p>
+                <p id={`${ids.message}-error`} className="text-sm text-red-600 mt-1">
+                  {errors.message.message}
+                </p>
               )}
             </div>
           )}
@@ -333,7 +399,7 @@ export function UnifiedLeadForm({
           {/* Submit Button */}
           <Button
             type="submit"
-            disabled={isSubmitting || !isValid}
+            disabled={isSubmitting}
             className="w-full"
             size="md"
           >
