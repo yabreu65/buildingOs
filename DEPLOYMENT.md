@@ -132,6 +132,7 @@ npm run dev
 - Confirm `NEXT_PUBLIC_API_URL` matches the public API URL used by browsers.
 - Confirm `WEB_ORIGIN` and `APP_BASE_URL` match the public HTTPS origin.
 - Confirm PostgreSQL, Redis, and MinIO are not published on public interfaces.
+- Confirm TLS is enabled and certificates are valid before the cutover.
 
 ---
 
@@ -506,22 +507,25 @@ npm run deploy:prod  # Your deployment script
 ### Step 6: Post-Deployment Verification
 
 ```bash
-# 1. Health check
+# 1. Liveness check
 curl https://buildingos.example.com/health
 
-# 2. Verify database connectivity
+# 2. Readiness check
+curl https://buildingos.example.com/ready
+
+# 3. Verify database connectivity
 # (check logs for successful connections)
 
-# 3. Test critical workflows
+# 4. Test critical workflows
 # - Login
 # - Create building/unit
 # - Upload document
 
-# 4. Monitor error logs
+# 5. Monitor error logs
 # - Check Sentry dashboard
 # - Check CloudWatch/application logs
 
-# 5. Monitor performance
+# 6. Monitor performance
 # - Response times
 # - Database query performance
 # - API rate limiting
@@ -623,7 +627,7 @@ async function main() {
 
 ### Post-Deployment (Staging)
 
-- [ ] API responds to health check
+- [ ] API readiness check passes
 - [ ] Database migrations applied successfully
 - [ ] Login works
 - [ ] Create building works
@@ -633,7 +637,7 @@ async function main() {
 
 ### Post-Deployment (Production)
 
-- [ ] API health check passes
+- [ ] API readiness check passes
 - [ ] Database is responsive
 - [ ] Critical workflows functional
 - [ ] No error spikes in Sentry/monitoring
@@ -681,7 +685,7 @@ git push origin main
 # (if auto-deploy on push is enabled)
 
 # 4. Verify rollback
-curl https://buildingos.example.com/health
+curl https://buildingos.example.com/ready
 ```
 
 ### Scenario 3: Data Corruption
@@ -715,7 +719,7 @@ kubectl rollout undo deployment/buildingos-api
 kubectl rollout status deployment/buildingos-api
 
 # 4. Verify
-curl https://buildingos.example.com/health
+curl https://buildingos.example.com/ready
 ```
 
 ---

@@ -307,7 +307,7 @@ curl http://localhost:4000/ready
 
 **Purpose**: Expose request volume, request duration, process uptime, and the last readiness snapshot for scrape-based monitoring.
 **Response**: Prometheus text exposition format
-**Used by**: Internal monitoring, dashboards, and alert rules
+**Used by**: Internal monitoring, dashboards, and alert rules. Do not treat it as a public unauthenticated edge endpoint.
 
 ```bash
 curl http://localhost:4000/metrics

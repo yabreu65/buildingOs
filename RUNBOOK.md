@@ -27,6 +27,13 @@ Complete operational guide for running BuildingOS in production. Covers daily pr
 
 Before any release or incident response, review the public ingress rules in [`docs/release/PUBLIC_EDGE_CONTRACT.md`](docs/release/PUBLIC_EDGE_CONTRACT.md). It defines the supported public hostnames, TLS expectations, and which services must remain internal.
 
+### Health, readiness, and metrics contract
+
+- `/health` is liveness only: it tells you whether the API process is alive.
+- `/ready` is readiness: it tells you whether the API can safely accept traffic.
+- `/readyz` is an alias for `/ready` and may be used by orchestrators or legacy tooling.
+- `/metrics` is for internal observability and monitoring, not a public unprotected endpoint.
+
 ### Prerequisites
 
 - PostgreSQL client tools (`psql`, `pg_dump`, `pg_restore`)
@@ -37,8 +44,14 @@ Before any release or incident response, review the public ingress rules in [`do
 ### Essential Commands
 
 ```bash
-# Check system health / readiness
+# Check liveness
+curl http://api-server:3001/health
+
+# Check readiness
 curl http://api-server:3001/readyz
+
+# Check internal metrics
+curl http://api-server:3001/metrics
 
 # Create backup
 ./scripts/backup-db.sh --upload --env production
@@ -61,7 +74,7 @@ grep "550e8400-e29b-41d4-a716-446655440000" /var/log/buildingos/api.log
 - Web should be reachable through the approved public hostname, not by direct container port exposure.
 - API should be reachable through the approved public hostname or reverse proxy route.
 - PostgreSQL, Redis, and MinIO should remain internal only.
-- Use `/health` for liveness and `/readyz` for readiness during operational checks.
+- Use `/health` for liveness, `/ready` or `/readyz` for readiness, and `/metrics` only for internal monitoring.
 
 ---
 
@@ -78,7 +91,7 @@ grep "550e8400-e29b-41d4-a716-446655440000" /var/log/buildingos/api.log
 echo "🔍 BuildingOS Daily Checklist - $(date)"
 echo "=================================="
 
-# 1. Check health endpoint
+# 1. Check readiness endpoint
 echo "1. Checking API health..."
 curl -s http://api-server:3001/readyz | jq .status
 if [ $? -ne 0 ]; then echo "❌ API DOWN"; exit 1; fi
@@ -142,6 +155,18 @@ grep "durationMs" /var/log/buildingos/api.log | \
 
 ## Backup & Recovery
 
+### Backup validity criteria
+
+A backup is considered valid only when all of the following are true:
+
+- The backup file exists.
+- The metadata file exists.
+- The checksum is generated and matches the backup artifact.
+- The backup stream was not contaminated by logs or interactive output.
+- Restore was tested in a temporary or staging database when applicable.
+- Production restore is never performed without explicit approval and a rollback plan.
+- RPO/RTO are documented or explicitly marked as pending for the release.
+
 ### Automated Backup Scheduling
 
 **PostgreSQL backups run automatically:**
@@ -174,6 +199,13 @@ Create backup immediately:
 ls -lh backups/metadata/ | head -3
 cat backups/metadata/backup_production_*.metadata.json | jq '.checksum_sha256'
 ```
+
+### Restore verification
+
+- Verify the backup file and metadata pair before any restore.
+- Prefer restoring to a temporary database or staging environment first.
+- Confirm the restored database has the expected table counts and a successful smoke test.
+- Never restore directly over production unless it is an explicitly approved emergency operation.
 
 **Backup file structure:**
 
@@ -345,7 +377,7 @@ npm run migrate:deploy
 npm run migrate:status
 # Should show: All migrations are up to date
 
-# 5. Check health endpoint
+# 5. Check readiness endpoint
 curl http://api-server:3001/readyz
 # Should return {"status":"healthy",...}
 
@@ -409,7 +441,7 @@ npm run migrate:deploy
 [ ] 3. Schema changes reviewed
 [ ] 4. Rollback plan documented
 [ ] 5. Team notified of migration window
-[ ] 6. Health endpoint verified
+[ ] 6. Readiness endpoint verified
 [ ] 7. Migration executed: npm run migrate:deploy
 [ ] 8. /readyz endpoint shows healthy
 [ ] 9. Error rate monitored for 15 minutes
@@ -565,7 +597,7 @@ grep "$REQUEST_ID" /var/log/buildingos/api.log
 | Database Slow | latency > 100ms | Check connections, check queries |
 | High Error Rate | > 10 errors/min | Check Sentry, investigate logs |
 | High P99 Latency | > 2s | Check database metrics, check slow queries |
-| Storage Down | health.storage = down | Restart MinIO or check S3 |
+| Storage Down | readiness.storage = down | Restart MinIO or check S3 |
 
 ---
 
@@ -895,7 +927,8 @@ psql -c "SELECT * FROM \"AuditLog\" WHERE \"createdAt\" > '2026-02-17';" > audit
 
 ### Observability Alerting Checklist
 
-- [ ] `/readyz` returns 200 for the API
+- [ ] `/health` returns 200 for the API process
+- [ ] `/readyz` returns 200 for the API when ready and reflects degraded states clearly
 - [ ] `/metrics` is scrapeable and contains request counters
 - [ ] `X-Request-Id` is present in API responses and visible in logs
 - [ ] Readiness failures page the on-call owner

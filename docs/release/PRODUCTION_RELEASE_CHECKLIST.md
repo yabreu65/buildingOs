@@ -17,6 +17,7 @@ Use this checklist before every production deployment.
 - [ ] `docker compose -f infra/docker/docker-compose.full.yml config` reviewed before deploy
 - [ ] Public ports reviewed and match the intended exposure
 - [ ] Public web/API hostnames match the release contract
+- [ ] TLS is enabled and certificates are valid for the public hostnames
 - [ ] No volume changes planned for this release
 - [ ] No shared postgres or redis container changes planned without approval
 - [ ] Database backup taken and verified
@@ -27,7 +28,10 @@ Use this checklist before every production deployment.
 
 - [ ] `docker compose ps` or equivalent runtime status checked
 - [ ] Deployment logs reviewed for errors or unexpected restarts
-- [ ] Health checks pass for the API, web app, and supporting services
+- [ ] `/health` returns 200 for the API process
+- [ ] `/ready` or `/readyz` returns the expected readiness state
+- [ ] `/metrics` is scrapeable under the agreed observability policy
+- [ ] Health checks pass for the web app and supporting services
 - [ ] Public port exposure matches the intended reverse-proxy setup
 - [ ] Public web/API hostnames match the release contract
 - [ ] No unexpected volume changes or container replacements occurred
@@ -53,8 +57,8 @@ Use this checklist before every production deployment.
 
 ## Readiness and observability
 
-- [ ] `/health` returns 200
-- [ ] `/readyz` returns 200 when the API is healthy or degraded, 503 only when the database is down
+- [ ] `/health` returns 200 for liveness
+- [ ] `/ready` and `/readyz` return readiness, with `degraded` allowed when only optional dependencies fail
 - [ ] `/metrics` returns scrapeable Prometheus text without secrets
 - [ ] Email provider health is green or intentionally `not_configured`
 - [ ] Request ID propagation verified end to end (`X-Request-Id`)
