@@ -63,21 +63,21 @@ S3_REGION="${S3_REGION:-us-east-1}"
 # Functions
 # =============================================================================
 
-# Print colored output
+# Print colored output to stderr so stdout stays reserved for return values.
 log_info() {
-  echo -e "\033[36m[INFO]\033[0m $1"
+  printf '\033[36m[INFO]\033[0m %s\n' "$1" >&2
 }
 
 log_success() {
-  echo -e "\033[32m[✓]\033[0m $1"
+  printf '\033[32m[✓]\033[0m %s\n' "$1" >&2
 }
 
 log_warn() {
-  echo -e "\033[33m[WARN]\033[0m $1"
+  printf '\033[33m[WARN]\033[0m %s\n' "$1" >&2
 }
 
 log_error() {
-  echo -e "\033[31m[✗]\033[0m $1"
+  printf '\033[31m[✗]\033[0m %s\n' "$1" >&2
 }
 
 # Validate configuration
@@ -151,25 +151,35 @@ parse_database_url() {
 
 # Create backup file
 create_backup() {
-  local timestamp=$(date +%Y%m%d_%H%M%S)
+  local timestamp
+  timestamp="$(date +%Y%m%d_%H%M%S)"
   local backup_file="${BACKUP_DIR}/backup_${ENVIRONMENT}_${timestamp}.sql.gz"
 
   log_info "Creating database backup..."
   log_info "Output: $backup_file"
 
   # Perform dump with progress
-  if pg_dump --verbose --no-acl --no-owner 2>&1 | gzip > "$backup_file"; then
+  if pg_dump --verbose --no-acl --no-owner | gzip > "$backup_file"; then
     log_success "Backup created: $backup_file"
 
     # Get file size
-    local file_size=$(du -h "$backup_file" | cut -f1)
+    local file_size
+    file_size="$(du -h "$backup_file" | cut -f1)"
     log_info "Backup size: $file_size"
 
     # Calculate checksum
-    local checksum=$(sha256sum "$backup_file" | cut -d' ' -f1)
+    local checksum
+    checksum="$(sha256sum "$backup_file" | cut -d' ' -f1)"
 
     # Create metadata
-    create_metadata "$backup_file" "$checksum" "$file_size" "$timestamp"
+    local metadata_file
+    metadata_file="$(create_metadata "$backup_file" "$checksum" "$file_size" "$timestamp")"
+    if [[ -z "$metadata_file" ]]; then
+      log_error "Metadata path was not returned"
+      rm -f "$backup_file"
+      return 3
+    fi
+    log_info "Metadata saved: $metadata_file"
 
     echo "$backup_file"
     return 0
@@ -209,35 +219,40 @@ create_metadata() {
 }
 EOF
 
-  log_success "Metadata saved: $metadata_file"
   echo "$metadata_file"
 }
 
 # Get current schema version (latest migration)
 get_schema_version() {
-  cd "$PROJECT_DIR/apps/api" 2>/dev/null || echo "unknown"
+  (
+    cd "$PROJECT_DIR/apps/api" 2>/dev/null || {
+      echo "unknown"
+      exit 0
+    }
 
-  # Try to get latest migration name
-  if [[ -d "prisma/migrations" ]]; then
-    ls -1 prisma/migrations | tail -1 | sed 's/_.*$//' || echo "unknown"
-  else
-    echo "unknown"
-  fi
-
-  cd - > /dev/null 2>&1
+    # Try to get latest migration name
+    if [[ -d "prisma/migrations" ]]; then
+      ls -1 prisma/migrations | tail -1 | sed 's/_.*$//' || echo "unknown"
+    else
+      echo "unknown"
+    fi
+  )
 }
 
 # Get app version
 get_app_version() {
-  cd "$PROJECT_DIR" 2>/dev/null || echo "unknown"
+  (
+    cd "$PROJECT_DIR" 2>/dev/null || {
+      echo "unknown"
+      exit 0
+    }
 
-  if [[ -f "package.json" ]]; then
-    grep '"version"' package.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/' || echo "unknown"
-  else
-    echo "unknown"
-  fi
-
-  cd - > /dev/null 2>&1
+    if [[ -f "package.json" ]]; then
+      grep '"version"' package.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/' || echo "unknown"
+    else
+      echo "unknown"
+    fi
+  )
 }
 
 # Get backup type (daily or weekly)
