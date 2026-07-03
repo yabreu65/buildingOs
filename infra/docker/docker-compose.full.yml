@@ -59,7 +59,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:?LOG_LEVEL is required}
       PORT: "3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ready"]
       interval: 30s
       timeout: 10s
       start_period: 10s

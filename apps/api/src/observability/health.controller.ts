@@ -1,10 +1,14 @@
 /**
  * Health Check Controller
- * Exposes /health (liveness) and /ready (readiness) endpoints
+ * Exposes /health (liveness), /ready (readiness), and /readyz (alias)
  * Kubernetes-compatible health check probes
  */
 
 import { Controller, Get, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  HealthLivenessResponseDto,
+  HealthReadinessResponseDto,
+} from './health.dto';
 import { HealthService } from './health.service';
 
 @Controller('')
@@ -12,48 +16,46 @@ export class HealthController {
   constructor(private healthService: HealthService) {}
 
   /**
-   * Liveness probe - basic health check
-   * Returns 200 OK if API is running
-   * Used by orchestrators (Kubernetes, Docker) to restart unhealthy instances
+   * Liveness probe.
+   *
+   * This endpoint only verifies the process is responding and must stay cheap.
+   * It intentionally avoids dependency checks so orchestrators can detect
+   * whether the app process itself is alive.
    */
   @Get('health')
-  async health() {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-    };
+  async health(): Promise<HealthLivenessResponseDto> {
+    return new HealthLivenessResponseDto(new Date().toISOString());
   }
 
   /**
-   * Readiness probe - checks all critical dependencies
-   * Returns 200 OK only if database + storage + email are operational
-   * Returns 503 Service Unavailable if any critical dependency is down
-   * Used by orchestrators to route traffic only to ready instances
+   * Readiness probe.
+   *
+   * This endpoint checks required dependencies before the service receives
+   * traffic. Use it for routing gates and deployment readiness checks.
    */
   @Get('ready')
-  async readiness() {
-    const health = await this.healthService.getHealth();
+  async readiness(): Promise<HealthReadinessResponseDto> {
+    const health = await this.healthService.getReadiness();
+    const response = new HealthReadinessResponseDto(
+      health.status,
+      new Date().toISOString(),
+      health.checks,
+    );
 
     if (health.status === 'unhealthy') {
       throw new HttpException(
-        {
-          status: 'unhealthy',
-          timestamp: new Date().toISOString(),
-          checks: health.checks,
-        },
+        response,
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
-    return {
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      checks: health.checks,
-    };
+    return response;
   }
 
   /**
-   * Alternative readiness endpoint (Kubernetes sometimes uses /readyz)
+   * Alternative readiness endpoint.
+   *
+   * Some orchestrators and probes expect /readyz, so keep it as an alias.
    */
   @Get('readyz')
   async readinessAlt() {

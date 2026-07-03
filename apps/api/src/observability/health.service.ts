@@ -1,6 +1,6 @@
 /**
  * Health Check Service
- * Verifies critical dependencies are operational
+ * Verifies readiness dependencies are operational
  */
 
 import { Injectable } from '@nestjs/common';
@@ -45,9 +45,12 @@ export class HealthService {
   ) {}
 
   /**
-   * Check all critical dependencies
+   * Check readiness dependencies.
+   *
+   * Database is always required. Storage and email are required only when they
+   * are configured for the current environment.
    */
-  async getHealth(): Promise<HealthStatus> {
+  async getReadiness(): Promise<HealthStatus> {
     const checks = {
       database: await this.checkDatabase(),
       storage: await this.checkStorage(),
@@ -78,7 +81,8 @@ export class HealthService {
     } catch (error) {
       return {
         status: 'down',
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          'Database readiness check failed while executing SELECT 1. Likely cause: database unavailable or connectivity issue.',
       };
     }
   }

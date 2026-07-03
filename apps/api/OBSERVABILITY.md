@@ -234,9 +234,18 @@ async login(@Body() loginDto: LoginDto) {
 
 ### Endpoints
 
+**Contract**
+- `/health` = liveness. It only confirms the API process is alive.
+- `/ready` = readiness. It confirms the API can safely receive traffic.
+- `/readyz` = alias for `/ready` for orchestrator compatibility.
+- Deployment gates and service routing should use readiness, not liveness.
+- Database is required for readiness.
+- Storage and email are required only when configured for the environment.
+- Redis is not part of the readiness gate in the current contract.
+
 #### Liveness Probe: `/health`
 
-**Purpose**: Basic health check - is the API running?
+**Purpose**: Basic liveness check - is the API process running?
 **Response**: Always returns 200 OK if API is running
 **Used by**: Kubernetes, Docker, load balancers to restart dead pods
 
@@ -252,7 +261,7 @@ curl http://localhost:4000/health
 #### Readiness Probe: `/ready`
 
 **Purpose**: Is the API ready to accept traffic?
-**Response**: 200 OK if all dependencies healthy, 503 if not
+**Response**: 200 OK if required dependencies are healthy, 503 if not
 **Used by**: Kubernetes, load balancers to route traffic only to ready pods
 
 ```bash
