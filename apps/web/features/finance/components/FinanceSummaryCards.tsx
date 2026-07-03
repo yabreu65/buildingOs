@@ -2,7 +2,7 @@
 
 import Card from '@/shared/components/ui/Card';
 import Skeleton from '@/shared/components/ui/Skeleton';
-import ErrorState from '@/shared/components/ui/ErrorState';
+import Button from '@/shared/components/ui/Button';
 import { FinancialSummary } from '../services/finance.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 
@@ -20,7 +20,19 @@ export function FinanceSummaryCards({
   onRetry,
 }: FinanceSummaryCardsProps) {
   if (error) {
-    return <ErrorState message={error} onRetry={onRetry} />;
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar el resumen financiero</p>
+          <p className="text-sm text-red-700">{error}</p>
+          {onRetry && (
+            <Button size="sm" variant="secondary" onClick={onRetry}>
+              Reintentar
+            </Button>
+          )}
+        </div>
+      </Card>
+    );
   }
 
   if (loading || !summary) {

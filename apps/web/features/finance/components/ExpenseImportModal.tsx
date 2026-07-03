@@ -96,7 +96,7 @@ export function ExpenseImportModal({
       XLSX.writeFile(wb, `gastos-${period}.xlsx`);
     } catch (err) {
       console.error('Error al generar template:', err);
-      alert('Error al descargar el template');
+      alert('Error al descargar la plantilla');
     }
   };
 
@@ -201,7 +201,7 @@ export function ExpenseImportModal({
                 )}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <p className="text-sm font-medium mb-1">Click para elegir archivo o arrastralo aquí</p>
+                <p className="text-sm font-medium mb-1">Haz clic para elegir archivo o arrástralo aquí</p>
                 <p className="text-xs text-muted-foreground">.xlsx, .xls, .csv</p>
               </div>
 
@@ -221,7 +221,7 @@ export function ExpenseImportModal({
                   Cancelar
                 </Button>
                 <Button onClick={downloadTemplate}>
-                  Descargar template (Excel)
+                  Descargar plantilla (Excel)
                 </Button>
               </div>
             </>

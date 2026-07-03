@@ -29,6 +29,11 @@ export function IncomeCreateModal({
   const { toast } = useToast();
   const { data: allCategories = [] } = useExpenseLedgerCategories(tenantId);
   const createMutation = useCreateIncome(tenantId);
+  const categoryFieldId = 'income-create-category';
+  const amountFieldId = 'income-create-amount';
+  const currencyFieldId = 'income-create-currency';
+  const receivedDateFieldId = 'income-create-received-date';
+  const descriptionFieldId = 'income-create-description';
 
   // Filtrar solo categorías de INGRESOS
   const categories = allCategories.filter((c) => c.movementType === 'INCOME');
@@ -81,7 +86,9 @@ export function IncomeCreateModal({
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Registrar Ingreso</h2>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Cerrar diálogo de registrar ingreso"
             className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
           >
             <X className="h-5 w-5" />
@@ -90,10 +97,11 @@ export function IncomeCreateModal({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label htmlFor={categoryFieldId} className="block text-sm font-medium mb-1">
               Rubro <span className="text-red-500">*</span>
             </label>
             <select
+              id={categoryFieldId}
               required
               value={form.categoryId}
               onChange={(e) =>
@@ -114,10 +122,11 @@ export function IncomeCreateModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label htmlFor={amountFieldId} className="block text-sm font-medium mb-1">
                 Monto <span className="text-red-500">*</span>
               </label>
               <input
+                id={amountFieldId}
                 type="number"
                 required
                 step="0.01"
@@ -131,8 +140,9 @@ export function IncomeCreateModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Moneda</label>
+              <label htmlFor={currencyFieldId} className="block text-sm font-medium mb-1">Moneda</label>
               <select
+                id={currencyFieldId}
                 value={form.currencyCode}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, currencyCode: e.target.value }))
@@ -149,10 +159,11 @@ export function IncomeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label htmlFor={receivedDateFieldId} className="block text-sm font-medium mb-1">
               Fecha de Recepción <span className="text-red-500">*</span>
             </label>
             <input
+              id={receivedDateFieldId}
               type="date"
               required
               value={form.receivedDate}
@@ -164,10 +175,11 @@ export function IncomeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label htmlFor={descriptionFieldId} className="block text-sm font-medium mb-1">
               Descripción (opcional)
             </label>
             <textarea
+              id={descriptionFieldId}
               placeholder="Ej: Cuota extraordinaria pagada por..."
               value={form.description}
               onChange={(e) =>

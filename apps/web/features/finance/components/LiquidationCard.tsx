@@ -168,12 +168,15 @@ export function LiquidationCard({
           </div>
 
           {/* Expandir */}
-          {isDetail(liquidation) && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="p-1 rounded hover:bg-muted"
-            >
-              {expanded ? (
+            {isDetail(liquidation) && (
+              <button
+                type="button"
+                aria-label={expanded ? 'Contraer detalles de la liquidación' : 'Expandir detalles de la liquidación'}
+                aria-expanded={expanded}
+                onClick={() => setExpanded((v) => !v)}
+                className="p-1 rounded hover:bg-muted"
+              >
+                {expanded ? (
                 <ChevronUp className="h-4 w-4" />
               ) : (
                 <ChevronDown className="h-4 w-4" />

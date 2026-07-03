@@ -33,6 +33,11 @@ export function ChargeCreateModal({
 }: ChargeCreateModalProps) {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const unitIdFieldId = 'charge-unit-id';
+  const conceptFieldId = 'charge-concept';
+  const typeFieldId = 'charge-type';
+  const amountFieldId = 'charge-amount';
+  const dueDateFieldId = 'charge-due-date';
   const [formData, setFormData] = useState<ChargeFormData>({
     unitId: '',
     concept: '',
@@ -75,15 +80,21 @@ export function ChargeCreateModal({
       <Card className="w-full max-w-md">
         <div className="mb-4 flex justify-between items-center">
           <h3 className="text-lg font-semibold">Crear Cargo</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar diálogo de crear cargo"
+            className="text-gray-500 hover:text-gray-700"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Unidad</label>
+            <label htmlFor={unitIdFieldId} className="block text-sm font-medium mb-1">Unidad</label>
             <input
+              id={unitIdFieldId}
               type="text"
               value={formData.unitId}
               onChange={(e) => setFormData({ ...formData, unitId: e.target.value })}
@@ -94,8 +105,9 @@ export function ChargeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Concepto</label>
+            <label htmlFor={conceptFieldId} className="block text-sm font-medium mb-1">Concepto</label>
             <input
+              id={conceptFieldId}
               type="text"
               value={formData.concept}
               onChange={(e) => setFormData({ ...formData, concept: e.target.value })}
@@ -106,8 +118,9 @@ export function ChargeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Tipo de Cargo</label>
+            <label htmlFor={typeFieldId} className="block text-sm font-medium mb-1">Tipo de cargo</label>
             <select
+              id={typeFieldId}
               value={formData.type}
               onChange={(e) => setFormData({ ...formData, type: e.target.value as ChargeType })}
               className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
@@ -122,8 +135,9 @@ export function ChargeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Monto</label>
+            <label htmlFor={amountFieldId} className="block text-sm font-medium mb-1">Monto</label>
             <input
+              id={amountFieldId}
               type="number"
               step="0.01"
               value={formData.amount || ''}
@@ -135,8 +149,9 @@ export function ChargeCreateModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Fecha de Vencimiento</label>
+            <label htmlFor={dueDateFieldId} className="block text-sm font-medium mb-1">Fecha de vencimiento</label>
             <input
+              id={dueDateFieldId}
               type="date"
               value={formData.dueDate}
               onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}

@@ -30,6 +30,7 @@ export function LiquidationPublishModal({
 }: LiquidationPublishModalProps) {
   const { toast } = useToast();
   const publishMutation = usePublishLiquidation(tenantId);
+  const dueDateFieldId = 'liquidation-publish-due-date';
 
   // Default: fin del mes del período
   const defaultDueDate = (() => {
@@ -66,7 +67,12 @@ export function LiquidationPublishModal({
       <div className="bg-background rounded-xl shadow-xl w-full max-w-sm p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Publicar liquidación</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar diálogo de publicación de liquidación"
+            className="p-1 rounded hover:bg-muted"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -102,10 +108,11 @@ export function LiquidationPublishModal({
 
           {/* Fecha de vencimiento */}
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label htmlFor={dueDateFieldId} className="block text-sm font-medium mb-1">
               Fecha de vencimiento <span className="text-red-500">*</span>
             </label>
             <input
+              id={dueDateFieldId}
               type="date"
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}

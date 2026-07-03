@@ -133,7 +133,7 @@ export function RecurringExpensesTab({ tenantId, buildingId }: RecurringExpenses
         <div>
           <h3 className="text-sm font-medium text-muted-foreground">Gastos recurrentes</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Configura plantillas que el cron diario convierte en gastos DRAFT automaticamente.
+            Configura plantillas que el cron diario convierte en gastos DRAFT automáticamente.
           </p>
         </div>
         <div className="flex gap-2">
@@ -174,7 +174,7 @@ export function RecurringExpensesTab({ tenantId, buildingId }: RecurringExpenses
                     <span>•</span>
                     <span>{formatCurrency(item.amount, item.currency)}</span>
                     <span>•</span>
-                    <span>Siguiente ejecucion: {formatDate(item.nextRunDate)}</span>
+                    <span>Siguiente ejecución: {formatDate(item.nextRunDate)}</span>
                   </div>
                 </div>
 

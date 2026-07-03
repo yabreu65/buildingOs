@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import { Skeleton } from '@/shared/components/ui';
+import Button from '@/shared/components/ui/Button';
 import { cn } from '@/shared/lib/utils';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listTenantCharges, type TenantCharge } from '../services/expense-ledger.api';
@@ -27,12 +28,14 @@ const statusLabels: Record<TenantCharge['status'], string> = {
 };
 
 export const TenantChargesTab = ({ tenantId, buildingNames }: TenantChargesTabProps) => {
-  const { data: charges = [], isLoading } = useQuery<TenantCharge[]>({
+  const { data: charges = [], isLoading, error, refetch } = useQuery<TenantCharge[]>({
     queryKey: ['tenantCharges', tenantId],
     queryFn: () => listTenantCharges(tenantId),
     enabled: !!tenantId,
     staleTime: 2 * 60 * 1000,
   });
+
+  const errorMessage = error instanceof Error ? error.message : error ? String(error) : null;
 
   if (isLoading) {
     return (
@@ -44,12 +47,28 @@ export const TenantChargesTab = ({ tenantId, buildingNames }: TenantChargesTabPr
     );
   }
 
+  if (errorMessage) {
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar los cargos del conjunto</p>
+          <p className="text-sm">{errorMessage}</p>
+          <Button size="sm" variant="secondary" onClick={() => void refetch()}>
+            Reintentar
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
   if (charges.length === 0) {
     return (
       <Card>
         <div className="p-6 text-center text-gray-600">
-          <p className="text-sm">No hay cargos</p>
-          <p className="text-xs text-muted-foreground mt-2">Los cargos aparecerán aquí cuando se creen</p>
+          <p className="text-sm">No hay cargos para mostrar</p>
+          <p className="text-xs text-muted-foreground mt-2">
+            Los cargos aparecerán aquí cuando la liquidación publique la deuda del período.
+          </p>
         </div>
       </Card>
     );

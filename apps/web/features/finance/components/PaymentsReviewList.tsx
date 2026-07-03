@@ -6,7 +6,6 @@ import Card from '@/shared/components/ui/Card';
 import Badge from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
-import ErrorState from '@/shared/components/ui/ErrorState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Payment } from '../services/finance.api';
@@ -65,7 +64,19 @@ export function PaymentsReviewList({
   };
 
   if (error) {
-    return <ErrorState message={error} onRetry={onRefresh} />;
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar los pagos pendientes</p>
+          <p className="text-sm">{error}</p>
+          {onRefresh && (
+            <Button size="sm" variant="secondary" onClick={onRefresh}>
+              Reintentar
+            </Button>
+          )}
+        </div>
+      </Card>
+    );
   }
 
   if (!loading && payments.length === 0) {
@@ -141,6 +152,8 @@ export function PaymentsReviewList({
                   <TD>
                     {payment.proofDocumentId ? (
                       <button
+                        type="button"
+                        aria-label={`Ver comprobante del pago pendiente de ${payment.unit?.label || payment.unitId || 'la unidad'}`}
                         onClick={() => handleDownloadProof(payment.id, payment.proofDocumentId!)}
                         disabled={downloadingId === payment.id}
                         className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
@@ -162,6 +175,8 @@ export function PaymentsReviewList({
                     <Button
                       size="sm"
                       variant="ghost"
+                      type="button"
+                      aria-label={`Aprobar pago de ${payment.unit?.label || payment.unitId || 'la unidad'}`}
                       onClick={() => handleApproveClick(payment.id)}
                       disabled={approveMutation.isPending}
                       className="text-green-600 hover:text-green-700 gap-1"
@@ -172,6 +187,8 @@ export function PaymentsReviewList({
                     <Button
                       size="sm"
                       variant="ghost"
+                      type="button"
+                      aria-label={`Rechazar pago de ${payment.unit?.label || payment.unitId || 'la unidad'}`}
                       onClick={() => handleRejectClick(payment.id)}
                       disabled={rejectMutation.isPending}
                       className="text-red-600 hover:text-red-700 gap-1"

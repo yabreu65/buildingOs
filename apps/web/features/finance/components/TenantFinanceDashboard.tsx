@@ -13,7 +13,7 @@ import { useTenantFinanceSummary } from '../hooks/useTenantFinanceSummary';
 import { useBuildings } from '@/features/buildings/hooks';
 import { Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/lib/utils';
-import { listPendingPayments, getPaymentMetrics, PaymentStatus, approvePaymentTenant } from '../services/finance.api';
+import { listPendingPayments, PaymentStatus, approvePaymentTenant } from '../services/finance.api';
 import { TenantChargesTab } from './TenantChargesTab';
 import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
 import { TenantExpensesList } from './TenantExpensesList';
@@ -40,9 +40,12 @@ export const TenantFinanceDashboard = () => {
   const params = useParams<Params>();
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
+  const currentMonth = new Date().toISOString().slice(0, 7);
   
   // Initialize tab from URL query param
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [period, setPeriod] = useState<string>(currentMonth);
+  const periodInputId = 'tenant-finance-period';
   
   // Set initial tab from URL after mount
   useEffect(() => {
@@ -52,7 +55,6 @@ export const TenantFinanceDashboard = () => {
     }
   }, [searchParams]);
 
-  const [period, setPeriod] = useState<string>('');
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
   const [downloadingProof, setDownloadingProof] = useState<string | null>(null);
   const [proofUrls, setProofUrls] = useState<Record<string, string>>({});
@@ -63,7 +65,7 @@ export const TenantFinanceDashboard = () => {
   const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
 
   // Tenant-level payments and metrics - always enabled for badge count
-  const { data: payments = [], isLoading: paymentsLoading } = useQuery({
+  const { data: payments = [], isLoading: paymentsLoading, error: paymentsError } = useQuery({
     queryKey: ['tenantPayments', tenantId],
     queryFn: () => listPendingPayments(tenantId!, { status: PaymentStatus.SUBMITTED }),
     enabled: !!tenantId,
@@ -71,15 +73,8 @@ export const TenantFinanceDashboard = () => {
     refetchInterval: 30000, // Auto-refresh every 30s
   });
 
-  const { data: metrics, isLoading: metricsLoading } = useQuery({
-    queryKey: ['paymentMetrics', tenantId],
-    queryFn: () => getPaymentMetrics(tenantId!),
-    enabled: !!tenantId,
-    staleTime: 60 * 1000,
-  });
-
   // Tenant-level expenses (TENANT_SHARED scope - gastos comunes)
-  const { data: tenantExpenses = [], isLoading: tenantExpensesLoading, refetch: refetchTenantExpenses } = useExpenses(
+  const { data: tenantExpenses = [], isLoading: tenantExpensesLoading, error: tenantExpensesError, refetch: refetchTenantExpenses } = useExpenses(
     tenantId || '',
     { period: period || undefined, status: undefined, scopeType: 'TENANT_SHARED' }
   );
@@ -106,6 +101,8 @@ export const TenantFinanceDashboard = () => {
 
   // Convert React Query error to string message
   const errorMsg = error ? (error instanceof Error ? error.message : String(error)) : null;
+  const paymentsErrorMsg = paymentsError ? (paymentsError instanceof Error ? paymentsError.message : String(paymentsError)) : null;
+  const tenantExpensesErrorMsg = tenantExpensesError ? (tenantExpensesError instanceof Error ? tenantExpensesError.message : String(tenantExpensesError)) : null;
 
   // Handle proof download
   const handleDownloadProof = async (paymentId: string, documentId: string) => {
@@ -128,11 +125,27 @@ export const TenantFinanceDashboard = () => {
   return (
     <div className="space-y-6">
        {/* Header */}
-       <div className="space-y-3">
-         <h1 className="text-2xl font-bold">Resumen financiero</h1>
-         <p className="text-sm text-muted-foreground">
-           Estado consolidado de {buildingIds.length} edificio{buildingIds.length !== 1 ? 's' : ''}
-         </p>
+      <div className="space-y-3">
+         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+           <div>
+             <h1 className="text-2xl font-bold">Finanzas del conjunto</h1>
+             <p className="text-sm text-muted-foreground">
+               Estado consolidado de {buildingIds.length} edificio{buildingIds.length !== 1 ? 's' : ''} para el período seleccionado
+             </p>
+           </div>
+           <div className="flex items-center gap-2">
+             <label htmlFor={periodInputId} className="text-sm font-medium text-gray-600">
+               Período:
+             </label>
+             <input
+               id={periodInputId}
+               type="month"
+               value={period}
+               onChange={(e) => setPeriod(e.target.value)}
+               className="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+             />
+           </div>
+         </div>
        </div>
 
       {/* KPI Cards */}
@@ -181,7 +194,7 @@ export const TenantFinanceDashboard = () => {
               <Card>
                 <div className="p-6 text-center text-gray-600">
                   <p className="text-sm">No hay edificios disponibles</p>
-                  <p className="text-xs text-muted-foreground mt-2">Crea un edificio para ver el resumen financiero</p>
+                  <p className="text-xs text-muted-foreground mt-2">Crea al menos un edificio para ver el resumen financiero consolidado</p>
                 </div>
               </Card>
             ) : (
@@ -199,7 +212,7 @@ export const TenantFinanceDashboard = () => {
             period={period || new Date().toISOString().split('T')[0].slice(0, 7)}
             expenses={visibleTenantExpenses}
             loading={tenantExpensesLoading}
-            error={null}
+            error={tenantExpensesErrorMsg}
             onRefresh={() => void refetchTenantExpenses()}
           />
         )}
@@ -216,6 +229,13 @@ export const TenantFinanceDashboard = () => {
                 <Skeleton className="h-10" />
                 <Skeleton className="h-10" />
               </>
+            ) : paymentsErrorMsg ? (
+              <Card>
+                <div className="p-6 text-center text-red-700">
+                  <p className="text-sm font-medium">No pudimos cargar los pagos pendientes</p>
+                  <p className="text-xs text-muted-foreground mt-2">{paymentsErrorMsg}</p>
+                </div>
+              </Card>
             ) : payments.length === 0 ? (
               <Card>
                 <div className="p-6 text-center text-gray-600">
@@ -237,6 +257,8 @@ export const TenantFinanceDashboard = () => {
                       <div className="flex flex-col items-end gap-2">
                         {payment.proofDocumentId ? (
                           <button
+                            type="button"
+                            aria-label={`Ver comprobante del pago de ${payment.unit?.label || payment.unitId}`}
                             onClick={() => handleDownloadProof(payment.id, payment.proofDocumentId!)}
                             disabled={downloadingProof === payment.id}
                             className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
@@ -255,6 +277,8 @@ export const TenantFinanceDashboard = () => {
                         )}
                         <Button
                           size="sm"
+                          type="button"
+                          aria-label={`Aprobar pago de ${payment.unit?.label || payment.unitId}`}
                           onClick={() => setSelectedPaymentId(payment.id)}
                         >
                           Aprobar

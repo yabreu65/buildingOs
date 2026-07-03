@@ -38,8 +38,8 @@ export const TenantDelinquentUnitsList = ({
         <div className="flex items-center space-x-3">
           <AlertCircle className="w-8 h-8 text-green-600" />
           <div>
-            <p className="font-medium text-green-800">Excelente</p>
-            <p className="text-sm text-green-600">Todas las unidades están al día</p>
+            <p className="font-medium text-green-800">Sin morosidad registrada</p>
+            <p className="text-sm text-green-600">Todas las unidades están al día en el período seleccionado</p>
           </div>
         </div>
       </div>
@@ -52,7 +52,7 @@ export const TenantDelinquentUnitsList = ({
   return (
     <div className="space-y-4">
       <div className="mb-4">
-        <h2 className="text-xl font-semibold text-gray-800">Unidades con deuda pendiente</h2>
+        <h2 className="text-xl font-semibold text-gray-800">Unidades con deuda pendiente del conjunto</h2>
         <p className="text-sm text-gray-600">
           {delinquent.length} unidad{delinquent.length !== 1 ? 's' : ''} requiere atención
         </p>
@@ -108,6 +108,8 @@ export const TenantDelinquentUnitsList = ({
                 </TD>
                 <TD className="px-4 py-4 text-center text-sm">
                   <button
+                    type="button"
+                    aria-label={`Ver detalle de ${item.unitLabel || item.unitId}`}
                     className="px-3 py-1.5 text-xs font-medium bg-red-50 text-red-600 rounded hover:bg-red-100"
                     onClick={() => router.push(`/${tenantId}/buildings/${item.buildingId}/units/${item.unitId}`)}
                   >

@@ -12,12 +12,11 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  Cell,
 } from 'recharts';
 import { useFinanceSummary } from '../hooks/useFinanceSummary';
 import { useFinanceTrend } from '../hooks/useFinanceTrend';
 import Skeleton from '@/shared/components/ui/Skeleton';
-import ErrorState from '@/shared/components/ui/ErrorState';
+import Card from '@/shared/components/ui/Card';
 
 interface FinanceChartsPanelProps {
   buildingId: string;
@@ -65,9 +64,14 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
   if (summaryError || trendError) {
     const errorMessage = summaryError || trendError || 'Error al cargar gráficos';
     return (
-      <ErrorState
-        message={typeof errorMessage === 'string' ? errorMessage : errorMessage.message}
-      />
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-2 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar los gráficos financieros</p>
+          <p className="text-sm">
+            {typeof errorMessage === 'string' ? errorMessage : errorMessage.message}
+          </p>
+        </div>
+      </Card>
     );
   }
 
@@ -83,7 +87,9 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
 
   if (!summary || !trend) {
     return (
-      <ErrorState message="No hay datos disponibles" />
+      <Card className="border-gray-200 bg-gray-50 p-4">
+        <div className="text-center text-sm text-gray-600">No hay datos financieros disponibles</div>
+      </Card>
     );
   }
 

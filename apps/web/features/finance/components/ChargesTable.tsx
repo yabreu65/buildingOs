@@ -6,7 +6,6 @@ import Card from '@/shared/components/ui/Card';
 import Badge from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
-import ErrorState from '@/shared/components/ui/ErrorState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import DeleteConfirmDialog from '@/shared/components/ui/DeleteConfirmDialog';
 import { useToast } from '@/shared/components/ui/Toast';
@@ -31,27 +30,45 @@ const statusColors: Record<ChargeStatus, string> = {
   [ChargeStatus.CANCELED]: 'bg-gray-100 text-gray-800',
 };
 
+const statusLabels: Record<ChargeStatus, string> = {
+  [ChargeStatus.PENDING]: 'Pendiente',
+  [ChargeStatus.PARTIAL]: 'Parcial',
+  [ChargeStatus.PAID]: 'Pagado',
+  [ChargeStatus.CANCELED]: 'Cancelado',
+};
+
 export function ChargesTable({
   charges,
   loading,
   error,
   onRefresh,
-  buildingId,
 }: ChargesTableProps) {
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
   const { toast } = useToast();
 
   if (error) {
-    return <ErrorState message={error} onRetry={onRefresh} />;
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar los cargos</p>
+          <p className="text-sm">{error}</p>
+          {onRefresh && (
+            <Button size="sm" variant="secondary" onClick={onRefresh}>
+              Reintentar
+            </Button>
+          )}
+        </div>
+      </Card>
+    );
   }
 
   if (!loading && charges.length === 0) {
     return (
       <EmptyState
         icon={<Plus className="w-12 h-12 text-muted-foreground" />}
-        title="No hay cargos"
-        description="Crea el primer cargo para esta unidad"
+        title="No hay cargos publicados"
+        description="La creación de cargos se realiza desde la acción principal de la pestaña financiera."
       />
     );
   }
@@ -75,11 +92,12 @@ export function ChargesTable({
     <>
       <div className="space-y-4">
         <div className="flex justify-between items-center">
-          <h3 className="text-lg font-semibold">Cargos</h3>
-          <Button disabled className="gap-2">
-            <Plus className="w-4 h-4" />
-            Crear cargo
-          </Button>
+          <div>
+            <h3 className="text-lg font-semibold">Cargos</h3>
+            <p className="text-xs text-muted-foreground">
+              Revisión de cargos del edificio para el período seleccionado.
+            </p>
+          </div>
         </div>
 
         <Card>
@@ -110,7 +128,7 @@ export function ChargesTable({
                     <TD>{new Date(charge.dueDate).toLocaleDateString()}</TD>
                     <TD>
                       <Badge className={statusColors[charge.status]}>
-                        {charge.status}
+                        {statusLabels[charge.status]}
                       </Badge>
                     </TD>
                     <TD className="text-right">
@@ -120,6 +138,7 @@ export function ChargesTable({
                           size="sm"
                           onClick={() => setSelectedChargeId(charge.id)}
                           className="text-red-600 hover:text-red-700"
+                          aria-label={`Cancelar cargo ${charge.concept}`}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>

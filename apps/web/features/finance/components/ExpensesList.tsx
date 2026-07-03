@@ -255,8 +255,10 @@ export function ExpensesList({
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
                       {expense.status === 'DRAFT' && (
-                        <>
+                          <>
                           <button
+                            type="button"
+                            aria-label={`Editar gasto ${expense.categoryName}`}
                             onClick={() => setEditingExpense(expense)}
                             disabled={actioningId === expense.id}
                             title="Editar"
@@ -265,6 +267,8 @@ export function ExpensesList({
                             <Pencil className="h-4 w-4" />
                           </button>
                           <button
+                            type="button"
+                            aria-label={`Validar gasto ${expense.categoryName}`}
                             onClick={() => handleValidate(expense.id)}
                             disabled={actioningId === expense.id}
                             title="Validar"
@@ -277,6 +281,8 @@ export function ExpensesList({
                             )}
                           </button>
                           <button
+                            type="button"
+                            aria-label={`Anular gasto ${expense.categoryName}`}
                             onClick={() => handleVoid(expense.id)}
                             disabled={actioningId === expense.id}
                             title="Anular"
@@ -288,6 +294,8 @@ export function ExpensesList({
                       )}
                       {expense.status === 'VALIDATED' && (
                         <button
+                          type="button"
+                          aria-label={`Anular gasto ${expense.categoryName}`}
                           onClick={() => handleVoid(expense.id)}
                           disabled={actioningId === expense.id}
                           title="Anular"

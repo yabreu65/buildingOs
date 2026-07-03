@@ -41,6 +41,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   const [activeTab, setActiveTab] = useState<TabType>('rubros');
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
   const [period, setPeriod] = useState<string>(currentMonth);
+  const periodInputId = 'building-finance-period';
 
   // Load data from hooks
   const { data: summary, isPending: summaryLoading, error: summaryError, refetch: refetchSummaryRaw } = useFinanceSummary(buildingId, period);
@@ -117,14 +118,15 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
       {/* Header with period selector */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Finanzas</h1>
+          <h1 className="text-3xl font-bold">Finanzas del edificio</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Todo lo que ves aquí corresponde al período seleccionado del edificio actual.
+            Todo lo que ves aquí corresponde al edificio actual y al período seleccionado.
           </p>
         </div>
         <div>
-          <label className="text-sm font-medium text-gray-600 mr-2">Período:</label>
+          <label htmlFor={periodInputId} className="text-sm font-medium text-gray-600 mr-2">Período:</label>
           <input
+            id={periodInputId}
             type="month"
             value={period}
             onChange={(e) => setPeriod(e.target.value)}

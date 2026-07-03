@@ -2,17 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { financeApi } from '../services/finance.api';
-import { Skeleton, ErrorState } from '@/shared/components/ui';
+import { Skeleton } from '@/shared/components/ui';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 
 interface BuildingFinanceSummary {
   buildingId: string;
   buildingName: string;
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
-  collectionRate: number;
+  totalCharges: number | null;
+  totalPaid: number | null;
+  totalOutstanding: number | null;
+  collectionRate: number | null;
+  errorMessage?: string;
 }
 
 interface BuildingsFinanceSummaryProps {
@@ -24,7 +25,6 @@ interface BuildingsFinanceSummaryProps {
 const formatPercentage = (val: number) => `${Math.round(val)}%`;
 
 export function BuildingsFinanceSummary({
-  tenantId,
   buildingIds,
   buildingNames,
 }: BuildingsFinanceSummaryProps) {
@@ -32,6 +32,7 @@ export function BuildingsFinanceSummary({
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const failedCount = summaries.filter((summary) => summary.errorMessage).length;
 
   useEffect(() => {
     const fetchSummaries = async () => {
@@ -56,10 +57,11 @@ export function BuildingsFinanceSummary({
               return {
                 buildingId: bId,
                 buildingName: buildingNames[bId] || bId,
-                totalCharges: 0,
-                totalPaid: 0,
-                totalOutstanding: 0,
-                collectionRate: 0,
+                totalCharges: null,
+                totalPaid: null,
+                totalOutstanding: null,
+                collectionRate: null,
+                errorMessage: 'No disponible',
               };
             }
           }),
@@ -107,6 +109,9 @@ export function BuildingsFinanceSummary({
     );
   }
 
+  const formatCurrencyValue = (value: number | null) =>
+    value === null ? '—' : format(value);
+
   return (
     <div className="space-y-6">
       <div className="mb-4">
@@ -115,6 +120,11 @@ export function BuildingsFinanceSummary({
           Vista comparativa de la eficiencia de cobranza entre todos los edificios del tenant
         </p>
       </div>
+      {failedCount > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          No pudimos cargar {failedCount} edificio{failedCount !== 1 ? 's' : ''}. Esos valores se muestran como “—” para no ocultar el error.
+        </div>
+      )}
       <div className="overflow-x-auto">
         <Table className="min-w-full divide-y divide-gray-200">
           <THead className="bg-gray-50">
@@ -143,28 +153,32 @@ export function BuildingsFinanceSummary({
                   {summary.buildingName}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-gray-900">
-                  {format(summary.totalCharges)}
+                  {formatCurrencyValue(summary.totalCharges)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-green-600">
-                  {format(summary.totalPaid)}
+                  {formatCurrencyValue(summary.totalPaid)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-red-600">
-                  {format(summary.totalOutstanding)}
+                  {formatCurrencyValue(summary.totalOutstanding)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium">
-                  <div className="flex items-center">
-                    <div className="relative w-24 h-2.5 bg-gray-200 rounded-full">
-                      <div
-                        className="absolute left-0 h-full rounded-full bg-blue-600"
-                        style={{
-                          width: `${Math.min(summary.collectionRate, 100)}%`,
-                        }}
-                      />
+                  {summary.collectionRate === null ? (
+                    <span className="text-gray-500">—</span>
+                  ) : (
+                    <div className="flex items-center">
+                      <div className="relative w-24 h-2.5 bg-gray-200 rounded-full">
+                        <div
+                          className="absolute left-0 h-full rounded-full bg-blue-600"
+                          style={{
+                            width: `${Math.min(summary.collectionRate, 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="ml-2 text-xs font-semibold text-gray-900">
+                        {formatPercentage(summary.collectionRate)}
+                      </span>
                     </div>
-                    <span className="ml-2 text-xs font-semibold text-gray-900">
-                      {formatPercentage(summary.collectionRate)}
-                    </span>
-                  </div>
+                  )}
                 </TD>
               </TR>
             ))}

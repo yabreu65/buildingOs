@@ -22,6 +22,7 @@ export function PaymentApproveModal({
   isSubmitting = false,
 }: PaymentApproveModalProps) {
   const [paidAt, setPaidAt] = useState<string>('');
+  const paidAtFieldId = 'payment-approve-paid-at';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,18 +34,23 @@ export function PaymentApproveModal({
       <Card className="w-full max-w-md">
         <div className="mb-4 flex justify-between items-center">
           <h3 className="text-lg font-semibold">Aprobar Pago</h3>
-          <button onClick={onCancel} className="text-gray-500 hover:text-gray-700">
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Cerrar diálogo de aprobación de pago"
+            className="text-gray-500 hover:text-gray-700"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="paidAt" className="block text-sm font-medium mb-1">
+            <label htmlFor={paidAtFieldId} className="block text-sm font-medium mb-1">
               Fecha de Pago (Opcional)
             </label>
             <input
-              id="paidAt"
+              id={paidAtFieldId}
               type="date"
               value={paidAt}
               onChange={(e) => setPaidAt(e.target.value)}

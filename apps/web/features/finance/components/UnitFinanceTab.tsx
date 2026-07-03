@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import Card from '@/shared/components/ui/Card';
-import { Skeleton, ErrorState, EmptyState } from '@/shared/components/ui';
+import { Skeleton, EmptyState } from '@/shared/components/ui';
+import Button from '@/shared/components/ui/Button';
 import { useUnitLedger } from '../hooks/useUnitLedger';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { DollarSign, TrendingUp, Calendar } from 'lucide-react';
@@ -28,7 +29,17 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
   }
 
   if (error) {
-    return <ErrorState message={error instanceof Error ? error.message : 'Error loading finances'} onRetry={() => refetch()} />;
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar las finanzas de la unidad</p>
+          <p className="text-sm">{error instanceof Error ? error.message : 'Error al cargar finanzas'}</p>
+          <Button size="sm" variant="secondary" onClick={() => refetch()}>
+            Reintentar
+          </Button>
+        </div>
+      </Card>
+    );
   }
 
   if (!ledger || (ledger.charges.length === 0 && ledger.payments.length === 0)) {

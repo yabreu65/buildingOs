@@ -33,6 +33,10 @@ export function ExpenseLedgerCategoriesManager({
   defaultScopeFilter = 'ALL',
 }: ExpenseLedgerCategoriesManagerProps) {
   const { toast } = useToast();
+  const nameFieldId = 'expense-ledger-category-name';
+  const descriptionFieldId = 'expense-ledger-category-description';
+  const movementTypeFieldId = 'expense-ledger-category-movement-type';
+  const scopeFieldId = 'expense-ledger-category-scope';
   const [activeTab, setActiveTab] = useState<Tab>('EXPENSE');
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>(defaultScopeFilter);
   const [showModal, setShowModal] = useState(false);
@@ -245,8 +249,10 @@ export function ExpenseLedgerCategoriesManager({
 
               <div className="flex gap-2">
                 <button
+                  type="button"
                   onClick={() => handleToggleActive(category)}
                   title={category.isActive ? 'Desactivar' : 'Activar'}
+                  aria-label={category.isActive ? `Desactivar rubro ${category.name}` : `Activar rubro ${category.name}`}
                   className="p-2 rounded hover:bg-amber-100 text-amber-700 disabled:opacity-50"
                   disabled={updateMutation.isPending}
                 >
@@ -257,16 +263,20 @@ export function ExpenseLedgerCategoriesManager({
                   )}
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleOpenEdit(category)}
                   title="Editar"
+                  aria-label={`Editar rubro ${category.name}`}
                   className="p-2 rounded hover:bg-blue-100 text-blue-700 disabled:opacity-50"
                   disabled={updateMutation.isPending}
                 >
                   <Edit2 className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleDelete(category.id)}
                   title="Eliminar"
+                  aria-label={`Eliminar rubro ${category.name}`}
                   className="p-2 rounded hover:bg-red-100 text-red-700 disabled:opacity-50"
                   disabled={deleteMutation.isPending}
                 >
@@ -292,10 +302,11 @@ export function ExpenseLedgerCategoriesManager({
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-1">
+                <label htmlFor={nameFieldId} className="block text-sm font-medium mb-1">
                   Nombre <span className="text-red-500">*</span>
                 </label>
                 <input
+                  id={nameFieldId}
                   type="text"
                   required
                   placeholder="Ej: Electricidad"
@@ -306,10 +317,11 @@ export function ExpenseLedgerCategoriesManager({
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">
+                <label htmlFor={descriptionFieldId} className="block text-sm font-medium mb-1">
                   Descripción (opcional)
                 </label>
                 <textarea
+                  id={descriptionFieldId}
                   placeholder="Ej: Gastos de electricidad de la edificación"
                   value={form.description}
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -320,10 +332,11 @@ export function ExpenseLedgerCategoriesManager({
 
               {!editingId && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">
+                  <label htmlFor={movementTypeFieldId} className="block text-sm font-medium mb-1">
                     Tipo de Rubro
                   </label>
                   <select
+                    id={movementTypeFieldId}
                     value={form.movementType}
                     onChange={(e) =>
                       setForm((f) => ({
@@ -342,10 +355,11 @@ export function ExpenseLedgerCategoriesManager({
               {/* Catalog Scope - Only for EXPENSE */}
               {form.movementType === 'EXPENSE' && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">
+                  <label htmlFor={scopeFieldId} className="block text-sm font-medium mb-1">
                     Ámbito
                   </label>
                   <select
+                    id={scopeFieldId}
                     value={form.catalogScope || 'BUILDING'}
                     onChange={(e) =>
                       setForm((f) => ({

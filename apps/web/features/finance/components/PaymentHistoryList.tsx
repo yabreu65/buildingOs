@@ -5,7 +5,7 @@ import Card from '@/shared/components/ui/Card';
 import Badge from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
-import ErrorState from '@/shared/components/ui/ErrorState';
+import Button from '@/shared/components/ui/Button';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Payment } from '../services/finance.api';
@@ -66,7 +66,19 @@ export function PaymentHistoryList({
   }
 
   if (error) {
-    return <ErrorState message={error} onRetry={onRefresh} />;
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <div className="space-y-3 text-center text-red-700">
+          <p className="text-sm font-medium text-red-900">No pudimos cargar el historial de pagos</p>
+          <p className="text-sm">{error}</p>
+          {onRefresh && (
+            <Button size="sm" variant="secondary" onClick={onRefresh}>
+              Reintentar
+            </Button>
+          )}
+        </div>
+      </Card>
+    );
   }
 
   if (!loading && payments.length === 0) {
@@ -108,6 +120,8 @@ export function PaymentHistoryList({
               <TD>
                 {payment.proofDocumentId ? (
                   <button
+                    type="button"
+                    aria-label={`Ver comprobante del pago de ${payment.unit?.label || payment.unitId || 'la unidad'}`}
                     onClick={() => handleDownloadProof(payment.id, payment.proofDocumentId!)}
                     disabled={downloadingId === payment.id}
                     className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
