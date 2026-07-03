@@ -13,8 +13,10 @@ Use this checklist before every production deployment.
 
 ## Pre-deploy checklist
 
+- [ ] `docs/release/PUBLIC_EDGE_CONTRACT.md` reviewed before deploy
 - [ ] `docker compose -f infra/docker/docker-compose.full.yml config` reviewed before deploy
 - [ ] Public ports reviewed and match the intended exposure
+- [ ] Public web/API hostnames match the release contract
 - [ ] No volume changes planned for this release
 - [ ] No shared postgres or redis container changes planned without approval
 - [ ] Database backup taken and verified
@@ -27,6 +29,7 @@ Use this checklist before every production deployment.
 - [ ] Deployment logs reviewed for errors or unexpected restarts
 - [ ] Health checks pass for the API, web app, and supporting services
 - [ ] Public port exposure matches the intended reverse-proxy setup
+- [ ] Public web/API hostnames match the release contract
 - [ ] No unexpected volume changes or container replacements occurred
 - [ ] Rollback path remains available and tested conceptually
 

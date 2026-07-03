@@ -42,6 +42,10 @@ Complete guide for deploying BuildingOS to staging and production environments w
 
 ## Environment Setup
 
+### Public Edge Contract
+
+Production and staging deployments must follow [`docs/release/PUBLIC_EDGE_CONTRACT.md`](docs/release/PUBLIC_EDGE_CONTRACT.md). That contract defines the allowed public entry points, hostnames, TLS expectations, and internal-only services.
+
 ### 1. Development Environment (Local)
 
 #### Step 1: Install Dependencies
@@ -120,6 +124,14 @@ npm run dev
 
 # Open http://localhost:3000
 ```
+
+#### Edge validation before production cutover
+
+- Confirm the public web hostname resolves to the reverse proxy.
+- Confirm the public API hostname resolves to the reverse proxy.
+- Confirm `NEXT_PUBLIC_API_URL` matches the public API URL used by browsers.
+- Confirm `WEB_ORIGIN` and `APP_BASE_URL` match the public HTTPS origin.
+- Confirm PostgreSQL, Redis, and MinIO are not published on public interfaces.
 
 ---
 

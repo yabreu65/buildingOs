@@ -23,6 +23,10 @@ Complete operational guide for running BuildingOS in production. Covers daily pr
 
 ## Quick Start
 
+### Public Edge Contract
+
+Before any release or incident response, review the public ingress rules in [`docs/release/PUBLIC_EDGE_CONTRACT.md`](docs/release/PUBLIC_EDGE_CONTRACT.md). It defines the supported public hostnames, TLS expectations, and which services must remain internal.
+
 ### Prerequisites
 
 - PostgreSQL client tools (`psql`, `pg_dump`, `pg_restore`)
@@ -33,7 +37,7 @@ Complete operational guide for running BuildingOS in production. Covers daily pr
 ### Essential Commands
 
 ```bash
-# Check system health
+# Check system health / readiness
 curl http://api-server:3001/readyz
 
 # Create backup
@@ -51,6 +55,13 @@ cd apps/api && npm run migrate:deploy
 # View recent logs by request ID
 grep "550e8400-e29b-41d4-a716-446655440000" /var/log/buildingos/api.log
 ```
+
+### Operational Edge Checks
+
+- Web should be reachable through the approved public hostname, not by direct container port exposure.
+- API should be reachable through the approved public hostname or reverse proxy route.
+- PostgreSQL, Redis, and MinIO should remain internal only.
+- Use `/health` for liveness and `/readyz` for readiness during operational checks.
 
 ---
 
