@@ -7,18 +7,30 @@ import { apiMe } from './auth.service';
 import { clearAllImpersonationData } from '../impersonation/impersonation.storage';
 import { subscribeAuthUnauthorized } from '@/shared/lib/auth/events';
 import { HttpError } from '@/shared/lib/http/client';
+import { useToast } from '@/shared/components/ui/Toast';
+import { reportFrontendError } from '@/shared/lib/observability/frontend-observability';
 
 const PUBLIC_PATHS = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact', '/invite'];
+
+function getBootstrapErrorMessage(error: unknown): string {
+  if (error instanceof HttpError) {
+    return error.message || 'No pudimos verificar tu sesión. Revisá tu conexión e intentá otra vez.';
+  }
+
+  return 'No pudimos verificar tu sesión. Revisá tu conexión e intentá otra vez.';
+}
 
 /**
  * AuthBootstrap: intenta restaurar sesión desde el backend.
  */
-export default function AuthBootstrap() {
+export const AuthBootstrap = () => {
   const router = useRouter();
   const pathname = usePathname();
+  const { toast } = useToast();
 
   // Flag para evitar múltiples intentos en Strict Mode
   const didBootstrap = useRef(false);
+  const isPublicPath = PUBLIC_PATHS.includes(pathname);
 
   useEffect(() => {
     if (didBootstrap.current) {
@@ -44,6 +56,15 @@ export default function AuthBootstrap() {
           return;
         }
 
+        reportFrontendError(new Error('Invalid session bootstrap payload'), {
+          source: 'api-client',
+          level: 'page',
+          path: pathname,
+        });
+
+        toast(getBootstrapErrorMessage(new Error('Invalid session bootstrap payload')), 'error', 5000);
+
+        clearAllImpersonationData();
         clearAuth();
         redirectToLoginIfPrivate();
       } catch (error) {
@@ -56,25 +77,29 @@ export default function AuthBootstrap() {
           return;
         }
 
-        console.warn('[AuthBootstrap] Error restaurando sesión:', error);
+        const bootstrapError = error instanceof Error ? error : new Error('Unexpected auth bootstrap error');
+
+        reportFrontendError(bootstrapError, {
+          source: 'api-client',
+          level: 'page',
+          path: pathname,
+        });
+
+        toast(getBootstrapErrorMessage(error), 'error', 5000);
       }
     };
 
     const redirectToLoginIfPrivate = () => {
-      const isPublicPath = PUBLIC_PATHS.includes(pathname);
-
       if (!isPublicPath) {
         router.replace('/login');
       }
     };
 
     performBootstrap();
-  }, [pathname, router]);
+  }, [pathname, router, toast]);
 
   useEffect(() => {
     const unsubscribe = subscribeAuthUnauthorized(() => {
-      const isPublicPath = PUBLIC_PATHS.includes(pathname);
-
       if (!isPublicPath) {
         router.replace('/login');
       }
@@ -84,4 +109,4 @@ export default function AuthBootstrap() {
   }, [pathname, router]);
 
   return null;
-}
+};

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Button from "@/shared/components/ui/Button";
 
-export default function Navbar() {
+export const Navbar = () => {
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
@@ -38,4 +38,4 @@ export default function Navbar() {
       </div>
     </nav>
   );
-}
+};

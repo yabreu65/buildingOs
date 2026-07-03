@@ -3,7 +3,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { ArrowRight, MessageCircle, Sparkles } from 'lucide-react';
 
-export default function CtaForm() {
+export const CtaForm = () => {
   return (
     <section id="demo" className="py-20 bg-primary text-primary-foreground">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -87,4 +87,4 @@ export default function CtaForm() {
       </div>
     </section>
   );
-}
+};

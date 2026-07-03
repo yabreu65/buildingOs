@@ -1,5 +1,7 @@
-import Landing from "@/shared/components/marketing/Landing";
+import { Landing } from "@/shared/components/marketing/Landing";
 
-export default function Home() {
+const Home = () => {
   return <Landing />;
-}
+};
+
+export default Home;

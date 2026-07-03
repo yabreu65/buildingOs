@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import QueryProvider from '../shared/lib/query/QueryProvider';
-import AuthBootstrap from '../features/auth/AuthBootstrap';
+import { AuthBootstrap } from '../features/auth/AuthBootstrap';
 import { ToastProvider } from '../shared/components/ui/Toast';
 
 export const metadata: Metadata = {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -18,37 +18,67 @@ interface UnifiedLeadFormProps {
   successMessage?: string;
 }
 
-// Zod validation schema
-const leadFormSchema = z.object({
-  fullName: z.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(100),
-  email: z.string().email('Correo electrónico inválido'),
-  phoneWhatsapp: z
-    .string()
-    .max(20, 'El teléfono debe tener como máximo 20 caracteres')
-    .optional()
-    .or(z.literal('')),
-  tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
-  tenantName: z
-    .string()
-    .min(2, 'El nombre debe tener al menos 2 caracteres')
-    .max(100)
-    .optional()
-    .or(z.literal('')),
-  unitsEstimate: z.number().min(1, 'Debe ser al menos 1').optional().or(z.undefined()),
-  countryCity: z
-    .string()
-    .max(100, 'La ubicación debe tener como máximo 100 caracteres')
-    .optional()
-    .or(z.literal('')),
-  message: z
-    .string()
-    .max(1000, 'El mensaje debe tener como máximo 1000 caracteres')
-    .optional()
-    .or(z.literal('')),
-  website: z.string().max(0, 'Envío inválido').optional().or(z.literal('')),
-});
+interface LeadFormData {
+  fullName: string;
+  email: string;
+  phoneWhatsapp?: string;
+  tenantType: 'ADMINISTRADORA' | 'EDIFICIO_AUTOGESTION';
+  tenantName?: string;
+  unitsEstimate?: number;
+  countryCity?: string;
+  message?: string;
+  website?: string;
+}
 
-type LeadFormData = z.infer<typeof leadFormSchema>;
+function buildLeadFormSchema(intent: LeadIntent) {
+  return z.object({
+    fullName: z.string().trim().min(2, 'El nombre debe tener al menos 2 caracteres').max(100),
+    email: z.string().trim().email('Correo electrónico inválido'),
+    phoneWhatsapp: z
+      .string()
+      .trim()
+      .max(20, 'El teléfono debe tener como máximo 20 caracteres')
+      .optional()
+      .or(z.literal('')),
+    tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
+    tenantName: z
+      .string()
+      .trim()
+      .max(100, 'El nombre debe tener como máximo 100 caracteres')
+      .optional()
+      .or(z.literal('')),
+    unitsEstimate: z.number().min(1, 'Debe ser al menos 1').optional().or(z.undefined()),
+    countryCity: z
+      .string()
+      .trim()
+      .max(100, 'La ubicación debe tener como máximo 100 caracteres')
+      .optional()
+      .or(z.literal('')),
+    message: z
+      .string()
+      .trim()
+      .max(1000, 'El mensaje debe tener como máximo 1000 caracteres')
+      .optional()
+      .or(z.literal('')),
+    website: z.string().max(0, 'Envío inválido').optional().or(z.literal('')),
+  }).superRefine((data, ctx) => {
+    if (intent === 'SIGNUP' && !data.tenantName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tenantName'],
+        message: 'El nombre de tu empresa/edificio es obligatorio',
+      });
+    }
+
+    if (intent === 'CONTACT' && (typeof data.unitsEstimate !== 'number' || data.unitsEstimate < 1)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unitsEstimate'],
+        message: 'Debe ser al menos 1',
+      });
+    }
+  });
+}
 
 export function UnifiedLeadForm({
   intent,
@@ -57,6 +87,7 @@ export function UnifiedLeadForm({
   successTitle,
   successMessage,
 }: UnifiedLeadFormProps) {
+  const leadFormSchema = useMemo(() => buildLeadFormSchema(intent), [intent]);
   const ids = {
     requiredNote: `lead-${intent.toLowerCase()}-required-note`,
     fullName: `lead-${intent.toLowerCase()}-full-name`,
@@ -89,32 +120,39 @@ export function UnifiedLeadForm({
       return;
     }
 
+    const normalizedFullName = data.fullName.trim();
+    const normalizedEmail = data.email.trim().toLowerCase();
+    const normalizedPhoneWhatsapp = data.phoneWhatsapp?.trim() || undefined;
+    const normalizedTenantName = data.tenantName?.trim() || undefined;
+    const normalizedCountryCity = data.countryCity?.trim() || undefined;
+    const normalizedMessage = data.message?.trim() || undefined;
+
     setIsSubmitting(true);
     setSubmitStatus('idle');
     setSubmitError('');
 
     try {
       // SIGNUP flow - register user
-      if (intent === 'SIGNUP' && data.tenantName) {
+      if (intent === 'SIGNUP' && normalizedTenantName) {
         console.log('📤 Enviando registro SIGNUP:', data);
         await registerUser({
-          fullName: data.fullName,
-          email: data.email,
-          tenantName: data.tenantName,
+          fullName: normalizedFullName,
+          email: normalizedEmail,
+          tenantName: normalizedTenantName,
           tenantType: data.tenantType,
-          phoneWhatsapp: data.phoneWhatsapp || undefined,
+          phoneWhatsapp: normalizedPhoneWhatsapp,
         });
         console.log('✅ Registro SIGNUP enviado correctamente');
-      } else {
+      } else if (intent !== 'SIGNUP') {
         // DEMO/CONTACT flow - submit as lead
         const submitData = {
-          fullName: data.fullName,
-          email: data.email,
-          phoneWhatsapp: data.phoneWhatsapp || undefined,
+          fullName: normalizedFullName,
+          email: normalizedEmail,
+          phoneWhatsapp: normalizedPhoneWhatsapp,
           tenantType: data.tenantType,
           unitsEstimate: data.unitsEstimate || 1, // Default to 1 if not provided
-          countryCity: data.countryCity || undefined,
-          message: data.message || undefined,
+          countryCity: normalizedCountryCity,
+          message: normalizedMessage,
           source: intent === 'DEMO' ? 'landing' : 'contact-form',
           intent,
         };

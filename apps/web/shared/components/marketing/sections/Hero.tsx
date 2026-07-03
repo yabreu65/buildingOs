@@ -1,9 +1,9 @@
+import Link from "next/link";
 import Button from "@/shared/components/ui/Button";
 import Card from "@/shared/components/ui/Card";
 import Badge from "@/shared/components/ui/Badge";
-import Link from "next/link";
 
-export default function Hero() {
+export const Hero = () => {
   return (
     <section className="relative overflow-hidden bg-linear-to-b from-muted/60 to-background pt-20 pb-20 lg:pt-28 lg:pb-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -119,4 +119,4 @@ export default function Hero() {
       </div>
     </section>
   );
-}
+};

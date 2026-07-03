@@ -1,16 +1,22 @@
 "use client";
 
-import { ButtonHTMLAttributes, ReactElement, ReactNode, cloneElement, isValidElement } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  type ButtonHTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md";
 
-type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
   asChild?: boolean;
   children?: ReactNode;
-};
+}
 
 const base =
   "inline-flex items-center justify-center rounded-md font-medium transition disabled:opacity-50 disabled:cursor-not-allowed";
@@ -27,14 +33,14 @@ const sizes: Record<Size, string> = {
   md: "px-3 py-2 text-sm",
 };
 
-export default function Button({
+export const Button = ({
   className = "",
   variant = "primary",
   size = "md",
   asChild = false,
   children,
   ...rest
-}: Props) {
+}: ButtonProps) => {
   const classes = [base, variants[variant], sizes[size], className].join(" ");
 
   if (asChild) {
@@ -58,4 +64,6 @@ export default function Button({
       {children}
     </button>
   );
-}
+};
+
+export default Button;

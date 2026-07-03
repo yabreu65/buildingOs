@@ -20,4 +20,4 @@ export {
 } from './session.storage';
 
 // Bootstrap
-export { default as AuthBootstrap } from './AuthBootstrap';
+export { AuthBootstrap } from './AuthBootstrap';
