@@ -5,6 +5,10 @@ module.exports = {
   testMatch: [
     '**/shared/components/assistant/__tests__/**/*.test.ts',
     '**/shared/components/assistant/__tests__/**/*.test.tsx',
+    '**/shared/components/error-boundary/**/*.test.ts',
+    '**/shared/components/error-boundary/**/*.test.tsx',
+    '**/shared/lib/observability/**/*.test.ts',
+    '**/shared/lib/observability/**/*.test.tsx',
     '**/features/super-admin/__tests__/**/*.test.ts',
     '**/features/super-admin/__tests__/**/*.test.tsx',
     '**/features/super-admin/components/__tests__/**/*.test.ts',
