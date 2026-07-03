@@ -11,7 +11,7 @@ BuildingOS has a two-tier testing strategy:
 
 ### Deterministic Seed Data
 
-All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. This ensures tests are reproducible and don't depend on external state.
+All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. This seed is intended for a **disposable or dedicated test database** so the suite stays reproducible and does not inherit historical production-like data.
 
 **Key test users:**
 
@@ -31,10 +31,22 @@ All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. Th
 - 1 published liquidation (April 2026) with charges
 - 1 submitted payment
 
+### E2E Environment Contract
+
+Use a clean database for E2E runs:
+
+0. Export `TEST_E2E_PASSWORD=TestPass123!` so the Playwright auth helpers can log in with the deterministic seed users.
+1. Point `DATABASE_URL` to a disposable or dedicated local test database.
+2. Run migrations with `npm run migrate:deploy` from `apps/api`.
+3. Load deterministic data with `npm run seed:test` from `apps/api`.
+4. Run Playwright from `apps/web` against that isolated environment.
+
+Do **not** point `seed:test` at a long-lived developer database that already contains legacy finance data or duplicate `Charge` rows. That database can fail newer uniqueness constraints even if the seed itself is correct.
+
 ### Running E2E Tests Locally
 
 **Prerequisites:**
-1. PostgreSQL running locally
+1. Disposable or dedicated PostgreSQL test database
 2. API dependencies installed
 3. Web app dependencies installed
 
@@ -45,7 +57,7 @@ All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. Th
 cp .env.example .env
 # Edit DATABASE_URL to point to your local Postgres
 
-# 2. Run migrations and seed
+# 2. Run migrations and seed on the isolated test database
 cd apps/api
 npm run migrate:deploy
 npm run seed:test
@@ -71,11 +83,29 @@ apps/web/tests/e2e/
 ├── api/
 │   └── health.spec.ts          # API smoke tests
 ├── auth/
-│   └── login.spec.ts           # Login/logout/session flows
+│   ├── login.spec.ts           # Login/logout/session flows
+│   ├── route-guards.spec.ts
+│   └── session.spec.ts
 ├── buildings/
 │   ├── create-building.spec.ts # Building CRUD
 │   └── manage-units.spec.ts    # Unit management
-└── helpers/
+├── tenants/
+│   └── tenant-routing.spec.ts  # Tenant context routing
+└── _archive/                   # Historical reference flows
+    ├── charges-and-payments.spec.ts
+    ├── expense-allocation.spec.ts
+    ├── multi-tenant-isolation.spec.ts
+    ├── onboarding-and-plans.spec.ts
+    ├── team-and-invitations.spec.ts
+    ├── tenant-management.spec.ts
+    ├── tickets-and-communications.spec.ts
+    └── view-assignment.spec.ts
+```
+
+### Helper Files
+
+```
+apps/web/tests/e2e/helpers/
     ├── auth.ts                 # Login/logout helpers
     └── navigation.ts           # Common navigation actions
 ```
@@ -164,4 +194,4 @@ npm run test:e2e -w apps/web -- tests/e2e/auth/login.spec.ts --headed
 | `isVisible()` returns false | Use `waitFor({ state: 'visible' })` instead |
 | Form submission fails | Check for validation errors in snapshot |
 | Unit code shows N/A | The `unitCode` field might be null; use label for assertions |
-| Seed data missing | Run `npm run seed:test` in `apps/api` |
+| Seed data missing | Run `npm run seed:test` in `apps/api` against a clean test database |

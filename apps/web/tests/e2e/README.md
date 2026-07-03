@@ -1,82 +1,44 @@
 # BuildingOS E2E Tests with Playwright
 
-Comprehensive end-to-end test suite covering 15 critical user flows across BuildingOS.
+Focused end-to-end test suite for the current product contract.
+
+> Active E2E coverage is intentionally smaller than the historical archive.
+> The repo keeps a narrow green path for auth/session, route guards, tenant
+> routing, health, and basic building flows, while broader
+> finance/invitations/tickets/communications scenarios remain archived until
+> the disposable test database and seed contract are fully stabilized.
 
 ## Test Coverage
 
-### Authentication (6 tests)
+### Current active coverage
+
+- ✅ Public landing page stays public at `/`
 - ✅ Successful login with valid credentials
-- ✅ Error handling for invalid credentials
-- ✅ Error handling for non-existent email
-- ✅ Redirect to login for unauthenticated access
-- ✅ Successful logout
 - ✅ Session persistence after page refresh
+- ✅ Successful logout
+- ✅ Redirects to `/login` for unauthenticated tenant routes
+- ✅ Tenant route guard behavior
+- ✅ Tenant routing and context switching
+- ✅ API health smoke coverage
+- ✅ Building create/manage flows
 
-### Building Management (4 tests)
-- ✅ Create new building
-- ✅ Validation errors for empty fields
-- ✅ View building details
-- ✅ Building list displays correctly
+### Archived reference coverage
 
-### Unit Management (5 tests)
-- ✅ Create unit in building
-- ✅ Validation errors for empty unit label
-- ✅ Prevent duplicate unit labels
-- ✅ Assign resident to unit
-- ✅ Update unit occupancy status
+Broader scenarios that were validated earlier live under:
+`apps/web/tests/e2e/_archive/`
 
-### Finance Operations (5 tests)
-- ✅ Create charge for unit
-- ✅ Display pending charges list
-- ✅ Validate negative charge amounts
-- ✅ Resident view and payment capability
-- ✅ Financial summary dashboard
+That archive currently contains reference flows for:
+- finance and payments
+- expense allocation
+- multi-tenant isolation
+- onboarding and plans
+- team and invitations
+- tenant management
+- tickets and communications
+- assignment / resident visibility
 
-### Tickets & Communications (5 tests)
-- ✅ Create ticket with title and description
-- ✅ Display ticket list with status
-- ✅ Add comments to ticket
-- ✅ Send communication/message
-- ✅ Upload document
-
-### Resident Access (5 tests)
-- ✅ Login as resident and view dashboard
-- ✅ Display assigned unit information
-- ✅ Prevent access to admin functions
-- ✅ Read-only access to own data
-- ✅ Access financial information (if applicable)
-
-### Super Admin (4 tests)
-- ✅ Access super-admin dashboard
-- ✅ View list of tenants
-- ✅ Change tenant plan (FREE → STARTER → PRO)
-- ✅ Enforce plan limits on tenants
-
-### Team Management (5 tests)
-- ✅ Navigate to members settings
-- ✅ Invite new team member
-- ✅ List active members with roles
-- ✅ Update member role
-- ✅ Remove team member
-
-### Onboarding (7 tests)
-- ✅ Display onboarding checklist
-- ✅ Show onboarding progress
-- ✅ Mark steps as complete
-- ✅ Hide onboarding when 100% complete
-- ✅ Dismiss onboarding card
-- ✅ Display current plan information
-- ✅ Show plan usage metrics
-
-### Multi-Tenant Isolation (6 tests)
-- ✅ Prevent Tenant A from seeing Tenant B buildings
-- ✅ Isolate units per tenant
-- ✅ Prevent access to other tenant data via direct URL
-- ✅ Isolate finance data per tenant
-- ✅ Isolate tickets per tenant
-- ✅ Prevent residents from seeing other tenants' data
-
-**Total: 57+ test cases**
+Use those files as a reference when reactivating the next slice. Do not rely on
+`57+` as a current active coverage count.
 
 ## Installation
 
@@ -134,24 +96,26 @@ apps/web/tests/e2e/
 ├── helpers/
 │   ├── auth.ts              # Authentication helpers
 │   └── navigation.ts        # Navigation and interaction helpers
+├── api/
+│   └── health.spec.ts       # API smoke tests
 ├── auth/
-│   └── login.spec.ts        # Login and auth flows
+│   ├── login.spec.ts        # Login and auth flows
+│   ├── route-guards.spec.ts
+│   └── session.spec.ts
 ├── buildings/
 │   ├── create-building.spec.ts
 │   └── manage-units.spec.ts
-├── resident/
-│   └── view-assignment.spec.ts
-├── finance/
-│   └── charges-and-payments.spec.ts
-├── operations/
-│   └── tickets-and-communications.spec.ts
-├── advanced/
-│   ├── team-and-invitations.spec.ts
-│   ├── onboarding-and-plans.spec.ts
-│   └── multi-tenant-isolation.spec.ts
-├── super-admin/
-│   └── tenant-management.spec.ts
-└── README.md
+├── tenants/
+│   └── tenant-routing.spec.ts
+└── _archive/
+    ├── charges-and-payments.spec.ts
+    ├── expense-allocation.spec.ts
+    ├── multi-tenant-isolation.spec.ts
+    ├── onboarding-and-plans.spec.ts
+    ├── team-and-invitations.spec.ts
+    ├── tenant-management.spec.ts
+    ├── tickets-and-communications.spec.ts
+    └── view-assignment.spec.ts
 ```
 
 ## Test Users
@@ -212,7 +176,7 @@ TEST_USERS = {
 ### playwright.config.ts
 
 Key settings:
-- **baseURL**: `http://localhost:3000` (set via `BASE_URL` env var)
+- **baseURL**: `http://localhost:3000` by default (override with `BASE_URL`)
 - **timeout**: 30 seconds per test
 - **retries**: 0 locally, 2 in CI
 - **workers**: Parallel execution by default
@@ -221,13 +185,16 @@ Key settings:
 - **video**: On failure only
 - **trace**: On first retry
 
+> The auth helpers require `TEST_E2E_PASSWORD=TestPass123!` so they can log in
+> with the deterministic seed users created by `apps/api/prisma/seed.test.ts`.
+
 ## CI/CD Integration
 
 GitHub Actions workflow (`.github/workflows/e2e-tests.yml`):
 - Runs on push to main/develop
 - Runs on pull requests
 - Scheduled daily run at 2 AM UTC
-- PostgreSQL service container
+- Disposable PostgreSQL service container
 - Uploads artifacts (reports, videos)
 - Comments on PRs with results
 

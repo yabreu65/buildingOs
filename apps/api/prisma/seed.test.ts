@@ -441,9 +441,12 @@ async function main() {
     },
   });
 
-  // Create charges for each unit in Building A1
+  // Create charges for each unit in Building A1.
+  // The first charge is marked PAID so the test dataset exercises collection-rate
+  // logic without creating duplicate charges for the same liquidation/unit/period.
   for (let i = 0; i < unitsA1.length; i++) {
     const amount = 100000 + i * 10000; // $1,000.00 - $1,400.00
+    const status = i === 0 ? ChargeStatus.PAID : ChargeStatus.PENDING;
     await prisma.charge.upsert({
       where: { id: `charge-test-a1-${i}-apr-2026` },
       update: {},
@@ -455,34 +458,14 @@ async function main() {
         liquidationId: liquidationA1.id,
         period: currentPeriod,
         type: ChargeType.COMMON_EXPENSE,
-        concept: `Expensas Comunes Abril 2026`,
+        concept: i === 0 ? `Expensas Comunes Abril 2026 (Pagada)` : `Expensas Comunes Abril 2026`,
         amount,
         currency,
         dueDate: new Date(2026, 3, 15), // April 15, 2026
-        status: ChargeStatus.PENDING,
+        status,
       },
     });
   }
-
-  // Create one PAID charge to test collection rate
-  await prisma.charge.upsert({
-    where: { id: `charge-test-a1-paid-apr-2026` },
-    update: {},
-    create: {
-      id: `charge-test-a1-paid-apr-2026`,
-      tenantId: tenantA.id,
-      buildingId: buildingA1.id,
-      unitId: unitsA1[0]!,
-      liquidationId: liquidationA1.id,
-      period: currentPeriod,
-      type: ChargeType.COMMON_EXPENSE,
-      concept: `Expensas Comunes Abril 2026 (Pagada)`,
-      amount: 100000,
-      currency,
-      dueDate: new Date(2026, 3, 15),
-      status: ChargeStatus.PAID,
-    },
-  });
 
   // Create one SUBMITTED payment
   await prisma.payment.upsert({
@@ -502,7 +485,7 @@ async function main() {
       createdByUserId: testUsers.resident.id,
     },
   });
-  console.log(`✅ Finances: Liquidation + ${unitsA1.length + 1} charges + 1 payment created`);
+  console.log(`✅ Finances: Liquidation + ${unitsA1.length} charges + 1 payment created`);
 
   // ============================================================================
   // SUMMARY
@@ -531,7 +514,7 @@ async function main() {
 
 💰 FINANZAS (Período: ${currentPeriod}):
    Liquidación: ${liquidationA1.id} (PUBLISHED)
-   Charges: ${unitsA1.length + 1} (1 PAID, resto PENDING)
+   Charges: ${unitsA1.length} (1 PAID, resto PENDING)
    Payment: 1 SUBMITTED (a validar)
 
 ✅ SEED COMPLETADO
