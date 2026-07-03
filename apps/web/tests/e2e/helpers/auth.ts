@@ -11,7 +11,11 @@ export interface TestUser {
   readonly fullName?: string;
 }
 
-const TEST_PASSWORD = process.env.TEST_E2E_PASSWORD || 'TestPass123!';
+const TEST_PASSWORD = process.env.TEST_E2E_PASSWORD;
+
+if (!TEST_PASSWORD) {
+  throw new Error('TEST_E2E_PASSWORD is required for E2E auth tests');
+}
 
 export const TEST_USERS = {
   superAdmin: { email: 'test-superadmin@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Super Admin' },
