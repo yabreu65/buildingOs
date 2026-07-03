@@ -1,5 +1,6 @@
 import { getCurrentImpersonationToken, clearAllImpersonationData } from '../../../features/impersonation/impersonation.storage';
 import { clearAuth } from '../../../features/auth/session.storage';
+import { emitAuthUnauthorized } from '../auth/events';
 import { getPublicApiUrl } from '../public-api-url';
 
 export interface HttpRequestConfig<TReq = never> {
@@ -108,7 +109,7 @@ export async function apiClient<TRes, TReq = never>(
   const response = await fetch(url, init);
 
   if (!response.ok) {
-    // Centralized 401 handler: try refresh cookie once, then fall back to login.
+    // Centralized 401 handler: try refresh cookie once, then emit an auth-expired event.
     if (response.status === 401) {
       const hasImpersonationToken = !!getCurrentImpersonationToken();
       const isAuthRoute =
@@ -141,10 +142,8 @@ export async function apiClient<TRes, TReq = never>(
 
       clearAllImpersonationData();
       clearAuth();
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
-      }
-      throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Redirigiendo a login...');
+      emitAuthUnauthorized();
+      throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Vuelve a iniciar sesión.');
     }
 
     const { message, data } = await parseErrorResponse(response);

@@ -5,6 +5,10 @@ import { useRouter, usePathname } from 'next/navigation';
 import { setSession, setLastTenant, clearAuth } from './session.storage';
 import { apiMe } from './auth.service';
 import { clearAllImpersonationData } from '../impersonation/impersonation.storage';
+import { subscribeAuthUnauthorized } from '@/shared/lib/auth/events';
+import { HttpError } from '@/shared/lib/http/client';
+
+const PUBLIC_PATHS = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact'];
 
 /**
  * AuthBootstrap: intenta restaurar sesión desde el backend.
@@ -43,7 +47,7 @@ export default function AuthBootstrap() {
         clearAuth();
         redirectToLoginIfPrivate();
       } catch (error) {
-        const is401 = error instanceof Error && error.message.includes('401');
+        const is401 = error instanceof HttpError && error.status === 401;
 
         if (is401) {
           clearAllImpersonationData();
@@ -57,8 +61,7 @@ export default function AuthBootstrap() {
     };
 
     const redirectToLoginIfPrivate = () => {
-      const publicPaths = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact'];
-      const isPublicPath = publicPaths.includes(pathname);
+      const isPublicPath = PUBLIC_PATHS.includes(pathname);
 
       if (!isPublicPath) {
         router.replace('/login');
@@ -66,6 +69,18 @@ export default function AuthBootstrap() {
     };
 
     performBootstrap();
+  }, [pathname, router]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeAuthUnauthorized(() => {
+      const isPublicPath = PUBLIC_PATHS.includes(pathname);
+
+      if (!isPublicPath) {
+        router.replace('/login');
+      }
+    });
+
+    return unsubscribe;
   }, [pathname, router]);
 
   return null;
