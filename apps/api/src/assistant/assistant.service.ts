@@ -67,6 +67,7 @@ import { tenantDebtIntent } from './intent-engine/allowed-intents/tenant-debt.in
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 import type { IntentSemanticValidationResult } from './intent-semantic-validator.service';
 import type { CanonicalFinancePeriod } from './finance-period.types';
+import { isLocalDevelopmentEnv, resolveAssistantProviderMode } from './assistant-env';
 
 const TEMPORARILY_UNAVAILABLE_INTENTS = new Set([
   'expenses_summary',
@@ -188,9 +189,31 @@ export class MockAiProvider implements AiProvider {
   }
 }
 
+class DisabledAiProvider implements AiProvider {
+  async chat(
+    _message: string,
+    _context: AiProviderContext,
+    _options?: { model?: string; maxTokens?: number },
+  ): Promise<ChatResponse> {
+    return {
+      answer: 'AI is not configured for this environment.',
+      suggestedActions: [],
+    };
+  }
+
+  async healthCheck(): Promise<AiProviderStatus> {
+    return {
+      status: 'disabled',
+      provider: 'none',
+      latencyMs: 0,
+    };
+  }
+}
+
 @Injectable()
 export class AssistantService implements OnModuleInit {
   private readonly provider: AiProvider;
+  private readonly providerMode: 'MOCK' | 'OLLAMA' | 'NONE';
   private readonly dailyLimit: number;
   private readonly logger = new Logger(AssistantService.name);
   private readonly queryParser = new AssistantQueryParser();
@@ -241,13 +264,11 @@ export class AssistantService implements OnModuleInit {
     this.intentEngineEnabled = process.env.AI_INTENT_ENGINE_ENABLED !== 'false';
 
     // Initialize provider based on env
-    const providerName = process.env.AI_PROVIDER || 'MOCK';
-    if (providerName === 'OLLAMA') {
+    this.providerMode = resolveAssistantProviderMode();
+    if (this.providerMode === 'OLLAMA') {
       this.provider = this.ollamaProvider;
-    } else if (providerName === 'OPENAI') {
-      // OPENAI provider will be implemented later
-      // For now, fallback to MOCK
-      this.provider = this.mockAiProvider;
+    } else if (this.providerMode === 'NONE') {
+      this.provider = new DisabledAiProvider();
     } else {
       this.provider = this.mockAiProvider;
     }
@@ -453,10 +474,10 @@ export class AssistantService implements OnModuleInit {
         );
         resolvedModelForLog = 'CLASSIFIER_SUGGESTION';
       } else {
-        // NIVEL 3: Fallback al provider (MockAiProvider o LLM real)
-        response = await this.provider.chat(
-          request.message,
-          {
+      // NIVEL 3: Fallback al provider (development-only mock, Ollama, or disabled response)
+      response = await this.provider.chat(
+        request.message,
+        {
             buildingId: request.buildingId,
             unitId: request.unitId,
             page: request.page,
@@ -503,7 +524,7 @@ export class AssistantService implements OnModuleInit {
         page: request.page,
         buildingId: request.buildingId,
         unitId: request.unitId,
-        provider: process.env.AI_PROVIDER || 'MOCK',
+        provider: this.providerMode,
         actionCount: response.suggestedActions.length,
         limited: false,
         summaryVersion: contextSummary?.summaryVersion || null,
@@ -559,8 +580,8 @@ export class AssistantService implements OnModuleInit {
       coverageMissing: [],
       usedLLM: false,
       llmProvider: 'none',
-      llmBaseUrl: process.env.AI_OLLAMA_URL || 'http://localhost:11434',
-      llmModel: process.env.AI_OLLAMA_MODEL || 'llama3:latest',
+      llmBaseUrl: isLocalDevelopmentEnv() ? (process.env.AI_OLLAMA_URL || 'http://localhost:11434') : (process.env.AI_OLLAMA_URL || ''),
+      llmModel: isLocalDevelopmentEnv() ? (process.env.AI_OLLAMA_MODEL || 'llama3:latest') : (process.env.AI_OLLAMA_MODEL || ''),
       llmReason: 'none',
       zodValidationPassed: false,
       finalIntent: undefined,
@@ -570,7 +591,7 @@ export class AssistantService implements OnModuleInit {
     };
 
     // Check feature flag (bypass in development)
-    const isDevelopment = process.env.NODE_ENV === 'development';
+    const isDevelopment = isLocalDevelopmentEnv();
     if (!this.intentEngineEnabled && !isDevelopment) {
       throw new ForbiddenException('Intent engine disabled');
     }
@@ -3660,7 +3681,7 @@ export class AssistantService implements OnModuleInit {
             answer: response.answer,
             suggestedActions: response.suggestedActions,
           } as unknown as Prisma.InputJsonValue,
-          provider: process.env.AI_PROVIDER || 'MOCK',
+          provider: this.providerMode,
           tokensIn: null,
           tokensOut: null,
           // PHASE 12: Analytics

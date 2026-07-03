@@ -1,6 +1,7 @@
 import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { AiProvider, AiProviderStatus } from './ai.types';
 import { AI_PROVIDER_TOKEN } from './providers/ai-provider.module';
+import { isLocalDevelopmentEnv } from './assistant-env';
 
 export interface LlmHealthResponse {
   enabled: boolean;
@@ -24,7 +25,7 @@ export class AssistantLlmHealthService {
   getProviderConfig(): { enabled: boolean; baseUrl: string; model: string } {
     const enabled = process.env.AI_INTENT_ENGINE_ENABLED !== 'false';
     const baseUrl = process.env.AI_OLLAMA_URL || '';
-    const model = process.env.AI_OLLAMA_MODEL || 'llama3:latest';
+    const model = isLocalDevelopmentEnv() ? (process.env.AI_OLLAMA_MODEL || 'llama3:latest') : (process.env.AI_OLLAMA_MODEL || '');
     return { enabled, baseUrl, model };
   }
 

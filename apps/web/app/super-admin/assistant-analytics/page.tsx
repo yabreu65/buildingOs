@@ -16,6 +16,7 @@ import {
   LineChart,
   Line,
 } from 'recharts';
+import { getPublicApiUrl } from '../../../shared/lib/public-api-url';
 
 interface OverviewMetrics {
   totalEvents: number;
@@ -77,7 +78,7 @@ interface ModuleMetricsItem {
   usefulRate: number;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_URL = getPublicApiUrl();
 
 export default function AssistantAnalyticsPage() {
   const [overview, setOverview] = useState<OverviewMetrics | null>(null);

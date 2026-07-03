@@ -1,4 +1,5 @@
 import { getToken, clearToken } from '../../../features/auth/session.storage';
+import { getPublicApiUrl } from '../public-api-url';
 
 export interface HttpRequestConfig<TReq = never> {
   path: string;
@@ -29,7 +30,7 @@ export class HttpError extends Error {
   }
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_URL = getPublicApiUrl();
 
 async function parseErrorResponse(response: Response): Promise<{
   message: string;

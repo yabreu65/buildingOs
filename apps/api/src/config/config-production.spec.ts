@@ -32,6 +32,21 @@ describe('Production Readiness Config Validation', () => {
     FEATURE_PAYMENTS_MVP: 'true',
   };
 
+  describe('NODE_ENV env var', () => {
+    it('requires NODE_ENV to be explicitly provided', () => {
+      const schema = createConfigSchema('test');
+      const env: Record<string, string | undefined> = { ...baseEnv };
+      delete env.NODE_ENV;
+
+      const result = schema.safeParse(env);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path.join('.') === 'NODE_ENV')).toBe(true);
+      }
+    });
+  });
+
   describe('PAYMENT_PROVIDER env var', () => {
     it('accepts valid payment provider values', () => {
       const schema = createConfigSchema('test');

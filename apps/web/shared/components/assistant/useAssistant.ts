@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { getPublicApiUrl } from '../../lib/public-api-url';
 
 export interface AssistantAction {
   readonly key: string;
@@ -102,7 +103,7 @@ export interface AssistantResponse {
   readonly knowledgeUsed?: AssistantKnowledgeUsed;
 }
 
-const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const ASSISTANT_API_URL = getPublicApiUrl();
 
 interface UseAssistantOptions {
   initialContext?: AssistantContext;

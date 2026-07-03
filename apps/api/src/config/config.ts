@@ -37,6 +37,19 @@ function emptyStringToUndefined(value: unknown): unknown {
   return value;
 }
 
+function resolveNodeEnv(rawNodeEnv: string | undefined): NodeEnv {
+  const nodeEnv = rawNodeEnv?.trim();
+  if (!nodeEnv) {
+    throw new Error('NODE_ENV is required');
+  }
+
+  if (!['development', 'staging', 'production', 'test'].includes(nodeEnv)) {
+    throw new Error(`NODE_ENV must be one of development, staging, production, test. Received: ${nodeEnv}`);
+  }
+
+  return nodeEnv as NodeEnv;
+}
+
 /**
  * Zod schema for environment validation
  * Split by env to enforce different requirements
@@ -46,9 +59,7 @@ export const createConfigSchema = (_nodeEnv: string) => {
 
   return z.object({
     // Server (always required)
-    NODE_ENV: z
-      .enum(['development', 'staging', 'production', 'test'])
-      .default('development'),
+    NODE_ENV: z.enum(['development', 'staging', 'production', 'test']),
     PORT: z.coerce.number().int().positive().default(4000),
     LOG_LEVEL: z
       .enum(['debug', 'log', 'warn', 'error'])
@@ -393,7 +404,7 @@ type ParsedConfig = z.infer<ReturnType<typeof createConfigSchema>>;
  * Throws descriptive error if validation fails
  */
 export function loadConfig(): AppConfig {
-  const nodeEnv = (process.env.NODE_ENV || 'development') as NodeEnv;
+  const nodeEnv = resolveNodeEnv(process.env.NODE_ENV);
 
   writeStdout(`[Config] Loading configuration for environment: ${nodeEnv}`);
 

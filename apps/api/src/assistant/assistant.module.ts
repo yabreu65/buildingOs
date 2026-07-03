@@ -74,7 +74,8 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
  * AssistantModule: AI Assistant with intelligent routing, caching, and context enrichment
  *
  * Features:
- * - MOCK provider (always works)
+ * - MOCK provider (development/test only)
+ * - NONE provider (disabled response in non-development environments)
  * - OPENAI provider (optional, behind feature flag)
  * - Rate limiting: 100 calls per tenant per day
  * - Budget enforcement: Monthly budget per tenant (hard stop or soft degrade)
@@ -89,7 +90,7 @@ import { AssistantTenantDebtService } from './tenant-debt.service';
  * - Cost optimization: 3x-10x savings through model routing + caching
  *
  * Configuration (ENV):
- * - AI_PROVIDER: "MOCK" or "OPENAI" (default: MOCK)
+ * - AI_PROVIDER: "MOCK", "NONE", "HYBRID", or "OLLAMA" (default: MOCK only in development/test)
  * - AI_SMALL_MODEL: Cheap model for simple queries (default: gpt-4.1-nano)
  * - AI_BIG_MODEL: Better model for complex queries (default: gpt-4o-mini)
  * - AI_MAX_TOKENS_SMALL: Max tokens for small model (default: 150)

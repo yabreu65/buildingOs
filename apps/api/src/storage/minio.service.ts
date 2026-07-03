@@ -13,10 +13,8 @@ interface MinioErrorLike {
  * MinIO Service: Wrapper around Minio SDK for presigned URLs and object operations
  *
  * Uses S3-compatible MinIO endpoint configured via environment variables:
- * - S3_ENDPOINT: http://localhost:9000 (for local development)
- * - S3_ACCESS_KEY: buildingos (default for local)
- * - S3_SECRET_KEY: buildingos123 (default for local)
- * - S3_BUCKET: buildingos-local (default bucket name)
+ * - S3_ENDPOINT: localhost only for local development fallback
+ * - S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET: required outside development
  * - S3_FORCE_PATH_STYLE: true (required for MinIO)
  */
 @Injectable()
@@ -47,14 +45,23 @@ export class MinioService {
   private readonly bucket: string;
 
   constructor(private configService: ConfigService) {
-    const endpoint = this.configService.getValue('s3Endpoint') || 'http://localhost:9000';
+    const nodeEnv = this.configService.getValue('nodeEnv');
+    const isDevelopment = nodeEnv === 'development' || nodeEnv === 'test';
+    const endpoint = this.configService.getValue('s3Endpoint');
+    if (!endpoint && !isDevelopment) {
+      throw new Error('S3_ENDPOINT is required outside development');
+    }
     const region = this.configService.getValue('s3Region') || 'us-east-1';
     const accessKey = this.configService.getValue('s3AccessKey');
     const secretKey = this.configService.getValue('s3SecretKey');
-    this.bucket = this.configService.getValue('s3Bucket') || 'buildingos-local';
+    const bucket = this.configService.getValue('s3Bucket');
+    if (!bucket && !isDevelopment) {
+      throw new Error('S3_BUCKET is required outside development');
+    }
+    this.bucket = bucket || 'buildingos-local';
 
     // Parse endpoint to extract host and port
-    const url = new URL(endpoint);
+    const url = new URL(endpoint || 'http://localhost:9000');
     const host = url.hostname;
     const port = url.port ? parseInt(url.port, 10) : url.protocol === 'https:' ? 443 : 9000;
     const useSSL = url.protocol === 'https:';

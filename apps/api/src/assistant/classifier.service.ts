@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { resolveDevOnlyFallback } from './assistant-env';
 
 export interface ClassifierResult {
   category: 'DEBT' | 'TICKETS' | 'DOCUMENTS' | 'PAYMENTS' | 'RESIDENTS' | 'STATS' | 'GENERAL';
@@ -29,9 +30,17 @@ interface ClassifierResponsePayload {
 @Injectable()
 export class AiClassifierService {
   private readonly logger = new Logger(AiClassifierService.name);
-  private readonly ollamaUrl = process.env.AI_OLLAMA_URL || 'http://localhost:11434';
+  private readonly ollamaUrl = resolveDevOnlyFallback(
+    process.env.AI_OLLAMA_URL,
+    'http://localhost:11434',
+    'AI_OLLAMA_URL',
+  );
   private readonly timeout = 5000; // 5 seconds - classifier should be fast
-  private readonly model = process.env.AI_CLASSIFIER_MODEL || process.env.AI_OLLAMA_MODEL || 'llama3:latest';
+  private readonly model = resolveDevOnlyFallback(
+    process.env.AI_CLASSIFIER_MODEL || process.env.AI_OLLAMA_MODEL,
+    'llama3:latest',
+    'AI_CLASSIFIER_MODEL or AI_OLLAMA_MODEL',
+  );
 
   /**
    * Classify a user message into a known category

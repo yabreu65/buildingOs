@@ -5,6 +5,8 @@
  * Currently logs to console (debug), but structured for easy swap to real analytics.
  */
 
+import { getPublicApiUrl } from '../../lib/public-api-url';
+
 const STORAGE_KEY = 'assistant_session_id';
 
 export type AssistantActionClickEvent = {
@@ -32,9 +34,7 @@ export type AssistantAnalyticsConfig = {
 let analyticsConfig: AssistantAnalyticsConfig = {
   debug: process.env.NODE_ENV !== 'production',
   sendToBackend: true,
-  backendUrl: process.env.NEXT_PUBLIC_API_URL 
-    ? `${process.env.NEXT_PUBLIC_API_URL}/api/analytics/events`
-    : 'http://localhost:4000/api/analytics/events',
+  backendUrl: `${getPublicApiUrl()}/api/analytics/events`,
 };
 
 export function configureAssistantAnalytics(config: Partial<AssistantAnalyticsConfig>): void {

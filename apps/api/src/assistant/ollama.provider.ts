@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChatResponse, SuggestedAction, AiProvider, AiProviderContext, AiProviderStatus, SuggestedActionType } from './ai.types';
+import { resolveDevOnlyFallback } from './assistant-env';
 
 /**
  * Ollama Provider for BuildingOS AI Assistant
@@ -35,7 +36,11 @@ type ParsedOllamaResponse = {
 @Injectable()
 export class OllamaProvider implements AiProvider {
   private readonly logger = new Logger(OllamaProvider.name);
-  private readonly ollamaUrl = process.env.AI_OLLAMA_URL || '';
+  private readonly ollamaUrl = resolveDevOnlyFallback(
+    process.env.AI_OLLAMA_URL,
+    'http://localhost:11434',
+    'AI_OLLAMA_URL',
+  );
   private readonly timeout = 10000; // 10 seconds
 
   /**

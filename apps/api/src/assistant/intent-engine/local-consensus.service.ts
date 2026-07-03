@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { resolveAiConsensusModeConfig } from '../providers/ai-provider.resolver';
+import { resolveDevOnlyFallback } from '../assistant-env';
 import type { CanonicalFinancePeriod } from '../finance-period.types';
 import type {
   AssistantConsensusEvaluation,
@@ -92,8 +93,18 @@ function isSameAlias(left: string | null, right: string | null): boolean {
 export class AssistantLocalConsensusService {
   private readonly logger = new Logger(AssistantLocalConsensusService.name);
   private readonly config = resolveAiConsensusModeConfig();
-  private readonly baseUrl = this.config.ollamaBaseUrl || process.env.OLLAMA_BASE_URL || process.env.AI_OLLAMA_URL || 'http://localhost:11434';
-  private readonly model = this.config.ollamaModel || process.env.OLLAMA_MODEL || process.env.AI_OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
+  private readonly baseUrl = this.config.ollamaBaseUrl
+    || resolveDevOnlyFallback(
+      process.env.OLLAMA_BASE_URL || process.env.AI_OLLAMA_URL,
+      'http://localhost:11434',
+      'AI_OLLAMA_URL or OLLAMA_BASE_URL',
+    );
+  private readonly model = this.config.ollamaModel
+    || resolveDevOnlyFallback(
+      process.env.OLLAMA_MODEL || process.env.AI_OLLAMA_MODEL,
+      DEFAULT_OLLAMA_MODEL,
+      'AI_OLLAMA_MODEL or OLLAMA_MODEL',
+    );
   private readonly timeoutMs = resolveOllamaTimeoutMs();
   private readonly traceEnabled = process.env.ASSISTANT_TRACE === 'true';
 

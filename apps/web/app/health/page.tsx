@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { getPublicApiUrl } from '../../shared/lib/public-api-url';
 
 type HealthStatus = {
   status?: string;
@@ -12,7 +13,7 @@ export default function HealthPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`)
+    fetch(`${getPublicApiUrl()}/health`)
       .then((res) => res.json())
       .then((data) => {
         setStatus(data);

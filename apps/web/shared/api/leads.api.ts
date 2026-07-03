@@ -2,6 +2,8 @@
  * Public Leads API - no authentication required
  */
 
+import { getPublicApiUrl } from '../lib/public-api-url';
+
 export interface CreateLeadRequest {
   fullName: string;
   email: string;
@@ -24,7 +26,7 @@ export interface LeadResponse {
   message: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_URL = getPublicApiUrl();
 
 /**
  * Submit a new marketing lead (no authentication required)
