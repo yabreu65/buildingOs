@@ -16,32 +16,33 @@ import Button from '@/shared/components/ui/Button';
 import Input from '@/shared/components/ui/Input';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
-import { apiClient } from '@/shared/lib/http/client';
 import { setSession, setLastTenant } from '@/features/auth/session.storage';
 import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
+import {
+  invitationsApi,
+  type AcceptInvitationResponse,
+  type ValidateTokenResponse,
+} from '@/features/invitations/services/invitations.api';
 import { t } from '@/i18n';
 
 const acceptSchema = z.object({
-  name: z.string().min(1, t('auth.invite.nameRequired')),
+  name: z.string().trim().min(1, t('auth.invite.nameRequired')),
   password: z.string().min(8, t('auth.invite.passwordMinimum')),
 });
 
 type AcceptFormData = z.infer<typeof acceptSchema>;
 
-interface AcceptInvitationResponse {
-  user: { id: string; name: string; email: string };
-  memberships: Array<{ id: string; tenantId: string; roles: Role[] }>;
-  membershipExisted?: boolean;
-}
+type InviteStatus = 'loading' | 'invalid' | 'ready' | 'submitting';
 
 function InvitePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const token = searchParams.get('token');
-  const [validating, setValidating] = useState(!!token);
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const token = searchParams.get('token')?.trim() ?? null;
+  const [status, setStatus] = useState<InviteStatus>(token ? 'loading' : 'invalid');
+  const [statusMessage, setStatusMessage] = useState<string | null>(
+    token ? null : t('auth.invite.noTokenDescription'),
+  );
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -49,6 +50,7 @@ function InvitePageContent() {
   const [tenantName, setTenantName] = useState<string | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const {
     register,
@@ -65,33 +67,28 @@ function InvitePageContent() {
   // Validate token on mount
   useEffect(() => {
     if (!token) {
-      setValidating(false);
+      setStatus('invalid');
+      setStatusMessage(t('auth.invite.noTokenDescription'));
       return;
     }
 
     const validateToken = async () => {
       try {
-        interface ValidateInvitationResponse {
-          tenantId: string;
+        const response: ValidateTokenResponse & {
           tenantName: string;
-          email: string;
           roles: Role[];
-          expiresAt: string;
-        }
-        const response = await apiClient<ValidateInvitationResponse>({
-          path: `/invitations/validate?token=${encodeURIComponent(token)}`,
-          method: 'GET',
-        });
+        } = await invitationsApi.validateToken(token);
         setTenantId(response.tenantId);
         setEmail(response.email);
         setTenantName(response.tenantName);
         setRoles(Array.isArray(response.roles) ? response.roles : []);
         setExpiresAt(new Date(response.expiresAt));
-        setValidating(false);
+        setStatus('ready');
+        setStatusMessage(null);
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : t('auth.invite.invalidOrExpired');
-        setValidationError(errorMessage);
-        setValidating(false);
+        setStatus('invalid');
+        setStatusMessage(errorMessage);
       }
     };
 
@@ -100,21 +97,20 @@ function InvitePageContent() {
 
   const handleAcceptInvitation = async (data: AcceptFormData) => {
     if (!token || !tenantId || !email) {
+      setStatus('invalid');
+      setStatusMessage(t('auth.invite.invalidOrExpired'));
       return;
     }
 
     try {
       setSubmitting(true);
       setSubmitError(null);
-      const response = await apiClient<AcceptInvitationResponse, { token: string; name: string; password: string }>({
-        path: '/invitations/accept',
-        method: 'POST',
-        body: {
-          token,
-          name: data.name,
-          password: data.password,
-        },
+      const response: AcceptInvitationResponse = await invitationsApi.acceptInvitation({
+        token,
+        name: data.name.trim(),
+        password: data.password,
       });
+      setStatus('ready');
 
       // Save session and redirect
       clearAllImpersonationData();
@@ -138,13 +134,14 @@ function InvitePageContent() {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : t('auth.invite.acceptError');
       setSubmitError(errorMessage);
+      setStatus('ready');
     } finally {
       setSubmitting(false);
     }
   };
 
   // Loading state
-  if (validating) {
+  if (status === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
         <Card className="w-full max-w-md">
@@ -159,13 +156,13 @@ function InvitePageContent() {
   }
 
   // Invalid/expired token
-  if (validationError) {
+  if (status === 'invalid') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
         <Card className="w-full max-w-md">
           <EmptyState
             title={t('auth.invite.invalidTitle')}
-            description={validationError}
+            description={statusMessage ?? t('auth.invite.invalidOrExpired')}
           />
           <Button
             className="w-full mt-6"
@@ -178,14 +175,13 @@ function InvitePageContent() {
     );
   }
 
-  // No token
-  if (!token) {
+  if (status !== 'ready' || !tenantId || !email) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
         <Card className="w-full max-w-md">
           <EmptyState
-            title={t('auth.invite.noTokenTitle')}
-            description={t('auth.invite.noTokenDescription')}
+            title={t('auth.invite.invalidTitle')}
+            description={t('auth.invite.invalidOrExpired')}
           />
           <Button
             className="w-full mt-6"
@@ -196,11 +192,6 @@ function InvitePageContent() {
         </Card>
       </div>
     );
-  }
-
-  // Valid invitation
-  if (!tenantId || !email) {
-    return null;
   }
 
   const formatDate = (date: Date) => {

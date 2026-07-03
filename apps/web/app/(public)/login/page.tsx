@@ -12,21 +12,21 @@ import Card from '../../../shared/components/ui/Card';
 import Button from '../../../shared/components/ui/Button';
 
 const loginSchema = z.object({
-  email: z.string().email('Correo electrónico inválido'),
+  email: z.string().trim().email('Correo electrónico inválido'),
   password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres'),
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
-export default function LoginPage() {
+const LoginPage = () => {
   return (
     <Suspense fallback={<LoginPageFallback />}>
       <LoginPageContent />
     </Suspense>
   );
-}
+};
 
-function LoginPageFallback() {
+const LoginPageFallback = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
@@ -37,9 +37,9 @@ function LoginPageFallback() {
       </div>
     </div>
   );
-}
+};
 
-function LoginPageContent() {
+const LoginPageContent = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const loginMutation = useLogin();
@@ -84,17 +84,10 @@ function LoginPageContent() {
             <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
               <p className="font-semibold">Acceso a la demo interactiva</p>
               <p className="mt-2 text-blue-900/90">
-                Usá estas credenciales de ejemplo para explorar el producto.
+                Usá el acceso de demo configurado en este entorno para explorar el producto.
               </p>
               <div className="mt-3 grid gap-2 rounded-md bg-white/70 p-3 font-mono text-sm">
-                <div>
-                  <span className="font-semibold font-sans text-blue-900">Correo electrónico: </span>
-                  demo@buildingos.app
-                </div>
-                <div>
-                  <span className="font-semibold font-sans text-blue-900">Contraseña: </span>
-                  DemoPass!123
-                </div>
+                <div className="text-blue-900">Las credenciales no se muestran en la UI.</div>
               </div>
               <p className="mt-3 text-xs text-blue-900/80">
                 Este entorno es de prueba y los datos pueden reiniciarse periódicamente.
@@ -181,4 +174,6 @@ function LoginPageContent() {
       </div>
     </div>
   );
-}
+};
+
+export default LoginPage;

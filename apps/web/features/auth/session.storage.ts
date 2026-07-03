@@ -85,21 +85,26 @@ export function clearLastTenant(): void {
  * Emits a storage change event for UI updates.
  */
 export function clearAuth(): void {
-  try {
-    localStorage.removeItem(KEY_SESSION);
-    localStorage.removeItem(KEY_LAST_TENANT);
+  const keysToRemove: string[] = [KEY_SESSION, KEY_LAST_TENANT];
 
-    const keysToRemove: string[] = [];
+  try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith('bo_')) {
         keysToRemove.push(key);
       }
     }
-    keysToRemove.forEach((key) => localStorage.removeItem(key));
-
-    emitBoStorageChange();
-  } catch {
-    // noop
+  } catch (error) {
+    console.warn('[auth] Unable to enumerate auth storage keys.', error);
   }
+
+  for (const key of keysToRemove) {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.warn(`[auth] Unable to remove storage key "${key}".`, error);
+    }
+  }
+
+  emitBoStorageChange();
 }

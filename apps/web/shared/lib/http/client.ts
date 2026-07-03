@@ -33,6 +33,14 @@ export class HttpError extends Error {
 
 const API_URL = getPublicApiUrl();
 
+/**
+ * 204 responses intentionally have no response body.
+ * Callers should treat the return value as void-compatible.
+ */
+function noContentResponse<TRes>(): TRes {
+  return undefined as TRes;
+}
+
 async function parseErrorResponse(response: Response): Promise<{
   message: string;
   data: ErrorResponseData | null;
@@ -114,7 +122,7 @@ export async function apiClient<TRes, TReq = never>(
           const retryResponse = await fetch(url, init);
           if (retryResponse.ok) {
             if (retryResponse.status === 204) {
-              return undefined as unknown as TRes;
+              return noContentResponse<TRes>();
             }
             return retryResponse.json() as Promise<TRes>;
           }
@@ -144,7 +152,7 @@ export async function apiClient<TRes, TReq = never>(
   }
 
   if (response.status === 204) {
-    return undefined as unknown as TRes;
+    return noContentResponse<TRes>();
   }
 
   return response.json() as Promise<TRes>;

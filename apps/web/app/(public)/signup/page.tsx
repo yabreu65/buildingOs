@@ -13,13 +13,13 @@ import Button from '../../../shared/components/ui/Button';
 
 const signupSchema = z
   .object({
-    name: z.string().min(2, 'El nombre debe tener al menos 2 caracteres'),
-    email: z.string().email('Correo electrónico inválido'),
+    name: z.string().trim().min(2, 'El nombre debe tener al menos 2 caracteres'),
+    email: z.string().trim().email('Correo electrónico inválido'),
     password: z
       .string()
       .min(8, 'La contraseña debe tener al menos 8 caracteres'),
     confirmPassword: z.string(),
-    tenantName: z.string().min(2, 'El nombre debe tener al menos 2 caracteres'),
+    tenantName: z.string().trim().min(2, 'El nombre debe tener al menos 2 caracteres'),
     tenantType: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
   })
   .refine((data) => data.password === data.confirmPassword, {
@@ -59,7 +59,12 @@ export default function SignupPage() {
   const onSubmit = async (data: SignupFormData) => {
     try {
       const { confirmPassword, ...payload } = data;
-      await signupMutation.mutateAsync(payload);
+      await signupMutation.mutateAsync({
+        ...payload,
+        name: payload.name.trim(),
+        email: payload.email.trim(),
+        tenantName: payload.tenantName.trim(),
+      });
     } catch (error) {
       console.error('Signup error:', error);
     }

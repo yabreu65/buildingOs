@@ -11,7 +11,7 @@ import Input from '@/shared/components/ui/Input';
 import { CreateInvitationRequest } from '../services/invitations.api';
 
 const inviteSchema = z.object({
-  email: z.string().email('Email inválido'),
+  email: z.string().trim().email('Email inválido'),
 });
 
 type InviteFormData = z.infer<typeof inviteSchema>;
@@ -20,21 +20,21 @@ interface InviteModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (dto: CreateInvitationRequest) => Promise<void>;
-  availableRoles?: readonly Role[];
+  availableRoles: readonly Role[];
   title?: string;
   subtitle?: string;
   submitLabel?: string;
 }
 
-export default function InviteModal({
+export const InviteModal = ({
   open,
   onOpenChange,
   onSubmit,
-  availableRoles = ['TENANT_ADMIN', 'OPERATOR', 'RESIDENT'],
+  availableRoles,
   title = 'Invitar miembro',
   subtitle = 'Envía una invitación para agregar un nuevo miembro al equipo operativo.',
   submitLabel = 'Enviar invitación',
-}: InviteModalProps) {
+}: InviteModalProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRoles, setSelectedRoles] = useState<Role[]>([]);
@@ -53,7 +53,7 @@ export default function InviteModal({
 
   const handleFormSubmit = async (data: InviteFormData) => {
     if (selectedRoles.length === 0) {
-      setError('Selecione pelo menos um papel');
+      setError('Seleccioná al menos un rol');
       return;
     }
 
@@ -61,14 +61,14 @@ export default function InviteModal({
       setError(null);
       setLoading(true);
       await onSubmit({
-        email: data.email,
+        email: data.email.trim(),
         roles: selectedRoles,
       });
       reset();
       setSelectedRoles([]);
       onOpenChange(false);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Erro ao enviar convite';
+      const message = err instanceof Error ? err.message : 'Error al enviar la invitación';
       setError(message);
     } finally {
       setLoading(false);
@@ -91,8 +91,9 @@ export default function InviteModal({
 
         <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
+            <label htmlFor="invite-email" className="block text-sm font-medium mb-1">Correo electrónico</label>
             <Input
+              id="invite-email"
               type="email"
               placeholder="usuario@example.com"
               {...register('email')}
@@ -103,7 +104,7 @@ export default function InviteModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Papéis</label>
+            <label className="block text-sm font-medium mb-2">Roles</label>
             <div className="space-y-2">
               {availableRoles.map((role) => (
                 <label
@@ -158,4 +159,4 @@ export default function InviteModal({
       </Card>
     </div>
   );
-}
+};

@@ -2,19 +2,24 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import type { Role } from '@buildingos/contracts';
 import { useHasRole } from '@/features/auth/useAuthSession';
 import { OperationalMembersList } from '@/features/memberships/components/OperationalMembersList';
 import { PeopleModuleSwitcher } from '@/features/memberships/components/PeopleModuleSwitcher';
-import InviteModal from '@/features/invitations/components/InviteModal';
+import { InviteModal } from '@/features/invitations/components/InviteModal';
 import PendingInvitationsList from '@/features/invitations/components/PendingInvitationsList';
 import { useInvitations } from '@/features/invitations/hooks/useInvitations';
 import type { CreateInvitationRequest } from '@/features/invitations/services/invitations.api';
 import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 
+const operationalInviteRoles: readonly Role[] = ['TENANT_ADMIN', 'OPERATOR'];
+
 const TeamPage = () => {
   const params = useParams();
-  const tenantId = params.tenantId as string;
+  const tenantId = typeof params.tenantId === 'string' && params.tenantId.length > 0
+    ? params.tenantId
+    : null;
   const router = useRouter();
   const isResident = useHasRole('RESIDENT');
   const { toast } = useToast();
@@ -35,16 +40,23 @@ const TeamPage = () => {
   }, [isResident, tenantId, router]);
 
   useEffect(() => {
-    if (tenantId) {
+    if (tenantId && !isResident) {
       void fetchInvitations(tenantId);
     }
-  }, [tenantId, fetchInvitations]);
+  }, [tenantId, isResident, fetchInvitations]);
 
   const handleInvite = async (dto: CreateInvitationRequest) => {
+    if (!tenantId) {
+      return;
+    }
     await createInvitation(tenantId, dto);
     toast('Invitación enviada', 'success');
     setShowInviteModal(false);
   };
+
+  if (!tenantId || isResident) {
+    return <div className="container mx-auto max-w-4xl py-8" />;
+  }
 
   return (
     <div className="container mx-auto max-w-4xl py-8">
@@ -87,7 +99,7 @@ const TeamPage = () => {
         open={showInviteModal}
         onOpenChange={setShowInviteModal}
         onSubmit={handleInvite}
-        availableRoles={['TENANT_ADMIN', 'OPERATOR']}
+        availableRoles={operationalInviteRoles}
         title="Invitar miembro operativo"
         subtitle="Envía una invitación para agregar administradores u operadores al equipo."
         submitLabel="Enviar invitación"

@@ -14,7 +14,9 @@ export interface CreateInvitationResponse {
 
 export interface ValidateTokenResponse {
   tenantId: string;
+  tenantName: string;
   email: string;
+  roles: Role[];
   expiresAt: string;
 }
 
@@ -22,6 +24,28 @@ export interface AcceptInvitationRequest {
   token: string;
   name?: string;
   password?: string;
+}
+
+export interface AuthMembership {
+  tenantId: string;
+  roles: Role[];
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface AcceptInvitationResponse {
+  user: AuthUser;
+  memberships: AuthMembership[];
+  membershipExisted?: boolean;
+  userExisted?: boolean;
+}
+
+export interface RevokeInvitationResponse {
+  success: true;
 }
 
 export interface Member {
@@ -56,9 +80,9 @@ export const invitationsApi = {
    */
   async acceptInvitation(
     dto: AcceptInvitationRequest,
-  ): Promise<any> {
+  ): Promise<AcceptInvitationResponse> {
     // This is like auth/login, returns { user, memberships } and sets auth cookies
-    return apiClient({
+    return apiClient<AcceptInvitationResponse, AcceptInvitationRequest>({
       path: '/invitations/accept',
       method: 'POST',
       body: dto,
@@ -102,8 +126,11 @@ export const invitationsApi = {
   /**
    * Revoke invitation (admin)
    */
-  async revokeInvitation(tenantId: string, invitationId: string): Promise<any> {
-    return apiClient({
+  async revokeInvitation(
+    tenantId: string,
+    invitationId: string,
+  ): Promise<RevokeInvitationResponse> {
+    return apiClient<RevokeInvitationResponse>({
       path: `/tenants/${tenantId}/memberships/invitations/${invitationId}`,
       method: 'DELETE',
     });
