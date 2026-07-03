@@ -51,10 +51,13 @@ Use this checklist before every production deployment.
 ## Readiness and observability
 
 - [ ] `/health` returns 200
-- [ ] `/readyz` returns 200 with database and storage up
+- [ ] `/readyz` returns 200 when the API is healthy or degraded, 503 only when the database is down
+- [ ] `/metrics` returns scrapeable Prometheus text without secrets
 - [ ] Email provider health is green or intentionally `not_configured`
+- [ ] Request ID propagation verified end to end (`X-Request-Id`)
 - [ ] Error tracking DSN configured for the target environment
 - [ ] Deployment version/release annotation captured in release notes
+- [ ] Alerting checklist reviewed: readiness failures, 5xx rate, latency, dependency degradation
 
 ## Go / No-Go
 

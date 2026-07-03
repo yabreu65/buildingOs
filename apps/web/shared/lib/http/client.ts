@@ -2,6 +2,7 @@ import { getCurrentImpersonationToken, clearAllImpersonationData } from '../../.
 import { clearAuth } from '../../../features/auth/session.storage';
 import { emitAuthUnauthorized } from '../auth/events';
 import { getPublicApiUrl } from '../public-api-url';
+import { recordApiResponseContext } from '../observability/frontend-observability';
 
 export interface HttpRequestConfig<TReq = never> {
   path: string;
@@ -79,6 +80,19 @@ async function tryRefreshAuthCookie(): Promise<boolean> {
   }
 }
 
+function captureResponseContext(
+  response: Response,
+  method: string,
+  path: string,
+): void {
+  recordApiResponseContext({
+    requestId: response.headers.get('X-Request-Id') ?? undefined,
+    method,
+    path,
+    statusCode: response.status,
+  });
+}
+
 export async function apiClient<TRes, TReq = never>(
   config: HttpRequestConfig<TReq>,
 ): Promise<TRes> {
@@ -106,7 +120,19 @@ export async function apiClient<TRes, TReq = never>(
     init.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    recordApiResponseContext({
+      requestId: undefined,
+      method,
+      path,
+      statusCode: 0,
+    });
+    throw error;
+  }
+  captureResponseContext(response, method, path);
 
   if (!response.ok) {
     // Centralized 401 handler: try refresh cookie once, then emit an auth-expired event.
@@ -121,6 +147,7 @@ export async function apiClient<TRes, TReq = never>(
         const refreshed = await tryRefreshAuthCookie();
         if (refreshed) {
           const retryResponse = await fetch(url, init);
+          captureResponseContext(retryResponse, method, path);
           if (retryResponse.ok) {
             if (retryResponse.status === 204) {
               return noContentResponse<TRes>();

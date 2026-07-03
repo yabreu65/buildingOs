@@ -1,6 +1,10 @@
 'use client';
 
 import React, { ReactNode } from 'react';
+import {
+  getLatestApiResponseContext,
+  reportFrontendError,
+} from '@/shared/lib/observability/frontend-observability';
 
 interface Props {
   children: ReactNode;
@@ -56,8 +60,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
       this.props.onError(error, errorInfo);
     }
 
-    // TODO: Send error to Sentry or error tracking service
-    // Sentry.captureException(error, { contexts: { errorBoundary: errorInfo } });
+    reportFrontendError(error, {
+      source: 'error-boundary',
+      level: this.props.level || 'component',
+      componentStack: errorInfo.componentStack ?? undefined,
+    });
   }
 
   render() {
@@ -91,6 +98,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
 // ============================================================================
 
 function ErrorPageFallback({ error }: { error: Error | null }) {
+  const requestContext = getLatestApiResponseContext();
+
   return (
     <div className="flex h-screen w-full flex-col items-center justify-center bg-background p-6">
       <div className="max-w-md space-y-4 text-center">
@@ -103,6 +112,11 @@ function ErrorPageFallback({ error }: { error: Error | null }) {
             ? error.message
             : 'Ocurrió un error inesperado. Por favor, intenta recargar la página.'}
         </p>
+        {requestContext?.requestId ? (
+          <p className="text-xs text-muted-foreground">
+            Reference: <span className="font-mono">{requestContext.requestId}</span>
+          </p>
+        ) : null}
         <button
           onClick={() => window.location.reload()}
           className="mt-6 rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
@@ -115,6 +129,8 @@ function ErrorPageFallback({ error }: { error: Error | null }) {
 }
 
 function ErrorFeatureFallback({ error }: { error: Error | null }) {
+  const requestContext = getLatestApiResponseContext();
+
   return (
     <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
       <div className="flex gap-3">
@@ -128,6 +144,11 @@ function ErrorFeatureFallback({ error }: { error: Error | null }) {
               ? error.message
               : 'Hubo un problema cargando esta sección. Intenta recargar la página.'}
           </p>
+          {requestContext?.requestId ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Reference: <span className="font-mono">{requestContext.requestId}</span>
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -135,6 +156,8 @@ function ErrorFeatureFallback({ error }: { error: Error | null }) {
 }
 
 function ErrorComponentFallback({ error }: { error: Error | null }) {
+  const requestContext = getLatestApiResponseContext();
+
   return (
     <div className="text-xs text-muted-foreground">
       {process.env.NODE_ENV === 'development' && error ? (
@@ -145,7 +168,12 @@ function ErrorComponentFallback({ error }: { error: Error | null }) {
           </pre>
         </details>
       ) : (
-        'Error al cargar componente'
+        <span>
+          Error al cargar componente
+          {requestContext?.requestId ? (
+            <span className="ml-2 font-mono">({requestContext.requestId})</span>
+          ) : null}
+        </span>
       )}
     </div>
   );

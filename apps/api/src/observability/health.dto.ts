@@ -30,7 +30,7 @@ export class HealthLivenessResponseDto {
 
 export class HealthReadinessResponseDto {
   constructor(
-    readonly status: 'healthy' | 'unhealthy',
+    readonly status: 'healthy' | 'degraded' | 'unhealthy',
     readonly timestamp: string,
     readonly checks: HealthChecksDto,
   ) {}

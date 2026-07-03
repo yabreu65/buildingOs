@@ -4,7 +4,7 @@
  */
 
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppConfigModule } from '../config/config.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { StorageModule } from '../storage/storage.module';
@@ -14,6 +14,9 @@ import { SentryService } from './sentry.service';
 import { RequestIdMiddleware } from './request-id.middleware';
 import { HealthService } from './health.service';
 import { HealthController } from './health.controller';
+import { MetricsService } from './metrics.service';
+import { MetricsController } from './metrics.controller';
+import { MetricsInterceptor } from './metrics.interceptor';
 import { SentryExceptionFilter } from './sentry-exception.filter';
 
 @Module({
@@ -22,13 +25,18 @@ import { SentryExceptionFilter } from './sentry-exception.filter';
     LoggerService,
     SentryService,
     HealthService,
+    MetricsService,
     {
       provide: APP_FILTER,
       useClass: SentryExceptionFilter,
     },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: MetricsInterceptor,
+    },
   ],
-  controllers: [HealthController],
-  exports: [LoggerService, SentryService, HealthService],
+  controllers: [HealthController, MetricsController],
+  exports: [LoggerService, SentryService, HealthService, MetricsService],
 })
 export class ObservabilityModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

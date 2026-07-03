@@ -882,6 +882,18 @@ psql -c "SELECT * FROM \"AuditLog\" WHERE \"createdAt\" > '2026-02-17';" > audit
 - Storage usage (alert: >80%)
 - Backup success rate (target: 100%)
 
+### Observability Alerting Checklist
+
+- [ ] `/readyz` returns 200 for the API
+- [ ] `/metrics` is scrapeable and contains request counters
+- [ ] `X-Request-Id` is present in API responses and visible in logs
+- [ ] Readiness failures page the on-call owner
+- [ ] 5xx rate and latency alerts are enabled
+- [ ] Database, storage, and email degradation are visible in metrics
+- [ ] Degraded readiness is distinguished from outright unhealthy states
+- [ ] Sentry is configured for the target environment
+- [ ] Rollback steps are documented and accessible to responders
+
 ---
 
 ## Appendix

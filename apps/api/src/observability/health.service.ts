@@ -8,13 +8,14 @@ import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { EmailService } from '../email/email.service';
+import { MetricsService } from './metrics.service';
 
 type DatabaseHealthCheck = HealthStatus['checks']['database'];
 type StorageHealthCheck = HealthStatus['checks']['storage'];
 type EmailHealthCheck = HealthStatus['checks']['email'];
 
 export interface HealthStatus {
-  status: 'healthy' | 'unhealthy';
+  status: 'healthy' | 'degraded' | 'unhealthy';
   timestamp: string;
   checks: {
     database: {
@@ -42,6 +43,7 @@ export class HealthService {
     private prisma: PrismaService,
     private minioService: MinioService,
     private emailService: EmailService,
+    private metricsService: MetricsService,
   ) {}
 
   /**
@@ -61,12 +63,25 @@ export class HealthService {
       checks.database.status === 'up' &&
       (checks.storage.status === 'up' || checks.storage.status === 'not_configured') &&
       (checks.email.status === 'up' || checks.email.status === 'not_configured');
+    const hasOptionalDegradation =
+      checks.database.status === 'up' &&
+      (checks.storage.status === 'down' || checks.email.status === 'down');
 
-    return {
-      status: isHealthy ? 'healthy' : 'unhealthy',
+    const readiness: HealthStatus = {
+      status: checks.database.status !== 'up'
+        ? 'unhealthy'
+        : isHealthy
+          ? 'healthy'
+          : hasOptionalDegradation
+            ? 'degraded'
+            : 'unhealthy',
       timestamp: new Date().toISOString(),
       checks,
     };
+
+    this.metricsService.recordReadiness(readiness);
+
+    return readiness;
   }
 
   /**
@@ -78,7 +93,7 @@ export class HealthService {
       await this.prisma.$queryRaw`SELECT 1`;
       const latency = Date.now() - startTime;
       return { status: 'up', latency };
-    } catch (error) {
+    } catch {
       return {
         status: 'down',
         error:

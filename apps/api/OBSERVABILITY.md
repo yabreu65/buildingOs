@@ -236,12 +236,13 @@ async login(@Body() loginDto: LoginDto) {
 
 **Contract**
 - `/health` = liveness. It only confirms the API process is alive.
-- `/ready` = readiness. It confirms the API can safely receive traffic.
+- `/ready` = readiness. It confirms the API can safely receive traffic and may return `degraded` when optional dependencies are down.
 - `/readyz` = alias for `/ready` for orchestrator compatibility.
 - Deployment gates and service routing should use readiness, not liveness.
 - Database is required for readiness.
 - Storage and email are required only when configured for the environment.
 - Redis is not part of the readiness gate in the current contract.
+- Dependency degradation is explicit: database failure blocks readiness; optional dependency failures surface as `degraded` readiness and in metrics for operational follow-up.
 
 #### Liveness Probe: `/health`
 
@@ -261,7 +262,7 @@ curl http://localhost:4000/health
 #### Readiness Probe: `/ready`
 
 **Purpose**: Is the API ready to accept traffic?
-**Response**: 200 OK if required dependencies are healthy, 503 if not
+**Response**: 200 OK if the API can safely serve traffic, 503 if the database is down
 **Used by**: Kubernetes, load balancers to route traffic only to ready pods
 
 ```bash
@@ -273,6 +274,18 @@ curl http://localhost:4000/ready
 #   "checks": {
 #     "database": { "status": "up", "latency": 2 },
 #     "storage": { "status": "up", "latency": 5 },
+#     "email": { "status": "up", "provider": "smtp" }
+#   }
+# }
+
+# Response (degraded):
+# HTTP 200 OK
+# {
+#   "status": "degraded",
+#   "timestamp": "2026-02-22T10:30:00.000Z",
+#   "checks": {
+#     "database": { "status": "up", "latency": 2 },
+#     "storage": { "status": "down", "error": "..." },
 #     "email": { "status": "up", "provider": "smtp" }
 #   }
 # }
@@ -289,6 +302,30 @@ curl http://localhost:4000/ready
 #   }
 # }
 ```
+
+### Metrics Endpoint: `/metrics`
+
+**Purpose**: Expose request volume, request duration, process uptime, and the last readiness snapshot for scrape-based monitoring.
+**Response**: Prometheus text exposition format
+**Used by**: Internal monitoring, dashboards, and alert rules
+
+```bash
+curl http://localhost:4000/metrics
+```
+
+Key series exposed:
+- `buildingos_process_uptime_seconds`
+- `buildingos_http_requests_total`
+- `buildingos_http_request_duration_ms`
+- `buildingos_readiness_dependency_state`
+- `buildingos_readiness_overall_status`
+
+### Dependency Degradation Policy
+
+- Database is a critical dependency.
+- Storage and email are tracked as operational dependencies and must be visible in readiness and metrics.
+- If a configured optional dependency fails, readiness becomes `degraded`, the service remains routable, and the failure should be handled by alerting/runbooks.
+- Do not infer degrade behavior from logs alone; use `/ready` plus `/metrics`.
 
 ### Kubernetes Configuration
 
