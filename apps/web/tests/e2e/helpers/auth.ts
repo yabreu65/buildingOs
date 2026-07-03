@@ -34,7 +34,21 @@ export async function login(page: Page, user: TestUser): Promise<string> {
   await page.getByRole('button', { name: /iniciar sesión/i }).click();
 
   // Wait for navigation away from login page (goes to /:tenantId/dashboard)
-  await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20000 });
+  try {
+    await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20000 });
+  } catch (error) {
+    const visibleError = await page
+      .locator('[role="alert"], [data-testid="login-error"], .text-red-700, .text-red-600')
+      .first()
+      .textContent()
+      .catch(() => null);
+
+    throw new Error(
+      visibleError
+        ? `Login did not navigate away from /login: ${visibleError.trim()}`
+        : `Login did not navigate away from /login: ${(error as Error).message}`,
+    );
+  }
 
   // Extract tenantId from URL like /:tenantId/dashboard
   const url = new URL(page.url());
@@ -49,7 +63,8 @@ export async function login(page: Page, user: TestUser): Promise<string> {
  * Logout from BuildingOS
  */
 export async function logout(page: Page): Promise<void> {
-  await page.click('button:has-text("Logout")');
+  const logoutButton = page.locator('button:has-text("Cerrar sesión"), button:has-text("Logout")').first();
+  await logoutButton.click();
   await page.waitForURL('/login', { timeout: 10000 });
   await expect(page).toHaveURL(/.*login/);
 }
