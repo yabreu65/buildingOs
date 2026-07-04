@@ -18,8 +18,12 @@ import { getResidentLedger, type UnitLedger } from '@/features/resident/api/resi
 import { getContextOptions } from '@/features/context/context.api';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus } from '@/features/finance/services/finance.api';
-import { apiClient } from '@/shared/lib/http/client';
-import { getDownloadUrl } from '@/features/buildings/services/documents.api';
+import {
+  getDownloadUrl,
+  presignUpload,
+  uploadFileToMinio,
+  createDocument,
+} from '@/features/buildings/services/documents.api';
 import type { ContextOption } from '@/features/context/context.types';
 import Card from '@/shared/components/ui/Card';
 import Input from '@/shared/components/ui/Input';
@@ -73,14 +77,13 @@ interface PaymentFormData {
   proofFileId?: string;
 }
 
-interface PresignResponse {
-  url: string;
-  bucket: string;
-  objectKey: string;
-  expiresAt: string;
-}
-
-const ResidentPaymentsPage = () => {
+/**
+ * Resident payments page.
+ *
+ * Loads resident context, ledger, payments history, and supports proof upload
+ * plus payment submission with explicit confirmation before sending.
+ */
+export const ResidentPaymentsPage = () => {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
 
@@ -104,7 +107,12 @@ const ResidentPaymentsPage = () => {
     refetch: refetchContextOptions,
   } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
     queryKey: ['contextOptions', tenantId],
-    queryFn: () => getContextOptions(tenantId!),
+    queryFn: () => {
+      if (!tenantId) {
+        throw new Error('Missing tenantId for resident context options');
+      }
+      return getContextOptions(tenantId);
+    },
     enabled: !!tenantId,
     staleTime: 5 * 60 * 1000,
   });
@@ -120,7 +128,12 @@ const ResidentPaymentsPage = () => {
     refetch: refetchLedger,
   } = useQuery<UnitLedger>({
     queryKey: ['residentLedger', tenantId, unitId],
-    queryFn: () => getResidentLedger(tenantId, unitId!),
+    queryFn: () => {
+      if (!tenantId || !unitId) {
+        throw new Error('Missing tenant or unit context for resident ledger');
+      }
+      return getResidentLedger(tenantId, unitId);
+    },
     enabled: !!tenantId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
@@ -133,7 +146,12 @@ const ResidentPaymentsPage = () => {
     refetch: refetchPayments,
   } = useQuery<Payment[]>({
     queryKey: ['residentPayments', buildingId, unitId],
-    queryFn: () => listPayments(buildingId!, undefined, unitId ?? undefined, 20),
+    queryFn: () => {
+      if (!buildingId || !unitId) {
+        throw new Error('Missing building or unit context for resident payments');
+      }
+      return listPayments(buildingId, undefined, unitId, 20);
+    },
     enabled: !!buildingId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
@@ -150,6 +168,7 @@ const ResidentPaymentsPage = () => {
   const [uploadingProof, setUploadingProof] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
@@ -161,11 +180,12 @@ const ResidentPaymentsPage = () => {
     }
     setDownloadingId(paymentId);
     try {
+      setDownloadError(null);
       const response = await getDownloadUrl(tenantId, documentId);
       setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
       window.open(response.url, '_blank');
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : 'No pudimos abrir el comprobante. Intentá nuevamente.');
+      setDownloadError(error instanceof Error ? error.message : 'No pudimos abrir el comprobante. Intentá nuevamente.');
     } finally {
       setDownloadingId(null);
     }
@@ -174,7 +194,7 @@ const ResidentPaymentsPage = () => {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !tenantId) return;
-    
+
     if (file.size > 10 * 1024 * 1024) {
       setSubmitError('El archivo no puede superar 10MB');
       return;
@@ -184,41 +204,25 @@ const ResidentPaymentsPage = () => {
     setSubmitError(null);
 
     try {
-      const presignRes = await apiClient<PresignResponse, { originalName: string; mimeType: string }>({
-        path: `/tenants/${tenantId}/documents/presign`,
-        method: 'POST',
-        body: {
+      const presignRes = await presignUpload(tenantId, file.name, file.type, file.size);
+      await uploadFileToMinio(presignRes.url, file);
+      const createdDocument = await createDocument(tenantId, {
+        title: `Comprobante pago - ${file.name}`,
+        category: 'RECEIPT',
+        visibility: 'RESIDENTS',
+        file: {
+          bucket: presignRes.bucket,
+          objectKey: presignRes.objectKey,
           originalName: file.name,
           mimeType: file.type,
-        },
-      });
-
-      const uploadResponse = await fetch(presignRes.url, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type },
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`Error al subir archivo: ${uploadResponse.status} ${uploadResponse.statusText}`);
-      }
-
-      const createRes = await apiClient<{ fileId: string }, { title: string; category: string; visibility: string; objectKey: string; size: number; buildingId?: string; unitId?: string }>({
-        path: `/tenants/${tenantId}/documents`,
-        method: 'POST',
-        body: {
-          title: `Comprobante pago - ${file.name}`,
-          category: 'RECEIPT',
-          visibility: 'RESIDENTS',
-          objectKey: presignRes.objectKey,
           size: file.size,
-          buildingId: buildingId ?? undefined,
-          unitId: unitId ?? undefined,
         },
+        buildingId: buildingId ?? undefined,
+        unitId: unitId ?? undefined,
       });
 
       setProofFile(file);
-      setProofFileId(createRes.fileId);
+      setProofFileId(createdDocument.file.id);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '';
       setSubmitError(`Error al subir el comprobante: ${errorMessage || 'Intentalo de nuevo'}`);
@@ -309,26 +313,6 @@ const ResidentPaymentsPage = () => {
     }
   };
 
-  if (!unitId) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Pagos</h1>
-          <p className="text-muted-foreground">{tenantName}</p>
-        </div>
-        <Card className="p-6 border-yellow-300 bg-yellow-50">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="text-yellow-600" size={24} />
-            <div>
-              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
-              <p className="text-sm text-yellow-700">No tenés una unidad asignada. Comunicate con la administración.</p>
-            </div>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
   if (contextLoading || ledgerLoading) {
     return (
       <div className="space-y-6">
@@ -413,6 +397,26 @@ const ResidentPaymentsPage = () => {
     );
   }
 
+  if (!unitId) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Pagos</h1>
+          <p className="text-muted-foreground">{tenantName}</p>
+        </div>
+        <Card className="p-6 border-yellow-300 bg-yellow-50">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="text-yellow-600" size={24} />
+            <div>
+              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700">No tenés una unidad asignada. Comunicate con la administración.</p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   const contextOptionsWarning = contextOptionsError ? (
     <Card className="p-4 border-amber-200 bg-amber-50">
       <div className="flex items-start gap-3">
@@ -445,6 +449,18 @@ const ResidentPaymentsPage = () => {
           {unitLabel && ` • Unidad ${unitLabel}`}
         </p>
       </div>
+
+      {downloadError && (
+        <Card className="p-4 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos abrir el comprobante.</p>
+              <p className="text-sm text-red-700">{downloadError}</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {contextOptionsWarning}
 
@@ -561,7 +577,10 @@ const ResidentPaymentsPage = () => {
           </div>
         ) : (
           <div className="space-y-2">
-            {payments.map((payment) => (
+            {payments.map((payment) => {
+              const proofDocumentId = payment.proofDocumentId;
+
+              return (
               <div key={payment.id} className="flex justify-between items-start gap-3 p-3 bg-muted/50 rounded-lg">
                 <div className="flex-1">
                   <p className="font-medium">{formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}</p>
@@ -571,9 +590,9 @@ const ResidentPaymentsPage = () => {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {payment.proofDocumentId ? (
+                  {proofDocumentId ? (
                     <button
-                      onClick={() => handleViewProof(payment.id, payment.proofDocumentId!)}
+                      onClick={() => handleViewProof(payment.id, proofDocumentId)}
                       disabled={downloadingId === payment.id}
                       type="button"
                       aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
@@ -594,7 +613,8 @@ const ResidentPaymentsPage = () => {
                   </span>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
