@@ -233,7 +233,7 @@ const ResidentDashboardPage = () => {
             className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition"
           >
             <MessageSquare className="w-4 h-4" />
-            <span className="text-sm font-medium">Crear ticket</span>
+            <span className="text-sm font-medium">Crear reclamo</span>
           </Link>
         </div>
       </Card>
@@ -265,10 +265,10 @@ const ResidentDashboardPage = () => {
           )}
         </Card>
 
-        {/* Tickets */}
+        {/* Reclamos */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">Mis tickets</h3>
+            <h3 className="font-semibold">Mis reclamos</h3>
             <Link href={`/${tenantId}/resident/tickets`} className="text-sm text-blue-600 hover:underline">
               Ver todos
             </Link>
@@ -276,7 +276,7 @@ const ResidentDashboardPage = () => {
           {tickets.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6">
               <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
-              <p className="text-muted-foreground">Sin tickets abiertos</p>
+              <p className="text-muted-foreground">No tenés reclamos abiertos.</p>
             </div>
           ) : (
             <div className="space-y-2">

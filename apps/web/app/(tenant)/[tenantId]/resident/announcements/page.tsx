@@ -7,9 +7,8 @@ import {
   type ResidentCommunicationItem,
 } from '@/features/communications/services/communications.api';
 import { useTenantId } from '@/features/tenancy/tenant.hooks';
-import { BuildingIcon, Bell, CheckCircle2, Circle, ArrowLeft, Loader2 } from 'lucide-react';
-import Link from 'next/link';
-import { routes } from '@/shared/lib/routes';
+import { BuildingIcon, Bell, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
+import Card from '@/shared/components/ui/Card';
 
 export default function ResidentAnnouncementsPage() {
   const tenantId = useTenantId();
@@ -100,15 +99,22 @@ export default function ResidentAnnouncementsPage() {
 
   if (error) {
     return (
-      <div className="text-center py-8">
-        <p className="text-red-500">{error}</p>
+      <Card className="p-6 border-red-200 bg-red-50">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="text-red-600 mt-0.5" size={20} />
+          <div className="space-y-1">
+            <p className="font-medium text-red-800">No pudimos cargar los comunicados</p>
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        </div>
         <button
           onClick={() => fetchCommunications()}
+          type="button"
           className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md"
         >
           Reintentar
         </button>
-      </div>
+      </Card>
     );
   }
 
@@ -129,15 +135,19 @@ export default function ResidentAnnouncementsPage() {
       {communications.length === 0 ? (
         <div className="text-center py-12">
           <Bell className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-          <p className="text-muted-foreground">No hay comunicados disponibles</p>
+          <p className="text-muted-foreground">No tenés comunicados para mostrar por ahora.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Cuando la administración publique novedades para tu edificio, las vas a ver acá.
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
           {communications.map((comm) => (
-            <div
+            <button
+              type="button"
               key={comm.id}
               onClick={() => handleCardClick(comm)}
-              className={`p-4 rounded-lg border cursor-pointer transition-colors ${
+              className={`w-full text-left p-4 rounded-lg border transition-colors ${
                 comm.deliveryStatus === 'UNREAD'
                   ? 'bg-card border-border hover:bg-accent'
                   : 'bg-card/50 border-border hover:bg-accent/50'
@@ -179,7 +189,7 @@ export default function ResidentAnnouncementsPage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </button>
           ))}
 
           {hasMore && (
@@ -187,6 +197,7 @@ export default function ResidentAnnouncementsPage() {
               <button
                 onClick={handleLoadMore}
                 disabled={loadingMore}
+                type="button"
                 className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
               >
                 {loadingMore ? (

@@ -142,7 +142,7 @@ const ResidentPaymentsPage = () => {
       setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
       window.open(response.url, '_blank');
     } catch (error) {
-      console.error('Error downloading proof:', error);
+      setSubmitError(error instanceof Error ? error.message : 'No pudimos abrir el comprobante. Intentá nuevamente.');
     } finally {
       setDownloadingId(null);
     }
@@ -169,10 +169,6 @@ const ResidentPaymentsPage = () => {
           mimeType: file.type,
         },
       });
-
-      console.log('[DEBUG] Presign URL:', presignRes.url);
-      console.log('[DEBUG] ObjectKey:', presignRes.objectKey);
-      console.log('[DEBUG] Bucket:', presignRes.bucket);
 
       const uploadResponse = await fetch(presignRes.url, {
         method: 'PUT',
@@ -201,7 +197,6 @@ const ResidentPaymentsPage = () => {
       setProofFile(file);
       setProofFileId(createRes.fileId);
     } catch (error: unknown) {
-      console.error('Error uploading proof:', error);
       const errorMessage = error instanceof Error ? error.message : '';
       setSubmitError(`Error al subir el comprobante: ${errorMessage || 'Intentalo de nuevo'}`);
     } finally {
@@ -228,6 +223,11 @@ const ResidentPaymentsPage = () => {
   const currency = ledger?.totals?.currency ?? 'ARS';
 
   const canSubmit = !!proofFileId;
+  const paymentAmountId = 'resident-payment-amount';
+  const paymentDateId = 'resident-payment-date';
+  const paymentReferenceId = 'resident-payment-reference';
+  const paymentMethodId = 'resident-payment-method';
+  const paymentProofId = 'resident-payment-proof';
 
   // Next due charge: use real outstanding, not legacy status
   const nextDueCharge = ledger?.charges
@@ -381,7 +381,7 @@ const ResidentPaymentsPage = () => {
         {pendingCharges.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6">
             <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
-            <p className="text-muted-foreground">Sin cargos pendientes</p>
+            <p className="text-muted-foreground">No tenés cargos pendientes por ahora.</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -389,7 +389,9 @@ const ResidentPaymentsPage = () => {
               <div key={charge.id} className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
                 <div>
                   <p className="font-medium">{charge.concept}</p>
-                  <p className="text-sm text-muted-foreground">{charge.period} • Vence: {formatDate(charge.dueDate)}</p>
+                  <p className="text-sm text-muted-foreground">
+                    Período {charge.period} • Vence: {formatDate(charge.dueDate)}
+                  </p>
                 </div>
                 <div className="text-right">
                   <p className="font-bold">{formatCurrency(charge.amount - (charge.allocated ?? 0), charge.currency, getLocaleForCurrency(charge.currency))}</p>
@@ -415,7 +417,7 @@ const ResidentPaymentsPage = () => {
           <Skeleton className="h-32" />
         ) : payments.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6">
-            <p className="text-muted-foreground">Sin pagos registrados</p>
+            <p className="text-muted-foreground">Todavía no tenés pagos registrados.</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -433,6 +435,8 @@ const ResidentPaymentsPage = () => {
                     <button
                       onClick={() => handleViewProof(payment.id, payment.proofDocumentId!)}
                       disabled={downloadingId === payment.id}
+                      type="button"
+                      aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
                       className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
                     >
                       {downloadingId === payment.id ? (
@@ -462,8 +466,9 @@ const ResidentPaymentsPage = () => {
           <form onSubmit={handleSubmitPayment} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Monto ({currency})</label>
+                <label htmlFor={paymentAmountId} className="block text-sm font-medium mb-1">Monto ({currency})</label>
                 <Input
+                  id={paymentAmountId}
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -475,8 +480,8 @@ const ResidentPaymentsPage = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Método de pago</label>
-                <Select value={PaymentMethod.TRANSFER} disabled>
+                <label className="block text-sm font-medium mb-1" htmlFor={paymentMethodId}>Método de pago</label>
+                <Select id={paymentMethodId} value={PaymentMethod.TRANSFER} disabled>
                   <option value={PaymentMethod.TRANSFER}>Transferencia bancaria</option>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">
@@ -486,16 +491,18 @@ const ResidentPaymentsPage = () => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Fecha de pago</label>
+                <label htmlFor={paymentDateId} className="block text-sm font-medium mb-1">Fecha de pago</label>
                 <Input
+                  id={paymentDateId}
                   type="date"
                   value={formData.paidAt}
                   onChange={(e) => setFormData({ ...formData, paidAt: e.target.value })}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Referencia (opcional)</label>
+                <label htmlFor={paymentReferenceId} className="block text-sm font-medium mb-1">Referencia (opcional)</label>
                 <Input
+                  id={paymentReferenceId}
                   type="text"
                   value={formData.reference}
                   onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
@@ -505,13 +512,14 @@ const ResidentPaymentsPage = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label htmlFor={paymentProofId} className="block text-sm font-medium mb-1">
                 Comprobante de pago {formData.method === PaymentMethod.TRANSFER && <span className="text-red-500">*</span>}
               </label>
               {formData.method === PaymentMethod.TRANSFER && !proofFile && (
                 <p className="text-xs text-amber-600 mb-2">Los pagos por transferencia requieren comprobante</p>
               )}
               <input
+                id={paymentProofId}
                 type="file"
                 accept="image/*,.pdf"
                 onChange={handleFileChange}
@@ -547,13 +555,13 @@ const ResidentPaymentsPage = () => {
 
             {submitError && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm text-red-600">{submitError}</p>
+                <p className="text-sm text-red-600" aria-live="polite">{submitError}</p>
               </div>
             )}
 
             {submitSuccess && (
               <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-sm text-green-600">✓ Pago enviado exitosamente</p>
+                <p className="text-sm text-green-600" aria-live="polite">✓ Pago enviado exitosamente</p>
               </div>
             )}
 

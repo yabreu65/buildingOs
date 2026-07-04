@@ -71,7 +71,7 @@ function formatDate(dateStr: string | undefined): string {
 export default function ResidentTicketsPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
-  
+
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTicket, setNewTicket] = useState({
@@ -90,7 +90,13 @@ export default function ResidentTicketsPage() {
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
 
-  const { data: tickets = [], isLoading, refetch } = useQuery<Ticket[]>({
+  const {
+    data: tickets = [],
+    isLoading,
+    isError: ticketsError,
+    error: ticketsErrorValue,
+    refetch,
+  } = useQuery<Ticket[]>({
     queryKey: ['residentTickets', buildingId, unitId],
     queryFn: () => getResidentTickets(buildingId!, unitId!, 50),
     enabled: !!buildingId && !!unitId,
@@ -101,6 +107,13 @@ export default function ResidentTicketsPage() {
     e.preventDefault();
     if (!buildingId || !unitId) return;
 
+    const title = newTicket.title.trim();
+    const description = newTicket.description.trim();
+    if (!title || !description) {
+      setError('Completá el título y la descripción antes de continuar.');
+      return;
+    }
+
     setCreating(true);
     setError(null);
     setSuccess(null);
@@ -108,9 +121,11 @@ export default function ResidentTicketsPage() {
     try {
       await createTicket(buildingId, {
         ...newTicket,
+        title,
+        description,
         unitId,
       });
-      setSuccess('Ticket creado correctamente');
+      setSuccess('Reclamo creado correctamente');
       setNewTicket({
         title: '',
         description: '',
@@ -120,7 +135,7 @@ export default function ResidentTicketsPage() {
       setShowCreateForm(false);
       refetch();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al crear ticket');
+      setError(err instanceof Error ? err.message : 'No pudimos crear el reclamo. Intentá nuevamente.');
     } finally {
       setCreating(false);
     }
@@ -149,7 +164,7 @@ export default function ResidentTicketsPage() {
       <div>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <MessageSquare className="w-6 h-6" />
-          Mis Tickets
+          Mis reclamos
         </h1>
         <p className="text-muted-foreground mt-1">{tenantName}</p>
         
@@ -172,49 +187,60 @@ export default function ResidentTicketsPage() {
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <MessageSquare className="w-6 h-6" />
-            Mis Tickets
+            Mis reclamos
           </h1>
-          <p className="text-muted-foreground mt-1">{tenantName}</p>
+          <p className="text-muted-foreground mt-1">
+            {tenantName}
+            {buildingId && unitId && ' • Tu unidad'}
+          </p>
         </div>
         <button
           onClick={() => setShowCreateForm(!showCreateForm)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          type="button"
         >
           <Plus className="w-4 h-4" />
-          Crear ticket
+          Crear reclamo
         </button>
       </div>
 
       {showCreateForm && (
         <Card className="p-4 mb-6">
-          <h3 className="font-semibold mb-4">Nuevo ticket</h3>
+          <h3 className="font-semibold mb-4">Nuevo reclamo</h3>
           <form onSubmit={handleCreate} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Título</label>
+              <label htmlFor="resident-ticket-title" className="block text-sm font-medium mb-1">Título</label>
               <input
+                id="resident-ticket-title"
                 type="text"
                 value={newTicket.title}
                 onChange={(e) => setNewTicket({ ...newTicket, title: e.target.value })}
                 className="w-full px-3 py-2 border rounded-md"
                 required
-                placeholder="Describe brevemente el problema"
+                placeholder="Describe brevemente lo que sucede"
+                aria-invalid={!!error}
+                aria-describedby={error ? 'resident-ticket-error' : undefined}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Descripción</label>
+              <label htmlFor="resident-ticket-description" className="block text-sm font-medium mb-1">Descripción</label>
               <textarea
+                id="resident-ticket-description"
                 value={newTicket.description}
                 onChange={(e) => setNewTicket({ ...newTicket, description: e.target.value })}
                 className="w-full px-3 py-2 border rounded-md"
                 rows={4}
                 required
-                placeholder="Detalles del problema..."
+                placeholder="Contá qué pasó, desde cuándo y si afecta a tu unidad"
+                aria-invalid={!!error}
+                aria-describedby={error ? 'resident-ticket-error' : undefined}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Categoría</label>
+                <label htmlFor="resident-ticket-category" className="block text-sm font-medium mb-1">Categoría</label>
                 <select
+                  id="resident-ticket-category"
                   value={newTicket.category}
                   onChange={(e) => setNewTicket({ ...newTicket, category: e.target.value })}
                   className="w-full px-3 py-2 border rounded-md"
@@ -227,8 +253,9 @@ export default function ResidentTicketsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Prioridad</label>
+                <label htmlFor="resident-ticket-priority" className="block text-sm font-medium mb-1">Prioridad</label>
                 <select
+                  id="resident-ticket-priority"
                   value={newTicket.priority}
                   onChange={(e) => setNewTicket({ ...newTicket, priority: e.target.value as Ticket['priority'] })}
                   className="w-full px-3 py-2 border rounded-md"
@@ -240,8 +267,12 @@ export default function ResidentTicketsPage() {
                 </select>
               </div>
             </div>
-            {error && <p className="text-red-600 text-sm">{error}</p>}
-            {success && <p className="text-green-600 text-sm">{success}</p>}
+            {error && (
+              <p id="resident-ticket-error" className="text-red-600 text-sm" aria-live="polite">
+                {error}
+              </p>
+            )}
+            {success && <p className="text-green-600 text-sm" aria-live="polite">{success}</p>}
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -254,7 +285,7 @@ export default function ResidentTicketsPage() {
                     Creando...
                   </span>
                 ) : (
-                  'Crear ticket'
+                  'Crear reclamo'
                 )}
               </button>
               <button
@@ -269,6 +300,27 @@ export default function ResidentTicketsPage() {
         </Card>
       )}
 
+      {(ticketsError || ticketsErrorValue) && (
+        <Card className="p-4 mb-6 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar tus reclamos</p>
+              <p className="text-sm text-red-700">
+                {ticketsErrorValue instanceof Error ? ticketsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetch()}
+                className="text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="space-y-4">
           {[1, 2, 3].map(i => (
@@ -278,7 +330,10 @@ export default function ResidentTicketsPage() {
       ) : filteredTickets.length === 0 ? (
         <Card className="p-8 text-center">
           <CheckCircle className="w-12 h-12 mx-auto text-green-600 mb-4" />
-          <p className="text-muted-foreground">No tenés tickets abiertos</p>
+          <p className="text-muted-foreground">Todavía no tenés reclamos abiertos.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Si necesitás ayuda con tu unidad o edificio, podés crear uno desde arriba.
+          </p>
         </Card>
       ) : (
         <div className="space-y-3">

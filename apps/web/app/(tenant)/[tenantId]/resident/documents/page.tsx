@@ -2,14 +2,12 @@
 
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   FileText,
   Download,
   AlertCircle,
-  CheckCircle,
-  Loader2,
   Building2,
-  Home,
   Folder,
   Calendar,
 } from 'lucide-react';
@@ -73,19 +71,10 @@ function categoryLabel(category: string): string {
   return labels[category] ?? category;
 }
 
-function visibilityLabel(visibility: Document['visibility']): string {
-  const labels: Record<Document['visibility'], string> = {
-    TENANT_ADMIN: 'Solo admins',
-    RESIDENTS: 'Todos los residentes',
-    PRIVATE: 'Privado',
-  };
-  return labels[visibility] ?? visibility;
-}
-
 function scopeLabel(buildingId: string | null, unitId: string | null): string {
   if (unitId) return 'Unidad';
   if (buildingId) return 'Edificio';
-  return '全局';
+  return 'General';
 }
 
 function formatDate(dateStr: string): string {
@@ -113,6 +102,7 @@ function getFileIcon(mimeType: string) {
 export default function ResidentDocumentsPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
@@ -130,7 +120,13 @@ export default function ResidentDocumentsPage() {
 
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
 
-  const { data: documents = [], isLoading: docsLoading, refetch } = useQuery<Document[]>({
+  const {
+    data: documents = [],
+    isLoading: docsLoading,
+    isError: docsError,
+    error: docsErrorValue,
+    refetch,
+  } = useQuery<Document[]>({
     queryKey: ['residentDocuments', tenantId, buildingId, unitId],
     queryFn: () => getResidentDocuments(tenantId!, buildingId ?? undefined, unitId ?? undefined),
     enabled: !!tenantId,
@@ -139,10 +135,11 @@ export default function ResidentDocumentsPage() {
 
   const handleDownload = async (doc: Document) => {
     try {
+      setDownloadError(null);
       const url = await getDownloadUrl(tenantId!, doc.id);
       window.open(url, '_blank');
     } catch (error) {
-      console.error('Failed to get download URL:', error);
+      setDownloadError(error instanceof Error ? error.message : 'No pudimos abrir el documento. Intentá nuevamente.');
     }
   };
 
@@ -195,6 +192,30 @@ export default function ResidentDocumentsPage() {
         </p>
       </div>
 
+      {(docsError || downloadError) && (
+        <Card className="p-4 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar los documentos</p>
+              <p className="text-sm text-red-700">
+                {downloadError ?? (docsErrorValue instanceof Error ? docsErrorValue.message : 'Intentá nuevamente en unos segundos.')}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setDownloadError(null);
+                  refetch();
+                }}
+                className="text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Documents List */}
       {docsLoading ? (
         <div className="space-y-4">
@@ -205,9 +226,9 @@ export default function ResidentDocumentsPage() {
       ) : documents.length === 0 ? (
         <Card className="p-8 text-center">
           <Folder className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-          <p className="text-muted-foreground">No hay documentos disponibles</p>
+          <p className="text-muted-foreground">No hay documentos disponibles para tu unidad.</p>
           <p className="text-sm text-muted-foreground mt-1">
-            Los documentos subidos por la administración aparecerán aquí
+            Cuando la administración comparta documentos con tu unidad o edificio, los vas a ver acá.
           </p>
         </Card>
       ) : (
@@ -238,6 +259,8 @@ export default function ResidentDocumentsPage() {
                 </div>
                 <button
                   onClick={() => handleDownload(doc)}
+                  type="button"
+                  aria-label={`Descargar ${doc.title}`}
                   className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition"
                 >
                   <Download className="w-4 h-4" />
