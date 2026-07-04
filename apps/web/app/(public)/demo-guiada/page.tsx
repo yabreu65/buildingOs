@@ -18,7 +18,7 @@ import Badge from '@/shared/components/ui/Badge';
 export const metadata = {
   title: 'Demo guiada | BuildingOS',
   description:
-    'Solicitá una demo guiada de BuildingOS y conocé cómo ayuda a administrar edificios, pagos, morosidad y tickets.',
+    'Solicitá una demo guiada de BuildingOS y conocé cómo ayuda a administrar edificios, pagos, morosidad, documentos y reclamos.',
 };
 
 interface BenefitCard {
@@ -81,7 +81,7 @@ export default function DemoGuidedPage() {
                 </h1>
                 <p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
                   Te mostramos la plataforma con foco comercial: cómo ayuda a gestionar edificios,
-                  unidades, residentes, finanzas, pagos, morosidad y solicitudes.
+                  unidades, residentes, finanzas, pagos, morosidad y reclamos.
                 </p>
               </div>
 
@@ -184,11 +184,11 @@ export default function DemoGuidedPage() {
             <Card className="bg-muted/40">
               <p className="text-sm font-semibold text-foreground">¿Querés ver el producto ya?</p>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Si preferís explorar por tu cuenta, entrá a la demo interactiva desde el login demo.
+                Si preferís explorar por tu cuenta, entrá a la demostración interactiva desde el login demo.
               </p>
               <div className="mt-4">
                 <Button asChild variant="secondary" className="w-full">
-                  <Link href="/demo">Explorar demo</Link>
+                  <Link href="/demo">Abrir demo</Link>
                 </Button>
               </div>
             </Card>

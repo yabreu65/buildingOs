@@ -26,7 +26,7 @@ export default function Modules() {
     {
       name: "Operación",
       items: [
-        { name: "Reclamos/Tickets", status: "available" },
+        { name: "Reclamos", status: "available" },
         { name: "Proveedores", status: "next" },
       ],
     },

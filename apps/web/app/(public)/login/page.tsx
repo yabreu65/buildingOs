@@ -82,16 +82,16 @@ const LoginPageContent = () => {
 
           {showDemoHelp && (
             <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-              <p className="font-semibold">Acceso a la demo interactiva</p>
+              <p className="font-semibold">Acceso a la demostración controlada</p>
               <p className="mt-2 text-blue-900/90">
-                Usá el acceso de demo habilitado en este entorno para explorar el producto.
+                Usá la entrada demo para recorrer el producto con datos ficticios.
               </p>
               <p className="mt-3 text-xs text-blue-900/80">
-                Este entorno es de prueba y los datos pueden reiniciarse periódicamente.
+                No uses información real en esta instancia.
               </p>
               <div className="mt-4 flex flex-col sm:flex-row gap-3">
                 <Button asChild variant="secondary" size="sm">
-                  <Link href="/demo">Ver la demo</Link>
+                  <Link href="/demo">Entrar a la demo</Link>
                 </Button>
                 <Link href="/demo-guiada" className="text-sm font-medium text-blue-700 hover:underline self-center">
                   Solicitar demo guiada
@@ -155,9 +155,9 @@ const LoginPageContent = () => {
 
           <div className="mt-4 text-center text-sm">
             <p className="text-muted-foreground">
-              ¿No tienes cuenta?{' '}
+              ¿No tenés cuenta?{' '}
               <Link href="/signup" className="text-blue-600 hover:underline">
-                Crea una
+                Creá una
               </Link>
             </p>
           </div>

@@ -6,11 +6,11 @@ export default function HowItWorks() {
     },
     {
       title: "Residentes reportan",
-      description: "Ellos informan pagos o crean reclamos desde su panel de autogestión.",
+      description: "Ellos informan pagos o crean reclamos desde su portal residente.",
     },
     {
       title: "Administración valida",
-      description: "Revisás comprobantes, aprobás pagos y gestionás los tickets de mantenimiento.",
+      description: "Revisás comprobantes, aprobás pagos y gestionás los reclamos de mantenimiento.",
     },
     {
       title: "Control total",

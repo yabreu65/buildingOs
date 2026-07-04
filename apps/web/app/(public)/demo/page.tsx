@@ -18,7 +18,7 @@ import Badge from '@/shared/components/ui/Badge';
 export const metadata = {
   title: 'Demo interactiva | BuildingOS',
   description:
-    'Explorá BuildingOS con una administración demo y probá módulos de edificios, finanzas, residentes y tickets.',
+    'Explorá BuildingOS con una demostración controlada y probá módulos de edificios, finanzas, residentes y reclamos.',
 };
 
 interface FeatureCard {
@@ -54,7 +54,7 @@ const features: FeatureCard[] = [
     icon: BadgeCheck,
   },
   {
-    title: 'Solicitudes y tickets',
+    title: 'Reclamos y seguimiento',
     description: 'Canalización de reclamos y seguimiento de estado.',
     icon: MessageSquareText,
   },
@@ -75,9 +75,9 @@ export default function DemoPage() {
     <main className="min-h-screen bg-gradient-to-b from-muted/40 via-background to-background">
       <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
         <div className="flex flex-wrap items-center gap-3">
-          <Badge className="bg-accent/15 text-accent border border-accent/30">Entorno demo</Badge>
+          <Badge className="bg-accent/15 text-accent border border-accent/30">Demostración controlada</Badge>
           <span className="text-sm text-muted-foreground">
-            Los datos son de ejemplo y pueden reiniciarse periódicamente.
+            Datos ficticios para evaluación comercial. No uses información real.
           </span>
         </div>
 
@@ -85,16 +85,16 @@ export default function DemoPage() {
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-sm text-muted-foreground">
               <Sparkles className="h-4 w-4 text-primary" />
-              Probá BuildingOS sin salir del producto
+              Probá BuildingOS con una administración ficticia
             </div>
 
             <h1 className="mt-5 text-4xl font-extrabold tracking-tight text-foreground sm:text-5xl lg:text-6xl">
-              Explorá BuildingOS con una administración demo
+              Explorá BuildingOS con una administración controlada
             </h1>
 
             <p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
               Probá cómo se gestionan edificios, unidades, residentes, finanzas, pagos,
-              morosidad y solicitudes desde un solo lugar.
+              morosidad y reclamos desde un solo lugar.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -110,10 +110,10 @@ export default function DemoPage() {
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-1 h-5 w-5 text-primary" />
                 <div>
-                  <p className="font-semibold text-foreground">Entorno de prueba</p>
+                  <p className="font-semibold text-foreground">Demostración controlada</p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Esta demo está pensada para mostrar la experiencia comercial del producto,
-                    no una cuenta real de cliente.
+                    con datos ficticios y sin afectar cuentas reales.
                   </p>
                 </div>
               </div>
@@ -138,7 +138,7 @@ export default function DemoPage() {
                 <div className="mt-3 rounded-xl border border-primary-foreground/15 bg-primary-foreground/10 p-4">
                   <div className="space-y-3 text-sm text-primary-foreground/90">
                     <p>
-                      El acceso demo está habilitado en este entorno y no se muestra en la UI pública.
+                      El acceso demo está habilitado para esta demostración y no se expone en la UI pública.
                     </p>
                     <p>
                       Si querés avanzar sin ayuda, ingresá desde el login demo. Si preferís,
@@ -153,15 +153,15 @@ export default function DemoPage() {
                 <ol className="mt-3 space-y-2 text-sm text-primary-foreground/85">
                   <li className="flex gap-2">
                     <span className="font-semibold">1.</span>
-                    Entrá a la demo o usá el botón de abajo.
+                    Abrí la demostración o usá el botón de abajo.
                   </li>
                   <li className="flex gap-2">
                     <span className="font-semibold">2.</span>
-                    Iniciá sesión con los datos de prueba.
+                    Ingresá con la entrada demo.
                   </li>
                   <li className="flex gap-2">
                     <span className="font-semibold">3.</span>
-                    Navegá por el panel, finanzas y tickets.
+                    Navegá por administración, finanzas y reclamos.
                   </li>
                 </ol>
               </div>
@@ -173,7 +173,7 @@ export default function DemoPage() {
           </Card>
         </div>
 
-        <div className="mt-14 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-14 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {features.map((feature) => {
             const Icon = feature.icon;
 

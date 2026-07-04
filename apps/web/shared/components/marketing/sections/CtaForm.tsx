@@ -18,7 +18,7 @@ export const CtaForm = () => {
               ¿Querés una demo guiada o explorar por tu cuenta?
             </h2>
             <p className="mt-4 text-lg text-primary-foreground/80 max-w-2xl lg:mx-0 mx-auto">
-              Podés hablar con el equipo comercial o entrar directamente a la experiencia demo del producto.
+              Podés hablar con el equipo comercial o abrir una demostración controlada con datos ficticios.
             </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-3 text-left">
@@ -37,9 +37,9 @@ export const CtaForm = () => {
                 <div className="flex items-start gap-3">
                   <ArrowRight className="mt-1 h-5 w-5 text-primary-foreground/90" />
                   <div>
-                    <p className="font-semibold">Exploración libre</p>
+                    <p className="font-semibold">Demo controlada</p>
                     <p className="mt-1 text-sm text-primary-foreground/75">
-                      Entrá a la demo interactiva.
+                      Entrá a la demo con datos ficticios.
                     </p>
                   </div>
                 </div>
@@ -72,13 +72,13 @@ export const CtaForm = () => {
             </Card>
 
             <Card className="bg-primary-foreground/10 border-primary-foreground/15 text-primary-foreground shadow-none">
-              <h3 className="text-xl font-semibold">Demo interactiva</h3>
+              <h3 className="text-xl font-semibold">Demo controlada</h3>
               <p className="mt-2 text-sm text-primary-foreground/80">
-                Explorá el producto con acceso de demo habilitado para este entorno.
+                Explorá el producto con datos ficticios y un recorrido profesional.
               </p>
               <div className="mt-5">
                 <Button asChild variant="secondary" className="w-full h-12 px-8 text-base">
-                  <Link href="/demo">Explorar demo</Link>
+                  <Link href="/demo">Abrir demo</Link>
                 </Button>
               </div>
             </Card>

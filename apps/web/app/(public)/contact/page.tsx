@@ -15,16 +15,16 @@ export default function ContactPage() {
             Hablemos de tu operación
           </h1>
           <p className="mt-4 text-lg text-gray-600">
-            Contanos sobre tu edificio o administradora y te ayudamos a entender cómo
-            BuildingOS puede ordenar pagos, reclamos y documentación.
+            Contanos sobre tu edificio o administradora y te mostramos cómo BuildingOS ordena
+            pagos, reclamos y documentación con datos ficticios.
           </p>
         </div>
 
         {/* Form */}
         <UnifiedLeadForm
           intent="CONTACT"
-          title="Solicitar contacto"
-          subtitle="Compartí algunos datos y nuestro equipo te contactará para coordinar una llamada o demo guiada."
+          title="Solicitar demo guiada"
+          subtitle="Compartí algunos datos y coordinamos una demo controlada con foco en tu operación."
           successTitle="¡Gracias!"
           successMessage="Recibimos tu información y te vamos a contactar pronto para coordinar el próximo paso."
         />
@@ -32,16 +32,16 @@ export default function ContactPage() {
         {/* Footer */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
           <div>
-            <div className="text-3xl font-bold text-blue-600">24h</div>
-            <p className="text-gray-600 mt-2">Tiempo de respuesta estimado</p>
+            <div className="text-3xl font-bold text-blue-600">Recorrido</div>
+            <p className="text-gray-600 mt-2">Guiado y enfocado en tu operación</p>
           </div>
           <div>
-            <div className="text-3xl font-bold text-blue-600">14 días</div>
-            <p className="text-gray-600 mt-2">Prueba gratuita, sin tarjeta</p>
+            <div className="text-3xl font-bold text-blue-600">Datos</div>
+            <p className="text-gray-600 mt-2">Ficticios, sin información real</p>
           </div>
           <div>
-            <div className="text-3xl font-bold text-blue-600">99.9%</div>
-            <p className="text-gray-600 mt-2">Disponibilidad objetivo</p>
+            <div className="text-3xl font-bold text-blue-600">Piloto</div>
+            <p className="text-gray-600 mt-2">Privado y sujeto a evaluación</p>
           </div>
         </div>
       </div>
