@@ -87,11 +87,22 @@ const ResidentPaymentsPage = () => {
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
 
-  const { data: context } = useResidentContext(tenantId ?? null);
+  const {
+    data: context,
+    isLoading: contextLoading,
+    isError: contextError,
+    error: contextErrorValue,
+    refetch: refetchContext,
+  } = useResidentContext(tenantId ?? null);
   const buildingId = context?.activeBuildingId ?? null;
   const unitId = context?.activeUnitId ?? null;
 
-  const { data: contextOptions } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
+  const {
+    data: contextOptions,
+    isError: contextOptionsError,
+    error: contextOptionsErrorValue,
+    refetch: refetchContextOptions,
+  } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
     queryKey: ['contextOptions', tenantId],
     queryFn: () => getContextOptions(tenantId!),
     enabled: !!tenantId,
@@ -101,14 +112,26 @@ const ResidentPaymentsPage = () => {
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
   const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
 
-  const { data: ledger, isLoading: ledgerLoading, refetch: refetchLedger } = useQuery<UnitLedger>({
+  const {
+    data: ledger,
+    isLoading: ledgerLoading,
+    isError: ledgerError,
+    error: ledgerErrorValue,
+    refetch: refetchLedger,
+  } = useQuery<UnitLedger>({
     queryKey: ['residentLedger', tenantId, unitId],
     queryFn: () => getResidentLedger(tenantId, unitId!),
     enabled: !!tenantId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: payments = [], isLoading: paymentsLoading, refetch: refetchPayments } = useQuery<Payment[]>({
+  const {
+    data: payments = [],
+    isLoading: paymentsLoading,
+    isError: paymentsError,
+    error: paymentsErrorValue,
+    refetch: refetchPayments,
+  } = useQuery<Payment[]>({
     queryKey: ['residentPayments', buildingId, unitId],
     queryFn: () => listPayments(buildingId!, undefined, unitId ?? undefined, 20),
     enabled: !!buildingId && !!unitId,
@@ -242,6 +265,20 @@ const ResidentPaymentsPage = () => {
     e.preventDefault();
     if (!buildingId || !unitId) return;
 
+    const amountLabel = formatCurrency(formData.amount || 0, currency, getLocaleForCurrency(currency));
+    const chargeLabel = nextDueCharge
+      ? `${nextDueCharge.concept} • Período ${nextDueCharge.period}`
+      : 'Tu saldo actual';
+    const confirmationMessage = [
+      `Vas a enviar un reporte de pago por ${amountLabel}.`,
+      `Cargo o período de referencia: ${chargeLabel}.`,
+      'La administración revisará el comprobante antes de aprobarlo.',
+    ].join('\n\n');
+
+    if (!window.confirm(confirmationMessage)) {
+      return;
+    }
+
     setSubmitting(true);
     setSubmitError(null);
     setSubmitSuccess(false);
@@ -252,7 +289,7 @@ const ResidentPaymentsPage = () => {
         amount: toCents(formData.amount),
         currency,
         method: formData.method,
-        reference: formData.reference || undefined,
+        reference: formData.reference.trim() || undefined,
         paidAt: formData.paidAt || undefined,
         proofFileId: proofFileId || undefined,
       });
@@ -292,7 +329,7 @@ const ResidentPaymentsPage = () => {
     );
   }
 
-  if (ledgerLoading) {
+  if (contextLoading || ledgerLoading) {
     return (
       <div className="space-y-6">
         <div className="space-y-2">
@@ -310,6 +347,93 @@ const ResidentPaymentsPage = () => {
     );
   }
 
+  if (contextError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Pagos</h1>
+          <p className="text-muted-foreground">
+            {tenantName}
+            {buildingName && ` • ${buildingName}`}
+            {unitLabel && ` • Unidad ${unitLabel}`}
+          </p>
+        </div>
+        <Card className="p-6 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={24} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar tu contexto residente.</p>
+              <p className="text-sm text-red-700">
+                {contextErrorValue instanceof Error ? contextErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchContext()}
+                className="mt-2 text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (ledgerError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Pagos</h1>
+          <p className="text-muted-foreground">
+            {tenantName}
+            {buildingName && ` • ${buildingName}`}
+            {unitLabel && ` • Unidad ${unitLabel}`}
+          </p>
+        </div>
+        <Card className="p-6 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={24} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar tus pagos.</p>
+              <p className="text-sm text-red-700">
+                {ledgerErrorValue instanceof Error ? ledgerErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchLedger()}
+                className="mt-2 text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  const contextOptionsWarning = contextOptionsError ? (
+    <Card className="p-4 border-amber-200 bg-amber-50">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="text-amber-600 mt-0.5" size={20} />
+        <div className="space-y-1">
+          <p className="font-medium text-amber-800">No pudimos cargar el nombre de tu edificio o unidad.</p>
+          <p className="text-sm text-amber-700">
+            {contextOptionsErrorValue instanceof Error ? contextOptionsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => refetchContextOptions()}
+            className="text-sm font-medium text-amber-800 hover:underline"
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+    </Card>
+  ) : null;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -321,6 +445,8 @@ const ResidentPaymentsPage = () => {
           {unitLabel && ` • Unidad ${unitLabel}`}
         </p>
       </div>
+
+      {contextOptionsWarning}
 
       {/* KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -413,7 +539,21 @@ const ResidentPaymentsPage = () => {
           </Button>
         </div>
 
-        {paymentsLoading ? (
+        {paymentsError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <p className="font-medium text-red-800">No pudimos cargar tu historial de pagos.</p>
+            <p className="text-sm text-red-700 mt-1">
+              {paymentsErrorValue instanceof Error ? paymentsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => refetchPayments()}
+              className="mt-2 text-sm font-medium text-red-700 hover:underline"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : paymentsLoading ? (
           <Skeleton className="h-32" />
         ) : payments.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6">

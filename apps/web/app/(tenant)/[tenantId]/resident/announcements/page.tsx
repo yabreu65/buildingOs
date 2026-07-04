@@ -10,12 +10,13 @@ import { useTenantId } from '@/features/tenancy/tenant.hooks';
 import { BuildingIcon, Bell, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
 import Card from '@/shared/components/ui/Card';
 
-export default function ResidentAnnouncementsPage() {
+const ResidentAnnouncementsPage = () => {
   const tenantId = useTenantId();
   const [communications, setCommunications] = useState<ResidentCommunicationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [markReadError, setMarkReadError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [hasMore, setHasMore] = useState(false);
 
@@ -54,6 +55,7 @@ export default function ResidentAnnouncementsPage() {
 
   const handleMarkAsRead = async (communicationId: string) => {
     try {
+      setMarkReadError(null);
       const result = await markResidentAsRead(communicationId);
       setCommunications((prev) =>
         prev.map((c) =>
@@ -64,6 +66,11 @@ export default function ResidentAnnouncementsPage() {
       );
     } catch (err) {
       console.error('Failed to mark as read:', err);
+      setMarkReadError(
+        err instanceof Error
+          ? err.message
+          : 'No pudimos marcar el aviso como leído. Intenta nuevamente.'
+      );
     }
   };
 
@@ -131,6 +138,19 @@ export default function ResidentAnnouncementsPage() {
           </p>
         </div>
       </div>
+
+      {markReadError && (
+        <Card className="p-4 mb-4 border-amber-200 bg-amber-50">
+          <p className="text-sm text-amber-800">{markReadError}</p>
+          <button
+            type="button"
+            onClick={() => setMarkReadError(null)}
+            className="mt-2 text-sm font-medium text-amber-800 hover:underline"
+          >
+            Cerrar
+          </button>
+        </Card>
+      )}
 
       {communications.length === 0 ? (
         <div className="text-center py-12">
@@ -215,4 +235,6 @@ export default function ResidentAnnouncementsPage() {
       )}
     </div>
   );
-}
+};
+
+export default ResidentAnnouncementsPage;

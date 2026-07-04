@@ -84,32 +84,56 @@ const ResidentDashboardPage = () => {
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
 
-  const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
+  const {
+    data: context,
+    isLoading: contextLoading,
+    isError: contextError,
+    error: contextErrorValue,
+    refetch: refetchContext,
+  } = useResidentContext(tenantId ?? null);
   const buildingId = context?.activeBuildingId ?? null;
   const unitId = context?.activeUnitId ?? null;
   const hasContext = !!buildingId && !!unitId;
 
-  const { data: contextOptions } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
+  const {
+    data: contextOptions,
+    isError: contextOptionsError,
+    error: contextOptionsErrorValue,
+    refetch: refetchContextOptions,
+  } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
     queryKey: ['contextOptions', tenantId],
     queryFn: () => getContextOptions(tenantId!),
     enabled: !!tenantId,
     staleTime: 5 * 60 * 1000,
   });
 
-  const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
-  const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
+  const {
+    data: ledger,
+    isLoading: ledgerLoading,
+    isError: ledgerError,
+    error: ledgerErrorValue,
+    refetch: refetchLedger,
+  } = useResidentLedger(tenantId, unitId);
 
-  const { data: ledger, isLoading: ledgerLoading } = useResidentLedger(tenantId, unitId);
-
-  const { data: communications = [], isLoading: commsLoading } = useQuery<InboxCommunication[]>({
-    queryKey: ['residentCommunications'],
+  const {
+    data: communications = [],
+    isLoading: commsLoading,
+    isError: commsError,
+    error: commsErrorValue,
+  } = useQuery<InboxCommunication[]>({
+    queryKey: ['residentCommunications', tenantId],
     queryFn: () => getResidentCommunications(3),
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 1,
   });
 
-  const { data: tickets = [], isLoading: ticketsLoading } = useQuery<Ticket[]>({
+  const {
+    data: tickets = [],
+    isLoading: ticketsLoading,
+    isError: ticketsError,
+    error: ticketsErrorValue,
+  } = useQuery<Ticket[]>({
     queryKey: ['residentTickets', buildingId, unitId],
     queryFn: () => getResidentTickets(buildingId!, unitId!, 3),
     enabled: !!buildingId && !!unitId,
@@ -117,6 +141,9 @@ const ResidentDashboardPage = () => {
     gcTime: 5 * 60 * 1000,
     retry: 1,
   });
+
+  const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
+  const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
 
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
@@ -150,6 +177,68 @@ const ResidentDashboardPage = () => {
     );
   }
 
+  if (contextError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">
+            {userName ? `Hola, ${userName}` : 'Mi portal'}
+          </h1>
+          <p className="text-muted-foreground">{tenantName}</p>
+        </div>
+        <Card className="p-6 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={24} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar tu contexto residente.</p>
+              <p className="text-sm text-red-700">
+                {contextErrorValue instanceof Error ? contextErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchContext()}
+                className="mt-2 text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (ledgerError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">
+            {userName ? `Hola, ${userName}` : 'Mi portal'}
+          </h1>
+          <p className="text-muted-foreground">{tenantName}</p>
+        </div>
+        <Card className="p-6 border-red-200 bg-red-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 mt-0.5" size={24} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800">No pudimos cargar tu saldo y movimientos.</p>
+              <p className="text-sm text-red-700">
+                {ledgerErrorValue instanceof Error ? ledgerErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchLedger()}
+                className="mt-2 text-sm font-medium text-red-700 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -163,6 +252,27 @@ const ResidentDashboardPage = () => {
           {unitLabel && ` • Unidad ${unitLabel}`}
         </p>
       </div>
+
+      {contextOptionsError && (
+        <Card className="p-4 border-amber-200 bg-amber-50">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-amber-600 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-amber-800">No pudimos cargar el nombre de tu edificio o unidad.</p>
+              <p className="text-sm text-amber-700">
+                {contextOptionsErrorValue instanceof Error ? contextOptionsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchContextOptions()}
+                className="text-sm font-medium text-amber-800 hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Context alert if no unit */}
       {!hasContext && (
@@ -248,7 +358,14 @@ const ResidentDashboardPage = () => {
               Ver todos
             </Link>
           </div>
-          {communications.length === 0 ? (
+          {commsError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+              <p className="font-medium text-red-800">No pudimos cargar los comunicados.</p>
+              <p className="text-sm text-red-700 mt-1">
+                {commsErrorValue instanceof Error ? commsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+            </div>
+          ) : communications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6">
               <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
               <p className="text-muted-foreground">Sin comunicados</p>
@@ -273,7 +390,14 @@ const ResidentDashboardPage = () => {
               Ver todos
             </Link>
           </div>
-          {tickets.length === 0 ? (
+          {ticketsError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+              <p className="font-medium text-red-800">No pudimos cargar tus reclamos.</p>
+              <p className="text-sm text-red-700 mt-1">
+                {ticketsErrorValue instanceof Error ? ticketsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+              </p>
+            </div>
+          ) : tickets.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6">
               <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
               <p className="text-muted-foreground">No tenés reclamos abiertos.</p>
