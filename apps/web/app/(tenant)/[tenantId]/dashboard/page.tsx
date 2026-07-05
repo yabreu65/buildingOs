@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useMemo } from 'react';
 import Card from "@/shared/components/ui/Card";
 import Skeleton from "@/shared/components/ui/Skeleton";
@@ -32,8 +32,8 @@ import {
 } from 'lucide-react';
 
 interface Params {
-  tenantId: string;
-  [key: string]: string | string[];
+  readonly tenantId: string;
+  readonly [key: string]: string | string[];
 }
 
 const formatARS = (cents: number) =>
@@ -45,7 +45,13 @@ const formatARS = (cents: number) =>
 
 const formatPercentage = (value: number) => `${Math.round(value * 100)}%`;
 
-const QUICK_ACTION_LABELS: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
+interface QuickActionInfo {
+  readonly label: string;
+  readonly icon: React.ReactNode;
+  readonly desc: string;
+}
+
+const QUICK_ACTION_LABELS: Record<string, QuickActionInfo> = {
   CREATE_CHARGE: { label: 'Registrar gasto', icon: <DollarSign className="w-5 h-5" />, desc: 'Se convierte en cargo al publicar la liquidación' },
   RECORD_PAYMENT: { label: 'Registrar pago', icon: <CreditCard className="w-5 h-5" />, desc: 'Pago de residente' },
   INVITE_RESIDENT: { label: 'Invitar residente', icon: <Users className="w-5 h-5" />, desc: 'Sumar nuevo vecino' },
@@ -86,7 +92,12 @@ function collectionRateLabel(rate: number): string {
   return 'Baja';
 }
 
-function delinquentSeverity(count: number): { bg: string; text: string } {
+interface SeverityStyle {
+  readonly bg: string;
+  readonly text: string;
+}
+
+function delinquentSeverity(count: number): SeverityStyle {
   if (count >= 8) return { bg: 'bg-red-500/10', text: 'text-red-400' };
   if (count >= 4) return { bg: 'bg-yellow-500/10', text: 'text-yellow-400' };
   return { bg: 'bg-green-500/10', text: 'text-green-400' };
@@ -95,16 +106,21 @@ function delinquentSeverity(count: number): { bg: string; text: string } {
 // ── KPI Card ────────────────────────────────────────────────────────────────
 
 interface KPICardProps {
-  label: string;
-  value: string;
-  subtitle?: string;
-  subValue?: string;
-  badge?: { label: string; color: string };
-  color: string;
-  icon: React.ReactNode;
-  cta?: string;
-  onClick?: () => void;
-  children?: React.ReactNode;
+  readonly label: string;
+  readonly value: string;
+  readonly subtitle?: string;
+  readonly subValue?: string;
+  readonly badge?: BadgeInfo;
+  readonly color: string;
+  readonly icon: React.ReactNode;
+  readonly cta?: string;
+  readonly onClick?: () => void;
+  readonly children?: React.ReactNode;
+}
+
+interface BadgeInfo {
+  readonly label: string;
+  readonly color: string;
 }
 
 const KPICard = ({ label, value, subtitle, subValue, badge, color, icon, cta, onClick, children }: KPICardProps) => (
@@ -138,9 +154,9 @@ const KPICard = ({ label, value, subtitle, subValue, badge, color, icon, cta, on
 );
 
 interface SectionHeaderProps {
-  title: string;
-  subtitle: string;
-  action?: React.ReactNode;
+  readonly title: string;
+  readonly subtitle: string;
+  readonly action?: React.ReactNode;
 }
 
 const SectionHeader = ({ title, subtitle, action }: SectionHeaderProps) => (
@@ -156,11 +172,11 @@ const SectionHeader = ({ title, subtitle, action }: SectionHeaderProps) => (
 // ── Empty State ─────────────────────────────────────────────────────────────
 
 interface EmptyStateProps {
-  message: string;
-  sub?: string;
-  icon: React.ReactNode;
-  cta?: string;
-  onCta?: () => void;
+  readonly message: string;
+  readonly sub?: string;
+  readonly icon: React.ReactNode;
+  readonly cta?: string;
+  readonly onCta?: () => void;
 }
 
 const EmptyState = ({ message, sub, icon, cta, onCta }: EmptyStateProps) => (
@@ -178,7 +194,7 @@ const EmptyState = ({ message, sub, icon, cta, onCta }: EmptyStateProps) => (
 
 // ── Admin Dashboard ─────────────────────────────────────────────────────────
 
-interface AdminDashboardProps { tenantId: string }
+interface AdminDashboardProps { readonly tenantId: string }
 
 const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const router = useRouter();
@@ -286,20 +302,33 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
 
         <div className="flex flex-wrap gap-3 items-center">
           <div className="flex items-center gap-2 bg-card rounded-lg px-3 py-2 border">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Período contable</span>
+            <label
+              htmlFor="dashboard-period"
+              className="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+            >
+              Período contable
+            </label>
             <input
+              id="dashboard-period"
               type="month"
               value={period}
               onChange={(e) => setPeriod(e.target.value)}
+              aria-describedby="dashboard-period-value"
               className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
             />
-            <span className="text-sm text-muted-foreground whitespace-nowrap">
+            <span id="dashboard-period-value" className="text-sm text-muted-foreground whitespace-nowrap">
               {formatAccountingPeriodLabel(period)}
             </span>
           </div>
           <div className="flex items-center gap-2 bg-card rounded-lg px-3 py-2 border">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ámbito</span>
+            <label
+              htmlFor="dashboard-scope"
+              className="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+            >
+              Ámbito
+            </label>
             <select
+              id="dashboard-scope"
               value={buildingFilter || ''}
               onChange={(e) => setBuildingFilter(e.target.value || undefined)}
               className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
@@ -615,20 +644,42 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
 
 const DashboardPage = () => {
   const router = useRouter();
-  const { tenantId, isReady } = useContextAware();
+  const { isReady } = useContextAware();
+  const params = useParams<Params>();
+  const routeTenantId = typeof params?.tenantId === 'string' ? params.tenantId.trim() : '';
   const session = useAuthSession();
-  const effectiveRole = useEffectiveRole(tenantId);
+  const effectiveRole = useEffectiveRole(routeTenantId || undefined);
   const isSuperAdmin = useIsSuperAdmin();
+  const tenantReady = isReady && routeTenantId.length > 0;
 
   useEffect(() => {
-    if (isSuperAdmin && isReady) router.replace('/super-admin');
-  }, [isSuperAdmin, isReady, router]);
+    if (isSuperAdmin && tenantReady) router.replace('/super-admin');
+  }, [isSuperAdmin, tenantReady, router]);
 
   useEffect(() => {
-    if (effectiveRole === 'RESIDENT' && isReady && tenantId) router.replace(`/${tenantId}/resident/dashboard`);
-  }, [effectiveRole, isReady, tenantId, router]);
+    if (effectiveRole === 'RESIDENT' && tenantReady) router.replace(`/${routeTenantId}/resident/dashboard`);
+  }, [effectiveRole, tenantReady, routeTenantId, router]);
 
-  if (!isReady || !session || !tenantId || isSuperAdmin) {
+  if (!isReady) {
+    return (
+      <div className="space-y-8">
+        <Card><Skeleton className="h-8 w-48 mb-4" /><Skeleton className="h-24" /></Card>
+      </div>
+    );
+  }
+
+  if (!routeTenantId) {
+    return (
+      <Card className="border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20">
+        <h3 className="text-lg font-semibold text-amber-900 dark:text-amber-400">Tenant no válido</h3>
+        <p className="text-sm text-amber-700 dark:text-amber-300 mt-2">
+          No pudimos identificar el tenant en esta ruta. Revisá la URL e intentá de nuevo.
+        </p>
+      </Card>
+    );
+  }
+
+  if (!session || isSuperAdmin) {
     return (
       <div className="space-y-8">
         <Card><Skeleton className="h-8 w-48 mb-4" /><Skeleton className="h-24" /></Card>
@@ -651,7 +702,7 @@ const DashboardPage = () => {
     return (
       <div className="space-y-8">
         <OnboardingChecklist />
-        <AdminDashboard tenantId={tenantId} />
+        <AdminDashboard tenantId={routeTenantId} />
       </div>
     );
   }
