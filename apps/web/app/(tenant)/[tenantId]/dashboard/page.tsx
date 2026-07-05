@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, useMemo } from 'react';
 import Card from "@/shared/components/ui/Card";
 import Skeleton from "@/shared/components/ui/Skeleton";
-import OnboardingChecklist from "@/features/onboarding/OnboardingChecklist";
+import { OnboardingChecklist } from "@/features/onboarding/OnboardingChecklist";
 import { useContextAware } from "@/features/buildings/hooks/useContextAware";
 import { useAuthSession, useIsSuperAdmin } from "@/features/auth/useAuthSession";
 import { useEffectiveRole } from "@/features/tenancy/hooks/useEffectiveRole";

@@ -9,8 +9,10 @@ import { useCan } from "@/features/rbac/rbac.hooks";
 import { getSession } from "@/features/auth/session.storage";
 import type { Role } from "@/features/auth/auth.types";
 import { useBoStorageTick } from "@/shared/lib/storage/useBoStorage";
+import { routes } from "@/shared/lib/routes";
 import { listBuildings } from "@/features/units/buildings.storage";
 import { listUnits } from "@/features/units/units.storage";
+import { listResidents } from "@/features/units/users.storage";
 import { listBankAccounts } from "@/features/banking/banking.storage";
 import { listPayments } from "@/features/payments/payments.storage";
 
@@ -18,15 +20,15 @@ import { useTenantOnboarding } from "./useTenantOnboarding";
 import { mergeStepStatus } from "./onboarding.utils";
 import type { OnboardingStep } from "./onboarding.types";
 
-export default function OnboardingChecklist() {
+export function OnboardingChecklist() {
   const [isMounted, setIsMounted] = useState(false);
   const tenantId = useTenantId();
   const canReview = useCan("payments.review");
 
-  // Storage tick para reactividad de datos automáticos (localStorage)
+  // Storage tick to react to automatic data updates (localStorage).
   const storageTick = useBoStorageTick();
 
-  // Hook de onboarding para datos manuales (simula API)
+  // Onboarding hook for manual progress data (API-like local state).
   const { manualCompletions, toggleStep, loading: loadingManual } =
     useTenantOnboarding(tenantId || "");
 
@@ -40,28 +42,29 @@ export default function OnboardingChecklist() {
   const steps = useMemo(() => {
     if (!tenantId || !session) return [];
 
-    // 1) Estado automático (source of truth: storages por feature)
-    // Depende de storageTick para actualizarse cuando cambie el storage
+    // 1) Automatic state (feature storages are the source of truth).
+    // Depends on storageTick so it updates when storage changes.
     const hasBuildings = listBuildings(tenantId).length > 0;
     const hasUnits = listUnits(tenantId).length > 0;
+    const hasResidents = listResidents(tenantId).length > 0;
     const hasAccounts = listBankAccounts(tenantId).length > 0;
     const hasPayments = listPayments(tenantId).length > 0;
 
     const autoStatus: Record<string, boolean> = {
       properties: hasBuildings,
       units: hasUnits,
-      banking: hasAccounts,
-      payments: hasPayments,
-      review: hasPayments,
+      banking: hasResidents,
+      payments: false,
+      review: hasAccounts || hasPayments,
     };
 
-    // 2) Base steps
+    // 2) Base steps.
     const baseSteps: OnboardingStep[] = [
       {
         id: "properties",
-        label: "Crear Edificios",
-        description: "Registra el edificio o condominio.",
-        path: `/${tenantId}/buildings`,
+        label: "Crear el primer edificio",
+        description: "Registrá el edificio o condominio para empezar a operar.",
+        path: routes.buildingsList(tenantId),
         status: "TODO",
         condition: true,
         isManualOverrideAllowed: false,
@@ -69,7 +72,7 @@ export default function OnboardingChecklist() {
       {
         id: "units",
         label: "Cargar Unidades",
-        description: "Da de alta los departamentos y funcionales.",
+        description: "Agregá departamentos o funcionales antes de vincular personas.",
         path: `/${tenantId}/units`,
         status: "TODO",
         condition: true,
@@ -77,38 +80,38 @@ export default function OnboardingChecklist() {
       },
       {
         id: "banking",
-        label: "Configurar Banco",
-        description: "Agrega cuenta para recibir transferencias.",
-        path: `/${tenantId}/settings/banking`,
+        label: "Vincular residentes",
+        description: "Asigná cada residente a su unidad para que empiece a ver su información.",
+        path: `/${tenantId}/units`,
         status: "TODO",
         condition: true,
         isManualOverrideAllowed: true,
       },
       {
         id: "payments",
-        label: "Reportar Pago (Prueba)",
-        description: "Simula un reporte de pago de residente.",
-        path: `/${tenantId}/payments`,
+        label: "Invitar al equipo",
+        description: "Sumá administradores u operadores para repartir tareas.",
+        path: `/${tenantId}/settings/team`,
         status: "TODO",
         condition: true,
         isManualOverrideAllowed: true,
       },
       {
         id: "review",
-        label: "Validar Pagos",
-        description: "Revisa y aprueba los pagos reportados.",
-        path: `/${tenantId}/payments/review`,
+        label: "Preparar finanzas",
+        description: "Cuando cargues gastos, podrás revisar la primera liquidación y registrar pagos.",
+        path: `/${tenantId}/finanzas`,
         status: "TODO",
         condition: canReview,
         isManualOverrideAllowed: true,
       },
     ];
 
-    // 3) Merge final: auto + manual
+    // 3) Final merge: automatic + manual.
     return mergeStepStatus(baseSteps, autoStatus, manualCompletions);
   }, [tenantId, session, storageTick, manualCompletions, canReview]);
 
-  // Evitar render en SSR/hidratación (localStorage)
+  // Avoid rendering during SSR/hydration (localStorage).
   if (!isMounted || !session || !tenantId) return null;
 
   const rolesForTenant: string[] =
@@ -125,6 +128,7 @@ export default function OnboardingChecklist() {
   const totalSteps = visibleSteps.length;
   const completedSteps = visibleSteps.filter((s) => s.status === "DONE").length;
   const progress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+  const nextStep = visibleSteps.find((step) => step.status === "TODO");
 
   if (completedSteps === totalSteps) return null;
 
@@ -133,7 +137,7 @@ export default function OnboardingChecklist() {
       <div className="flex justify-between items-center mb-4">
         <div>
           <h2 className="text-xl font-bold text-foreground">
-            Configuración Inicial{" "}
+            Primeros pasos{" "}
             {loadingManual && (
               <span className="text-xs text-muted-foreground font-normal ml-2">
                 (Sincronizando...)
@@ -141,7 +145,7 @@ export default function OnboardingChecklist() {
             )}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Completa estos pasos para activar tu cuenta al 100%.
+            Seguís este orden para dejar la cuenta lista: edificio, unidades, residentes, equipo y finanzas.
           </p>
         </div>
 
@@ -150,6 +154,23 @@ export default function OnboardingChecklist() {
           <p className="text-xs text-muted-foreground">Completado</p>
         </div>
       </div>
+
+      {nextStep && (
+        <div className="mb-4 rounded-lg border border-border bg-muted/40 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Siguiente paso recomendado
+          </p>
+          <div className="mt-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium text-foreground">{nextStep.label}</p>
+              <p className="text-sm text-muted-foreground">{nextStep.description}</p>
+            </div>
+            <Button asChild variant="secondary" size="sm">
+              <Link href={nextStep.path}>Ir ahora</Link>
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3">
         {visibleSteps.map((step) => (
@@ -162,8 +183,16 @@ export default function OnboardingChecklist() {
             }`}
           >
             <div className="flex items-center gap-3">
-              <div
+              <button
+                type="button"
                 onClick={() => step.isManualOverrideAllowed && toggleStep(step.id)}
+                disabled={!step.isManualOverrideAllowed}
+                aria-pressed={step.status === "DONE"}
+                aria-label={
+                  step.isManualOverrideAllowed
+                    ? `Marcar ${step.label} como completado manualmente`
+                    : `Paso automático: ${step.label}`
+                }
                 className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors ${
                   step.status === "DONE"
                     ? "bg-success/15 text-success"
@@ -190,7 +219,7 @@ export default function OnboardingChecklist() {
                 ) : (
                   <div className="w-2 h-2 rounded-full bg-muted-foreground/30" />
                 )}
-              </div>
+              </button>
               <div>
                 <h3
                   className={`font-medium ${
@@ -206,11 +235,9 @@ export default function OnboardingChecklist() {
             </div>
 
             {step.status === "TODO" && (
-              <Link href={step.path}>
-                <Button variant="secondary" size="sm">
-                  Ir ahora
-                </Button>
-              </Link>
+              <Button asChild variant="secondary" size="sm">
+                <Link href={step.path}>Ir ahora</Link>
+              </Button>
             )}
           </div>
         ))}
