@@ -18,6 +18,12 @@ interface SubscriptionPanelProps {
 }
 
 const PLAN_OPTIONS = ['FREE', 'BASIC', 'PRO', 'ENTERPRISE'];
+const PLAN_LABELS: Record<string, string> = {
+  FREE: 'Gratis',
+  BASIC: 'Básico',
+  PRO: 'Profesional',
+  ENTERPRISE: 'Enterprise',
+};
 
 /**
  * SubscriptionPanel: Super-admin view for managing a tenant's subscription
@@ -41,7 +47,7 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
       setBilling(data);
       setSelectedPlan(data.plan.planId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch billing');
+      setError(err instanceof Error ? err.message : 'No se pudo cargar la suscripción');
     } finally {
       setLoading(false);
     }
@@ -61,11 +67,11 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
     setIsChangingPlan(true);
     try {
       await changePlanAdmin(tenantId, selectedPlan);
-      toast(`Plan changed to ${selectedPlan}`, 'success');
+      toast(`Plan cambiado a ${selectedPlan}`, 'success');
       setShowPlanModal(false);
       await refetch();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to change plan';
+      const message = err instanceof Error ? err.message : 'No se pudo cambiar el plan';
       toast(message, 'error');
     } finally {
       setIsChangingPlan(false);
@@ -96,14 +102,14 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-foreground">
-          Subscription Management
+          Gestión de suscripción
         </h2>
         <Button
           onClick={() => setShowPlanModal(true)}
           variant="secondary"
           size="sm"
         >
-          Change Plan
+          Cambiar plan
         </Button>
       </div>
 
@@ -118,10 +124,10 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
           <Card className="w-full max-w-md">
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-foreground">
-                Change Plan
+                Cambiar plan
               </h3>
               <p className="text-sm text-muted-foreground">
-                Current plan: <strong>{billing.plan.planId}</strong>
+                Plan actual: <strong>{billing.plan.planId}</strong>
               </p>
 
               {/* Plan options */}
@@ -140,7 +146,7 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
                       disabled={isChangingPlan}
                     />
                     <span className="text-sm font-medium text-foreground">
-                      {planId}
+                      {PLAN_LABELS[planId] ?? planId}
                     </span>
                   </label>
                 ))}
@@ -154,7 +160,7 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
                   disabled={isChangingPlan}
                   className="flex-1"
                 >
-                  Cancel
+                  Cancelar
                 </Button>
                 <Button
                   onClick={handleChangePlan}
@@ -164,7 +170,7 @@ export default function SubscriptionPanel({ tenantId }: SubscriptionPanelProps) 
                   }
                   className="flex-1"
                 >
-                  {isChangingPlan ? 'Changing...' : 'Confirm'}
+                  {isChangingPlan ? 'Cambiando...' : 'Confirmar'}
                 </Button>
               </div>
             </div>

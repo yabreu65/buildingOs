@@ -29,10 +29,9 @@ export function DeleteUserModal({ user, onClose, onConfirm }: DeleteUserModalPro
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-card rounded-xl border border-border p-6 w-full max-w-md shadow-lg">
-        <h2 className="text-2xl font-bold text-foreground mb-2">⚠️ Eliminar Super Admin</h2>
+        <h2 className="text-2xl font-bold text-foreground mb-2">Eliminar usuario global</h2>
         <p className="text-muted-foreground mb-4">
-          ¿Estás seguro de que querés revocar el acceso de <strong>{user.name}</strong>
-          ({user.email})? Esta acción es irreversible.
+          ¿Quieres revocar el acceso de <strong>{user.name}</strong> ({user.email})? Esta acción es irreversible.
         </p>
 
         {error && (
@@ -43,17 +42,19 @@ export function DeleteUserModal({ user, onClose, onConfirm }: DeleteUserModalPro
 
         <div className="flex gap-3 justify-end">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 rounded-lg hover:bg-muted transition-colors text-foreground"
           >
             Cancelar
           </button>
           <Button
+            type="button"
             disabled={loading}
             onClick={handleConfirm}
             className="bg-destructive hover:bg-destructive/90"
           >
-            {loading ? 'Eliminando...' : 'Eliminar'}
+            {loading ? 'Eliminando...' : 'Eliminar acceso'}
           </Button>
         </div>
       </div>

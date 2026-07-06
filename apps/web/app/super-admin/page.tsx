@@ -7,59 +7,55 @@ export default function SuperAdminDashboard() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold">Control Plane</h1>
+        <h1 className="text-3xl font-bold">Centro de operación</h1>
         <p className="text-muted-foreground mt-2">
-          Manage your BuildingOS SaaS platform
+          Administra la plataforma BuildingOS desde un panel interno claro y centralizado.
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Tenants Card */}
         <Link href="/super-admin/tenants">
           <Card className="h-32 flex flex-col justify-between hover:bg-accent/5 cursor-pointer transition-colors">
             <div>
-              <h2 className="text-xl font-semibold">Tenants</h2>
+              <h2 className="text-xl font-semibold">Administradoras</h2>
               <p className="text-sm text-muted-foreground">
-                Manage all customer organizations
+                Ver y administrar las cuentas de cada cliente.
               </p>
             </div>
             <div className="text-2xl font-bold text-primary">→</div>
           </Card>
         </Link>
 
-        {/* Overview/Stats Card */}
         <Link href="/super-admin/overview">
           <Card className="h-32 flex flex-col justify-between hover:bg-accent/5 cursor-pointer transition-colors">
             <div>
-              <h2 className="text-xl font-semibold">Overview</h2>
+              <h2 className="text-xl font-semibold">Visión general</h2>
               <p className="text-sm text-muted-foreground">
-                View platform statistics and metrics
+                Consultar métricas básicas de la plataforma.
               </p>
             </div>
             <div className="text-2xl font-bold text-primary">→</div>
           </Card>
         </Link>
 
-        {/* Audit Logs Card */}
         <Link href="/super-admin/audit-logs">
           <Card className="h-32 flex flex-col justify-between hover:bg-accent/5 cursor-pointer transition-colors">
             <div>
-              <h2 className="text-xl font-semibold">Audit Logs</h2>
+              <h2 className="text-xl font-semibold">Registro de auditoría</h2>
               <p className="text-sm text-muted-foreground">
-                Track platform activity and compliance
+                Revisar actividad y eventos sensibles.
               </p>
             </div>
             <div className="text-2xl font-bold text-primary">→</div>
           </Card>
         </Link>
 
-        {/* Platform Users Card */}
         <Link href="/super-admin/users">
           <Card className="h-32 flex flex-col justify-between hover:bg-accent/5 cursor-pointer transition-colors">
             <div>
-              <h2 className="text-xl font-semibold">Platform Users</h2>
+              <h2 className="text-xl font-semibold">Usuarios globales</h2>
               <p className="text-sm text-muted-foreground">
-                Manage global super admin users
+                Gestionar usuarios con acceso a la consola interna.
               </p>
             </div>
             <div className="text-2xl font-bold text-primary">→</div>

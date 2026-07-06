@@ -12,6 +12,7 @@ interface UserMenuProps {
 export function UserMenu({ email, name }: UserMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const router = useRouter();
+  const menuId = 'super-admin-user-menu';
 
   const handleLogout = async () => {
     await logout();
@@ -22,8 +23,12 @@ export function UserMenu({ email, name }: UserMenuProps) {
     <div className="relative">
       {/* User Button */}
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="w-full p-4 rounded-lg hover:bg-accent/50 transition-colors text-left"
+        aria-expanded={isOpen}
+        aria-controls={menuId}
+        aria-label={isOpen ? 'Cerrar menú de usuario' : 'Abrir menú de usuario'}
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-bold">
@@ -39,13 +44,14 @@ export function UserMenu({ email, name }: UserMenuProps) {
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="absolute bottom-full left-0 right-0 mb-2 bg-card border border-border rounded-lg shadow-lg overflow-hidden z-50">
+        <div id={menuId} className="absolute bottom-full left-0 right-0 mb-2 bg-card border border-border rounded-lg shadow-lg overflow-hidden z-50">
           <div className="p-4 border-b border-border bg-muted/30">
-            <p className="text-sm font-semibold text-foreground">Conectado como</p>
+            <p className="text-sm font-semibold text-foreground">Sesión activa</p>
             <p className="text-xs text-muted-foreground mt-1">{email}</p>
           </div>
 
           <button
+            type="button"
             onClick={handleLogout}
             className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 hover:bg-red-50/20 transition-colors flex items-center gap-2"
           >

@@ -18,6 +18,7 @@ export default function TenantsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const searchId = 'super-admin-tenants-search';
 
   useEffect(() => {
     const loadTenants = async () => {
@@ -56,11 +57,11 @@ export default function TenantsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Tenants</h1>
-          <p className="text-muted-foreground">Gestión de clientes del SaaS</p>
+          <h1 className="text-3xl font-bold">Administradoras</h1>
+          <p className="text-muted-foreground">Gestión de cuentas cliente y su estado operativo</p>
         </div>
         <Link href="/super-admin/tenants/create">
-          <Button>+ Crear Tenant</Button>
+          <Button>+ Crear administradora</Button>
         </Link>
       </div>
 
@@ -80,35 +81,50 @@ export default function TenantsPage() {
       {/* Loading State */}
       {loading && (
         <div className="text-center py-12">
-          <p className="text-muted-foreground">Cargando tenants...</p>
+          <p className="text-muted-foreground">Cargando administradoras...</p>
         </div>
       )}
 
       {/* Filters */}
       {!loading && (
         <div className="flex gap-4">
-          <input
-            type="text"
-            placeholder="Buscar por nombre..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="px-4 py-2 border border-input rounded-md flex-1 text-sm"
-          />
+          <div className="flex-1 space-y-2">
+            <label htmlFor={searchId} className="block text-sm font-medium text-foreground">
+              Buscar administradora
+            </label>
+            <input
+              id={searchId}
+              type="text"
+              placeholder="Buscar por nombre..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="px-4 py-2 border border-input rounded-md flex-1 text-sm w-full"
+            />
+          </div>
         </div>
       )}
 
       {/* Empty State */}
       {!loading && tenants.length === 0 && (
         <div className="text-center py-12 border border-dashed rounded-md">
-          <p className="text-muted-foreground mb-4">No hay tenants</p>
+          <p className="text-muted-foreground mb-4">No hay administradoras cargadas</p>
           <Link href="/super-admin/tenants/create">
-            <Button>Crear primer tenant</Button>
+            <Button>Crear primera administradora</Button>
           </Link>
         </div>
       )}
 
+      {!loading && tenants.length > 0 && filteredTenants.length === 0 && (
+        <div className="text-center py-12 border border-dashed rounded-md">
+          <p className="text-muted-foreground mb-2">No encontramos administradoras con ese filtro</p>
+          <Button variant="secondary" onClick={() => setSearchTerm('')}>
+            Limpiar búsqueda
+          </Button>
+        </div>
+      )}
+
       {/* Table */}
-      {!loading && tenants.length > 0 && (
+      {!loading && filteredTenants.length > 0 && (
         <div className="border rounded-lg overflow-hidden">
           <table className="w-full">
             <thead className="bg-muted">
@@ -142,7 +158,9 @@ export default function TenantsPage() {
                 return (
                   <tr key={tenant.id} className="hover:bg-muted/50">
                     <td className="px-6 py-4 text-sm font-medium">{tenant.name}</td>
-                    <td className="px-6 py-4 text-sm">{tenant.type === 'ADMINISTRADORA' ? 'ADM' : 'EDIF'}</td>
+                    <td className="px-6 py-4 text-sm">
+                      {tenant.type === 'ADMINISTRADORA' ? 'Administradora' : 'Edificio'}
+                    </td>
                     <td className="px-6 py-4 text-sm">
                       <Badge className={getTenantDemoBadgeClass(tenant.isDemo)}>
                         {getTenantDemoLabel(tenant.isDemo)}
@@ -154,7 +172,7 @@ export default function TenantsPage() {
                         status === 'ACTIVE' ? 'bg-green-100 text-green-800' :
                         'bg-red-100 text-red-800'
                       }`}>
-                        {status}
+                        {status === 'TRIAL' ? 'Prueba' : status === 'ACTIVE' ? 'Activa' : 'Suspendida'}
                       </Badge>
                     </td>
                     <td className="px-6 py-4 text-sm">{planId}</td>

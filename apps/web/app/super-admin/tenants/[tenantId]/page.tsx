@@ -24,11 +24,17 @@ export default function TenantDetailPage({
 
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
+  const tenantId = params?.tenantId?.trim();
 
   useEffect(() => {
     setLoading(true);
     try {
-      const loaded = getTenantById(params.tenantId);
+      if (!tenantId) {
+        setTenant(null);
+        return;
+      }
+
+      const loaded = getTenantById(tenantId);
       setTenant(loaded || null);
     } catch (error) {
       console.error('Failed to load tenant:', error);
@@ -36,7 +42,7 @@ export default function TenantDetailPage({
     } finally {
       setLoading(false);
     }
-  }, [params.tenantId]);
+  }, [tenantId]);
 
   if (loading) {
     return (
@@ -53,19 +59,19 @@ export default function TenantDetailPage({
         <Link href="/super-admin/tenants">
           <Button variant="secondary" size="sm">
             <ChevronLeft className="w-4 h-4 mr-2" />
-            Back to Tenants
+            Volver a administradoras
           </Button>
         </Link>
         <Card>
           <div className="text-center py-12">
             <h2 className="text-lg font-semibold text-foreground mb-2">
-              Tenant Not Found
+              Administradora no encontrada
             </h2>
             <p className="text-sm text-muted-foreground mb-4">
-              Could not find tenant with ID: {params.tenantId}
+              No pudimos encontrar la administradora con el ID: {tenantId || '(sin ID)'}
             </p>
             <Link href="/super-admin/tenants">
-              <Button size="sm">Go Back to Tenants</Button>
+              <Button size="sm">Volver a administradoras</Button>
             </Link>
           </div>
         </Card>
@@ -80,7 +86,7 @@ export default function TenantDetailPage({
         <Link href="/super-admin/tenants">
           <Button variant="secondary" size="sm">
             <ChevronLeft className="w-4 h-4 mr-2" />
-            Back to Tenants
+            Volver a administradoras
           </Button>
         </Link>
         <h1 className="text-3xl font-bold text-foreground mt-4">
@@ -94,12 +100,12 @@ export default function TenantDetailPage({
       {/* Tenant Info */}
       <Card>
         <h2 className="text-lg font-semibold text-foreground mb-4">
-          Tenant Information
+          Información de la administradora
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide">
-              Name
+              Nombre
             </div>
             <div className="text-sm font-medium text-foreground mt-1">
               {tenant.name}
@@ -107,7 +113,7 @@ export default function TenantDetailPage({
           </div>
           <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide">
-              Status
+              Estado
             </div>
             <div className="text-sm font-medium text-foreground mt-1">
               <span
@@ -117,13 +123,13 @@ export default function TenantDetailPage({
                     : 'bg-red-100 text-red-800'
                 }`}
               >
-                {tenant.status}
+                {tenant.status === 'ACTIVE' ? 'Activa' : 'Suspendida'}
               </span>
             </div>
           </div>
           <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide">
-              Created
+              Creada
             </div>
             <div className="text-sm font-medium text-foreground mt-1">
               {new Date(tenant.createdAt).toLocaleDateString()}
@@ -133,15 +139,15 @@ export default function TenantDetailPage({
       </Card>
 
       {/* Subscription Management */}
-      <SubscriptionPanel tenantId={params.tenantId} />
+      {tenantId && <SubscriptionPanel tenantId={tenantId} />}
 
       {/* Demo Seed Wizard (only for TRIAL tenants) */}
-      {tenant.status === 'TRIAL' && (
+      {tenant.status === 'TRIAL' && tenantId && (
         <DemoSeedWizard
-          tenantId={params.tenantId}
+          tenantId={tenantId}
           onSuccess={() => {
             // Refresh tenant data after demo seed created
-            const loaded = getTenantById(params.tenantId);
+            const loaded = getTenantById(tenantId);
             setTenant(loaded || null);
           }}
         />

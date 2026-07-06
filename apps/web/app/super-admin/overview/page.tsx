@@ -23,10 +23,10 @@ export default function OverviewPage() {
   });
 
   useEffect(() => {
-    // Seed tenants demo si están vacíos
+    // Seed demo tenants if storage is empty.
     seedSuperAdminIfEmpty();
 
-    // Cargar stats
+    // Load stats.
     const globalStats = getGlobalStats();
     setStats(globalStats);
   }, []);
@@ -35,42 +35,42 @@ export default function OverviewPage() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Visión General</h1>
-        <p className="text-muted-foreground">Panel de control del SaaS</p>
+        <h1 className="text-3xl font-bold">Visión general</h1>
+        <p className="text-muted-foreground">Panel interno de control de la plataforma</p>
       </div>
 
       {/* Quick Actions */}
       <div className="flex gap-3">
         <Link href="/super-admin/tenants/create">
-          <Button>+ Crear Tenant</Button>
+          <Button>+ Crear administradora</Button>
         </Link>
         <Link href="/super-admin/tenants">
-          <Button variant="secondary">Ver Tenants</Button>
+          <Button variant="secondary">Ver administradoras</Button>
         </Link>
       </div>
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <OverviewMetricWidget label="Total Administraciones" value={stats.totalTenants} />
+        <OverviewMetricWidget label="Total administradoras" value={stats.totalTenants} />
         <OverviewMetricWidget
-          label="Administraciones Activas"
+          label="Administradoras activas"
           value={stats.activeTenants}
           color="green"
         />
-        <OverviewMetricWidget label="En Prueba" value={stats.trialTenants} color="blue" />
+        <OverviewMetricWidget label="En prueba" value={stats.trialTenants} color="blue" />
         <OverviewMetricWidget
-          label="Administraciones Suspendidas"
+          label="Administradoras suspendidas"
           value={stats.suspendedTenants}
           color="red"
         />
-        <OverviewMetricWidget label="Total Edificios" value={stats.totalBuildings} />
-        <OverviewMetricWidget label="Total Unidades" value={stats.totalUnits} />
+        <OverviewMetricWidget label="Total edificios" value={stats.totalBuildings} />
+        <OverviewMetricWidget label="Total unidades" value={stats.totalUnits} />
       </div>
 
       {/* Info */}
       <div className="border border-border rounded-lg p-6 bg-muted/30">
         <p className="text-sm">
-          BuildingOS SUPER_ADMIN Dashboard MVP v0. Gestión de tenants y operaciones SaaS.
+          Consola interna de BuildingOS para seguimiento de cuentas, uso y soporte.
         </p>
       </div>
     </div>

@@ -25,7 +25,7 @@ export default function UsersPage() {
       setUsers(data);
       setError(null);
     } catch (err) {
-      setError('Failed to load users');
+      setError('No se pudieron cargar los usuarios globales');
       console.error(err);
     } finally {
       setLoading(false);
@@ -58,21 +58,23 @@ export default function UsersPage() {
       {/* Header */}
       <div>
         <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">
-          Platform Users
+          Usuarios globales
         </h1>
-        <p className="text-muted-foreground mt-2">Gestión de super admins y usuarios globales</p>
+        <p className="text-muted-foreground mt-2">
+          Gestión de cuentas con acceso a la consola interna
+        </p>
       </div>
 
       {/* Action Button */}
       <div className="flex gap-3">
-        <Button onClick={() => setShowCreateModal(true)}>+ Crear Super Admin</Button>
+        <Button onClick={() => setShowCreateModal(true)}>+ Crear usuario global</Button>
       </div>
 
       {/* Users Table */}
       <div className="bg-card rounded-xl border border-border p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-foreground mb-6">👥 Super Admin Users</h2>
+        <h2 className="text-xl font-bold text-foreground mb-6">Usuarios de la consola</h2>
 
-        {loading && <div className="text-muted-foreground text-center py-8">Cargando usuarios...</div>}
+        {loading && <div className="text-muted-foreground text-center py-8">Cargando usuarios globales...</div>}
 
         {error && (
           <div className="bg-destructive/10 text-destructive text-sm p-4 rounded-lg mb-4">
@@ -101,17 +103,19 @@ export default function UsersPage() {
                     </td>
                     <td className="py-3 px-4 text-right">
                       <button
+                        type="button"
                         onClick={() => {
                           setSelectedUser(user);
                           setShowDeleteModal(true);
                         }}
                         className="text-red-600 hover:text-red-700 text-sm font-medium transition-colors"
+                        aria-label={`Eliminar usuario global ${user.name}`}
                       >
-                        🗑️ Eliminar
+                        Eliminar
                       </button>
                     </td>
                   </tr>
-                ))}
+                  ))}
               </tbody>
             </table>
           </div>
@@ -119,7 +123,7 @@ export default function UsersPage() {
 
         {!loading && users.length === 0 && (
           <div className="text-center py-8 text-muted-foreground">
-            📭 No hay usuarios super admin creados
+            No hay usuarios globales creados
           </div>
         )}
       </div>

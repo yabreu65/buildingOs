@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { SuperAdminProvider } from '@/features/super-admin/super-admin-context';
 import { useAuth } from '@/features/auth/useAuth';
@@ -14,6 +15,7 @@ import { UserMenu } from '@/features/super-admin/components/UserMenu';
  */
 export default function SuperAdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { isLoading: authLoading } = useAuth();
   const session = useAuthSession();
   const isSuperAdmin = useIsSuperAdmin();
@@ -34,7 +36,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
     // Rule 2: Has session but NOT SUPER_ADMIN → redirect to tenant dashboard
     if (!isSuperAdmin) {
       const tenantId = session.activeTenantId;
-      router.replace(`/${tenantId}/dashboard`);
+      router.replace(tenantId ? `/${tenantId}/dashboard` : '/login');
       setIsAuthorized(false);
       return;
     }
@@ -51,58 +53,66 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
     return null; // La redirección se maneja en useEffect
   }
 
+  const navLinkClass = (href: string) => {
+    const isActive = pathname === href || pathname.startsWith(`${href}/`);
+    return [
+      'block rounded-md px-4 py-2 text-sm font-medium transition-colors',
+      isActive ? 'bg-accent text-accent-foreground' : 'hover:bg-accent text-foreground',
+    ].join(' ');
+  };
+
   return (
     <SuperAdminProvider>
       <div className="flex min-h-screen bg-background">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-border bg-muted/30">
+        <aside className="relative w-64 border-r border-border bg-muted/30">
           <div className="p-6">
             <h1 className="text-xl font-bold">BuildingOS</h1>
             <p className="text-xs text-muted-foreground">SUPER_ADMIN</p>
           </div>
 
-          <nav className="space-y-2 px-4">
+          <nav className="space-y-2 px-4" aria-label="Navegación del super administrador">
             <Link
               href="/super-admin/overview"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/overview')}
             >
-              Overview
+              Visión general
             </Link>
             <Link
               href="/super-admin/leads"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/leads')}
             >
-              Leads
+              Prospectos
             </Link>
             <Link
               href="/super-admin/tenants"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/tenants')}
             >
-              Tenants
+              Administradoras
             </Link>
             <Link
               href="/super-admin/ai-analytics"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/ai-analytics')}
             >
-              AI Analytics
+              Uso de IA
             </Link>
             <Link
               href="/super-admin/assistant-analytics"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/assistant-analytics')}
             >
-              Assistant Actions
+              Acciones del asistente
             </Link>
             <Link
               href="/super-admin/users"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/users')}
             >
-              Platform Users
+              Usuarios globales
             </Link>
             <Link
               href="/super-admin/audit-logs"
-              className="block px-4 py-2 rounded-md hover:bg-accent text-sm font-medium"
+              className={navLinkClass('/super-admin/audit-logs')}
             >
-              Audit Logs
+              Registro de auditoría
             </Link>
           </nav>
 

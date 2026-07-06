@@ -14,24 +14,31 @@ export function CreateUserModal({ onClose, onSubmit }: CreateUserModalProps) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameId = 'super-admin-create-user-name';
+  const emailId = 'super-admin-create-user-email';
+  const passwordId = 'super-admin-create-user-password';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!name || !email || !password) {
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedName || !trimmedEmail || !trimmedPassword) {
       setError('Todos los campos son obligatorios');
       return;
     }
 
-    if (password.length < 8) {
+    if (trimmedPassword.length < 8) {
       setError('La contraseña debe tener al menos 8 caracteres');
       return;
     }
 
     try {
       setLoading(true);
-      await onSubmit(name, email, password);
+      await onSubmit(trimmedName, trimmedEmail, trimmedPassword);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al crear el usuario';
       setError(message);
@@ -53,8 +60,11 @@ export function CreateUserModal({ onClose, onSubmit }: CreateUserModalProps) {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">Nombre</label>
+            <label htmlFor={nameId} className="block text-sm font-medium text-foreground mb-2">
+              Nombre
+            </label>
             <input
+              id={nameId}
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -64,8 +74,11 @@ export function CreateUserModal({ onClose, onSubmit }: CreateUserModalProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">Email</label>
+            <label htmlFor={emailId} className="block text-sm font-medium text-foreground mb-2">
+              Email
+            </label>
             <input
+              id={emailId}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -75,8 +88,11 @@ export function CreateUserModal({ onClose, onSubmit }: CreateUserModalProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">Contraseña</label>
+            <label htmlFor={passwordId} className="block text-sm font-medium text-foreground mb-2">
+              Contraseña
+            </label>
             <input
+              id={passwordId}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -93,7 +109,7 @@ export function CreateUserModal({ onClose, onSubmit }: CreateUserModalProps) {
             >
               Cancelar
             </button>
-            <Button disabled={loading} onClick={handleSubmit}>
+            <Button type="submit" disabled={loading}>
               {loading ? 'Creando...' : 'Crear'}
             </Button>
           </div>

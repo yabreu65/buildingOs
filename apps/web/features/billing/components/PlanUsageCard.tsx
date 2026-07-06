@@ -22,6 +22,18 @@ export default function PlanUsageCard({
   isLoading = false,
 }: PlanUsageCardProps) {
   const { subscription, plan, usage } = billing;
+  const formatStatus = (status: string) => {
+    if (status === 'ACTIVE') return 'Activa';
+    if (status === 'TRIAL') return 'Prueba';
+    if (status === 'PAST_DUE') return 'Pago pendiente';
+    if (status === 'CANCELLED') return 'Cancelada';
+    return status;
+  };
+  const resourceLabel = (key: 'buildings' | 'units' | 'users') => {
+    if (key === 'buildings') return 'Edificios';
+    if (key === 'units') return 'Unidades';
+    return 'Usuarios';
+  };
 
   // Calculate percentages for progress visualization
   const getPercentage = (used: number, limit: number): number => {
@@ -45,9 +57,9 @@ export default function PlanUsageCard({
   }
 
   const resources: ResourceItem[] = [
-    { label: 'Buildings', used: usage.buildings, limit: plan.maxBuildings },
-    { label: 'Units', used: usage.units, limit: plan.maxUnits },
-    { label: 'Users', used: usage.users, limit: plan.maxUsers },
+    { label: resourceLabel('buildings'), used: usage.buildings, limit: plan.maxBuildings },
+    { label: resourceLabel('units'), used: usage.units, limit: plan.maxUnits },
+    { label: resourceLabel('users'), used: usage.users, limit: plan.maxUsers },
   ];
 
   // Check if any resource is at/over limit (for warning banner)
@@ -65,10 +77,10 @@ export default function PlanUsageCard({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-foreground">
-              {plan.name} Plan
+              Plan {plan.name}
             </h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Status: {subscription.status}
+              Estado: {formatStatus(subscription.status)}
             </p>
           </div>
           <Badge
@@ -80,7 +92,7 @@ export default function PlanUsageCard({
                   : 'bg-muted text-muted-foreground border-border'
             }
           >
-            {subscription.status}
+            {formatStatus(subscription.status)}
           </Badge>
         </div>
 
@@ -107,7 +119,7 @@ export default function PlanUsageCard({
         {/* Usage progress bars */}
         <div className="space-y-3">
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-            Usage
+            Uso
           </div>
           {resources.map((resource) => {
             const percentage = getPercentage(resource.used, resource.limit);
@@ -146,7 +158,7 @@ export default function PlanUsageCard({
         {/* Trial end date info */}
         {subscription.trialEndDate && subscription.status === 'TRIAL' && (
           <p className="text-xs text-amber-600">
-            Trial ends:{' '}
+            La prueba termina:{' '}
             {new Date(subscription.trialEndDate).toLocaleDateString()}
           </p>
         )}
@@ -159,7 +171,7 @@ export default function PlanUsageCard({
               disabled={isLoading}
               className="w-full"
             >
-              {isLoading ? 'Loading...' : 'Upgrade Plan'}
+              {isLoading ? 'Cargando...' : 'Mejorar plan'}
             </Button>
           </div>
         )}
