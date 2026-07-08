@@ -23,6 +23,8 @@
     "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
     "seed:pilot": "ts-node prisma/seed-pilot.ts",
     "seed:pilot:staging": "NODE_ENV=staging ts-node prisma/seed-pilot.ts",
+    "seed:pilot:data-pack": "ts-node prisma/seed-pilot-data-pack.ts",
+    "seed:pilot:data-pack:staging": "NODE_ENV=staging ts-node prisma/seed-pilot-data-pack.ts",
     "demo:tenants": "ts-node scripts/create_demo_tenants.ts",
     "demo:bootstrap": "ts-node --project tsconfig.script.json scripts/bootstrap-demo-tenant.ts",
     "reset:building:categories": "ts-node --project tsconfig.script.json scripts/reset_building_expense_categories.ts",
