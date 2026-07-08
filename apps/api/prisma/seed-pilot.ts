@@ -237,6 +237,7 @@ async function seedPilot() {
     data: {
       tenantId: tenant.id,
       name: `${tenantName} - Main Building`,
+      alias: "A",
       address: "123 Main Street, Sample City, Country",
     },
   });
