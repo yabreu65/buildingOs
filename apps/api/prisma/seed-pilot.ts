@@ -151,8 +151,10 @@ async function seedPilot() {
 
   section("1️⃣  Creating Tenant");
 
-  const tenant = await prisma.tenant.create({
-    data: {
+  const tenant = await prisma.tenant.upsert({
+    where: { name: tenantName },
+    update: { type: tenantType },
+    create: {
       name: tenantName,
       type: tenantType,
     },
@@ -168,8 +170,13 @@ async function seedPilot() {
     process.exit(1);
   }
 
-  await prisma.subscription.create({
-    data: {
+  await prisma.subscription.upsert({
+    where: { tenantId: tenant.id },
+    update: {
+      planId: freePlan.id,
+      status: SubscriptionStatus.ACTIVE,
+    },
+    create: {
       tenantId: tenant.id,
       planId: freePlan.id,
       status: SubscriptionStatus.ACTIVE,
@@ -188,8 +195,13 @@ async function seedPilot() {
   const ownerEmail = `owner-${tenant.id.substring(0, 8)}@pilot.buildingos.local`;
   const ownerPassword = await generatePassword();
 
-  const ownerUser = await prisma.user.create({
-    data: {
+  const ownerUser = await prisma.user.upsert({
+    where: { email: ownerEmail },
+    update: {
+      name: `${tenantName} Owner`,
+      passwordHash: ownerPassword.hash,
+    },
+    create: {
       email: ownerEmail,
       name: `${tenantName} Owner`,
       passwordHash: ownerPassword.hash,
@@ -201,31 +213,70 @@ async function seedPilot() {
   log(`Password: ${ownerPassword.plain}`, "yellow");
 
   // Create membership with TENANT_OWNER + TENANT_ADMIN roles
-  const ownerMembership = await prisma.membership.create({
-    data: {
+  const ownerMembership = await prisma.membership.upsert({
+    where: {
+      userId_tenantId: {
+        userId: ownerUser.id,
+        tenantId: tenant.id,
+      },
+    },
+    update: {},
+    create: {
       tenantId: tenant.id,
       userId: ownerUser.id,
     },
   });
 
-  await Promise.all([
-    prisma.membershipRole.create({
-      data: {
-        tenantId: tenant.id,
-        membershipId: ownerMembership.id,
-        role: Role.TENANT_OWNER,
-      },
-    }),
-    prisma.membershipRole.create({
-      data: {
-        tenantId: tenant.id,
-        membershipId: ownerMembership.id,
-        role: Role.TENANT_ADMIN,
-      },
-    }),
-  ]);
+  await Promise.all(
+    [Role.TENANT_OWNER, Role.TENANT_ADMIN].map(async (role) => {
+      const existingRole = await prisma.membershipRole.findFirst({
+        where: {
+          tenantId: tenant.id,
+          membershipId: ownerMembership.id,
+          role,
+        },
+      });
+
+      if (existingRole) {
+        return existingRole;
+      }
+
+      return prisma.membershipRole.create({
+        data: {
+          tenantId: tenant.id,
+          membershipId: ownerMembership.id,
+          role,
+        },
+      });
+    })
+  );
 
   success(`Roles assigned: TENANT_OWNER + TENANT_ADMIN`);
+
+  const ownerTenantMember = await prisma.tenantMember.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: ownerEmail,
+      },
+    },
+    update: {
+      userId: ownerUser.id,
+      name: `${tenantName} Owner`,
+      role: Role.TENANT_ADMIN,
+      status: "ACTIVE",
+    },
+    create: {
+      tenantId: tenant.id,
+      userId: ownerUser.id,
+      name: `${tenantName} Owner`,
+      email: ownerEmail,
+      role: Role.TENANT_ADMIN,
+      status: "ACTIVE",
+    },
+  });
+
+  log(`Tenant member created: ${ownerTenantMember.id}`, "cyan");
 
   // =========================================================================
   // 5. Create building
@@ -233,8 +284,18 @@ async function seedPilot() {
 
   section("3️⃣  Creating Building");
 
-  const building = await prisma.building.create({
-    data: {
+  const building = await prisma.building.upsert({
+    where: {
+      tenantId_name: {
+        tenantId: tenant.id,
+        name: `${tenantName} - Main Building`,
+      },
+    },
+    update: {
+      alias: "A",
+      address: "123 Main Street, Sample City, Country",
+    },
+    create: {
       tenantId: tenant.id,
       name: `${tenantName} - Main Building`,
       alias: "A",
@@ -254,8 +315,19 @@ async function seedPilot() {
   const units = await Promise.all(
     Array.from({ length: 10 }).map((_, i) => {
       const unitNumber = 101 + i;
-      return prisma.unit.create({
-        data: {
+      return prisma.unit.upsert({
+        where: {
+          tenantId_buildingId_code: {
+            tenantId: tenant.id,
+            buildingId: building.id,
+            code: `${unitNumber}`,
+          },
+        },
+        update: {
+          label: `Apartment ${unitNumber}`,
+          unitType: "APARTMENT",
+        },
+        create: {
           tenantId: tenant.id,
           buildingId: building.id,
           label: `Apartment ${unitNumber}`,
@@ -280,8 +352,13 @@ async function seedPilot() {
   const residentEmail = `resident-${tenant.id.substring(0, 8)}@pilot.buildingos.local`;
   const residentPassword = await generatePassword();
 
-  const residentUser = await prisma.user.create({
-    data: {
+  const residentUser = await prisma.user.upsert({
+    where: { email: residentEmail },
+    update: {
+      name: `Resident (Unit ${units[0].code})`,
+      passwordHash: residentPassword.hash,
+    },
+    create: {
       email: residentEmail,
       name: `Resident (Unit ${units[0].code})`,
       passwordHash: residentPassword.hash,
@@ -293,28 +370,80 @@ async function seedPilot() {
   log(`Password: ${residentPassword.plain}`, "yellow");
 
   // Create membership for resident
-  const residentMembership = await prisma.membership.create({
-    data: {
+  const residentMembership = await prisma.membership.upsert({
+    where: {
+      userId_tenantId: {
+        userId: residentUser.id,
+        tenantId: tenant.id,
+      },
+    },
+    update: {},
+    create: {
       tenantId: tenant.id,
       userId: residentUser.id,
     },
   });
 
-  await prisma.membershipRole.create({
-    data: {
+  const residentExistingRole = await prisma.membershipRole.findFirst({
+    where: {
       tenantId: tenant.id,
       membershipId: residentMembership.id,
       role: Role.RESIDENT,
     },
   });
 
+  if (!residentExistingRole) {
+    await prisma.membershipRole.create({
+      data: {
+        tenantId: tenant.id,
+        membershipId: residentMembership.id,
+        role: Role.RESIDENT,
+      },
+    });
+  }
+
+  const residentTenantMember = await prisma.tenantMember.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: residentEmail,
+      },
+    },
+    update: {
+      userId: residentUser.id,
+      name: `Resident (Unit ${units[0].code})`,
+      role: Role.RESIDENT,
+      status: "ACTIVE",
+    },
+    create: {
+      tenantId: tenant.id,
+      userId: residentUser.id,
+      name: `Resident (Unit ${units[0].code})`,
+      email: residentEmail,
+      role: Role.RESIDENT,
+      status: "ACTIVE",
+    },
+  });
+
   // Assign resident to Unit 1
-  await prisma.unitOccupant.create({
-    data: {
+  await prisma.unitOccupant.upsert({
+    where: {
+      tenantId_unitId_memberId: {
+        tenantId: tenant.id,
+        unitId: units[0].id,
+        memberId: residentTenantMember.id,
+      },
+    },
+    update: {
+      role: UnitOccupantRole.RESIDENT,
+      isPrimary: true,
+    },
+    create: {
       tenantId: tenant.id,
       unitId: units[0].id,
-      memberId: residentMembership.id,
+      memberId: residentTenantMember.id,
       role: UnitOccupantRole.RESIDENT,
+      isPrimary: true,
     },
   });
 
