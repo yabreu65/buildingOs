@@ -6,6 +6,7 @@ test-results
 .env
 .env.*
 !infra/docker/.env.api.example
+!infra/docker/.env.staging.example
 .DS_Store
 coverage
 **/.turbo
