@@ -3,6 +3,8 @@ name: buildingos-staging
 networks:
   buildingos_staging_net:
     driver: bridge
+  pawtech_public:
+    external: true
 
 services:
   postgres:
@@ -46,6 +48,7 @@ services:
     container_name: buildingos-staging-minio
     networks:
       - buildingos_staging_net
+      - pawtech_public
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
@@ -54,6 +57,14 @@ services:
     ports:
       - "127.0.0.1:${MINIO_API_PORT:-9110}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9111}:9001"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos-staging-files.rule=Host(`buildingos-staging-files.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos-staging-files.entrypoints=websecure"
+      - "traefik.http.routers.buildingos-staging-files.tls=true"
+      - "traefik.http.routers.buildingos-staging-files.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos-staging-files.loadbalancer.server.port=9000"
     volumes:
       - buildingos_staging_miniodata:/data
     healthcheck:
@@ -91,6 +102,7 @@ services:
     container_name: buildingos-staging-api
     networks:
       - buildingos_staging_net
+      - pawtech_public
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,6 +112,14 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${API_PORT:-4010}:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos-staging-api.rule=Host(`buildingos-api-staging.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos-staging-api.entrypoints=websecure"
+      - "traefik.http.routers.buildingos-staging-api.tls=true"
+      - "traefik.http.routers.buildingos-staging-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos-staging-api.loadbalancer.server.port=3000"
     environment:
       APP_ENV: staging
       NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
@@ -146,11 +166,20 @@ services:
     container_name: buildingos-staging-web
     networks:
       - buildingos_staging_net
+      - pawtech_public
     depends_on:
       buildingos-api:
         condition: service_healthy
     ports:
       - "127.0.0.1:${WEB_PORT:-4011}:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos-staging.rule=Host(`buildingos-staging.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos-staging.entrypoints=websecure"
+      - "traefik.http.routers.buildingos-staging.tls=true"
+      - "traefik.http.routers.buildingos-staging.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos-staging.loadbalancer.server.port=3000"
     environment:
       APP_ENV: staging
       NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
