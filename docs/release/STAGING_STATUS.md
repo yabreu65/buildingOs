@@ -118,8 +118,9 @@ Do **not** use a global `docker compose down` on production or staging without a
 
 ## Risks and open observations
 
-- `/super-admin` returns a 200 shell in curl checks, but the browser-side redirect or block was **not fully confirmed** because Chromium is not installed in the current Playwright environment.
+- `/super-admin` browser-side redirect/block was originally noted as unconfirmed when Chromium was missing, but it was later validated successfully in a real browser smoke check.
 - `Sentry DSN` is intentionally not configured in staging; warnings are expected.
+- Las credenciales demo reales deben almacenarse fuera del repositorio y rotarse si fueron expuestas previamente.
 - AI is disabled by configuration, but the staging env must keep the required fallback values present so bootstrap does not fail.
 - Production and staging must remain isolated at the database, env, and secrets level.
 
@@ -152,5 +153,5 @@ Stop if:
 | Staging app | Ready | API/web healthy | DevOps / Engineering | Loopback ports only |
 | Database | Ready | `buildingos_staging_db` migrated | DevOps | Not shared with prod |
 | Env / secrets | Ready | Separate staging files | DevOps | No prod reuse |
-| Validation | Partial | Browser-side `/super-admin` redirect not fully confirmed | QA / DevOps | Chromium missing in current environment |
+| Validation | Ready | Browser-side `/super-admin` smoke was later validated successfully | QA / DevOps | Historical Chromium note resolved |
 | Production | Intact | Prod health and HTTP checks OK | DevOps | No production mutation |

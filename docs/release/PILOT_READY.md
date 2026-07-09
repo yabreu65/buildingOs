@@ -57,6 +57,8 @@ cat .github/workflows/ci.yml | head -30
 
 ## 2. Seed Demo Tenants ✅
 
+> Las credenciales demo reales deben almacenarse fuera del repositorio y rotarse si fueron expuestas previamente.
+
 ### Criterio
 Datos de demostración listos para usar sin tocar base de datos
 
@@ -86,7 +88,7 @@ npx prisma db seed
 **Tenant 1: ADMINISTRADORA**
 ```
 Email: admin@administradora.com
-Password: TestPassword123!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Role: TENANT_OWNER
 Building: "Torre Central" (5 units)
 ```
@@ -94,7 +96,7 @@ Building: "Torre Central" (5 units)
 **Tenant 2: EDIFICIO_AUTOGESTION**
 ```
 Email: admin@edificio.com
-Password: TestPassword123!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Role: TENANT_OWNER
 Building: "Residencial Flores" (3 units)
 ```
@@ -102,7 +104,7 @@ Building: "Residencial Flores" (3 units)
 **Super Admin (para testing)**
 ```
 Email: superadmin@buildingos.com
-Password: SuperAdminPass123!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Role: SUPER_ADMIN
 Access: All tenants via /super-admin
 ```
@@ -150,14 +152,14 @@ curl -X POST http://localhost:4000/auth/signup \
   -d '{
     "email": "newclient@example.com",
     "name": "Juan Cliente",
-    "password": "SecurePassword123!",
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>",
     "tenantName": "Mi Condominio",
     "tenantType": "EDIFICIO_AUTOGESTION"
   }'
 
 # Esperado: 201 Created
 # {
-#   "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+#   "accessToken": "<TOKEN_REDACTED>",
 #   "user": {
 #     "id": "user-uuid",
 #     "email": "newclient@example.com",
@@ -181,7 +183,7 @@ curl -X POST http://localhost:4000/auth/signup \
 
 ```bash
 # 3.2 POST /buildings (con token del paso 1)
-TOKEN="eyJhbGciOiJIUzI1NiIs..."
+TOKEN="<TOKEN_REDACTED>"
 TENANT_ID="tenant-uuid-from-step-1"
 
 curl -X POST http://localhost:4000/buildings \
@@ -477,10 +479,10 @@ npm run build
 # 6.3 Crear .env.staging con variables:
 NODE_ENV=staging
 PORT=4000
-DATABASE_URL=postgresql://user:pass@staging-db:5432/buildingos_staging
+DATABASE_URL=<DATABASE_URL_REDACTED>
 
 # JWT
-JWT_SECRET=<64+ caracteres aleatorios>
+JWT_SECRET=<SECRET_REDACTED>
 JWT_EXPIRES_IN=24h
 
 # CORS
@@ -490,7 +492,7 @@ WEB_ORIGIN=https://staging-app.buildingos.com
 SMTP_HOST=smtp.sendgrid.net
 SMTP_PORT=587
 SMTP_USER=apikey
-SMTP_PASS=<sendgrid-api-key>
+SMTP_PASS=<SECRET_REDACTED>
 MAIL_FROM=noreply@buildingos.com
 SALES_TEAM_EMAIL=sales@buildingos.com
 
@@ -500,8 +502,8 @@ SENTRY_ENVIRONMENT=staging
 
 # Optional: MinIO/S3
 S3_ENDPOINT=https://minio.staging.buildingos.com
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
+S3_ACCESS_KEY=<CREDENTIAL_STORED_OUTSIDE_GIT>
+S3_SECRET_KEY=<SECRET_REDACTED>
 S3_BUCKET=documents
 ```
 
@@ -537,7 +539,7 @@ heroku addons:create heroku-redis:premium-0 --app buildingos-staging
 
 # 6.4c Configurar variables
 heroku config:set NODE_ENV=staging \
-  JWT_SECRET="<64-char-random>" \
+  JWT_SECRET="<SECRET_REDACTED>" \
   WEB_ORIGIN="https://buildingos-staging.herokuapp.com" \
   --app buildingos-staging
 

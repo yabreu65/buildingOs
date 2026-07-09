@@ -17,12 +17,14 @@ All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. Th
 
 | Role | Email | Password |
 |------|-------|----------|
-| Super Admin | `test-superadmin@buildingos.local` | `TestPass123!` |
-| Tenant Admin A | `test-tenant-admin-a@buildingos.local` | `TestPass123!` |
-| Tenant Admin B | `test-tenant-admin-b@buildingos.local` | `TestPass123!` |
-| Operator | `test-operator@buildingos.local` | `TestPass123!` |
-| Resident A | `test-resident@buildingos.local` | `TestPass123!` |
-| Resident B | `test-resident-b@buildingos.local` | `TestPass123!` |
+| Super Admin | `<SUPERADMIN_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+| Tenant Admin A | `<TENANT_ADMIN_A_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+| Tenant Admin B | `<TENANT_ADMIN_B_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+| Operator | `<OPERATOR_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+| Resident A | `<RESIDENT_A_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+| Resident B | `<RESIDENT_B_EMAIL>` | `<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` |
+
+The real demo password must be stored outside Git and rotated if it was ever exposed.
 
 **Seed data includes:**
 - 2 tenants (Tenant A: PRO plan, Tenant B: FREE trial)
@@ -35,7 +37,7 @@ All E2E tests rely on deterministic data from `apps/api/prisma/seed.test.ts`. Th
 
 Use a clean database for E2E runs:
 
-0. Export `TEST_E2E_PASSWORD=TestPass123!` so the Playwright auth helpers can log in with the deterministic seed users.
+0. Export `TEST_E2E_PASSWORD=<DEMO_PASSWORD_STORED_OUTSIDE_GIT>` so the Playwright auth helpers can log in with the deterministic seed users.
 1. Point `DATABASE_URL` to a disposable or dedicated local test database.
 2. Run migrations with `npm run migrate:deploy` from `apps/api`.
 3. Load deterministic data with `npm run seed:test` from `apps/api`.

@@ -31,7 +31,7 @@ One command creates:
 │ Plan: FREE (1 building, 10 units)│
 ├─ Owner User ────────────────────┤
 │ Email: owner-abc123@pilot...    │
-│ Password: PilotABC123!          │
+│ Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>          │
 │ Role: TENANT_OWNER + TENANT_ADM │
 ├─ Building ──────────────────────┤
 │ Name: "Pilot... - Main Building"│
@@ -41,7 +41,7 @@ One command creates:
 │ Ready for residents             │
 ├─ Resident User ─────────────────┤
 │ Email: resident-abc123@pilot... │
-│ Password: PilotXYZ123!          │
+│ Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>          │
 │ Unit: 101 (assigned)            │
 └─────────────────────────────────┘
 ```
@@ -100,7 +100,7 @@ Name: Pilot 2026-02-23
 📌 2️⃣  Creating Owner Account
 ✅ Owner user created: user-owner123
 Email: owner-abc123@pilot.buildingos.local
-Password: PilotAbc123!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 📌 3️⃣  Creating Building
 ✅ Building created: building-xyz789
@@ -115,7 +115,7 @@ Name: Pilot 2026-02-23 - Main Building
 📌 5️⃣  Creating Resident
 ✅ Resident user created: user-resident456
 Email: resident-abc123@pilot.buildingos.local
-Password: PilotXyz456!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 ======================================================================
 ✅ PILOT ACTIVATION COMPLETE
@@ -130,7 +130,7 @@ Prisma Studio: http://localhost:5555
 📌 👤 OWNER LOGIN CREDENTIALS
 
 Email:    owner-abc123@pilot.buildingos.local
-Password: PilotAbc123!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 📌 🏢 TENANT INFORMATION
 
@@ -157,7 +157,7 @@ Total Units: 10
 📌 👥 RESIDENT LOGIN CREDENTIALS
 
 Email:    resident-abc123@pilot.buildingos.local
-Password: PilotXyz456!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Unit:     101 (Apartment 101)
 
 📌 📋 SYSTEM CONFIGURATION
@@ -171,11 +171,11 @@ Resident User ID:         user-resident456
 
 1. Login with OWNER account:
    Email: owner-abc123@pilot.buildingos.local
-   Password: PilotAbc123!
+   Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 2. Share with RESIDENT:
    Email: resident-abc123@pilot.buildingos.local
-   Password: PilotXyz456!
+   Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 3. (Optional) Invite more residents to other units:
    Use the POST /invitations endpoint in Swagger UI
@@ -208,7 +208,7 @@ curl -X POST http://localhost:4000/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "owner-abc123@pilot.buildingos.local",
-    "password": "PilotAbc123!"
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>"
   }'
 # Expected: 200 OK + JWT token
 
@@ -283,7 +283,7 @@ npm run seed:pilot -- --name "Customer A"
 
 # Output:
 # Email: owner-abc123@pilot...
-# Password: PilotXxx123!
+# Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 # (Copy these down)
 
 # Create second pilot
@@ -291,7 +291,7 @@ npm run seed:pilot -- --name "Customer B"
 
 # Output:
 # Email: owner-def456@pilot...
-# Password: PilotYyy456!
+# Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 # (Copy these down)
 
 # Both pilots coexist in same database
@@ -318,11 +318,11 @@ Your tenant has been set up and is ready to use.
 
 Owner Account (Administer your property):
   Email:    owner-abc123@pilot.buildingos.local
-  Password: PilotAbc123!
+  Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 
 Resident Account (Test resident experience):
   Email:    resident-abc123@pilot.buildingos.local
-  Password: PilotXyz456!
+  Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
   (Already assigned to Unit 101)
 
 🎯 ACCESS LINKS
@@ -372,7 +372,7 @@ BuildingOS Support Team
 
 2. Login as owner (0:30-1:00)
    - Email: owner-abc123@pilot.buildingos.local
-   - Password: PilotAbc123!
+   - Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
    - Click: Login
    - Wait for dashboard
 
@@ -393,7 +393,7 @@ BuildingOS Support Team
 5. Show resident view (3:00-4:00)
    - Logout (or open in incognito)
    - Login as resident: resident-abc123@pilot.buildingos.local
-   - Password: PilotXyz456!
+   - Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
    - Show: Resident sees ONLY their unit (Unit 101)
    - Show: Can see the ticket just created
    - Show: Can comment on ticket
@@ -644,7 +644,7 @@ OWNER_TOKEN=$(curl -s -X POST http://localhost:4000/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "owner-abc123@pilot.buildingos.local",
-    "password": "PilotAbc123!"
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>"
   }' | jq -r '.accessToken')
 
 # 4. Get buildings

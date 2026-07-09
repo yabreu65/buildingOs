@@ -75,6 +75,8 @@ ls -la
 
 ## A3. Environment Variables
 
+> Las credenciales demo reales deben almacenarse fuera del repositorio y rotarse si fueron expuestas previamente.
+
 ### Create `.env` file in project root
 
 ```bash
@@ -89,20 +91,20 @@ PORT=4000
 LOG_LEVEL=debug
 
 # Database (PostgreSQL 16)
-DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos?schema=public
+DATABASE_URL=<DATABASE_URL_REDACTED>
 
 # Frontend (Web)
 WEB_ORIGIN=http://localhost:3000
 
 # Auth (JWT)
-JWT_SECRET=your-secret-key-min-48-chars-for-staging-longer-is-better-12345678901234
+JWT_SECRET=<SECRET_REDACTED>
 JWT_EXPIRES_IN=24h
 
 # Storage (MinIO S3-compatible)
 S3_ENDPOINT=http://localhost:9000
 S3_REGION=us-east-1
-S3_ACCESS_KEY=buildingos
-S3_SECRET_KEY=buildingos123
+S3_ACCESS_KEY=<CREDENTIAL_STORED_OUTSIDE_GIT>
+S3_SECRET_KEY=<SECRET_REDACTED>
 S3_BUCKET=buildingos-local
 S3_FORCE_PATH_STYLE=true
 S3_PUBLIC_BASE_URL=http://localhost:9000
@@ -111,7 +113,7 @@ S3_PUBLIC_BASE_URL=http://localhost:9000
 APP_BASE_URL=http://localhost:3000
 
 # Redis (optional, for caching)
-REDIS_URL=redis://localhost:6379
+REDIS_URL=<DATABASE_URL_REDACTED>
 
 # Email (can be 'none' for testing)
 MAIL_PROVIDER=none
@@ -348,14 +350,14 @@ docker-compose logs postgres
 # staging: minimum 48 characters
 # production: minimum 64 characters
 
-JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+JWT_SECRET=<SECRET_REDACTED>
 echo "JWT_SECRET=$JWT_SECRET" >> .env
 ```
 
 ### Issue: "MinIO bucket not created"
 ```bash
 # Manually create bucket
-docker-compose exec minio mc alias set myminio http://localhost:9000 buildingos buildingos123
+docker-compose exec minio mc alias set myminio http://localhost:9000 buildingos <SECRET_REDACTED>
 docker-compose exec minio mc mb --ignore-existing myminio/buildingos-local
 docker-compose exec minio mc ls myminio
 ```
@@ -400,7 +402,7 @@ services:
 
 **Meaning**:
 - PostgreSQL 16 service container starts automatically
-- Tests connect to `postgresql://buildingos:buildingos@localhost:5432/buildingos`
+- Tests connect to `<DATABASE_URL_REDACTED>`
 
 ---
 
@@ -746,8 +748,8 @@ Click: "Sign Up" button (or navigate to /signup)
 ```
 Email:           juan.perez@condominio.com
 Full Name:       Juan Pérez García
-Password:        SecurePassword123!
-Confirm Password: SecurePassword123!
+Password:        <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
+Confirm Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Organization:    Edificio Central
 Organization Type: EDIFICIO_AUTOGESTION (dropdown)
 ```
@@ -758,7 +760,7 @@ curl -X POST http://localhost:4000/auth/signup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "juan.perez@condominio.com",
-    "password": "SecurePassword123!",
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>",
     "name": "Juan Pérez García",
     "tenantName": "Edificio Central",
     "tenantType": "EDIFICIO_AUTOGESTION"
@@ -766,7 +768,7 @@ curl -X POST http://localhost:4000/auth/signup \
 
 # Expected response (201 Created):
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "accessToken": "<TOKEN_REDACTED>",
   "user": {
     "id": "user-abc123",
     "email": "juan.perez@condominio.com",
@@ -815,7 +817,7 @@ Click: "Create"
 ```bash
 # First, save the tenantId from signup response: tenant-123
 TENANT_ID="tenant-123"
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+TOKEN="<TOKEN_REDACTED>"
 
 curl -X POST http://localhost:4000/buildings \
   -H "Authorization: Bearer $TOKEN" \
@@ -883,7 +885,7 @@ Unit 3:
 ```bash
 BUILDING_ID="building-456"
 TENANT_ID="tenant-123"
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+TOKEN="<TOKEN_REDACTED>"
 
 # Create Unit 1
 curl -X POST http://localhost:4000/buildings/$BUILDING_ID/units \
@@ -964,7 +966,7 @@ Click: "Send Invitation"
 ```bash
 TENANT_ID="tenant-123"
 UNIT_ID="unit-101"
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+TOKEN="<TOKEN_REDACTED>"
 
 curl -X POST http://localhost:4000/tenants/$TENANT_ID/invitations \
   -H "Authorization: Bearer $TOKEN" \
@@ -980,13 +982,13 @@ curl -X POST http://localhost:4000/tenants/$TENANT_ID/invitations \
 {
   "id": "inv-123",
   "email": "maria.garcia@email.com",
-  "token": "abc123def456ghi789...",  # 7-day valid token (hashed in DB)
+  "token": "<TOKEN_REDACTED>",  # 7-day valid token (hashed in DB)
   "expiresAt": "2026-03-02T15:40:00.000Z",
   "tenantId": "tenant-123",
   "unitId": "unit-101",
   "roles": ["RESIDENT"],
   "createdAt": "2026-02-23T15:40:00.000Z",
-  "invitationUrl": "http://localhost:3000/invite?token=abc123def456ghi789..."
+  "invitationUrl": "http://localhost:3000/invite?token=<TOKEN_REDACTED>"
 }
 ```
 
@@ -1001,7 +1003,7 @@ curl -X POST http://localhost:4000/tenants/$TENANT_ID/invitations \
      To: maria.garcia@email.com
      Subject: You've been invited to Edificio Central
      Body: Click link to accept:
-           http://localhost:3000/invite?token=abc123def456ghi789...
+           http://localhost:3000/invite?token=<TOKEN_REDACTED>
 7. ✅ Audit logged: INVITATION_CREATED event
 ```
 
@@ -1017,7 +1019,7 @@ Maria receives email and clicks the invitation link to join.
 ### Step 5a: Via Email Link (Typical Flow)
 ```
 1. Maria opens email from buildingos@email
-2. Clicks link: http://localhost:3000/invite?token=abc123def456ghi789...
+2. Clicks link: http://localhost:3000/invite?token=<TOKEN_REDACTED>
 3. Browser redirects to Accept Invitation page
 4. Page shows:
    - Building: "Avenida Libertad 234"
@@ -1025,26 +1027,26 @@ Maria receives email and clicks the invitation link to join.
    - Your role: RESIDENT
    - Message: "Accept to join"
 5. Maria fills form:
-   - Password: MariaPassword456!
-   - Confirm: MariaPassword456!
+   - Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
+   - Confirm: <SECRET_REDACTED>
    - Click: "Accept Invitation"
 ```
 
 ### Step 5b: Via API (Testing/Automation)
 ```bash
 # Extract token from email link (or from invitation creation response above)
-TOKEN_FROM_EMAIL="abc123def456ghi789..."
+TOKEN_FROM_EMAIL="<TOKEN_REDACTED>"
 
 curl -X POST http://localhost:4000/invitations/accept \
   -H "Content-Type: application/json" \
   -d '{
-    "token": "'$TOKEN_FROM_EMAIL'",
-    "password": "MariaPassword456!"
+    "token": "<TOKEN_REDACTED>",
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>"
   }'
 
 # Expected response (200 OK):
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "accessToken": "<TOKEN_REDACTED>",
   "user": {
     "id": "user-maria456",
     "email": "maria.garcia@email.com",
@@ -1088,7 +1090,7 @@ Maria logs in to the system and takes her first action (creates a maintenance ti
 Browser: http://localhost:3000
 Navigate to: /login
 Email: maria.garcia@email.com
-Password: MariaPassword456!
+Password: <DEMO_PASSWORD_STORED_OUTSIDE_GIT>
 Click: "Log In"
 ```
 
@@ -1098,12 +1100,12 @@ curl -X POST http://localhost:4000/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "maria.garcia@email.com",
-    "password": "MariaPassword456!"
+    "password": "<DEMO_PASSWORD_STORED_OUTSIDE_GIT>"
   }'
 
 # Expected response (200 OK):
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "accessToken": "<TOKEN_REDACTED>",
   "user": { ... },
   "memberships": [ ... ]
 }
@@ -1147,7 +1149,7 @@ Fill form:
 BUILDING_ID="building-456"
 UNIT_ID="unit-101"
 TENANT_ID="tenant-123"
-MARIA_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+MARIA_TOKEN="<TOKEN_REDACTED>"
 
 curl -X POST http://localhost:4000/buildings/$BUILDING_ID/tickets \
   -H "Authorization: Bearer $MARIA_TOKEN" \
@@ -1201,7 +1203,7 @@ Juan (tenant A) should NOT see Maria's ticket or anyone else's tenant B data.
 ### Security Test
 ```bash
 # Juan's token (from signup)
-JUAN_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+JUAN_TOKEN="<TOKEN_REDACTED>"
 JUAN_TENANT="tenant-123"
 
 # Try to list ALL tickets (should only see tenant-123)
@@ -1359,7 +1361,7 @@ npm run build
 # Ensure JWT_SECRET is set in .env
 # Check: grep JWT_SECRET .env
 # If missing or wrong:
-JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+JWT_SECRET=<SECRET_REDACTED>
 # Update .env and restart API
 ```
 
