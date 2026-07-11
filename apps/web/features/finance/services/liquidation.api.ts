@@ -1,124 +1,50 @@
 import { apiClient } from '@/shared/lib/http/client';
 
-export interface LiquidationDraft {
-  liquidation: {
-    id: string;
-    tenantId: string;
-    buildingId: string;
-    period: string;
-    status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
-    baseCurrency: string;
-    totalAmountMinor: number;
-    unitCount: number;
-    generatedAt: string;
-  };
-  expenses: Array<{
-    id: string;
-    categoryName: string;
-    vendorName: string | null;
-    amountMinor: number;
-    currencyCode: string;
-    invoiceDate: string;
-    description: string | null;
-  }>;
-  chargesPreview: Array<{
-    unitId: string;
-    unitCode: string;
-    unitLabel: string | null;
-    areaM2: number;
-    amountMinor: number;
-  }>;
+interface CreateUnitGroupPayload {
+  readonly buildingId: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly unitIds: readonly string[];
 }
 
-export interface LiquidationDetail extends LiquidationDraft {
-  reviewedAt: string | null;
-  publishedAt: string | null;
-  canceledAt: string | null;
+function requirePathSegment(label: string, value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  return encodeURIComponent(normalized);
 }
 
-export const liquidationApi = {
-  /**
-   * Create a draft liquidation for a building/period
-   */
-  async createDraft(tenantId: string, payload: {
-    buildingId: string;
-    period: string;
-    baseCurrency: string;
-  }): Promise<LiquidationDraft> {
-    return apiClient({
-      path: `/tenants/${tenantId}/liquidations`,
-      method: 'POST',
-      body: payload,
-      headers: { 'tenant-id': tenantId },
-    });
-  },
+function optionalQueryValue(label: string, value?: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
 
-  /**
-   * Get liquidation detail with expenses and charges
-   */
-  async getDetail(tenantId: string, liquidationId: string): Promise<LiquidationDetail> {
-    return apiClient({
-      path: `/tenants/${tenantId}/liquidations/${liquidationId}`,
-      headers: { 'tenant-id': tenantId },
-    });
-  },
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
 
-  /**
-   * Review a liquidation (DRAFT → REVIEWED)
-   */
-  async review(tenantId: string, liquidationId: string): Promise<LiquidationDetail> {
-    return apiClient({
-      path: `/tenants/${tenantId}/liquidations/${liquidationId}/review`,
-      method: 'PATCH',
-      body: {},
-      headers: { 'tenant-id': tenantId },
-    });
-  },
-
-  /**
-   * Publish a liquidation (REVIEWED → PUBLISHED with charges)
-   */
-  async publish(
-    tenantId: string,
-    liquidationId: string,
-    dueDate: string,
-  ): Promise<LiquidationDetail> {
-    return apiClient({
-      path: `/tenants/${tenantId}/liquidations/${liquidationId}/publish`,
-      method: 'PATCH',
-      body: { dueDate },
-      headers: { 'tenant-id': tenantId },
-    });
-  },
-
-  /**
-   * Cancel a liquidation
-   */
-  async cancel(tenantId: string, liquidationId: string): Promise<LiquidationDetail> {
-    return apiClient({
-      path: `/tenants/${tenantId}/liquidations/${liquidationId}/cancel`,
-      method: 'PATCH',
-      body: {},
-      headers: { 'tenant-id': tenantId },
-    });
-  },
-};
+  return normalized;
+}
 
 export const unitGroupApi = {
   /**
    * Create a new unit group
    */
-  async create(tenantId: string, payload: {
-    buildingId: string;
-    name: string;
-    description?: string;
-    unitIds: string[];
-  }) {
+  async create(tenantId: string, payload: CreateUnitGroupPayload) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups`,
+      path: `/tenants/${tenantSegment}/unit-groups`,
       method: 'POST',
-      body: payload,
-      headers: { 'tenant-id': tenantId },
+      body: {
+        ...payload,
+        buildingId: requirePathSegment('buildingId', payload.buildingId),
+        name: payload.name.trim(),
+        description: payload.description?.trim(),
+        unitIds: payload.unitIds.map((unitId) => requirePathSegment('unitId', unitId)),
+      },
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 
@@ -126,9 +52,11 @@ export const unitGroupApi = {
    * Get unit group with members
    */
   async getGroup(tenantId: string, groupId: string) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
+    const groupSegment = requirePathSegment('groupId', groupId);
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups/${groupId}`,
-      headers: { 'tenant-id': tenantId },
+      path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}`,
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 
@@ -136,12 +64,14 @@ export const unitGroupApi = {
    * List unit groups for tenant (optionally filtered by building)
    */
   async list(tenantId: string, buildingId?: string) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
     const params = new URLSearchParams();
-    if (buildingId) params.append('buildingId', buildingId);
+    const normalizedBuildingId = optionalQueryValue('buildingId', buildingId);
+    if (normalizedBuildingId) params.append('buildingId', normalizedBuildingId);
     const query = params.toString();
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups${query ? `?${query}` : ''}`,
-      headers: { 'tenant-id': tenantId },
+      path: `/tenants/${tenantSegment}/unit-groups${query ? `?${query}` : ''}`,
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 
@@ -149,11 +79,14 @@ export const unitGroupApi = {
    * Add a unit to a group
    */
   async addMember(tenantId: string, groupId: string, unitId: string) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
+    const groupSegment = requirePathSegment('groupId', groupId);
+    const unitSegment = requirePathSegment('unitId', unitId);
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups/${groupId}/members`,
+      path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}/members/${unitSegment}`,
       method: 'POST',
-      body: { unitId },
-      headers: { 'tenant-id': tenantId },
+      body: { unitId: unitId.trim() },
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 
@@ -161,10 +94,13 @@ export const unitGroupApi = {
    * Remove a unit from a group
    */
   async removeMember(tenantId: string, groupId: string, unitId: string) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
+    const groupSegment = requirePathSegment('groupId', groupId);
+    const unitSegment = requirePathSegment('unitId', unitId);
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups/${groupId}/members/${unitId}`,
+      path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}/members/${unitSegment}`,
       method: 'DELETE',
-      headers: { 'tenant-id': tenantId },
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 
@@ -172,10 +108,12 @@ export const unitGroupApi = {
    * Delete a unit group
    */
   async delete(tenantId: string, groupId: string) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
+    const groupSegment = requirePathSegment('groupId', groupId);
     return apiClient({
-      path: `/tenants/${tenantId}/unit-groups/${groupId}`,
+      path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}`,
       method: 'DELETE',
-      headers: { 'tenant-id': tenantId },
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 };
@@ -189,13 +127,16 @@ export const allocationApi = {
     expenseId?: string,
     incomeId?: string,
   ) {
+    const tenantSegment = requirePathSegment('tenantId', tenantId);
     const params = new URLSearchParams();
-    if (expenseId) params.append('expenseId', expenseId);
-    if (incomeId) params.append('incomeId', incomeId);
+    const normalizedExpenseId = optionalQueryValue('expenseId', expenseId);
+    const normalizedIncomeId = optionalQueryValue('incomeId', incomeId);
+    if (normalizedExpenseId) params.append('expenseId', normalizedExpenseId);
+    if (normalizedIncomeId) params.append('incomeId', normalizedIncomeId);
     const query = params.toString();
     return apiClient({
-      path: `/tenants/${tenantId}/allocations${query ? `?${query}` : ''}`,
-      headers: { 'tenant-id': tenantId },
+      path: `/tenants/${tenantSegment}/allocations${query ? `?${query}` : ''}`,
+      headers: { 'tenant-id': tenantId.trim() },
     });
   },
 };

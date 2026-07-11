@@ -5,39 +5,45 @@ import { formatCurrency } from '@/shared/lib/format/money';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import Badge from '@/shared/components/ui/Badge';
-import { AlertCircle, FileText, CheckCircle2, Trash2, Loader2 } from 'lucide-react';
+import { AlertCircle, FileText, CheckCircle2, Loader2 } from 'lucide-react';
 import {
   useReviewLiquidation,
   usePublishLiquidation,
   useCancelLiquidation,
-} from '../hooks/useLiquidation';
+} from '../hooks/useExpenseLedger';
 import PublishLiquidationModal from './PublishLiquidationModal';
 
+interface LiquidationSummary {
+  readonly id: string;
+  readonly buildingId: string;
+  readonly period: string;
+  readonly status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+  readonly baseCurrency: string;
+  readonly totalAmountMinor: number;
+  readonly unitCount: number;
+  readonly generatedAt: string;
+}
+
+interface LiquidationExpenseItem {
+  readonly id: string;
+  readonly categoryName: string;
+  readonly vendorName: string | null;
+  readonly amountMinor: number;
+  readonly currencyCode: string;
+}
+
+interface ChargePreviewItem {
+  readonly unitCode: string;
+  readonly unitLabel: string | null;
+  readonly amountMinor: number;
+}
+
 interface LiquidationDraftCardProps {
-  tenantId: string;
-  liquidation: {
-    id: string;
-    buildingId: string;
-    period: string;
-    status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
-    baseCurrency: string;
-    totalAmountMinor: number;
-    unitCount: number;
-    generatedAt: string;
-  };
-  expenses: Array<{
-    id: string;
-    categoryName: string;
-    vendorName: string | null;
-    amountMinor: number;
-    currencyCode: string;
-  }>;
-  chargesPreview: Array<{
-    unitCode: string;
-    unitLabel: string | null;
-    amountMinor: number;
-  }>;
-  onRefresh?: () => void;
+  readonly tenantId: string;
+  readonly liquidation: LiquidationSummary;
+  readonly expenses: readonly LiquidationExpenseItem[];
+  readonly chargesPreview: readonly ChargePreviewItem[];
+  readonly onRefresh?: () => void;
 }
 
 const statusConfig = {
@@ -74,7 +80,7 @@ export function LiquidationDraftCard({
   chargesPreview,
   onRefresh,
 }: LiquidationDraftCardProps) {
-  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [actionError, setActionError] = useState('');
   const reviewMutation = useReviewLiquidation(tenantId);
   const publishMutation = usePublishLiquidation(tenantId);
   const cancelMutation = useCancelLiquidation(tenantId);
@@ -83,27 +89,36 @@ export function LiquidationDraftCard({
   const StatusIcon = config.icon;
 
   const handleReview = async () => {
-    await reviewMutation.mutateAsync(liquidation.id);
-    onRefresh?.();
+    try {
+      setActionError('');
+      await reviewMutation.mutateAsync(liquidation.id);
+      onRefresh?.();
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : 'Error al revisar la liquidación');
+    }
   };
 
   const handlePublish = async (dueDate: string) => {
-    await publishMutation.mutateAsync({
-      liquidationId: liquidation.id,
-      dueDate,
-    });
-    setShowPublishModal(false);
-    onRefresh?.();
+    try {
+      setActionError('');
+      await publishMutation.mutateAsync({
+        liquidationId: liquidation.id,
+        dueDate,
+      });
+      onRefresh?.();
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : 'Error al publicar la liquidación');
+    }
   };
 
   const handleCancel = async () => {
     if (!confirm('¿Está seguro de cancelar esta liquidación?')) return;
     try {
+      setActionError('');
       await cancelMutation.mutateAsync(liquidation.id);
       onRefresh?.();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error al cancelar la liquidación';
-      alert(msg);
+      setActionError(err instanceof Error ? err.message : 'Error al cancelar la liquidación');
     }
   };
 
@@ -221,22 +236,19 @@ export function LiquidationDraftCard({
         )}
 
         {liquidation.status === 'PUBLISHED' && (
-          <Button
-            onClick={handleCancel}
-            disabled={cancelMutation.isPending}
-            variant="danger"
-            className="flex items-center gap-1"
-          >
-            {cancelMutation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
-            <Trash2 className="w-3 h-3" />
-            Cancelar
-          </Button>
+          <p className="text-xs text-gray-600">Liquidación publicada - no hay acciones disponibles</p>
         )}
 
         {liquidation.status === 'CANCELED' && (
           <p className="text-xs text-gray-600">Liquidación cancelada - no hay acciones disponibles</p>
         )}
       </div>
+
+      {actionError && (
+        <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert" aria-live="polite">
+          {actionError}
+        </div>
+      )}
     </Card>
   );
 }
