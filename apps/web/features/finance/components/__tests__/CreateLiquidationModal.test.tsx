@@ -29,7 +29,7 @@ describe('CreateLiquidationModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Crear Liquidación' }));
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Todos los campos son requeridos');
+    expect(screen.getByRole('alert').textContent).toContain('Todos los campos son requeridos');
   });
 
   it('submits normalized values and closes on escape', async () => {
@@ -61,10 +61,14 @@ describe('CreateLiquidationModal', () => {
       expect(onSuccess).toHaveBeenCalled();
     });
 
-    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Nueva Liquidación' }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Crear Liquidación' })).toBeTruthy();
+    });
+
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Crear Liquidación' }), { key: 'Escape' });
 
     expect(screen.queryByRole('dialog', { name: 'Crear Liquidación' })).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Nueva Liquidación' }));
   });
 });
