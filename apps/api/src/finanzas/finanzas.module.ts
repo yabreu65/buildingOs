@@ -10,7 +10,6 @@ import { IncomesController } from './incomes.controller';
 import { LiquidationsController } from './liquidations.controller';
 import { UnitGroupController } from './unit-group.controller';
 import { MovementAllocationController } from './movement-allocation.controller';
-import { LiquidationEngineController } from './liquidation-engine.controller';
 import { AdjustmentsController } from './adjustments.controller';
 import { FinanzasService } from './finanzas.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -68,7 +67,6 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     LiquidationsController,
     UnitGroupController,
     MovementAllocationController,
-    LiquidationEngineController,
     AdjustmentsController,
     VendorPreferenceController,
     ExpenseReportsController,

@@ -36,6 +36,7 @@ import { IntentSemanticValidatorService } from './intent-semantic-validator.serv
 
 describe('AssistantService - Strict Operational Questions', () => {
   let service: AssistantService;
+  const originalAiProvider = process.env.AI_PROVIDER;
 
   const mockPrisma = {
     tenant: { findUniqueOrThrow: jest.fn() },
@@ -98,6 +99,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    process.env.AI_PROVIDER = 'mock';
 
     mockRouter.classifyRequest.mockReturnValue({ model: 'SMALL', intent: 'general' });
     mockRouter.getModelName.mockReturnValue('gpt-4.1-nano');
@@ -170,6 +172,10 @@ describe('AssistantService - Strict Operational Questions', () => {
     }).compile();
 
     service = module.get<AssistantService>(AssistantService);
+  });
+
+  afterEach(() => {
+    process.env.AI_PROVIDER = originalAiProvider;
   });
 
   // ============================================================
