@@ -3,8 +3,24 @@ name: E2E Tests
 on:
   push:
     branches: [main, develop]
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'scripts/**'
   pull_request:
     branches: [main, develop]
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'scripts/**'
   schedule:
     - cron: '0 2 * * *' # Run daily at 2 AM UTC
 
@@ -21,10 +37,10 @@ jobs:
 
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://buildingos:buildingos-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/buildingos_test
+      DATABASE_URL: postgresql://buildingos@localhost:5432/buildingos_test
       WEB_ORIGIN: http://localhost:3000
       APP_BASE_URL: http://localhost:3000
-      NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
       TEST_E2E_PASSWORD: ${{ secrets.TEST_E2E_PASSWORD }}
       S3_ENDPOINT: http://localhost:9000
       S3_BUCKET: buildingos-test
@@ -40,7 +56,7 @@ jobs:
         image: postgres:15-alpine
         env:
           POSTGRES_USER: buildingos
-          POSTGRES_PASSWORD: buildingos-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: buildingos_test
         options: >-
           --health-cmd pg_isready
@@ -130,6 +146,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
+        id: e2e-tests
         run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
@@ -140,9 +157,8 @@ jobs:
         run: |
           if [ -n "${API_PID:-}" ] && kill -0 "$API_PID" 2>/dev/null; then
             kill "$API_PID"
-            wait "$API_PID"
           else
-            echo "API process already stopped"
+            echo "::warning::API process already stopped or not accessible from this shell"
           fi
 
       - name: Upload playwright report
@@ -170,12 +186,13 @@ jobs:
             const fs = require('fs');
             const core = require('@actions/core');
             const reportPath = 'apps/web/playwright-report/index.html';
+            const e2eOutcome = '${{ steps.e2e-tests.outcome }}';
 
             let comment = '## E2E Test Results\n\n';
-            if (fs.existsSync(reportPath)) {
+            if (e2eOutcome === 'success' && fs.existsSync(reportPath)) {
               comment += '✅ Tests completed! [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
             } else {
-              comment += '❌ Tests failed or report not found.\n';
+              comment += '⚠️ Tests failed or report not found. [Open the run for details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
             }
 
             try {
