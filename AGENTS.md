@@ -10,6 +10,7 @@
 - No commit or push without explicit user permission.
 - If scope is uncertain, STOP and ask before proceeding.
 - Never say "listo" without validation, or clarify that validation was not performed.
+- GitHub Actions build, lint, test, and E2E jobs declared in `.github/workflows/` are preauthorized quality gates for CI alignment work. This does not authorize deploys, VPS access, staging, production, or remote migrations.
 
 ## RTK Usage
 When working with AI coding agents such as Codex or OpenCode, prefer RTK commands to reduce token usage and keep command outputs compact.

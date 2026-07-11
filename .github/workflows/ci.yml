@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +21,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: buildingos
-          POSTGRES_PASSWORD: buildingos
+          POSTGRES_PASSWORD: buildingos-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: buildingos
         options: >-
           --health-cmd pg_isready
@@ -32,10 +32,9 @@ jobs:
           - 5432:5432
 
     env:
-      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos?schema=public
+      DATABASE_URL: postgresql://buildingos:buildingos-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/buildingos?schema=public
       NODE_ENV: test
       NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
-
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4

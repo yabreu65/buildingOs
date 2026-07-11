@@ -21,14 +21,12 @@ jobs:
 
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-ci-only
+      DATABASE_URL: postgresql://buildingos:buildingos-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/buildingos_test
       WEB_ORIGIN: http://localhost:3000
       APP_BASE_URL: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
+      TEST_E2E_PASSWORD: ${{ secrets.TEST_E2E_PASSWORD }}
       S3_ENDPOINT: http://localhost:9000
-      S3_ACCESS_KEY: test-access-key
-      S3_SECRET_KEY: test-secret-key
       S3_BUCKET: buildingos-test
       S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
       S3_FORCE_PATH_STYLE: true
@@ -42,7 +40,7 @@ jobs:
         image: postgres:15-alpine
         env:
           POSTGRES_USER: buildingos
-          POSTGRES_PASSWORD: buildingos
+          POSTGRES_PASSWORD: buildingos-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: buildingos_test
         options: >-
           --health-cmd pg_isready
@@ -65,21 +63,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate CI test credentials
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "S3_ACCESS_KEY=ci-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+          echo "S3_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: Setup environment
         run: |
-          cat > .env.test <<'EOF'
-          NODE_ENV=test
-          DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          JWT_SECRET=test-jwt-secret-minimum-32-characters-long-for-ci-only
-          WEB_ORIGIN=http://localhost:3000
-          APP_BASE_URL=http://localhost:3000
-          S3_ENDPOINT=http://localhost:9000
-          S3_ACCESS_KEY=test-access-key
-          S3_SECRET_KEY=test-secret-key
-          S3_BUCKET=buildingos-test
-          S3_PUBLIC_BASE_URL=http://localhost:9000/buildingos-test
-          S3_FORCE_PATH_STYLE=true
-          MAIL_PROVIDER=none
+          cat > .env.test <<EOF
+          NODE_ENV=${NODE_ENV}
+          DATABASE_URL=${DATABASE_URL}
+          JWT_SECRET=${JWT_SECRET}
+          WEB_ORIGIN=${WEB_ORIGIN}
+          APP_BASE_URL=${APP_BASE_URL}
+          NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+          TEST_E2E_PASSWORD=${TEST_E2E_PASSWORD}
+          S3_ENDPOINT=${S3_ENDPOINT}
+          S3_ACCESS_KEY=${S3_ACCESS_KEY}
+          S3_SECRET_KEY=${S3_SECRET_KEY}
+          S3_BUCKET=${S3_BUCKET}
+          S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL}
+          S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+          MAIL_PROVIDER=${MAIL_PROVIDER}
           EOF
 
       - name: Build internal packages
@@ -162,6 +168,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const core = require('@actions/core');
             const reportPath = 'apps/web/playwright-report/index.html';
 
             let comment = '## E2E Test Results\n\n';
@@ -171,9 +178,14 @@ jobs:
               comment += '❌ Tests failed or report not found.\n';
             }
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              core.warning(`Failed to comment on the PR: ${message}`);
+            }
