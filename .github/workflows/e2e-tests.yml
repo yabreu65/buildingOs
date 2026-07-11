@@ -142,6 +142,176 @@ jobs:
             sleep 1
           done
 
+      - name: Validate seeded auth user
+        run: |
+          node <<'NODE'
+          const { PrismaClient } = require('@prisma/client');
+          const bcrypt = require('bcrypt');
+
+          const prisma = new PrismaClient();
+          const email = 'test-tenant-admin-a@buildingos.local';
+          const password = process.env.TEST_E2E_PASSWORD;
+
+          if (!password) {
+            console.error('SEEDED_AUTH_PASSWORD_MISSING');
+            process.exit(1);
+          }
+
+          async function main() {
+            const user = await prisma.user.findUnique({
+              where: { email },
+              select: {
+                id: true,
+                email: true,
+                passwordHash: true,
+                memberships: {
+                  select: {
+                    tenantId: true,
+                    roles: {
+                      select: {
+                        role: true,
+                      },
+                    },
+                  },
+                },
+                tenantMembers: {
+                  select: {
+                    tenantId: true,
+                    role: true,
+                    status: true,
+                  },
+                },
+              },
+            });
+
+            if (!user) {
+              throw new Error('SEEDED_AUTH_USER_MISSING');
+            }
+
+            if (user.tenantMembers.length === 0) {
+              throw new Error('SEEDED_AUTH_TENANT_MEMBER_MISSING');
+            }
+
+            const hasActiveTenantMember = user.tenantMembers.some((member) => member.status === 'ACTIVE');
+            if (!hasActiveTenantMember) {
+              throw new Error('SEEDED_AUTH_MEMBER_NOT_ACTIVE');
+            }
+
+            if (user.memberships.length === 0) {
+              throw new Error('SEEDED_AUTH_MEMBERSHIP_MISSING');
+            }
+
+            const hasRole = user.memberships.some((membership) => membership.roles.length > 0);
+            if (!hasRole) {
+              throw new Error('SEEDED_AUTH_ROLE_MISSING');
+            }
+
+            const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+            if (!passwordMatches) {
+              throw new Error('SEEDED_AUTH_PASSWORD_MISMATCH');
+            }
+
+            console.log('SEEDED_AUTH_USER_OK');
+          }
+
+          main()
+            .then(async () => {
+              await prisma.$disconnect();
+            })
+            .catch(async (error) => {
+              console.error(error instanceof Error ? error.message : String(error));
+              await prisma.$disconnect();
+              process.exit(1);
+            });
+          NODE
+
+      - name: E2E auth preflight
+        run: |
+          set -euo pipefail
+
+          export LOGIN_EMAIL='test-tenant-admin-a@buildingos.local'
+          LOGIN_URL="${NEXT_PUBLIC_API_URL}/auth/login"
+          SESSION_URL="${NEXT_PUBLIC_API_URL}/auth/me"
+          COOKIE_JAR="$(mktemp)"
+          HEADERS_FILE="$(mktemp)"
+          BODY_FILE="$(mktemp)"
+          export BODY_FILE
+
+          cleanup() {
+            rm -f "$COOKIE_JAR" "$HEADERS_FILE" "$BODY_FILE"
+          }
+          trap cleanup EXIT
+
+          login_payload="$(
+            node <<'NODE'
+            process.stdout.write(JSON.stringify({
+              email: process.env.LOGIN_EMAIL,
+              password: process.env.TEST_E2E_PASSWORD,
+            }));
+NODE
+          )"
+
+          login_status="$(
+            curl -sS \
+              -D "$HEADERS_FILE" \
+              -o "$BODY_FILE" \
+              -c "$COOKIE_JAR" \
+              -b "$COOKIE_JAR" \
+              -H 'Content-Type: application/json' \
+              -X POST \
+              --data-raw "$login_payload" \
+              -w '%{http_code}' \
+              "$LOGIN_URL"
+          )"
+
+          if [ "$login_status" -ge 400 ]; then
+            echo "AUTH_LOGIN_FAILED status=$login_status endpoint=/auth/login"
+            exit 1
+          fi
+
+          if ! grep -q 'bo_access_token' "$HEADERS_FILE" || ! grep -q 'bo_refresh_token' "$HEADERS_FILE"; then
+            echo "AUTH_COOKIE_MISSING status=$login_status endpoint=/auth/login"
+            exit 1
+          fi
+
+          session_status="$(
+            curl -sS \
+              -o "$BODY_FILE" \
+              -b "$COOKIE_JAR" \
+              -c "$COOKIE_JAR" \
+              -H 'Accept: application/json' \
+              -w '%{http_code}' \
+              "$SESSION_URL"
+          )"
+
+          if [ "$session_status" -ge 400 ]; then
+            echo "AUTH_SESSION_FAILED status=$session_status endpoint=/auth/me"
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          try {
+            const payload = JSON.parse(fs.readFileSync(process.env.BODY_FILE, 'utf8'));
+            const hasUser = payload && typeof payload === 'object' && payload.user && typeof payload.user === 'object';
+            const memberships = payload && typeof payload === 'object' ? payload.memberships : null;
+
+            if (!hasUser || !Array.isArray(memberships) || memberships.length === 0) {
+              console.error('AUTH_SESSION_INVALID_PAYLOAD');
+              process.exit(1);
+            }
+
+            console.log('AUTH_SESSION_VALID');
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`AUTH_SESSION_INVALID_PAYLOAD ${message.replace(/\s+/g, ' ').trim()}`);
+            process.exit(1);
+          }
+NODE
+
+          echo "AUTH_PREFLIGHT_OK login=$login_status session=$session_status"
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
