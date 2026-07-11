@@ -88,7 +88,6 @@ describe('action-route-map', () => {
 
     it('should return false for action not in the map', () => {
       expect(isAssistantActionMapped('open-reports')).toBe(false);
-      expect(isAssistantActionMapped('open-tickets')).toBe(false);
     });
   });
 
@@ -142,6 +141,26 @@ describe('action-route-map', () => {
         'view-my-charges',
         'check-my-payment-status',
         'review-pending-payments',
+        'view-payment-history',
+        'view-pending-charges',
+        'view-my-balance',
+        'report-payment',
+        'upload-payment-proof',
+        'view-all-payments',
+        'open-tickets',
+        'create-ticket',
+        'view-my-tickets',
+        'review-open-tickets',
+        'view-all-tickets',
+        'open-communications',
+        'create-communication',
+        'view-all-communications',
+        'view-my-inbox',
+        'view-notices',
+        'open-documents',
+        'upload-document',
+        'view-building-documents',
+        'view-rules',
       ];
       const actualKeys = Object.keys(ACTION_ROUTE_MAP);
       expect(actualKeys).toEqual(expectedKeys);

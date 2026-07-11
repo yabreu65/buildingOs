@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import TenantActions from '../TenantActions';
 import type { Tenant } from '../../super-admin.types';
 
@@ -32,7 +32,9 @@ describe('TenantActions', () => {
       />
     );
 
-    expect(screen.getByRole('button', { name: 'Eliminar demo' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Eliminar datos de prueba de Tenant Demo' })
+    ).toBeTruthy();
 
     rerender(
       <TenantActions
@@ -41,7 +43,9 @@ describe('TenantActions', () => {
       />
     );
 
-    expect(screen.queryByRole('button', { name: 'Eliminar demo' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Eliminar datos de prueba de Tenant Demo' })
+    ).toBeNull();
   });
 
   it('opens confirmation modal and confirms demo delete', async () => {
@@ -56,14 +60,23 @@ describe('TenantActions', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Eliminar demo' }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Eliminar datos de prueba de Tenant Demo' })
+      );
+    });
 
-    expect(screen.getByRole('heading', { name: 'Eliminar demo' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Eliminar datos de prueba' })).toBeTruthy();
     expect(screen.getByText(/datos de demo/i)).toBeTruthy();
 
-    const deleteButtons = screen.getAllByRole('button', { name: 'Sí, eliminar demo' });
-    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    const deleteButtons = screen.getAllByRole('button', { name: 'Sí, eliminar datos de prueba' });
+    await act(async () => {
+      fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    });
 
     expect(onDeleteDemo).toHaveBeenCalledWith(expect.objectContaining({ id: 'tenant-1' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
   });
 });

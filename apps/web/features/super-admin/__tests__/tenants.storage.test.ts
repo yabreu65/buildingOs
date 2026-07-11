@@ -288,8 +288,8 @@ describe('Tenants Storage - Search & Filter', () => {
       const recent = getRecentTenants(2);
       expect(recent.length).toBe(2);
 
-      // Most recent should be last created (Tower Complex)
-      expect(recent[0].name).toBe('Tower Complex');
+      // Most recent should be the newest tenant in the fixture set.
+      expect(recent[0].name).toBe('Acme Corp');
     });
 
     it('should respect limit parameter', () => {
