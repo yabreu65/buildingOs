@@ -18,7 +18,7 @@ import {
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
 
-interface LiquidationExpenseSnapshotItem {
+interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   expenseId: string;
   categoryName: string;
   vendorName: string | null;
@@ -28,6 +28,29 @@ interface LiquidationExpenseSnapshotItem {
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
   sourcePeriod?: string;
+}
+
+interface LiquidationExpenseSnapshotRow {
+  expenseId: string;
+  categoryName: string;
+  vendorName: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  invoiceDate: Date;
+  description: string | null;
+  type: 'EXPENSE' | 'ADJUSTMENT';
+  sourcePeriod?: string;
+}
+
+interface CancelLiquidationOptions {
+  readonly buildingId?: string;
+  readonly reason?: string;
+}
+
+interface NotificationDispatchResult {
+  readonly sentCount: number;
+  readonly failedCount: number;
+  readonly errorMessages: ReadonlyArray<string>;
 }
 
 @Injectable()
@@ -99,7 +122,7 @@ export class LiquidationsService {
     }
 
     // Rebuild expense list from snapshot
-    const expenseSnapshot = liq.expenseSnapshot as unknown as LiquidationExpenseSnapshotItem[];
+    const expenseSnapshot = this.parseExpenseSnapshot(liq.expenseSnapshot);
 
     return {
       ...this.toDto(liq),
@@ -204,13 +227,28 @@ export class LiquidationsService {
     const allocatedSharedExpenses = sharedExpenses.filter(e => e.allocations.length > 0);
 
     // Combinar: buildingExpenses (monto completo) + allocatedSharedExpenses (solo monto asignado)
-    const allExpenses = [...buildingExpenses];
+    const allExpenses: LiquidationExpenseSnapshotRow[] = buildingExpenses.map((expense) => ({
+      expenseId: expense.id,
+      categoryName: expense.category.name,
+      vendorName: expense.vendor?.name ?? null,
+      amountMinor: expense.amountMinor,
+      currencyCode: expense.currencyCode,
+      invoiceDate: expense.invoiceDate,
+      description: expense.description,
+      type: 'EXPENSE',
+    }));
     for (const exp of allocatedSharedExpenses) {
       const allocation = exp.allocations[0];
       if (allocation && allocation.amountMinor !== null) {
         allExpenses.push({
-          ...exp,
+          expenseId: exp.id,
+          categoryName: exp.category.name,
+          vendorName: exp.vendor?.name ?? null,
           amountMinor: allocation.amountMinor,
+          currencyCode: exp.currencyCode,
+          invoiceDate: exp.invoiceDate,
+          description: exp.description,
+          type: 'EXPENSE',
         });
       }
     }
@@ -218,8 +256,8 @@ export class LiquidationsService {
     // Calcular totales por moneda - inicializar antes de usar
     const totalsByCurrency: Record<string, number> = {};
     for (const expense of allExpenses) {
-      const expCurrency = expense.currencyCode as string;
-      const expAmount = expense.amountMinor as number;
+      const expCurrency = expense.currencyCode;
+      const expAmount = expense.amountMinor;
       totalsByCurrency[expCurrency] =
         (totalsByCurrency[expCurrency] ?? 0) + expAmount;
     }
@@ -238,19 +276,19 @@ export class LiquidationsService {
     });
 
     // Si hay ajustes, agregarlos al snapshot y a los totales
-    const expenseSnapshot: LiquidationExpenseSnapshotItem[] = allExpenses.map((e) => ({
-      expenseId: e.id,
-      categoryName: e.category.name,
-      vendorName: e.vendor?.name ?? null,
+    const expenseSnapshotItems: LiquidationExpenseSnapshotItem[] = allExpenses.map((e) => ({
+      expenseId: e.expenseId,
+      categoryName: e.categoryName,
+      vendorName: e.vendorName,
       amountMinor: e.amountMinor,
       currencyCode: e.currencyCode,
       invoiceDate: e.invoiceDate.toISOString(),
       description: e.description,
-      type: 'EXPENSE' as const,
+      type: e.type,
     }));
 
     for (const adj of adjustments) {
-      expenseSnapshot.push({
+      expenseSnapshotItems.push({
         expenseId: `ADJ-${adj.id}`,
         categoryName: adj.category.name,
         vendorName: null,
@@ -258,12 +296,14 @@ export class LiquidationsService {
         currencyCode: adj.currencyCode,
         invoiceDate: adj.sourceInvoiceDate.toISOString(),
         description: `Ajuste retroactivo: ${adj.reason}`,
-        type: 'ADJUSTMENT' as const,
+        type: 'ADJUSTMENT',
         sourcePeriod: adj.sourcePeriod,
       });
       const adjCurrency = adj.currencyCode;
       totalsByCurrency[adjCurrency] = (totalsByCurrency[adjCurrency] ?? 0) + adj.amountMinor;
     }
+
+    const expenseSnapshot: ReadonlyArray<LiquidationExpenseSnapshotItem> = expenseSnapshotItems;
 
     if (allExpenses.length === 0 && adjustments.length === 0) {
       throw new BadRequestException(
@@ -277,7 +317,7 @@ export class LiquidationsService {
 
     // Contar unidades billables
     const billableUnits = await this.prisma.unit.findMany({
-      where: { buildingId: dto.buildingId, isBillable: true },
+      where: { tenantId, buildingId: dto.buildingId, isBillable: true },
       include: { unitCategory: { select: { coefficient: true, id: true } } },
       orderBy: { code: 'asc' },
     });
@@ -292,13 +332,13 @@ export class LiquidationsService {
         baseCurrency: dto.baseCurrency,
         totalAmountMinor,
         totalsByCurrency,
-        expenseSnapshot: expenseSnapshot as unknown as Prisma.InputJsonValue,
+        expenseSnapshot,
         unitCount: billableUnits.length,
         generatedByMembershipId: membershipId,
       },
     });
 
-    void this.auditService.createLog({
+    await this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
       action: 'LIQUIDATION_DRAFT',
@@ -360,8 +400,8 @@ export class LiquidationsService {
       );
     }
 
-    const updated = await this.prisma.liquidation.update({
-      where: { id: liquidationId },
+    await this.prisma.liquidation.updateMany({
+      where: { id: liquidationId, tenantId },
       data: {
         status: 'REVIEWED',
         reviewedByMembershipId: membershipId,
@@ -369,7 +409,15 @@ export class LiquidationsService {
       },
     });
 
-    void this.auditService.createLog({
+    const updated = await this.prisma.liquidation.findFirst({
+      where: { id: liquidationId, tenantId },
+    });
+
+    if (!updated) {
+      throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+    }
+
+    await this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
       action: 'LIQUIDATION_REVIEW',
@@ -410,26 +458,9 @@ export class LiquidationsService {
       );
     }
 
-    // Anti-duplicado: no puede existir otra PUBLISHED para (building, period)
-    const existingPublished = await this.prisma.liquidation.findFirst({
-      where: {
-        tenantId,
-        buildingId: liq.buildingId,
-        period: liq.period,
-        status: 'PUBLISHED',
-        id: { not: liquidationId },
-      },
-    });
-
-    if (existingPublished) {
-      throw new ConflictException(
-        `Ya existe una liquidación publicada para el período ${liq.period}`,
-      );
-    }
-
     // Cargar unidades billables con categorías para distribución
     const billableUnits = await this.prisma.unit.findMany({
-      where: { buildingId: liq.buildingId, isBillable: true },
+      where: { tenantId, buildingId: liq.buildingId, isBillable: true },
       include: { unitCategory: { select: { coefficient: true, id: true } } },
       orderBy: { code: 'asc' },
     });
@@ -447,9 +478,11 @@ export class LiquidationsService {
     );
 
     let shouldSendPublishedNotifications = false;
+    let publishResult: { publishedNow: boolean; liquidation?: LiquidationResponseDto } | null = null;
 
     try {
-      const publishResult = await this.prisma.$transaction(async (tx) => {
+      publishResult = await this.prisma.$transaction(
+        async (tx) => {
         const current = await tx.liquidation.findFirst({
           where: { id: liquidationId, tenantId },
           select: { status: true },
@@ -460,12 +493,37 @@ export class LiquidationsService {
         }
 
         if (current.status === 'PUBLISHED') {
-          return { publishedNow: false };
+          const published = await tx.liquidation.findFirst({
+            where: { id: liquidationId, tenantId },
+          });
+
+          if (!published) {
+            throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+          }
+
+          return { publishedNow: false, liquidation: this.toDto(published) };
         }
 
         if (current.status !== 'DRAFT' && current.status !== 'REVIEWED') {
           throw new BadRequestException(
             `Solo se puede publicar una liquidación en DRAFT o REVIEWED. Estado actual: ${current.status}`,
+          );
+        }
+
+        const duplicatePublished = await tx.liquidation.findFirst({
+          where: {
+            tenantId,
+            buildingId: liq.buildingId,
+            period: liq.period,
+            status: 'PUBLISHED',
+            id: { not: liquidationId },
+          },
+          select: { id: true },
+        });
+
+        if (duplicatePublished) {
+          throw new ConflictException(
+            `Ya existe una liquidación publicada para el período ${liq.period}`,
           );
         }
 
@@ -479,8 +537,8 @@ export class LiquidationsService {
         });
 
         if (duplicateCharges === distribution.length) {
-          await tx.liquidation.update({
-            where: { id: liquidationId },
+          await tx.liquidation.updateMany({
+            where: { id: liquidationId, tenantId },
             data: {
               status: 'PUBLISHED',
               publishedByMembershipId: membershipId,
@@ -488,7 +546,15 @@ export class LiquidationsService {
             },
           });
 
-          return { publishedNow: true };
+          const liquidation = await tx.liquidation.findFirst({
+            where: { id: liquidationId, tenantId },
+          });
+
+          if (!liquidation) {
+            throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+          }
+
+          return { publishedNow: true, liquidation: this.toDto(liquidation) };
         }
 
         if (duplicateCharges > 0) {
@@ -514,8 +580,8 @@ export class LiquidationsService {
 
         await tx.charge.createMany({ data: chargeData });
 
-        await tx.liquidation.update({
-          where: { id: liquidationId },
+        await tx.liquidation.updateMany({
+          where: { id: liquidationId, tenantId },
           data: {
             status: 'PUBLISHED',
             publishedByMembershipId: membershipId,
@@ -523,8 +589,22 @@ export class LiquidationsService {
           },
         });
 
-        return { publishedNow: true };
-      });
+        const liquidation = await tx.liquidation.findFirst({
+          where: { id: liquidationId, tenantId },
+        });
+
+        if (!liquidation) {
+          throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+        }
+
+        return { publishedNow: true, liquidation: this.toDto(liquidation) };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+
+      if (!publishResult) {
+        throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+      }
 
       shouldSendPublishedNotifications = publishResult.publishedNow;
     } catch (error) {
@@ -549,7 +629,7 @@ export class LiquidationsService {
     }
 
     if (shouldSendPublishedNotifications) {
-      void this.auditService.createLog({
+      await this.auditService.createLog({
         tenantId,
         actorMembershipId: membershipId,
         action: 'LIQUIDATION_PUBLISH',
@@ -565,18 +645,42 @@ export class LiquidationsService {
       });
 
       // [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to all residents
-      void this.sendChargePublishedNotifications(tenantId, liquidationId, {
+      const notificationResult = await this.sendChargePublishedNotifications(tenantId, liquidationId, {
         period: liq.period,
         buildingId: liq.buildingId,
         baseCurrency: liq.baseCurrency,
       });
+
+      if (notificationResult.failedCount > 0) {
+        await this.auditService.createLog({
+          tenantId,
+          actorMembershipId: membershipId,
+          action: 'LIQUIDATION_PUBLISH',
+          entityType: 'Liquidation',
+          entityId: liquidationId,
+          metadata: {
+            period: liq.period,
+            buildingId: liq.buildingId,
+            notificationFailure: true,
+            sentCount: notificationResult.sentCount,
+            failedCount: notificationResult.failedCount,
+            errorMessages: notificationResult.errorMessages,
+          },
+        });
+        this.logger.warn(
+          `Charge notifications for liquidation ${liquidationId} completed with ${notificationResult.failedCount} failure(s)`,
+        );
+        throw new ConflictException(
+          `Charge notifications completed with ${notificationResult.failedCount} failure(s)`,
+        );
+      }
     }
 
-    const updated = await this.prisma.liquidation.findUniqueOrThrow({
-      where: { id: liquidationId },
-    });
+    if (!publishResult?.liquidation) {
+      throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+    }
 
-    return this.toDto(updated);
+    return this.toDto(publishResult.liquidation);
   }
 
   async cancelLiquidation(
@@ -584,6 +688,7 @@ export class LiquidationsService {
     liquidationId: string,
     membershipId: string,
     userRoles: string[],
+    options: CancelLiquidationOptions = {},
   ): Promise<LiquidationResponseDto> {
     if (!this.validators.isAdminOrOperator(userRoles)) {
       throw new ForbiddenException('Acceso denegado');
@@ -597,39 +702,82 @@ export class LiquidationsService {
       throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
     }
 
-    // Si está publicada, verificar que no haya pagos aprobados sobre sus charges
-    if (liq.status === 'PUBLISHED') {
-      const approvedAllocations = await this.prisma.paymentAllocation.count({
-        where: {
-          tenantId,
-          charge: { liquidationId },
-          payment: { status: 'APPROVED' },
-        },
+    if (liq.canceledAt) {
+      return this.toDto(liq);
+    }
+
+    const cancellation = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.liquidation.findFirst({
+        where: { id: liquidationId, tenantId },
       });
 
-      if (approvedAllocations > 0) {
+      if (!current) {
+        throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+      }
+
+      if (current.canceledAt) {
+        return { liquidation: current, canceled: false };
+      }
+
+      if (options.buildingId && current.buildingId !== options.buildingId) {
+        throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+      }
+
+      const canceledAt = new Date();
+      const cancellationReason = options.reason?.trim() || 'No reason provided';
+
+      if (current.status === 'PUBLISHED') {
         throw new ConflictException(
-          `No se puede cancelar: hay ${approvedAllocations} pago(s) aprobado(s) asignados a esta liquidación`,
+          'No se puede cancelar una liquidación publicada; use un flujo de reversa o compensación',
         );
       }
 
-      // Eliminar los charges generados
-      await this.prisma.charge.deleteMany({ where: { liquidationId, tenantId } });
-    }
+      const cancelResult = await tx.liquidation.updateMany({
+        where: { id: liquidationId, tenantId, canceledAt: null, status: { not: 'CANCELED' } },
+        data: {
+          status: 'CANCELED',
+          canceledAt,
+          canceledByMembershipId: membershipId,
+        },
+      });
 
-    // Hard delete: el historial queda en AuditLog
-    await this.prisma.liquidation.delete({ where: { id: liquidationId } });
+      const liquidation = await tx.liquidation.findFirst({
+        where: { id: liquidationId, tenantId },
+      });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_CANCEL',
-      entityType: 'Liquidation',
-      entityId: liquidationId,
-      metadata: { period: liq.period, buildingId: liq.buildingId, previousStatus: liq.status },
-    });
+      if (!liquidation) {
+        throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+      }
 
-    return this.toDto(liq);
+      if (cancelResult.count === 0 && liquidation.status !== 'CANCELED') {
+        throw new ConflictException(
+          `No se pudo cancelar la liquidación ${liquidationId} porque cambió durante la operación`,
+        );
+      }
+
+      if (cancelResult.count > 0) {
+        await tx.auditLog.create({
+          data: {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'LIQUIDATION_CANCEL',
+            entity: 'Liquidation',
+            entityId: liquidationId,
+            metadata: {
+              period: current.period,
+              buildingId: current.buildingId,
+              previousStatus: current.status,
+              canceledAt: canceledAt.toISOString(),
+              reason: cancellationReason,
+            },
+          },
+        });
+      }
+
+      return { liquidation, canceled: true };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    return this.toDto(cancellation.liquidation);
   }
 
   /**
@@ -648,22 +796,36 @@ export class LiquidationsService {
     _buildingId: string,
   ): Array<{ unitId: string; unitCode: string; unitLabel: string | null; amountMinor: number }> {
     if (billableUnits.length === 0) return [];
+    if (totalAmountMinor < 0) {
+      throw new BadRequestException('Liquidation total amount cannot be negative');
+    }
 
-    const hasCoefficients = billableUnits.every((u) => u.unitCategory !== null);
+    const billableUnitsWithCoefficients = billableUnits.filter(
+      (
+        unit,
+      ): unit is {
+        id: string;
+        code: string;
+        label: string | null;
+        unitCategory: { coefficient: number; id: string };
+      } => unit.unitCategory !== null,
+    );
+    const hasCoefficients = billableUnitsWithCoefficients.length === billableUnits.length;
+
+    if (billableUnitsWithCoefficients.some((unit) => unit.unitCategory.coefficient < 0)) {
+      throw new BadRequestException('Unit coefficients cannot be negative');
+    }
 
     if (hasCoefficients) {
-      const sumCoef = billableUnits.reduce(
-        (sum, u) => sum + (u.unitCategory!.coefficient),
-        0,
-      );
+      const sumCoef = billableUnitsWithCoefficients.reduce((sum, u) => sum + u.unitCategory.coefficient, 0);
 
       if (sumCoef === 0) {
         return this.equalDistribution(billableUnits, totalAmountMinor);
       }
 
       // Largest Remainder
-      const amounts = billableUnits.map((unit) => {
-        const coef = unit.unitCategory!.coefficient;
+      const amounts = billableUnitsWithCoefficients.map((unit) => {
+        const coef = unit.unitCategory.coefficient;
         const exact = (coef / sumCoef) * totalAmountMinor;
         const floor = Math.floor(exact);
         return { unit, floor, fraction: exact - floor };
@@ -724,6 +886,8 @@ export class LiquidationsService {
     canceledAt: Date | null;
     createdAt: Date;
   }): LiquidationResponseDto {
+    const totalsByCurrency = this.parseTotalsByCurrency(liq.totalsByCurrency);
+
     return {
       id: liq.id,
       tenantId: liq.tenantId,
@@ -732,7 +896,7 @@ export class LiquidationsService {
       status: liq.status,
       baseCurrency: liq.baseCurrency,
       totalAmountMinor: liq.totalAmountMinor,
-      totalsByCurrency: liq.totalsByCurrency as Record<string, number>,
+      totalsByCurrency,
       unitCount: liq.unitCount,
       generatedAt: liq.generatedAt,
       reviewedAt: liq.reviewedAt,
@@ -742,9 +906,92 @@ export class LiquidationsService {
     };
   }
 
+  private parseTotalsByCurrency(value: unknown): Record<string, number> {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new BadRequestException('Liquidation totalsByCurrency snapshot is invalid');
+    }
+
+    const result: Record<string, number> = {};
+
+    for (const [currency, amount] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+        throw new BadRequestException(
+          `Liquidation totalsByCurrency snapshot has invalid amount for ${currency}`,
+        );
+      }
+
+      result[currency] = amount;
+    }
+
+    return result;
+  }
+
+  private parseExpenseSnapshot(value: unknown): LiquidationExpenseSnapshotItem[] {
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('Liquidation expense snapshot is invalid');
+    }
+
+    return value.map((item, index) => {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} is invalid`);
+      }
+
+      const snapshot = item as Record<string, unknown>;
+      const expenseId = snapshot.expenseId;
+      const categoryName = snapshot.categoryName;
+      const vendorName = snapshot.vendorName;
+      const amountMinor = snapshot.amountMinor;
+      const currencyCode = snapshot.currencyCode;
+      const invoiceDate = snapshot.invoiceDate;
+      const description = snapshot.description;
+      const type = snapshot.type;
+      const sourcePeriod = snapshot.sourcePeriod;
+
+      if (typeof expenseId !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid expenseId`);
+      }
+      if (typeof categoryName !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid categoryName`);
+      }
+      if (vendorName !== null && typeof vendorName !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid vendorName`);
+      }
+      if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor)) {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid amountMinor`);
+      }
+      if (typeof currencyCode !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid currencyCode`);
+      }
+      if (typeof invoiceDate !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid invoiceDate`);
+      }
+      if (description !== null && typeof description !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid description`);
+      }
+      if (type !== 'EXPENSE' && type !== 'ADJUSTMENT') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid type`);
+      }
+      if (sourcePeriod !== undefined && sourcePeriod !== null && typeof sourcePeriod !== 'string') {
+        throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid sourcePeriod`);
+      }
+
+      return {
+        expenseId,
+        categoryName,
+        vendorName,
+        amountMinor,
+        currencyCode,
+        invoiceDate,
+        description,
+        type,
+        sourcePeriod: sourcePeriod ?? undefined,
+      };
+    });
+  }
+
   /**
    * [PHASE 2 QUICK #2] Send CHARGE_PUBLISHED notifications to residents
-   * Fire-and-forget: logs errors but never throws
+   * Best-effort notification dispatch with observable result.
    */
   private async sendChargePublishedNotifications(
     tenantId: string,
@@ -754,17 +1001,25 @@ export class LiquidationsService {
       buildingId: string;
       baseCurrency: string;
     },
-  ): Promise<void> {
+  ): Promise<NotificationDispatchResult> {
+    let sentCount = 0;
+    let failedCount = 0;
+    const errorMessages: string[] = [];
+
     try {
       // Load all charges for this liquidation
       const charges = await this.prisma.charge.findMany({
-        where: { liquidationId },
+        where: { tenantId, liquidationId },
       });
 
       // For each charge, load unit and occupants
       for (const charge of charges) {
-        const unit = await this.prisma.unit.findUnique({
-          where: { id: charge.unitId },
+        const unit = await this.prisma.unit.findFirst({
+          where: {
+            tenantId,
+            buildingId: liquidation.buildingId,
+            id: charge.unitId,
+          },
           include: {
             unitOccupants: {
               where: { endDate: null }, // Active occupants only
@@ -784,32 +1039,75 @@ export class LiquidationsService {
               ? new Date(charge.dueDate).toLocaleDateString('es-AR')
               : 'N/A';
 
-            await this.notificationsService.createNotification({
-              tenantId,
-              userId: occupant.member.user.id,
-              type: 'CHARGE_PUBLISHED',
-              title: `${liquidation.buildingId} - Nuevo cargo por ${liquidation.period}`,
-              body: `Se ha registrado un cargo de ${(charge.amount / 100).toFixed(2)} ${liquidation.baseCurrency} en la unidad ${unit.label}. Vencimiento: ${dueDateStr}`,
-              data: {
-                chargeId: charge.id,
-                unitLabel: unit.label,
-                unitId: unit.id,
-                amount: charge.amount / 100,
-                currency: charge.currency,
-                dueDate: charge.dueDate?.toISOString(),
-                period: liquidation.period,
-              },
-              deliveryMethods: ['IN_APP', 'EMAIL'],
-            });
+            try {
+              await this.notificationsService.createNotification({
+                tenantId,
+                userId: occupant.member.user.id,
+                type: 'CHARGE_PUBLISHED',
+                title: `${liquidation.buildingId} - Nuevo cargo por ${liquidation.period}`,
+                body: `Se ha registrado un cargo de ${(charge.amount / 100).toFixed(2)} ${liquidation.baseCurrency} en la unidad ${unit.label}. Vencimiento: ${dueDateStr}`,
+                data: {
+                  chargeId: charge.id,
+                  unitLabel: unit.label,
+                  unitId: unit.id,
+                  amount: charge.amount / 100,
+                  currency: charge.currency,
+                  dueDate: charge.dueDate?.toISOString(),
+                  period: liquidation.period,
+                },
+                deliveryMethods: ['IN_APP', 'EMAIL'],
+              });
+              sentCount += 1;
+            } catch (notificationError) {
+              failedCount += 1;
+              errorMessages.push(
+                notificationError instanceof Error
+                  ? notificationError.message
+                  : String(notificationError),
+              );
+              this.logger.error(
+                `Failed to create notification for charge ${charge.id} in liquidation ${liquidationId}`,
+                notificationError instanceof Error ? notificationError.stack : String(notificationError),
+              );
+            }
+          } else {
+            failedCount += 1;
+            errorMessages.push(
+              `Missing user for occupant ${occupant.member?.id ?? 'unknown'} in unit ${unit.id}`,
+            );
           }
         }
       }
     } catch (error) {
+      failedCount += 1;
+      errorMessages.push(error instanceof Error ? error.message : String(error));
+      try {
+        await this.auditService.createLog({
+          tenantId,
+          action: 'LIQUIDATION_PUBLISH',
+          entityType: 'Liquidation',
+          entityId: liquidationId,
+          metadata: {
+            period: liquidation.period,
+            buildingId: liquidation.buildingId,
+            notificationFailure: true,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch (auditError) {
+        this.logger.error(
+          `Failed to persist notification failure audit for liquidation ${liquidationId}`,
+          auditError instanceof Error ? auditError.stack : String(auditError),
+        );
+      }
+
       // Fire-and-forget: log but never fail
       this.logger.error(
         `Failed to send charge notifications for liquidation ${liquidationId}`,
         error instanceof Error ? error.stack : String(error),
       );
     }
+
+    return { sentCount, failedCount, errorMessages };
   }
 }

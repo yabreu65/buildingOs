@@ -3,8 +3,24 @@ name: E2E Tests
 on:
   push:
     branches: [main, develop]
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'scripts/**'
   pull_request:
     branches: [main, develop]
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'scripts/**'
   schedule:
     - cron: '0 2 * * *' # Run daily at 2 AM UTC
 
@@ -21,13 +37,12 @@ jobs:
 
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-ci-only
+      DATABASE_URL: postgresql://buildingos@localhost:5432/buildingos_test
       WEB_ORIGIN: http://localhost:3000
       APP_BASE_URL: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      TEST_E2E_PASSWORD: ${{ secrets.TEST_E2E_PASSWORD }}
       S3_ENDPOINT: http://localhost:9000
-      S3_ACCESS_KEY: test-access-key
-      S3_SECRET_KEY: test-secret-key
       S3_BUCKET: buildingos-test
       S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
       S3_FORCE_PATH_STYLE: true
@@ -41,7 +56,7 @@ jobs:
         image: postgres:15-alpine
         env:
           POSTGRES_USER: buildingos
-          POSTGRES_PASSWORD: buildingos
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: buildingos_test
         options: >-
           --health-cmd pg_isready
@@ -64,21 +79,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate CI test credentials
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "S3_ACCESS_KEY=ci-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+          echo "S3_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: Setup environment
         run: |
-          cat > .env.test <<'EOF'
-          NODE_ENV=test
-          DATABASE_URL=postgresql://buildingos:buildingos@localhost:5432/buildingos_test
-          JWT_SECRET=test-jwt-secret-minimum-32-characters-long-for-ci-only
-          WEB_ORIGIN=http://localhost:3000
-          APP_BASE_URL=http://localhost:3000
-          S3_ENDPOINT=http://localhost:9000
-          S3_ACCESS_KEY=test-access-key
-          S3_SECRET_KEY=test-secret-key
-          S3_BUCKET=buildingos-test
-          S3_PUBLIC_BASE_URL=http://localhost:9000/buildingos-test
-          S3_FORCE_PATH_STYLE=true
-          MAIL_PROVIDER=none
+          cat > .env.test <<EOF
+          NODE_ENV=${NODE_ENV}
+          DATABASE_URL=${DATABASE_URL}
+          JWT_SECRET=${JWT_SECRET}
+          WEB_ORIGIN=${WEB_ORIGIN}
+          APP_BASE_URL=${APP_BASE_URL}
+          NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+          TEST_E2E_PASSWORD=${TEST_E2E_PASSWORD}
+          S3_ENDPOINT=${S3_ENDPOINT}
+          S3_ACCESS_KEY=${S3_ACCESS_KEY}
+          S3_SECRET_KEY=${S3_SECRET_KEY}
+          S3_BUCKET=${S3_BUCKET}
+          S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL}
+          S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+          MAIL_PROVIDER=${MAIL_PROVIDER}
           EOF
 
       - name: Build internal packages
@@ -108,26 +131,205 @@ jobs:
           echo "API_PID=$API_PID" >> $GITHUB_ENV
           # Wait for API to be ready
           for i in {1..30}; do
-            if curl -s http://localhost:4000/health > /dev/null; then
+            if curl -fsS http://localhost:4000/health > /dev/null; then
               echo "API is ready!"
               break
             fi
+            if [ "$i" -eq 30 ]; then
+              echo "API failed to become ready within 30 seconds"
+              exit 1
+            fi
             sleep 1
           done
+
+      - name: Validate seeded auth user
+        run: |
+          node <<'NODE'
+          const { PrismaClient } = require('@prisma/client');
+          const bcrypt = require('bcrypt');
+
+          const prisma = new PrismaClient();
+          const email = 'test-tenant-admin-a@buildingos.local';
+          const password = process.env.TEST_E2E_PASSWORD;
+
+          if (!password) {
+            console.error('SEEDED_AUTH_PASSWORD_MISSING');
+            process.exit(1);
+          }
+
+          async function main() {
+            const user = await prisma.user.findUnique({
+              where: { email },
+              select: {
+                id: true,
+                email: true,
+                passwordHash: true,
+                memberships: {
+                  select: {
+                    tenantId: true,
+                    roles: {
+                      select: {
+                        role: true,
+                      },
+                    },
+                  },
+                },
+                tenantMembers: {
+                  select: {
+                    tenantId: true,
+                    role: true,
+                    status: true,
+                  },
+                },
+              },
+            });
+
+            if (!user) {
+              throw new Error('SEEDED_AUTH_USER_MISSING');
+            }
+
+            if (user.tenantMembers.length === 0) {
+              throw new Error('SEEDED_AUTH_TENANT_MEMBER_MISSING');
+            }
+
+            const hasActiveTenantMember = user.tenantMembers.some((member) => member.status === 'ACTIVE');
+            if (!hasActiveTenantMember) {
+              throw new Error('SEEDED_AUTH_MEMBER_NOT_ACTIVE');
+            }
+
+            if (user.memberships.length === 0) {
+              throw new Error('SEEDED_AUTH_MEMBERSHIP_MISSING');
+            }
+
+            const hasRole = user.memberships.some((membership) => membership.roles.length > 0);
+            if (!hasRole) {
+              throw new Error('SEEDED_AUTH_ROLE_MISSING');
+            }
+
+            const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+            if (!passwordMatches) {
+              throw new Error('SEEDED_AUTH_PASSWORD_MISMATCH');
+            }
+
+            console.log('SEEDED_AUTH_USER_OK');
+          }
+
+          main()
+            .then(async () => {
+              await prisma.$disconnect();
+            })
+            .catch(async (error) => {
+              console.error(error instanceof Error ? error.message : String(error));
+              await prisma.$disconnect();
+              process.exit(1);
+            });
+          NODE
+
+      - name: E2E auth preflight
+        run: |
+          set -euo pipefail
+
+          export LOGIN_EMAIL='test-tenant-admin-a@buildingos.local'
+          LOGIN_URL="${NEXT_PUBLIC_API_URL}/auth/login"
+          SESSION_URL="${NEXT_PUBLIC_API_URL}/auth/me"
+          COOKIE_JAR="$(mktemp)"
+          HEADERS_FILE="$(mktemp)"
+          BODY_FILE="$(mktemp)"
+          export BODY_FILE
+
+          cleanup() {
+            rm -f "$COOKIE_JAR" "$HEADERS_FILE" "$BODY_FILE"
+          }
+          trap cleanup EXIT
+
+          login_payload="$(
+            node <<'NODE'
+            process.stdout.write(JSON.stringify({
+              email: process.env.LOGIN_EMAIL,
+              password: process.env.TEST_E2E_PASSWORD,
+            }));
+NODE
+          )"
+
+          login_status="$(
+            curl -sS \
+              -D "$HEADERS_FILE" \
+              -o "$BODY_FILE" \
+              -c "$COOKIE_JAR" \
+              -b "$COOKIE_JAR" \
+              -H 'Content-Type: application/json' \
+              -X POST \
+              --data-raw "$login_payload" \
+              -w '%{http_code}' \
+              "$LOGIN_URL"
+          )"
+
+          if [ "$login_status" -ge 400 ]; then
+            echo "AUTH_LOGIN_FAILED status=$login_status endpoint=/auth/login"
+            exit 1
+          fi
+
+          if ! grep -q 'bo_access_token' "$HEADERS_FILE" || ! grep -q 'bo_refresh_token' "$HEADERS_FILE"; then
+            echo "AUTH_COOKIE_MISSING status=$login_status endpoint=/auth/login"
+            exit 1
+          fi
+
+          session_status="$(
+            curl -sS \
+              -o "$BODY_FILE" \
+              -b "$COOKIE_JAR" \
+              -c "$COOKIE_JAR" \
+              -H 'Accept: application/json' \
+              -w '%{http_code}' \
+              "$SESSION_URL"
+          )"
+
+          if [ "$session_status" -ge 400 ]; then
+            echo "AUTH_SESSION_FAILED status=$session_status endpoint=/auth/me"
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          try {
+            const payload = JSON.parse(fs.readFileSync(process.env.BODY_FILE, 'utf8'));
+            const hasUser = payload && typeof payload === 'object' && payload.user && typeof payload.user === 'object';
+            const memberships = payload && typeof payload === 'object' ? payload.memberships : null;
+
+            if (!hasUser || !Array.isArray(memberships) || memberships.length === 0) {
+              console.error('AUTH_SESSION_INVALID_PAYLOAD');
+              process.exit(1);
+            }
+
+            console.log('AUTH_SESSION_VALID');
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`AUTH_SESSION_INVALID_PAYLOAD ${message.replace(/\s+/g, ' ').trim()}`);
+            process.exit(1);
+          }
+NODE
+
+          echo "AUTH_PREFLIGHT_OK login=$login_status session=$session_status"
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
+        id: e2e-tests
         run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
           PORT: 3000
-          NEXT_PUBLIC_API_URL: http://localhost:4000
 
       - name: Stop API server
         if: always()
-        run: kill $API_PID || true
+        run: |
+          if [ -n "${API_PID:-}" ] && kill -0 "$API_PID" 2>/dev/null; then
+            kill "$API_PID"
+          else
+            echo "::warning::API process already stopped or not accessible from this shell"
+          fi
 
       - name: Upload playwright report
         uses: actions/upload-artifact@v4
@@ -152,18 +354,25 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const core = require('@actions/core');
             const reportPath = 'apps/web/playwright-report/index.html';
+            const e2eOutcome = '${{ steps.e2e-tests.outcome }}';
 
             let comment = '## E2E Test Results\n\n';
-            if (fs.existsSync(reportPath)) {
+            if (e2eOutcome === 'success' && fs.existsSync(reportPath)) {
               comment += '✅ Tests completed! [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
             } else {
-              comment += '❌ Tests failed or report not found.\n';
+              comment += '⚠️ Tests failed or report not found. [Open the run for details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
             }
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              core.warning(`Failed to comment on the PR: ${message}`);
+            }
