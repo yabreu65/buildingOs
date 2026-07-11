@@ -34,6 +34,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://buildingos:buildingos@localhost:5432/buildingos?schema=public
       NODE_ENV: test
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
 
     steps:
       - name: 📥 Checkout code

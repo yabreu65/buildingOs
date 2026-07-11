@@ -25,6 +25,7 @@ jobs:
       JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-ci-only
       WEB_ORIGIN: http://localhost:3000
       APP_BASE_URL: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
       S3_ENDPOINT: http://localhost:9000
       S3_ACCESS_KEY: test-access-key
       S3_SECRET_KEY: test-secret-key
@@ -108,9 +109,13 @@ jobs:
           echo "API_PID=$API_PID" >> $GITHUB_ENV
           # Wait for API to be ready
           for i in {1..30}; do
-            if curl -s http://localhost:4000/health > /dev/null; then
+            if curl -fsS http://localhost:4000/health > /dev/null; then
               echo "API is ready!"
               break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "API failed to become ready within 30 seconds"
+              exit 1
             fi
             sleep 1
           done
@@ -123,11 +128,16 @@ jobs:
         env:
           BASE_URL: http://localhost:3000
           PORT: 3000
-          NEXT_PUBLIC_API_URL: http://localhost:4000
 
       - name: Stop API server
         if: always()
-        run: kill $API_PID || true
+        run: |
+          if [ -n "${API_PID:-}" ] && kill -0 "$API_PID" 2>/dev/null; then
+            kill "$API_PID"
+            wait "$API_PID"
+          else
+            echo "API process already stopped"
+          fi
 
       - name: Upload playwright report
         uses: actions/upload-artifact@v4
