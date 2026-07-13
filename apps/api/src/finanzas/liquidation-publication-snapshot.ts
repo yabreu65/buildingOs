@@ -49,6 +49,21 @@ export interface BuildLiquidationPublicationSnapshotInput {
   publishedAt: Date;
 }
 
+export interface LiquidationDistributionUnit {
+  id: string;
+  code: string;
+  label: string | null;
+  areaM2: number;
+}
+
+export interface LiquidationDistributionAllocation {
+  unitId: string;
+  unitCode: string;
+  unitLabel: string | null;
+  areaM2: number;
+  amountMinor: number;
+}
+
 export function buildLiquidationPublicationSnapshot(
   input: BuildLiquidationPublicationSnapshotInput,
 ): Prisma.InputJsonObject {
@@ -106,6 +121,117 @@ export function buildLiquidationPublicationSnapshot(
     dueDate: input.dueDate.toISOString(),
     publishedAt: input.publishedAt.toISOString(),
   });
+}
+
+export function distributeLiquidationAmountByLargestRemainder(
+  units: readonly LiquidationDistributionUnit[],
+  totalAmountMinor: number,
+): LiquidationDistributionAllocation[] {
+  assertSafeIntegerNonNegative(totalAmountMinor, 'totalAmountMinor');
+
+  if (units.length === 0) {
+    if (totalAmountMinor === 0) {
+      return [];
+    }
+
+    throw new BadRequestException(
+      'Liquidation publication snapshot requires billable units to allocate a positive amount',
+    );
+  }
+
+  const normalizedUnits = units.map(normalizeDistributionUnit);
+  const totalAreaM2 = normalizedUnits.reduce(
+    (sum, unit) => safeAddFinite(sum, unit.areaM2, 'units.totalAreaM2'),
+    0,
+  );
+
+  if (totalAreaM2 === 0) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot units must have a positive allocation area',
+    );
+  }
+
+  const rankedAllocations = normalizedUnits.map((unit, index) => {
+    const exactShare = (totalAmountMinor * unit.areaM2) / totalAreaM2;
+    const amountMinor = Math.floor(exactShare);
+
+    return {
+      unit,
+      originalIndex: index,
+      amountMinor,
+      fraction: exactShare - amountMinor,
+    };
+  });
+
+  let allocatedMinor = rankedAllocations.reduce(
+    (sum, allocation) => safeAddMinor(sum, allocation.amountMinor, 'allocations.totalAmountMinor'),
+    0,
+  );
+  const remainder = totalAmountMinor - allocatedMinor;
+
+  if (!Number.isSafeInteger(remainder) || remainder < 0) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot allocations must match the liquidation total',
+    );
+  }
+
+  const winners = [...rankedAllocations]
+    .sort((left, right) => {
+      if (right.fraction !== left.fraction) {
+        return right.fraction - left.fraction;
+      }
+
+      const unitIdComparison = left.unit.id.localeCompare(right.unit.id);
+      if (unitIdComparison !== 0) {
+        return unitIdComparison;
+      }
+
+      const unitCodeComparison = left.unit.code.localeCompare(right.unit.code);
+      if (unitCodeComparison !== 0) {
+        return unitCodeComparison;
+      }
+
+      return left.originalIndex - right.originalIndex;
+    })
+    .slice(0, remainder);
+
+  for (const winner of winners) {
+    winner.amountMinor += 1;
+  }
+
+  const finalTotal = rankedAllocations.reduce(
+    (sum, allocation) => safeAddMinor(sum, allocation.amountMinor, 'allocations.totalAmountMinor'),
+    0,
+  );
+
+  if (finalTotal !== totalAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot allocations must match the liquidation total',
+    );
+  }
+
+  return rankedAllocations
+    .slice()
+    .sort((left, right) => {
+      const unitIdComparison = left.unit.id.localeCompare(right.unit.id);
+      if (unitIdComparison !== 0) {
+        return unitIdComparison;
+      }
+
+      const unitCodeComparison = left.unit.code.localeCompare(right.unit.code);
+      if (unitCodeComparison !== 0) {
+        return unitCodeComparison;
+      }
+
+      return left.originalIndex - right.originalIndex;
+    })
+    .map((allocation) => ({
+      unitId: allocation.unit.id,
+      unitCode: allocation.unit.code,
+      unitLabel: allocation.unit.label,
+      areaM2: allocation.unit.areaM2,
+      amountMinor: allocation.amountMinor,
+    }));
 }
 
 export function parseLiquidationPublicationSnapshot(
@@ -236,6 +362,26 @@ function normalizeAllocationSnapshot(value: PublishedAllocationSnapshot): Publis
     unitCode: value.unitCode,
     unitLabel: value.unitLabel,
     amountMinor: value.amountMinor,
+  };
+}
+
+function normalizeDistributionUnit(
+  value: LiquidationDistributionUnit,
+): LiquidationDistributionUnit {
+  assertNonEmpty(value.id, 'unit.id');
+  assertNonEmpty(value.code, 'unit.code');
+  if (value.label !== null) {
+    assertNonEmpty(value.label, 'unit.label');
+  }
+  if (typeof value.areaM2 !== 'number' || !Number.isFinite(value.areaM2) || value.areaM2 < 0) {
+    throw new BadRequestException('Liquidation publication snapshot unit areaM2 is invalid');
+  }
+
+  return {
+    id: value.id,
+    code: value.code,
+    label: value.label,
+    areaM2: value.areaM2,
   };
 }
 
@@ -371,6 +517,16 @@ function safeAddMinor(left: number, right: number, field: string): number {
   const total = left + right;
 
   if (!Number.isSafeInteger(total) || total < 0) {
+    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
+  }
+
+  return total;
+}
+
+function safeAddFinite(left: number, right: number, field: string): number {
+  const total = left + right;
+
+  if (!Number.isFinite(total) || total < 0) {
     throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
   }
 

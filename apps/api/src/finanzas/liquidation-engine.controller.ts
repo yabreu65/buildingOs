@@ -50,7 +50,6 @@ export class LiquidationEngineController {
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
     const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
       throw new UnauthorizedException(
@@ -64,7 +63,6 @@ export class LiquidationEngineController {
       dto.period,
       dto.baseCurrency,
       membershipId,
-      roles,
     );
   }
 
@@ -80,16 +78,18 @@ export class LiquidationEngineController {
     @Param('liquidationId') liquidationId: string,
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
-    const roles = req.user?.roles ?? [];
+    const membershipId = req.user?.membershipId;
 
-    if (!tenantId) {
-      throw new UnauthorizedException('Missing tenantId in request');
+    if (!tenantId || !membershipId) {
+      throw new UnauthorizedException(
+        'Missing tenantId or membershipId in request',
+      );
     }
 
     return this.liquidationEngine.getLiquidationDetail(
       tenantId,
       liquidationId,
-      roles,
+      membershipId,
     );
   }
 
@@ -107,7 +107,6 @@ export class LiquidationEngineController {
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
     const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
       throw new UnauthorizedException(
@@ -119,7 +118,6 @@ export class LiquidationEngineController {
       tenantId,
       liquidationId,
       membershipId,
-      roles,
     );
   }
 
@@ -139,7 +137,6 @@ export class LiquidationEngineController {
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
     const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
       throw new UnauthorizedException(
@@ -157,13 +154,12 @@ export class LiquidationEngineController {
       liquidationId,
       dueDate,
       membershipId,
-      roles,
     );
   }
 
   /**
    * Cancel a liquidation
-   * If PUBLISHED, removes all associated charges
+   * PUBLISHED liquidations are terminal and cannot be canceled directly
    * @param req Authenticated request with tenantId and membershipId
    * @param liquidationId ID of liquidation to cancel
    * @returns Updated liquidation
@@ -175,7 +171,6 @@ export class LiquidationEngineController {
   ) {
     const tenantId = req.tenantId || req.user?.tenantId;
     const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
 
     if (!tenantId || !membershipId) {
       throw new UnauthorizedException(
@@ -187,7 +182,6 @@ export class LiquidationEngineController {
       tenantId,
       liquidationId,
       membershipId,
-      roles,
     );
   }
 }
