@@ -71,6 +71,12 @@ export function LiquidationCard({
   };
 
   const totalsEntries = Object.entries(liquidation.totalsByCurrency);
+  const terminalMessage =
+    liquidation.status === 'PUBLISHED'
+      ? 'Liquidación publicada — no hay acciones disponibles'
+      : liquidation.status === 'CANCELED'
+        ? 'Liquidación cancelada — no hay acciones disponibles'
+        : null;
 
   return (
     <div className="rounded-lg border bg-background shadow-sm">
@@ -104,67 +110,68 @@ export function LiquidationCard({
           </div>
 
           {/* Acciones */}
-          <div className="flex gap-1">
-            {liquidation.status === 'DRAFT' && (
-              <>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={handleReview}
-                  disabled={reviewMutation.isPending}
-                >
-                  {reviewMutation.isPending ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    'Revisar'
-                  )}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => setShowPublishModal(true)}
-                >
-                  Publicar
-                </Button>
-              </>
-            )}
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-1">
+              {liquidation.status === 'DRAFT' && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleReview}
+                    disabled={reviewMutation.isPending}
+                  >
+                    {reviewMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      'Revisar'
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleCancel}
+                    disabled={cancelMutation.isPending}
+                    className="text-red-600 hover:text-red-700"
+                  >
+                    {cancelMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      'Cancelar'
+                    )}
+                  </Button>
+                </>
+              )}
 
-            {liquidation.status === 'REVIEWED' && (
-              <Button
-                size="sm"
-                onClick={() => setShowPublishModal(true)}
-              >
-                Publicar
-              </Button>
-            )}
+              {liquidation.status === 'REVIEWED' && (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => setShowPublishModal(true)}
+                  >
+                    Publicar
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleCancel}
+                    disabled={cancelMutation.isPending}
+                    className="text-red-600 hover:text-red-700"
+                  >
+                    {cancelMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      'Cancelar'
+                    )}
+                  </Button>
+                </>
+              )}
+            </div>
 
-            {(liquidation.status === 'DRAFT' ||
-              liquidation.status === 'REVIEWED') && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={handleCancel}
-                disabled={cancelMutation.isPending}
-                className="text-red-600 hover:text-red-700"
-              >
-                {cancelMutation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  'Cancelar'
-                )}
-              </Button>
-            )}
-
-            {liquidation.status === 'PUBLISHED' && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={handleCancel}
-                disabled={cancelMutation.isPending}
-                className="text-red-600 hover:text-red-700"
-              >
-                Cancelar
-              </Button>
-            )}
+            {terminalMessage ? (
+              <p className="text-xs text-muted-foreground text-right">
+                {terminalMessage}
+              </p>
+            ) : null}
           </div>
 
           {/* Expandir */}
