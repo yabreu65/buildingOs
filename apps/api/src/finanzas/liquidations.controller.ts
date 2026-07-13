@@ -1,41 +1,30 @@
 import {
+  Body,
   Controller,
   Get,
-  Post,
-  Param,
-  Body,
-  Query,
-  UseGuards,
-  Request,
   HttpCode,
   HttpStatus,
+  Param,
+  Post,
+  Query,
+  Request,
+  UseGuards,
 } from '@nestjs/common';
-import { IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
-import { LiquidationsService } from './liquidations.service';
+import { resolveTenantMembershipContext } from '../common/request-context';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import {
+  CancelLiquidationDto,
   CreateLiquidationDraftDto,
-  PublishLiquidationDto,
-  LiquidationResponseDto,
+  ListLiquidationsQueryDto,
   LiquidationDetailDto,
+  LiquidationParamDto,
+  LiquidationResponseDto,
+  PublishLiquidationDto,
 } from './expense-ledger.dto';
+import { LiquidationsService } from './liquidations.service';
 
-class ListLiquidationsQuery {
-  @IsOptional()
-  @IsString()
-  buildingId?: string;
-
-  @IsOptional()
-  @IsString()
-  period?: string;
-}
-
-/**
- * Liquidaciones de expensas
- * Routes: /tenants/:tenantId/finance/liquidations
- */
 @Controller('tenants/:tenantId/finance/liquidations')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class LiquidationsController {
@@ -43,25 +32,31 @@ export class LiquidationsController {
 
   @Get()
   async listLiquidations(
-    @Query() query: ListLiquidationsQuery,
+    @Query() query: ListLiquidationsQueryDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationResponseDto[]> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.listLiquidations(
-      req.tenantId!,
-      req.user.roles ?? [],
+      context.tenantId,
+      context.membershipId,
+      context.roles,
       { buildingId: query.buildingId, period: query.period },
     );
   }
 
   @Get(':liquidationId')
   async getLiquidation(
-    @Param('liquidationId') liquidationId: string,
+    @Param() params: LiquidationParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationDetailDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.getLiquidation(
-      req.tenantId!,
-      liquidationId,
-      req.user.roles ?? [],
+      context.tenantId,
+      params.liquidationId,
+      context.membershipId,
+      context.roles,
     );
   }
 
@@ -70,10 +65,12 @@ export class LiquidationsController {
     @Body() dto: CreateLiquidationDraftDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationDetailDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.createDraft(
-      req.tenantId!,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      context.membershipId,
+      context.roles,
       dto,
     );
   }
@@ -81,29 +78,33 @@ export class LiquidationsController {
   @Post(':liquidationId/review')
   @HttpCode(HttpStatus.OK)
   async reviewLiquidation(
-    @Param('liquidationId') liquidationId: string,
+    @Param() params: LiquidationParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.reviewLiquidation(
-      req.tenantId!,
-      liquidationId,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      params.liquidationId,
+      context.membershipId,
+      context.roles,
     );
   }
 
   @Post(':liquidationId/publish')
   @HttpCode(HttpStatus.OK)
   async publishLiquidation(
-    @Param('liquidationId') liquidationId: string,
+    @Param() params: LiquidationParamDto,
     @Body() dto: PublishLiquidationDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.publishLiquidation(
-      req.tenantId!,
-      liquidationId,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      params.liquidationId,
+      context.membershipId,
+      context.roles,
       dto,
     );
   }
@@ -111,14 +112,26 @@ export class LiquidationsController {
   @Post(':liquidationId/cancel')
   @HttpCode(HttpStatus.OK)
   async cancelLiquidation(
-    @Param('liquidationId') liquidationId: string,
+    @Param() params: LiquidationParamDto,
+    @Body() dto: CancelLiquidationDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.liquidationsService.cancelLiquidation(
-      req.tenantId!,
-      liquidationId,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      params.liquidationId,
+      context.membershipId,
+      context.roles,
+      { reason: dto.reason },
     );
+  }
+
+  private resolveRequestContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    membershipId: string;
+    roles: string[];
+  } {
+    return resolveTenantMembershipContext(req);
   }
 }

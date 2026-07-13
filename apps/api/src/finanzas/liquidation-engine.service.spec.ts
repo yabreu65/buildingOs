@@ -37,11 +37,12 @@ describe('LiquidationEngineService', () => {
               findMany: jest.fn(),
               deleteMany: jest.fn(),
             },
+            $transaction: jest.fn(),
           },
         },
         {
           provide: AuditService,
-          useValue: { createLog: jest.fn() },
+          useValue: { createLog: jest.fn(), createLogRequired: jest.fn().mockResolvedValue(undefined) },
         },
         {
           provide: FinanzasValidators,
@@ -57,6 +58,9 @@ describe('LiquidationEngineService', () => {
     prisma = module.get<PrismaService>(PrismaService);
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<FinanzasValidators>(FinanzasValidators);
+    jest.spyOn(prisma, '$transaction').mockImplementation(
+      async (callback) => callback(prisma),
+    );
   });
 
   describe('createLiquidationDraft', () => {
@@ -114,10 +118,11 @@ describe('LiquidationEngineService', () => {
       expect(result.liquidation.id).toBe('liq-1');
       expect(result.liquidation.status).toBe('DRAFT');
       expect(result.chargesPreview.length).toBe(2);
-      expect(auditService.createLog).toHaveBeenCalledWith(
+      expect(auditService.createLogRequired).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'LIQUIDATION_DRAFT',
         }),
+        prisma,
       );
     });
 
@@ -211,10 +216,11 @@ describe('LiquidationEngineService', () => {
       );
 
       expect(result.status).toBe('REVIEWED');
-      expect(auditService.createLog).toHaveBeenCalledWith(
+      expect(auditService.createLogRequired).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'LIQUIDATION_REVIEW',
         }),
+        prisma,
       );
     });
 
@@ -254,6 +260,7 @@ describe('LiquidationEngineService', () => {
         status: 'REVIEWED',
         buildingId,
         period: '2026-04',
+        baseCurrency: 'ARS',
       };
 
       const expenses = [
@@ -261,6 +268,10 @@ describe('LiquidationEngineService', () => {
           id: 'exp-1',
           amountMinor: 120000,
           currencyCode: 'ARS',
+          category: { name: 'Electricidad' },
+          vendor: { name: 'EDENOR' },
+          invoiceDate: new Date('2026-04-10'),
+          description: 'Servicio eléctrico',
           allocations: [],
           scopeType: 'BUILDING',
         },
@@ -300,10 +311,102 @@ describe('LiquidationEngineService', () => {
 
       expect(result.status).toBe('PUBLISHED');
       expect(prisma.charge.createMany).toHaveBeenCalled();
-      expect(auditService.createLog).toHaveBeenCalledWith(
+      expect(prisma.liquidation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            publicationSnapshot: expect.objectContaining({
+              version: 1,
+              liquidationId: 'liq-1',
+              totalAmountMinor: 120000,
+              publishedAt: expect.any(String),
+              allocations: expect.arrayContaining([
+                expect.objectContaining({ unitId: 'unit-1' }),
+              ]),
+            }),
+            publishedAt: expect.any(Date),
+            publishedByMembershipId: membershipId,
+          }),
+        }),
+      );
+      expect(auditService.createLogRequired).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'LIQUIDATION_PUBLISH',
         }),
+        prisma,
+      );
+    });
+
+    it('rolls back publication when required audit logging fails', async () => {
+      const liquidation = {
+        id: 'liq-1',
+        status: 'REVIEWED',
+        buildingId,
+        period: '2026-04',
+        baseCurrency: 'ARS',
+      };
+      const expenses = [{
+        id: 'exp-1',
+        amountMinor: 120000,
+        currencyCode: 'ARS',
+        category: { name: 'Electricidad' },
+        vendor: { name: 'EDENOR' },
+        invoiceDate: new Date('2026-04-10'),
+        description: 'Servicio eléctrico',
+        allocations: [],
+        scopeType: 'BUILDING',
+      }];
+      const units = [
+        { id: 'unit-1', code: 'A-101', label: '101', m2: 100 },
+        { id: 'unit-2', code: 'A-102', label: '102', m2: 200 },
+      ];
+      let persistedStatus = 'REVIEWED';
+      const transactionClient = {
+        ...prisma,
+        charge: {
+          ...prisma.charge,
+          createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        },
+        liquidation: {
+          ...prisma.liquidation,
+          update: jest.fn().mockImplementation(async () => ({
+            ...liquidation,
+            status: 'PUBLISHED',
+          })),
+        },
+      };
+
+      jest.spyOn(prisma.liquidation, 'findFirst').mockResolvedValue(liquidation as never);
+      jest.spyOn(prisma.expense, 'findMany')
+        .mockResolvedValueOnce(expenses as never)
+        .mockResolvedValueOnce([] as never);
+      jest.spyOn(prisma.unit, 'findMany').mockResolvedValue(units as never);
+      jest.spyOn(prisma, '$transaction').mockImplementation(async (callback) => {
+        try {
+          const result = await callback(transactionClient);
+          persistedStatus = 'PUBLISHED';
+          return result;
+        } catch (error) {
+          throw error;
+        }
+      });
+      jest.spyOn(auditService, 'createLogRequired').mockRejectedValueOnce(new Error('audit failed'));
+
+      await expect(
+        service.publishLiquidation(
+          tenantId,
+          liquidation.id,
+          new Date('2026-05-30'),
+          membershipId,
+          adminRoles,
+        ),
+      ).rejects.toThrow('audit failed');
+
+      expect(persistedStatus).toBe('REVIEWED');
+      expect(transactionClient.charge.createMany).toHaveBeenCalledTimes(1);
+      expect(transactionClient.liquidation.update).toHaveBeenCalledTimes(1);
+      expect(auditService.createLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'LIQUIDATION_PUBLISH' }),
+        transactionClient,
       );
     });
 
@@ -345,6 +448,10 @@ describe('LiquidationEngineService', () => {
       expect(prisma.liquidation.delete).toHaveBeenCalledWith({
         where: { id: 'liq-1' },
       });
+      expect(auditService.createLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'LIQUIDATION_CANCEL' }),
+        prisma,
+      );
     });
 
     it('debería eliminar charges si status es PUBLISHED', async () => {

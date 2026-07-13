@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { buildLiquidationPublicationSnapshot } from './liquidation-publication-snapshot';
 
 export interface LiquidationCalculationInput {
   buildingId: string;
@@ -168,8 +169,9 @@ export class LiquidationEngineService {
     );
 
     // Crear liquidación en DRAFT
-    const liquidation = await this.prisma.liquidation.create({
-      data: {
+    const liquidation = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.liquidation.create({
+        data: {
         tenantId,
         buildingId,
         period,
@@ -192,23 +194,26 @@ export class LiquidationEngineService {
         }),
         unitCount: units.length,
         generatedByMembershipId: membershipId,
-      },
-    });
+        },
+      });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_DRAFT',
-      entityType: 'Liquidation',
-      entityId: liquidation.id,
-      metadata: {
-        period,
-        buildingId,
-        expenseCount: allExpenses.length,
-        buildingExpenseCount: buildingExpenses.length,
-        sharedExpenseCount: sharedExpenses.length,
-        totalAmountMinor,
-      },
+      await this.auditService.createLogRequired({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'LIQUIDATION_DRAFT',
+        entityType: 'Liquidation',
+        entityId: created.id,
+        metadata: {
+          period,
+          buildingId,
+          expenseCount: allExpenses.length,
+          buildingExpenseCount: buildingExpenses.length,
+          sharedExpenseCount: sharedExpenses.length,
+          totalAmountMinor,
+        },
+      }, tx);
+
+      return created;
     });
 
     return {
@@ -299,24 +304,26 @@ export class LiquidationEngineService {
       );
     }
 
-    const updated = await this.prisma.liquidation.update({
-      where: { id: liquidationId },
-      data: {
-        status: 'REVIEWED',
-        reviewedAt: new Date(),
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.liquidation.update({
+        where: { id: liquidationId },
+        data: {
+          status: 'REVIEWED',
+          reviewedAt: new Date(),
+        },
+      });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_REVIEW',
-      entityType: 'Liquidation',
-      entityId: liquidationId,
-      metadata: { period: liquidation.period, previousStatus: 'DRAFT' },
-    });
+      await this.auditService.createLogRequired({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'LIQUIDATION_REVIEW',
+        entityType: 'Liquidation',
+        entityId: liquidationId,
+        metadata: { period: liquidation.period, previousStatus: 'DRAFT' },
+      }, tx);
 
-    return updated;
+      return updated;
+    });
   }
 
   /**
@@ -334,61 +341,121 @@ export class LiquidationEngineService {
       throw new ForbiddenException('Solo administradores pueden publicar liquidaciones');
     }
 
-    const liquidation = await this.prisma.liquidation.findFirst({
-      where: { id: liquidationId, tenantId },
-      include: { building: { select: { id: true } } },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const liquidation = await tx.liquidation.findFirst({
+        where: { id: liquidationId, tenantId },
+      });
 
-    if (!liquidation) {
-      throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
-    }
+      if (!liquidation) {
+        throw new NotFoundException(`Liquidación no encontrada: ${liquidationId}`);
+      }
 
-    if (liquidation.status !== 'REVIEWED') {
-      throw new BadRequestException(
-        `La liquidación debe estar en REVIEWED. Estado actual: ${liquidation.status}`,
+      if (liquidation.status !== 'REVIEWED') {
+        throw new BadRequestException(
+          `La liquidación debe estar en REVIEWED. Estado actual: ${liquidation.status}`,
+        );
+      }
+
+      const buildingExpenses = await tx.expense.findMany({
+        where: {
+          tenantId,
+          buildingId: liquidation.buildingId,
+          period: liquidation.period,
+          status: 'VALIDATED',
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+          allocations: true,
+        },
+      });
+
+      const sharedExpenses = await tx.expense.findMany({
+        where: {
+          tenantId,
+          period: liquidation.period,
+          status: 'VALIDATED',
+          scopeType: 'TENANT_SHARED',
+          allocations: { some: { buildingId: liquidation.buildingId } },
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+          allocations: { where: { buildingId: liquidation.buildingId } },
+        },
+      });
+
+      const units = await tx.unit.findMany({
+        where: { tenantId, buildingId: liquidation.buildingId, isBillable: true },
+        select: { id: true, code: true, label: true, m2: true },
+      });
+
+      const buildingTotal = buildingExpenses.reduce(
+        (sum, expense) => sum + expense.amountMinor,
+        0,
       );
-    }
+      const sharedTotal = sharedExpenses.reduce((sum, expense) => {
+        const allocation = expense.allocations[0];
+        if (!allocation) {
+          return sum;
+        }
 
-    // Recalcular charges para crear registros de Charge
-    const buildingExpenses = await this.prisma.expense.findMany({
-      where: {
+        return sum + (
+          allocation.amountMinor
+          ?? Math.floor(expense.amountMinor * (allocation.percentage ?? 0) / 100)
+        );
+      }, 0);
+      const totalAmountMinor = buildingTotal + sharedTotal;
+      const allExpenses = [...buildingExpenses, ...sharedExpenses];
+      const charges = this.calculateCharges(allExpenses, units, totalAmountMinor);
+      const totalsByCurrency: Record<string, number> = {};
+      const publicationExpenses = allExpenses.map((expense) => {
+        const allocation = expense.scopeType === 'TENANT_SHARED'
+          ? expense.allocations[0]
+          : undefined;
+        const amountMinor = allocation
+          ? (
+            allocation.amountMinor
+            ?? Math.floor(expense.amountMinor * (allocation.percentage ?? 0) / 100)
+          )
+          : expense.amountMinor;
+
+        totalsByCurrency[expense.currencyCode] =
+          (totalsByCurrency[expense.currencyCode] ?? 0) + amountMinor;
+
+        return {
+          expenseId: expense.id,
+          categoryName: expense.category.name,
+          vendorName: expense.vendor?.name ?? null,
+          amountMinor,
+          currencyCode: expense.currencyCode,
+          invoiceDate: expense.invoiceDate.toISOString(),
+          description: expense.description,
+          type: 'EXPENSE' as const,
+        };
+      });
+      const publishedAt = new Date();
+      const publicationSnapshot = buildLiquidationPublicationSnapshot({
+        liquidationId: liquidation.id,
         tenantId,
         buildingId: liquidation.buildingId,
         period: liquidation.period,
-        status: 'VALIDATED',
-      },
-    });
+        baseCurrency: liquidation.baseCurrency,
+        totalAmountMinor,
+        totalsByCurrency,
+        expenses: publicationExpenses,
+        allocations: charges.map((charge) => ({
+          unitId: charge.unitId,
+          unitCode: charge.unitCode,
+          unitLabel: charge.unitLabel,
+          amountMinor: charge.amountMinor,
+        })),
+        dueDate,
+        publishedAt,
+      });
 
-    const sharedExpenses = await this.prisma.expense.findMany({
-      where: {
-        tenantId,
-        period: liquidation.period,
-        status: 'VALIDATED',
-        scopeType: 'TENANT_SHARED',
-        allocations: { some: { buildingId: liquidation.buildingId } },
-      },
-      include: { allocations: { where: { buildingId: liquidation.buildingId } } },
-    });
-
-    const units = await this.prisma.unit.findMany({
-      where: { tenantId, buildingId: liquidation.buildingId, isBillable: true },
-      select: { id: true, code: true, label: true, m2: true },
-    });
-
-    const buildingTotal = buildingExpenses.reduce((s, e) => s + e.amountMinor, 0);
-    const sharedTotal = sharedExpenses.reduce((s, e) => {
-      const alloc = e.allocations[0];
-      if (!alloc) return s;
-      return s + (alloc.amountMinor ?? Math.floor(e.amountMinor * (alloc.percentage ?? 0) / 100));
-    }, 0);
-    const totalAmountMinor = buildingTotal + sharedTotal;
-
-    const allExpenses = [...buildingExpenses, ...sharedExpenses];
-    const charges = this.calculateCharges(allExpenses, units, totalAmountMinor);
-
-    // Crear charges para cada unidad
-    const chargeRecords = await this.prisma.charge.createMany({
-      data: charges.map((charge) => ({
+      const chargeRecords = await tx.charge.createMany({
+        data: charges.map((charge) => ({
         tenantId,
         buildingId: liquidation.buildingId,
         unitId: charge.unitId,
@@ -399,34 +466,35 @@ export class LiquidationEngineService {
         dueDate,
         status: 'PENDING',
         liquidationId: liquidation.id,
-      })),
-    });
+        })),
+      });
 
-    // Actualizar liquidación a PUBLISHED
-    const updated = await this.prisma.liquidation.update({
-      where: { id: liquidationId },
-      data: {
-        status: 'PUBLISHED',
-        publishedByMembershipId: membershipId,
-        publishedAt: new Date(),
-      },
-    });
+      const updated = await tx.liquidation.update({
+        where: { id: liquidationId },
+        data: {
+          status: 'PUBLISHED',
+          publicationSnapshot,
+          publishedByMembershipId: membershipId,
+          publishedAt,
+        },
+      });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_PUBLISH',
-      entityType: 'Liquidation',
-      entityId: liquidationId,
-      metadata: {
-        period: liquidation.period,
-        chargeCount: chargeRecords.count,
-        totalAmountMinor,
-        dueDate: dueDate.toISOString(),
-      },
-    });
+      await this.auditService.createLogRequired({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'LIQUIDATION_PUBLISH',
+        entityType: 'Liquidation',
+        entityId: liquidationId,
+        metadata: {
+          period: liquidation.period,
+          chargeCount: chargeRecords.count,
+          totalAmountMinor,
+          dueDate: dueDate.toISOString(),
+        },
+      }, tx);
 
-    return updated;
+      return updated;
+    });
   }
 
   /**
@@ -455,27 +523,27 @@ export class LiquidationEngineService {
       throw new BadRequestException('La liquidación ya está cancelada');
     }
 
-    // Si PUBLISHED, eliminar charges asociadas
-    if (liquidation.status === 'PUBLISHED') {
-      await this.prisma.charge.deleteMany({ where: { tenantId, liquidationId } });
-    }
+    return this.prisma.$transaction(async (tx) => {
+      if (liquidation.status === 'PUBLISHED') {
+        await tx.charge.deleteMany({ where: { tenantId, liquidationId } });
+      }
 
-    // Hard delete: el historial queda en AuditLog
-    await this.prisma.liquidation.delete({ where: { id: liquidationId } });
+      await tx.liquidation.delete({ where: { id: liquidationId } });
 
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'LIQUIDATION_CANCEL',
-      entityType: 'Liquidation',
-      entityId: liquidationId,
-      metadata: {
-        period: liquidation.period,
-        previousStatus: liquidation.status,
-      },
+      await this.auditService.createLogRequired({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'LIQUIDATION_CANCEL',
+        entityType: 'Liquidation',
+        entityId: liquidationId,
+        metadata: {
+          period: liquidation.period,
+          previousStatus: liquidation.status,
+        },
+      }, tx);
+
+      return liquidation;
     });
-
-    return liquidation;
   }
 
   /**
