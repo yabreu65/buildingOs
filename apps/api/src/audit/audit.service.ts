@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, AuditLog, Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 
 export interface AuditLogInput {
   tenantId?: string;
@@ -13,7 +13,6 @@ export interface AuditLogInput {
 }
 
 export interface AuditLogQueryFilters {
-  tenantId?: string;
   actorUserId?: string;
   action?: AuditAction;
   entityType?: string;
@@ -28,14 +27,32 @@ export interface AuditLogQueryResponse {
   total: number;
 }
 
-/**
- * AuditService: Global service for audit logging
- *
- * PATTERN:
- * - createLog() is fire-and-forget: async but never throws
- * - Never fails the main operation even if audit write fails
- * - Logs errors to console for debugging
- */
+interface AuditWriteClient {
+  auditLog: {
+    create: (args: { data: Prisma.AuditLogUncheckedCreateInput }) => Promise<unknown>;
+  };
+}
+
+interface MembershipQueryClient {
+  membership: {
+    findFirst: (args: {
+      where: { id: string; tenantId: string };
+      select: {
+        id: boolean;
+        tenantId: boolean;
+        roles: { select: { role: boolean; scopeType: boolean } };
+      };
+    }) => Promise<{
+      id: string;
+      tenantId: string;
+      roles: Array<{
+        role: string;
+        scopeType: 'TENANT' | 'BUILDING' | 'UNIT';
+      }>;
+    } | null>;
+  };
+}
+
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
@@ -43,29 +60,15 @@ export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Write audit log entry (fire-and-forget pattern)
-   *
-   * RULE: This method must NEVER throw or fail the calling operation.
-   * If DB write fails, log to console and continue.
-   *
-   * @param input Audit log input with context
+   * Writes a best-effort audit record. Failures are logged and intentionally
+   * do not change the caller's outcome; financial mutations must use
+   * createLogRequired instead.
    */
   async createLog(input: AuditLogInput): Promise<void> {
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          tenantId: input.tenantId ?? null,
-          actorUserId: input.actorUserId ?? null,
-          actorMembershipId: input.actorMembershipId ?? null,
-          action: input.action,
-          entity: input.entityType,
-          entityId: input.entityId,
-          metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
-        },
-      });
-    } catch (err) {
-      // RULE: Never fail main operation on audit write failure
-      const message = err instanceof Error ? err.message : String(err);
+      await this.createLogRequired(input, this.prisma);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       this.logger.error('[AuditService] Failed to write audit log', {
         message,
         input,
@@ -74,33 +77,55 @@ export class AuditService {
     }
   }
 
-  /**
-   * Query audit logs with filters
-   *
-   * RULE: Only return logs from within the scope of the requesting actor.
-   * This is enforced by the controller/guard, not here.
-   *
-   * @param filters Query filters (all optional)
-   * @returns Paginated audit logs
-   */
-  async queryLogs(filters: AuditLogQueryFilters): Promise<AuditLogQueryResponse> {
-    const {
-      tenantId,
-      actorUserId,
-      action,
-      entityType,
-      dateFrom,
-      dateTo,
-      skip = 0,
-      take = 50,
-    } = filters;
+  async createLogRequired(input: AuditLogInput, tx: AuditWriteClient): Promise<void> {
+    const tenantId = this.normalizeTenantId(input.tenantId);
+    const metadata = this.normalizeMetadata(
+      input.metadata === undefined ? {} : input.metadata,
+    );
 
-    // Build dynamic where clause
-    const where: Prisma.AuditLogWhereInput = {};
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId: input.actorUserId ?? null,
+        actorMembershipId: input.actorMembershipId ?? null,
+        action: input.action,
+        entity: input.entityType,
+        entityId: input.entityId,
+        metadata,
+      },
+    });
+  }
 
-    if (tenantId) {
-      where.tenantId = tenantId;
-    }
+  async queryTenantLogs(
+    tenantId: string,
+    membershipId: string,
+    filters: AuditLogQueryFilters = {},
+  ): Promise<AuditLogQueryResponse> {
+    await this.resolveTenantAuditMembership(tenantId, membershipId);
+    return this.queryLogs(tenantId, filters);
+  }
+
+  async queryGlobalLogsForSuperAdmin(
+    tenantId: string,
+    filters: AuditLogQueryFilters = {},
+  ): Promise<AuditLogQueryResponse> {
+    return this.queryLogs(tenantId, filters);
+  }
+
+  async queryLogs(
+    tenantId: string,
+    filters: AuditLogQueryFilters = {},
+  ): Promise<AuditLogQueryResponse> {
+    const normalizedTenantId = this.normalizeTenantId(tenantId);
+    const { actorUserId, action, entityType, dateFrom, dateTo, skip = 0, take = 50 } = filters;
+
+    this.assertValidDate(dateFrom, 'dateFrom');
+    this.assertValidDate(dateTo, 'dateTo');
+
+    const where: Prisma.AuditLogWhereInput = {
+      tenantId: normalizedTenantId,
+    };
+
     if (actorUserId) {
       where.actorUserId = actorUserId;
     }
@@ -111,7 +136,6 @@ export class AuditService {
       where.entity = entityType;
     }
 
-    // Date range filter
     if (dateFrom || dateTo) {
       where.createdAt = {};
       if (dateFrom) {
@@ -122,7 +146,6 @@ export class AuditService {
       }
     }
 
-    // Execute parallel queries for consistency
     const [data, total] = await Promise.all([
       this.prisma.auditLog.findMany({
         where,
@@ -138,5 +161,134 @@ export class AuditService {
     ]);
 
     return { data, total };
+  }
+
+  private async resolveTenantAuditMembership(
+    tenantId: string,
+    membershipId: string,
+  ): Promise<void> {
+    const membership = await (this.prisma as PrismaService & MembershipQueryClient).membership.findFirst({
+      where: { id: membershipId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        roles: { select: { role: true, scopeType: true } },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('No tiene acceso al tenant solicitado');
+    }
+
+    const tenantRoles = membership.roles
+      .filter((role) => role.scopeType === 'TENANT')
+      .map((role) => role.role);
+
+    if (tenantRoles.length === 0 || tenantRoles.every((role) => role === 'RESIDENT')) {
+      throw new ForbiddenException('Residents cannot access audit logs');
+    }
+  }
+
+  private normalizeTenantId(tenantId?: string): string {
+    const normalized = tenantId?.trim();
+
+    if (!normalized) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    return normalized;
+  }
+
+  private assertValidDate(value: Date | undefined, field: 'dateFrom' | 'dateTo'): void {
+    if (!value) {
+      return;
+    }
+
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+      throw new BadRequestException(`${field} must be a valid date`);
+    }
+  }
+
+  private normalizeMetadata(metadata: unknown): Prisma.InputJsonValue {
+    if (metadata === null || metadata === undefined) {
+      throw new BadRequestException('metadata must not be null');
+    }
+
+    return this.normalizeJsonValue(metadata, 'metadata');
+  }
+
+  private normalizeJsonValue(
+    value: unknown,
+    path: string,
+    seen: WeakSet<object> = new WeakSet<object>(),
+  ): Prisma.InputJsonValue {
+    if (value === null || value === undefined) {
+      throw new BadRequestException(`${path} must not be null or undefined`);
+    }
+
+    const valueType = typeof value;
+
+    if (valueType === 'string' || valueType === 'boolean') {
+      return value;
+    }
+
+    if (valueType === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new BadRequestException(`${path} must be a finite number`);
+      }
+
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      if (seen.has(value)) {
+        throw new BadRequestException(`${path} contains a circular reference`);
+      }
+
+      seen.add(value);
+
+      const normalizedArray: unknown[] = [];
+
+      for (const [index, item] of value.entries()) {
+        normalizedArray.push(this.normalizeJsonValue(item, `${path}[${index}]`, seen));
+      }
+
+      return normalizedArray as Prisma.InputJsonValue;
+    }
+
+    if (valueType === 'object') {
+      if (!this.isPlainObject(value)) {
+        throw new BadRequestException(`${path} must be a plain JSON object`);
+      }
+
+      if (seen.has(value)) {
+        throw new BadRequestException(`${path} contains a circular reference`);
+      }
+
+      seen.add(value);
+
+      const normalizedObject: Record<string, unknown> = {};
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (nestedValue === undefined) {
+          throw new BadRequestException(`${path}.${key} must not be undefined`);
+        }
+
+        normalizedObject[key] = this.normalizeJsonValue(
+          nestedValue,
+          `${path}.${key}`,
+          seen,
+        );
+      }
+
+      return normalizedObject as Prisma.InputJsonValue;
+    }
+
+    throw new BadRequestException(`${path} must be JSON-compatible`);
+  }
+
+  private isPlainObject(value: object): boolean {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
   }
 }

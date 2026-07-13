@@ -1,115 +1,181 @@
-import { Controller, Get, Query, UseGuards, Request, ForbiddenException } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AuditService, AuditLogQueryFilters } from './audit.service';
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  Get,
+  Query,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { AuditAction } from '@prisma/client';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AuditLogQueryDto } from './dto/audit-log-query.dto';
+import { AuditService } from './audit.service';
 
 export interface RequestWithUser extends Request {
+  tenantId?: string;
   user: {
     id: string;
     email: string;
     name: string;
+    tenantId?: string;
+    membershipId?: string;
+    roles?: string[];
+    effectiveMembership?: {
+      id: string;
+      tenantId: string;
+      roles: string[];
+    };
     memberships: Array<{
+      id: string;
       tenantId: string;
       roles: string[];
     }>;
   };
 }
 
-/**
- * AuditController: Query audit logs
- *
- * ACCESS CONTROL:
- * - SUPER_ADMIN: Can query all tenants or filter by specific tenantId
- * - TENANT_ADMIN/OWNER/OPERATOR: Forced to their own primary tenantId
- * - RESIDENT: 403 Forbidden (no audit access)
- *
- * ENDPOINT: GET /audit/logs
- * QUERY PARAMS:
- *   - tenantId (optional, forced if not SUPER_ADMIN)
- *   - actorUserId (optional)
- *   - action (optional, any AuditAction enum value)
- *   - entityType (optional, e.g., "Ticket", "Building")
- *   - dateFrom (optional, ISO date string)
- *   - dateTo (optional, ISO date string)
- *   - skip (optional, default 0)
- *   - take (optional, default 50, max 100)
- */
 @Controller('audit')
 @UseGuards(JwtAuthGuard)
 export class AuditController {
-  constructor(private auditService: AuditService) {}
+  constructor(private readonly auditService: AuditService) {}
 
   @Get('logs')
   async getLogs(
     @Request() req: RequestWithUser,
-    @Query('tenantId') queryTenantId?: string,
-    @Query('actorUserId') actorUserId?: string,
-    @Query('action') action?: string,
-    @Query('entityType') entityType?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-    @Query('skip') skip?: string,
-    @Query('take') take?: string,
+    @Query() query: AuditLogQueryDto,
   ) {
-    // Check role: RESIDENT cannot access audit logs
-    const userRoles = req.user.memberships.flatMap((m) => m.roles);
-    const isSuperAdmin = userRoles.includes('SUPER_ADMIN');
-    const isResident = userRoles.includes('RESIDENT') && !isSuperAdmin;
+    const memberships = req.user?.memberships ?? [];
+    const isSuperAdmin = memberships.some((membership) =>
+      membership.roles.includes('SUPER_ADMIN'),
+    );
 
-    if (isResident) {
+    if (!isSuperAdmin && memberships.every((membership) => membership.roles.includes('RESIDENT'))) {
       throw new ForbiddenException('Residents cannot access audit logs');
     }
 
-    // Determine effective tenantId based on role
-    let effectiveTenantId: string | undefined;
-
-    if (isSuperAdmin) {
-      // SUPER_ADMIN: use provided tenantId or undefined (no filter)
-      effectiveTenantId = queryTenantId;
-    } else {
-      // TENANT_ADMIN/OWNER/OPERATOR: must use their tenantId
-      const firstTenantId = req.user.memberships[0]?.tenantId;
-      if (!firstTenantId) {
-        return {
-          data: [],
-          total: 0,
-          message: 'No active tenant',
-        };
-      }
-      effectiveTenantId = firstTenantId;
-      // Ignore queryTenantId if provided (security: force own tenant)
-    }
-
-    // Parse date filters
-    const dateFromObj = dateFrom ? new Date(dateFrom) : undefined;
-    const dateToObj = dateTo ? new Date(dateTo) : undefined;
-
-    // Parse pagination
-    const skipNum = skip ? Math.max(0, parseInt(skip, 10)) : 0;
-    let takeNum = take ? Math.max(1, parseInt(take, 10)) : 50;
-    takeNum = Math.min(takeNum, 100); // Max 100 per request
-
-    // Build query filters
-    const filters: AuditLogQueryFilters = {
-      tenantId: effectiveTenantId,
-      actorUserId,
-      action: action ? (action as AuditAction) : undefined,
-      entityType,
-      dateFrom: dateFromObj,
-      dateTo: dateToObj,
-      skip: skipNum,
-      take: takeNum,
+    const context = this.resolveAuditContext(req, query.tenantId, isSuperAdmin);
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
+    const skip = (page - 1) * limit;
+    const filters = {
+      actorUserId: query.actorUserId,
+      action: query.action,
+      entityType: query.entityType,
+      dateFrom: query.dateFrom ? new Date(query.dateFrom) : undefined,
+      dateTo: query.dateTo ? new Date(query.dateTo) : undefined,
+      skip,
+      take: limit,
     };
 
-    const result = await this.auditService.queryLogs(filters);
+    const result = isSuperAdmin
+      ? await this.auditService.queryGlobalLogsForSuperAdmin(context.tenantId, filters)
+      : await this.auditService.queryTenantLogs(context.tenantId, context.membershipId, filters);
 
     return {
       ...result,
       pagination: {
-        skip: skipNum,
-        take: takeNum,
+        page,
+        limit,
+        skip,
+        take: limit,
         total: result.total,
       },
     };
+  }
+
+  private resolveAuditContext(
+    req: RequestWithUser,
+    requestedTenantId: string | undefined,
+    isSuperAdmin: boolean,
+  ): { tenantId: string; membershipId: string } {
+    const normalizedRequestedTenantId = requestedTenantId?.trim();
+    const memberships = req.user?.memberships ?? [];
+    const effectiveMembership = req.user?.effectiveMembership;
+    const directTenantId = req.tenantId?.trim() ?? req.user?.tenantId?.trim();
+
+    if (isSuperAdmin) {
+      if (!normalizedRequestedTenantId) {
+        throw new BadRequestException('tenantId is required for super-admin audit queries');
+      }
+
+      return { tenantId: normalizedRequestedTenantId, membershipId: '' };
+    }
+
+    if (normalizedRequestedTenantId) {
+      const requestedMembership = this.findMembershipForTenant(
+        memberships,
+        effectiveMembership,
+        normalizedRequestedTenantId,
+      );
+
+      if (!requestedMembership) {
+        throw new ForbiddenException('Residents cannot access audit logs');
+      }
+
+      return requestedMembership;
+    }
+
+    if (directTenantId) {
+      const directMembership = this.findMembershipForTenant(
+        memberships,
+        effectiveMembership,
+        directTenantId,
+      );
+
+      if (!directMembership) {
+        throw new ForbiddenException('Residents cannot access audit logs');
+      }
+
+      return directMembership;
+    }
+
+    const eligibleMemberships = memberships.filter((membership) =>
+      membership.roles.some((role) => role !== 'RESIDENT'),
+    );
+
+    if (eligibleMemberships.length === 0) {
+      throw new ForbiddenException('Residents cannot access audit logs');
+    }
+
+    if (eligibleMemberships.length > 1) {
+      throw new BadRequestException('Ambiguous tenant scope');
+    }
+
+    const [onlyMembership] = eligibleMemberships;
+    if (!onlyMembership) {
+      throw new ForbiddenException('Residents cannot access audit logs');
+    }
+
+    return { tenantId: onlyMembership.tenantId.trim(), membershipId: onlyMembership.id.trim() };
+  }
+
+  private findMembershipForTenant(
+    memberships: RequestWithUser['user']['memberships'],
+    effectiveMembership: RequestWithUser['user']['effectiveMembership'],
+    tenantId: string,
+  ): { tenantId: string; membershipId: string } | null {
+    const effectiveMatchesTenant = effectiveMembership?.tenantId === tenantId;
+    const membership = effectiveMatchesTenant
+      ? {
+          id: effectiveMembership.id,
+          tenantId: effectiveMembership.tenantId,
+          roles: effectiveMembership.roles,
+        }
+      : memberships.find((candidate) => candidate.tenantId === tenantId);
+
+    if (!membership) {
+      return null;
+    }
+
+    if (membership.roles.every((role) => role === 'RESIDENT')) {
+      return null;
+    }
+
+    const membershipId = membership.id?.trim();
+    if (!membershipId) {
+      return null;
+    }
+
+    return { tenantId: membership.tenantId.trim(), membershipId };
   }
 }

@@ -1778,6 +1778,7 @@ model Liquidation {
   totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
   totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
   expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
+  publicationSnapshot      Json?             // Immutable snapshot persisted when published
   unitCount                Int               // Unidades billables al momento de draft
   generatedByMembershipId  String
   generatedAt              DateTime          @default(now())

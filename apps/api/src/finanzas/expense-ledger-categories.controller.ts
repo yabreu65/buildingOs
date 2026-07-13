@@ -15,9 +15,12 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { resolveTenantMembershipContext } from '../common/request-context';
 import { ExpenseLedgerCategoriesService } from './expense-ledger-categories.service';
 import {
   CreateExpenseLedgerCategoryDto,
+  ExpenseLedgerCategoryParamDto,
+  ExpenseLedgerCategoryQueryDto,
   UpdateExpenseLedgerCategoryDto,
   ExpenseLedgerCategoryResponseDto,
 } from './expense-ledger.dto';
@@ -35,27 +38,30 @@ export class ExpenseLedgerCategoriesController {
 
   @Get()
   async listCategories(
-    @Query('movementType') movementType?: 'EXPENSE' | 'INCOME',
-    @Query('catalogScope') catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON',
-    @Request() req?: AuthenticatedRequest,
+    @Query() query: ExpenseLedgerCategoryQueryDto,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto[]> {
+    const context = this.resolveRequestContext(req);
+
     return this.categoriesService.listCategories(
-      req!.tenantId!,
-      req!.user.roles ?? [],
-      movementType,
-      catalogScope,
+      context.tenantId,
+      context.membershipId,
+      query.movementType,
+      query.catalogScope,
     );
   }
 
   @Get(':categoryId')
   async getCategory(
-    @Param('categoryId') categoryId: string,
+    @Param() params: ExpenseLedgerCategoryParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.categoriesService.getCategory(
-      req.tenantId!,
-      categoryId,
-      req.user.roles ?? [],
+      context.tenantId,
+      params.categoryId,
+      context.membershipId,
     );
   }
 
@@ -64,25 +70,27 @@ export class ExpenseLedgerCategoriesController {
     @Body() dto: CreateExpenseLedgerCategoryDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.categoriesService.createCategory(
-      req.tenantId!,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      context.membershipId,
       dto,
     );
   }
 
   @Patch(':categoryId')
   async updateCategory(
-    @Param('categoryId') categoryId: string,
+    @Param() params: ExpenseLedgerCategoryParamDto,
     @Body() dto: UpdateExpenseLedgerCategoryDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseLedgerCategoryResponseDto> {
+    const context = this.resolveRequestContext(req);
+
     return this.categoriesService.updateCategory(
-      req.tenantId!,
-      categoryId,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      params.categoryId,
+      context.membershipId,
       dto,
     );
   }
@@ -90,14 +98,23 @@ export class ExpenseLedgerCategoriesController {
   @Delete(':categoryId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteCategory(
-    @Param('categoryId') categoryId: string,
+    @Param() params: ExpenseLedgerCategoryParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<void> {
+    const context = this.resolveRequestContext(req);
+
     return this.categoriesService.deleteCategory(
-      req.tenantId!,
-      categoryId,
-      req.user.membershipId ?? '',
-      req.user.roles ?? [],
+      context.tenantId,
+      params.categoryId,
+      context.membershipId,
     );
+  }
+
+  private resolveRequestContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    membershipId: string;
+  } {
+    const { tenantId, membershipId } = resolveTenantMembershipContext(req);
+    return { tenantId, membershipId };
   }
 }
