@@ -2,7 +2,6 @@ import {
   IsString,
   IsOptional,
   IsInt,
-  IsNumber,
   IsISO8601,
   IsBoolean,
   IsEnum,
@@ -10,11 +9,18 @@ import {
   ValidateNested,
   MinLength,
   Min,
-  Max,
   Length,
   Matches,
+  ValidateIf,
+  registerDecorator,
+  ValidationOptions,
+  ValidationArguments,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { MovementType } from '@prisma/client';
+
+export type ExpenseLedgerCategoryMovementType = 'EXPENSE' | 'INCOME';
+export type ExpenseLedgerCategoryCatalogScope = 'BUILDING' | 'CONDOMINIUM_COMMON';
 
 // ── Movement Allocation ────────────────────────────────────────────────────
 
@@ -22,10 +28,9 @@ export class AllocationInputDto {
   @IsString()
   buildingId!: string;
 
-  @IsNumber({ maxDecimalPlaces: 4 })
+  @IsInt()
   @IsOptional()
   @Min(0)
-  @Max(100)
   percentage?: number; // 0-100
 
   @IsInt()
@@ -52,11 +57,12 @@ export class CreateExpenseLedgerCategoryDto {
 
   @IsString()
   @IsOptional()
-  movementType?: 'EXPENSE' | 'INCOME'; // default EXPENSE if not provided
+  @IsEnum(MovementType)
+  movementType?: ExpenseLedgerCategoryMovementType; // default EXPENSE if not provided
 
   @IsEnum(['BUILDING', 'CONDOMINIUM_COMMON'])
   @IsOptional()
-  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON'; // default BUILDING if not provided
+  catalogScope?: ExpenseLedgerCategoryCatalogScope; // default BUILDING if not provided
 }
 
 export class UpdateExpenseLedgerCategoryDto {
@@ -75,7 +81,25 @@ export class UpdateExpenseLedgerCategoryDto {
 
   @IsEnum(['BUILDING', 'CONDOMINIUM_COMMON'])
   @IsOptional()
-  catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON';
+  catalogScope?: ExpenseLedgerCategoryCatalogScope;
+}
+
+export class ExpenseLedgerCategoryQueryDto {
+  @IsOptional()
+  @IsEnum(MovementType, { message: 'movementType must be EXPENSE or INCOME' })
+  movementType?: ExpenseLedgerCategoryMovementType;
+
+  @IsOptional()
+  @Matches(/^(BUILDING|CONDOMINIUM_COMMON)$/, {
+    message: 'catalogScope must be BUILDING or CONDOMINIUM_COMMON',
+  })
+  catalogScope?: ExpenseLedgerCategoryCatalogScope;
+}
+
+export class ExpenseLedgerCategoryParamDto {
+  @IsString()
+  @Matches(/^c[0-9a-z]{24}$/)
+  categoryId!: string;
 }
 
 export interface ExpenseLedgerCategoryResponseDto {
@@ -100,9 +124,8 @@ export class CreateExpenseDto {
   buildingId?: string; // Optional for TENANT_SHARED scope
 
   @IsString()
-  @IsOptional()
   @Matches(/^\d{4}-\d{2}$/, { message: 'period must be in YYYY-MM format' })
-  period?: string; // Informational only — liquidationPeriod is derived from invoiceDate
+  period!: string;
 
   @IsString()
   categoryId!: string;
@@ -206,7 +229,9 @@ export class CreateLiquidationDraftDto {
   buildingId!: string;
 
   @IsString()
-  @Matches(/^\d{4}-\d{2}$/, { message: 'period must be in YYYY-MM format' })
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, {
+    message: 'period must be in YYYY-MM format',
+  })
   period!: string;
 
   @IsString()
@@ -215,8 +240,64 @@ export class CreateLiquidationDraftDto {
 }
 
 export class PublishLiquidationDto {
-  @IsISO8601()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsStrictDateString({ message: 'dueDate must be a valid YYYY-MM-DD date' })
   dueDate!: string;
+}
+
+export class CancelLiquidationDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @MinLength(1)
+  reason?: string;
+}
+
+export class ListLiquidationsQueryDto {
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, {
+    message: 'period must be in YYYY-MM format',
+  })
+  period?: string;
+
+  @IsOptional()
+  @IsString()
+  buildingId?: string;
+}
+
+export class LiquidationParamDto {
+  @IsString()
+  @Matches(/^c[0-9a-z]{24}$/)
+  liquidationId!: string;
+}
+
+function IsStrictDateString(validationOptions?: ValidationOptions) {
+  return (object: object, propertyName: string): void => {
+    registerDecorator({
+      name: 'IsStrictDateString',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown, args: ValidationArguments): boolean {
+          if (typeof value !== 'string') {
+            return false;
+          }
+
+          if (value.trim() !== value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            return false;
+          }
+
+          const date = new Date(`${value}T00:00:00.000Z`);
+          return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+        },
+        defaultMessage(validationArguments?: ValidationArguments): string {
+          return `${validationArguments?.property ?? 'value'} must be a valid YYYY-MM-DD date`;
+        },
+      },
+    });
+  };
 }
 
 export interface LiquidationResponseDto {
@@ -238,6 +319,7 @@ export interface LiquidationResponseDto {
 }
 
 export interface LiquidationDetailDto extends LiquidationResponseDto {
+  publicationSnapshotStatus: 'AVAILABLE' | 'LEGACY';
   expenses: Array<{
     id: string;
     categoryName: string;
