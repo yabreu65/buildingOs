@@ -110,11 +110,10 @@ export class LiquidationsService {
 
   async listLiquidations(
     tenantId: string,
-    _membershipId: string,
-    _userRoles: string[],
+    membershipId: string,
     query: { buildingId?: string; period?: string },
   ): Promise<LiquidationResponseDto[]> {
-    const membership = await this.requireFinanceMembership(this.prisma, tenantId, _membershipId);
+    const membership = await this.requireFinanceMembership(this.prisma, tenantId, membershipId);
     if (!this.validators.isAdminOrOperator(membership.roles)) {
       throw new ForbiddenException('Solo administradores pueden ver liquidaciones');
     }
@@ -135,10 +134,9 @@ export class LiquidationsService {
   async getLiquidation(
     tenantId: string,
     liquidationId: string,
-    _membershipId: string,
-    _userRoles: string[],
+    membershipId: string,
   ): Promise<LiquidationDetailDto> {
-    const membership = await this.requireFinanceMembership(this.prisma, tenantId, _membershipId);
+    const membership = await this.requireFinanceMembership(this.prisma, tenantId, membershipId);
     if (!this.validators.isAdminOrOperator(membership.roles)) {
       throw new ForbiddenException('Acceso denegado');
     }
@@ -171,7 +169,6 @@ export class LiquidationsService {
   async createDraft(
     tenantId: string,
     membershipId: string,
-    _userRoles: string[],
     dto: CreateLiquidationDraftDto,
   ): Promise<LiquidationDetailDto> {
     return this.prisma.$transaction(async (tx) => {
@@ -403,7 +400,6 @@ export class LiquidationsService {
     tenantId: string,
     liquidationId: string,
     membershipId: string,
-    _userRoles: string[],
   ): Promise<LiquidationResponseDto> {
     return this.prisma.$transaction(async (tx) => {
       const membership = await this.requireFinanceMembership(tx, tenantId, membershipId);
@@ -487,7 +483,6 @@ export class LiquidationsService {
     tenantId: string,
     liquidationId: string,
     membershipId: string,
-    _userRoles: string[],
     dto: PublishLiquidationDto,
   ): Promise<LiquidationResponseDto> {
     let publishResult: { liquidation: LiquidationResponseDto; publishedNow: boolean } | null = null;
@@ -783,7 +778,6 @@ export class LiquidationsService {
     tenantId: string,
     liquidationId: string,
     membershipId: string,
-    _userRoles: string[],
     options: CancelLiquidationOptions = {},
   ): Promise<LiquidationResponseDto> {
     const membership = await this.requireFinanceMembership(this.prisma, tenantId, membershipId);

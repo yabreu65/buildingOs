@@ -40,7 +40,6 @@ export class LiquidationsController {
     return this.liquidationsService.listLiquidations(
       context.tenantId,
       context.membershipId,
-      context.roles,
       { buildingId: query.buildingId, period: query.period },
     );
   }
@@ -56,7 +55,6 @@ export class LiquidationsController {
       context.tenantId,
       params.liquidationId,
       context.membershipId,
-      context.roles,
     );
   }
 
@@ -70,7 +68,6 @@ export class LiquidationsController {
     return this.liquidationsService.createDraft(
       context.tenantId,
       context.membershipId,
-      context.roles,
       dto,
     );
   }
@@ -87,7 +84,6 @@ export class LiquidationsController {
       context.tenantId,
       params.liquidationId,
       context.membershipId,
-      context.roles,
     );
   }
 
@@ -104,7 +100,6 @@ export class LiquidationsController {
       context.tenantId,
       params.liquidationId,
       context.membershipId,
-      context.roles,
       dto,
     );
   }
@@ -122,7 +117,6 @@ export class LiquidationsController {
       context.tenantId,
       params.liquidationId,
       context.membershipId,
-      context.roles,
       { reason: dto.reason },
     );
   }
@@ -130,7 +124,6 @@ export class LiquidationsController {
   private resolveRequestContext(req: AuthenticatedRequest): {
     tenantId: string;
     membershipId: string;
-    roles: string[];
   } {
     return resolveTenantMembershipContext(req);
   }

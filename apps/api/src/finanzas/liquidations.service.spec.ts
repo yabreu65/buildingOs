@@ -214,7 +214,6 @@ describe('LiquidationsService', () => {
     const liquidations = await service.listLiquidations(
       'tenant-1',
       'member-1',
-      ['TENANT_ADMIN'],
       {},
     );
 
@@ -233,7 +232,7 @@ describe('LiquidationsService', () => {
         publishedAt: new Date('2026-05-02T00:00:00.000Z'),
       });
 
-    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -263,7 +262,7 @@ describe('LiquidationsService', () => {
       publishedAt: new Date('2026-05-02T00:00:00.000Z'),
     });
 
-    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -297,7 +296,7 @@ describe('LiquidationsService', () => {
     ]);
 
     await expect(
-      service.createDraft('tenant-1', 'member-1', ['TENANT_ADMIN'], {
+      service.createDraft('tenant-1', 'member-1', {
         buildingId: 'building-1',
         period: '2026-05',
         baseCurrency: 'USD',
@@ -339,7 +338,7 @@ describe('LiquidationsService', () => {
         publishedAt: new Date('2026-05-02T00:00:00.000Z'),
       });
 
-    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -382,7 +381,7 @@ describe('LiquidationsService', () => {
     ]);
 
     await expect(
-      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
       }),
     ).rejects.toThrow(ConflictException);
@@ -414,7 +413,7 @@ describe('LiquidationsService', () => {
     ]);
 
     await expect(
-      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
       }),
     ).rejects.toThrow(ConflictException);
@@ -435,7 +434,7 @@ describe('LiquidationsService', () => {
       .mockResolvedValueOnce(publishedOtherLiquidation);
 
     await expect(
-      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
       }),
     ).rejects.toThrow(ConflictException);
@@ -461,7 +460,7 @@ describe('LiquidationsService', () => {
       .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' })
       .mockResolvedValueOnce(publishedLiquidation);
 
-    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -490,7 +489,7 @@ describe('LiquidationsService', () => {
     prisma.$transaction.mockRejectedValueOnce(serializationError);
     prisma.liquidation.findFirst.mockResolvedValueOnce(publishedLiquidation);
 
-    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    const result = await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -524,7 +523,6 @@ describe('LiquidationsService', () => {
       'tenant-1',
       'liq-1',
       'member-1',
-      ['TENANT_ADMIN'],
       { reason: 'Board decision' },
     );
 
@@ -563,7 +561,6 @@ describe('LiquidationsService', () => {
         'tenant-1',
         'liq-1',
         'member-1',
-        ['TENANT_ADMIN'],
         { reason: 'Board decision' },
       ),
     ).rejects.toThrow(ConflictException);
@@ -589,7 +586,7 @@ describe('LiquidationsService', () => {
       });
     tx.liquidation.updateMany.mockResolvedValue({ count: 1 });
 
-    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN']);
+    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1');
 
     expect(auditService.createLogRequired).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -611,7 +608,7 @@ describe('LiquidationsService', () => {
     tx.liquidation.findFirst.mockResolvedValue(publishedLiquidation);
 
     await expect(
-      service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+      service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', {
         buildingId: 'building-2',
       }),
     ).rejects.toThrow(NotFoundException);
@@ -625,7 +622,7 @@ describe('LiquidationsService', () => {
     validators.isAdminOrOperator.mockReturnValue(false);
 
     await expect(
-      service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['RESIDENT']),
+      service.cancelLiquidation('tenant-1', 'liq-1', 'member-1'),
     ).rejects.toThrow(ForbiddenException);
 
     expect(prisma.liquidation.findFirst).not.toHaveBeenCalled();
@@ -635,7 +632,7 @@ describe('LiquidationsService', () => {
     prisma.liquidation.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.cancelLiquidation('tenant-2', 'liq-1', 'member-1', ['TENANT_ADMIN']),
+      service.cancelLiquidation('tenant-2', 'liq-1', 'member-1'),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -651,7 +648,6 @@ describe('LiquidationsService', () => {
       'tenant-1',
       'liq-1',
       'member-1',
-      ['TENANT_ADMIN'],
     );
 
     expect(result.status).toBe('CANCELED');
@@ -677,7 +673,7 @@ describe('LiquidationsService', () => {
       });
     tx.liquidation.updateMany.mockResolvedValue({ count: 1 });
 
-    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN']);
+    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1');
 
     expect(prisma.liquidation.delete).not.toHaveBeenCalled();
     expect(tx.liquidation.delete).not.toHaveBeenCalled();
@@ -712,7 +708,7 @@ describe('LiquidationsService', () => {
       },
     ]);
 
-    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+    await service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
 
@@ -769,7 +765,7 @@ describe('LiquidationsService', () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN'], {
+      service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
       }),
     ).resolves.toMatchObject({ status: 'PUBLISHED' });
@@ -823,8 +819,8 @@ describe('LiquidationsService', () => {
       });
     tx.liquidation.updateMany.mockResolvedValue({ count: 1 });
 
-    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN']);
-    const secondResult = await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN']);
+    await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1');
+    const secondResult = await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1');
 
     expect(secondResult.status).toBe('CANCELED');
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
@@ -865,7 +861,7 @@ describe('LiquidationsService', () => {
       .mockResolvedValueOnce(canceledLiquidation);
     tx.liquidation.updateMany.mockResolvedValueOnce({ count: 0 });
 
-    const result = await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1', ['TENANT_ADMIN']);
+    const result = await service.cancelLiquidation('tenant-1', 'liq-1', 'member-1');
 
     expect(result.status).toBe('CANCELED');
     expect(tx.liquidation.updateMany).toHaveBeenCalledWith({

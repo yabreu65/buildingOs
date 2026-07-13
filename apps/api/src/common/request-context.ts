@@ -4,7 +4,6 @@ import type { AuthenticatedRequest } from './types/request.types';
 export interface TenantMembershipContext {
   tenantId: string;
   membershipId: string;
-  roles: string[];
 }
 
 export function resolveTenantMembershipContext(
@@ -29,7 +28,6 @@ export function resolveTenantMembershipContext(
     return {
       tenantId,
       membershipId: effectiveMembershipId,
-      roles: effectiveMembership.roles.slice(),
     };
   }
 
@@ -41,6 +39,5 @@ export function resolveTenantMembershipContext(
   return {
     tenantId,
     membershipId,
-    roles: req.user?.roles?.slice() ?? [],
   };
 }

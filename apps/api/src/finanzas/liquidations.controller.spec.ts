@@ -113,14 +113,12 @@ describe('LiquidationsController', () => {
     expect(service.listLiquidations).toHaveBeenCalledWith(
       'tenant-1',
       'member-effective',
-      ['TENANT_ADMIN'],
       { buildingId: 'building-1', period: '2026-05' },
     );
     expect(service.getLiquidation).toHaveBeenCalledWith(
       'tenant-1',
       'c123456789012345678901234',
       'member-effective',
-      ['TENANT_ADMIN'],
     );
   });
 
@@ -185,27 +183,23 @@ describe('LiquidationsController', () => {
     expect(service.createDraft).toHaveBeenCalledWith(
       'tenant-1',
       'member-effective',
-      ['TENANT_ADMIN'],
       draftDto,
     );
     expect(service.reviewLiquidation).toHaveBeenCalledWith(
       'tenant-1',
       'c123456789012345678901234',
       'member-effective',
-      ['TENANT_ADMIN'],
     );
     expect(service.publishLiquidation).toHaveBeenCalledWith(
       'tenant-1',
       'c123456789012345678901234',
       'member-effective',
-      ['TENANT_ADMIN'],
       publishDto,
     );
     expect(service.cancelLiquidation).toHaveBeenCalledWith(
       'tenant-1',
       'c123456789012345678901234',
       'member-effective',
-      ['TENANT_ADMIN'],
       { reason: 'Board decision' },
     );
   });

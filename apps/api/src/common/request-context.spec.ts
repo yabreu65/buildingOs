@@ -29,7 +29,6 @@ describe('resolveTenantMembershipContext', () => {
     expect(context).toEqual({
       tenantId: 'tenant-legacy',
       membershipId: 'member-effective',
-      roles: ['TENANT_ADMIN'],
     });
   });
 
@@ -73,7 +72,6 @@ describe('resolveTenantMembershipContext', () => {
     expect(context).toEqual({
       tenantId: 'tenant-legacy',
       membershipId: 'member-legacy',
-      roles: ['TENANT_ADMIN'],
     });
   });
 
