@@ -8,6 +8,10 @@ import { ExpenseLedgerCategoriesController } from './expense-ledger-categories.c
 import { ExpensesController } from './expenses.controller';
 import { IncomesController } from './incomes.controller';
 import { LiquidationsController } from './liquidations.controller';
+import {
+  createLiquidationWorkflowDependencies,
+  LiquidationPublicationUseCase,
+} from './liquidation-publication.use-case';
 import { UnitGroupController } from './unit-group.controller';
 import { MovementAllocationController } from './movement-allocation.controller';
 import { AdjustmentsController } from './adjustments.controller';
@@ -24,8 +28,11 @@ import { UnitGroupService } from './unit-group.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { AdjustmentsService } from './adjustments.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StorageModule } from '../storage/storage.module';
 import { PaymentGatewayModule } from './payment-gateway/payment-gateway.module';
 import { ConfigService } from '../config/config.service';
@@ -81,6 +88,24 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     ExpenseLedgerCategoriesService,
     ExpensesService,
     IncomesService,
+    {
+      provide: LiquidationPublicationUseCase,
+      inject: [PrismaService, AuditService, FinanzasValidators, NotificationsService],
+      useFactory: (
+        prisma: PrismaService,
+        auditService: AuditService,
+        validators: FinanzasValidators,
+        notificationsService: NotificationsService,
+      ) =>
+        new LiquidationPublicationUseCase(
+          createLiquidationWorkflowDependencies({
+            prisma,
+            auditService,
+            validators,
+            notificationsService,
+          }),
+        ),
+    },
     LiquidationsService,
     MovementAllocationService,
     UnitGroupService,
