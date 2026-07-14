@@ -284,12 +284,12 @@ describe('Tenants Storage - Search & Filter', () => {
   });
 
   describe('getRecentTenants', () => {
-    it('should return most recent tenants', () => {
+    it('should return the most recently created or updated tenants first', () => {
       const recent = getRecentTenants(2);
       expect(recent.length).toBe(2);
 
-      // Most recent should be the newest tenant in the fixture set.
-      expect(recent[0].name).toBe('Acme Corp');
+      // Building Heights was updated after creation, so it should be the most recent entry.
+      expect(recent[0].name).toBe('Building Heights');
     });
 
     it('should respect limit parameter', () => {
