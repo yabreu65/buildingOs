@@ -5,6 +5,7 @@ import {
   Get,
   UseGuards,
   Request,
+  Headers,
   UnauthorizedException,
   Res,
 } from '@nestjs/common';
@@ -81,6 +82,7 @@ export class AuthController {
   @Post('login')
   async login(
     @Body() loginDto: LoginDto,
+    @Headers('x-tenant-id') selectedTenantId: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<PublicAuthResponse> {
     const user = await this.authService.validateUser(
@@ -92,7 +94,7 @@ export class AuthController {
       await this.authService.logFailedLogin(loginDto.email);
       throw new UnauthorizedException('Credenciales inválidas');
     }
-    const response = await this.authService.login(user);
+    const response = await this.authService.login(user, selectedTenantId ?? null);
     setAuthCookies(res, response.accessToken, response.refreshToken);
 
     // Set user context in Sentry for error tracking

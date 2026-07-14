@@ -34,6 +34,7 @@ export class HttpError extends Error {
 }
 
 const API_URL = getPublicApiUrl();
+let refreshPromise: Promise<void> | null = null;
 
 /**
  * 204 responses intentionally have no response body.
@@ -65,7 +66,17 @@ async function parseErrorResponse(response: Response): Promise<{
   return { message: response.statusText || 'Error desconocido', data: null };
 }
 
-async function tryRefreshAuthCookie(): Promise<boolean> {
+function isAuthRoute(path: string): boolean {
+  return (
+    path === '/auth/refresh' ||
+    path === '/auth/login' ||
+    path === '/auth/logout' ||
+    path === '/auth/logout-all' ||
+    path === '/auth/signup'
+  );
+}
+
+async function requestAuthRefresh(): Promise<void> {
   try {
     const response = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
@@ -74,10 +85,43 @@ async function tryRefreshAuthCookie(): Promise<boolean> {
         'Content-Type': 'application/json',
       },
     });
-    return response.ok;
-  } catch {
-    return false;
+
+    captureResponseContext(response, 'POST', '/auth/refresh');
+
+    if (!response.ok) {
+      const error = await parseErrorResponse(response);
+      throw new HttpError(response.status, response.statusText, error.message, error.data);
+    }
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+
+    recordApiResponseContext({
+      requestId: undefined,
+      method: 'POST',
+      path: '/auth/refresh',
+      statusCode: 0,
+    });
+    throw error instanceof Error ? error : new Error('Auth refresh request failed');
   }
+}
+
+function ensureSharedRefreshPromise(): Promise<void> {
+  if (!refreshPromise) {
+    refreshPromise = requestAuthRefresh()
+      .catch((error) => {
+        clearAllImpersonationData();
+        clearAuth();
+        emitAuthUnauthorized();
+        throw error;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
 }
 
 function captureResponseContext(
@@ -138,39 +182,34 @@ export async function apiClient<TRes, TReq = never>(
     // Centralized 401 handler: try refresh cookie once, then emit an auth-expired event.
     if (response.status === 401) {
       const hasImpersonationToken = !!getCurrentImpersonationToken();
-      const isAuthRoute =
-        path === '/auth/refresh' ||
-        path === '/auth/login' ||
-        path === '/auth/signup';
 
-      if (!hasImpersonationToken && !isAuthRoute) {
-        const refreshed = await tryRefreshAuthCookie();
-        if (refreshed) {
-          const retryResponse = await fetch(url, init);
-          captureResponseContext(retryResponse, method, path);
-          if (retryResponse.ok) {
-            if (retryResponse.status === 204) {
-              return noContentResponse<TRes>();
-            }
-            return retryResponse.json() as Promise<TRes>;
-          }
-
-          if (retryResponse.status !== 401) {
-            const retryError = await parseErrorResponse(retryResponse);
-            throw new HttpError(
-              retryResponse.status,
-              retryResponse.statusText,
-              retryError.message,
-              retryError.data,
-            );
-          }
+      if (!hasImpersonationToken && !isAuthRoute(path)) {
+        try {
+          await ensureSharedRefreshPromise();
+        } catch {
+          throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Vuelve a iniciar sesión.');
         }
+
+        const retryResponse = await fetch(url, init);
+        captureResponseContext(retryResponse, method, path);
+        if (retryResponse.ok) {
+          if (retryResponse.status === 204) {
+            return noContentResponse<TRes>();
+          }
+          return retryResponse.json() as Promise<TRes>;
+        }
+
+        const retryError = await parseErrorResponse(retryResponse);
+        throw new HttpError(
+          retryResponse.status,
+          retryResponse.statusText,
+          retryError.message,
+          retryError.data,
+        );
       }
 
-      clearAllImpersonationData();
-      clearAuth();
-      emitAuthUnauthorized();
-      throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Vuelve a iniciar sesión.');
+      const { message, data } = await parseErrorResponse(response);
+      throw new HttpError(response.status, response.statusText, message, data);
     }
 
     const { message, data } = await parseErrorResponse(response);

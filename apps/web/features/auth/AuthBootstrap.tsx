@@ -71,9 +71,6 @@ export const AuthBootstrap = () => {
         const is401 = error instanceof HttpError && error.status === 401;
 
         if (is401) {
-          clearAllImpersonationData();
-          clearAuth();
-          redirectToLoginIfPrivate();
           return;
         }
 

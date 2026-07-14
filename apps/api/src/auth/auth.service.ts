@@ -23,6 +23,11 @@ interface UserWithMemberships {
   }>;
 }
 
+interface TenantMembershipForLogin {
+  tenantId: string;
+  roles: string[];
+}
+
 export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
@@ -157,22 +162,45 @@ export class AuthService {
     return null;
   }
 
-  async login(user: UserWithMemberships): Promise<AuthResponse> {
-    const memberships = await this.tenancyService.getMembershipsForUser(user.id);
+  async login(
+    user: UserWithMemberships,
+    selectedTenantId?: string | null,
+  ): Promise<AuthResponse> {
+    const memberships = (await this.tenancyService.getMembershipsForUser(user.id)) as TenantMembershipForLogin[];
     const isSuperAdmin = memberships.some((m) =>
       m.roles.includes('SUPER_ADMIN'),
     );
+    const loginAuditTenantId = this.resolveLoginAuditTenantId(
+      memberships,
+      isSuperAdmin,
+      selectedTenantId,
+    );
+    const auditMetadata = {
+      email: user.email,
+      isSuperAdmin,
+      membershipCount: memberships.length,
+      tenantIds: memberships.map((membership) => membership.tenantId),
+      selectedTenantId: loginAuditTenantId,
+    };
 
-    void this.auditService.createLog({
-      actorUserId: user.id,
-      action: AuditAction.AUTH_LOGIN,
-      entityType: 'User',
-      entityId: user.id,
-      metadata: {
-        email: user.email,
-        isSuperAdmin,
-      },
-    });
+    if (loginAuditTenantId) {
+      void this.auditService.createLog({
+        tenantId: loginAuditTenantId,
+        actorUserId: user.id,
+        action: AuditAction.AUTH_LOGIN,
+        entityType: 'User',
+        entityId: user.id,
+        metadata: auditMetadata,
+      });
+    } else {
+      void this.auditService.createGlobalLog({
+        actorUserId: user.id,
+        action: AuditAction.AUTH_LOGIN,
+        entityType: 'User',
+        entityId: user.id,
+        metadata: auditMetadata,
+      });
+    }
 
     return this.createAuthResponse({
       user: {
@@ -343,6 +371,30 @@ export class AuthService {
 
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private resolveLoginAuditTenantId(
+    memberships: TenantMembershipForLogin[],
+    isSuperAdmin: boolean,
+    selectedTenantId?: string | null,
+  ): string | null {
+    if (selectedTenantId != null) {
+      const matchingMembership = memberships.find(
+        (membership) => membership.tenantId === selectedTenantId,
+      );
+
+      return matchingMembership?.tenantId ?? null;
+    }
+
+    if (isSuperAdmin) {
+      return null;
+    }
+
+    if (memberships.length === 1) {
+      return memberships[0]?.tenantId ?? null;
+    }
+
+    return null;
   }
 
   private getSessionExpiresAt(): Date {
