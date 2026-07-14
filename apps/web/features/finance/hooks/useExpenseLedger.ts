@@ -36,7 +36,6 @@ import {
   validateAdjustment,
   listAdjustments,
   ListAdjustmentsParams,
-  Adjustment,
 } from '../services/expense-ledger.api';
 
 // ── ExpenseLedgerCategories hooks ──────────────────────────────────────────
@@ -64,7 +63,7 @@ export function useCreateExpenseLedgerCategory(tenantId: string) {
       movementType?: 'EXPENSE' | 'INCOME';
       catalogScope?: 'BUILDING' | 'CONDOMINIUM_COMMON';
     }) => createExpenseLedgerCategory(tenantId, data),
-    onSuccess: (_, variables) => {
+    onSuccess: () => {
       // Invalidate both all categories and the specific movement type
       void queryClient.invalidateQueries({
         queryKey: ['expenseLedgerCategories', tenantId],
@@ -232,12 +231,16 @@ export function useLiquidations(
   });
 }
 
-export function useLiquidationDetail(tenantId: string, liquidationId: string) {
+export function useLiquidationDetail(
+  tenantId: string,
+  liquidationId: string,
+  enabled = true,
+) {
   return useQuery({
     queryKey: ['liquidation', tenantId, liquidationId],
     queryFn: () => getLiquidation(tenantId, liquidationId),
     staleTime: 2 * 60 * 1000,
-    enabled: !!tenantId && !!liquidationId,
+    enabled: !!tenantId && !!liquidationId && enabled,
   });
 }
 
