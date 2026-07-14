@@ -69,6 +69,7 @@ describe('AuthService', () => {
           provide: AuditService,
           useValue: {
             createLog: jest.fn(),
+            createGlobalLog: jest.fn(),
           },
         },
       ],
@@ -562,6 +563,7 @@ describe('AuthService', () => {
 
       // ASSERT
       expect(auditService.createLog).toHaveBeenCalledWith({
+        tenantId: 'tenant-123',
         actorUserId: 'user-123',
         action: AuditAction.AUTH_LOGIN,
         entityType: 'User',
@@ -569,9 +571,176 @@ describe('AuthService', () => {
         metadata: {
           email: 'user@example.com',
           isSuperAdmin: false,
+          membershipCount: 1,
+          tenantIds: ['tenant-123'],
+          selectedTenantId: 'tenant-123',
         },
       });
     });
+
+    it('should write a global audit log for superadmin logins', async () => {
+      const user = {
+        id: 'admin-123',
+        email: 'admin@example.com',
+        name: 'Admin User',
+        memberships: [
+          {
+            tenantId: 'tenant-123',
+            roles: [{ role: 'SUPER_ADMIN' }],
+          },
+          {
+            tenantId: 'tenant-456',
+            roles: [{ role: 'TENANT_OWNER' }],
+          },
+        ],
+      };
+
+      jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
+        { tenantId: 'tenant-123', roles: ['SUPER_ADMIN'] },
+        { tenantId: 'tenant-456', roles: ['TENANT_OWNER'] },
+      ] as any);
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue({
+        id: 'session-admin-global',
+        userId: 'admin-123',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      } as any);
+      jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_global');
+      jest.spyOn(auditService, 'createGlobalLog').mockResolvedValue(undefined);
+
+      await service.login(user as any);
+
+      expect(auditService.createGlobalLog).toHaveBeenCalledWith({
+        actorUserId: 'admin-123',
+        action: AuditAction.AUTH_LOGIN,
+        entityType: 'User',
+        entityId: 'admin-123',
+        metadata: {
+          email: 'admin@example.com',
+          isSuperAdmin: true,
+          membershipCount: 2,
+          tenantIds: ['tenant-123', 'tenant-456'],
+          selectedTenantId: null,
+        },
+      });
+      expect(auditService.createLog).not.toHaveBeenCalled();
+    });
+
+    it('should write a global audit log for multi-tenant logins without a selected tenant', async () => {
+      const user = {
+        id: 'user-multi',
+        email: 'multi@example.com',
+        name: 'Multi User',
+        memberships: [
+          {
+            tenantId: 'tenant-123',
+            roles: [{ role: 'TENANT_OWNER' }],
+          },
+          {
+            tenantId: 'tenant-456',
+            roles: [{ role: 'OPERATOR' }],
+          },
+        ],
+      };
+
+      jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
+        { tenantId: 'tenant-123', roles: ['TENANT_OWNER'] },
+        { tenantId: 'tenant-456', roles: ['OPERATOR'] },
+      ] as any);
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue({
+        id: 'session-multi-global',
+        userId: 'user-multi',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      } as any);
+      jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_multi');
+      jest.spyOn(auditService, 'createGlobalLog').mockResolvedValue(undefined);
+
+      await service.login(user as any);
+
+      expect(auditService.createGlobalLog).toHaveBeenCalledWith({
+        actorUserId: 'user-multi',
+        action: AuditAction.AUTH_LOGIN,
+        entityType: 'User',
+        entityId: 'user-multi',
+        metadata: {
+          email: 'multi@example.com',
+          isSuperAdmin: false,
+          membershipCount: 2,
+          tenantIds: ['tenant-123', 'tenant-456'],
+          selectedTenantId: null,
+        },
+      });
+      expect(auditService.createLog).not.toHaveBeenCalled();
+    });
+
+    it('should audit the selected tenant when login receives one', async () => {
+      const user = {
+        id: 'user-selected',
+        email: 'selected@example.com',
+        name: 'Selected User',
+        memberships: [
+          {
+            tenantId: 'tenant-123',
+            roles: [{ role: 'TENANT_OWNER' }],
+          },
+          {
+            tenantId: 'tenant-456',
+            roles: [{ role: 'OPERATOR' }],
+          },
+        ],
+      };
+
+      jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
+        { tenantId: 'tenant-123', roles: ['TENANT_OWNER'] },
+        { tenantId: 'tenant-456', roles: ['OPERATOR'] },
+      ] as any);
+      jest.spyOn(prismaService.authSession, 'create').mockResolvedValue({
+        id: 'session-selected',
+        userId: 'user-selected',
+        refreshTokenHash: 'refresh-hash',
+        expiresAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      } as any);
+      jest.spyOn(jwtService, 'sign').mockReturnValue('jwt_token_selected');
+      jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+      await service.login(user as any, 'tenant-456');
+
+      expect(auditService.createLog).toHaveBeenCalledWith({
+        tenantId: 'tenant-456',
+        actorUserId: 'user-selected',
+        action: AuditAction.AUTH_LOGIN,
+        entityType: 'User',
+        entityId: 'user-selected',
+        metadata: {
+          email: 'selected@example.com',
+          isSuperAdmin: false,
+          membershipCount: 2,
+          tenantIds: ['tenant-123', 'tenant-456'],
+          selectedTenantId: 'tenant-456',
+        },
+      });
+      expect(auditService.createGlobalLog).not.toHaveBeenCalled();
+    });
+
   });
 
   // ========== TESTS: REFRESH SESSION ==========

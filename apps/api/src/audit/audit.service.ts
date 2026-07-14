@@ -33,6 +33,15 @@ interface AuditWriteClient {
   };
 }
 
+interface GlobalAuditLogInput {
+  actorUserId?: string;
+  actorMembershipId?: string;
+  action: AuditAction;
+  entityType: string;
+  entityId: string;
+  metadata?: unknown;
+}
+
 interface MembershipQueryClient {
   membership: {
     findFirst: (args: {
@@ -77,23 +86,51 @@ export class AuditService {
     }
   }
 
+  async createGlobalLog(input: GlobalAuditLogInput): Promise<void> {
+    try {
+      await this.createGlobalLogRequired(input, this.prisma);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('[AuditService] Failed to write global audit log', {
+        message,
+        input,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
   async createLogRequired(input: AuditLogInput, tx: AuditWriteClient): Promise<void> {
     const tenantId = this.normalizeTenantId(input.tenantId);
-    const metadata = this.normalizeMetadata(
-      input.metadata === undefined ? {} : input.metadata,
-    );
-
-    await tx.auditLog.create({
-      data: {
+    await this.writeLog(
+      {
         tenantId,
-        actorUserId: input.actorUserId ?? null,
-        actorMembershipId: input.actorMembershipId ?? null,
+        actorUserId: input.actorUserId,
+        actorMembershipId: input.actorMembershipId,
         action: input.action,
-        entity: input.entityType,
+        entityType: input.entityType,
         entityId: input.entityId,
-        metadata,
+        metadata: input.metadata,
       },
-    });
+      tx,
+    );
+  }
+
+  async createGlobalLogRequired(
+    input: GlobalAuditLogInput,
+    tx: AuditWriteClient,
+  ): Promise<void> {
+    await this.writeLog(
+      {
+        tenantId: null,
+        actorUserId: input.actorUserId,
+        actorMembershipId: input.actorMembershipId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        metadata: input.metadata,
+      },
+      tx,
+    );
   }
 
   async queryTenantLogs(
@@ -197,6 +234,35 @@ export class AuditService {
     }
 
     return normalized;
+  }
+
+  private async writeLog(
+    input: {
+      tenantId: string | null;
+      actorUserId?: string;
+      actorMembershipId?: string;
+      action: AuditAction;
+      entityType: string;
+      entityId: string;
+      metadata?: unknown;
+    },
+    tx: AuditWriteClient,
+  ): Promise<void> {
+    const metadata = this.normalizeMetadata(
+      input.metadata === undefined ? {} : input.metadata,
+    );
+
+    await tx.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId ?? null,
+        actorMembershipId: input.actorMembershipId ?? null,
+        action: input.action,
+        entity: input.entityType,
+        entityId: input.entityId,
+        metadata,
+      },
+    });
   }
 
   private assertValidDate(value: Date | undefined, field: 'dateFrom' | 'dateTo'): void {

@@ -142,6 +142,43 @@ describe('AuditService', () => {
     });
   });
 
+  it('writes global audit logs with a null tenantId when the domain is global', async () => {
+    const tx = {
+      auditLog: {
+        create: jest.fn().mockResolvedValue(undefined),
+      },
+    };
+
+    await service.createGlobalLogRequired(
+      {
+        actorMembershipId: 'member-1',
+        action: 'AUTH_LOGIN',
+        entityType: 'User',
+        entityId: 'user-1',
+        metadata: {
+          email: 'user@example.com',
+          isSuperAdmin: true,
+        },
+      },
+      tx as never,
+    );
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        tenantId: null,
+        actorUserId: null,
+        actorMembershipId: 'member-1',
+        action: 'AUTH_LOGIN',
+        entity: 'User',
+        entityId: 'user-1',
+        metadata: {
+          email: 'user@example.com',
+          isSuperAdmin: true,
+        },
+      },
+    });
+  });
+
   it('persists JSON metadata values without unsafe casts', async () => {
     const tx = {
       auditLog: {
@@ -334,5 +371,24 @@ describe('AuditService', () => {
     ).resolves.toBeUndefined();
 
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps createLog fire-and-forget when persistence fails', async () => {
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('database down'));
+
+    await expect(
+      service.createLog({
+        tenantId: 'tenant-a',
+        actorMembershipId: 'member-1',
+        action: 'AUTH_LOGIN',
+        entityType: 'User',
+        entityId: 'user-1',
+        metadata: {
+          email: 'user@example.com',
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 });

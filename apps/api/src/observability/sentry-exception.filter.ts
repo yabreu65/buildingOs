@@ -10,10 +10,10 @@ import {
   ArgumentsHost,
   HttpStatus,
   HttpException,
-  Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { SentryService } from './sentry.service';
+import { LoggerService } from './logger.service';
 
 type ExceptionRequest = Request & {
   tenantId?: string;
@@ -26,9 +26,10 @@ interface HttpExceptionResponseBody {
 
 @Catch()
 export class SentryExceptionFilter implements ExceptionFilter {
-  private logger = new Logger('SentryExceptionFilter');
-
-  constructor(private sentry: SentryService) {}
+  constructor(
+    private sentry: SentryService,
+    private logger: LoggerService,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -71,6 +72,8 @@ export class SentryExceptionFilter implements ExceptionFilter {
 
     context.statusCode = statusCode;
 
+    const logMessage = `[${context.requestId}] ${context.method} ${context.route} - ${statusCode}`;
+
     // Send to Sentry only for 5xx errors
     if (statusCode >= 500) {
       if (error) {
@@ -80,11 +83,27 @@ export class SentryExceptionFilter implements ExceptionFilter {
       }
     }
 
-    // Log the error
-    this.logger.error(
-      `[${context.requestId}] ${context.method} ${context.route} - ${statusCode}`,
-      error?.stack || message,
-    );
+    if (statusCode === 401) {
+      this.logger.info(logMessage, {
+        ...context,
+        error: message,
+      });
+    } else if (statusCode === 403) {
+      this.logger.warn(logMessage, {
+        ...context,
+        error: message,
+      });
+    } else if (statusCode >= 500) {
+      this.logger.error(logMessage, error ?? undefined, {
+        ...context,
+        error: message,
+      });
+    } else {
+      this.logger.warn(logMessage, {
+        ...context,
+        error: message,
+      });
+    }
 
     // Send response
     response.status(statusCode).json({

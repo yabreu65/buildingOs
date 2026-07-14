@@ -19,6 +19,8 @@
     "migrate:deploy": "prisma migrate deploy",
     "migrate:status": "prisma migrate status",
     "seed": "ts-node prisma/seed.ts",
+    "reset:local-password": "ts-node scripts/reset-local-user-password.ts",
+    "seed:local:manual": "ts-node prisma/seed-local-manual.ts",
     "seed:test": "ts-node prisma/seed.test.ts",
     "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
     "seed:pilot": "ts-node prisma/seed-pilot.ts",

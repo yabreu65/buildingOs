@@ -1,5 +1,6 @@
-import { PrismaClient, Role, TenantType, BillingPlanId, ChargeStatus, PaymentStatus, PaymentMethod, ChargeType, LiquidationStatus } from "@prisma/client";
+import { PrismaClient, Role, TenantType, BillingPlanId, ChargeStatus, PaymentStatus, PaymentMethod } from "@prisma/client";
 import * as bcrypt from "bcrypt";
+import { buildSeedExpenseSnapshotItem, ensureSeedPublishedLiquidation } from "./lib/seed-liquidation-workflow";
 
 const prisma = new PrismaClient();
 
@@ -265,7 +266,7 @@ async function main() {
     return membership;
   }
 
-  await upsertMembership({ tenantId: tenantA.id, userId: testUsers.tenantAdminA.id, role: Role.TENANT_ADMIN });
+  const adminMembershipA = await upsertMembership({ tenantId: tenantA.id, userId: testUsers.tenantAdminA.id, role: Role.TENANT_ADMIN });
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.operator.id, role: Role.OPERATOR });
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.resident.id, role: Role.RESIDENT });
   await upsertMembership({ tenantId: tenantB.id, userId: testUsers.tenantAdminB.id, role: Role.TENANT_ADMIN });
@@ -420,52 +421,75 @@ async function main() {
   // ============================================================================
   const currentPeriod = "2026-04";
   const currency = "ARS";
+  const expenseSnapshot = [
+    buildSeedExpenseSnapshotItem({
+      expenseId: `seed-expense-${currentPeriod}`,
+      categoryName: "Test Expense",
+      vendorName: "Seed Vendor",
+      amountMinor: 500000,
+      currencyCode: currency,
+      invoiceDate: new Date(`${currentPeriod}-01T00:00:00.000Z`),
+      description: "Test liquidation expense snapshot",
+      type: "EXPENSE",
+    }),
+  ];
 
   // Create a published liquidation for Tenant A, Building A1
-  const liquidationA1 = await prisma.liquidation.upsert({
-    where: { id: "liq-test-a1-apr-2026" },
-    update: {},
-    create: {
-      id: "liq-test-a1-apr-2026",
-      tenantId: tenantA.id,
-      buildingId: buildingA1.id,
-      period: currentPeriod,
-      status: LiquidationStatus.PUBLISHED,
-      totalAmountMinor: 500000, // $5,000.00 ARS
-      baseCurrency: currency,
-      totalsByCurrency: { "ARS": 500000 },
-      expenseSnapshot: [],
-      unitCount: unitsA1.length,
-      generatedByMembershipId: adminMemberA.id,
-      publishedAt: new Date(),
-    },
+  const liquidationWorkflowResult = await ensureSeedPublishedLiquidation({
+    prisma,
+    tenantId: tenantA.id,
+    buildingId: buildingA1.id,
+    membershipId: adminMembershipA.id,
+    period: currentPeriod,
+    chargePeriod: currentPeriod,
+    baseCurrency: currency,
+    totalAmountMinor: 500000,
+    totalsByCurrency: { ARS: 500000 },
+    expenseSnapshot,
+    units: unitsA1.map((unitId, index) => ({
+      id: unitId,
+      code: `A1-10${index + 1}`,
+      label: `Unidad A1-10${index + 1}`,
+    })),
+    dueDate: new Date(`${currentPeriod}-15T00:00:00.000Z`),
+    notificationPolicy: 'disabled',
   });
 
-  // Create charges for each unit in Building A1.
-  // The first charge is marked PAID so the test dataset exercises collection-rate
-  // logic without creating duplicate charges for the same liquidation/unit/period.
-  for (let i = 0; i < unitsA1.length; i++) {
-    const amount = 100000 + i * 10000; // $1,000.00 - $1,400.00
-    const status = i === 0 ? ChargeStatus.PAID : ChargeStatus.PENDING;
-    await prisma.charge.upsert({
-      where: { id: `charge-test-a1-${i}-apr-2026` },
-      update: {},
-      create: {
-        id: `charge-test-a1-${i}-apr-2026`,
-        tenantId: tenantA.id,
-        buildingId: buildingA1.id,
-        unitId: unitsA1[i]!,
-        liquidationId: liquidationA1.id,
-        period: currentPeriod,
-        type: ChargeType.COMMON_EXPENSE,
-        concept: i === 0 ? `Expensas Comunes Abril 2026 (Pagada)` : `Expensas Comunes Abril 2026`,
-        amount,
-        currency,
-        dueDate: new Date(2026, 3, 15), // April 15, 2026
-        status,
-      },
-    });
+  let liquidationA1 = await prisma.liquidation.findUniqueOrThrow({
+    where: { id: liquidationWorkflowResult.id },
+  });
+
+  const expectedTotals = { ARS: 500000 };
+  if (liquidationA1.baseCurrency !== currency || liquidationA1.totalAmountMinor !== 500000 ||
+      liquidationA1.unitCount !== unitsA1.length || liquidationA1.chargePeriod !== null && liquidationA1.chargePeriod !== currentPeriod ||
+      JSON.stringify(liquidationA1.totalsByCurrency) !== JSON.stringify(expectedTotals) ||
+      !Array.isArray(liquidationA1.expenseSnapshot) ||
+      liquidationA1.expenseSnapshot.length !== 1) {
+    throw new Error(`Test liquidation ${liquidationA1.id} does not match the expected fixture`);
   }
+  const [snapshotExpense] = liquidationA1.expenseSnapshot as Array<{ amountMinor?: number; currencyCode?: string }>;
+  if (!snapshotExpense || snapshotExpense.amountMinor !== 500000 || snapshotExpense.currencyCode !== currency) {
+    throw new Error(`Test liquidation ${liquidationA1.id} snapshot expense does not match the expected fixture`);
+  }
+  const chargesA1 = await prisma.charge.findMany({
+    where: {
+      tenantId: tenantA.id,
+      buildingId: buildingA1.id,
+      liquidationId: liquidationA1.id,
+      period: currentPeriod,
+    },
+    orderBy: { unitId: "asc" },
+  });
+  if (chargesA1.length !== unitsA1.length) {
+    throw new Error(`Expected ${unitsA1.length} generated charges but got ${chargesA1.length}`);
+  }
+
+  await prisma.charge.update({
+    where: { id: chargesA1[0]!.id },
+    data: {
+      status: ChargeStatus.PAID,
+    },
+  });
 
   // Create one SUBMITTED payment
   await prisma.payment.upsert({
@@ -476,7 +500,7 @@ async function main() {
       tenantId: tenantA.id,
       buildingId: buildingA1.id,
       unitId: unitsA1[1],
-      amount: 110000,
+      amount: chargesA1[1]!.amount,
       currency,
       method: PaymentMethod.TRANSFER,
       status: PaymentStatus.SUBMITTED,

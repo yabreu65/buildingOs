@@ -11,6 +11,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  createLiquidationWorkflowDependencies,
+  LiquidationPublicationUseCase,
+} from './liquidation-publication.use-case';
 
 const baseLiquidation = {
   id: 'liq-1',
@@ -48,6 +52,7 @@ describe('LiquidationsService', () => {
   let auditService: { createLog: jest.Mock; createLogRequired: jest.Mock };
   let validators: { isAdminOrOperator: jest.Mock };
   let notificationsService: { createNotification: jest.Mock };
+  let publicationUseCase: LiquidationPublicationUseCase;
   let tx: {
     membership: {
       findFirst: jest.Mock;
@@ -133,6 +138,24 @@ describe('LiquidationsService', () => {
       providers: [
         LiquidationsService,
         {
+          provide: LiquidationPublicationUseCase,
+          inject: [PrismaService, AuditService, FinanzasValidators, NotificationsService],
+          useFactory: (
+            prisma: PrismaService,
+            auditService: AuditService,
+            validators: FinanzasValidators,
+            notificationsService: NotificationsService,
+          ) =>
+            new LiquidationPublicationUseCase(
+              createLiquidationWorkflowDependencies({
+                prisma,
+                auditService,
+                validators,
+                notificationsService,
+              }),
+            ),
+        },
+        {
           provide: PrismaService,
           useValue: {
             membership: {
@@ -207,6 +230,7 @@ describe('LiquidationsService', () => {
     }).compile();
 
     service = module.get<LiquidationsService>(LiquidationsService);
+    publicationUseCase = module.get<LiquidationPublicationUseCase>(LiquidationPublicationUseCase);
     prisma = module.get<PrismaService>(PrismaService);
   });
 
@@ -873,5 +897,24 @@ describe('LiquidationsService', () => {
       },
     });
     expect(auditService.createLogRequired).not.toHaveBeenCalled();
+  });
+
+  it('applies the same finance membership validation in the service path and the publication use case', async () => {
+    (prisma.membership.findFirst as jest.Mock).mockResolvedValueOnce(null);
+    tx.membership.findFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      service.listLiquidations('tenant-1', 'member-1', {}),
+    ).rejects.toThrow('No se encontró una membresía válida para el tenant');
+
+    await expect(
+      publicationUseCase.execute(
+        'tenant-1',
+        'liq-1',
+        'member-1',
+        { dueDate: '2026-06-10' },
+        'disabled',
+      ),
+    ).rejects.toThrow('No se encontró una membresía válida para el tenant');
   });
 });

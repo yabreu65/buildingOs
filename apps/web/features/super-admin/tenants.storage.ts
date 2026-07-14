@@ -230,8 +230,28 @@ export function getTenantsByStatus(): Record<string, Tenant[]> {
  */
 export function getRecentTenants(limit = 10): Tenant[] {
   const tenants = listTenants();
-  return tenants
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return [...tenants]
+    .sort((a, b) => {
+      const aLastActivity = new Date(a.updatedAt ?? a.createdAt).getTime();
+      const bLastActivity = new Date(b.updatedAt ?? b.createdAt).getTime();
+
+      if (aLastActivity !== bLastActivity) {
+        return bLastActivity - aLastActivity;
+      }
+
+      const aWasUpdated = Boolean(a.updatedAt);
+      const bWasUpdated = Boolean(b.updatedAt);
+      if (aWasUpdated !== bWasUpdated) {
+        return aWasUpdated ? -1 : 1;
+      }
+
+      const nameComparison = a.name.localeCompare(b.name, 'es');
+      if (nameComparison !== 0) {
+        return nameComparison;
+      }
+
+      return a.id.localeCompare(b.id);
+    })
     .slice(0, limit);
 }
 

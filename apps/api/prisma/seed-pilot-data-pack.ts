@@ -10,10 +10,14 @@
  *   NODE_ENV=staging npm run seed:pilot:data-pack:staging -- --tenantId <TENANT_ID> --buildingId <BUILDING_ID>
  */
 
-import { Prisma, PrismaClient, Role, ScopeType, MemberStatus, MovementScope, MovementType, CatalogScope, ExpensePeriodStatus, ExpenseStatus, LiquidationStatus, ChargeStatus, PaymentStatus, PaymentMethod, ReceiptStatus, TicketCategory, TicketPriority, TicketStatus, CommunicationChannel, CommunicationStatus, CommunicationPriority, CommunicationTargetType, DocumentCategory, DocumentVisibility, UnitOccupantRole } from '@prisma/client';
+import { Prisma, PrismaClient, Role, ScopeType, MemberStatus, MovementScope, MovementType, CatalogScope, ExpensePeriodStatus, ExpenseStatus, PaymentStatus, PaymentMethod, ReceiptStatus, TicketCategory, TicketPriority, TicketStatus, CommunicationChannel, CommunicationStatus, CommunicationPriority, CommunicationTargetType, DocumentCategory, DocumentVisibility, UnitOccupantRole } from '@prisma/client';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as Minio from 'minio';
+import {
+  buildSeedExpenseSnapshotItem,
+  ensureSeedPublishedLiquidation,
+} from './lib/seed-liquidation-workflow';
 
 interface CliOptions {
   tenantId: string;
@@ -143,13 +147,6 @@ interface ExpenseCategorySeedSpec {
 interface ExpenseDataSeedSpec extends ExpenseCategorySeedSpec {
   amountMinor: number;
   invoiceOffsetDays: number;
-}
-
-interface ExpenseSnapshotEntry extends Prisma.InputJsonObject {
-  expenseId: string;
-  amountMinor: number;
-  currencyCode: string;
-  type: 'EXPENSE';
 }
 
 interface DocumentSeedSpec {
@@ -401,12 +398,6 @@ function addDaysUtc(date: Date, days: number): Date {
   const next = new Date(date.getTime());
   next.setUTCDate(next.getUTCDate() + days);
   return next;
-}
-
-function computeEvenAllocations(totalMinor: number, parts: number): number[] {
-  const baseAmount = Math.floor(totalMinor / parts);
-  const remainder = totalMinor % parts;
-  return Array.from({ length: parts }, (_, index) => baseAmount + (index < remainder ? 1 : 0));
 }
 
 async function ensureBucket(client: Minio.Client, bucket: string, region: string): Promise<void> {
@@ -721,7 +712,7 @@ async function ensureExpense(
 }
 
 async function ensureLiquidation(
-  db: DbClient,
+  db: PrismaClient,
   tenantId: string,
   buildingId: string,
   period: string,
@@ -729,106 +720,25 @@ async function ensureLiquidation(
   ownerMembershipId: string,
   totalAmountMinor: number,
   expenseSnapshot: Prisma.InputJsonArray,
-  unitCount: number,
+  unitRecords: Array<{ id: string; code: string; label: string | null }>,
 ): Promise<{ id: string; created: boolean }> {
-  const id = buildSeedId('pilot-liquidation', tenantId, buildingId, period, chargePeriod ?? 'open');
-  const snapshot: Prisma.InputJsonArray = expenseSnapshot;
-  const totalsByCurrency: Prisma.InputJsonObject = { ARS: totalAmountMinor };
+  const result = await ensureSeedPublishedLiquidation({
+    prisma: db,
+    tenantId,
+    buildingId,
+    membershipId: ownerMembershipId,
+    period,
+    chargePeriod,
+    baseCurrency: 'ARS',
+    totalAmountMinor,
+    totalsByCurrency: { ARS: totalAmountMinor },
+    expenseSnapshot,
+    units: unitRecords,
+    dueDate: new Date(`${chargePeriod}-15T00:00:00.000Z`),
+    notificationPolicy: 'disabled',
+  });
 
-  try {
-    const created = await db.liquidation.create({
-      data: {
-        id,
-        tenantId,
-        buildingId,
-        period,
-        chargePeriod,
-        status: LiquidationStatus.PUBLISHED,
-        baseCurrency: 'ARS',
-        totalAmountMinor,
-        totalsByCurrency,
-        expenseSnapshot: snapshot,
-        unitCount,
-        generatedByMembershipId: ownerMembershipId,
-        generatedAt: new Date(),
-        reviewedByMembershipId: ownerMembershipId,
-        reviewedAt: new Date(),
-        publishedByMembershipId: ownerMembershipId,
-        publishedAt: new Date(),
-      },
-    });
-
-    return { id: created.id, created: true };
-  } catch (error: unknown) {
-    if (!isUniqueConstraintError(error)) {
-      throw error;
-    }
-
-    const existing = await db.liquidation.findFirst({
-      where: { id, tenantId },
-    });
-
-    if (!existing) {
-      throw new Error(`Pilot data pack failed during liquidation reuse. Likely cause: ${describeSeedError(error)}`);
-    }
-
-    return { id: existing.id, created: false };
-  }
-}
-
-async function ensureCharge(
-  db: DbClient,
-  params: {
-    tenantId: string;
-    buildingId: string;
-    unitId: string;
-    period: string;
-    liquidationId: string;
-    amount: number;
-    dueDate: Date;
-    concept: string;
-    periodId?: string;
-    status: ChargeStatus;
-    ownerMembershipId: string;
-  },
-): Promise<{ id: string; created: boolean }> {
-  const id = buildSeedId('pilot-charge', params.tenantId, params.liquidationId, params.unitId, params.period);
-
-  try {
-    const created = await db.charge.create({
-      data: {
-        id,
-        tenantId: params.tenantId,
-        buildingId: params.buildingId,
-        unitId: params.unitId,
-        period: params.period,
-        liquidationId: params.liquidationId,
-        amount: params.amount,
-        dueDate: params.dueDate,
-        concept: params.concept,
-        status: params.status,
-        createdByMembershipId: params.ownerMembershipId,
-        periodId: params.periodId,
-        currency: 'ARS',
-      },
-    });
-
-    return { id: created.id, created: true };
-  } catch (error: unknown) {
-    if (!isUniqueConstraintError(error)) {
-      throw error;
-    }
-
-    const existing = await db.charge.findFirst({
-      where: { id, tenantId: params.tenantId },
-    });
-
-    if (!existing) {
-      throw new Error(`Pilot data pack failed during charge reuse. Likely cause: ${describeSeedError(error)}`);
-    }
-
-    return { id: existing.id, created: false };
-  }
+  return { id: result.id, created: result.created };
 }
 
 async function ensurePayment(
@@ -1374,9 +1284,9 @@ async function loadPilotDataPack() {
     },
   ];
 
-  const financeResult = await runSeedStep('finance seeding', async () => prisma.$transaction(async (tx) => {
+  const financeResult = await runSeedStep('finance seeding', async () => {
     const expensePeriodResult = await ensureExpensePeriod(
-      tx,
+      prisma,
       options.tenantId,
       options.buildingId,
       currentYear,
@@ -1396,7 +1306,7 @@ async function loadPilotDataPack() {
       }
       const invoiceDate = addDaysUtc(startOfUtcMonth(now), spec.invoiceOffsetDays);
       const result = await ensureExpense(
-        tx,
+        prisma,
         options.tenantId,
         options.buildingId,
         currentPeriod,
@@ -1412,15 +1322,23 @@ async function loadPilotDataPack() {
     }
 
     const totalAmountMinor = expenseSpecs.reduce((sum, spec) => sum + spec.amountMinor, 0);
-    const expenseSnapshot: ExpenseSnapshotEntry[] = expenseResults.map((expenseResult, index) => ({
-      expenseId: expenseResult.id,
-      amountMinor: expenseSpecs[index]!.amountMinor,
-      currencyCode: 'ARS',
-      type: 'EXPENSE',
-    }));
+    const expenseSnapshot = expenseResults.map((expenseResult, index) => {
+      const spec = expenseSpecs[index]!;
+      const invoiceDate = addDaysUtc(startOfUtcMonth(now), spec.invoiceOffsetDays);
+
+      return buildSeedExpenseSnapshotItem({
+        expenseId: expenseResult.id,
+        categoryName: spec.name,
+        vendorName: 'Servicios Integrales Piloto',
+        amountMinor: spec.amountMinor,
+        currencyCode: 'ARS',
+        invoiceDate,
+        description: spec.description,
+      });
+    });
 
     const liquidationResult = await ensureLiquidation(
-      tx,
+      prisma,
       options.tenantId,
       options.buildingId,
       currentPeriod,
@@ -1428,38 +1346,32 @@ async function loadPilotDataPack() {
       ownerMembership.id,
       totalAmountMinor,
       expenseSnapshot,
-      unitRecords.length,
+      unitRecords,
     );
     counts.liquidations[liquidationResult.created ? 'created' : 'reused'] += 1;
-
-    const chargeAmounts = computeEvenAllocations(totalAmountMinor, unitRecords.length);
-    const chargeResults: Array<{ id: string; created: boolean; amount: number; unitId: string; period: string }> = [];
-
-    for (let index = 0; index < unitRecords.length; index += 1) {
-      const unit = unitRecords[index]!;
-      const amount = chargeAmounts[index]!;
-      const dueDateForCharge = addDaysUtc(startOfUtcMonth(nextMonthDate), 9);
-      const chargeResult = await ensureCharge(tx, {
+    const publishedCharges = await prisma.charge.findMany({
+      where: {
         tenantId: options.tenantId,
         buildingId: options.buildingId,
-        unitId: unit.id,
-        period: chargePeriod,
         liquidationId: liquidationResult.id,
-        amount,
-        dueDate: dueDateForCharge,
-        concept: `Expensas piloto ${chargePeriod} - Unidad ${unit.code}`,
-        periodId: expensePeriodResult.id,
-        status: ChargeStatus.PENDING,
-        ownerMembershipId: ownerMembership.id,
-      });
-      counts.charges[chargeResult.created ? 'created' : 'reused'] += 1;
-      chargeResults.push({
-        ...chargeResult,
-        amount,
-        unitId: unit.id,
-        period: chargePeriod,
-      });
-    }
+        period: currentPeriod,
+      },
+      orderBy: { unitId: 'asc' },
+      select: {
+        id: true,
+        unitId: true,
+        amount: true,
+        period: true,
+      },
+    });
+    counts.charges[liquidationResult.created ? 'created' : 'reused'] += publishedCharges.length;
+    const chargeResults = publishedCharges.map((charge) => ({
+      id: charge.id,
+      created: liquidationResult.created,
+      amount: charge.amount,
+      unitId: charge.unitId,
+      period: charge.period,
+    }));
 
     const paymentSpecs: Array<{
       reference: string;
@@ -1470,20 +1382,20 @@ async function loadPilotDataPack() {
       {
         reference: 'PILOT-PAGO-001',
         unitId: unitRecords[0]!.id,
-        amount: chargeAmounts[0]!,
+        amount: chargeResults[0]!.amount,
         chargeId: chargeResults[0]!.id,
       },
       {
         reference: 'PILOT-PAGO-002',
         unitId: unitRecords[1]!.id,
-        amount: chargeAmounts[1]!,
+        amount: chargeResults[1]!.amount,
         chargeId: chargeResults[1]!.id,
       },
     ];
 
     const paymentResults: Array<{ id: string; created: boolean; chargeId: string; amount: number }> = [];
     for (const paymentSpec of paymentSpecs) {
-      const payment = await ensurePayment(tx, {
+      const payment = await ensurePayment(prisma, {
         tenantId: options.tenantId,
         buildingId: options.buildingId,
         unitId: paymentSpec.unitId,
@@ -1513,7 +1425,7 @@ async function loadPilotDataPack() {
 
     for (const paymentResult of paymentResults) {
       const allocation = await ensurePaymentAllocation(
-        tx,
+        prisma,
         options.tenantId,
         paymentResult.id,
         paymentResult.chargeId,
@@ -1529,7 +1441,7 @@ async function loadPilotDataPack() {
       chargeResults,
       paymentResults,
     };
-  }));
+  });
 
   const documentSpecs: DocumentSeedSpec[] = [
     {
