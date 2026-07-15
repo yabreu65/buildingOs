@@ -84,6 +84,13 @@ export function tenantReports(tenantId: string): string {
 }
 
 /**
+ * Tenant-level onboarding import wizard
+ */
+export function onboardingImport(tenantId: string): string {
+  return `/${tenantId}/settings/onboarding-import`;
+}
+
+/**
  * Tenant-level categories (Rubros) page
  */
 export function tenantCategories(tenantId: string): string {
@@ -125,6 +132,7 @@ export const routes = {
   buildingPayments,
   buildingSettings,
   tenantReports,
+  onboardingImport,
   buildingReports,
   superAdminDashboard,
   tenantCategories,

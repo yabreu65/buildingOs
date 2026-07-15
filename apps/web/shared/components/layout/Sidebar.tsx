@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { routes } from "../../../shared/lib/routes";
 import { useTenantId } from "../../../features/tenancy/tenant.hooks";
-import { useCan } from "../../../features/rbac/rbac.hooks";
 import { useIsSuperAdmin, useHasRole } from "../../../features/auth/useAuthSession";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
 import { useTenants } from "../../../features/tenants/tenants.hooks";
@@ -80,6 +79,7 @@ export const Sidebar = () => {
               {t('navigation.settings')}
             </div>
             <NavItem href={`/${tenantId}/settings/general`} label={t('settings.general')} />
+            <NavItem href={routes.onboardingImport(tenantId)} label="Onboarding import" />
             <NavItem href={`/${tenantId}/settings/members`} label={t('navigation.residents')} />
             <NavItem href={`/${tenantId}/settings/team`} label={t('sidebar.team')} />
           </>

@@ -143,6 +143,25 @@ enum LeadStatus {
   DISQUALIFIED
 }
 
+enum ImportType {
+  INITIAL_ONBOARDING
+}
+
+enum ImportJobStatus {
+  READY
+  BLOCKED
+  FAILED
+  EXPIRED
+  CONFIRMING
+  CONFIRMED
+}
+
+enum ImportIssueSeverity {
+  BLOCKER
+  WARNING
+  INFO
+}
+
 enum LeadIntent {
   DEMO      // "Solicitar demo" from landing page
   CONTACT   // "Get started" from contact/signup flow
@@ -177,6 +196,9 @@ model Tenant {
   memberships           Membership[]
   buildings             Building[]
   auditLogs             AuditLog[]
+  importJobs            ImportJob[]
+  importIssues          ImportIssue[]
+  externalEntityReferences ExternalEntityReference[]
   subscription          Subscription?
   paymentVerifications  PaymentVerification[]
   tickets               Ticket[]
@@ -293,6 +315,9 @@ model Membership {
   paymentsReviewedBy    Payment[]
   paymentAuditLogs      PaymentAuditLog[]    // Auditoría de pagos
   invitationsSent       Invitation[]          @relation("InvitationsSent")
+  createdImportJobs     ImportJob[]           @relation("ImportJobCreatedByMembership")
+  confirmingImportJobs  ImportJob[]           @relation("ImportJobConfirmingByMembership")
+  confirmedImportJobs   ImportJob[]           @relation("ImportJobConfirmedByMembership")
   aiInteractionLogs     AiInteractionLog[]
   aiActionEvents        AiActionEvent[]
   planChangeRequests    PlanChangeRequest[]   @relation("PlanRequestRequestedBy")
@@ -611,6 +636,14 @@ enum AuditAction {
   DOCUMENT_VISIBILITY_CHANGED
   DOCUMENT_DOWNLOADED
   DOCUMENT_DELETE
+  IMPORT_FILE_LOADED
+  IMPORT_PREVIEW_READY
+  IMPORT_PREVIEW_BLOCKED
+  IMPORT_PREVIEW_FAILED
+  IMPORT_CONFIRM_STARTED
+  IMPORT_CONFIRMED
+  IMPORT_CONFIRM_FAILED
+  IMPORT_RECONFIRM_ATTEMPT
   // FINANCE
   CHARGE_CREATE
   CHARGE_CANCEL
@@ -1269,6 +1302,96 @@ model Document {
 }
 
 // ============================================================================
+// ONBOARDING IMPORTS: Excel import preview jobs and issues
+// ============================================================================
+
+model ImportJob {
+  id                    String           @id @default(cuid())
+  tenantId              String
+  type                  ImportType
+  status                ImportJobStatus
+  schemaVersion         String           @default("v1")
+  previewVersion        Int              @default(1)
+  fileName              String
+  fileSize              Int
+  fileMimeType          String
+  fileHash              String
+  previewHash           String?
+  originalObjectKey     String
+  normalizedObjectKey   String?
+  summary               Json?
+  counts                Json?
+  canConfirm            Boolean          @default(false)
+  expiresAt             DateTime
+  confirmingAt          DateTime?
+  confirmingLockExpiresAt DateTime?
+  confirmingByMembershipId String?
+  confirmedAt           DateTime?
+  confirmedByMembershipId String?
+  confirmationSummary   Json?
+  confirmationResult    Json?
+  errorCode             String?
+  errorMessage          String?
+  createdByMembershipId String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByMembership   Membership?      @relation("ImportJobCreatedByMembership", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  confirmingByMembership Membership?     @relation("ImportJobConfirmingByMembership", fields: [confirmingByMembershipId], references: [id], onDelete: SetNull)
+  confirmedByMembership Membership?      @relation("ImportJobConfirmedByMembership", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  issues                ImportIssue[]
+  importedCharges       Charge[]
+
+  @@unique([tenantId, type, schemaVersion, fileHash])
+  @@index([tenantId, status])
+  @@index([tenantId, expiresAt])
+  @@index([tenantId, createdAt])
+  @@index([createdByMembershipId])
+}
+
+model ImportIssue {
+  id              String              @id @default(cuid())
+  tenantId        String
+  importJobId     String
+  sheet           String
+  row             Int?
+  column          String?
+  code            String
+  severity        ImportIssueSeverity
+  message         String
+  receivedValue   String?
+  normalizedValue String?
+  createdAt       DateTime            @default(now())
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importJob       ImportJob           @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, importJobId])
+  @@index([tenantId, severity])
+  @@index([tenantId, sheet])
+  @@index([tenantId, code])
+}
+
+model ExternalEntityReference {
+  id           String   @id @default(cuid())
+  tenantId     String
+  source       String
+  entityType   String
+  externalCode String
+  entityId     String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, entityType, externalCode])
+  @@index([tenantId, entityType])
+  @@index([tenantId, entityId])
+}
+
+// ============================================================================
 // Vendor: Proveedores (plomeros, electricistas, ascensoristas, etc.)
 // ============================================================================
 model Vendor {
@@ -1394,6 +1517,7 @@ model Charge {
   dueDate                     DateTime
   status                      ChargeStatus @default(PENDING)
   createdByMembershipId       String?     // Who created this charge (admin)
+  importJobId                 String?
   createdAt                   DateTime     @default(now())
   updatedAt                   DateTime     @updatedAt
   canceledAt                  DateTime?
@@ -1419,6 +1543,7 @@ model Charge {
   building                    Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unit                        Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
   createdByMembership         Membership?           @relation(fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  importJob                   ImportJob?            @relation(fields: [importJobId], references: [id], onDelete: SetNull)
   expensePeriod               ExpensePeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
   liquidation                 Liquidation?          @relation(fields: [liquidationId], references: [id], onDelete: SetNull)
   paymentAllocations          PaymentAllocation[]
@@ -1431,7 +1556,9 @@ model Charge {
   @@index([dueDate])
   @@index([periodId])
   @@index([liquidationId])
+  @@index([importJobId])
   @@index([paymentExternalId])
+  @@unique([tenantId, importJobId, unitId, period, concept])
   @@unique([tenantId, liquidationId, unitId, period])
 }
 
@@ -1453,27 +1580,27 @@ model Payment {
   createdByUserId          String         // Who submitted the payment (resident)
   reviewedByMembershipId  String?        // Who approved the payment (admin)
   canceledAt               DateTime?      // Soft delete: NULL = active, timestamp = canceled
-  
+
   // Datos de transferencia bancaria
   transferDate             DateTime?      // Fecha en que se realizó la transferencia
   sourceBank               String?        // Banco/emisor de la transferencia
   sourceAccount            String?        // Cuenta de origen (CBU/CVU/alia)
   sourceHolder             String?        // Nombre del titular de la cuenta origen
   destinationAccount       String?        // Cuenta destino (CBU/CVU/alias)
-  
+
   // Auditoría completa
   rejectionReason          RejectionReason?  // Motivo de rechazo (catálogo estructurado)
   rejectionComment         String?           // Comentario adicional opcional del revisor
   reviewedAt               DateTime?         // Cuándo se revisó (aprobó/rechazó)
   notes                    String?           // Notas internas del revisor
-  
+
   // Receipt (non-fiscal payment receipt)
   receiptDocumentId        String?           // Link to receipt Document (generated when payment is approved)
   receiptNumber            String?           // Sequential receipt number: R-{TENANT}-{YYYY}-{000001}
   receiptStatus            ReceiptStatus     @default(PENDING)
   receiptError             String?           // Error message if receipt generation failed
   receiptGeneratedAt       DateTime?         // When receipt was successfully generated
-  
+
   // Webhook idempotency key (payment gateway)
   paymentEventId           String?            // Provider's webhook event ID for idempotency
 
@@ -1482,7 +1609,7 @@ model Payment {
   approvedAt               DateTime?          // When the payment was approved
   rejectedByUserId         String?            // User ID who rejected the payment
   rejectedAt               DateTime?          // When the payment was rejected
-  
+
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 

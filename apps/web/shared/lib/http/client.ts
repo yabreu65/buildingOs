@@ -9,6 +9,7 @@ export interface HttpRequestConfig<TReq = never> {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   body?: TReq;
   headers?: Record<string, string>;
+  responseType?: 'json' | 'blob' | 'text' | 'arrayBuffer';
 }
 
 export interface ErrorResponseData {
@@ -64,6 +65,38 @@ async function parseErrorResponse(response: Response): Promise<{
     // ignore parse error
   }
   return { message: response.statusText || 'Error desconocido', data: null };
+}
+
+function isBinaryBody(body: unknown): body is BodyInit {
+  return (
+    typeof body === 'string' ||
+    body instanceof FormData ||
+    body instanceof Blob ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body) ||
+    body instanceof URLSearchParams
+  );
+}
+
+async function readResponse<TRes>(
+  response: Response,
+  responseType: HttpRequestConfig['responseType'] = 'json',
+): Promise<TRes> {
+  if (response.status === 204) {
+    return noContentResponse<TRes>();
+  }
+
+  switch (responseType) {
+    case 'blob':
+      return (await response.blob()) as TRes;
+    case 'text':
+      return (await response.text()) as TRes;
+    case 'arrayBuffer':
+      return (await response.arrayBuffer()) as TRes;
+    case 'json':
+    default:
+      return response.json() as Promise<TRes>;
+  }
 }
 
 function isAuthRoute(path: string): boolean {
@@ -140,15 +173,20 @@ function captureResponseContext(
 export async function apiClient<TRes, TReq = never>(
   config: HttpRequestConfig<TReq>,
 ): Promise<TRes> {
-  const { path, method = 'GET', body, headers: customHeaders } = config;
+  const { path, method = 'GET', body, headers: customHeaders, responseType = 'json' } = config;
 
   const url = `${API_URL}${path}`;
   const token = getCurrentImpersonationToken();
+  const hasBody = body !== undefined;
+  const shouldUseBinaryBody = hasBody && isBinaryBody(body);
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...customHeaders,
   };
+
+  if (hasBody && !shouldUseBinaryBody && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -160,8 +198,8 @@ export async function apiClient<TRes, TReq = never>(
     credentials: 'include',
   };
 
-  if (body && method !== 'GET') {
-    init.body = JSON.stringify(body);
+  if (hasBody && method !== 'GET') {
+    init.body = shouldUseBinaryBody ? (body as BodyInit) : JSON.stringify(body);
   }
 
   let response: Response;
@@ -193,10 +231,7 @@ export async function apiClient<TRes, TReq = never>(
         const retryResponse = await fetch(url, init);
         captureResponseContext(retryResponse, method, path);
         if (retryResponse.ok) {
-          if (retryResponse.status === 204) {
-            return noContentResponse<TRes>();
-          }
-          return retryResponse.json() as Promise<TRes>;
+          return readResponse<TRes>(retryResponse, responseType);
         }
 
         const retryError = await parseErrorResponse(retryResponse);
@@ -216,9 +251,5 @@ export async function apiClient<TRes, TReq = never>(
     throw new HttpError(response.status, response.statusText, message, data);
   }
 
-  if (response.status === 204) {
-    return noContentResponse<TRes>();
-  }
-
-  return response.json() as Promise<TRes>;
+  return readResponse<TRes>(response, responseType);
 }

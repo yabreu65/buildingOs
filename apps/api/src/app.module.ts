@@ -24,6 +24,7 @@ import { ReportsModule } from './reports/reports.module';
 import { BillingModule } from './billing/billing.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { OnboardingImportsModule } from './onboarding-imports/onboarding-imports.module';
 import { RbacModule } from './rbac/rbac.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { ContextModule } from './context/context.module';
@@ -69,6 +70,7 @@ import { ReceiptsModule } from './receipts/receipts.module';
     BillingModule,
     InvitationsModule,
     OnboardingModule,
+    OnboardingImportsModule,
     MembershipsModule,
     ContextModule,
     InboxModule,

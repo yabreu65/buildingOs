@@ -1,4 +1,4 @@
-import { apiClient, HttpError } from './client';
+import { apiClient } from './client';
 import { clearAuth } from '@/features/auth/session.storage';
 import { clearAllImpersonationData, getCurrentImpersonationToken } from '@/features/impersonation/impersonation.storage';
 import { emitAuthUnauthorized } from '@/shared/lib/auth/events';
@@ -233,5 +233,62 @@ describe('apiClient auth refresh single-flight', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('sends FormData bodies without forcing JSON content-type', async () => {
+    const fetchMock = jest.mocked(global.fetch);
+    const formData = new FormData();
+    const file = new File(['workbook'], 'buildingos.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    formData.append('file', file);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+
+    await apiClient<{ ok: boolean }, FormData>({
+      path: '/tenants/tenant-1/onboarding-imports/preview',
+      method: 'POST',
+      body: formData,
+    });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    expect(init.body).toBe(formData as unknown as BodyInit);
+  });
+
+  it('can read blob responses', async () => {
+    const fetchMock = jest.mocked(global.fetch);
+    const response = {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        get: () => 'application/octet-stream',
+      },
+      async blob() {
+        return new Blob(['template-bytes'], {
+          type: 'application/octet-stream',
+        });
+      },
+      async json() {
+        return {};
+      },
+      async text() {
+        return 'template-bytes';
+      },
+      async arrayBuffer() {
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+
+    fetchMock.mockResolvedValueOnce(response);
+
+    const result = await apiClient<Blob>({
+      path: '/tenants/tenant-1/onboarding-imports/template',
+      method: 'GET',
+      responseType: 'blob',
+    });
+
+    expect(result).toBeInstanceOf(Blob);
   });
 });
