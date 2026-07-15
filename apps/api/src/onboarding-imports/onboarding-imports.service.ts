@@ -92,6 +92,7 @@ interface ExistingTenantMemberRecord {
 }
 
 interface ExistingReferenceRecord {
+  readonly entityType: string;
   readonly externalCode: string;
   readonly entityId: string;
 }
@@ -633,14 +634,26 @@ export class OnboardingImportsService {
       where: {
         tenantId,
         source: 'onboarding-import',
-        entityType: 'PERSON',
+        entityType: {
+          in: ['PERSON', 'PERSON_DOCUMENT'],
+        },
       },
-      select: { externalCode: true, entityId: true },
+      select: { entityType: true, externalCode: true, entityId: true },
     });
-    const personRefByCode = new Map(personRefs.map((ref) => [this.normalizeCode(ref.externalCode), ref] as const));
+    const personRefByCode = new Map(
+      personRefs
+        .filter((ref) => ref.entityType === 'PERSON')
+        .map((ref) => [this.normalizeCode(ref.externalCode), ref] as const),
+    );
+    const personRefByDocument = new Map(
+      personRefs
+        .filter((ref) => ref.entityType === 'PERSON_DOCUMENT')
+        .map((ref) => [this.normalizeDocument(ref.externalCode), ref] as const),
+    );
 
     const personEmails = Array.from(new Set(data.people.flatMap((row) => (row.normalized?.email ? [this.normalizeEmail(row.normalized.email)] : []))));
     const personPhones = Array.from(new Set(data.people.flatMap((row) => (row.normalized?.telefono ? [this.normalizeText(row.normalized.telefono)] : [])).filter((phone): phone is string => Boolean(phone))));
+    const referencedMemberIds = Array.from(new Set(personRefs.map((ref) => ref.entityId)));
 
     const tenantMemberWhere: Prisma.TenantMemberWhereInput = { tenantId };
     const tenantMemberOr: Prisma.TenantMemberWhereInput[] = [];
@@ -649,6 +662,9 @@ export class OnboardingImportsService {
     }
     if (personPhones.length > 0) {
       tenantMemberOr.push({ phone: { in: personPhones } });
+    }
+    if (referencedMemberIds.length > 0) {
+      tenantMemberOr.push({ id: { in: referencedMemberIds } });
     }
     if (tenantMemberOr.length > 0) {
       tenantMemberWhere.OR = tenantMemberOr;
@@ -669,6 +685,10 @@ export class OnboardingImportsService {
     const userByEmail = new Map(usersByEmail.map((user) => [this.normalizeEmail(user.email), user] as const));
     const memberByEmail = new Map(tenantMembers.filter((member) => member.email).map((member) => [this.normalizeEmail(member.email ?? ''), member] as const));
     const memberByPhone = new Map(tenantMembers.filter((member) => member.phone).map((member) => [this.normalizeText(member.phone ?? ''), member] as const));
+    const memberById = new Map(tenantMembers.map((member) => [member.id, member] as const));
+    const personEmailOwners = new Map<string, string>();
+    const personPhoneOwners = new Map<string, string>();
+    const personDocumentOwners = new Map<string, string>();
 
     const personRowsByCode = new Map<string, ParsedRow<ParsedPersonRowRaw, ParsedPersonRowNormalized>>();
     const personStatusByCode = new Map<string, 'new' | 'reusable' | 'conflict' | 'invalid'>();
@@ -689,11 +709,58 @@ export class OnboardingImportsService {
       personRowsByCode.set(code, row);
 
       const existingRef = personRefByCode.get(code);
+      const normalizedDocument = normalized.documento ? this.normalizeDocument(normalized.documento) : null;
       const normalizedEmail = normalized.email ? this.normalizeEmail(normalized.email) : null;
       const normalizedPhone = normalized.telefono ? this.normalizeText(normalized.telefono) : null;
-      const existingMember = normalizedEmail ? memberByEmail.get(normalizedEmail) : undefined;
+      const existingDocumentRef = normalizedDocument ? personRefByDocument.get(normalizedDocument) : undefined;
+      const existingMember = existingRef ? memberById.get(existingRef.entityId) : undefined;
+      const existingDocumentMember = existingDocumentRef ? memberById.get(existingDocumentRef.entityId) : undefined;
+      const existingEmailMember = normalizedEmail ? memberByEmail.get(normalizedEmail) : undefined;
       const existingPhoneMember = normalizedPhone ? memberByPhone.get(normalizedPhone) : undefined;
       const existingUser = normalizedEmail ? userByEmail.get(normalizedEmail) : undefined;
+
+      if (normalizedEmail) {
+        const previousCode = personEmailOwners.get(normalizedEmail);
+        if (previousCode && previousCode !== code) {
+          this.bump(summary.people, 'conflict');
+          personStatusByCode.set(code, 'conflict');
+          issues.push(this.makeIssue(row.sheet, row.rowNumber, 'email', 'DUPLICATE_IN_FILE', 'BLOCKER', `Duplicate person email in file: ${normalizedEmail}`, normalizedEmail, normalizedEmail));
+          continue;
+        }
+
+        personEmailOwners.set(normalizedEmail, code);
+      }
+
+      if (normalizedPhone) {
+        const previousCode = personPhoneOwners.get(normalizedPhone);
+        if (previousCode && previousCode !== code) {
+          this.bump(summary.people, 'conflict');
+          personStatusByCode.set(code, 'conflict');
+          issues.push(this.makeIssue(row.sheet, row.rowNumber, 'telefono', 'DUPLICATE_IN_FILE', 'BLOCKER', `Duplicate person phone in file: ${normalizedPhone}`, normalizedPhone, normalizedPhone));
+          continue;
+        }
+
+        personPhoneOwners.set(normalizedPhone, code);
+      }
+
+      if (normalizedDocument) {
+        const previousCode = personDocumentOwners.get(normalizedDocument);
+        if (previousCode && previousCode !== code) {
+          this.bump(summary.people, 'conflict');
+          personStatusByCode.set(code, 'conflict');
+          issues.push(this.makeIssue(row.sheet, row.rowNumber, 'documento', 'DUPLICATE_IN_FILE', 'BLOCKER', `Duplicate person document in file: ${normalizedDocument}`, normalizedDocument, normalizedDocument));
+          continue;
+        }
+
+        personDocumentOwners.set(normalizedDocument, code);
+      }
+
+      if (existingRef && !existingMember) {
+        this.bump(summary.people, 'conflict');
+        personStatusByCode.set(code, 'conflict');
+        issues.push(this.makeIssue(row.sheet, row.rowNumber, 'persona_codigo', 'CONFLICT_WITH_DB', 'BLOCKER', `Person ${code} references a missing tenant member`, code, code));
+        continue;
+      }
 
       if (existingRef) {
         this.bump(summary.people, 'reusable');
@@ -701,26 +768,41 @@ export class OnboardingImportsService {
         continue;
       }
 
-      if (existingMember || existingPhoneMember || existingUser) {
-        const sameName = [existingMember?.name, existingPhoneMember?.name, existingUser?.name].some((name) => name ? this.normalizeText(name) === this.normalizeText(normalized.nombre) : false);
-        const sameContact = Boolean(
-          (normalizedEmail && existingUser && this.normalizeEmail(existingUser.email) === normalizedEmail) ||
-          (normalizedEmail && existingMember && this.normalizeEmail(existingMember.email ?? '') === normalizedEmail) ||
-          (normalizedPhone && existingPhoneMember && this.normalizeText(existingPhoneMember.phone ?? '') === normalizedPhone)
-        );
+      const sameName = [existingEmailMember?.name, existingPhoneMember?.name, existingDocumentMember?.name, existingUser?.name].some((name) => name ? this.normalizeText(name) === this.normalizeText(normalized.nombre) : false);
+      const sameIdentity = Boolean(
+        (normalizedEmail && (
+          (existingEmailMember && this.normalizeEmail(existingEmailMember.email ?? '') === normalizedEmail) ||
+          (existingUser && this.normalizeEmail(existingUser.email) === normalizedEmail)
+        )) ||
+        (normalizedPhone && existingPhoneMember && this.normalizeText(existingPhoneMember.phone ?? '') === normalizedPhone) ||
+        (normalizedDocument && existingDocumentMember && existingDocumentRef && this.normalizeDocument(existingDocumentRef.externalCode) === normalizedDocument)
+      );
 
-        if (sameName || sameContact) {
-          this.bump(summary.people, 'reusable');
-          personStatusByCode.set(code, 'reusable');
-        } else {
-          this.bump(summary.people, 'conflict');
-          personStatusByCode.set(code, 'conflict');
-          issues.push(this.makeIssue(row.sheet, row.rowNumber, 'persona_codigo', 'CONFLICT_WITH_DB', 'BLOCKER', `Person ${code} conflicts with an existing user or tenant member`, code, code));
-        }
-      } else {
-        this.bump(summary.people, 'new');
-        personStatusByCode.set(code, 'new');
+      if (sameName && sameIdentity) {
+        this.bump(summary.people, 'reusable');
+        personStatusByCode.set(code, 'reusable');
+        continue;
       }
+
+      if (existingEmailMember || existingPhoneMember || existingDocumentMember || existingUser || existingDocumentRef) {
+        this.bump(summary.people, 'conflict');
+        personStatusByCode.set(code, 'conflict');
+        const conflictColumn = existingEmailMember || existingUser ? 'email' : existingPhoneMember ? 'telefono' : 'documento';
+        issues.push(this.makeIssue(
+          row.sheet,
+          row.rowNumber,
+          conflictColumn,
+          'CONFLICT_WITH_DB',
+          'BLOCKER',
+          'La persona entra en conflicto con una identidad existente del tenant',
+          conflictColumn === 'email' ? normalizedEmail : conflictColumn === 'telefono' ? normalizedPhone : normalizedDocument,
+          conflictColumn === 'email' ? normalizedEmail : conflictColumn === 'telefono' ? normalizedPhone : normalizedDocument,
+        ));
+        continue;
+      }
+
+      this.bump(summary.people, 'new');
+      personStatusByCode.set(code, 'new');
     }
 
     const occupantRows = await this.prisma.unitOccupant.findMany({
@@ -1224,6 +1306,10 @@ export class OnboardingImportsService {
 
   private normalizeEmail(value: string): string {
     return this.normalizeText(value).toLowerCase();
+  }
+
+  private normalizeDocument(value: string): string {
+    return this.normalizeText(value).toUpperCase();
   }
 
   private compareNullableNumber(left: number | null, right: number | null): boolean {

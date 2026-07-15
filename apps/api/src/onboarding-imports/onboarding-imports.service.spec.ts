@@ -686,7 +686,13 @@ describe('OnboardingImportsService', () => {
         isBillable: true,
       },
     ]);
-    prisma.externalEntityReference.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([
+      {
+        entityType: 'PERSON',
+        externalCode: 'P-001',
+        entityId: 'member-1',
+      },
+    ]);
     prisma.tenantMember.findMany.mockResolvedValue([
       {
         id: 'member-1',
@@ -966,5 +972,270 @@ describe('OnboardingImportsService', () => {
     expect(businessWrites.membership.create).not.toHaveBeenCalled();
     expect(businessWrites.membershipRole.create).not.toHaveBeenCalled();
     expect(businessWrites.charge.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks person identity duplicates in file and stale external references', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.building.findMany.mockResolvedValue([
+      {
+        id: 'building-1',
+        alias: 'A',
+        name: 'Torre A',
+        address: 'Av. Principal 123',
+        deletedAt: null,
+      },
+    ]);
+    prisma.unitCategory.findMany.mockResolvedValue([]);
+    prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([
+      {
+        entityType: 'PERSON',
+        externalCode: 'P-EXIST',
+        entityId: 'member-missing',
+      },
+    ]);
+    prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]);
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
+    prisma.charge.findMany.mockResolvedValue([]);
+
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.people = [
+      {
+        sheet: 'Personas',
+        rowNumber: 2,
+        raw: {
+          persona_codigo: 'P-001',
+          nombre: 'Unique One',
+          email: 'unique-1@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-1',
+        },
+        normalized: {
+          personaCodigo: 'P-001',
+          nombre: 'Unique One',
+          email: 'unique-1@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-1',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 3,
+        raw: {
+          persona_codigo: 'P-002',
+          nombre: 'Email Duplicate',
+          email: 'unique-1@buildingos.test',
+          telefono: '+58 412 2000000',
+          documento: 'V-2',
+        },
+        normalized: {
+          personaCodigo: 'P-002',
+          nombre: 'Email Duplicate',
+          email: 'unique-1@buildingos.test',
+          telefono: '+58 412 2000000',
+          documento: 'V-2',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 4,
+        raw: {
+          persona_codigo: 'P-003',
+          nombre: 'Phone Duplicate',
+          email: 'unique-3@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-3',
+        },
+        normalized: {
+          personaCodigo: 'P-003',
+          nombre: 'Phone Duplicate',
+          email: 'unique-3@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-3',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 5,
+        raw: {
+          persona_codigo: 'P-004',
+          nombre: 'Document Duplicate',
+          email: 'unique-4@buildingos.test',
+          telefono: '+58 412 4000000',
+          documento: 'V-1',
+        },
+        normalized: {
+          personaCodigo: 'P-004',
+          nombre: 'Document Duplicate',
+          email: 'unique-4@buildingos.test',
+          telefono: '+58 412 4000000',
+          documento: 'V-1',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 6,
+        raw: {
+          persona_codigo: 'P-EXIST',
+          nombre: 'External Ref Conflict',
+          email: 'unique-5@buildingos.test',
+          telefono: '+58 412 5000000',
+          documento: 'V-5',
+        },
+        normalized: {
+          personaCodigo: 'P-EXIST',
+          nombre: 'External Ref Conflict',
+          email: 'unique-5@buildingos.test',
+          telefono: '+58 412 5000000',
+          documento: 'V-5',
+        },
+      },
+    ];
+
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+
+    expect(validation.summary.people.new).toBe(1);
+    expect(validation.summary.people.conflict).toBe(4);
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sheet: 'Personas', column: 'email', code: 'DUPLICATE_IN_FILE', severity: 'BLOCKER' }),
+      expect.objectContaining({ sheet: 'Personas', column: 'telefono', code: 'DUPLICATE_IN_FILE', severity: 'BLOCKER' }),
+      expect.objectContaining({ sheet: 'Personas', column: 'documento', code: 'DUPLICATE_IN_FILE', severity: 'BLOCKER' }),
+      expect.objectContaining({ sheet: 'Personas', column: 'persona_codigo', code: 'CONFLICT_WITH_DB', severity: 'BLOCKER' }),
+    ]));
+    expect(businessWrites.tenantMember.create).not.toHaveBeenCalled();
+    expect(businessWrites.user.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks existing email phone and document identities during preview without business writes', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.building.findMany.mockResolvedValue([
+      {
+        id: 'building-1',
+        alias: 'A',
+        name: 'Torre A',
+        address: 'Av. Principal 123',
+        deletedAt: null,
+      },
+    ]);
+    prisma.unitCategory.findMany.mockResolvedValue([]);
+    prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([
+      {
+        entityType: 'PERSON_DOCUMENT',
+        externalCode: 'V-EXIST',
+        entityId: 'member-doc',
+      },
+    ]);
+    prisma.tenantMember.findMany.mockResolvedValue([
+      {
+        id: 'member-email',
+        tenantId,
+        name: 'Existing Email',
+        email: 'existing-email@buildingos.test',
+        phone: null,
+        role: 'RESIDENT',
+        status: 'ACTIVE',
+      },
+      {
+        id: 'member-phone',
+        tenantId,
+        name: 'Existing Phone',
+        email: null,
+        phone: '+58 412 9999999',
+        role: 'RESIDENT',
+        status: 'ACTIVE',
+      },
+      {
+        id: 'member-doc',
+        tenantId,
+        name: 'Existing Document',
+        email: null,
+        phone: null,
+        role: 'RESIDENT',
+        status: 'ACTIVE',
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-email',
+        email: 'existing-email@buildingos.test',
+        name: 'Existing Email',
+      },
+    ]);
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
+    prisma.charge.findMany.mockResolvedValue([]);
+
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.people = [
+      {
+        sheet: 'Personas',
+        rowNumber: 2,
+        raw: {
+          persona_codigo: 'P-EMAIL',
+          nombre: 'Email Conflict',
+          email: 'existing-email@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-100',
+        },
+        normalized: {
+          personaCodigo: 'P-EMAIL',
+          nombre: 'Email Conflict',
+          email: 'existing-email@buildingos.test',
+          telefono: '+58 412 1000000',
+          documento: 'V-100',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 3,
+        raw: {
+          persona_codigo: 'P-PHONE',
+          nombre: 'Phone Conflict',
+          email: 'phone-conflict@buildingos.test',
+          telefono: '+58 412 9999999',
+          documento: 'V-200',
+        },
+        normalized: {
+          personaCodigo: 'P-PHONE',
+          nombre: 'Phone Conflict',
+          email: 'phone-conflict@buildingos.test',
+          telefono: '+58 412 9999999',
+          documento: 'V-200',
+        },
+      },
+      {
+        sheet: 'Personas',
+        rowNumber: 4,
+        raw: {
+          persona_codigo: 'P-DOC',
+          nombre: 'Document Conflict',
+          email: 'document-conflict@buildingos.test',
+          telefono: '+58 412 2000000',
+          documento: 'V-EXIST',
+        },
+        normalized: {
+          personaCodigo: 'P-DOC',
+          nombre: 'Document Conflict',
+          email: 'document-conflict@buildingos.test',
+          telefono: '+58 412 2000000',
+          documento: 'V-EXIST',
+        },
+      },
+    ];
+
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+
+    expect(validation.summary.people.conflict).toBe(3);
+    expect(validation.summary.people.new).toBe(0);
+    expect(validation.summary.people.reusable).toBe(0);
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ column: 'email', code: 'CONFLICT_WITH_DB', severity: 'BLOCKER' }),
+      expect.objectContaining({ column: 'telefono', code: 'CONFLICT_WITH_DB', severity: 'BLOCKER' }),
+      expect.objectContaining({ column: 'documento', code: 'CONFLICT_WITH_DB', severity: 'BLOCKER' }),
+    ]));
+    expect(businessWrites.tenantMember.create).not.toHaveBeenCalled();
+    expect(businessWrites.user.create).not.toHaveBeenCalled();
+    expect(businessWrites.externalEntityReference.create).not.toHaveBeenCalled();
   });
 });
