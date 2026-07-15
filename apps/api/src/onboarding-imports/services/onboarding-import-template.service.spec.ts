@@ -38,3 +38,4 @@ describe('OnboardingImportTemplateService', () => {
     expect(String(instructions[0]?.[0] ?? '')).toContain('BuildingOS import');
     expect(String(instructions[0]?.[1] ?? '')).toContain(ONBOARDING_IMPORT_SCHEMA_VERSION);
   });
+});
