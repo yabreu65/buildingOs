@@ -288,6 +288,43 @@ export class MinioService {
   }
 
   /**
+   * Read an object from MinIO as a Buffer.
+   */
+  async getObjectBuffer(
+    bucketName: string = this.bucket,
+    objectKey: string,
+  ): Promise<Buffer> {
+    try {
+      const stream = await this.minioClient.getObject(bucketName, objectKey);
+      const chunks: Buffer[] = [];
+
+      return await new Promise<Buffer>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+
+        stream.on('error', (error: unknown) => {
+          this.logger.error(
+            `Failed to read object: ${this.getErrorMessage(error)}`,
+            this.getErrorStack(error),
+          );
+          reject(error);
+        });
+
+        stream.on('end', () => {
+          resolve(Buffer.concat(chunks));
+        });
+      });
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to read object: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Upload a buffer directly to MinIO
    *
    * @param bucketName - Bucket name
