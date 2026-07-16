@@ -359,6 +359,10 @@ export class OnboardingImportConfirmationService {
           continue;
         }
 
+        if (this.isKnownImportP2002(error)) {
+          throw new ConflictException('Se detectó un conflicto de identidad durante la confirmación');
+        }
+
         throw error;
       }
     }
@@ -607,6 +611,10 @@ export class OnboardingImportConfirmationService {
   ): Promise<Map<string, string>> {
     const memberMap = new Map<string, string>();
     const personCodes = rows.map((row) => this.normalizeCode(this.requireNormalizedRow(row, 'People').personaCodigo));
+    const personDocuments = Array.from(new Set(rows.map((row) => {
+      const normalized = this.requireNormalizedRow(row, 'People');
+      return normalized.documento ? this.normalizeDocument(normalized.documento) : null;
+    }).filter((value): value is string => Boolean(value))));
     const emails = Array.from(new Set(rows.map((row) => {
       const normalized = this.requireNormalizedRow(row, 'People');
       return normalized.email ? this.normalizeEmail(normalized.email) : null;
@@ -616,22 +624,32 @@ export class OnboardingImportConfirmationService {
       return normalized.telefono ? this.normalizeText(normalized.telefono) : null;
     }).filter((value): value is string => Boolean(value))));
 
-    const [existingRefs, existingMembers, existingUsers] = await Promise.all([
-      tx.externalEntityReference.findMany({
-        where: {
-          tenantId: input.tenantId,
-          source: 'onboarding-import',
-          entityType: 'PERSON',
-          externalCode: { in: personCodes },
-        },
-        select: { entityType: true, externalCode: true, entityId: true },
-      }),
+    const existingRefs = await tx.externalEntityReference.findMany({
+      where: {
+        tenantId: input.tenantId,
+        source: 'onboarding-import',
+        entityType: { in: ['PERSON', 'PERSON_DOCUMENT'] },
+        externalCode: { in: [...personCodes, ...personDocuments] },
+      },
+      select: { entityType: true, externalCode: true, entityId: true },
+    });
+    const documentRefMemberIds = Array.from(
+      new Set(
+        existingRefs
+          .filter((ref) => ref.entityType === 'PERSON_DOCUMENT')
+          .map((ref) => ref.entityId)
+          .filter((entityId): entityId is string => Boolean(entityId)),
+      ),
+    );
+
+    const [existingMembers, existingUsers] = await Promise.all([
       tx.tenantMember.findMany({
         where: {
           tenantId: input.tenantId,
           OR: [
             emails.length > 0 ? { email: { in: emails } } : undefined,
             phones.length > 0 ? { phone: { in: phones } } : undefined,
+            documentRefMemberIds.length > 0 ? { id: { in: documentRefMemberIds } } : undefined,
           ].filter((value): value is NonNullable<typeof value> => Boolean(value)),
         },
         select: { id: true, tenantId: true, userId: true, name: true, email: true, phone: true, role: true, status: true },
@@ -639,24 +657,26 @@ export class OnboardingImportConfirmationService {
       emails.length > 0 ? tx.user.findMany({ where: { email: { in: emails } }, select: { id: true, email: true, name: true } }) : Promise.resolve([]),
     ]);
 
-    const refByCode = new Map(existingRefs.map((ref) => [this.normalizeCode(ref.externalCode), ref] as const));
+    const refByCode = new Map(existingRefs.filter((ref) => ref.entityType === 'PERSON').map((ref) => [this.normalizeCode(ref.externalCode), ref] as const));
+    const refByDocument = new Map(existingRefs.filter((ref) => ref.entityType === 'PERSON_DOCUMENT').map((ref) => [this.normalizeDocument(ref.externalCode), ref] as const));
     const memberByEmail = new Map(existingMembers.filter((member) => member.email).map((member) => [this.normalizeEmail(member.email ?? ''), member] as const));
     const memberByPhone = new Map(existingMembers.filter((member) => member.phone).map((member) => [this.normalizeText(member.phone ?? ''), member] as const));
+    const memberById = new Map(existingMembers.map((member) => [member.id, member] as const));
     const userByEmail = new Map(existingUsers.map((user) => [this.normalizeEmail(user.email), user] as const));
 
     for (const row of rows) {
       const normalized = this.requireNormalizedRow(row, 'People');
       const code = this.normalizeCode(normalized.personaCodigo);
+      const document = normalized.documento ? this.normalizeDocument(normalized.documento) : null;
       const email = normalized.email ? this.normalizeEmail(normalized.email) : null;
       const phone = normalized.telefono ? this.normalizeText(normalized.telefono) : null;
       const existingRef = refByCode.get(code);
-      const existingMember = existingRef
-        ? existingMembers.find((member) => member.id === existingRef.entityId)
-        : email
-          ? memberByEmail.get(email)
-          : phone
-            ? memberByPhone.get(phone)
-            : undefined;
+      const existingDocumentRef = document ? refByDocument.get(document) : undefined;
+      const existingMemberFromRef = existingRef ? memberById.get(existingRef.entityId) : undefined;
+      const existingMemberFromEmail = email ? memberByEmail.get(email) : undefined;
+      const existingMemberFromPhone = phone ? memberByPhone.get(phone) : undefined;
+      const existingMemberFromDocument = document && existingDocumentRef ? memberById.get(existingDocumentRef.entityId) : undefined;
+      const existingMember = existingMemberFromRef ?? existingMemberFromEmail ?? existingMemberFromPhone ?? existingMemberFromDocument;
       const existingUser = email ? userByEmail.get(email) : undefined;
 
       if (existingRef && !existingMember) {
@@ -667,6 +687,24 @@ export class OnboardingImportConfirmationService {
       if (candidate) {
         if (candidate.role !== Role.RESIDENT) {
           throw new ConflictException(`Person ${code} is linked to a non-resident member`);
+        }
+
+        if (document && existingDocumentRef && existingDocumentRef.entityId !== candidate.id) {
+          throw new ConflictException(`La persona entra en conflicto con una identidad existente por document en el tenant`);
+        }
+
+        const sameName = this.normalizeText(candidate.name) === this.normalizeText(normalized.nombre);
+        const sameIdentity = Boolean(
+          (email && (
+            (existingMemberFromEmail && this.normalizeEmail(existingMemberFromEmail.email ?? '') === email) ||
+            (existingUser && this.normalizeEmail(existingUser.email) === email)
+          )) ||
+          (phone && existingMemberFromPhone && this.normalizeText(existingMemberFromPhone.phone ?? '') === phone) ||
+          (document && existingDocumentRef && existingDocumentRef.entityId === candidate.id)
+        );
+
+        if (!sameName || !sameIdentity) {
+          throw new ConflictException(`La persona entra en conflicto con una identidad existente por ${email ? 'email' : phone ? 'phone' : 'document'} en el tenant`);
         }
 
         const conflictingMember = this.findConflictingMember(existingMembers, candidate.id, email, phone);
@@ -689,7 +727,24 @@ export class OnboardingImportConfirmationService {
         memberMap.set(code, updated.id);
         summary.people.reused += 1;
         await this.upsertExternalReference(tx, input.tenantId, 'PERSON', code, updated.id);
+        if (document) {
+          await this.upsertExternalReference(tx, input.tenantId, 'PERSON_DOCUMENT', document, updated.id);
+        }
         continue;
+      }
+
+      if (existingUser) {
+        if (this.normalizeText(existingUser.name ?? '') !== this.normalizeText(normalized.nombre)) {
+          throw new ConflictException(`La persona entra en conflicto con una identidad existente por email en el tenant`);
+        }
+
+        if (email && this.normalizeEmail(existingUser.email) !== email) {
+          throw new ConflictException(`La persona entra en conflicto con una identidad existente por email en el tenant`);
+        }
+      }
+
+      if (existingMemberFromEmail || existingMemberFromPhone || existingDocumentRef) {
+        throw new ConflictException(`La persona entra en conflicto con una identidad existente por ${existingMemberFromEmail ? 'email' : existingMemberFromPhone ? 'phone' : 'document'} en el tenant`);
       }
 
       const created = await tx.tenantMember.create({
@@ -707,6 +762,9 @@ export class OnboardingImportConfirmationService {
       memberMap.set(code, created.id);
       summary.people.created += 1;
       await this.upsertExternalReference(tx, input.tenantId, 'PERSON', code, created.id);
+      if (document) {
+        await this.upsertExternalReference(tx, input.tenantId, 'PERSON_DOCUMENT', document, created.id);
+      }
     }
 
     return memberMap;
@@ -1455,7 +1513,52 @@ export class OnboardingImportConfirmationService {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
   }
 
+  private isKnownImportP2002(error: unknown): boolean {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    return this.isKnownImportUniqueTarget(this.getUniqueTarget(error));
+  }
+
+  private isKnownImportUniqueTarget(target: string[]): boolean {
+    return (
+      this.matchesUniqueTarget(target, ['tenantId', 'email']) ||
+      this.matchesUniqueTarget(target, ['tenantId', 'phone']) ||
+      this.matchesUniqueTarget(target, ['tenantId', 'source', 'entityType', 'externalCode']) ||
+      this.matchesUniqueTarget(target, ['tenantId', 'unitId', 'memberId']) ||
+      this.matchesUniqueTarget(target, ['tenantId', 'importJobId', 'unitId', 'period', 'concept'])
+    );
+  }
+
+  private matchesUniqueTarget(target: string[], expectedFields: string[]): boolean {
+    if (target.length !== expectedFields.length) {
+      return false;
+    }
+
+    const normalizedTarget = [...target].sort().join('|');
+    const normalizedExpected = [...expectedFields].sort().join('|');
+    return normalizedTarget === normalizedExpected;
+  }
+
+  private getUniqueTarget(error: Prisma.PrismaClientKnownRequestError): string[] {
+    const meta = error.meta as { target?: unknown } | undefined;
+    if (!Array.isArray(meta?.target)) {
+      return [];
+    }
+
+    return meta.target.filter((value): value is string => typeof value === 'string');
+  }
+
   private sanitizeErrorMessage(error: unknown): string {
+    if (this.isKnownImportP2002(error)) {
+      return 'Se detectó un conflicto de identidad durante la confirmación';
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return 'Error de base de datos durante la confirmación';
+    }
+
     if (error instanceof Error) {
       return error.message.slice(0, 200);
     }
@@ -1471,7 +1574,19 @@ export class OnboardingImportConfirmationService {
     return 'IMPORT_ERROR';
   }
 
+  private normalizeDocument(value: string): string {
+    return this.normalizeText(value).toUpperCase();
+  }
+
   private rethrow(error: unknown): never {
+    if (this.isKnownImportP2002(error)) {
+      throw new ConflictException('Se detectó un conflicto de identidad durante la confirmación');
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      throw new Error('Error de base de datos durante la confirmación');
+    }
+
     if (error instanceof Error) {
       throw error;
     }
