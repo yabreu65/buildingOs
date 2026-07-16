@@ -12,7 +12,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
-import { getContextOptions } from '../../../../../features/context/context.api';
+import { useContextOptions } from '../../../../../features/context/useContextOptions';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import { apiClient } from '../../../../../shared/lib/http/client';
 import Card from '../../../../../shared/components/ui/Card';
@@ -111,12 +111,7 @@ export default function ResidentDocumentsPage() {
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
 
-  const { data: contextOptions } = useQuery({
-    queryKey: ['contextOptions', tenantId],
-    queryFn: () => getContextOptions(tenantId!),
-    enabled: !!tenantId,
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: contextOptions } = useContextOptions(tenantId ?? null);
 
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
 

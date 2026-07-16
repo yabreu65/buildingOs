@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import { UserContext, ContextOptions } from './context.types';
 import { getContext, setContext, getContextOptions } from './context.api';
 
@@ -26,6 +27,8 @@ interface UseContextState {
  * } = useContext(tenantId);
  */
 export function useContextManager(tenantId: string | null) {
+  const session = useAuthSession();
+  const userId = session?.user.id ?? null;
   const [state, setState] = useState<UseContextState>({
     context: null,
     options: null,
@@ -35,15 +38,31 @@ export function useContextManager(tenantId: string | null) {
 
   // Load context and options on mount or when tenantId changes
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId || !userId) {
+      setState({
+        context: null,
+        options: null,
+        loading: false,
+        error: null,
+      });
+      return;
+    }
 
+    let isActive = true;
     const loadData = async () => {
-      setState((prev) => ({ ...prev, loading: true, error: null }));
+      setState({
+        context: null,
+        options: null,
+        loading: true,
+        error: null,
+      });
       try {
         const [context, options] = await Promise.all([
           getContext(tenantId),
           getContextOptions(tenantId),
         ]);
+
+        if (!isActive) return;
 
         setState((prev) => ({
           ...prev,
@@ -52,13 +71,17 @@ export function useContextManager(tenantId: string | null) {
           loading: false,
         }));
       } catch (error) {
+        if (!isActive) return;
         const message = error instanceof Error ? error.message : 'Unknown error';
         setState((prev) => ({ ...prev, loading: false, error: message }));
       }
     };
 
     loadData();
-  }, [tenantId]);
+    return () => {
+      isActive = false;
+    };
+  }, [tenantId, userId]);
 
   const setActiveBuilding = useCallback(
     async (buildingId: string | null) => {
@@ -99,9 +122,14 @@ export function useContextManager(tenantId: string | null) {
   );
 
   const refetch = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId || !userId) return;
 
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState({
+      context: null,
+      options: null,
+      loading: true,
+      error: null,
+    });
     try {
       const [context, options] = await Promise.all([
         getContext(tenantId),
@@ -118,7 +146,7 @@ export function useContextManager(tenantId: string | null) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setState((prev) => ({ ...prev, loading: false, error: message }));
     }
-  }, [tenantId]);
+  }, [tenantId, userId]);
 
   return {
     ...state,

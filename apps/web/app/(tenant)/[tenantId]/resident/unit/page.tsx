@@ -12,7 +12,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
-import { getContextOptions } from '../../../../../features/context/context.api';
+import { useContextOptions } from '../../../../../features/context/useContextOptions';
 import { getUnit, type Unit } from '../../../../../features/units/units.api';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import Card from '../../../../../shared/components/ui/Card';
@@ -63,12 +63,7 @@ export default function ResidentUnitPage() {
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
 
-  const { data: contextOptions } = useQuery({
-    queryKey: ['contextOptions', tenantId],
-    queryFn: () => getContextOptions(tenantId!),
-    enabled: !!tenantId,
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: contextOptions } = useContextOptions(tenantId ?? null);
 
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
   const unitLabel = buildingId && unitId

@@ -14,8 +14,8 @@ import {
 } from 'lucide-react';
 
 import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
+import { useContextOptions } from '@/features/context/useContextOptions';
 import { getResidentLedger, type UnitLedger } from '@/features/resident/api/resident-context.api';
-import { getContextOptions } from '@/features/context/context.api';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus } from '@/features/finance/services/finance.api';
 import {
@@ -24,7 +24,6 @@ import {
   uploadFileToMinio,
   createDocument,
 } from '@/features/buildings/services/documents.api';
-import type { ContextOption } from '@/features/context/context.types';
 import Card from '@/shared/components/ui/Card';
 import Input from '@/shared/components/ui/Input';
 import Select from '@/shared/components/ui/Select';
@@ -105,17 +104,7 @@ export const ResidentPaymentsPage = () => {
     isError: contextOptionsError,
     error: contextOptionsErrorValue,
     refetch: refetchContextOptions,
-  } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
-    queryKey: ['contextOptions', tenantId],
-    queryFn: () => {
-      if (!tenantId) {
-        throw new Error('Missing tenantId for resident context options');
-      }
-      return getContextOptions(tenantId);
-    },
-    enabled: !!tenantId,
-    staleTime: 5 * 60 * 1000,
-  });
+  } = useContextOptions(tenantId ?? null);
 
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
   const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;

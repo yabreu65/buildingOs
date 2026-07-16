@@ -15,11 +15,11 @@ import {
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
 import { useResidentLedger } from '../../../../../features/resident/hooks/useResidentLedger';
-import { getResidentCommunications, getResidentTickets } from '../../../../../features/resident/api/resident-context.api';
-import { getContextOptions } from '../../../../../features/context/context.api';
+import { useResidentCommunications } from '../../../../../features/resident/hooks/useResidentCommunications';
+import { useContextOptions } from '../../../../../features/context/useContextOptions';
+import { getResidentTickets } from '../../../../../features/resident/api/resident-context.api';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
-import type { InboxCommunication, Ticket } from '../../../../../features/resident/api/resident-context.api';
-import type { ContextOption } from '../../../../../features/context/context.types';
+import type { Ticket } from '../../../../../features/resident/api/resident-context.api';
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { formatCurrency } from '../../../../../shared/lib/format/money';
@@ -100,12 +100,7 @@ const ResidentDashboardPage = () => {
     isError: contextOptionsError,
     error: contextOptionsErrorValue,
     refetch: refetchContextOptions,
-  } = useQuery<{ buildings: ContextOption[]; unitsByBuilding: Record<string, ContextOption[]> }>({
-    queryKey: ['contextOptions', tenantId],
-    queryFn: () => getContextOptions(tenantId!),
-    enabled: !!tenantId,
-    staleTime: 5 * 60 * 1000,
-  });
+  } = useContextOptions(tenantId ?? null);
 
   const {
     data: ledger,
@@ -120,13 +115,7 @@ const ResidentDashboardPage = () => {
     isLoading: commsLoading,
     isError: commsError,
     error: commsErrorValue,
-  } = useQuery<InboxCommunication[]>({
-    queryKey: ['residentCommunications', tenantId],
-    queryFn: () => getResidentCommunications(3),
-    staleTime: 2 * 60 * 1000,
-    gcTime: 5 * 60 * 1000,
-    retry: 1,
-  });
+  } = useResidentCommunications(tenantId ?? null, 3);
 
   const {
     data: tickets = [],
