@@ -248,7 +248,7 @@ jobs:
               email: process.env.LOGIN_EMAIL,
               password: process.env.TEST_E2E_PASSWORD,
             }));
-NODE
+          NODE
           )"
 
           login_status="$(
@@ -308,7 +308,7 @@ NODE
             console.error(`AUTH_SESSION_INVALID_PAYLOAD ${message.replace(/\s+/g, ' ').trim()}`);
             process.exit(1);
           }
-NODE
+          NODE
 
           echo "AUTH_PREFLIGHT_OK login=$login_status session=$session_status"
 
