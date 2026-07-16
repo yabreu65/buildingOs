@@ -55,6 +55,11 @@ export function clearSession(): void {
  * @param tenantId - The tenant ID to remember as the last active one
  */
 export function setLastTenant(tenantId: string): void {
+  const currentTenantId = localStorage.getItem(KEY_LAST_TENANT);
+  if (currentTenantId === tenantId) {
+    return;
+  }
+
   localStorage.setItem(KEY_LAST_TENANT, tenantId);
   emitBoStorageChange();
 }
