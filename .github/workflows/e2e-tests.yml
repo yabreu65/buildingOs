@@ -41,7 +41,7 @@ jobs:
       WEB_ORIGIN: http://localhost:3000
       APP_BASE_URL: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://localhost:4000
-      TEST_E2E_PASSWORD: ${{ secrets.TEST_E2E_PASSWORD }}
+      TEST_E2E_PASSWORD: TestPass123!
       S3_ENDPOINT: http://localhost:9000
       S3_BUCKET: buildingos-test
       S3_PUBLIC_BASE_URL: http://localhost:9000/buildingos-test
@@ -248,7 +248,7 @@ jobs:
               email: process.env.LOGIN_EMAIL,
               password: process.env.TEST_E2E_PASSWORD,
             }));
-NODE
+          NODE
           )"
 
           login_status="$(
@@ -308,7 +308,7 @@ NODE
             console.error(`AUTH_SESSION_INVALID_PAYLOAD ${message.replace(/\s+/g, ' ').trim()}`);
             process.exit(1);
           }
-NODE
+          NODE
 
           echo "AUTH_PREFLIGHT_OK login=$login_status session=$session_status"
 

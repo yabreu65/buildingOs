@@ -81,28 +81,22 @@ export async function login(page: Page, user: TestUser): Promise<string> {
     );
   }
 
-  const sessionProbe = await page.evaluate(async (targetUrl) => {
-    try {
-      const response = await fetch(targetUrl, {
-        credentials: 'include',
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-
-      return {
-        ok: response.ok,
-        status: response.status,
-        text: await response.text(),
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        status: 0,
-        text: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }, sessionUrl);
+  const sessionProbe = await page.request
+    .get(sessionUrl, {
+      headers: {
+        Accept: 'application/json',
+      },
+    })
+    .then(async (response) => ({
+      ok: response.ok(),
+      status: response.status(),
+      text: await response.text(),
+    }))
+    .catch((error: unknown) => ({
+      ok: false,
+      status: 0,
+      text: error instanceof Error ? error.message : String(error),
+    }));
 
   if (!sessionProbe.ok) {
     throw new Error(
