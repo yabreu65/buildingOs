@@ -490,6 +490,182 @@ describe('OnboardingImportConfirmationService', () => {
     );
   });
 
+  it('loads members referenced only by document refs when confirming people', async () => {
+    const currentJob = createCurrentJob();
+    const { payload } = createPayload(currentJob.id, currentJob.tenantId, currentJob.fileHash);
+    payload.data.people[0].normalized.email = null;
+    payload.data.people[0].normalized.telefono = null;
+    payload.data.people[0].raw.email = '';
+    payload.data.people[0].raw.telefono = '';
+    const serialized = JSON.stringify(payload);
+    const previewHash = createHash('sha256').update(serialized, 'utf8').digest('hex');
+    currentJob.previewHash = previewHash;
+
+    const confirmingJob = {
+      ...currentJob,
+      status: ImportJobStatus.CONFIRMING,
+      confirmingLockExpiresAt: new Date('2030-01-01T00:05:00.000Z'),
+    };
+
+    (prisma.importJob.findFirst as jest.Mock)
+      .mockResolvedValueOnce(currentJob)
+      .mockResolvedValueOnce(confirmingJob);
+    (prisma.importJob.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (minio.getObjectBuffer as jest.Mock).mockResolvedValue(Buffer.from(serialized, 'utf8'));
+
+    const tx = createTransactionMocks();
+    (tx.externalEntityReference.findMany as jest.Mock).mockResolvedValue([
+      {
+        entityType: 'PERSON_DOCUMENT',
+        externalCode: 'V-12345678',
+        entityId: 'member-1',
+      },
+    ]);
+    (tx.tenantMember.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'member-1',
+        tenantId: currentJob.tenantId,
+        userId: null,
+        name: 'Residente Uno',
+        email: null,
+        phone: null,
+        role: Role.RESIDENT,
+        status: MemberStatus.ACTIVE,
+      },
+    ]);
+    (tx.user.findMany as jest.Mock).mockResolvedValue([]);
+    (tx.importJob.findFirst as jest.Mock).mockResolvedValue(confirmingJob);
+    (prisma.$transaction as jest.Mock).mockImplementation(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx));
+
+    const result = await service.confirmImport({
+      tenantId: currentJob.tenantId,
+      tenantCurrency: 'ARS',
+      userId: 'user-admin',
+      membershipId: 'membership-1',
+      roles: [Role.TENANT_ADMIN],
+      isSuperAdmin: false,
+      importId: currentJob.id,
+      expectedPreviewVersion: 1,
+    });
+
+    expect(result.summary.peopleReused).toBe(1);
+    expect(tx.tenantMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            expect.objectContaining({
+              id: {
+                in: ['member-1'],
+              },
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(tx.externalEntityReference.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId_source_entityType_externalCode: {
+            tenantId: currentJob.tenantId,
+            source: 'onboarding-import',
+            entityType: 'PERSON_DOCUMENT',
+            externalCode: 'V-12345678',
+          },
+        },
+        update: { entityId: 'member-1' },
+        create: {
+          tenantId: currentJob.tenantId,
+          source: 'onboarding-import',
+          entityType: 'PERSON_DOCUMENT',
+          externalCode: 'V-12345678',
+          entityId: 'member-1',
+        },
+      }),
+    );
+  });
+
+  it('rejects a document ref that belongs to another member before updating the candidate', async () => {
+    const currentJob = createCurrentJob();
+    const { serialized } = createPayload(currentJob.id, currentJob.tenantId, currentJob.fileHash);
+    const previewHash = createHash('sha256').update(serialized, 'utf8').digest('hex');
+    currentJob.previewHash = previewHash;
+
+    const confirmingJob = {
+      ...currentJob,
+      status: ImportJobStatus.CONFIRMING,
+      confirmingLockExpiresAt: new Date('2030-01-01T00:05:00.000Z'),
+    };
+
+    (prisma.importJob.findFirst as jest.Mock)
+      .mockResolvedValueOnce(currentJob)
+      .mockResolvedValueOnce(confirmingJob);
+    (prisma.importJob.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (minio.getObjectBuffer as jest.Mock).mockResolvedValue(Buffer.from(serialized, 'utf8'));
+
+    const tx = createTransactionMocks();
+    (tx.externalEntityReference.findMany as jest.Mock).mockResolvedValue([
+      {
+        entityType: 'PERSON',
+        externalCode: 'P-1',
+        entityId: 'member-1',
+      },
+      {
+        entityType: 'PERSON_DOCUMENT',
+        externalCode: 'V-12345678',
+        entityId: 'member-2',
+      },
+    ]);
+    (tx.tenantMember.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'member-1',
+        tenantId: currentJob.tenantId,
+        userId: 'user-1',
+        name: 'Residente Uno',
+        email: 'resident@example.com',
+        phone: '555-0101',
+        role: Role.RESIDENT,
+        status: MemberStatus.ACTIVE,
+      },
+      {
+        id: 'member-2',
+        tenantId: currentJob.tenantId,
+        userId: null,
+        name: 'Otra Persona',
+        email: null,
+        phone: null,
+        role: Role.RESIDENT,
+        status: MemberStatus.ACTIVE,
+      },
+    ]);
+    (tx.user.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'user-1',
+        email: 'resident@example.com',
+        name: 'Residente Uno',
+      },
+    ]);
+    (tx.importJob.findFirst as jest.Mock).mockResolvedValue(confirmingJob);
+    (prisma.$transaction as jest.Mock).mockImplementation(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx));
+
+    await expect(service.confirmImport({
+      tenantId: currentJob.tenantId,
+      tenantCurrency: 'ARS',
+      userId: 'user-admin',
+      membershipId: 'membership-1',
+      roles: [Role.TENANT_ADMIN],
+      isSuperAdmin: false,
+      importId: currentJob.id,
+      expectedPreviewVersion: 1,
+    })).rejects.toThrow('document en el tenant');
+
+    expect(tx.tenantMember.update).not.toHaveBeenCalled();
+    expect(
+      (tx.externalEntityReference.upsert as jest.Mock).mock.calls.some(([args]) => (
+        args?.where?.tenantId_source_entityType_externalCode?.entityType === 'PERSON_DOCUMENT'
+      )),
+    ).toBe(false);
+  });
+
   it('returns the stored result when the import was already confirmed', async () => {
     const currentJob = {
       ...createCurrentJob(),

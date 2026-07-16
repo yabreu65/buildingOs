@@ -624,22 +624,32 @@ export class OnboardingImportConfirmationService {
       return normalized.telefono ? this.normalizeText(normalized.telefono) : null;
     }).filter((value): value is string => Boolean(value))));
 
-    const [existingRefs, existingMembers, existingUsers] = await Promise.all([
-      tx.externalEntityReference.findMany({
-        where: {
-          tenantId: input.tenantId,
-          source: 'onboarding-import',
-          entityType: { in: ['PERSON', 'PERSON_DOCUMENT'] },
-          externalCode: { in: [...personCodes, ...personDocuments] },
-        },
-        select: { entityType: true, externalCode: true, entityId: true },
-      }),
+    const existingRefs = await tx.externalEntityReference.findMany({
+      where: {
+        tenantId: input.tenantId,
+        source: 'onboarding-import',
+        entityType: { in: ['PERSON', 'PERSON_DOCUMENT'] },
+        externalCode: { in: [...personCodes, ...personDocuments] },
+      },
+      select: { entityType: true, externalCode: true, entityId: true },
+    });
+    const documentRefMemberIds = Array.from(
+      new Set(
+        existingRefs
+          .filter((ref) => ref.entityType === 'PERSON_DOCUMENT')
+          .map((ref) => ref.entityId)
+          .filter((entityId): entityId is string => Boolean(entityId)),
+      ),
+    );
+
+    const [existingMembers, existingUsers] = await Promise.all([
       tx.tenantMember.findMany({
         where: {
           tenantId: input.tenantId,
           OR: [
             emails.length > 0 ? { email: { in: emails } } : undefined,
             phones.length > 0 ? { phone: { in: phones } } : undefined,
+            documentRefMemberIds.length > 0 ? { id: { in: documentRefMemberIds } } : undefined,
           ].filter((value): value is NonNullable<typeof value> => Boolean(value)),
         },
         select: { id: true, tenantId: true, userId: true, name: true, email: true, phone: true, role: true, status: true },
@@ -677,6 +687,10 @@ export class OnboardingImportConfirmationService {
       if (candidate) {
         if (candidate.role !== Role.RESIDENT) {
           throw new ConflictException(`Person ${code} is linked to a non-resident member`);
+        }
+
+        if (document && existingDocumentRef && existingDocumentRef.entityId !== candidate.id) {
+          throw new ConflictException(`La persona entra en conflicto con una identidad existente por document en el tenant`);
         }
 
         const sameName = this.normalizeText(candidate.name) === this.normalizeText(normalized.nombre);
