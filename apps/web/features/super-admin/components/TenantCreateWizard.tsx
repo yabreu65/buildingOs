@@ -6,11 +6,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import Button from '@/shared/components/ui/Button';
 import Input from '@/shared/components/ui/Input';
 import { createTenantSchema } from '../super-admin.validation';
-import type { CreateTenantInput } from '../super-admin.types';
 import type { z } from 'zod';
 
 interface TenantCreateWizardProps {
-  onSubmit: (data: CreateTenantInput) => Promise<void>;
+  onSubmit: (data: CreateTenantFormData) => Promise<void>;
   isLoading?: boolean;
   feedback?: { type: 'success' | 'error'; message: string } | null;
 }
@@ -35,7 +34,6 @@ export default function TenantCreateWizard({
       name: '',
       type: 'ADMINISTRADORA',
       plan: 'FREE',
-      ownerEmail: '',
     },
   });
 
@@ -149,21 +147,9 @@ export default function TenantCreateWizard({
               )}
             </div>
 
-            <div>
-              <label htmlFor="ownerEmail" className="block text-sm font-medium mb-1">
-                Email del Owner *
-              </label>
-              <Input
-                id="ownerEmail"
-                type="email"
-                placeholder="admin@empresa.com"
-                {...register('ownerEmail')}
-                disabled={isLoaded}
-              />
-              {errors.ownerEmail && (
-                <p className="text-xs text-red-600 mt-1">{errors.ownerEmail.message}</p>
-              )}
-            </div>
+            <p className="text-sm text-muted-foreground">
+              La invitación del administrador principal estará disponible próximamente.
+            </p>
           </div>
         )}
 
@@ -186,10 +172,6 @@ export default function TenantCreateWizard({
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Plan:</span>
                 <span className="text-sm font-medium">{formData.plan}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm text-muted-foreground">Email Owner:</span>
-                <span className="text-sm font-medium">{formData.ownerEmail}</span>
               </div>
             </div>
           </div>

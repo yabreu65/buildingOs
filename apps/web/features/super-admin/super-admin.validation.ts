@@ -14,7 +14,6 @@ export const createTenantSchema = z.object({
     .max(100, 'El nombre no puede exceder 100 caracteres'),
   type: z.enum(['ADMINISTRADORA', 'EDIFICIO_AUTOGESTION']),
   plan: z.enum(['FREE', 'BASIC', 'PRO', 'ENTERPRISE']),
-  ownerEmail: z.string().email('Email inválido'),
 });
 
 /**

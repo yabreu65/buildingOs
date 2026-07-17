@@ -6,10 +6,8 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import SubscriptionPanel from '@/features/billing/components/SubscriptionPanel';
 import { DemoSeedWizard } from '@/features/demo-seed/DemoSeedWizard';
-import { getTenantById } from '@/features/super-admin/tenants.storage';
-import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
+import { getTenant, type TenantFromAPI } from '@/features/super-admin/tenants.api';
 import { ChevronLeft } from 'lucide-react';
-import type { Tenant } from '@/features/super-admin/super-admin.types';
 
 interface TenantDetailPageProps {
   params: {
@@ -20,13 +18,12 @@ interface TenantDetailPageProps {
 export default function TenantDetailPage({
   params,
 }: TenantDetailPageProps) {
-  useBoStorageTick();
-
-  const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [tenant, setTenant] = useState<TenantFromAPI | null>(null);
   const [loading, setLoading] = useState(true);
   const tenantId = params?.tenantId?.trim();
 
   useEffect(() => {
+    const loadTenant = async () => {
     setLoading(true);
     try {
       if (!tenantId) {
@@ -34,14 +31,14 @@ export default function TenantDetailPage({
         return;
       }
 
-      const loaded = getTenantById(tenantId);
-      setTenant(loaded || null);
+      const loaded = await getTenant(tenantId);
+      setTenant(loaded);
     } catch (error) {
-      console.error('Failed to load tenant:', error);
       setTenant(null);
     } finally {
       setLoading(false);
-    }
+    }};
+    void loadTenant();
   }, [tenantId]);
 
   if (loading) {
@@ -118,12 +115,12 @@ export default function TenantDetailPage({
             <div className="text-sm font-medium text-foreground mt-1">
               <span
                 className={`inline-block px-2 py-1 rounded text-xs font-medium ${
-                  tenant.status === 'ACTIVE'
+                  tenant.subscription?.status === 'ACTIVE'
                     ? 'bg-green-100 text-green-800'
                     : 'bg-red-100 text-red-800'
                 }`}
               >
-                {tenant.status === 'ACTIVE' ? 'Activa' : 'Suspendida'}
+                {tenant.subscription?.status ?? 'Dato no disponible'}
               </span>
             </div>
           </div>
@@ -142,13 +139,12 @@ export default function TenantDetailPage({
       {tenantId && <SubscriptionPanel tenantId={tenantId} />}
 
       {/* Demo Seed Wizard (only for TRIAL tenants) */}
-      {tenant.status === 'TRIAL' && tenantId && (
+      {tenant.subscription?.status === 'TRIAL' && tenantId && (
         <DemoSeedWizard
           tenantId={tenantId}
           onSuccess={() => {
             // Refresh tenant data after demo seed created
-            const loaded = getTenantById(tenantId);
-            setTenant(loaded || null);
+            void getTenant(tenantId).then(setTenant);
           }}
         />
       )}
