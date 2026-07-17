@@ -4,31 +4,23 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Button from '@/shared/components/ui/Button';
 import { OverviewMetricWidget } from '@/features/super-admin/components/OverviewMetricWidget';
-import { getGlobalStats, seedSuperAdminIfEmpty } from '@/features/super-admin/tenants.storage';
-import { useBoStorageTick } from '@/shared/lib/storage/useBoStorage';
-import type { GlobalStats } from '@/features/super-admin/super-admin.types';
+import { listTenants } from '@/features/super-admin/tenants.api';
 
 export default function OverviewPage() {
-  // Re-render cuando cambie localStorage
-  useBoStorageTick();
-
-  const [stats, setStats] = useState<GlobalStats>({
-    totalTenants: 0,
+  const [stats, setStats] = useState({
+    totalTenants: null as number | null,
     activeTenants: 0,
     trialTenants: 0,
-    suspendedTenants: 0,
-    totalBuildings: 0,
-    totalUnits: 0,
-    totalResidents: 0,
+    suspendedTenants: null as number | null,
   });
 
   useEffect(() => {
-    // Seed demo tenants if storage is empty.
-    seedSuperAdminIfEmpty();
-
-    // Load stats.
-    const globalStats = getGlobalStats();
-    setStats(globalStats);
+    void listTenants({ take: 100 })
+      .then((response) => {
+        const count = (status: string) => response.data.filter((tenant) => tenant.subscription?.status === status).length;
+        setStats({ totalTenants: response.total, activeTenants: count('ACTIVE'), trialTenants: count('TRIAL'), suspendedTenants: null });
+      })
+      .catch(() => setStats({ totalTenants: null, activeTenants: 0, trialTenants: 0, suspendedTenants: null }));
   }, []);
 
   return (
@@ -51,20 +43,14 @@ export default function OverviewPage() {
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <OverviewMetricWidget label="Total administradoras" value={stats.totalTenants} />
+        <OverviewMetricWidget label="Total administradoras" value={stats.totalTenants ?? 'Dato no disponible'} />
         <OverviewMetricWidget
           label="Administradoras activas"
-          value={stats.activeTenants}
+          value={stats.activeTenants ?? 'Dato no disponible'}
           color="green"
         />
-        <OverviewMetricWidget label="En prueba" value={stats.trialTenants} color="blue" />
-        <OverviewMetricWidget
-          label="Administradoras suspendidas"
-          value={stats.suspendedTenants}
-          color="red"
-        />
-        <OverviewMetricWidget label="Total edificios" value={stats.totalBuildings} />
-        <OverviewMetricWidget label="Total unidades" value={stats.totalUnits} />
+        <OverviewMetricWidget label="En prueba" value={stats.trialTenants ?? 'Dato no disponible'} color="blue" />
+        <OverviewMetricWidget label="Administradoras suspendidas" value={stats.suspendedTenants ?? 'Dato no disponible'} color="red" />
       </div>
 
       {/* Info */}

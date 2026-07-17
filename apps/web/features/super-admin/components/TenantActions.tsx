@@ -1,14 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import type { TenantFromAPI } from '../tenants.api';
 import type { Tenant } from '../super-admin.types';
 import { useImpersonation } from '../../impersonation/useImpersonation';
 import Button from '@/shared/components/ui/Button';
 
 interface TenantActionsProps {
-  tenant: Tenant;
-  onToggleSuspend: (tenant: Tenant) => void;
-  onDeleteDemo?: (tenant: Tenant) => Promise<void>;
+  tenant: TenantFromAPI | Tenant;
+  onToggleSuspend?: (tenant: Tenant) => void;
+  onDeleteDemo?: (tenant: { id: string; name: string; isDemo?: boolean }) => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -26,7 +27,9 @@ export default function TenantActions({
   const [impersonationError, setImpersonationError] = useState<string | null>(null);
 
   // Only show actions for TRIAL and ACTIVE tenants
-  const isActionable = tenant.status === 'TRIAL' || tenant.status === 'ACTIVE';
+  const subscription = 'subscription' in tenant ? tenant.subscription : null;
+  const legacyStatus = 'status' in tenant ? tenant.status : undefined;
+  const isActionable = subscription?.status === 'TRIAL' || subscription?.status === 'ACTIVE' || legacyStatus === 'TRIAL' || legacyStatus === 'ACTIVE';
   const isDemoTenant = Boolean(tenant.isDemo);
 
   const handleEnter = async () => {
@@ -84,22 +87,7 @@ export default function TenantActions({
             {isImpersonating ? 'Ingresando...' : 'Soporte'}
           </button>
         )}
-        {isActionable && (
-          <button
-            type="button"
-            onClick={() => onToggleSuspend(tenant)}
-            disabled={isLoading}
-            className={`text-xs px-2 py-1 rounded border whitespace-nowrap disabled:opacity-50 ${
-              tenant.status === 'SUSPENDED'
-                ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
-              : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-            }`}
-            title={tenant.status === 'SUSPENDED' ? 'Reactivar administradora' : 'Suspender administradora'}
-            aria-label={tenant.status === 'SUSPENDED' ? `Reactivar ${tenant.name}` : `Suspender ${tenant.name}`}
-          >
-            {tenant.status === 'SUSPENDED' ? 'Activar' : 'Suspender'}
-          </button>
-        )}
+        <span className="self-center text-xs text-muted-foreground">Suspensión próximamente disponible</span>
         {isDemoTenant && (
           <button
             type="button"

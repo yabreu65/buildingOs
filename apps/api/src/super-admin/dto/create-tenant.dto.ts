@@ -1,5 +1,5 @@
 import { IsString, IsEnum, MinLength, MaxLength } from 'class-validator';
-import { TenantType } from '@prisma/client';
+import { BillingPlanId, TenantType } from '@prisma/client';
 
 export class CreateTenantDto {
   @IsString()
@@ -9,4 +9,7 @@ export class CreateTenantDto {
 
   @IsEnum(TenantType)
   type!: TenantType;
+
+  @IsEnum(BillingPlanId)
+  planId!: BillingPlanId;
 }

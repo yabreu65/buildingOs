@@ -18,9 +18,7 @@ export interface TenantFromAPI {
     companyName?: string;
   };
   // Subscription info (populated by backend if subscription exists)
-  subscription?: SubscriptionInfo[];
-  // Derived status from subscription
-  status?: 'TRIAL' | 'ACTIVE' | 'SUSPENDED' | 'CANCELED';
+  subscription: SubscriptionInfo | null;
 }
 
 export interface ListTenantsResponse {
@@ -29,22 +27,11 @@ export interface ListTenantsResponse {
 }
 
 export interface SubscriptionInfo {
-  id: string;
-  tenantId: string;
   planId: string;
-  status: 'TRIAL' | 'ACTIVE' | 'CANCELED';
-  currentPeriodStart: string;
-  currentPeriodEnd: string;
-  trialEndDate?: string;
-  plan?: {
-    planId: string;
-    name: string;
-  };
+  status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'EXPIRED';
 }
 
-export interface TenantDetailFromAPI extends TenantFromAPI {
-  subscription?: SubscriptionInfo[];
-}
+export interface TenantDetailFromAPI extends TenantFromAPI {}
 
 /**
  * List all tenants
@@ -71,6 +58,18 @@ export async function getTenant(tenantId: string): Promise<TenantDetailFromAPI> 
   return apiClient<TenantDetailFromAPI>({
     path: `/api/super-admin/tenants/${tenantId}`,
     method: 'GET',
+  });
+}
+
+export async function createTenant(data: {
+  name: string;
+  type: TenantFromAPI['type'];
+  planId: SubscriptionInfo['planId'];
+}): Promise<TenantFromAPI> {
+  return apiClient<TenantFromAPI, typeof data>({
+    path: '/api/super-admin/tenants',
+    method: 'POST',
+    body: data,
   });
 }
 

@@ -7,7 +7,6 @@ import Badge from '@/shared/components/ui/Badge';
 import { deleteTenant, listTenants } from '@/features/super-admin/tenants.api';
 import TenantActions from '@/features/super-admin/components/TenantActions';
 import type { TenantFromAPI } from '@/features/super-admin/tenants.api';
-import type { Tenant } from '@/features/super-admin/super-admin.types';
 import {
   getTenantDemoBadgeClass,
   getTenantDemoLabel,
@@ -27,7 +26,7 @@ export default function TenantsPage() {
         const response = await listTenants();
         setTenants(response.data);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to load tenants';
+        const message = error instanceof Error ? error.message : 'No se pudieron cargar las administradoras';
         setFeedback({ type: 'error', message });
       } finally {
         setLoading(false);
@@ -36,12 +35,7 @@ export default function TenantsPage() {
     loadTenants();
   }, []);
 
-  const handleToggleSuspend = (tenant: Tenant) => {
-    // TODO: Implement suspend/activate functionality
-    console.log('Toggle suspend for tenant:', tenant.id);
-  };
-
-  const handleDeleteDemo = async (tenant: Tenant) => {
+  const handleDeleteDemo = async (tenant: { id: string; name: string }) => {
     await deleteTenant(tenant.id);
     const response = await listTenants();
     setTenants(response.data);
@@ -141,19 +135,8 @@ export default function TenantsPage() {
             <tbody className="divide-y">
               {filteredTenants.map((tenant) => {
                 // Derive status from subscription if available
-                const status = tenant.status || (tenant.subscription?.[0]?.status) || 'TRIAL';
-                const planId = tenant.subscription?.[0]?.plan?.planId || 'BASIC';
-
-                // Convert to Tenant type for TenantActions component
-                const tenantForActions: Tenant = {
-                  id: tenant.id,
-                  name: tenant.name,
-                  type: tenant.type,
-                  isDemo: tenant.isDemo,
-                  status: status as 'TRIAL' | 'ACTIVE' | 'SUSPENDED',
-                  plan: planId as 'FREE' | 'BASIC' | 'PRO' | 'ENTERPRISE',
-                  createdAt: tenant.createdAt,
-                };
+                const status = tenant.subscription?.status ?? 'SIN SUSCRIPCIÓN';
+                const planId = tenant.subscription?.planId ?? 'Dato no disponible';
 
                 return (
                   <tr key={tenant.id} className="hover:bg-muted/50">
@@ -186,11 +169,7 @@ export default function TenantsPage() {
                             Ver
                           </Button>
                         </Link>
-                        <TenantActions
-                          tenant={tenantForActions}
-                          onToggleSuspend={handleToggleSuspend}
-                          onDeleteDemo={handleDeleteDemo}
-                        />
+                        <TenantActions tenant={tenant} onDeleteDemo={handleDeleteDemo} />
                       </div>
                     </td>
                   </tr>

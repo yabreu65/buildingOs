@@ -9,7 +9,7 @@ import type { Tenant } from '../super-admin.types';
 interface TenantTableProps {
   tenants: Tenant[];
   onToggleSuspend: (tenant: Tenant) => void;
-  onDeleteDemo?: (tenant: Tenant) => Promise<void>;
+  onDeleteDemo?: (tenant: { id: string; name: string; isDemo?: boolean }) => Promise<void>;
   isLoading?: boolean;
 }
 

@@ -32,6 +32,10 @@ export interface TenantResponse {
   isDemo: boolean;
   createdAt: string;
   updatedAt: string;
+  subscription: {
+    planId: BillingPlanId;
+    status: string;
+  } | null;
 }
 
 export interface StatsResponse {
@@ -93,17 +97,17 @@ export class SuperAdminService {
 
       // 2. Create default subscription (TRIAL on FREE plan)
       // First, ensure FREE plan exists
-      const freePlan = await tx.billingPlan.findUnique({
-        where: { planId: BillingPlanId.FREE },
+      const plan = await tx.billingPlan.findUnique({
+        where: { planId: dto.planId },
       });
-      if (!freePlan) {
-        throw new Error('FREE plan not found. Run seed?');
+      if (!plan) {
+        throw new NotFoundException(`Plan "${dto.planId}" not found`);
       }
 
       await tx.subscription.create({
         data: {
           tenantId: tenant.id,
-          planId: freePlan.id,
+          planId: plan.id,
           status: 'TRIAL',
           trialEndDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
         },
@@ -147,6 +151,7 @@ export class SuperAdminService {
         skip,
         take,
         orderBy: { createdAt: 'desc' },
+        include: { subscription: { include: { plan: true } } },
       }),
       this.prisma.tenant.count(),
     ]);
@@ -163,6 +168,7 @@ export class SuperAdminService {
   async getTenant(tenantId: string): Promise<TenantResponse> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
+      include: { subscription: { include: { plan: true } } },
     });
 
     if (!tenant) {
@@ -744,7 +750,9 @@ export class SuperAdminService {
   // HELPERS
   // ============================================================================
 
-  private formatTenant(tenant: Tenant): TenantResponse {
+  private formatTenant(
+    tenant: Tenant & { subscription?: { plan: { planId: BillingPlanId }; status: string } | null },
+  ): TenantResponse {
     return {
       id: tenant.id,
       name: tenant.name,
@@ -752,6 +760,9 @@ export class SuperAdminService {
       isDemo: tenant.isDemo,
       createdAt: tenant.createdAt.toISOString(),
       updatedAt: tenant.updatedAt.toISOString(),
+      subscription: tenant.subscription
+        ? { planId: tenant.subscription.plan.planId, status: tenant.subscription.status }
+        : null,
     };
   }
 
