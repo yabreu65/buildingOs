@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import SubscriptionPanel from '@/features/billing/components/SubscriptionPanel';
@@ -9,15 +10,8 @@ import { DemoSeedWizard } from '@/features/demo-seed/DemoSeedWizard';
 import { getTenant, type TenantFromAPI } from '@/features/super-admin/tenants.api';
 import { ChevronLeft } from 'lucide-react';
 
-interface TenantDetailPageProps {
-  params: {
-    tenantId: string;
-  };
-}
-
-export default function TenantDetailPage({
-  params,
-}: TenantDetailPageProps) {
+export default function TenantDetailPage() {
+  const params = useParams<{ tenantId: string }>();
   const [tenant, setTenant] = useState<TenantFromAPI | null>(null);
   const [loading, setLoading] = useState(true);
   const tenantId = params?.tenantId?.trim();
