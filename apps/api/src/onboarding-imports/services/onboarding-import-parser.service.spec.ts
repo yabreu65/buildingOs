@@ -12,8 +12,8 @@ function buildWorkbook(includeAllSheets = true): Buffer {
     ['A', 'Torre A', 'Av. Principal 123'],
   ]);
   const units = XLSX.utils.aoa_to_sheet([
-    ['edificio_codigo', 'codigo', 'etiqueta', 'tipo', 'm2', 'facturacion', 'categoria_nombre', 'coeficiente'],
-    ['A', 'A-01-01', 'Apartamento 1', 'APARTAMENTO', 72.5, 'SI', 'Standard', 1],
+    ['edificio_codigo', 'codigo', 'etiqueta', 'tipo', 'm2', 'facturacion', 'estado_ocupacion', 'categoria_nombre', 'coeficiente'],
+    ['A', 'A-01-01', 'Apartamento 1', 'APARTAMENTO', 72.5, 'SI', 'OCUPADA', 'Standard', 1],
   ]);
   const people = XLSX.utils.aoa_to_sheet([
     ['persona_codigo', 'nombre', 'email', 'telefono', 'documento'],
@@ -49,6 +49,40 @@ function buildWorkbook(includeAllSheets = true): Buffer {
   return XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
 }
 
+function buildLocalizedWorkbook(): Buffer {
+  const workbook = XLSX.utils.book_new();
+
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['codigo', 'nombre', 'direccion'],
+    ['A', 'Torre A', 'Av. Principal 123'],
+  ]), ONBOARDING_IMPORT_SHEETS.instructions);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['codigo', 'nombre', 'direccion'],
+    ['A', 'Torre A', 'Av. Principal 123'],
+  ]), ONBOARDING_IMPORT_SHEETS.buildings);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['edificio_codigo', 'codigo', 'etiqueta', 'tipo', 'm2', 'facturacion', 'estado_ocupacion', 'categoria_nombre', 'coeficiente'],
+    ['A', 'A-01-01', 'Apartamento 1', 'APARTAMENTO', 72.5, 'SI', 'DESOCUPADA', 'Standard', 1],
+    ['A', 'A-01-02', 'Apartamento 2', 'APARTAMENTO', 68, 'SI', 'OCUPADA', 'Standard', 1.25],
+  ]), ONBOARDING_IMPORT_SHEETS.units);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['persona_codigo', 'nombre', 'email', 'telefono', 'documento'],
+    ['P-001', 'Ana Pérez', 'ana.perez@example.com', '+58 412 1234567', 'V-12345678'],
+  ]), ONBOARDING_IMPORT_SHEETS.people);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['persona_codigo', 'edificio_codigo', 'unidad_codigo', 'rol', 'principal', 'fecha_inicio'],
+    ['P-001', 'A', 'A-01-01', 'PROPIETARIO', 'SI', '2026-01-01'],
+    ['P-001', 'A', 'A-01-01', 'RESIDENTE', 'NO', '2026-01-02'],
+  ]), ONBOARDING_IMPORT_SHEETS.relations);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['edificio_codigo', 'unidad_codigo', 'periodo', 'concepto', 'monto', 'moneda', 'vencimiento', 'tipo'],
+    ['A', 'A-01-01', '2026-01', 'Saldo inicial', 15000, 'ARS', '2026-01-15', 'DÉBITO'],
+    ['A', 'A-01-01', '2026-02', 'Saldo inicial', 5000, 'ARS', '2026-02-15', 'CRÉDITO'],
+  ]), ONBOARDING_IMPORT_SHEETS.openingBalances);
+
+  return XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
+}
+
 function inflateDeclaredUncompressedSize(buffer: Buffer, declaredSize: number): Buffer {
   const clone = Buffer.from(buffer);
   const eocdSignature = 0x06054b50;
@@ -79,6 +113,14 @@ describe('OnboardingImportParserService', () => {
     expect(result.data.relations).toHaveLength(1);
     expect(result.data.openingBalances).toHaveLength(1);
     expect(result.issues.some((issue) => issue.code === 'FORMULA_NOT_ALLOWED')).toBe(true);
+  });
+
+  it('normalizes localized roles, occupancy and balance kinds', () => {
+    const result = parser.parseWorkbook(buildLocalizedWorkbook());
+
+    expect(result.data.units.map((row) => row.normalized?.estadoOcupacion)).toEqual(['VACANT', 'OCCUPIED']);
+    expect(result.data.relations.map((row) => row.normalized?.rol)).toEqual(['OWNER', 'RESIDENT']);
+    expect(result.data.openingBalances.map((row) => row.normalized?.kind)).toEqual(['DEBITO', 'CREDITO']);
   });
 
   it('reports missing required sheets', () => {

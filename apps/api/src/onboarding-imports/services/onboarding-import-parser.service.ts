@@ -58,7 +58,7 @@ export class OnboardingImportParserService {
     },
     {
       name: ONBOARDING_IMPORT_SHEETS.units,
-      headers: ['edificio_codigo', 'codigo', 'etiqueta', 'tipo', 'm2', 'facturacion', 'categoria_nombre', 'coeficiente'],
+      headers: ['edificio_codigo', 'codigo', 'etiqueta', 'tipo', 'm2', 'facturacion', 'estado_ocupacion', 'categoria_nombre', 'coeficiente'],
       requiredHeaders: ['edificio_codigo', 'codigo', 'tipo', 'facturacion'],
     },
     {
@@ -132,7 +132,7 @@ export class OnboardingImportParserService {
           null,
           'DUPLICATE_SHEET_NAME',
           'BLOCKER',
-          `The workbook contains duplicate sheets after normalization: ${matches.join(', ')}`,
+          `El libro contiene hojas duplicadas después de normalizar: ${matches.join(', ')}`,
           matches.join(', '),
           normalizedSheetName,
         ));
@@ -228,7 +228,7 @@ export class OnboardingImportParserService {
 
     const ref = worksheet['!ref'];
     if (!ref) {
-      issues.push(this.makeIssue(schema.name, null, null, 'EMPTY_SHEET', 'BLOCKER', 'The sheet is empty', null, null));
+      issues.push(this.makeIssue(schema.name, null, null, 'EMPTY_SHEET', 'BLOCKER', 'La hoja está vacía', null, null));
       return [];
     }
 
@@ -239,14 +239,14 @@ export class OnboardingImportParserService {
     if (totalRows - 1 > ONBOARDING_IMPORT_MAX_ROWS_PER_SHEET) {
       throw new PayloadTooLargeException({
         code: 'WORKBOOK_TOO_MANY_ROWS',
-        message: `Sheet ${schema.name} exceeds the maximum of ${ONBOARDING_IMPORT_MAX_ROWS_PER_SHEET} data rows`,
+        message: `La hoja ${schema.name} supera el máximo de ${ONBOARDING_IMPORT_MAX_ROWS_PER_SHEET} filas de datos`,
       });
     }
 
     if (totalColumns > ONBOARDING_IMPORT_MAX_COLUMNS_PER_SHEET) {
       throw new PayloadTooLargeException({
         code: 'WORKBOOK_TOO_MANY_COLUMNS',
-        message: `Sheet ${schema.name} exceeds the maximum of ${ONBOARDING_IMPORT_MAX_COLUMNS_PER_SHEET} columns`,
+        message: `La hoja ${schema.name} supera el máximo de ${ONBOARDING_IMPORT_MAX_COLUMNS_PER_SHEET} columnas`,
       });
     }
 
@@ -292,12 +292,12 @@ export class OnboardingImportParserService {
       const headerValue = this.normalizer.normalizeHeader(String(cell?.v ?? ''));
 
       if (!headerValue) {
-        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'MISSING_HEADER', 'BLOCKER', 'Header cell is empty', null, null));
+        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'MISSING_HEADER', 'BLOCKER', 'La celda del encabezado está vacía', null, null));
         continue;
       }
 
       if (seenHeaders.has(headerValue)) {
-        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'DUPLICATE_HEADER', 'BLOCKER', `Duplicate header: ${headerValue}`, this.sanitizeForIssue(cell?.v), headerValue));
+        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'DUPLICATE_HEADER', 'BLOCKER', `Encabezado duplicado: ${headerValue}`, this.sanitizeForIssue(cell?.v), headerValue));
         continue;
       }
 
@@ -305,13 +305,13 @@ export class OnboardingImportParserService {
       headerMap.set(headerValue, column);
 
       if (!schema.headers.includes(headerValue)) {
-        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'UNKNOWN_HEADER', 'WARNING', `Unknown header: ${headerValue}`, this.sanitizeForIssue(cell?.v), headerValue));
+        issues.push(this.makeIssue(schema.name, 1, this.columnLetter(column), 'UNKNOWN_HEADER', 'WARNING', `Encabezado desconocido: ${headerValue}`, this.sanitizeForIssue(cell?.v), headerValue));
       }
     }
 
     for (const requiredHeader of schema.requiredHeaders) {
       if (!headerMap.has(requiredHeader)) {
-        issues.push(this.makeIssue(schema.name, 1, null, 'MISSING_HEADER', 'BLOCKER', `Missing required header: ${requiredHeader}`, null, null));
+        issues.push(this.makeIssue(schema.name, 1, null, 'MISSING_HEADER', 'BLOCKER', `Falta el encabezado obligatorio: ${requiredHeader}`, null, null));
       }
     }
 
@@ -345,7 +345,7 @@ export class OnboardingImportParserService {
           this.columnLetter(column),
           'FORMULA_NOT_ALLOWED',
           'BLOCKER',
-          'Formulas are not allowed in onboarding imports',
+          'No se permiten fórmulas en las importaciones iniciales',
           this.sanitizeForIssue(`=${cell.f}`),
           null,
         ));
@@ -385,7 +385,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.normalizeCode(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -402,6 +402,7 @@ export class OnboardingImportParserService {
     const tipo = this.safeNormalizeUnitType(sheet, row.tipo, 'tipo', rowNumber, 'tipo', issues);
     const m2 = this.safeNormalizeOptionalDecimal(sheet, row.m2, 'm2', rowNumber, 'm2', issues);
     const facturacion = this.safeNormalizeBoolean(sheet, row.facturacion, 'facturacion', rowNumber, 'facturacion', issues);
+    const estadoOcupacion = this.safeNormalizeOccupancyStatus(sheet, row.estado_ocupacion, 'estado_ocupacion', rowNumber, 'estado_ocupacion', issues);
     const categoriaNombre = this.safeNormalizeOptionalText(row.categoria_nombre);
     const coeficiente = this.safeNormalizeOptionalDecimal(sheet, row.coeficiente, 'coeficiente', rowNumber, 'coeficiente', issues);
 
@@ -410,12 +411,12 @@ export class OnboardingImportParserService {
     }
 
     if (coeficiente !== null && coeficiente <= 0) {
-      issues.push(this.makeIssue(sheet, rowNumber, 'coeficiente', 'INVALID_VALUE', 'BLOCKER', 'Coeficiente must be greater than zero', this.sanitizeForIssue(row.coeficiente), String(coeficiente)));
+      issues.push(this.makeIssue(sheet, rowNumber, 'coeficiente', 'INVALID_VALUE', 'BLOCKER', 'El coeficiente debe ser mayor que cero', this.sanitizeForIssue(row.coeficiente), String(coeficiente)));
       return null;
     }
 
     if (m2 !== null && m2 < 0) {
-      issues.push(this.makeIssue(sheet, rowNumber, 'm2', 'INVALID_VALUE', 'BLOCKER', 'Square meters must be positive', this.sanitizeForIssue(row.m2), String(m2)));
+      issues.push(this.makeIssue(sheet, rowNumber, 'm2', 'INVALID_VALUE', 'BLOCKER', 'Los metros cuadrados deben ser positivos', this.sanitizeForIssue(row.m2), String(m2)));
       return null;
     }
 
@@ -426,6 +427,7 @@ export class OnboardingImportParserService {
       tipo,
       m2,
       facturacion,
+      estadoOcupacion,
       categoriaNombre,
       coeficiente,
     };
@@ -459,16 +461,11 @@ export class OnboardingImportParserService {
     const personaCodigo = this.safeNormalizeCode(sheet, row.persona_codigo, 'persona_codigo', rowNumber, 'persona_codigo', issues);
     const edificioCodigo = this.safeNormalizeCode(sheet, row.edificio_codigo, 'edificio_codigo', rowNumber, 'edificio_codigo', issues);
     const unidadCodigo = this.safeNormalizeCode(sheet, row.unidad_codigo, 'unidad_codigo', rowNumber, 'unidad_codigo', issues);
-    const rolRaw = this.safeNormalizeCode(sheet, row.rol, 'rol', rowNumber, 'rol', issues);
+    const rolRaw = this.safeNormalizeRelationRole(sheet, row.rol, 'rol', rowNumber, 'rol', issues);
     const principal = this.safeNormalizeBoolean(sheet, row.principal, 'principal', rowNumber, 'principal', issues);
     const startDate = this.safeNormalizeDate(sheet, row.fecha_inicio, 'fecha_inicio', rowNumber, 'fecha_inicio', issues);
 
     if (!personaCodigo || !edificioCodigo || !unidadCodigo || !rolRaw || principal === null || !startDate) {
-      return null;
-    }
-
-    if (rolRaw !== 'OWNER' && rolRaw !== 'RESIDENT') {
-      issues.push(this.makeIssue(sheet, rowNumber, 'rol', 'INVALID_VALUE', 'BLOCKER', 'Rol must be OWNER or RESIDENT', this.sanitizeForIssue(row.rol), rolRaw));
       return null;
     }
 
@@ -488,19 +485,14 @@ export class OnboardingImportParserService {
     const amountMinor = this.safeNormalizeDecimalToMinor(sheet, row.monto, 'monto', rowNumber, 'monto', issues);
     const currency = this.safeNormalizeCurrency(sheet, row.moneda, 'moneda', rowNumber, 'moneda', issues);
     const dueDate = this.safeNormalizeDate(sheet, row.vencimiento, 'vencimiento', rowNumber, 'vencimiento', issues);
-    const kindRaw = this.safeNormalizeCode(sheet, row.tipo, 'tipo', rowNumber, 'tipo', issues);
+    const kindRaw = this.safeNormalizeOpeningBalanceKind(sheet, row.tipo, 'tipo', rowNumber, 'tipo', issues);
 
     if (!edificioCodigo || !unidadCodigo || !period || !concept || amountMinor === null || !currency || !dueDate || !kindRaw) {
       return null;
     }
 
     if (amountMinor <= 0) {
-      issues.push(this.makeIssue(sheet, rowNumber, 'monto', 'INVALID_VALUE', 'BLOCKER', 'Amount must be greater than zero', this.sanitizeForIssue(row.monto), String(amountMinor)));
-      return null;
-    }
-
-    if (kindRaw !== 'DEBITO' && kindRaw !== 'CREDITO') {
-      issues.push(this.makeIssue(sheet, rowNumber, 'tipo', 'INVALID_VALUE', 'BLOCKER', 'Tipo must be DEBITO or CREDITO', this.sanitizeForIssue(row.tipo), kindRaw));
+      issues.push(this.makeIssue(sheet, rowNumber, 'monto', 'INVALID_VALUE', 'BLOCKER', 'El monto debe ser mayor que cero', this.sanitizeForIssue(row.monto), String(amountMinor)));
       return null;
     }
 
@@ -518,7 +510,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.normalizeRequiredText(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -542,7 +534,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseOptionalDecimalToMinor(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -558,7 +550,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseDecimalToMinor(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -574,7 +566,59 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseBoolean(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
+      return null;
+    }
+  }
+
+  private safeNormalizeOccupancyStatus(
+    sheet: ImportSheetName,
+    value: unknown,
+    fieldName: string,
+    rowNumber: number,
+    column: string,
+    issues: ImportIssueRecord[],
+  ): 'VACANT' | 'OCCUPIED' | null {
+    try {
+      if (value === null || value === undefined || value === '') {
+        return null;
+      }
+
+      return this.normalizer.parseUnitOccupancyStatus(value, fieldName);
+    } catch (error) {
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
+      return null;
+    }
+  }
+
+  private safeNormalizeRelationRole(
+    sheet: ImportSheetName,
+    value: unknown,
+    fieldName: string,
+    rowNumber: number,
+    column: string,
+    issues: ImportIssueRecord[],
+  ): 'OWNER' | 'RESIDENT' | null {
+    try {
+      return this.normalizer.parseRelationRole(value, fieldName);
+    } catch (error) {
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
+      return null;
+    }
+  }
+
+  private safeNormalizeOpeningBalanceKind(
+    sheet: ImportSheetName,
+    value: unknown,
+    fieldName: string,
+    rowNumber: number,
+    column: string,
+    issues: ImportIssueRecord[],
+  ): 'DEBITO' | 'CREDITO' | null {
+    try {
+      return this.normalizer.parseOpeningBalanceKind(value, fieldName);
+    } catch (error) {
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -590,7 +634,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseCurrency(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -606,7 +650,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseUnitType(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -622,7 +666,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parsePeriod(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -638,7 +682,7 @@ export class OnboardingImportParserService {
     try {
       return this.normalizer.parseDate(value, fieldName);
     } catch (error) {
-      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} is invalid`), this.sanitizeForIssue(value), null));
+      issues.push(this.makeIssue(sheet, rowNumber, column, 'INVALID_VALUE', 'BLOCKER', this.errorMessage(error, `${fieldName} es inválido`), this.sanitizeForIssue(value), null));
       return null;
     }
   }
@@ -684,18 +728,18 @@ export class OnboardingImportParserService {
     const matches = workbook.SheetNames.filter((candidate) => this.normalizer.normalizeSheetName(candidate) === normalized);
 
     if (matches.length === 0) {
-      issues.push(this.makeIssue(sheetName, null, null, 'MISSING_SHEET', 'BLOCKER', `Missing required sheet: ${sheetName}`, null, null));
+      issues.push(this.makeIssue(sheetName, null, null, 'MISSING_SHEET', 'BLOCKER', `Falta la hoja obligatoria: ${sheetName}`, null, null));
       return null;
     }
 
     if (matches.length > 1) {
-      issues.push(this.makeIssue(sheetName, null, null, 'DUPLICATE_SHEET_NAME', 'BLOCKER', `Duplicate sheet name after normalization: ${matches.join(', ')}`, matches.join(', '), normalized));
+      issues.push(this.makeIssue(sheetName, null, null, 'DUPLICATE_SHEET_NAME', 'BLOCKER', `Nombre de hoja duplicado después de normalizar: ${matches.join(', ')}`, matches.join(', '), normalized));
       return null;
     }
 
     const worksheet = workbook.Sheets[matches[0] ?? sheetName];
     if (!worksheet) {
-      issues.push(this.makeIssue(sheetName, null, null, 'MISSING_SHEET', 'BLOCKER', `Missing required sheet: ${sheetName}`, null, null));
+      issues.push(this.makeIssue(sheetName, null, null, 'MISSING_SHEET', 'BLOCKER', `Falta la hoja obligatoria: ${sheetName}`, null, null));
       return null;
     }
 
@@ -758,7 +802,7 @@ export class OnboardingImportParserService {
 
       totalCompressed += compressedSize;
       totalUncompressed += uncompressedSize;
-      if (fileName.startsWith('xl/worksheets/')) {
+      if (/^xl\/worksheets\/sheet\d+\.xml$/u.test(fileName)) {
         sheetEntries += 1;
       }
 

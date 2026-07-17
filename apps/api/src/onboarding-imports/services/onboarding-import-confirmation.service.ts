@@ -116,6 +116,7 @@ interface UnitRecord {
   readonly unitType: string;
   readonly m2: number | null;
   readonly isBillable: boolean;
+  readonly occupancyStatus: string | null;
   readonly unitCategoryId: string | null;
 }
 
@@ -458,16 +459,16 @@ export class OnboardingImportConfirmationService {
     for (const [groupKey, groupRows] of categoriesByBuilding.entries()) {
       const [buildingCode, categoryName, coefficientKey = 'null'] = groupKey.split('::');
       if (!buildingCode || !categoryName) {
-        throw new ConflictException('Unit category grouping is invalid');
+        throw new ConflictException('La agrupación de categorías de unidades no es válida');
       }
       const buildingId = buildingMap.get(buildingCode);
       if (!buildingId) {
-        throw new NotFoundException(`Building ${buildingCode} not available for category resolution`);
+        throw new NotFoundException(`El edificio ${buildingCode} no está disponible para resolver la categoría`);
       }
 
       const coefficient = this.requireNormalizedRow(groupRows[0]!, 'Units').coeficiente;
       if (coefficient === null || coefficient === undefined || coefficient <= 0) {
-        throw new BadRequestException(`Unit category ${categoryName} requires a positive coefficient`);
+        throw new BadRequestException(`La categoría de unidad ${categoryName} requiere un coeficiente positivo`);
       }
 
       const existing = existingByKey.get(`${buildingId}::${this.normalizeText(categoryName)}`);
@@ -479,15 +480,15 @@ export class OnboardingImportConfirmationService {
 
       if (existing) {
         if (!existing.active) {
-          throw new ConflictException(`Unit category ${categoryName} is inactive`);
+          throw new ConflictException(`La categoría de unidad ${categoryName} está inactiva`);
         }
 
         if (!this.compareNumbers(existing.coefficient, coefficient)) {
-          throw new ConflictException(`Unit category ${categoryName} has a different coefficient in the database`);
+          throw new ConflictException(`La categoría de unidad ${categoryName} tiene un coeficiente distinto en la base de datos`);
         }
 
         if (minM2 !== null && !this.isRangeCompatible(existing.minM2, existing.maxM2, minM2, maxM2 ?? minM2)) {
-          throw new ConflictException(`Unit category ${categoryName} does not match the current m² range`);
+          throw new ConflictException(`La categoría de unidad ${categoryName} no coincide con el rango actual de m²`);
         }
 
         categoryMap.set(`${buildingCode}::${this.normalizeText(categoryName)}::${coefficientKey}`, existing.id);
@@ -496,7 +497,7 @@ export class OnboardingImportConfirmationService {
       }
 
       if (minM2 === null) {
-        throw new UnprocessableEntityException(`Unit category ${categoryName} requires at least one unit with m²`);
+        throw new UnprocessableEntityException(`La categoría de unidad ${categoryName} requiere al menos una unidad con m²`);
       }
 
       const rangeMax = maxM2 === null || maxM2 === minM2 ? minM2 + 0.01 : maxM2;
@@ -533,7 +534,7 @@ export class OnboardingImportConfirmationService {
     const buildingIds = Array.from(new Set(Array.from(buildingMap.values())));
     const existingUnits = await tx.unit.findMany({
       where: { tenantId: input.tenantId, buildingId: { in: buildingIds } },
-      select: { id: true, buildingId: true, code: true, label: true, unitType: true, m2: true, isBillable: true, unitCategoryId: true },
+      select: { id: true, buildingId: true, code: true, label: true, unitType: true, m2: true, isBillable: true, occupancyStatus: true, unitCategoryId: true },
     });
     const existingByKey = new Map(existingUnits.map((unit) => [`${unit.buildingId}::${this.normalizeCode(unit.code)}`, unit] as const));
 
@@ -546,19 +547,21 @@ export class OnboardingImportConfirmationService {
       const categoryId = categoryMap.get(`${buildingCode}::${this.normalizeText(categoryName)}::${normalized.coeficiente ?? 'null'}`);
 
       if (!buildingId) {
-        throw new NotFoundException(`Building ${buildingCode} not available for unit resolution`);
+        throw new NotFoundException(`El edificio ${buildingCode} no está disponible para resolver unidades`);
       }
 
       const existing = existingByKey.get(`${buildingId}::${unitCode}`);
       const compatibleCategoryId = categoryId ?? null;
       const rowKey = `${buildingCode}::${unitCode}`;
+      const expectedOccupancyStatus = this.resolveLegacyOccupancyStatus(normalized);
 
       if (existing) {
         const sameUnit =
           this.normalizeText(existing.label ?? '') === this.normalizeText(normalized.etiqueta ?? '')
           && this.normalizeText(existing.unitType) === this.normalizeText(normalized.tipo)
           && this.compareNullableNumbers(existing.m2, normalized.m2)
-          && existing.isBillable === normalized.facturacion;
+          && existing.isBillable === normalized.facturacion
+          && this.normalizeText(existing.occupancyStatus ?? '') === expectedOccupancyStatus;
 
         if (!sameUnit) {
           throw new ConflictException(`Unit ${unitCode} conflicts with the current database state`);
@@ -587,7 +590,7 @@ export class OnboardingImportConfirmationService {
           code: unitCode,
           label: normalized.etiqueta ?? undefined,
           unitType: normalized.tipo,
-          occupancyStatus: normalized.facturacion ? 'OCCUPIED' : 'VACANT',
+          occupancyStatus: expectedOccupancyStatus,
           m2: normalized.m2,
           isBillable: normalized.facturacion,
           unitCategoryId: compatibleCategoryId ?? undefined,
@@ -680,13 +683,13 @@ export class OnboardingImportConfirmationService {
       const existingUser = email ? userByEmail.get(email) : undefined;
 
       if (existingRef && !existingMember) {
-        throw new ConflictException(`Person ${code} references a missing tenant member`);
+        throw new ConflictException(`La persona ${code} referencia un miembro del tenant inexistente`);
       }
 
       const candidate = existingMember ?? undefined;
       if (candidate) {
         if (candidate.role !== Role.RESIDENT) {
-          throw new ConflictException(`Person ${code} is linked to a non-resident member`);
+          throw new ConflictException(`La persona ${code} está vinculada a un miembro que no es residente`);
         }
 
         if (document && existingDocumentRef && existingDocumentRef.entityId !== candidate.id) {
@@ -709,7 +712,7 @@ export class OnboardingImportConfirmationService {
 
         const conflictingMember = this.findConflictingMember(existingMembers, candidate.id, email, phone);
         if (conflictingMember) {
-          throw new ConflictException(`Person ${code} conflicts with another tenant member`);
+          throw new ConflictException(`La persona ${code} entra en conflicto con otro miembro del tenant`);
         }
 
         const updated = await tx.tenantMember.update({
@@ -800,17 +803,17 @@ export class OnboardingImportConfirmationService {
       const memberId = memberMap.get(personCode);
 
       if (seen.has(relationKey)) {
-        throw new ConflictException('Duplicate relationship in file');
+        throw new ConflictException('Relación duplicada en el archivo');
       }
       seen.add(relationKey);
 
       if (!unitId || !memberId) {
-        throw new ConflictException(`Relationship ${relationKey} references missing entities`);
+        throw new ConflictException(`La relación ${relationKey} referencia entidades inexistentes`);
       }
 
       const principalCount = principalByUnit.get(unitId) ?? 0;
       if (normalized.principal && principalCount > 0) {
-        throw new ConflictException(`Unit ${unitCode} already has a principal occupant in the file`);
+        throw new ConflictException(`La unidad ${unitCode} ya tiene un ocupante principal en el archivo`);
       }
       if (normalized.principal) {
         principalByUnit.set(unitId, principalCount + 1);
@@ -825,7 +828,7 @@ export class OnboardingImportConfirmationService {
           && existing.endDate === null;
 
         if (!sameRelation) {
-          throw new ConflictException(`Relationship ${relationKey} conflicts with an existing occupant`);
+          throw new ConflictException(`La relación ${relationKey} entra en conflicto con un ocupante existente`);
         }
 
         summary.relations.reused += 1;
@@ -834,7 +837,7 @@ export class OnboardingImportConfirmationService {
 
       const otherPrincipal = existingOccupants.find((occupant) => occupant.unitId === unitId && occupant.isPrimary && occupant.endDate === null);
       if (normalized.principal && otherPrincipal && otherPrincipal.memberId !== memberId) {
-        throw new ConflictException(`Unit ${unitCode} already has a different principal occupant`);
+        throw new ConflictException(`La unidad ${unitCode} ya tiene un ocupante principal distinto`);
       }
 
       await tx.unitOccupant.create({
@@ -867,11 +870,11 @@ export class OnboardingImportConfirmationService {
       const unitId = unitMap.get(`${buildingCode}::${unitCode}`);
 
       if (!buildingId || !unitId) {
-        throw new ConflictException(`Opening balance ${buildingCode}:${unitCode} references missing entities`);
+        throw new ConflictException(`El saldo inicial ${buildingCode}:${unitCode} referencia entidades inexistentes`);
       }
 
       if (this.normalizeCode(normalized.currency) !== input.tenantCurrency) {
-        throw new ConflictException(`Opening balance currency ${normalized.currency} does not match tenant currency ${input.tenantCurrency}`);
+        throw new ConflictException(`La moneda del saldo inicial ${normalized.currency} no coincide con la moneda del tenant ${input.tenantCurrency}`);
       }
 
       const existing = await tx.charge.findFirst({
@@ -1254,7 +1257,7 @@ export class OnboardingImportConfirmationService {
     label: string,
   ): Array<ParsedRow<TRaw, TNormalized>> {
     if (!Array.isArray(value)) {
-      throw new UnprocessableEntityException(`${label} payload is invalid`);
+      throw new UnprocessableEntityException(`El payload de ${label} no es válido`);
     }
 
     return value.map((row, index) => this.assertParsedRow<TRaw, TNormalized>(row, label, index));
@@ -1266,22 +1269,22 @@ export class OnboardingImportConfirmationService {
     index: number,
   ): ParsedRow<TRaw, TNormalized> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new UnprocessableEntityException(`${label} row ${index} is invalid`);
+      throw new UnprocessableEntityException(`La fila ${index} de ${label} no es válida`);
     }
 
     const record = value as Record<string, unknown>;
     if (typeof record.sheet !== 'string' || !record.sheet.trim()) {
-      throw new UnprocessableEntityException(`${label} row ${index} has invalid sheet`);
+      throw new UnprocessableEntityException(`La fila ${index} de ${label} tiene una hoja inválida`);
     }
 
     const rowNumber = this.requireInteger(record.rowNumber, 'rowNumber');
 
     if (!record.raw || typeof record.raw !== 'object' || Array.isArray(record.raw)) {
-      throw new UnprocessableEntityException(`${label} row ${index} has invalid raw payload`);
+      throw new UnprocessableEntityException(`La fila ${index} de ${label} tiene un payload bruto inválido`);
     }
 
     if (!record.normalized || typeof record.normalized !== 'object' || Array.isArray(record.normalized)) {
-      throw new UnprocessableEntityException(`${label} row ${index} has invalid normalized payload`);
+      throw new UnprocessableEntityException(`La fila ${index} de ${label} tiene un payload normalizado inválido`);
     }
 
     return {
@@ -1335,7 +1338,7 @@ export class OnboardingImportConfirmationService {
     for (const category of existing) {
       const existingMax = category.maxM2 ?? Number.POSITIVE_INFINITY;
       if (this.rangesOverlap(minM2, maxM2, category.minM2, existingMax)) {
-        throw new ConflictException(`Unit category ${categoryName} overlaps with existing category ${category.name}`);
+        throw new ConflictException(`La categoría de unidad ${categoryName} se superpone con la categoría existente ${category.name}`);
       }
     }
   }
@@ -1380,7 +1383,7 @@ export class OnboardingImportConfirmationService {
       return `COEF_${row.coeficiente}`;
     }
 
-    throw new BadRequestException('Unit category name or coefficient is required');
+      throw new BadRequestException('El nombre de la categoría de unidad o el coeficiente son obligatorios');
   }
 
   private compareNullableNumbers(left: number | null, right: number | null): boolean {
@@ -1393,6 +1396,14 @@ export class OnboardingImportConfirmationService {
     }
 
     return Math.abs(left - right) < 0.0001;
+  }
+
+  private resolveLegacyOccupancyStatus(row: ParsedUnitRowNormalized): 'VACANT' | 'OCCUPIED' {
+    if (row.estadoOcupacion) {
+      return row.estadoOcupacion;
+    }
+
+    return row.facturacion ? 'OCCUPIED' : 'VACANT';
   }
 
   private compareNumbers(left: number, right: number): boolean {
@@ -1420,7 +1431,7 @@ export class OnboardingImportConfirmationService {
     label: string,
   ): TNormalized {
     if (!row.normalized) {
-      throw new UnprocessableEntityException(`${label} row ${row.rowNumber} is missing normalized data`);
+      throw new UnprocessableEntityException(`La fila ${row.rowNumber} de ${label} no tiene datos normalizados`);
     }
 
     return row.normalized;
@@ -1437,7 +1448,7 @@ export class OnboardingImportConfirmationService {
 
   private requireString(value: unknown, field: string): string {
     if (typeof value !== 'string' || !value.trim()) {
-      throw new UnprocessableEntityException(`${field} is required`);
+      throw new UnprocessableEntityException(`${field} es obligatorio`);
     }
 
     return value.trim();
@@ -1445,7 +1456,7 @@ export class OnboardingImportConfirmationService {
 
   private requireInteger(value: unknown, field: string): number {
     if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-      throw new UnprocessableEntityException(`${field} is required`);
+      throw new UnprocessableEntityException(`${field} es obligatorio`);
     }
 
     return value;

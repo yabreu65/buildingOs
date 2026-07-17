@@ -172,27 +172,27 @@ describe('OnboardingImportWizard', () => {
   it('downloads the template, previews the workbook, and confirms the import', async () => {
     render(<OnboardingImportWizard />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Descargar' }));
     await waitFor(() => {
-      expect(mockedDownloadTemplate).toHaveBeenCalledWith('tenant-1');
+    expect(mockedDownloadTemplate).toHaveBeenCalledWith('tenant-1');
     });
 
     const file = new File(['content'], 'buildingos-onboarding.xlsx', {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
-    fireEvent.change(screen.getByLabelText('Workbook file'), {
+    fireEvent.change(screen.getByLabelText('Archivo del libro'), {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Preview import' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previsualizar importación' }));
 
     await waitFor(() => {
       expect(mockedPreviewImport).toHaveBeenCalledWith('tenant-1', file);
     });
-    expect(await screen.findByText('Ready to confirm')).toBeTruthy();
+    expect(await screen.findByText('Lista para confirmar')).toBeTruthy();
     expect(screen.getByText('buildingos-onboarding.xlsx')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm import' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar importación' }));
 
     await waitFor(() => {
       expect(mockedConfirmImport).toHaveBeenCalledWith('tenant-1', 'import-1', {
@@ -221,8 +221,8 @@ describe('OnboardingImportWizard', () => {
       expect(mockedGetImport).toHaveBeenCalledWith('tenant-1', 'import-1');
     });
 
-    expect(await screen.findByText('Has blocking issues')).toBeTruthy();
-    expect(await screen.findByText('1 entries')).toBeTruthy();
+    expect(await screen.findByText('Tiene bloqueos')).toBeTruthy();
+    expect(await screen.findByText('1 entrada')).toBeTruthy();
     expect(mockedListIssues).toHaveBeenCalledWith('tenant-1', 'import-1', {
       severity: '',
       sheet: '',

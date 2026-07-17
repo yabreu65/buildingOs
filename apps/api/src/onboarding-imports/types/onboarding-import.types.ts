@@ -34,6 +34,7 @@ export interface ParsedUnitRowRaw {
   readonly tipo: unknown;
   readonly m2: unknown;
   readonly facturacion: unknown;
+  readonly estado_ocupacion: unknown;
   readonly categoria_nombre: unknown;
   readonly coeficiente: unknown;
 }
@@ -45,6 +46,7 @@ export interface ParsedUnitRowNormalized {
   readonly tipo: string;
   readonly m2: number | null;
   readonly facturacion: boolean;
+  readonly estadoOcupacion: 'VACANT' | 'OCCUPIED' | null;
   readonly categoriaNombre: string | null;
   readonly coeficiente: number | null;
 }

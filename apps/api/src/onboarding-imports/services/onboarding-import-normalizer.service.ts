@@ -28,7 +28,7 @@ export class OnboardingImportNormalizerService {
   normalizeRequiredText(value: unknown, field: string): string {
     const normalized = this.normalizeText(value);
     if (!normalized) {
-      throw new BadRequestException(`${field} is required`);
+      throw new BadRequestException(`${field} es obligatorio`);
     }
 
     return normalized;
@@ -44,7 +44,7 @@ export class OnboardingImportNormalizerService {
       .toUpperCase();
 
     if (!normalized) {
-      throw new BadRequestException(`${field} is required`);
+      throw new BadRequestException(`${field} es obligatorio`);
     }
 
     return normalized;
@@ -63,12 +63,12 @@ export class OnboardingImportNormalizerService {
   parseBoolean(value: unknown, field: string): boolean {
     const normalized = this.normalizeText(value)?.toUpperCase();
     if (!normalized) {
-      throw new BadRequestException(`${field} is required`);
+      throw new BadRequestException(`${field} es obligatorio`);
     }
 
     const mapped = ONBOARDING_IMPORT_ALLOWED_BOOLEAN_VALUES.get(normalized);
     if (mapped === undefined) {
-      throw new BadRequestException(`${field} must be SI or NO`);
+      throw new BadRequestException(`${field} debe ser SI o NO`);
     }
 
     return mapped;
@@ -82,7 +82,7 @@ export class OnboardingImportNormalizerService {
 
     const mapped = ONBOARDING_IMPORT_ALLOWED_BOOLEAN_VALUES.get(normalized);
     if (mapped === undefined) {
-      throw new BadRequestException('Boolean values must be SI or NO');
+      throw new BadRequestException('Los valores booleanos deben ser SI o NO');
     }
 
     return mapped;
@@ -91,7 +91,7 @@ export class OnboardingImportNormalizerService {
   parseCurrency(value: unknown, field: string): string {
     const normalized = this.normalizeCode(value, field);
     if (!ONBOARDING_IMPORT_ALLOWED_CURRENCIES.includes(normalized as (typeof ONBOARDING_IMPORT_ALLOWED_CURRENCIES)[number])) {
-      throw new BadRequestException(`${field} must be one of ${ONBOARDING_IMPORT_ALLOWED_CURRENCIES.join(', ')}`);
+      throw new BadRequestException(`${field} debe ser uno de ${ONBOARDING_IMPORT_ALLOWED_CURRENCIES.join(', ')}`);
     }
 
     return normalized;
@@ -100,16 +100,58 @@ export class OnboardingImportNormalizerService {
   parseUnitType(value: unknown, field: string): string {
     const normalized = this.normalizeCode(value, field);
     if (!ONBOARDING_IMPORT_ALLOWED_UNIT_TYPES.includes(normalized as (typeof ONBOARDING_IMPORT_ALLOWED_UNIT_TYPES)[number])) {
-      throw new BadRequestException(`${field} must be one of ${ONBOARDING_IMPORT_ALLOWED_UNIT_TYPES.join(', ')}`);
+      throw new BadRequestException(`${field} debe ser uno de ${ONBOARDING_IMPORT_ALLOWED_UNIT_TYPES.join(', ')}`);
     }
 
     return normalized;
   }
 
+  parseUnitOccupancyStatus(value: unknown, field: string): 'VACANT' | 'OCCUPIED' {
+    const normalized = this.normalizeEnumToken(value, field);
+
+    if (['VACANT', 'VACANTE', 'DESOCUPADA'].includes(normalized)) {
+      return 'VACANT';
+    }
+
+    if (['OCCUPIED', 'OCUPADA'].includes(normalized)) {
+      return 'OCCUPIED';
+    }
+
+    throw new BadRequestException(`${field} debe ser VACANTE, DESOCUPADA u OCUPADA`);
+  }
+
+  parseRelationRole(value: unknown, field: string): 'OWNER' | 'RESIDENT' {
+    const normalized = this.normalizeEnumToken(value, field);
+
+    if (['OWNER', 'PROPIETARIO'].includes(normalized)) {
+      return 'OWNER';
+    }
+
+    if (['RESIDENT', 'RESIDENTE'].includes(normalized)) {
+      return 'RESIDENT';
+    }
+
+    throw new BadRequestException(`${field} debe ser OWNER, PROPIETARIO, RESIDENT o RESIDENTE`);
+  }
+
+  parseOpeningBalanceKind(value: unknown, field: string): 'DEBITO' | 'CREDITO' {
+    const normalized = this.normalizeEnumToken(value, field);
+
+    if (['DEBITO', 'DÉBITO'].includes(normalized)) {
+      return 'DEBITO';
+    }
+
+    if (['CREDITO', 'CRÉDITO'].includes(normalized)) {
+      return 'CREDITO';
+    }
+
+    throw new BadRequestException(`${field} debe ser DEBITO, DÉBITO, CREDITO o CRÉDITO`);
+  }
+
   parsePeriod(value: unknown, field: string): string {
     const normalized = this.normalizeRequiredText(value, field);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(normalized)) {
-      throw new BadRequestException(`${field} must be YYYY-MM`);
+      throw new BadRequestException(`${field} debe tener formato YYYY-MM`);
     }
 
     return normalized;
@@ -118,7 +160,7 @@ export class OnboardingImportNormalizerService {
   parseDate(value: unknown, field: string): string {
     if (value instanceof Date) {
       if (Number.isNaN(value.getTime())) {
-        throw new BadRequestException(`${field} must be a valid date`);
+        throw new BadRequestException(`${field} debe ser una fecha válida`);
       }
 
       return this.formatDate(value);
@@ -131,12 +173,12 @@ export class OnboardingImportNormalizerService {
 
     const normalized = this.normalizeRequiredText(value, field);
     if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(normalized)) {
-      throw new BadRequestException(`${field} must be YYYY-MM-DD`);
+      throw new BadRequestException(`${field} debe tener formato YYYY-MM-DD`);
     }
 
     const date = new Date(`${normalized}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) {
-      throw new BadRequestException(`${field} must be a valid date`);
+      throw new BadRequestException(`${field} debe ser una fecha válida`);
     }
 
     return normalized;
@@ -153,7 +195,7 @@ export class OnboardingImportNormalizerService {
   parseDecimalToMinor(value: unknown, field: string): number {
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) {
-        throw new BadRequestException(`${field} must be a finite number`);
+        throw new BadRequestException(`${field} debe ser un número finito`);
       }
 
       return this.decimalStringToMinor(value.toString(), field);
@@ -193,6 +235,11 @@ export class OnboardingImportNormalizerService {
     return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '');
   }
 
+  private normalizeEnumToken(value: unknown, field: string): string {
+    const normalized = this.normalizeRequiredText(value, field);
+    return this.stripDiacritics(normalized).normalize('NFKC').replace(/\s+/g, ' ').toUpperCase();
+  }
+
   private decimalStringToMinor(value: string, field: string): number {
     const sanitized = value
       .trim()
@@ -200,7 +247,7 @@ export class OnboardingImportNormalizerService {
       .replace(/[^\d,.-]/g, '');
 
     if (!sanitized) {
-      throw new BadRequestException(`${field} must be a valid amount`);
+      throw new BadRequestException(`${field} debe ser un importe válido`);
     }
 
     const negative = sanitized.startsWith('-');
@@ -209,7 +256,7 @@ export class OnboardingImportNormalizerService {
     const normalized = this.normalizeDecimalSeparator(unsigned);
     const match = normalized.match(/^(\d+)(?:\.(\d{1,}))?$/);
     if (!match) {
-      throw new BadRequestException(`${field} must be a valid amount`);
+      throw new BadRequestException(`${field} debe ser un importe válido`);
     }
 
     const integerPart = match[1] ?? '0';
@@ -217,7 +264,7 @@ export class OnboardingImportNormalizerService {
     const cents = Number.parseInt(integerPart, 10) * 100 + Number.parseInt(fractionPart, 10);
 
     if (!Number.isFinite(cents)) {
-      throw new BadRequestException(`${field} is too large`);
+      throw new BadRequestException(`${field} es demasiado grande`);
     }
 
     return negative ? -cents : cents;

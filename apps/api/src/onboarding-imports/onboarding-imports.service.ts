@@ -66,6 +66,7 @@ interface ExistingUnitRecord {
   readonly unitType: string;
   readonly m2: number | null;
   readonly isBillable: boolean;
+  readonly occupancyStatus: string | null;
 }
 
 interface ExistingCategoryRecord {
@@ -557,6 +558,7 @@ export class OnboardingImportsService {
         unitType: true,
         m2: true,
         isBillable: true,
+        occupancyStatus: true,
       },
     });
     const unitByBuildingAndCode = new Map(existingUnits.map((unit) => [`${unit.buildingId}:${this.normalizeCode(unit.code)}`, unit] as const));
@@ -595,11 +597,13 @@ export class OnboardingImportsService {
 
       const existingUnit = buildingId ? unitByBuildingAndCode.get(`${buildingId}:${unitCode}`) : undefined;
       if (existingUnit) {
+        const expectedOccupancyStatus = normalized.estadoOcupacion ?? (normalized.facturacion ? 'OCCUPIED' : 'VACANT');
         const sameUnit =
           this.normalizeText(existingUnit.label ?? '') === this.normalizeText(normalized.etiqueta ?? '') &&
           this.normalizeText(existingUnit.unitType) === this.normalizeText(normalized.tipo) &&
           this.compareNullableNumber(existingUnit.m2, normalized.m2) &&
-          existingUnit.isBillable === normalized.facturacion;
+          existingUnit.isBillable === normalized.facturacion &&
+          this.normalizeText(existingUnit.occupancyStatus ?? '') === expectedOccupancyStatus;
 
         if (sameUnit) {
           this.bump(summary.units, 'reusable');

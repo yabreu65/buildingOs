@@ -36,6 +36,9 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_PAGE_SIZE = 25;
 const SHEET_OPTIONS = [
   'Instrucciones',
+  'Diccionario_de_Datos',
+  'Catalogos',
+  'Ejemplos',
   'Edificios',
   'Unidades',
   'Personas',
@@ -78,23 +81,27 @@ function statusBadgeClass(status: OnboardingImportJob['status']): string {
 function statusLabel(status: OnboardingImportJob['status']): string {
   switch (status) {
     case 'READY':
-      return 'Ready to confirm';
+      return 'Lista para confirmar';
     case 'BLOCKED':
-      return 'Has blocking issues';
+      return 'Tiene bloqueos';
     case 'FAILED':
-      return 'Failed';
+      return 'Fallida';
     case 'CONFIRMING':
-      return 'Confirming';
+      return 'Confirmando';
     case 'CONFIRMED':
-      return 'Confirmed';
+      return 'Confirmada';
     case 'EXPIRED':
     default:
-      return 'Expired';
+      return 'Expirada';
   }
 }
 
 function summarizeSheetStats(summary: ImportPreviewSummary['buildings']): string {
-  return `new ${summary.new} · reusable ${summary.reusable} · conflicts ${summary.conflict} · invalid ${summary.invalid}`;
+  return `nuevos ${summary.new} · reutilizables ${summary.reusable} · conflictos ${summary.conflict} · inválidos ${summary.invalid}`;
+}
+
+function formatIssueCount(count: number): string {
+  return count === 1 ? '1 entrada' : `${count} entradas`;
 }
 
 function validateSpreadsheetFile(file: File): string | null {
@@ -102,15 +109,15 @@ function validateSpreadsheetFile(file: File): string | null {
   const mimeTypeAllowed = file.type === '' || ONBOARDING_IMPORT_ALLOWED_MIME_TYPES.includes(file.type);
 
   if (!fileName.endsWith('.xlsx')) {
-    return 'Only .xlsx files are allowed.';
+    return 'Solo se permiten archivos .xlsx.';
   }
 
   if (!mimeTypeAllowed) {
-    return `Unsupported file type: ${file.type || 'unknown'}`;
+    return `Tipo de archivo no compatible: ${file.type || 'desconocido'}`;
   }
 
   if (file.size > MAX_FILE_SIZE_BYTES) {
-    return `The workbook exceeds the 10 MB limit.`;
+    return 'El libro supera el límite de 10 MB.';
   }
 
   return null;
@@ -234,7 +241,7 @@ export function OnboardingImportWizard() {
         syncImportId(nextJob.importId);
         setIssues(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to load import status';
+        const message = error instanceof Error ? error.message : 'No se pudo cargar el estado de la importación';
         setActionError(message);
         setJob(null);
         setIssues(null);
@@ -257,7 +264,7 @@ export function OnboardingImportWizard() {
         const page = await listOnboardingImportIssues(tenantId, jobId, filters);
         setIssues(page);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to load import issues';
+        const message = error instanceof Error ? error.message : 'No se pudieron cargar las incidencias de la importación';
         setActionError(message);
         setIssues(null);
       } finally {
@@ -301,9 +308,9 @@ export function OnboardingImportWizard() {
     try {
       const { blob, fileName } = await downloadOnboardingImportTemplate(tenantId);
       createDownload(fileName, blob);
-      toast('Template downloaded successfully.', 'success');
+      toast('La plantilla se descargó correctamente.', 'success');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to download template';
+      const message = error instanceof Error ? error.message : 'No se pudo descargar la plantilla';
       setActionError(message);
       toast(message, 'error');
     } finally {
@@ -336,7 +343,7 @@ export function OnboardingImportWizard() {
     }
 
     if (!selectedFile) {
-      setActionError('Choose an .xlsx file before previewing the import.');
+      setActionError('Elija un archivo .xlsx antes de previsualizar la importación.');
       return;
     }
 
@@ -352,9 +359,9 @@ export function OnboardingImportWizard() {
         ...current,
         page: 1,
       }));
-      toast('Preview ready.', 'success');
+      toast('Vista previa lista.', 'success');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to preview import';
+      const message = error instanceof Error ? error.message : 'No se pudo previsualizar la importación';
       setActionError(message);
       toast(message, 'error');
     } finally {
@@ -375,10 +382,10 @@ export function OnboardingImportWizard() {
         expectedPreviewVersion: job.previewVersion,
       });
 
-      toast(`Import ${result.status.toLowerCase()} successfully.`, 'success');
+      toast(`Importación ${result.status.toLowerCase()} correctamente.`, 'success');
       await loadImport(result.importId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to confirm import';
+      const message = error instanceof Error ? error.message : 'No se pudo confirmar la importación';
       setActionError(message);
       toast(message, 'error');
     } finally {
@@ -397,11 +404,11 @@ export function OnboardingImportWizard() {
     }
 
     return [
-      { label: 'Buildings', stats: job.summary.buildings },
-      { label: 'Units', stats: job.summary.units },
-      { label: 'People', stats: job.summary.people },
-      { label: 'Relations', stats: job.summary.relations },
-      { label: 'Opening balances', stats: job.summary.openingBalances },
+      { label: 'Edificios', stats: job.summary.buildings },
+      { label: 'Unidades', stats: job.summary.units },
+      { label: 'Personas', stats: job.summary.people },
+      { label: 'Relaciones', stats: job.summary.relations },
+      { label: 'Saldos iniciales', stats: job.summary.openingBalances },
     ];
   }, [job]);
 
@@ -409,8 +416,8 @@ export function OnboardingImportWizard() {
     return (
       <EmptyState
         icon={<AlertCircle className="text-muted-foreground" size={32} />}
-        title="Tenant context not available"
-        description="This wizard must be opened from a tenant-scoped route."
+        title="No hay contexto de tenant"
+        description="Este asistente debe abrirse desde una ruta con tenant."
       />
     );
   }
@@ -418,9 +425,9 @@ export function OnboardingImportWizard() {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h1 className="text-2xl font-bold">Onboarding import wizard</h1>
+        <h1 className="text-2xl font-bold">Asistente de importación inicial</h1>
         <p className="text-sm text-muted-foreground">
-          Download the template, upload the completed workbook, review the preview, and confirm the import when it is ready.
+          Descargue la plantilla, cargue el libro completado, revise la vista previa y confirme la importación cuando esté lista.
         </p>
       </div>
 
@@ -429,7 +436,7 @@ export function OnboardingImportWizard() {
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 flex-shrink-0 text-red-600" size={20} />
             <div className="space-y-1">
-              <p className="text-sm font-semibold">Action failed</p>
+              <p className="text-sm font-semibold">La acción falló</p>
               <p className="text-sm">{actionError}</p>
             </div>
           </div>
@@ -440,27 +447,27 @@ export function OnboardingImportWizard() {
         <Card className="space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">1. Download the template</h2>
+              <h2 className="text-lg font-semibold">1. Descargar la plantilla</h2>
               <p className="text-sm text-muted-foreground">
-                Use the official workbook so the backend can validate the expected sheets and headers.
+                Use el libro oficial para que el backend pueda validar las hojas y los encabezados esperados.
               </p>
             </div>
             <Button onClick={handleTemplateDownload} disabled={isTemplateDownloading} variant="secondary" size="sm">
               {isTemplateDownloading ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Download size={16} className="mr-2" />}
-              Download
+              Descargar
             </Button>
           </div>
 
           <div className="rounded-lg border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-            The workbook must be a valid <strong>.xlsx</strong> file and cannot exceed {formatBytes(MAX_FILE_SIZE_BYTES)}.
+            El libro debe ser un archivo válido <strong>.xlsx</strong> y no puede superar {formatBytes(MAX_FILE_SIZE_BYTES)}.
           </div>
         </Card>
 
         <Card className="space-y-4">
           <div>
-            <h2 className="text-lg font-semibold">2. Upload and preview</h2>
+            <h2 className="text-lg font-semibold">2. Cargar y previsualizar</h2>
             <p className="text-sm text-muted-foreground">
-              Pick the completed workbook and generate a preview before confirming.
+              Elija el libro completado y genere una vista previa antes de confirmar.
             </p>
           </div>
 
@@ -468,7 +475,7 @@ export function OnboardingImportWizard() {
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="onboarding-import-file">
-                  Workbook file
+                  Archivo del libro
                 </label>
                 <Input
                   id="onboarding-import-file"
@@ -485,7 +492,7 @@ export function OnboardingImportWizard() {
                     {selectedFile.name}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {formatBytes(selectedFile.size)} · {selectedFile.type || 'unknown type'}
+                    {formatBytes(selectedFile.size)} · {selectedFile.type || 'tipo desconocido'}
                   </p>
                 </div>
               )}
@@ -497,12 +504,12 @@ export function OnboardingImportWizard() {
                   variant="primary"
                 >
                   {isUploading ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Upload size={16} className="mr-2" />}
-                  Preview import
+                  Previsualizar importación
                 </Button>
               </div>
 
               <p className="text-xs text-muted-foreground">
-                Preview uploads the file to the backend and returns the deterministic import summary and issues for the tenant.
+                La previsualización sube el archivo al backend y devuelve el resumen determinista de importación y las incidencias del tenant.
               </p>
             </div>
           ) : (
@@ -512,7 +519,7 @@ export function OnboardingImportWizard() {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <Badge className={statusBadgeClass(job.status)}>{statusLabel(job.status)}</Badge>
-                      <span className="text-xs text-muted-foreground">Import #{job.importId.slice(0, 8)}</span>
+                      <span className="text-xs text-muted-foreground">Importación #{job.importId.slice(0, 8)}</span>
                     </div>
                     <p className="text-sm font-medium">{job.fileName}</p>
                     <p className="text-xs text-muted-foreground">
@@ -528,11 +535,11 @@ export function OnboardingImportWizard() {
                       disabled={isLoadingImport}
                     >
                       {isLoadingImport ? <Loader2 size={16} className="mr-2 animate-spin" /> : <RefreshCw size={16} className="mr-2" />}
-                      Refresh
+                      Actualizar
                     </Button>
                     <Button onClick={resetWizard} variant="ghost" size="sm">
                       <ArrowLeft size={16} className="mr-2" />
-                      Start over
+                      Comenzar de nuevo
                     </Button>
                   </div>
                 </div>
@@ -542,48 +549,48 @@ export function OnboardingImportWizard() {
                 <div className="rounded-lg border border-border bg-card p-3 text-sm">
                   <div className="flex items-center gap-2 font-medium">
                     <FileSpreadsheet size={16} />
-                    Ready to re-upload: {selectedFile.name}
+                    Listo para volver a cargar: {selectedFile.name}
                   </div>
                 </div>
               )}
 
               {job.status === 'READY' && (
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                  The preview is ready and can be confirmed now.
+                  La vista previa está lista y ya puede confirmarse.
                 </div>
               )}
 
               {job.status === 'BLOCKED' && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  The preview has blocking issues. Review them before confirming.
+                  La vista previa tiene bloqueos. Revíselos antes de confirmar.
                 </div>
               )}
 
               {job.status === 'FAILED' && (
                 <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-                  The backend could not complete the preview. Re-upload the workbook or start over.
+                  El backend no pudo completar la vista previa. Vuelva a cargar el libro o comience de nuevo.
                 </div>
               )}
 
               {job.status === 'EXPIRED' && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-900">
-                  The preview expired. Start over and upload the workbook again.
+                  La vista previa expiró. Comience de nuevo y cargue el libro otra vez.
                 </div>
               )}
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <Card className="border-border/80 bg-muted/20">
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Issues</div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Incidencias</div>
                   <div className="mt-1 text-2xl font-semibold">{totalIssues}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{totalBlocking} blocking · {totalWarnings} warnings</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{totalBlocking} bloqueos · {totalWarnings} advertencias</div>
                 </Card>
                 <Card className="border-border/80 bg-muted/20">
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Can confirm</div>
-                  <div className="mt-1 text-2xl font-semibold">{job.canConfirm ? 'Yes' : 'No'}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Confirmation is handled by the backend.</div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Puede confirmar</div>
+                  <div className="mt-1 text-2xl font-semibold">{job.canConfirm ? 'Sí' : 'No'}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">La confirmación la gestiona el backend.</div>
                 </Card>
                 <Card className="border-border/80 bg-muted/20">
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground">File hash</div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Hash del archivo</div>
                   <div className="mt-1 break-all text-sm font-medium">{job.fileHash}</div>
                 </Card>
               </div>
@@ -592,14 +599,14 @@ export function OnboardingImportWizard() {
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={handleConfirm} disabled={isConfirming} variant="primary">
                     {isConfirming ? <Loader2 size={16} className="mr-2 animate-spin" /> : <CheckCircle2 size={16} className="mr-2" />}
-                    Confirm import
+                    Confirmar importación
                   </Button>
                 </div>
               )}
 
               {phase === 'confirming' && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-                  Confirming import with the backend. Please wait.
+                  Confirmando la importación con el backend. Espere.
                 </div>
               )}
             </div>
@@ -611,9 +618,9 @@ export function OnboardingImportWizard() {
         <Card className="space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">Preview summary</h2>
+              <h2 className="text-lg font-semibold">Resumen de vista previa</h2>
               <p className="text-sm text-muted-foreground">
-                Deterministic counts returned by the backend preview for this tenant.
+                Conteos deterministas devueltos por la vista previa del backend para este tenant.
               </p>
             </div>
             <BadgeInfo className="text-muted-foreground" size={18} />
@@ -634,21 +641,21 @@ export function OnboardingImportWizard() {
         <Card className="space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">Issues</h2>
+              <h2 className="text-lg font-semibold">Incidencias</h2>
               <p className="text-sm text-muted-foreground">
-                Review blocking and warning entries before confirming the import.
+                Revise los bloqueos y las advertencias antes de confirmar la importación.
               </p>
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               {isLoadingIssues ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              {issues ? `${issues.total} entries` : 'Loading...'}
+              {issues ? formatIssueCount(issues.total) : 'Cargando...'}
             </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-4">
             <div className="space-y-1">
               <label htmlFor="issue-severity" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Severity
+                Severidad
               </label>
               <Select
                 id="issue-severity"
@@ -661,16 +668,16 @@ export function OnboardingImportWizard() {
                   }))
                 }
               >
-                <option value="">All</option>
-                <option value="BLOCKER">Blocker</option>
-                <option value="WARNING">Warning</option>
-                <option value="INFO">Info</option>
+                <option value="">Todas</option>
+                <option value="BLOCKER">Bloqueo</option>
+                <option value="WARNING">Advertencia</option>
+                <option value="INFO">Información</option>
               </Select>
             </div>
 
             <div className="space-y-1">
               <label htmlFor="issue-sheet" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Sheet
+                Hoja
               </label>
               <Select
                 id="issue-sheet"
@@ -683,7 +690,7 @@ export function OnboardingImportWizard() {
                   }))
                 }
               >
-                <option value="">All sheets</option>
+                <option value="">Todas las hojas</option>
                 {SHEET_OPTIONS.map((sheet) => (
                   <option key={sheet} value={sheet}>
                     {sheet}
@@ -694,7 +701,7 @@ export function OnboardingImportWizard() {
 
             <div className="space-y-1 md:col-span-2">
               <label htmlFor="issue-code" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Code
+                Código
               </label>
               <Input
                 id="issue-code"
@@ -706,7 +713,7 @@ export function OnboardingImportWizard() {
                     page: 1,
                   }))
                 }
-                placeholder="Filter by code"
+                placeholder="Filtrar por código"
               />
             </div>
           </div>
@@ -716,13 +723,13 @@ export function OnboardingImportWizard() {
               <Table>
                 <THead>
                   <TR>
-                    <TH>Severity</TH>
-                    <TH>Sheet</TH>
-                    <TH>Row</TH>
-                    <TH>Code</TH>
-                    <TH>Message</TH>
-                    <TH>Received</TH>
-                    <TH>Normalized</TH>
+                    <TH>Severidad</TH>
+                    <TH>Hoja</TH>
+                    <TH>Fila</TH>
+                    <TH>Código</TH>
+                    <TH>Mensaje</TH>
+                    <TH>Recibido</TH>
+                    <TH>Normalizado</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -746,13 +753,13 @@ export function OnboardingImportWizard() {
 
               <div className="flex items-center justify-between gap-3 text-sm">
                 <p className="text-muted-foreground">
-                  Page {issues.page} of {issues.totalPages}
+                  Página {issues.page} de {issues.totalPages}
                 </p>
                 <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={issues.page <= 1}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={issues.page <= 1}
                     onClick={() =>
                       setIssueFilters((current) => ({
                         ...current,
@@ -760,7 +767,7 @@ export function OnboardingImportWizard() {
                       }))
                     }
                   >
-                    Previous
+                    Anterior
                   </Button>
                   <Button
                     variant="secondary"
@@ -773,14 +780,14 @@ export function OnboardingImportWizard() {
                       }))
                     }
                   >
-                    Next
+                    Siguiente
                   </Button>
                 </div>
               </div>
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
-              {isLoadingIssues ? 'Loading issues...' : 'No issues match the current filters.'}
+              {isLoadingIssues ? 'Cargando incidencias...' : 'No hay incidencias que coincidan con los filtros actuales.'}
             </div>
           )}
         </Card>
@@ -792,9 +799,9 @@ export function OnboardingImportWizard() {
             <CheckCircle2 className="mt-1 text-emerald-600" size={24} />
             <div className="space-y-3">
               <div>
-                <h2 className="text-lg font-semibold text-emerald-900">Import confirmed</h2>
+                <h2 className="text-lg font-semibold text-emerald-900">Importación confirmada</h2>
                 <p className="text-sm text-emerald-800">
-                  The backend confirmed this workbook and the tenant data has been persisted atomically.
+                  El backend confirmó este libro y los datos del tenant se guardaron de forma atómica.
                 </p>
               </div>
 
@@ -815,7 +822,7 @@ export function OnboardingImportWizard() {
 
       {job?.status === 'EXPIRED' && (
         <ErrorState
-          message="This import preview expired. Start over to upload the workbook again."
+          message="La vista previa de importación expiró. Comience de nuevo para subir el libro otra vez."
           onRetry={resetWizard}
         />
       )}
@@ -824,7 +831,7 @@ export function OnboardingImportWizard() {
         <Card className="border-blue-200 bg-blue-50">
           <div className="flex items-center gap-3 text-blue-900">
             <Loader2 size={20} className="animate-spin" />
-            <span className="text-sm font-medium">Uploading workbook and generating preview...</span>
+            <span className="text-sm font-medium">Cargando el libro y generando la vista previa...</span>
           </div>
         </Card>
       )}
@@ -833,7 +840,7 @@ export function OnboardingImportWizard() {
         <Card className="border-border/80 bg-muted/20">
           <div className="flex items-center gap-3">
             <Loader2 size={20} className="animate-spin text-primary" />
-            <span className="text-sm text-muted-foreground">Loading existing import state...</span>
+            <span className="text-sm text-muted-foreground">Cargando el estado existente de la importación...</span>
           </div>
         </Card>
       )}
