@@ -19,6 +19,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "migrate:status": "prisma migrate status",
     "seed": "ts-node prisma/seed.ts",
+    "seed:billing-plans:local": "ts-node --compiler-options '{\"types\":[\"node\"]}' prisma/seed-billing-plans-local.ts",
     "reset:local-password": "ts-node scripts/reset-local-user-password.ts",
     "seed:local:manual": "ts-node prisma/seed-local-manual.ts",
     "seed:test": "ts-node prisma/seed.test.ts",
