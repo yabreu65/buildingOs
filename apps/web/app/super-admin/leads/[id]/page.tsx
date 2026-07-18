@@ -49,13 +49,15 @@ export default function LeadDetailPage() {
   const params = useParams();
   const leadId = params?.id as string;
 
-  const { fetchLead, update, convert } = useLeads();
+  const { fetchLead, update, convert, resendInvitation } = useLeads();
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
+  const [isResendingInvitation, setIsResendingInvitation] = useState(false);
+  const [invitationDeliveryFailed, setInvitationDeliveryFailed] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [successTenantId, setSuccessTenantId] = useState<string | null>(null);
 
@@ -131,7 +133,13 @@ export default function LeadDetailPage() {
         ownerEmail: ownerEmail.trim(),
       });
       if (result && result.tenantId) {
-        setSuccessMessage('Lead converted successfully!');
+        const deliveryFailed = result.invitationEmailStatus !== 'SENT';
+        setInvitationDeliveryFailed(deliveryFailed);
+        setSuccessMessage(
+          deliveryFailed
+            ? 'Administración creada, pero no se pudo enviar la invitación. Podés reenviarla.'
+            : 'Administración creada e invitación enviada.',
+        );
         setSuccessTenantId(result.tenantId);
         setShowConvertForm(false);
         setTenantName('');
@@ -157,6 +165,25 @@ export default function LeadDetailPage() {
     }
   };
 
+  const handleResendInvitation = async () => {
+    try {
+      setIsResendingInvitation(true);
+      setError(null);
+      const result = await resendInvitation(leadId);
+      const deliveryFailed = result.invitationEmailStatus !== 'SENT';
+      setInvitationDeliveryFailed(deliveryFailed);
+      setSuccessMessage(
+        deliveryFailed
+          ? 'La invitación fue renovada, pero no se pudo enviar el correo. Podés volver a intentarlo.'
+          : 'Invitación reenviada.',
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo reenviar la invitación');
+    } finally {
+      setIsResendingInvitation(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-24">
@@ -171,7 +198,7 @@ export default function LeadDetailPage() {
         <Button onClick={() => router.back()}>← Back to Leads</Button>
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <h3 className="font-medium text-red-900">Lead Not Found</h3>
-          <p className="text-sm text-red-700">The lead doesn't exist.</p>
+          <p className="text-sm text-red-700">The lead doesn&apos;t exist.</p>
         </div>
       </div>
     );
@@ -439,6 +466,12 @@ export default function LeadDetailPage() {
                     <p className="text-sm font-medium text-green-700">✓ {t('superAdmin.leads.converted')}</p>
                   </div>
 
+                  {invitationDeliveryFailed && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      La administración fue creada, pero el correo de invitación no pudo enviarse. Podés reenviarlo.
+                    </div>
+                  )}
+
                   <div className="space-y-3 border-t border-green-200 pt-4">
                     <div>
                       <p className="text-xs font-medium text-muted-foreground">Nombre del Tenant</p>
@@ -472,6 +505,15 @@ export default function LeadDetailPage() {
                         className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                       >
                         Ver Tenant
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleResendInvitation}
+                        disabled={isResendingInvitation}
+                        className="flex-1"
+                      >
+                        {isResendingInvitation ? 'Reenviando...' : 'Reenviar invitación'}
                       </Button>
                       <Button
                         size="sm"
