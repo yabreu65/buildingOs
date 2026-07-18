@@ -63,6 +63,11 @@ export class CreateLeadDto {
   @IsOptional()
   @IsIn(['DEMO', 'CONTACT'])
   intent?: 'DEMO' | 'CONTACT'; // Defaults to CONTACT
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  website?: string;
 }
 
 export class UpdateLeadDto {

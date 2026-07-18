@@ -36,9 +36,10 @@ export class LeadsService {
    * - NO TENANT CREATION
    */
   async createLead(dto: CreateLeadDto): Promise<Lead> {
+    const email = dto.email.trim().toLowerCase();
     // Check if email already exists
     const existingLead = await this.prisma.lead.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
 
     if (existingLead) {
@@ -49,7 +50,7 @@ export class LeadsService {
     const lead = await this.prisma.lead.create({
       data: {
         fullName: dto.fullName,
-        email: dto.email,
+        email,
         phone: dto.phoneWhatsapp,
         tenantType: dto.tenantType,
         buildingsCount: dto.buildingsCount,

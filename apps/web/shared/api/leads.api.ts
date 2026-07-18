@@ -15,14 +15,10 @@ export interface CreateLeadRequest {
   message?: string;
   source?: string;
   intent?: 'DEMO' | 'CONTACT' | 'SIGNUP';
+  website?: string;
 }
 
 export interface LeadResponse {
-  id: string;
-  email: string;
-  fullName: string;
-  status: string;
-  createdAt: string;
   message: string;
 }
 

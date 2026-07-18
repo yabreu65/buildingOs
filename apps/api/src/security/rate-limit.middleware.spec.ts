@@ -98,4 +98,20 @@ describe('RateLimitMiddleware', () => {
     expect(unrelatedGet.next).toHaveBeenCalledWith();
     expect(unrelatedGet.response.setHeader).not.toHaveBeenCalled();
   });
+
+  it('limits public lead submissions by IP, method, and path without email buckets', async () => {
+    const middleware = createMiddleware();
+
+    for (let index = 0; index < 10; index++) {
+      const request = createRequest('POST', '/leads/public', '203.0.113.10');
+      request.body = { email: `person-${index}@example.com` };
+      const { next } = await invoke(middleware, request);
+      expect(next).toHaveBeenCalledWith();
+    }
+
+    const duplicateRoute = createRequest('POST', '/leads/public', '203.0.113.10');
+    duplicateRoute.body = { email: 'different@example.com' };
+    const limited = await invoke(middleware, duplicateRoute);
+    expect((limited.next.mock.calls[0][0] as HttpException).getStatus()).toBe(429);
+  });
 });
