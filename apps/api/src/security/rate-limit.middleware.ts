@@ -154,7 +154,7 @@ export class RateLimitMiddleware implements NestMiddleware {
       suffix += `:${req.body.tenantId}`;
     }
 
-    return `${ip}:${path}${suffix}`;
+    return `${ip}:${req.method}:${path}${suffix}`;
   }
 
   /**
@@ -164,7 +164,13 @@ export class RateLimitMiddleware implements NestMiddleware {
     const path = req.path;
     const method = req.method;
 
-    // Exempt authenticated GET requests from rate limiting (they're safe from abuse)
+    // Public invitation validation is intentionally rate limited before the
+    // broad GET exemption. req.path excludes the token query string.
+    if (path === '/invitations/validate' && method === 'GET') {
+      return { max: 10, windowMs: 15 * 60 * 1000 };
+    }
+
+    // Exempt other GET requests from rate limiting.
     if (method === 'GET') {
       return null;
     }
@@ -190,10 +196,6 @@ export class RateLimitMiddleware implements NestMiddleware {
     }
 
     // Invitation endpoints - moderate limits
-    if (path.includes('/invitations/validate') && method === 'POST') {
-      return { max: 10, windowMs: 15 * 60 * 1000 }; // 10 attempts per 15 minutes
-    }
-
     if (path.includes('/invitations/accept') && method === 'POST') {
       return { max: 10, windowMs: 15 * 60 * 1000 }; // 10 attempts per 15 minutes
     }
