@@ -47,6 +47,11 @@ export interface ConvertLeadResponse {
   tenantId: string;
   ownerUserId: string;
   inviteSent: boolean;
+  invitationEmailStatus: 'SENT' | 'FAILED' | 'DISABLED';
+}
+
+export interface ResendLeadInvitationResponse {
+  invitationEmailStatus: 'SENT' | 'FAILED' | 'DISABLED';
 }
 
 /**
@@ -108,6 +113,13 @@ export async function convertLead(
     path: `/leads/admin/${id}/convert`,
     method: 'POST',
     body: dto,
+  });
+}
+
+export async function resendLeadInvitation(id: string): Promise<ResendLeadInvitationResponse> {
+  return apiClient<ResendLeadInvitationResponse>({
+    path: `/leads/admin/${id}/resend-invitation`,
+    method: 'POST',
   });
 }
 

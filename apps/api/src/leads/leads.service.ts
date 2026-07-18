@@ -3,8 +3,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ConfigService } from '../config/config.service';
-import { CreateLeadDto, UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto, SelfRegisterDto } from './leads.dto';
-import { AuditAction, Role, Lead, LeadStatus, Prisma } from '@prisma/client';
+import {
+  CreateLeadDto,
+  UpdateLeadDto,
+  ConvertLeadDto,
+  ConvertLeadResponseDto,
+  ResendLeadInvitationResponseDto,
+  SelfRegisterDto,
+} from './leads.dto';
+import { AuditAction, InvitationStatus, Role, Lead, LeadStatus, Prisma } from '@prisma/client';
 import { EmailType } from '../email/email.types';
 import { EmailTemplates } from '../email/email.templates';
 import { LeadResponse, LeadsListResponse, SelfRegisterResponse } from './leads.types';
@@ -380,7 +387,6 @@ export class LeadsService {
       throw new ConflictException('An account with this email already exists');
     }
 
-    // Start atomic transaction
     return await this.prisma.$transaction(async (tx) => {
       // 1. Create Lead (NEW status, DEMO intent, self-registration source)
       this.logger.log(`[SELF-REGISTER] Creating Lead for ${email}`);
@@ -627,8 +633,8 @@ export class LeadsService {
 
     this.logger.log(`[CONVERT] Using owner email: ${ownerEmail}`);
 
-    // Start atomic transaction
-    return await this.prisma.$transaction(async (tx) => {
+    // The transaction contains only durable domain writes. Email is sent after commit.
+    const conversion = await this.prisma.$transaction(async (tx) => {
       // 3. Create tenant
       this.logger.log(`[CONVERT] Creating tenant with name="${dto.tenantName}", type="${tenantType}"`);
 
@@ -731,13 +737,7 @@ export class LeadsService {
       });
       this.logger.log(`[CONVERT] ✓ Invitation created`);
 
-      // 8. Send invitation email (fire-and-forget)
-      this.logger.log(`[CONVERT] Sending invitation email...`);
-      void this.sendInvitationEmail(ownerEmail, inviteToken, dto.tenantName).catch((error) => {
-        this.logger.error(`Failed to send invitation email: ${error.message}`);
-      });
-
-      // 9. Update lead status and mark as converted
+      // 8. Update lead status and mark as converted
       this.logger.log(`[CONVERT] Updating lead status and marking as converted...`);
       await tx.lead.update({
         where: { id: leadId },
@@ -749,51 +749,130 @@ export class LeadsService {
       });
       this.logger.log(`[CONVERT] ✓ Lead updated`);
 
-      // 10. Audit events (fire-and-forget)
-      void this.auditService
-        .createLog({
-          tenantId: tenant.id,
-          actorUserId: superAdminUserId,
-          action: AuditAction.TENANT_CREATE,
-          entityType: 'Tenant',
-          entityId: tenant.id,
-          metadata: {
-            source: 'lead_conversion',
-            leadId,
-            tenantType,
-          },
-        })
-        .catch((error) => {
-          this.logger.error(`Failed to audit tenant create: ${error.message}`);
-        });
-
-      void this.auditService
-        .createLog({
-          tenantId: tenant.id,
-          actorUserId: superAdminUserId,
-          action: AuditAction.LEAD_CONVERTED,
-          entityType: 'Lead',
-          entityId: leadId,
-          metadata: {
-            tenantId: tenant.id,
-            ownerUserId: ownerUser.id,
-          },
-        })
-        .catch((error) => {
-          this.logger.error(`Failed to audit lead converted: ${error.message}`);
-        });
-
-      this.logger.log(`[CONVERT] ✓✓✓ CONVERSION COMPLETE: tenantId=${tenant.id}, leadId=${leadId}, plan=${billingPlan.planId}`);
-
       return {
         tenantId: tenant.id,
         ownerUserId: ownerUser.id,
-        inviteSent: true,
+        invitationId: invitation.id,
+        ownerEmail,
+        inviteToken,
+        tenantName: dto.tenantName,
         plan: billingPlan.planId,
         subscriptionStatus: 'TRIAL',
         trialEndDate: trialEndDate.toISOString(),
       };
     });
+
+    void this.auditService
+      .createLog({
+        tenantId: conversion.tenantId,
+        actorUserId: superAdminUserId,
+        action: AuditAction.TENANT_CREATE,
+        entityType: 'Tenant',
+        entityId: conversion.tenantId,
+        metadata: { source: 'lead_conversion', leadId, tenantType },
+      })
+      .catch((error) => this.logger.error(`Failed to audit tenant creation: ${error.message}`));
+    void this.auditService
+      .createLog({
+        tenantId: conversion.tenantId,
+        actorUserId: superAdminUserId,
+        action: AuditAction.LEAD_CONVERTED,
+        entityType: 'Lead',
+        entityId: leadId,
+        metadata: { tenantId: conversion.tenantId, ownerUserId: conversion.ownerUserId },
+      })
+      .catch((error) => this.logger.error(`Failed to audit lead conversion: ${error.message}`));
+
+    const invitationEmailStatus = await this.sendInvitationEmail(
+      conversion.ownerEmail,
+      conversion.inviteToken,
+      conversion.tenantName,
+      conversion.tenantId,
+    );
+
+    this.logger.log(`[CONVERT] Completed lead conversion for ${leadId}; invitation email status=${invitationEmailStatus}`);
+    return {
+      tenantId: conversion.tenantId,
+      ownerUserId: conversion.ownerUserId,
+      inviteSent: invitationEmailStatus === 'SENT',
+      invitationEmailStatus,
+      plan: conversion.plan,
+      subscriptionStatus: conversion.subscriptionStatus,
+      trialEndDate: conversion.trialEndDate,
+    };
+  }
+
+  /**
+   * Rotates the converted owner's pending invitation before a single post-commit resend.
+   */
+  async resendLeadInvitation(
+    leadId: string,
+    superAdminUserId: string,
+  ): Promise<ResendLeadInvitationResponseDto> {
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { convertedTenantId: true },
+    });
+
+    const tenantId = lead?.convertedTenantId;
+    if (!tenantId) {
+      throw new NotFoundException('Converted lead not found');
+    }
+
+    const resend = await this.prisma.$transaction(async (tx) => {
+      const invitation = await tx.invitation.findFirst({
+        where: {
+          tenantId,
+          status: InvitationStatus.PENDING,
+          roles: { array_contains: Role.TENANT_OWNER },
+        },
+      });
+
+      if (!invitation) {
+        throw new NotFoundException('Pending owner invitation not found');
+      }
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const rotation = await tx.invitation.updateMany({
+        where: { id: invitation.id, tokenHash: invitation.tokenHash, status: InvitationStatus.PENDING },
+        data: { tokenHash, expiresAt },
+      });
+
+      if (rotation.count !== 1) {
+        throw new ConflictException('Invitation was updated concurrently');
+      }
+
+      const tenant = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { name: true },
+      });
+
+      if (!tenant) {
+        throw new NotFoundException('Tenant not found');
+      }
+
+      return { invitationId: invitation.id, email: invitation.email, token, tenantName: tenant.name };
+    });
+
+    void this.auditService
+      .createLog({
+        tenantId,
+        actorUserId: superAdminUserId,
+        action: AuditAction.MEMBERSHIP_INVITE_RESENT,
+        entityType: 'Invitation',
+        entityId: resend.invitationId,
+      })
+      .catch((error) => this.logger.error(`Failed to audit invitation resend: ${error.message}`));
+
+    const invitationEmailStatus = await this.sendInvitationEmail(
+      resend.email,
+      resend.token,
+      resend.tenantName,
+      tenantId,
+    );
+    return { invitationEmailStatus };
   }
 
   /**
@@ -830,7 +909,8 @@ export class LeadsService {
     email: string,
     token: string,
     tenantName: string,
-  ): Promise<void> {
+    tenantId: string,
+  ): Promise<'SENT' | 'FAILED' | 'DISABLED'> {
     const inviteLink = `${this.configService.getValue('appBaseUrl')}/invite?token=${token}`;
 
     const htmlBody = `
@@ -841,13 +921,20 @@ export class LeadsService {
       <p style="color: #999; font-size: 12px;">If you didn't request this, please ignore this email.</p>
     `;
 
-    await this.emailService.sendEmail(
-      {
-        to: email,
-        subject: `Invitation to ${tenantName} - BuildingOS`,
-        htmlBody,
-      },
-      EmailType.INVITATION,
-    );
+    try {
+      const result = await this.emailService.sendEmail(
+        {
+          to: email,
+          subject: `Invitation to ${tenantName} - BuildingOS`,
+          htmlBody,
+          tenantId,
+        },
+        EmailType.INVITATION,
+      );
+      return result.skipped ? 'DISABLED' : result.success ? 'SENT' : 'FAILED';
+    } catch (error) {
+      this.logger.error(`Failed to send invitation email for tenant ${tenantId}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      return 'FAILED';
+    }
   }
 }

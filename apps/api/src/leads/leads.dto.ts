@@ -107,9 +107,14 @@ export class ConvertLeadResponseDto {
   tenantId!: string;
   ownerUserId!: string;
   inviteSent!: boolean;
+  invitationEmailStatus!: 'SENT' | 'FAILED' | 'DISABLED';
   plan!: string; // FREE | BASIC | PRO | ENTERPRISE (BillingPlanId)
   subscriptionStatus!: string; // TRIAL
   trialEndDate!: string; // ISO 8601 date
+}
+
+export class ResendLeadInvitationResponseDto {
+  invitationEmailStatus!: 'SENT' | 'FAILED' | 'DISABLED';
 }
 
 export class LeadResponseDto {

@@ -9,6 +9,7 @@ import {
   getLead,
   updateLead,
   convertLead,
+  resendLeadInvitation,
   deleteLead,
   Lead,
   ListLeadsResponse,
@@ -103,6 +104,8 @@ export function useLeads() {
     return result;
   };
 
+  const resendInvitation = async (id: string) => resendLeadInvitation(id);
+
   // Delete lead
   const remove = async (id: string): Promise<boolean> => {
     try {
@@ -127,6 +130,7 @@ export function useLeads() {
     fetchLead,
     update,
     convert,
+    resendInvitation,
     remove,
     pageSize,
   };

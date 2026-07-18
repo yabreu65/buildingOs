@@ -14,7 +14,12 @@ import {
 } from '@nestjs/common';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { LeadsService } from './leads.service';
-import { UpdateLeadDto, ConvertLeadDto, ConvertLeadResponseDto } from './leads.dto';
+import {
+  UpdateLeadDto,
+  ConvertLeadDto,
+  ConvertLeadResponseDto,
+  ResendLeadInvitationResponseDto,
+} from './leads.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 
@@ -134,6 +139,17 @@ export class AdminLeadsController {
   ): Promise<ConvertLeadResponseDto> {
     const superAdminUserId = req.user?.id;
     return this.leadsService.convertLeadToTenant(id, dto, superAdminUserId);
+  }
+
+  /**
+   * Rotate and resend the pending owner invitation for a converted lead.
+   */
+  @Post(':id/resend-invitation')
+  async resendLeadInvitation(
+    @Param('id') id: string,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<ResendLeadInvitationResponseDto> {
+    return this.leadsService.resendLeadInvitation(id, req.user?.id);
   }
 
   /**
