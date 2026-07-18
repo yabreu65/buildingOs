@@ -636,6 +636,14 @@ export class LeadsService {
 
     // The transaction contains only durable domain writes. Email is sent after commit.
     const conversion = await this.prisma.$transaction(async (tx) => {
+      const billingPlan = dto.planId
+        ? await tx.billingPlan.findUnique({ where: { id: dto.planId } })
+        : await this.getDefaultBillingPlan(tx);
+
+      if (!billingPlan) {
+        throw new BadRequestException('Selected billing plan not found');
+      }
+
       // 3. Create tenant
       this.logger.log(`[CONVERT] Creating tenant with name="${dto.tenantName}", type="${tenantType}"`);
 
@@ -650,9 +658,6 @@ export class LeadsService {
 
       // 4. Create subscription with plan
       this.logger.log(`[CONVERT] Creating subscription...`);
-
-      // Get billing plan (default BASIC, fallback to FREE)
-      const billingPlan = await this.getDefaultBillingPlan();
 
       // Calculate trial period (14 days from now)
       const now = new Date();
@@ -880,15 +885,27 @@ export class LeadsService {
    * Get default plan (BASIC with fallback to FREE)
    * Used for new tenant conversions
    */
-  private async getDefaultBillingPlan() {
+  async listConversionBillingPlans() {
+    return this.prisma.billingPlan.findMany({
+      select: {
+        id: true,
+        planId: true,
+        name: true,
+        monthlyPrice: true,
+      },
+      orderBy: { monthlyPrice: 'asc' },
+    });
+  }
+
+  private async getDefaultBillingPlan(client: Prisma.TransactionClient | PrismaService = this.prisma) {
     // Try BASIC first
-    let plan = await this.prisma.billingPlan.findFirst({
+    let plan = await client.billingPlan.findFirst({
       where: { planId: 'BASIC' },
     });
 
     // Fallback to FREE if BASIC doesn't exist
     if (!plan) {
-      plan = await this.prisma.billingPlan.findFirst({
+      plan = await client.billingPlan.findFirst({
         where: { planId: 'FREE' },
       });
     }

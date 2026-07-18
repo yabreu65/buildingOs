@@ -74,6 +74,14 @@ export class AdminLeadsController {
   }
 
   /**
+   * List persisted billing plans available for a lead conversion.
+   */
+  @Get('billing-plans')
+  async listConversionBillingPlans() {
+    return this.leadsService.listConversionBillingPlans();
+  }
+
+  /**
    * Get a single lead by ID
    *
    * GET /leads/admin/:id

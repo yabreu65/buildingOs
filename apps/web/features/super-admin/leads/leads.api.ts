@@ -48,6 +48,16 @@ export interface ConvertLeadResponse {
   ownerUserId: string;
   inviteSent: boolean;
   invitationEmailStatus: 'SENT' | 'FAILED' | 'DISABLED';
+  plan: string;
+  subscriptionStatus: string;
+  trialEndDate: string;
+}
+
+export interface ConversionBillingPlan {
+  id: string;
+  planId: string;
+  name: string;
+  monthlyPrice: number;
 }
 
 export interface ResendLeadInvitationResponse {
@@ -113,6 +123,13 @@ export async function convertLead(
     path: `/leads/admin/${id}/convert`,
     method: 'POST',
     body: dto,
+  });
+}
+
+export async function listConversionBillingPlans(): Promise<ConversionBillingPlan[]> {
+  return apiClient<ConversionBillingPlan[]>({
+    path: '/leads/admin/billing-plans',
+    method: 'GET',
   });
 }
 

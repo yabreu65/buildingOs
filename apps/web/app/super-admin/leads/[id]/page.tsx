@@ -9,6 +9,10 @@ import Textarea from '@/shared/components/ui/Textarea';
 import Select from '@/shared/components/ui/Select';
 import Badge from '@/shared/components/ui/Badge';
 import { useLeads } from '@/features/super-admin/leads/useLeads';
+import {
+  ConversionBillingPlan,
+  listConversionBillingPlans,
+} from '@/features/super-admin/leads/leads.api';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 
@@ -66,6 +70,9 @@ export default function LeadDetailPage() {
   const [notes, setNotes] = useState<string>('');
   const [tenantName, setTenantName] = useState<string>('');
   const [ownerEmail, setOwnerEmail] = useState<string>('');
+  const [plans, setPlans] = useState<ConversionBillingPlan[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
+  const [plansError, setPlansError] = useState<string | null>(null);
   const [showConvertForm, setShowConvertForm] = useState(false);
 
   useEffect(() => {
@@ -90,6 +97,23 @@ export default function LeadDetailPage() {
 
     if (leadId) {
       loadLead();
+    }
+  }, [leadId]);
+
+  useEffect(() => {
+    const loadPlans = async () => {
+      try {
+        setPlansError(null);
+        setSelectedPlanId('');
+        setPlans(await listConversionBillingPlans());
+      } catch {
+        setPlans([]);
+        setPlansError('No se pudieron cargar los planes disponibles. Intentá nuevamente.');
+      }
+    };
+
+    if (leadId) {
+      void loadPlans();
     }
   }, [leadId]);
 
@@ -124,6 +148,11 @@ export default function LeadDetailPage() {
       return;
     }
 
+    if (!selectedPlanId) {
+      setError('Seleccioná un plan para la administración');
+      return;
+    }
+
     try {
       setIsConverting(true);
       setError(null);
@@ -131,19 +160,21 @@ export default function LeadDetailPage() {
         tenantName: tenantName.trim(),
         tenantType: lead?.tenantType,
         ownerEmail: ownerEmail.trim(),
+        planId: selectedPlanId,
       });
       if (result && result.tenantId) {
         const deliveryFailed = result.invitationEmailStatus !== 'SENT';
         setInvitationDeliveryFailed(deliveryFailed);
         setSuccessMessage(
           deliveryFailed
-            ? 'Administración creada, pero no se pudo enviar la invitación. Podés reenviarla.'
-            : 'Administración creada e invitación enviada.',
+            ? `Administración creada con plan ${result.plan}, pero no se pudo enviar la invitación. Podés reenviarla.`
+            : `Administración creada con plan ${result.plan} e invitación enviada.`,
         );
         setSuccessTenantId(result.tenantId);
         setShowConvertForm(false);
         setTenantName('');
         setOwnerEmail('');
+        setSelectedPlanId('');
         // Refresh lead data
         const updated = await fetchLead(leadId);
         if (updated) {
@@ -415,10 +446,11 @@ export default function LeadDetailPage() {
                 ) : (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-2">
+                      <label className="block text-xs font-medium mb-2" htmlFor="conversion-tenant-name">
                         {t('superAdmin.leads.tenantName')} *
                       </label>
                       <Input
+                        id="conversion-tenant-name"
                         value={tenantName}
                         onChange={(e) => setTenantName(e.target.value)}
                         placeholder={t('forms.placeholder')}
@@ -435,10 +467,29 @@ export default function LeadDetailPage() {
                         placeholder="owner@example.com"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-2" htmlFor="conversion-plan">
+                        Plan *
+                      </label>
+                      <Select
+                        id="conversion-plan"
+                        value={selectedPlanId}
+                        onChange={(event) => setSelectedPlanId(event.target.value)}
+                        disabled={isConverting || plans.length === 0}
+                      >
+                        <option value="">Seleccioná un plan</option>
+                        {plans.map((plan) => (
+                          <option key={plan.id} value={plan.id}>
+                            {plan.name} ({plan.planId})
+                          </option>
+                        ))}
+                      </Select>
+                      {plansError && <p className="mt-1 text-xs text-red-700">{plansError}</p>}
+                    </div>
                     <div className="flex gap-2">
                       <Button
                         onClick={handleConvertLead}
-                        disabled={isConverting || !tenantName.trim() || !ownerEmail.trim()}
+                        disabled={isConverting || !tenantName.trim() || !ownerEmail.trim() || !selectedPlanId}
                         className="flex-1"
                       >
                         {isConverting ? t('superAdmin.leads.converting') : t('superAdmin.leads.convertButton')}
@@ -448,6 +499,7 @@ export default function LeadDetailPage() {
                           setShowConvertForm(false);
                           setTenantName('');
                           setOwnerEmail('');
+                          setSelectedPlanId('');
                         }}
                         className="flex-1"
                       >

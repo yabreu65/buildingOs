@@ -8,6 +8,7 @@ import { LeadsService } from './leads.service';
 
 interface ConversionTransaction {
   readonly tenant: { create: jest.Mock };
+  readonly billingPlan: { findUnique: jest.Mock; findFirst: jest.Mock };
   readonly subscription: { findUnique: jest.Mock; create: jest.Mock };
   readonly user: { findUnique: jest.Mock; create: jest.Mock };
   readonly membership: { create: jest.Mock };
@@ -20,6 +21,12 @@ function createConversionFixture(emailResult: Promise<unknown>) {
   let transactionCompleted = false;
   const transaction: ConversionTransaction = {
     tenant: { create: jest.fn().mockResolvedValue({ id: 'tenant-1' }) },
+    billingPlan: {
+      findUnique: jest.fn().mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ id: where.id, planId: 'BASIC' }),
+      ),
+      findFirst: jest.fn().mockResolvedValue({ id: 'plan-basic', planId: 'BASIC' }),
+    },
     subscription: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'subscription-1' }),
@@ -70,6 +77,7 @@ function createConversionFixture(emailResult: Promise<unknown>) {
     service: new LeadsService(prisma, emailService, auditService, configService),
     transaction,
     emailService,
+    prisma,
   };
 }
 
@@ -126,6 +134,57 @@ describe('LeadsService', () => {
     const result = await service.convertLeadToTenant('lead-1', dto, 'super-admin-1');
 
     expect(result).toEqual(expect.objectContaining({ invitationEmailStatus: 'DISABLED', inviteSent: false }));
+  });
+
+  it.each([
+    ['FREE', 'plan-free'],
+    ['BASIC', 'plan-basic'],
+    ['PRO', 'plan-pro'],
+    ['ENTERPRISE', 'plan-enterprise'],
+  ])('uses the selected %s billing plan for the created subscription', async (planId, selectedPlanId) => {
+    const { service, transaction } = createConversionFixture(Promise.resolve({ success: true }));
+    transaction.billingPlan.findUnique.mockResolvedValue({ id: selectedPlanId, planId });
+
+    const result = await service.convertLeadToTenant(
+      'lead-1',
+      { ...dto, planId: selectedPlanId },
+      'super-admin-1',
+    );
+
+    expect(transaction.billingPlan.findUnique).toHaveBeenCalledWith({ where: { id: selectedPlanId } });
+    expect(transaction.subscription.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ planId: selectedPlanId, status: 'TRIAL' }) }),
+    );
+    expect(result).toEqual(expect.objectContaining({ plan: planId, subscriptionStatus: 'TRIAL' }));
+  });
+
+  it('uses the canonical BASIC fallback when no plan id is supplied', async () => {
+    const { service, transaction } = createConversionFixture(Promise.resolve({ success: true }));
+
+    await service.convertLeadToTenant('lead-1', dto, 'super-admin-1');
+
+    expect(transaction.billingPlan.findUnique).not.toHaveBeenCalled();
+    expect(transaction.billingPlan.findFirst).toHaveBeenCalledWith({ where: { planId: 'BASIC' } });
+    expect(transaction.subscription.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ planId: 'plan-basic' }) }),
+    );
+  });
+
+  it('rejects an unknown selected plan before creating partial conversion resources or sending an invitation', async () => {
+    const { service, transaction, emailService } = createConversionFixture(Promise.resolve({ success: true }));
+    transaction.billingPlan.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.convertLeadToTenant('lead-1', { ...dto, planId: 'missing-plan' }, 'super-admin-1'),
+    ).rejects.toThrow('Selected billing plan not found');
+
+    expect(transaction.tenant.create).not.toHaveBeenCalled();
+    expect(transaction.subscription.create).not.toHaveBeenCalled();
+    expect(transaction.user.create).not.toHaveBeenCalled();
+    expect(transaction.membership.create).not.toHaveBeenCalled();
+    expect(transaction.invitation.create).not.toHaveBeenCalled();
+    expect(transaction.lead.update).not.toHaveBeenCalled();
+    expect(emailService.sendEmail).not.toHaveBeenCalled();
   });
 
   it('rotates only the converted owner pending invitation before resending it', async () => {
