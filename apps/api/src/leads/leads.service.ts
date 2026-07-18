@@ -9,7 +9,6 @@ import { EmailType } from '../email/email.types';
 import { EmailTemplates } from '../email/email.templates';
 import { LeadResponse, LeadsListResponse, SelfRegisterResponse } from './leads.types';
 import * as crypto from 'crypto';
-import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class LeadsService {
@@ -679,16 +678,14 @@ export class LeadsService {
       let ownerUser = await tx.user.findUnique({ where: { email: ownerEmail } });
 
       if (!ownerUser) {
-        // Create new user with temporary password
+        // New owners activate their account by accepting the invitation.
         this.logger.log(`[CONVERT] Creating new user ${ownerEmail}`);
-        const tempPassword = this.generateTemporaryPassword();
-        const passwordHash = await this.hashPassword(tempPassword);
 
         ownerUser = await tx.user.create({
           data: {
             email: ownerEmail,
             name: ownerFullName,
-            passwordHash,
+            passwordHash: '',
           },
         });
 
@@ -824,20 +821,6 @@ export class LeadsService {
 
     this.logger.log(`[CONVERT] Using default plan: ${plan.planId}`);
     return plan;
-  }
-
-  /**
-   * Hash password (simple bcrypt)
-   */
-  private async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, 10);
-  }
-
-  /**
-   * Generate temporary password
-   */
-  private generateTemporaryPassword(): string {
-    return crypto.randomBytes(12).toString('hex');
   }
 
   /**
