@@ -38,8 +38,8 @@ export class EmailDeliveryModule {
             return new SmtpAdapter({
               host: options.smtpHost || '',
               port: options.smtpPort || 587,
-              user: options.smtpUser || '',
-              pass: options.smtpPass || '',
+              user: options.smtpUser,
+              pass: options.smtpPass,
               from: options.mailFrom,
             });
           case 'resend':

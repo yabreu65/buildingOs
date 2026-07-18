@@ -61,6 +61,34 @@ describe('resolveEmailDelivery', () => {
         resolveEmailDelivery({ MAIL_PROVIDER: 'smtp' }),
       ).toThrow('SMTP_HOST is required when MAIL_PROVIDER=smtp');
     });
+
+    it('supports unauthenticated local SMTP when both credentials are empty', () => {
+      const result = resolveEmailDelivery({
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: '127.0.0.1',
+        SMTP_PORT: '1025',
+        SMTP_USER: '',
+        SMTP_PASS: '',
+      });
+
+      expect(result).toEqual(expect.objectContaining({
+        smtpHost: '127.0.0.1',
+        smtpPort: 1025,
+        smtpUser: undefined,
+        smtpPass: undefined,
+      }));
+    });
+
+    it.each([
+      { SMTP_USER: 'mailer' },
+      { SMTP_PASS: 'secret' },
+    ])('rejects partial SMTP credentials: %o', (credentials) => {
+      expect(() => resolveEmailDelivery({
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        ...credentials,
+      })).toThrow('SMTP_USER and SMTP_PASS must both be set or both be empty');
+    });
   });
 
   describe('resend provider', () => {

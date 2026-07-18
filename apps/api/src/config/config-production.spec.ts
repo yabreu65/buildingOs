@@ -288,7 +288,7 @@ describe('Production Readiness Config Validation', () => {
   });
 
   describe('SMTP config validation', () => {
-    it('requires SMTP_USER when MAIL_PROVIDER is smtp', () => {
+    it('rejects SMTP_PASS without SMTP_USER', () => {
       const schema = createConfigSchema('test');
       const result = schema.safeParse({
         ...baseEnv,
@@ -305,7 +305,7 @@ describe('Production Readiness Config Validation', () => {
       }
     });
 
-    it('requires SMTP_PASS when MAIL_PROVIDER is smtp', () => {
+    it('rejects SMTP_USER without SMTP_PASS', () => {
       const schema = createConfigSchema('test');
       const result = schema.safeParse({
         ...baseEnv,
@@ -322,7 +322,7 @@ describe('Production Readiness Config Validation', () => {
       }
     });
 
-    it('rejects blank SMTP_USER and SMTP_PASS when MAIL_PROVIDER is smtp', () => {
+    it('accepts blank SMTP_USER and SMTP_PASS for local unauthenticated SMTP', () => {
       const schema = createConfigSchema('test');
       const result = schema.safeParse({
         ...baseEnv,
@@ -333,12 +333,7 @@ describe('Production Readiness Config Validation', () => {
         SMTP_PASS: '',
       });
 
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        const issues = result.error.issues.map((i) => i.message);
-        expect(issues.some((m) => m.includes('SMTP_USER'))).toBe(true);
-        expect(issues.some((m) => m.includes('SMTP_PASS'))).toBe(true);
-      }
+      expect(result.success).toBe(true);
     });
 
     it('accepts smtp provider with all runtime-required fields', () => {

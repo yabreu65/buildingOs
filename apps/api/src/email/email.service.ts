@@ -48,22 +48,33 @@ export class EmailService {
   private initializeSMTP(): void {
     const config = this.config.get();
 
-    if (!config.smtpHost || !config.smtpPort || !config.smtpUser || !config.smtpPass) {
+    const hasSmtpUser = Boolean(config.smtpUser);
+    const hasSmtpPass = Boolean(config.smtpPass);
+
+    if (!config.smtpHost || !config.smtpPort || hasSmtpUser !== hasSmtpPass) {
       throw new Error('SMTP configuration incomplete');
     }
 
-    this.smtpTransporter = nodemailer.createTransport({
+    const transportOptions = {
       host: config.smtpHost,
       port: config.smtpPort,
       secure: config.smtpPort === 465, // TLS for 465, STARTTLS for 587
       connectionTimeout: 3000,
       greetingTimeout: 3000,
       socketTimeout: 3000,
-      auth: {
-        user: config.smtpUser,
-        pass: config.smtpPass,
-      },
-    });
+    };
+
+    this.smtpTransporter = nodemailer.createTransport(
+      hasSmtpUser && hasSmtpPass
+        ? {
+            ...transportOptions,
+            auth: {
+              user: config.smtpUser!,
+              pass: config.smtpPass!,
+            },
+          }
+        : transportOptions,
+    );
 
     this.logger.log(`[Email] SMTP configured: ${config.smtpHost}:${config.smtpPort}`);
   }

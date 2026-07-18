@@ -20,13 +20,18 @@ export function resolveEmailDelivery(env: NodeJS.ProcessEnv = process.env): Emai
         'Set the env var or switch to MAIL_PROVIDER=none.',
       );
     }
+    const smtpUser = env.SMTP_USER || undefined;
+    const smtpPass = env.SMTP_PASS || undefined;
+    if (Boolean(smtpUser) !== Boolean(smtpPass)) {
+      throw new Error('SMTP_USER and SMTP_PASS must both be set or both be empty when MAIL_PROVIDER=smtp.');
+    }
     return {
       mailProvider,
       mailFrom,
       smtpHost: env.SMTP_HOST,
       smtpPort: env.SMTP_PORT ? Number(env.SMTP_PORT) : 587,
-      smtpUser: env.SMTP_USER,
-      smtpPass: env.SMTP_PASS,
+      smtpUser,
+      smtpPass,
     };
   }
 
