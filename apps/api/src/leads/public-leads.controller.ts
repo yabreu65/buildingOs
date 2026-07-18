@@ -4,6 +4,7 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  ConflictException,
 } from '@nestjs/common';
 import { LeadsService } from './leads.service';
 import { CreateLeadDto, SelfRegisterDto } from './leads.dto';
@@ -30,14 +31,24 @@ export class PublicLeadsController {
   @Post('public')
   @HttpCode(HttpStatus.CREATED)
   async submitLead(@Body() dto: CreateLeadDto) {
-    const lead = await this.leadsService.createLead(dto);
+    if (dto.website?.trim()) {
+      return this.publicResponse();
+    }
 
+    try {
+      await this.leadsService.createLead(dto);
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        return this.publicResponse();
+      }
+      throw error;
+    }
+
+    return this.publicResponse();
+  }
+
+  private publicResponse() {
     return {
-      id: lead.id,
-      email: lead.email,
-      fullName: lead.fullName,
-      status: lead.status,
-      createdAt: lead.createdAt,
       message: 'Lead received. Our sales team will contact you shortly.',
     };
   }

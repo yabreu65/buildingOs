@@ -115,11 +115,6 @@ export function UnifiedLeadForm({
   });
 
   const onSubmit = async (data: LeadFormData) => {
-    if (data.website) {
-      console.warn('Honeypot field filled, ignoring submission');
-      return;
-    }
-
     const normalizedFullName = data.fullName.trim();
     const normalizedEmail = data.email.trim().toLowerCase();
     const normalizedPhoneWhatsapp = data.phoneWhatsapp?.trim() || undefined;
@@ -155,6 +150,7 @@ export function UnifiedLeadForm({
           message: normalizedMessage,
           source: intent === 'DEMO' ? 'landing' : 'contact-form',
           intent,
+          website: data.website || undefined,
         };
 
         console.log(`📤 Enviando lead ${intent}:`, submitData);
@@ -432,7 +428,16 @@ export function UnifiedLeadForm({
           )}
 
           {/* Honeypot */}
-          <input type="hidden" {...register('website')} />
+          <div aria-hidden="true" className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden">
+            <label htmlFor={`lead-${intent.toLowerCase()}-website`}>Website</label>
+            <input
+              id={`lead-${intent.toLowerCase()}-website`}
+              type="text"
+              tabIndex={-1}
+              autoComplete="off"
+              {...register('website')}
+            />
+          </div>
 
           {/* Submit Button */}
           <Button

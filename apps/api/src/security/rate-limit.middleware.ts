@@ -145,6 +145,10 @@ export class RateLimitMiddleware implements NestMiddleware {
     const ip = this.getClientIp(req);
     const path = req.path;
 
+    if (path === '/leads/public' && req.method === 'POST') {
+      return `${ip}:${req.method}:${path}`;
+    }
+
     // Include email if present in body (for auth/invitations)
     let suffix = '';
     if (req.body?.email) {
