@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { OnboardingImportWizard } from './OnboardingImportWizard';
 import {
   confirmOnboardingImport,
@@ -230,5 +230,109 @@ describe('OnboardingImportWizard', () => {
       page: 1,
       pageSize: 25,
     });
+  });
+
+  it('loads an import once without replacing an unchanged URL', async () => {
+    mockedUseSearchParams.mockImplementation(() => createSearchParams('import-1'));
+
+    render(<OnboardingImportWizard />);
+
+    await waitFor(() => {
+      expect(mockedGetImport).toHaveBeenCalledTimes(1);
+    });
+
+    expect(routerReplace).not.toHaveBeenCalled();
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not poll when the URL has no import ID', () => {
+    render(<OnboardingImportWizard />);
+
+    expect(mockedGetImport).not.toHaveBeenCalled();
+  });
+
+  it('polls a confirming import at a controlled interval and stops after a terminal status', async () => {
+    jest.useFakeTimers();
+    mockedUseSearchParams.mockImplementation(() => createSearchParams('import-1'));
+    mockedGetImport
+      .mockResolvedValueOnce(createJob({ status: 'CONFIRMING', canConfirm: false }))
+      .mockResolvedValueOnce(createJob({ status: 'CONFIRMED', canConfirm: false }));
+
+    render(<OnboardingImportWizard />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(999);
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(2);
+
+    jest.useRealTimers();
+  });
+
+  it('stops polling after a network error instead of retrying in a tight loop', async () => {
+    jest.useFakeTimers();
+    mockedUseSearchParams.mockImplementation(() => createSearchParams('import-1'));
+    mockedGetImport
+      .mockResolvedValueOnce(createJob({ status: 'CONFIRMING', canConfirm: false }))
+      .mockRejectedValueOnce(new Error('Network unavailable'));
+
+    render(<OnboardingImportWizard />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(2);
+
+    jest.useRealTimers();
+  });
+
+  it('cancels the confirming import poller on unmount', async () => {
+    jest.useFakeTimers();
+    mockedUseSearchParams.mockImplementation(() => createSearchParams('import-1'));
+    mockedGetImport.mockResolvedValue(createJob({ status: 'CONFIRMING', canConfirm: false }));
+
+    const { unmount } = render(<OnboardingImportWizard />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+    });
+    expect(mockedGetImport).toHaveBeenCalledTimes(1);
+
+    jest.useRealTimers();
   });
 });

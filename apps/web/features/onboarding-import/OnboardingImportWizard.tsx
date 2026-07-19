@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
@@ -34,6 +34,7 @@ import {
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_PAGE_SIZE = 25;
+const ONBOARDING_IMPORT_POLLING_INTERVAL_MS = 1_000;
 const SHEET_OPTIONS = [
   'Instrucciones',
   'Diccionario_de_Datos',
@@ -184,6 +185,7 @@ export function OnboardingImportWizard() {
   const [isUploading, setIsUploading] = useState(false);
   const [isLoadingIssues, setIsLoadingIssues] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const isMountedRef = useRef(false);
   const [issueFilters, setIssueFilters] = useState<ImportIssueFilters>({
     severity: '',
     sheet: '',
@@ -192,13 +194,14 @@ export function OnboardingImportWizard() {
     pageSize: DEFAULT_PAGE_SIZE,
   });
 
+  const serializedSearchParams = searchParams.toString();
   const importIdFromUrl = searchParams.get('importId');
   const activeImportId = job?.importId ?? null;
   const phase = getImportStep(job, isUploading, isConfirming);
 
   const syncImportId = useCallback(
     (nextImportId: string | null) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(serializedSearchParams);
       if (nextImportId) {
         params.set('importId', nextImportId);
       } else {
@@ -206,10 +209,24 @@ export function OnboardingImportWizard() {
       }
 
       const nextUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
+      const currentUrl = serializedSearchParams ? `${pathname}?${serializedSearchParams}` : pathname;
+
+      if (nextUrl === currentUrl) {
+        return;
+      }
+
       router.replace(nextUrl, { scroll: false });
     },
-    [pathname, router, searchParams],
+    [pathname, router, serializedSearchParams],
   );
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const resetWizard = useCallback(() => {
     setJob(null);
@@ -228,7 +245,7 @@ export function OnboardingImportWizard() {
 
   const loadImport = useCallback(
     async (importId: string) => {
-      if (!tenantId) {
+      if (!tenantId || !isMountedRef.current) {
         return;
       }
 
@@ -237,16 +254,27 @@ export function OnboardingImportWizard() {
 
       try {
         const nextJob = await getOnboardingImport(tenantId, importId);
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
         setJob(nextJob);
         syncImportId(nextJob.importId);
         setIssues(null);
       } catch (error) {
+        if (!isMountedRef.current) {
+          return;
+        }
+
         const message = error instanceof Error ? error.message : 'No se pudo cargar el estado de la importación';
         setActionError(message);
         setJob(null);
         setIssues(null);
       } finally {
-        setIsLoadingImport(false);
+        if (isMountedRef.current) {
+          setIsLoadingImport(false);
+        }
       }
     },
     [syncImportId, tenantId],
@@ -254,7 +282,7 @@ export function OnboardingImportWizard() {
 
   const loadIssues = useCallback(
     async (jobId: string, filters: ImportIssueFilters) => {
-      if (!tenantId) {
+      if (!tenantId || !isMountedRef.current) {
         return;
       }
 
@@ -262,39 +290,81 @@ export function OnboardingImportWizard() {
 
       try {
         const page = await listOnboardingImportIssues(tenantId, jobId, filters);
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
         setIssues(page);
       } catch (error) {
+        if (!isMountedRef.current) {
+          return;
+        }
+
         const message = error instanceof Error ? error.message : 'No se pudieron cargar las incidencias de la importación';
         setActionError(message);
         setIssues(null);
       } finally {
-        setIsLoadingIssues(false);
+        if (isMountedRef.current) {
+          setIsLoadingIssues(false);
+        }
       }
     },
     [tenantId],
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     if (!tenantId) {
       return;
     }
 
     if (!importIdFromUrl) {
-      setJob(null);
-      setIssues(null);
-      setActionError(null);
       return;
     }
 
-    void loadImport(importIdFromUrl);
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        return loadImport(importIdFromUrl);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [importIdFromUrl, loadImport, tenantId]);
 
   useEffect(() => {
+    if (!tenantId || !activeImportId || job?.status !== 'CONFIRMING') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadImport(activeImportId);
+    }, ONBOARDING_IMPORT_POLLING_INTERVAL_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeImportId, job?.status, loadImport, tenantId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     if (!tenantId || !activeImportId) {
       return;
     }
 
-    void loadIssues(activeImportId, issueFilters);
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        return loadIssues(activeImportId, issueFilters);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeImportId, issueFilters, loadIssues, tenantId]);
 
   const handleTemplateDownload = async () => {
