@@ -18,15 +18,28 @@ export class SmtpAdapter implements EmailProvider {
   }
 
   private initializeTransporter(): void {
-    this.transporter = nodemailer.createTransport({
+    const hasSmtpUser = Boolean(this.config.user);
+    const hasSmtpPass = Boolean(this.config.pass);
+    if (hasSmtpUser !== hasSmtpPass) {
+      throw new Error('SMTP authentication requires both user and password');
+    }
+
+    const transportOptions = {
       host: this.config.host,
       port: this.config.port,
       secure: this.config.port === 465,
-      auth: {
-        user: this.config.user,
-        pass: this.config.pass,
-      },
-    });
+    };
+    this.transporter = nodemailer.createTransport(
+      hasSmtpUser && hasSmtpPass
+        ? {
+            ...transportOptions,
+            auth: {
+              user: this.config.user!,
+              pass: this.config.pass!,
+            },
+          }
+        : transportOptions,
+    );
   }
 
   async send(options: SendEmailInput): Promise<SendResult> {

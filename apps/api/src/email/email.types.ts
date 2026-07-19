@@ -50,8 +50,8 @@ export interface EmailLog {
 export interface SMTPConfig {
   host: string;
   port: number;
-  user: string;
-  pass: string;
+  user?: string;
+  pass?: string;
   from: string;
   secure?: boolean; // TLS
 }

@@ -82,6 +82,16 @@ services:
       "
     restart: on-failure
 
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    container_name: buildingos-mailpit
+    networks:
+      - buildingos_net
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
 volumes:
   buildingos_pgdata:
   buildingos_miniodata:

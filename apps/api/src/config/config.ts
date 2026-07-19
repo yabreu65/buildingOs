@@ -244,18 +244,18 @@ export const createConfigSchema = (_nodeEnv: string) => {
           message: 'SMTP_PORT is required when MAIL_PROVIDER=smtp',
         });
       }
-      if (!data.SMTP_USER) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['SMTP_USER'],
-          message: 'SMTP_USER is required when MAIL_PROVIDER=smtp',
-        });
-      }
-      if (!data.SMTP_PASS) {
+      if (data.SMTP_USER && !data.SMTP_PASS) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['SMTP_PASS'],
-          message: 'SMTP_PASS is required when MAIL_PROVIDER=smtp',
+          message: 'SMTP_PASS is required when SMTP_USER is set',
+        });
+      }
+      if (data.SMTP_PASS && !data.SMTP_USER) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SMTP_USER'],
+          message: 'SMTP_USER is required when SMTP_PASS is set',
         });
       }
     }
