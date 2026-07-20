@@ -985,6 +985,111 @@ describe('OnboardingImportsService', () => {
     expect(businessWrites.charge.create).not.toHaveBeenCalled();
   });
 
+  it('accepts units that reference valid new buildings in the same workbook', async () => {
+    prisma.building.findMany.mockResolvedValue([]);
+    prisma.unitCategory.findMany.mockResolvedValue([]);
+    prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([]);
+    prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]);
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
+    prisma.charge.findMany.mockResolvedValue([]);
+
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.buildings = [
+      { sheet: 'Edificios', rowNumber: 2, raw: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' }, normalized: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' } },
+      { sheet: 'Edificios', rowNumber: 3, raw: { codigo: 'TS', nombre: 'Torre Sur', direccion: 'Av. 2' }, normalized: { codigo: 'TS', nombre: 'Torre Sur', direccion: 'Av. 2' } },
+    ];
+    parsedData.units[0]!.normalized!.edificioCodigo = 'TN';
+    parsedData.units[1]!.normalized!.edificioCodigo = 'TS';
+    parsedData.relations = [parsedData.relations[0]!];
+    parsedData.openingBalances = [parsedData.openingBalances[0]!];
+    parsedData.relations[0]!.normalized!.edificioCodigo = 'TN';
+    parsedData.openingBalances[0]!.normalized!.edificioCodigo = 'TN';
+
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+
+    expect(validation.summary.buildings.new).toBe(2);
+    expect(validation.summary.units.new).toBe(2);
+    expect(validation.summary.relations.new).toBe(1);
+    expect(validation.summary.openingBalances.new).toBe(1);
+    expect(validation.issues.some((issue) => issue.code === 'UNKNOWN_BUILDING')).toBe(false);
+    expect(businessWrites.building.create).not.toHaveBeenCalled();
+    expect(businessWrites.unit.create).not.toHaveBeenCalled();
+  });
+
+  it('resolves mixed existing and new building codes with normalized references', async () => {
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-existing', alias: 'EXISTENTE', name: 'Torre Existente', address: 'Av. E', deletedAt: null }]);
+    prisma.unitCategory.findMany.mockResolvedValue([]); prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([]); prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]); prisma.unitOccupant.findMany.mockResolvedValue([]); prisma.charge.findMany.mockResolvedValue([]);
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.buildings = [
+      { sheet: 'Edificios', rowNumber: 2, raw: { codigo: ' NUEVO ', nombre: 'Torre Nueva', direccion: 'Av. N' }, normalized: { codigo: ' NUEVO ', nombre: 'Torre Nueva', direccion: 'Av. N' } },
+      { sheet: 'Edificios', rowNumber: 3, raw: { codigo: 'EXISTENTE', nombre: 'Torre Existente', direccion: 'Av. E' }, normalized: { codigo: 'EXISTENTE', nombre: 'Torre Existente', direccion: 'Av. E' } },
+    ];
+    parsedData.units[0]!.normalized!.edificioCodigo = 'existente';
+    parsedData.units[1]!.normalized!.edificioCodigo = ' nuevo ';
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+    expect(validation.summary.units.new).toBe(2);
+    expect(validation.issues.some((issue) => issue.code === 'UNKNOWN_BUILDING')).toBe(false);
+    expect(businessWrites.building.create).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve a tenant A unit from a building that exists only in tenant B', async () => {
+    prisma.building.findMany.mockResolvedValue([]);
+    prisma.unitCategory.findMany.mockResolvedValue([]); prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([]); prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]); prisma.unitOccupant.findMany.mockResolvedValue([]); prisma.charge.findMany.mockResolvedValue([]);
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.buildings = [];
+    parsedData.units[0]!.normalized!.edificioCodigo = 'TN';
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+    expect(prisma.building.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId } }));
+    expect(validation.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'UNKNOWN_BUILDING' })]));
+    expect(businessWrites.building.create).not.toHaveBeenCalled();
+  });
+
+  it('does not make deleted persisted buildings available to units', async () => {
+    prisma.building.findMany.mockResolvedValue([{ id: 'building-deleted', alias: 'TN', name: 'Torre Norte', address: 'Av. 1', deletedAt: new Date() }]);
+    prisma.unitCategory.findMany.mockResolvedValue([]); prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([]); prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]); prisma.unitOccupant.findMany.mockResolvedValue([]); prisma.charge.findMany.mockResolvedValue([]);
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.buildings = [{ sheet: 'Edificios', rowNumber: 2, raw: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' }, normalized: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' } }];
+    parsedData.units[0]!.normalized!.edificioCodigo = 'TN';
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+    expect(validation.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'DELETED_BUILDING' }), expect.objectContaining({ code: 'UNKNOWN_BUILDING' })]));
+  });
+
+  it.each([
+    ['unknown', [], 'ZZ', 'UNKNOWN_BUILDING'],
+    ['invalid', [{ sheet: 'Edificios', rowNumber: 2, raw: {}, normalized: null }], 'TN', 'UNKNOWN_BUILDING'],
+    ['duplicate', [
+      { sheet: 'Edificios', rowNumber: 2, raw: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' }, normalized: { codigo: 'TN', nombre: 'Torre Norte', direccion: 'Av. 1' } },
+      { sheet: 'Edificios', rowNumber: 3, raw: { codigo: ' tn ', nombre: 'Torre Norte', direccion: 'Av. 1' }, normalized: { codigo: ' tn ', nombre: 'Torre Norte', direccion: 'Av. 1' } },
+    ], 'TN', 'DUPLICATE_IN_FILE'],
+  ])('does not make %s workbook buildings available to units', async (_caseName, buildings, buildingCode, expectedIssue) => {
+    prisma.building.findMany.mockResolvedValue([]);
+    prisma.unitCategory.findMany.mockResolvedValue([]);
+    prisma.unit.findMany.mockResolvedValue([]);
+    prisma.externalEntityReference.findMany.mockResolvedValue([]);
+    prisma.tenantMember.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([]);
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
+    prisma.charge.findMany.mockResolvedValue([]);
+    const parsedData = buildParsedData(currentPeriod);
+    parsedData.buildings = buildings as typeof parsedData.buildings;
+    parsedData.units[0]!.normalized!.edificioCodigo = buildingCode;
+
+    const validation = await (service as any).validateWorkbook(tenantId, 'ARS', parsedData, []);
+
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: expectedIssue }),
+    ]));
+    expect(validation.summary.units.invalid).toBeGreaterThan(0);
+  });
+
   it('blocks person identity duplicates in file and stale external references', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
     prisma.building.findMany.mockResolvedValue([

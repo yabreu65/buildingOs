@@ -498,6 +498,7 @@ export class OnboardingImportsService {
     const buildingIdByCode = new Map(existingBuildings.map((building) => [this.normalizeCode(building.alias), building.id] as const));
 
     const buildingRowsByCode = new Map<string, ParsedRow<ParsedBuildingRowRaw, ParsedBuildingRowNormalized>>();
+    const availableBuildingCodes = new Set<string>();
     for (const row of data.buildings) {
       const normalized = row.normalized;
       if (!normalized) {
@@ -517,6 +518,7 @@ export class OnboardingImportsService {
       const existing = buildingByCode.get(code);
       if (!existing) {
         this.bump(summary.buildings, 'new');
+        availableBuildingCodes.add(code);
         continue;
       }
 
@@ -530,6 +532,7 @@ export class OnboardingImportsService {
     const sameAddress = this.normalizeText(existing.address ?? '') === this.normalizeText(normalized.direccion);
       if (sameName && sameAddress) {
         this.bump(summary.buildings, 'reusable');
+        availableBuildingCodes.add(code);
       } else {
         this.bump(summary.buildings, 'conflict');
         issues.push(this.makeIssue(row.sheet, row.rowNumber, 'codigo', 'CONFLICT_WITH_DB', 'BLOCKER', `Building ${code} conflicts with an existing record`, code, code));
@@ -577,7 +580,7 @@ export class OnboardingImportsService {
       const unitCode = this.normalizeCode(normalized.codigo);
       const rowKey = `${buildingCode}:${unitCode}`;
       const buildingId = buildingIdByCode.get(buildingCode);
-      const buildingKnown = Boolean(buildingByCode.get(buildingCode) || buildingId);
+      const buildingKnown = availableBuildingCodes.has(buildingCode);
 
       if (!buildingKnown) {
         this.bump(summary.units, 'invalid');
