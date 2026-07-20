@@ -1,6 +1,7 @@
 import { ImportType } from '@prisma/client';
 
 export const ONBOARDING_IMPORT_SCHEMA_VERSION = 'v1';
+export const ONBOARDING_IMPORT_PREVIEW_VERSION = 3;
 export const ONBOARDING_IMPORT_TYPE = ImportType.INITIAL_ONBOARDING;
 export const ONBOARDING_IMPORT_TEMPLATE_FILENAME = 'buildingos-importacion-inicial-v1.xlsx';
 export const ONBOARDING_IMPORT_TEMPLATE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -16,6 +17,8 @@ export const ONBOARDING_IMPORT_MAX_CELL_TEXT_LENGTH = 5000;
 export const ONBOARDING_IMPORT_ISSUE_PAGE_SIZE_MAX = 100;
 export const ONBOARDING_IMPORT_EXPIRES_DAYS = 30;
 export const ONBOARDING_IMPORT_CONFIRM_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+export const ONBOARDING_IMPORT_CONFIRM_TRANSACTION_MAX_WAIT_MS = 10 * 1000;
+export const ONBOARDING_IMPORT_CONFIRM_TRANSACTION_TIMEOUT_MS = 60 * 1000;
 
 export const ONBOARDING_IMPORT_ALLOWED_MIME_TYPES = new Set<string>([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

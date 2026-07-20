@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
-import { ONBOARDING_IMPORT_ALLOWED_MIME_TYPES, ONBOARDING_IMPORT_EXPIRES_DAYS, ONBOARDING_IMPORT_ISSUE_PAGE_SIZE_MAX, ONBOARDING_IMPORT_MAX_FILE_SIZE_BYTES, ONBOARDING_IMPORT_OBJECT_KEY_PREFIX, ONBOARDING_IMPORT_SCHEMA_VERSION, ONBOARDING_IMPORT_TYPE } from './onboarding-imports.constants';
+import { ONBOARDING_IMPORT_ALLOWED_MIME_TYPES, ONBOARDING_IMPORT_EXPIRES_DAYS, ONBOARDING_IMPORT_ISSUE_PAGE_SIZE_MAX, ONBOARDING_IMPORT_MAX_FILE_SIZE_BYTES, ONBOARDING_IMPORT_OBJECT_KEY_PREFIX, ONBOARDING_IMPORT_PREVIEW_VERSION, ONBOARDING_IMPORT_SCHEMA_VERSION, ONBOARDING_IMPORT_TYPE } from './onboarding-imports.constants';
 import { OnboardingImportConfirmationService } from './services/onboarding-import-confirmation.service';
 import { OnboardingImportNormalizerService } from './services/onboarding-import-normalizer.service';
 import { OnboardingImportParserService } from './services/onboarding-import-parser.service';
@@ -240,7 +240,7 @@ export class OnboardingImportsService {
       const validation = await this.validateWorkbook(input.tenantId, access.tenantCurrency, parsed.data, parsed.issues);
       const status = validation.summary.blockingIssues > 0 ? ImportJobStatus.BLOCKED : ImportJobStatus.READY;
       const normalizedObjectKey = status === ImportJobStatus.READY ? keys.normalizedObjectKey : null;
-      const previewVersion = 1;
+      const previewVersion = ONBOARDING_IMPORT_PREVIEW_VERSION;
       const previewHash = this.computeHash(Buffer.from(JSON.stringify(this.buildNormalizedPayload(input.tenantId, importId, fileHash, fileName, validation, parsed.data)), 'utf8'));
 
       if (normalizedObjectKey) {
@@ -1058,10 +1058,11 @@ export class OnboardingImportsService {
 
       await this.prisma.importJob.upsert({
         where: {
-          tenantId_type_schemaVersion_fileHash: {
+          tenantId_type_schemaVersion_previewVersion_fileHash: {
             tenantId: input.tenantId,
             type: ONBOARDING_IMPORT_TYPE,
             schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
+            previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
             fileHash: input.fileHash,
           },
         },
@@ -1069,7 +1070,7 @@ export class OnboardingImportsService {
           status: ImportJobStatus.FAILED,
           errorCode,
           errorMessage,
-          previewVersion: 1,
+          previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
           previewHash: null,
           summary: summary as unknown as Prisma.JsonObject,
           counts: summary as unknown as Prisma.JsonObject,
@@ -1087,7 +1088,7 @@ export class OnboardingImportsService {
           type: ONBOARDING_IMPORT_TYPE,
           status: ImportJobStatus.FAILED,
           schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
-          previewVersion: 1,
+          previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
           fileName: input.fileName,
           fileSize: input.fileSize,
           fileMimeType: input.fileMimeType,
@@ -1112,10 +1113,11 @@ export class OnboardingImportsService {
   private async findExistingJob(tenantId: string, fileHash: string): Promise<ImportJobView | null> {
     const job = await this.prisma.importJob.findUnique({
       where: {
-        tenantId_type_schemaVersion_fileHash: {
+        tenantId_type_schemaVersion_previewVersion_fileHash: {
           tenantId,
           type: ONBOARDING_IMPORT_TYPE,
           schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
+          previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
           fileHash,
         },
       },

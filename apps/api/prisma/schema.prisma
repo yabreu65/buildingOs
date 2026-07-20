@@ -1343,7 +1343,7 @@ model ImportJob {
   issues                ImportIssue[]
   importedCharges       Charge[]
 
-  @@unique([tenantId, type, schemaVersion, fileHash])
+  @@unique([tenantId, type, schemaVersion, previewVersion, fileHash])
   @@index([tenantId, status])
   @@index([tenantId, expiresAt])
   @@index([tenantId, createdAt])
