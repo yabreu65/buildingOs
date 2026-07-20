@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString, IsIn, Matches, MaxLength, Min, Max } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
 import {
   BuildingChargeParamDto,
@@ -436,6 +437,85 @@ export class FinancialSummaryQueryDto {
   @IsOptional()
   @IsString()
   period?: string;
+}
+
+export enum BuildingDelinquencyAging {
+  ALL = 'ALL',
+  ONE_PERIOD = 'ONE_PERIOD',
+  TWO_TO_THREE_PERIODS = 'TWO_TO_THREE_PERIODS',
+  MORE_THAN_THREE_PERIODS = 'MORE_THAN_THREE_PERIODS',
+}
+
+export enum BuildingDelinquencySortBy {
+  ACCUMULATED_DEBT = 'ACCUMULATED_DEBT',
+  PERIOD_DEBT = 'PERIOD_DEBT',
+  OVERDUE_PERIODS = 'OVERDUE_PERIODS',
+  UNIT = 'UNIT',
+}
+
+export enum BuildingDelinquencySortOrder {
+  ASC = 'asc',
+  DESC = 'desc',
+}
+
+export class BuildingDelinquencyQueryDto {
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  period!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  @IsIn([25, 50, 100])
+  pageSize?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @IsOptional()
+  @IsEnum(BuildingDelinquencyAging)
+  aging?: BuildingDelinquencyAging;
+
+  @IsOptional()
+  @IsEnum(BuildingDelinquencySortBy)
+  sortBy?: BuildingDelinquencySortBy;
+
+  @IsOptional()
+  @IsEnum(BuildingDelinquencySortOrder)
+  sortOrder?: BuildingDelinquencySortOrder;
+}
+
+export interface BuildingDelinquencyItemDto {
+  unitId: string;
+  unitCode: string;
+  unitLabel: string;
+  responsibleName: string | null;
+  periodDebt: number;
+  accumulatedDebt: number;
+  overduePeriods: number;
+}
+
+export interface BuildingDelinquencyResponseDto {
+  items: BuildingDelinquencyItemDto[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  totals: {
+    periodDebt: number;
+    accumulatedDebt: number;
+  };
+  currency: string;
 }
 
 // ============================================================================

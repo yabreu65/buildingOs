@@ -142,6 +142,43 @@ export interface FinancialSummary {
   currency: string;
 }
 
+export type BuildingDelinquencyAging = 'ALL' | 'ONE_PERIOD' | 'TWO_TO_THREE_PERIODS' | 'MORE_THAN_THREE_PERIODS';
+export type BuildingDelinquencySortBy = 'ACCUMULATED_DEBT' | 'PERIOD_DEBT' | 'OVERDUE_PERIODS' | 'UNIT';
+export type BuildingDelinquencySortOrder = 'asc' | 'desc';
+
+export interface BuildingDelinquencyQuery {
+  period: string;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  aging?: BuildingDelinquencyAging;
+  sortBy?: BuildingDelinquencySortBy;
+  sortOrder?: BuildingDelinquencySortOrder;
+}
+
+export interface BuildingDelinquencyItem {
+  unitId: string;
+  unitCode: string;
+  unitLabel: string;
+  responsibleName: string | null;
+  periodDebt: number;
+  accumulatedDebt: number;
+  overduePeriods: number;
+}
+
+export interface BuildingDelinquencyResponse {
+  items: BuildingDelinquencyItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  totals: {
+    periodDebt: number;
+    accumulatedDebt: number;
+  };
+  currency: string;
+}
+
 export interface UnitLedger {
   unitId: string;
   unitLabel?: string;
@@ -418,6 +455,25 @@ export async function getFinancialSummary(
   const query = period ? `?period=${period}` : '';
   return apiClient<FinancialSummary>({
     path: `/buildings/${buildingId}/finance/summary${query}`,
+    method: 'GET',
+  });
+}
+
+/** Get a server-side paginated operational delinquency list for one building. */
+export async function getBuildingDelinquency(
+  buildingId: string,
+  query: BuildingDelinquencyQuery,
+): Promise<BuildingDelinquencyResponse> {
+  const params = new URLSearchParams({ period: query.period });
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+  if (query.search) params.set('search', query.search);
+  if (query.aging && query.aging !== 'ALL') params.set('aging', query.aging);
+  if (query.sortBy) params.set('sortBy', query.sortBy);
+  if (query.sortOrder) params.set('sortOrder', query.sortOrder);
+
+  return apiClient<BuildingDelinquencyResponse>({
+    path: `/buildings/${buildingId}/finance/delinquency?${params.toString()}`,
     method: 'GET',
   });
 }

@@ -18,6 +18,12 @@ import {
   ListPaymentsQueryDto,
   ListPendingPaymentsQueryDto,
   FinancialSummaryDto,
+  BuildingDelinquencyAging,
+  BuildingDelinquencyItemDto,
+  BuildingDelinquencyQueryDto,
+  BuildingDelinquencyResponseDto,
+  BuildingDelinquencySortBy,
+  BuildingDelinquencySortOrder,
   PaymentMetricsQueryDto,
   PaymentMetricsDto,
   PaymentAuditLogDto,
@@ -38,6 +44,25 @@ export interface PendingPaymentListItem extends Payment {
 export interface BuildingFinancialSummaryPeriodFilter {
   period?: string;
   periods?: string[];
+}
+
+interface RawDelinquencyRow {
+  unitId: string;
+  unitCode: string;
+  unitLabel: string;
+  responsibleName: string | null;
+  periodDebt: bigint | number | string;
+  accumulatedDebt: bigint | number | string;
+  overduePeriods: bigint | number | string;
+}
+
+interface RawDelinquencyCountRow {
+  total: bigint | number | string;
+}
+
+interface RawDelinquencyTotalsRow {
+  periodDebt: bigint | number | string;
+  accumulatedDebt: bigint | number | string;
 }
 
 @Injectable()
@@ -1211,6 +1236,218 @@ export class FinanzasService {
       topDelinquentUnits,
       currency: tenant.currency,
     };
+  }
+
+  /**
+   * Return a server-side paginated operational delinquency list for one building.
+   *
+   * A unit is included only when it has an outstanding balance for the selected
+   * period. Its accumulated balance and overdue-period count include only charges
+   * from that period or an earlier period.
+   */
+  async getBuildingDelinquency(
+    tenantId: string,
+    buildingId: string,
+    query: BuildingDelinquencyQueryDto,
+  ): Promise<BuildingDelinquencyResponseDto> {
+    await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
+
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { currency: true },
+    });
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 25;
+    const skip = (page - 1) * pageSize;
+    const search = query.search?.trim();
+    const searchPattern = search ? `%${search}%` : null;
+
+    const searchClause = searchPattern
+      ? Prisma.sql`AND (
+          unit_rows."unitCode" ILIKE ${searchPattern}
+          OR unit_rows."unitLabel" ILIKE ${searchPattern}
+          OR unit_rows."responsibleName" ILIKE ${searchPattern}
+        )`
+      : Prisma.empty;
+    const agingClause = this.buildDelinquencyAgingClause(query.aging);
+    const orderBy = this.getDelinquencyOrderBy(query.sortBy, query.sortOrder);
+
+    const baseQuery = Prisma.sql`
+      WITH charge_balances AS (
+        SELECT
+          charge."unitId",
+          charge.period,
+          GREATEST(
+            charge.amount - COALESCE(
+              SUM(
+                CASE
+                  WHEN payment.status IN ('APPROVED', 'RECONCILED')
+                    THEN allocation.amount
+                  ELSE 0
+                END
+              ),
+              0
+            ),
+            0
+          ) AS outstanding
+        FROM "Charge" AS charge
+        LEFT JOIN "PaymentAllocation" AS allocation
+          ON allocation."chargeId" = charge.id
+          AND allocation."tenantId" = ${tenantId}
+        LEFT JOIN "Payment" AS payment
+          ON payment.id = allocation."paymentId"
+          AND payment."tenantId" = ${tenantId}
+          AND payment."canceledAt" IS NULL
+        WHERE charge."tenantId" = ${tenantId}
+          AND charge."buildingId" = ${buildingId}
+          AND charge."canceledAt" IS NULL
+          AND charge.period <= ${query.period}
+        GROUP BY charge.id, charge."unitId", charge.period, charge.amount
+      ),
+      unit_debts AS (
+        SELECT
+          "unitId",
+          SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) AS "periodDebt",
+          SUM(outstanding) AS "accumulatedDebt",
+          COUNT(DISTINCT period) FILTER (WHERE outstanding > 0) AS "overduePeriods"
+        FROM charge_balances
+        GROUP BY "unitId"
+        HAVING SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) > 0
+      ),
+      unit_rows AS (
+        SELECT
+          debt."unitId",
+          unit.code AS "unitCode",
+          COALESCE(unit.label, unit.code) AS "unitLabel",
+          responsible.name AS "responsibleName",
+          debt."periodDebt",
+          debt."accumulatedDebt",
+          debt."overduePeriods"
+        FROM unit_debts AS debt
+        INNER JOIN "Unit" AS unit
+          ON unit.id = debt."unitId"
+          AND unit."tenantId" = ${tenantId}
+          AND unit."buildingId" = ${buildingId}
+        LEFT JOIN LATERAL (
+          SELECT member.name
+          FROM "UnitOccupant" AS occupant
+          INNER JOIN "TenantMember" AS member
+            ON member.id = occupant."memberId"
+            AND member."tenantId" = ${tenantId}
+            AND member."disabledAt" IS NULL
+            AND member.status = 'ACTIVE'
+          WHERE occupant."tenantId" = ${tenantId}
+            AND occupant."unitId" = unit.id
+            AND occupant."endDate" IS NULL
+          ORDER BY occupant."isPrimary" DESC, occupant."startDate" ASC
+          LIMIT 1
+        ) AS responsible ON TRUE
+      ),
+      filtered_units AS (
+        SELECT *
+        FROM unit_rows
+        WHERE TRUE
+        ${searchClause}
+        ${agingClause}
+      )
+    `;
+
+    const [items, countRows, totalsRows] = await this.prisma.$transaction([
+      this.prisma.$queryRaw<RawDelinquencyRow[]>(Prisma.sql`
+        ${baseQuery}
+        SELECT
+          "unitId",
+          "unitCode",
+          "unitLabel",
+          "responsibleName",
+          "periodDebt",
+          "accumulatedDebt",
+          "overduePeriods"
+        FROM filtered_units
+        ORDER BY ${orderBy}
+        LIMIT ${pageSize}
+        OFFSET ${skip}
+      `),
+      this.prisma.$queryRaw<RawDelinquencyCountRow[]>(Prisma.sql`
+        ${baseQuery}
+        SELECT COUNT(*) AS total
+        FROM filtered_units
+      `),
+      this.prisma.$queryRaw<RawDelinquencyTotalsRow[]>(Prisma.sql`
+        ${baseQuery}
+        SELECT
+          COALESCE(SUM("periodDebt"), 0) AS "periodDebt",
+          COALESCE(SUM("accumulatedDebt"), 0) AS "accumulatedDebt"
+        FROM unit_debts
+      `),
+    ]);
+
+    const total = this.toSafeFinancialNumber(countRows[0]?.total ?? 0);
+    const totals = totalsRows[0] ?? { periodDebt: 0, accumulatedDebt: 0 };
+
+    return {
+      items: items.map((item) => this.mapDelinquencyItem(item)),
+      page,
+      pageSize,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+      totals: {
+        periodDebt: this.toSafeFinancialNumber(totals.periodDebt),
+        accumulatedDebt: this.toSafeFinancialNumber(totals.accumulatedDebt),
+      },
+      currency: tenant.currency,
+    };
+  }
+
+  private buildDelinquencyAgingClause(
+    aging: BuildingDelinquencyAging | undefined,
+  ): Prisma.Sql {
+    switch (aging) {
+      case BuildingDelinquencyAging.ONE_PERIOD:
+        return Prisma.sql`AND unit_rows."overduePeriods" = 1`;
+      case BuildingDelinquencyAging.TWO_TO_THREE_PERIODS:
+        return Prisma.sql`AND unit_rows."overduePeriods" BETWEEN 2 AND 3`;
+      case BuildingDelinquencyAging.MORE_THAN_THREE_PERIODS:
+        return Prisma.sql`AND unit_rows."overduePeriods" > 3`;
+      case BuildingDelinquencyAging.ALL:
+      case undefined:
+        return Prisma.empty;
+    }
+  }
+
+  private getDelinquencyOrderBy(
+    sortBy: BuildingDelinquencySortBy | undefined,
+    sortOrder: BuildingDelinquencySortOrder | undefined,
+  ): Prisma.Sql {
+    const direction = sortOrder === BuildingDelinquencySortOrder.ASC ? 'ASC' : 'DESC';
+    const column = {
+      [BuildingDelinquencySortBy.ACCUMULATED_DEBT]: '"accumulatedDebt"',
+      [BuildingDelinquencySortBy.PERIOD_DEBT]: '"periodDebt"',
+      [BuildingDelinquencySortBy.OVERDUE_PERIODS]: '"overduePeriods"',
+      [BuildingDelinquencySortBy.UNIT]: '"unitLabel"',
+    }[sortBy ?? BuildingDelinquencySortBy.ACCUMULATED_DEBT];
+
+    return Prisma.raw(`${column} ${direction}, "unitLabel" ASC`);
+  }
+
+  private mapDelinquencyItem(item: RawDelinquencyRow): BuildingDelinquencyItemDto {
+    return {
+      unitId: item.unitId,
+      unitCode: item.unitCode,
+      unitLabel: item.unitLabel,
+      responsibleName: item.responsibleName,
+      periodDebt: this.toSafeFinancialNumber(item.periodDebt),
+      accumulatedDebt: this.toSafeFinancialNumber(item.accumulatedDebt),
+      overduePeriods: this.toSafeFinancialNumber(item.overduePeriods),
+    };
+  }
+
+  private toSafeFinancialNumber(value: bigint | number | string): number {
+    const numericValue = typeof value === 'bigint' ? Number(value) : Number(value);
+    if (!Number.isSafeInteger(numericValue)) {
+      throw new Error('Financial aggregate exceeds the supported integer range');
+    }
+    return numericValue;
   }
 
   /**

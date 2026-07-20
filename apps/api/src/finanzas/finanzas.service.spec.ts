@@ -58,6 +58,8 @@ describe('FinanzasService', () => {
             expense: {
               findMany: jest.fn(),
             },
+            $queryRaw: jest.fn(),
+            $transaction: jest.fn(),
           },
         },
         {
@@ -675,6 +677,85 @@ describe('FinanzasService', () => {
           period: '2026-06',
         }),
       }));
+    });
+  });
+
+  describe('getBuildingDelinquency', () => {
+    it('returns a server-side page with period and accumulated debt totals', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService, '$transaction').mockResolvedValue([
+        [
+          {
+            unitId: 'unit-1',
+            unitCode: 'TS-01-07',
+            unitLabel: 'Piso 01 - Apartamento 07',
+            responsibleName: 'Ana Pérez',
+            periodDebt: 6900000n,
+            accumulatedDebt: 75420000n,
+            overduePeriods: 4n,
+          },
+        ],
+        [{ total: 96n }],
+        [{ periodDebt: 565800000n, accumulatedDebt: 6426000000n }],
+      ] as never);
+
+      const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {
+        period: '2026-07',
+        page: 1,
+        pageSize: 25,
+        sortBy: 'ACCUMULATED_DEBT' as never,
+        sortOrder: 'desc' as never,
+      });
+
+      expect(validators.validateBuildingBelongsToTenant).toHaveBeenCalledWith('tenant-1', 'building-1');
+      expect(prismaService.$transaction).toHaveBeenCalledWith(expect.any(Array));
+      expect(result).toEqual({
+        items: [
+          {
+            unitId: 'unit-1',
+            unitCode: 'TS-01-07',
+            unitLabel: 'Piso 01 - Apartamento 07',
+            responsibleName: 'Ana Pérez',
+            periodDebt: 6900000,
+            accumulatedDebt: 75420000,
+            overduePeriods: 4,
+          },
+        ],
+        page: 1,
+        pageSize: 25,
+        total: 96,
+        totalPages: 4,
+        totals: {
+          periodDebt: 565800000,
+          accumulatedDebt: 6426000000,
+        },
+        currency: 'ARS',
+      });
+    });
+
+    it('preserves the selected period boundary and resets an empty result to zero pages', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService, '$transaction').mockResolvedValue([
+        [],
+        [{ total: 0n }],
+        [{ periodDebt: 0n, accumulatedDebt: 0n }],
+      ] as never);
+
+      const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {
+        period: '2026-07',
+        aging: 'MORE_THAN_THREE_PERIODS' as never,
+      });
+
+      expect(result).toMatchObject({
+        items: [],
+        page: 1,
+        pageSize: 25,
+        total: 0,
+        totalPages: 0,
+      });
+      expect(prismaService.$queryRaw).toHaveBeenCalledTimes(3);
     });
   });
 
