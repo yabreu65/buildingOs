@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import ErrorState from '@/shared/components/ui/ErrorState';
@@ -47,6 +47,7 @@ const UnitDashboardPage = () => {
   const buildingId = params?.buildingId;
   const unitId = params?.unitId;
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const { currentUser } = useAuth();
 
@@ -71,7 +72,9 @@ const UnitDashboardPage = () => {
     occupantId: null,
   });
   const [isDeleting, setIsDeleting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'finance' | 'tickets' | 'messages' | 'documents'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'finance' | 'tickets' | 'messages' | 'documents'>(
+    searchParams.get('tab') === 'finance' ? 'finance' : 'overview',
+  );
   const [showAssignModal, setShowAssignModal] = useState(false);
 
   const unit = units.find((u) => u.id === unitId);

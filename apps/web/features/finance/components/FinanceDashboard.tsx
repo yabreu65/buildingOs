@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useFinanceSummary } from '../hooks/useFinanceSummary';
 import { useCharges } from '../hooks/useCharges';
 import { usePaymentsReview, usePaymentHistory } from '../hooks/usePaymentsReview';
@@ -8,7 +9,7 @@ import { FinanceSummaryCards } from './FinanceSummaryCards';
 import { PaymentsReviewList } from './PaymentsReviewList';
 import { PaymentHistoryList } from './PaymentHistoryList';
 import { ChargesTab } from './ChargesTab';
-import { DelinquentUnitsList } from './DelinquentUnitsList';
+import { BuildingDelinquencyList } from './BuildingDelinquencyList';
 import { FinanceChartsPanel } from './FinanceChartsPanel';
 import { ExpensesList } from './ExpensesList';
 import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager';
@@ -40,8 +41,25 @@ type TabType =
 export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps) {
   const [activeTab, setActiveTab] = useState<TabType>('rubros');
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const [period, setPeriod] = useState<string>(currentMonth);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const period = searchParams.get('period') || currentMonth;
   const periodInputId = 'building-finance-period';
+
+  const updatePeriod = (nextPeriod: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextPeriod === currentMonth) {
+      params.delete('period');
+    } else {
+      params.set('period', nextPeriod);
+    }
+    params.delete('delinquencyPage');
+
+    const nextQuery = params.toString();
+    if (nextQuery === searchParams.toString()) return;
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
 
   // Load data from hooks
   const { data: summary, isPending: summaryLoading, error: summaryError, refetch: refetchSummaryRaw } = useFinanceSummary(buildingId, period);
@@ -129,7 +147,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             id={periodInputId}
             type="month"
             value={period}
-            onChange={(e) => setPeriod(e.target.value)}
+            onChange={(e) => updatePeriod(e.target.value)}
             className="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
@@ -145,7 +163,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
 
       {/* Tabs */}
       <div className="border-b mb-6">
-        <nav className="flex gap-1 overflow-x-auto whitespace-nowrap pb-1">
+          <nav className="flex gap-1 overflow-x-auto whitespace-nowrap pb-1 lg:flex-wrap lg:overflow-visible lg:whitespace-normal">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -235,11 +253,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
         )}
 
         {activeTab === 'delinquent' && (
-          <DelinquentUnitsList
-            units={summary?.topDelinquentUnits || []}
-            loading={summaryLoading}
-            currency={summary?.currency || 'ARS'}
-          />
+          <BuildingDelinquencyList tenantId={tenantId} buildingId={buildingId} period={period} />
         )}
 
         {activeTab === 'analysis' && (

@@ -47,9 +47,11 @@ import {
   GetPaymentAllocationsParamDto,
   FinancialSummaryParamDto,
   FinancialSummaryQueryDto,
+  BuildingDelinquencyQueryDto,
   ChargeDetailDto,
   PaymentDetailDto,
   FinancialSummaryDto,
+  BuildingDelinquencyResponseDto,
   FinanceTrendQueryDto,
   MonthlyTrendDto,
 } from './finanzas.dto';
@@ -545,6 +547,28 @@ export class FinanzasController {
       tenantId,
       params.buildingId,
       query.period || undefined,
+    );
+  }
+
+  /**
+   * GET /buildings/:buildingId/finance/delinquency?period=&page=&pageSize=
+   * Return the complete operational delinquency list for one building.
+   */
+  @Get('finance/delinquency')
+  async getBuildingDelinquency(
+    @Param() params: FinancialSummaryParamDto,
+    @Query() query: BuildingDelinquencyQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<BuildingDelinquencyResponseDto> {
+    const userRoles = req.user.roles || [];
+    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
+      throw new ForbiddenException('Solo administradores pueden consultar la morosidad completa');
+    }
+
+    return this.finanzasService.getBuildingDelinquency(
+      req.tenantId!,
+      params.buildingId,
+      query,
     );
   }
 
