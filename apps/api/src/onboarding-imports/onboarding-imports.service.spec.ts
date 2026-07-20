@@ -430,6 +430,79 @@ describe('OnboardingImportsService', () => {
     );
   });
 
+  it('revalidates an identical workbook when its only preview is from an older validation version', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.importJob.findUnique.mockImplementation(({ where }) => {
+      const previewVersion = where.tenantId_type_schemaVersion_previewVersion_fileHash.previewVersion;
+
+      return Promise.resolve(previewVersion === 1 ? {
+        id: 'import-legacy-preview',
+        tenantId,
+        type: 'INITIAL_ONBOARDING',
+        fileName: 'import.xlsx',
+        fileHash: 'legacy-hash',
+        schemaVersion: 'v1',
+        previewVersion: 1,
+        status: ImportJobStatus.BLOCKED,
+        canConfirm: false,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+        summary: createSummary({ blockingIssues: 1 }),
+        counts: createSummary({ blockingIssues: 1 }),
+        issues: [{ id: 'issue-legacy' }],
+      } : null);
+    });
+    parserService.parseWorkbook.mockReturnValue({ data: buildParsedData(currentPeriod), issues: [] });
+    jest.spyOn(service as any, 'validateWorkbook').mockResolvedValue({
+      summary: createSummary(),
+      issues: [],
+    });
+    transactionCreate.mockResolvedValue({
+      id: 'import-current-preview',
+      tenantId,
+      type: 'INITIAL_ONBOARDING',
+      fileName: 'import.xlsx',
+      fileHash: 'current-hash',
+      schemaVersion: 'v1',
+      previewVersion: 3,
+      status: ImportJobStatus.READY,
+      canConfirm: true,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      summary: createSummary(),
+      counts: createSummary(),
+      issues: [],
+    });
+
+    const result = await service.previewImport(
+      { tenantId, user: buildUser(['TENANT_ADMIN']) },
+      {
+        buffer: Buffer.from('xlsx-data'),
+        originalname: 'import.xlsx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: 9,
+      } as UploadableSpreadsheetFile,
+    );
+
+    expect(prisma.importJob.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId_type_schemaVersion_previewVersion_fileHash: {
+            tenantId,
+            type: 'INITIAL_ONBOARDING',
+            schemaVersion: 'v1',
+            previewVersion: 3,
+            fileHash: expect.any(String),
+          },
+        },
+      }),
+    );
+    expect(result.importId).toBe('import-current-preview');
+    expect(minio.uploadBuffer).toHaveBeenCalledTimes(2);
+  });
+
   it('serves the official template and records the access in audit logs', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
 
@@ -568,8 +641,23 @@ describe('OnboardingImportsService', () => {
     expect(minio.uploadBuffer).toHaveBeenCalledTimes(1);
     expect(prisma.importJob.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.objectContaining({ status: ImportJobStatus.FAILED }),
-        create: expect.objectContaining({ status: ImportJobStatus.FAILED }),
+        where: {
+          tenantId_type_schemaVersion_previewVersion_fileHash: {
+            tenantId,
+            type: 'INITIAL_ONBOARDING',
+            schemaVersion: 'v1',
+            previewVersion: 3,
+            fileHash: expect.any(String),
+          },
+        },
+        update: expect.objectContaining({
+          status: ImportJobStatus.FAILED,
+          previewVersion: 3,
+        }),
+        create: expect.objectContaining({
+          status: ImportJobStatus.FAILED,
+          previewVersion: 3,
+        }),
       }),
     );
     expect(auditService.createLog).toHaveBeenCalledWith(

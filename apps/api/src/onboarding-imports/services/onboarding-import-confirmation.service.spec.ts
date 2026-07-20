@@ -352,6 +352,14 @@ describe('OnboardingImportConfirmationService', () => {
         chargesCreated: 1,
       },
     });
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 10_000,
+        timeout: 60_000,
+      }),
+    );
     expect(result.confirmedAt).toEqual(expect.any(String));
 
     expect(prisma.importJob.updateMany).toHaveBeenCalledWith({

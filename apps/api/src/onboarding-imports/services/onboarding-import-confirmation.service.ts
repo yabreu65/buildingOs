@@ -20,7 +20,12 @@ import { createHash } from 'crypto';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MinioService } from '../../storage/minio.service';
-import { ONBOARDING_IMPORT_CONFIRM_LOCK_TIMEOUT_MS, ONBOARDING_IMPORT_SCHEMA_VERSION } from '../onboarding-imports.constants';
+import {
+  ONBOARDING_IMPORT_CONFIRM_LOCK_TIMEOUT_MS,
+  ONBOARDING_IMPORT_CONFIRM_TRANSACTION_MAX_WAIT_MS,
+  ONBOARDING_IMPORT_CONFIRM_TRANSACTION_TIMEOUT_MS,
+  ONBOARDING_IMPORT_SCHEMA_VERSION,
+} from '../onboarding-imports.constants';
 import type {
   ConfirmOnboardingImportRequest,
   ConfirmOnboardingImportResult,
@@ -353,7 +358,11 @@ export class OnboardingImportConfirmationService {
           );
 
           return result;
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        }, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: ONBOARDING_IMPORT_CONFIRM_TRANSACTION_MAX_WAIT_MS,
+          timeout: ONBOARDING_IMPORT_CONFIRM_TRANSACTION_TIMEOUT_MS,
+        });
       } catch (error) {
         if (this.isSerializationConflict(error) && attempt === 0) {
           attempt += 1;
