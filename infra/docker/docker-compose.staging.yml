@@ -95,6 +95,15 @@ services:
         exit 0;
     restart: on-failure
 
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    container_name: buildingos-staging-mailpit
+    networks:
+      - buildingos_staging_net
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8026}:8025"
+    restart: unless-stopped
+
   buildingos-api:
     build:
       context: ../../
@@ -110,6 +119,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     ports:
       - "127.0.0.1:${API_PORT:-4010}:3000"
     labels:
@@ -140,6 +151,10 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-staging}
       MAIL_PROVIDER: ${MAIL_PROVIDER:?MAIL_PROVIDER is required}
       MAIL_FROM: ${MAIL_FROM:?MAIL_FROM is required}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:?PAYMENT_PROVIDER is required}
       AI_PROVIDER: ${AI_PROVIDER:?AI_PROVIDER is required}
       AI_OLLAMA_URL: ${AI_OLLAMA_URL:-}
