@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { AuditService } from '../../src/audit/audit.service';
 import { FinanzasValidators } from '../../src/finanzas/finanzas.validators';
+import { ResidentAccessService } from '../../src/resident-access/resident-access.service';
 import {
   createLiquidationDraftRecord,
   LiquidationPublicationUseCase,
@@ -97,7 +98,10 @@ function normalizeSnapshotForComparison(snapshot: unknown): Record<string, unkno
 export async function ensureSeedPublishedLiquidation(
   input: SeedLiquidationWorkflowInput,
 ): Promise<SeedWorkflowResult> {
-  const validators = new FinanzasValidators(input.prisma as never);
+  const validators = new FinanzasValidators(
+    input.prisma as never,
+    new ResidentAccessService(input.prisma as never),
+  );
   const auditService = new AuditService(input.prisma as never);
   const publicationUseCase = new LiquidationPublicationUseCase({
     prisma: input.prisma as never,

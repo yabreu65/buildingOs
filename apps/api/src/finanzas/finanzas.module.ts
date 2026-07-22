@@ -28,6 +28,7 @@ import { UnitGroupService } from './unit-group.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { AdjustmentsService } from './adjustments.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ResidentAccessModule } from '../resident-access/resident-access.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { EmailModule } from '../email/email.module';
@@ -55,7 +56,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
 
 @Module({
   imports: [
-    PrismaModule,
+    PrismaModule, ResidentAccessModule,
     EmailModule,
     NotificationsModule,
     StorageModule,

@@ -10,6 +10,7 @@ import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { LiquidationsService } from './liquidations.service';
 import {
   createLiquidationWorkflowDependencies,
@@ -37,7 +38,10 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     prisma = new PrismaClient();
     await prisma.$connect();
     auditService = new AuditService(prisma as unknown as PrismaService);
-    validators = new FinanzasValidators(prisma as unknown as PrismaService);
+    validators = new FinanzasValidators(
+      prisma as unknown as PrismaService,
+      new ResidentAccessService(prisma as unknown as PrismaService),
+    );
   });
 
   afterAll(async () => {

@@ -547,10 +547,7 @@ export class FinanzasService {
       if (userUnitIds.length === 0) {
         return [];
       }
-      where.OR = [
-        { unitId: { in: userUnitIds } },
-        { createdByUserId: userId }, // Can see own submissions
-      ];
+      where.unitId = { in: userUnitIds };
     }
 
     // 4. Apply filters
@@ -1610,6 +1607,8 @@ export class FinanzasService {
     tenantId: string,
     buildingId: string,
     paymentId: string,
+    userRoles: string[],
+    userId: string,
   ): Promise<(PaymentAllocation & { charge: { id: string; concept: string; amount: number; status: ChargeStatus; period: string } })[]> {
     // 1. Validate payment
     const payment = await this.prisma.payment.findFirst({
@@ -1624,6 +1623,18 @@ export class FinanzasService {
     if (!payment) {
       throw new NotFoundException(
         `Payment not found or does not belong to this building/tenant`,
+      );
+    }
+
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      if (!payment.unitId) {
+        throw new NotFoundException('Payment not found or does not belong to you');
+      }
+      await this.validators.validateResidentUnitAccess(
+        tenantId,
+        userId,
+        payment.unitId,
+        buildingId,
       );
     }
 
@@ -1750,11 +1761,15 @@ export class FinanzasService {
     }
 
     // 2. RESIDENT: validate unit ownership
-    if (this.validators.isResidentOrOwner(userRoles) && payment.unitId) {
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      if (!payment.unitId) {
+        throw new NotFoundException('Payment not found or does not belong to you');
+      }
       await this.validators.validateResidentUnitAccess(
         tenantId,
         userId,
         payment.unitId,
+        buildingId,
       );
     }
 
@@ -1831,6 +1846,8 @@ export class FinanzasService {
   async getTenantFinancialSummary(
     tenantId: string,
     period?: string | BuildingFinancialSummaryPeriodFilter,
+    userRoles: string[] = [],
+    userId?: string,
   ): Promise<FinancialSummaryDto> {
     // Load tenant to get currency
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
@@ -1843,6 +1860,20 @@ export class FinanzasService {
       tenantId,
       canceledAt: null,
     };
+    if (this.validators.isResidentOrOwner(userRoles)) {
+      const unitIds = await this.validators.getUserUnitIds(tenantId, userId!);
+      if (unitIds.length === 0) {
+        return {
+          totalCharges: 0,
+          totalPaid: 0,
+          totalOutstanding: 0,
+          delinquentUnitsCount: 0,
+          topDelinquentUnits: [],
+          currency: tenant.currency,
+        };
+      }
+      chargeWhere.unitId = { in: unitIds };
+    }
     if (typeof period === 'string') {
       chargeWhere.period = period;
     } else if (period?.periods?.length) {
@@ -2145,10 +2176,7 @@ export class FinanzasService {
       if (userUnitIds.length === 0) {
         return [];
       }
-      where.OR = [
-        { unitId: { in: userUnitIds } },
-        { createdByUserId: userId },
-      ];
+      where.unitId = { in: userUnitIds };
     }
 
     // Execute query

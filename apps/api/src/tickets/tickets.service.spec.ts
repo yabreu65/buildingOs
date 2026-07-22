@@ -13,12 +13,14 @@ import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import { AuditAction } from '@prisma/client';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 
 describe('TicketsService', () => {
   let service: TicketsService;
   let prismaService: PrismaService;
   let auditService: AuditService;
   let validators: TicketsValidators;
+  let residentAccess: jest.Mocked<ResidentAccessService>;
 
   // ========== SETUP ==========
   beforeEach(async () => {
@@ -79,6 +81,13 @@ describe('TicketsService', () => {
           },
         },
         {
+          provide: ResidentAccessService,
+          useValue: {
+            getActiveUnitIds: jest.fn(),
+            assertUnitAccess: jest.fn(),
+          },
+        },
+        {
           provide: NotificationsService,
           useValue: {
             notifyTicketCreated: jest.fn(),
@@ -93,6 +102,7 @@ describe('TicketsService', () => {
     prismaService = module.get<PrismaService>(PrismaService);
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<TicketsValidators>(TicketsValidators);
+    residentAccess = module.get(ResidentAccessService);
   });
 
   // ========== CLEANUP ==========
@@ -102,88 +112,40 @@ describe('TicketsService', () => {
 
   // ========== TESTS: GET USER UNIT IDS ==========
   describe('getUserUnitIds', () => {
-    it('should return unit IDs where user is occupant', async () => {
-      // ARRANGE
+    it('should return every active unit from the centralized resident scope', async () => {
       const tenantId = 'tenant-123';
       const userId = 'user-123';
-      const memberId = 'member-123';
+      residentAccess.getActiveUnitIds.mockResolvedValue(['unit-1', 'unit-2']);
 
-      const member = { id: memberId };
-      const occupancies = [
-        { unitId: 'unit-1' },
-        { unitId: 'unit-2' },
-      ];
-
-      jest.spyOn(prismaService.tenantMember, 'findFirst').mockResolvedValue(member as any);
-      jest
-        .spyOn(prismaService.unitOccupant, 'findMany')
-        .mockResolvedValue(occupancies as any);
-
-      // ACT
-      const result = await service.getUserUnitIds(tenantId, userId);
-
-      // ASSERT
-      expect(result).toEqual(['unit-1', 'unit-2']);
-      expect(prismaService.tenantMember.findFirst).toHaveBeenCalledWith({
-        where: { tenantId, userId },
-        select: { id: true },
-      });
-      expect(prismaService.unitOccupant.findMany).toHaveBeenCalledWith({
-        where: {
-          memberId,
-          unit: {
-            building: { tenantId },
-          },
-        },
-        select: { unitId: true },
-        distinct: ['unitId'],
-      });
+      await expect(service.getUserUnitIds(tenantId, userId)).resolves.toEqual(['unit-1', 'unit-2']);
+      expect(residentAccess.getActiveUnitIds).toHaveBeenCalledWith(tenantId, userId);
     });
 
-    it('should return empty array when user has no units', async () => {
-      // ARRANGE
-      const tenantId = 'tenant-123';
-      const userId = 'user-123';
+    it('should return an empty array when the centralized scope has no active units', async () => {
+      residentAccess.getActiveUnitIds.mockResolvedValue([]);
 
-      jest.spyOn(prismaService.tenantMember, 'findFirst').mockResolvedValue(null);
-      jest.spyOn(prismaService.unitOccupant, 'findMany').mockResolvedValue([]);
-
-      // ACT
-      const result = await service.getUserUnitIds(tenantId, userId);
-
-      // ASSERT
-      expect(result).toEqual([]);
+      await expect(service.getUserUnitIds('tenant-123', 'user-123')).resolves.toEqual([]);
     });
   });
 
   // ========== TESTS: VALIDATE RESIDENT UNIT ACCESS ==========
   describe('validateResidentUnitAccess', () => {
-    it('should allow access when user has access to unit', async () => {
-      // ARRANGE
-      const tenantId = 'tenant-123';
-      const userId = 'user-123';
-      const unitId = 'unit-123';
-
-      jest.spyOn(service, 'getUserUnitIds').mockResolvedValue(['unit-123']);
-
-      // ACT & ASSERT
-      await expect(
-        service.validateResidentUnitAccess(tenantId, userId, unitId),
-      ).resolves.not.toThrow();
+    it('should allow access when the centralized active scope authorizes the unit', async () => {
+      await expect(service.validateResidentUnitAccess('tenant-123', 'user-123', 'unit-123'))
+        .resolves.not.toThrow();
+      expect(residentAccess.assertUnitAccess).toHaveBeenCalledWith(
+        'tenant-123',
+        'user-123',
+        'unit-123',
+        undefined,
+      );
     });
 
-    it('should throw NotFoundException when user lacks access', async () => {
-      // ARRANGE
-      const tenantId = 'tenant-123';
-      const userId = 'user-123';
-      const unitId = 'unit-999';
+    it('should propagate NotFoundException when the centralized scope denies a foreign unit', async () => {
+      residentAccess.assertUnitAccess.mockRejectedValue(new NotFoundException());
 
-      jest.spyOn(service, 'getUserUnitIds').mockResolvedValue(['unit-123']);
-
-      // ACT & ASSERT
-      await expect(
-        service.validateResidentUnitAccess(tenantId, userId, unitId),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.validateResidentUnitAccess('tenant-123', 'user-123', 'unit-999'))
+        .rejects.toThrow(NotFoundException);
     });
   });
 

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 
 /**
  * FinanzasValidators: Scope validation helpers for Finanzas (Charges, Payments, Allocations)
@@ -23,7 +24,10 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class FinanzasValidators {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly residentAccess: ResidentAccessService,
+  ) {}
 
   // ============================================================================
   // RESIDENT UNIT ACCESS (CRITICAL)
@@ -38,31 +42,7 @@ export class FinanzasValidators {
    * @returns Array of unit IDs where user has active occupancy
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
-    // Find the TenantMember for this user
-    const member = await this.prisma.tenantMember.findFirst({
-      where: {
-        tenantId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!member) {
-      return [];
-    }
-
-    const occupancies = await this.prisma.unitOccupant.findMany({
-      where: {
-        memberId: member.id,
-        unit: {
-          building: { tenantId }, // Ensure unit belongs to tenant
-        },
-      },
-      select: { unitId: true },
-      distinct: ['unitId'],
-    });
-
-    return occupancies.map((o) => o.unitId);
+    return this.residentAccess.getActiveUnitIds(tenantId, userId);
   }
 
   /**
@@ -78,13 +58,9 @@ export class FinanzasValidators {
     tenantId: string,
     userId: string,
     unitId: string,
+    buildingId?: string,
   ): Promise<void> {
-    const userUnitIds = await this.getUserUnitIds(tenantId, userId);
-    if (!userUnitIds.includes(unitId)) {
-      throw new NotFoundException(
-        `Unit not found or does not belong to you`,
-      );
-    }
+    await this.residentAccess.assertUnitAccess(tenantId, userId, unitId, buildingId);
   }
 
   // ============================================================================
@@ -407,7 +383,7 @@ export class FinanzasValidators {
    * @returns true if user is resident or owner
    */
   isResidentOrOwner(userRoles: string[]): boolean {
-    return this.hasRole(userRoles, 'RESIDENT');
+    return this.residentAccess.shouldEnforce(userRoles);
   }
 
   /**

@@ -16,6 +16,7 @@ import { DocumentCategory, DocumentVisibility } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { DocumentsService } from './documents.service';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { PresignUploadDto, PresignedUrlResponse } from './dto/presign-upload.dto';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
@@ -87,14 +88,11 @@ import type { TenantContextRequest } from '../common/types/request.types';
 @Controller('tenants/:tenantId/documents')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class DocumentsController {
-  constructor(private documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly residentAccess: ResidentAccessService,
+  ) {}
 
-  /**
-   * Check if user has RESIDENT role
-   */
-  private isResidentRole(userRoles: string[]): boolean {
-    return userRoles?.includes('RESIDENT') || false;
-  }
 
   /**
    * Check if user is SUPER_ADMIN (global role across any membership)
@@ -176,14 +174,15 @@ export class DocumentsController {
       userRoles.includes('TENANT_OWNER') ||
       userRoles.includes('OPERATOR');
 
-    const isResidentOrOwner =
-      userRoles.includes('RESIDENT') || userRoles.includes('OWNER');
+    const enforceResidentScope = this.residentAccess.shouldEnforce(
+      isSuperAdmin ? [...userRoles, 'SUPER_ADMIN'] : userRoles,
+    );
 
     // Check if this is a payment proof (RECEIPT category)
     const isPaymentProof = dto.category === 'RECEIPT';
 
     // Residents can only create RECEIPT documents (payment proofs)
-    if (!isAdmin && !isSuperAdmin && isResidentOrOwner) {
+    if (!isAdmin && !isSuperAdmin && enforceResidentScope) {
       if (!isPaymentProof) {
         throw new ForbiddenException('Residents can only create payment proof documents');
       }
@@ -202,7 +201,7 @@ export class DocumentsController {
     }
 
     // For residents, validate they have access to the unit
-    if (isResidentOrOwner && isPaymentProof && dto.unitId) {
+    if (enforceResidentScope && isPaymentProof && dto.unitId) {
       const hasAccess = await this.documentsService.checkResidentUnitAccess(
         tenantId,
         userId,

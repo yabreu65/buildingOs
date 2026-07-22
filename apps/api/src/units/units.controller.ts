@@ -17,11 +17,15 @@ import { TenantParam } from '../tenancy/tenant-param.decorator';
 import { UnitsService } from './units.service';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 
 @Controller('tenants/:tenantId/units')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class UnitsController {
-  constructor(private readonly unitsService: UnitsService) {}
+  constructor(
+    private readonly unitsService: UnitsService,
+    private readonly residentAccess: ResidentAccessService,
+  ) {}
 
   /**
    * Get all units for a tenant (optionally filtered by buildingId)
@@ -29,11 +33,16 @@ export class UnitsController {
    * GET /tenants/:tenantId/units?buildingId=xyz
    */
   @Get()
-  findAllByTenant(
+  async findAllByTenant(
     @TenantParam() tenantId: string,
-    @Query('buildingId') buildingId?: string,
+    @Query('buildingId') buildingId: string | undefined,
+    @Req() req: RequestWithUser,
   ) {
-    return this.unitsService.findAllByTenant(tenantId, buildingId);
+    const roles = req.user.roles || [];
+    const unitIds = this.residentAccess.shouldEnforce(roles)
+      ? await this.residentAccess.getActiveUnitIds(tenantId, req.user.id, buildingId)
+      : undefined;
+    return this.unitsService.findAllByTenant(tenantId, buildingId, unitIds);
   }
 }
 
@@ -44,7 +53,10 @@ export class UnitsController {
 @Controller('tenants/:tenantId/buildings/:buildingId/units')
 @UseGuards(JwtAuthGuard, TenantAccessGuard, BuildingAccessGuard)
 export class BuildingUnitsController {
-  constructor(private readonly unitsService: UnitsService) {}
+  constructor(
+    private readonly unitsService: UnitsService,
+    private readonly residentAccess: ResidentAccessService,
+  ) {}
 
   /**
    * Create a new unit in a building
@@ -64,19 +76,26 @@ export class BuildingUnitsController {
    * List all units in a building
    */
   @Get()
-  findAll(@TenantParam() tenantId: string, @Param('buildingId') buildingId: string) {
-    return this.unitsService.findAll(tenantId, buildingId);
+  async findAll(@TenantParam() tenantId: string, @Param('buildingId') buildingId: string, @Req() req: RequestWithUser) {
+    const unitIds = this.residentAccess.shouldEnforce(req.user.roles || [])
+      ? await this.residentAccess.getActiveUnitIds(tenantId, req.user.id, buildingId)
+      : undefined;
+    return this.unitsService.findAll(tenantId, buildingId, unitIds);
   }
 
   /**
    * Get a single unit by ID
    */
   @Get(':unitId')
-  findOne(
+  async findOne(
     @TenantParam() tenantId: string,
     @Param('buildingId') buildingId: string,
     @Param('unitId') unitId: string,
+    @Req() req: RequestWithUser,
   ) {
+    if (this.residentAccess.shouldEnforce(req.user.roles || [])) {
+      await this.residentAccess.assertUnitAccess(tenantId, req.user.id, unitId, buildingId);
+    }
     return this.unitsService.findOne(tenantId, buildingId, unitId);
   }
 

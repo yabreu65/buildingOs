@@ -447,6 +447,8 @@ export class FinanzasController {
       tenantId,
       params.buildingId,
       params.paymentId,
+      req.user.roles || [],
+      req.user.id,
     );
   }
 
