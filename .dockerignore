@@ -38,6 +38,20 @@ logs
 **/.env
 **/.env.*
 
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+
 # Editor, OS, and local scratch files
 .idea
 .vscode

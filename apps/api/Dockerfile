@@ -26,7 +26,7 @@ RUN npm run build -w packages/contracts && npm run build -w packages/permissions
 
 # Copy Prisma schema and generate client
 COPY apps/api/prisma ./apps/api/prisma
-RUN cd apps/api && npx prisma generate
+RUN cd apps/api && ../../node_modules/.bin/prisma generate
 
 # Copy API source code
 COPY apps/api ./apps/api
@@ -53,11 +53,19 @@ RUN npm ci --only=production
 # Copy Prisma schema and regenerate client
 COPY apps/api/prisma ./apps/api/prisma
 # Install prisma CLI temporarily to generate client
-RUN cd apps/api && npm install prisma@5.22.0 && npx prisma generate && npm uninstall prisma
+RUN cd apps/api && npm install prisma@5.22.0 && ../../node_modules/.bin/prisma generate && npm uninstall prisma
 
 # ---- Stage 3: Dev Tools (migrate, seed) ----
 # Uses builder which has all deps (dev + prod) including ts-node
 FROM builder AS dev-tools
+
+# ---- Stage 4: Migration Runner ----
+# Ephemeral target containing the pinned Prisma CLI from npm ci.
+FROM builder AS migrate
+
+WORKDIR /app
+ENTRYPOINT ["./node_modules/.bin/prisma"]
+CMD ["migrate", "deploy", "--schema", "apps/api/prisma/schema.prisma"]
 
 # ---- Stage 4: Runtime ----
 FROM node:20-alpine AS runtime

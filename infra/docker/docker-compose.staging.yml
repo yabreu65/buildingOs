@@ -104,6 +104,21 @@ services:
       - "127.0.0.1:${MAILPIT_UI_PORT:-8026}:8025"
     restart: unless-stopped
 
+  api-migrate:
+    profiles: ["migrate"]
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    networks:
+      - buildingos_staging_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+    restart: "no"
+
   buildingos-api:
     build:
       context: ../../
