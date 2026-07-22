@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { DocumentVisibility, Role } from '@prisma/client';
 
 /**
@@ -18,7 +19,10 @@ import { DocumentVisibility, Role } from '@prisma/client';
  */
 @Injectable()
 export class DocumentsValidators {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly residentAccess: ResidentAccessService,
+  ) {}
 
   /**
    * Validate document scope constraint
@@ -139,31 +143,7 @@ export class DocumentsValidators {
    * @returns Array of unit IDs user can access
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
-    // Find the TenantMember for this user
-    const member = await this.prisma.tenantMember.findFirst({
-      where: {
-        tenantId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!member) {
-      return [];
-    }
-
-    const occupancies = await this.prisma.unitOccupant.findMany({
-      where: {
-        memberId: member.id,
-        unit: {
-          building: { tenantId },
-        },
-      },
-      select: { unitId: true },
-      distinct: ['unitId'],
-    });
-
-    return occupancies.map((o) => o.unitId);
+    return this.residentAccess.getActiveUnitIds(tenantId, userId);
   }
 
   /**
@@ -175,35 +155,7 @@ export class DocumentsValidators {
    * @returns Array of building IDs user can access
    */
   async getUserBuildingIds(tenantId: string, userId: string): Promise<string[]> {
-    // Find the TenantMember for this user
-    const member = await this.prisma.tenantMember.findFirst({
-      where: {
-        tenantId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!member) {
-      return [];
-    }
-
-    const buildings = await this.prisma.building.findMany({
-      where: {
-        tenantId,
-        units: {
-          some: {
-            unitOccupants: {
-              some: { memberId: member.id },
-            },
-          },
-        },
-      },
-      select: { id: true },
-      distinct: ['id'],
-    });
-
-    return buildings.map((b) => b.id);
+    return this.residentAccess.getActiveBuildingIds(tenantId, userId);
   }
 
   /**
@@ -224,12 +176,20 @@ export class DocumentsValidators {
     visibility: DocumentVisibility,
     isDocumentCreator: boolean,
   ): Promise<void> {
-    // Creators can always access their own documents
+    // A historical occupancy never grants document access, including private documents
+    // created before move-out.
+    const activeUnitIds = await this.getUserUnitIds(tenantId, userId);
+    if (activeUnitIds.length === 0) {
+      throw new NotFoundException('Document not found or does not belong to you');
+    }
+
+    // Creators can access only their own document while they still have a current occupancy.
     if (isDocumentCreator) {
       return;
     }
 
-    // Tenant-wide documents: only RESIDENTS visibility
+    // Tenant-wide documents still require a current occupancy: historical residents
+    // must not retain tenant-wide document access after their move-out date.
     if (!buildingId && !unitId) {
       if (visibility !== DocumentVisibility.RESIDENTS) {
         throw new NotFoundException(
@@ -241,8 +201,7 @@ export class DocumentsValidators {
 
     // Unit-scoped: check if user is occupant of unit
     if (unitId) {
-      const userUnitIds = await this.getUserUnitIds(tenantId, userId);
-      if (!userUnitIds.includes(unitId)) {
+      if (!activeUnitIds.includes(unitId)) {
         throw new NotFoundException(
           'Document not found or does not belong to you',
         );

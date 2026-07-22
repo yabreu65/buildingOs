@@ -24,6 +24,7 @@ import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
 import { ASSIGNABLE_TICKET_ROLES } from '../memberships/memberships.constants';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -35,6 +36,7 @@ interface TicketFilters {
   status?: string;
   priority?: string;
   unitId?: string;
+  unitIds?: string[];
   assignedToMembershipId?: string;
   limit?: number;
   page?: number;
@@ -117,6 +119,7 @@ export class TicketsService {
     private readonly auditService: AuditService,
     private readonly aiCategoryService: AiTicketCategoryService,
     private readonly notificationsService: NotificationsService,
+    private readonly residentAccess: ResidentAccessService,
   ) {}
 
   /**
@@ -128,32 +131,7 @@ export class TicketsService {
    * @returns Array of unit IDs where user is an occupant
    */
   async getUserUnitIds(tenantId: string, userId: string): Promise<string[]> {
-    // Find the TenantMember for this user in this tenant
-    const member = await this.prisma.tenantMember.findFirst({
-      where: {
-        tenantId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!member) {
-      return [];
-    }
-
-    // Find all UnitOccupants for this member
-    const occupancies = await this.prisma.unitOccupant.findMany({
-      where: {
-        memberId: member.id,
-        unit: {
-          building: { tenantId }, // Ensure unit belongs to tenant
-        },
-      },
-      select: { unitId: true },
-      distinct: ['unitId'], // Get unique unit IDs
-    });
-
-    return occupancies.map((o) => o.unitId);
+    return this.residentAccess.getActiveUnitIds(tenantId, userId);
   }
 
   /**
@@ -169,13 +147,9 @@ export class TicketsService {
     tenantId: string,
     userId: string,
     unitId: string,
+    buildingId?: string,
   ): Promise<void> {
-    const userUnitIds = await this.getUserUnitIds(tenantId, userId);
-    if (!userUnitIds.includes(unitId)) {
-      throw new NotFoundException(
-        `Unit not found or does not belong to you`,
-      );
-    }
+    await this.residentAccess.assertUnitAccess(tenantId, userId, unitId, buildingId);
   }
 
   /**
@@ -365,6 +339,7 @@ export class TicketsService {
       where.priority = filters.priority;
     }
     if (filters?.unitId) where.unitId = filters.unitId;
+    else if (filters?.unitIds) where.unitId = { in: filters.unitIds };
     if (filters?.assignedToMembershipId)
       where.assignedToMembershipId = filters.assignedToMembershipId;
 

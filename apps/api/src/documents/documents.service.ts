@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { Document, AuditAction } from '@prisma/client';
@@ -10,6 +11,7 @@ import { MinioService } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { DocumentsValidators } from './documents.validators';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import {
@@ -82,6 +84,7 @@ export class DocumentsService {
     private readonly minio: MinioService,
     private readonly notificationsService: NotificationsService,
     private readonly auditService: AuditService,
+    private readonly residentAccess: ResidentAccessService,
   ) {}
 
   /**
@@ -253,7 +256,9 @@ export class DocumentsService {
       userRoles.includes(Role.TENANT_OWNER) ||
       userRoles.includes(Role.OPERATOR);
 
-    const isResident = userRoles.includes(Role.RESIDENT);
+    const enforceResidentScope = this.residentAccess.shouldEnforce(
+      isSuperAdmin ? [...userRoles, Role.SUPER_ADMIN] : userRoles,
+    );
 
     // Base query: always filter by tenant
     const whereConditions: Prisma.DocumentWhereInput = { tenantId };
@@ -301,7 +306,7 @@ export class DocumentsService {
     });
 
     // Post-process: RESIDENT role scope validation
-    if (isResident && !isAdmin) {
+    if (enforceResidentScope) {
       const filteredDocs = await Promise.all(
         documents.map(async (doc) => {
           try {
@@ -419,6 +424,17 @@ export class DocumentsService {
       throw new NotFoundException('Document not found');
     }
 
+    if (this.residentAccess.shouldEnforce(userRoles)) {
+      await this.validators.validateResidentDocumentAccess(
+        tenantId,
+        userId,
+        document.buildingId,
+        document.unitId,
+        document.visibility,
+        isDocumentCreator,
+      );
+    }
+
     // Update
     const updated = await this.prisma.document.update({
       where: { id: documentId },
@@ -472,6 +488,17 @@ export class DocumentsService {
 
     if (!isDocumentCreator && !isAdmin) {
       throw new NotFoundException('Document not found');
+    }
+
+    if (this.residentAccess.shouldEnforce(userRoles)) {
+      await this.validators.validateResidentDocumentAccess(
+        tenantId,
+        userId,
+        document.buildingId,
+        document.unitId,
+        document.visibility,
+        isDocumentCreator,
+      );
     }
 
     // Get file info before delete (for MinIO cleanup)
@@ -606,17 +633,13 @@ export class DocumentsService {
     userId: string,
     unitId: string,
   ): Promise<boolean> {
-    const occupant = await this.prisma.unitOccupant.findFirst({
-      where: {
-        tenantId,
-        unitId,
-        member: {
-          userId,
-        },
-      },
-    });
-
-    return !!occupant;
+    try {
+      await this.residentAccess.assertUnitAccess(tenantId, userId, unitId);
+      return true;
+    } catch (error: unknown) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) return false;
+      throw error;
+    }
   }
 
   /**

@@ -760,6 +760,23 @@ describe('FinanzasService', () => {
   });
 
   describe('getTenantFinancialSummary', () => {
+    it('limits a resident tenant summary to active occupant units', async () => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);
+      jest.spyOn(validators, 'getUserUnitIds').mockResolvedValue(['unit-1']);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([] as never);
+
+      await service.getTenantFinancialSummary('tenant-1', undefined, ['RESIDENT'], 'resident-1');
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 'tenant-1',
+          unitId: { in: ['unit-1'] },
+        }),
+      }));
+    });
+
     it('uses Charge.period IN when tenant periods are provided', async () => {
       jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
       jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
@@ -824,6 +841,48 @@ describe('FinanzasService', () => {
           period: '2026-06',
         }),
       }));
+    });
+  });
+
+  describe('getPaymentAllocations', () => {
+    it('requires an active resident occupancy for the payment unit', async () => {
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: 'payment-1',
+        unitId: 'unit-1',
+      } as never);
+      jest.spyOn(validators, 'validateResidentUnitAccess').mockResolvedValue();
+      jest.spyOn(prismaService.paymentAllocation, 'findMany').mockResolvedValue([] as never);
+
+      await service.getPaymentAllocations(
+        'tenant-1',
+        'building-1',
+        'payment-1',
+        ['RESIDENT'],
+        'resident-1',
+      );
+
+      expect(validators.validateResidentUnitAccess).toHaveBeenCalledWith(
+        'tenant-1',
+        'resident-1',
+        'unit-1',
+        'building-1',
+      );
+    });
+  });
+
+  describe('listPendingPayments', () => {
+    it('never grants a resident access through payment creator identity', async () => {
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);
+      jest.spyOn(validators, 'getUserUnitIds').mockResolvedValue(['unit-1']);
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([] as never);
+
+      await service.listPendingPayments('tenant-1', ['RESIDENT'], 'resident-1', {});
+
+      expect(prismaService.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ unitId: { in: ['unit-1'] } }),
+      }));
+      expect((prismaService.payment.findMany as jest.Mock).mock.calls[0][0].where.OR).toBeUndefined();
     });
   });
 

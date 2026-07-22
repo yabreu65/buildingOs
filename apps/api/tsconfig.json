@@ -39,7 +39,8 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "removeComments": true,
-    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "types": ["node"],
+    "typeRoots": ["../../node_modules/@types", "./node_modules/@types", "./src/types"],
     "paths": {
       "@prisma/client": ["../../node_modules/@prisma/client"]
     }

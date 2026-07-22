@@ -59,6 +59,8 @@ export class TenantFinanceController {
     return this.finanzasService.getTenantFinancialSummary(
       tenantId,
       query.period || undefined,
+      req.user.roles || [],
+      req.user.id,
     );
   }
 

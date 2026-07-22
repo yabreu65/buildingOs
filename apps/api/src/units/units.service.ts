@@ -121,13 +121,16 @@ export class UnitsService {
    * Get all units for a tenant (optionally filtered by buildingId)
    * Multi-tenant safe: filters by building.tenantId
    */
-  async findAllByTenant(tenantId: string, buildingId?: string): Promise<UnitWithDisplayCode[]> {
+  async findAllByTenant(tenantId: string, buildingId?: string, unitIds?: string[]): Promise<UnitWithDisplayCode[]> {
     const where: Prisma.UnitWhereInput = {
       tenantId,
     };
 
     if (buildingId) {
       where.buildingId = buildingId;
+    }
+    if (unitIds) {
+      where.id = { in: unitIds };
     }
 
     const units = await this.prisma.unit.findMany({
@@ -146,7 +149,7 @@ export class UnitsService {
   /**
    * List all units in a building, scoped to tenant
    */
-  async findAll(tenantId: string, buildingId: string): Promise<UnitWithDisplayCode[]> {
+  async findAll(tenantId: string, buildingId: string, unitIds?: string[]): Promise<UnitWithDisplayCode[]> {
     // Verify building belongs to tenant
     const building = await this.prisma.building.findFirst({
       where: { id: buildingId, tenantId, deletedAt: null },
@@ -159,7 +162,7 @@ export class UnitsService {
     }
 
     const units = await this.prisma.unit.findMany({
-      where: { tenantId, buildingId },
+      where: { tenantId, buildingId, ...(unitIds ? { id: { in: unitIds } } : {}) },
       include: {
         building: { select: { id: true, name: true, alias: true } },
         unitCategory: { select: { id: true, name: true } },

@@ -20,6 +20,7 @@ describe('🔒 Tenant Data Isolation - Database Layer Validation', () => {
   let tenantAId: string;
   let buildingA1Id: string;
   let buildingA2Id: string;
+  let testRunId: string;
 
   // Tenant B setup
   let tenantBId: string;
@@ -27,6 +28,7 @@ describe('🔒 Tenant Data Isolation - Database Layer Validation', () => {
 
   beforeAll(async () => {
     prisma = new PrismaClient();
+    testRunId = Date.now().toString(36);
 
     console.log('\n📋 Test Setup: Creating test data...');
 
@@ -54,6 +56,7 @@ describe('🔒 Tenant Data Isolation - Database Layer Validation', () => {
     const bA1 = await prisma.building.create({
       data: {
         name: 'Building A1',
+        alias: `TEST-A1-${testRunId}`,
         address: '123 Main St, Tenant A',
         tenantId: tenantAId,
       },
@@ -63,6 +66,7 @@ describe('🔒 Tenant Data Isolation - Database Layer Validation', () => {
     const bA2 = await prisma.building.create({
       data: {
         name: 'Building A2',
+        alias: `TEST-A2-${testRunId}`,
         address: '456 Oak Ave, Tenant A',
         tenantId: tenantAId,
       },
@@ -74,6 +78,7 @@ describe('🔒 Tenant Data Isolation - Database Layer Validation', () => {
     const bB1 = await prisma.building.create({
       data: {
         name: 'Building B1',
+        alias: `TEST-B1-${testRunId}`,
         address: '789 Pine Rd, Tenant B',
         tenantId: tenantBId,
       },
