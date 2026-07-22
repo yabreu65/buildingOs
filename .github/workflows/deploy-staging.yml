@@ -1,0 +1,84 @@
+name: Deploy main to staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact 40-character main commit SHA to deploy"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REMOTE_APP_DIR: /opt/pawtech/apps/buildingos-staging/buildingos-app
+
+jobs:
+  deploy:
+    name: Deploy exact SHA to staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    steps:
+      - name: Checkout requested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate exact main SHA
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Manual deployment must run from refs/heads/main" >&2; exit 1; }
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$DEPLOY_SHA^{commit}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" FETCH_HEAD
+
+      - name: Deploy over SSH
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ inputs.sha || github.sha }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          APP_PATH: /opt/pawtech/apps/buildingos-staging/buildingos-app
+          COMPOSE_FILE: infra/docker/docker-compose.staging.yml
+          COMPOSE_PROJECT: buildingos-staging
+          ENV_FILE: /opt/pawtech/env/buildingos-staging.env
+          API_HEALTH: ${{ vars.STAGING_API_LOCAL_HEALTH_URL }}
+          API_READY: ${{ vars.STAGING_API_LOCAL_READY_URL }}
+          API_READYZ: ${{ vars.STAGING_API_LOCAL_READYZ_URL }}
+          WEB_LOCAL: ${{ vars.STAGING_WEB_LOCAL_URL }}
+          API_PUBLIC_HEALTH: ${{ vars.STAGING_API_PUBLIC_HEALTH_URL }}
+          WEB_PUBLIC_LOGIN: ${{ vars.STAGING_WEB_PUBLIC_LOGIN_URL }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_PORT" && -n "$KNOWN_HOSTS" ]] || { echo "SSH settings are incomplete" >&2; exit 1; }
+          [[ -n "$APP_PATH" && -n "$COMPOSE_FILE" && -n "$COMPOSE_PROJECT" && -n "$ENV_FILE" ]] || { echo "Staging path settings are incomplete" >&2; exit 1; }
+          [[ -n "$API_HEALTH" && -n "$API_READY" && -n "$API_READYZ" && -n "$WEB_LOCAL" && -n "$API_PUBLIC_HEALTH" && -n "$WEB_PUBLIC_LOGIN" ]] || { echo "Staging health URL settings are incomplete" >&2; exit 1; }
+          key_file="$(mktemp)"
+          known_hosts_file="$(mktemp)"
+          cleanup_ssh() { rm -f "$key_file" "$known_hosts_file"; }
+          trap cleanup_ssh EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$KNOWN_HOSTS" > "$known_hosts_file"
+          ssh_opts=(-i "$key_file" -o UserKnownHostsFile="$known_hosts_file" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
+          remote_args=()
+          for arg in "$DEPLOY_SHA" "$APP_PATH" "$COMPOSE_FILE" "$COMPOSE_PROJECT" "$ENV_FILE" "$API_HEALTH" "$API_READY" "$API_READYZ" "$WEB_LOCAL" "$API_PUBLIC_HEALTH" "$WEB_PUBLIC_LOGIN"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "bash -s -- ${remote_args[*]}" < scripts/deploy-staging.sh
