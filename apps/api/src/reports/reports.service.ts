@@ -16,6 +16,19 @@ export interface TicketsReportData {
   topCategories: Array<{ category: string; count: number }>;
   avgTimeToFirstResponseHours: number;
   avgTimeToResolveHours: number;
+  tickets: Array<{
+    id: string;
+    title: string;
+    description: string;
+    createdAt: Date;
+    status: string;
+    priority: string;
+    category: string;
+    buildingId: string;
+    building: { id: string; name: string };
+    unitId: string | null;
+    unit: { id: string; label: string | null; code: string } | null;
+  }>;
 }
 
 export interface DelinquentUnit {
@@ -92,7 +105,10 @@ export class ReportsService {
 
     const tickets = await this.prisma.ticket.findMany({
       where: whereBase,
+      orderBy: { createdAt: 'desc' },
       include: {
+        building: { select: { id: true, name: true } },
+        unit: { select: { id: true, label: true, code: true } },
         comments: {
           orderBy: { createdAt: 'asc' },
           take: 1,
@@ -172,6 +188,19 @@ export class ReportsService {
       topCategories,
       avgTimeToFirstResponseHours,
       avgTimeToResolveHours,
+      tickets: tickets.map((ticket) => ({
+        id: ticket.id,
+        title: ticket.title,
+        description: ticket.description,
+        createdAt: ticket.createdAt,
+        status: ticket.status,
+        priority: ticket.priority,
+        category: ticket.category,
+        buildingId: ticket.buildingId,
+        building: ticket.building,
+        unitId: ticket.unitId,
+        unit: ticket.unit,
+      })),
     };
   }
 

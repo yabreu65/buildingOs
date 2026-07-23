@@ -15,7 +15,10 @@ export function useResidentContext(tenantId: string | null) {
   return useQuery<ResidentContext>({
     queryKey: ['residentContext', tenantId, userId],
     queryFn: () => getResidentContext(tenantId!),
-    enabled: !!tenantId && !!userId,
+    // A resident route must match the tenant selected by the authenticated
+    // session. This prevents a previous route/context from being reused while
+    // a different account or tenant is still settling.
+    enabled: !!tenantId && !!userId && session?.activeTenantId === tenantId,
     staleTime: 2 * 60 * 1000, // 2 minutes
     gcTime: 5 * 60 * 1000,
     retry: 1,

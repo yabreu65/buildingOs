@@ -5,7 +5,7 @@ import Button from '@/shared/components/ui/Button';
 import { useToast } from '@/shared/components/ui/Toast';
 import { useTickets } from '../hooks/useTickets';
 import { Loader2 } from 'lucide-react';
-import type { Ticket } from '../services/tickets.api';
+import type { Ticket, TicketCategory } from '../services/tickets.api';
 import type { Unit } from '@/features/units/units.types';
 import { t } from '@/i18n';
 import type { TicketPriority } from '@/types/enums';
@@ -30,7 +30,7 @@ export default function TicketForm({
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('MAINTENANCE');
+  const [category, setCategory] = useState<TicketCategory>('MAINTENANCE');
   const [priority, setPriority] = useState('MEDIUM');
   const [unitId, setUnitId] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -116,7 +116,7 @@ export default function TicketForm({
           <label className="block text-sm font-medium mb-1">{t('tickets.category')} *</label>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => setCategory(e.target.value as TicketCategory)}
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >

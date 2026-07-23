@@ -347,6 +347,8 @@
       "repair": "Reparación",
       "cleaning": "Limpieza",
       "complaint": "Reclamo",
+      "safety": "Seguridad",
+      "billing": "Facturación",
       "other": "Otro"
     },
     "priority": "Prioridad",
@@ -389,6 +391,7 @@
     "closeConfirmTitle": "¿Cerrar solicitud?",
     "closeConfirmMessage": "¿Estás seguro de que deseas cerrar esta solicitud? Puedes reabrirla más tarde si es necesario.",
     "closeButton": "Cerrar solicitud",
+    "viewDetail": "Ver reclamo",
     "statusManagedByStaff": "(Estado gestionado por el personal)",
     "submitComment": "Enviar comentario",
     "commentRequired": "El comentario es requerido",

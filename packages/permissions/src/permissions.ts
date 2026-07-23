@@ -26,7 +26,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "buildings.read",
     "units.read",
     "payments.review",
-    "tickets.read","tickets.write",
+    "tickets.read","tickets.write","tickets.manage",
   ],
   RESIDENT: [
     "tickets.read","tickets.write",

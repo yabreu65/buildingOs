@@ -89,4 +89,18 @@ describe('useResidentContext', () => {
     expect(mockedGetResidentContext).toHaveBeenNthCalledWith(1, 'tenant-1');
     expect(mockedGetResidentContext).toHaveBeenNthCalledWith(2, 'tenant-1');
   });
+
+  it('does not fetch a resident context for a route outside the active session tenant', async () => {
+    mockedUseAuthSession.mockReturnValue({
+      user: { id: 'user-1', email: 'resident@buildingos.test', name: 'Resident' },
+      memberships: [],
+      activeTenantId: 'tenant-current',
+    });
+
+    const wrapper = createWrapper();
+    const { result } = renderHook(() => useResidentContext('tenant-previous'), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(mockedGetResidentContext).not.toHaveBeenCalled();
+  });
 });

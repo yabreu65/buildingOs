@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsEnum, Length } from 'class-validator';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { TicketCategory, TicketPriority, TicketStatus } from '@prisma/client';
 
 export class UpdateTicketDto {
   @IsOptional()
@@ -13,9 +13,9 @@ export class UpdateTicketDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsEnum(TicketCategory)
   @Length(1, 100)
-  category?: string;
+  category?: TicketCategory;
 
   @IsOptional()
   @IsEnum(TicketPriority)

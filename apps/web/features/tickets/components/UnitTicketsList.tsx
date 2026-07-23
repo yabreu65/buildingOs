@@ -2,18 +2,18 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listTickets, addComment as addCommentApi, createTicket } from '../services/tickets.api';
+import { listTickets, getTicket, addComment as addCommentApi, createTicket } from '../services/tickets.api';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
-import { Ticket as TicketIcon, Plus, Send, X, AlertCircle } from 'lucide-react';
-import type { Ticket } from '../services/tickets.api';
+import { Ticket as TicketIcon, Plus, Send, X, AlertCircle, ChevronRight } from 'lucide-react';
+import type { Ticket, TicketCategory } from '../services/tickets.api';
 import { t } from '@/i18n';
-import type { TicketPriority } from '@/types/enums';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
+import { ticketCategoryLabel, ticketPriorityLabel, ticketStatusLabel } from '../ticket-labels';
 interface UnitTicketsListProps {
   buildingId: string;
   unitId: string;
@@ -31,8 +31,11 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState('');
   const [addingComment, setAddingComment] = useState(false);
+  const [commentError, setCommentError] = useState<string | null>(null);
 
   // Fetch tickets using React Query for better caching and no flash
   const { data: ticketsData, isLoading: loading, error, refetch } = useQuery({
@@ -68,6 +71,7 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
     }
 
     setAddingComment(true);
+    setCommentError(null);
     try {
       await addCommentMutation.mutateAsync({
         ticketId: selectedTicket.id,
@@ -77,14 +81,24 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
       setCommentBody('');
       // React Query automatically invalidates, but update selected ticket manually
       await refetch();
-      const updated = tickets.find((t) => t.id === selectedTicket.id);
-      if (updated) {
-        setSelectedTicket(updated);
-      }
-    } catch {
+      setSelectedTicket(await getTicket(buildingId, selectedTicket.id));
+    } catch (err) {
+      setCommentError(err instanceof Error ? err.message : t('tickets.errors.commentFailed'));
       toast(t('tickets.errors.commentFailed'), 'error');
     } finally {
       setAddingComment(false);
+    }
+  };
+
+  const openTicketDetail = async (ticketId: string) => {
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      setSelectedTicket(await getTicket(buildingId, ticketId));
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : 'No pudimos cargar el reclamo.');
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -157,9 +171,15 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
           {tickets.map((ticket) => (
             <Card
               key={ticket.id}
-              className="cursor-pointer hover:shadow-md transition p-4"
-              onClick={() => setSelectedTicket(ticket)}
+              className="hover:shadow-md transition p-4"
             >
+              <button
+                type="button"
+                className="w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 rounded cursor-pointer"
+                onClick={() => void openTicketDetail(ticket.id)}
+                disabled={detailLoading}
+                aria-label={`Ver reclamo ${ticket.title}`}
+              >
               <div className="flex justify-between items-start mb-2">
                 <div className="flex-1">
                   <h3 className="font-semibold text-foreground">{ticket.title}</h3>
@@ -173,21 +193,26 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
                       ticket.status
                     )}`}
                   >
-                    {ticket.status}
+                    {ticketStatusLabel(ticket.status)}
                   </span>
                   <span
                     className={`text-xs font-medium px-2 py-1 rounded ${getPriorityColor(
                       ticket.priority
                     )}`}
                   >
-                    {ticket.priority}
+                    {ticketPriorityLabel(ticket.priority)}
                   </span>
                 </div>
               </div>
               <div className="flex justify-between items-center text-xs text-muted-foreground">
-                <span>{ticket.category}</span>
+                <span>{ticketCategoryLabel(ticket.category)}</span>
                 <span>{ticket.comments?.length || 0} {t('common.comments')}</span>
               </div>
+              <div className="flex items-center justify-end gap-1 mt-3 text-sm text-blue-600 font-medium">
+                {t('tickets.viewDetail')}
+                <ChevronRight className="w-4 h-4" />
+              </div>
+              </button>
             </Card>
           ))}
         </div>
@@ -261,7 +286,7 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
                 <label className="block text-sm font-medium text-muted-foreground mb-1">
                   {t('tickets.category')}
                 </label>
-                <p className="text-sm">{selectedTicket.category}</p>
+                <p className="text-sm">{ticketCategoryLabel(selectedTicket.category)}</p>
               </div>
 
               {/* Comments */}
@@ -292,6 +317,7 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
                 </div>
 
                 {/* Add Comment Form */}
+                {commentError && <p role="alert" className="mb-2 text-sm text-red-700">{commentError}</p>}
                 <div className="flex gap-2">
                   <textarea
                     value={commentBody}
@@ -314,6 +340,12 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
           </Card>
         </div>
       )}
+      {detailLoading && !selectedTicket && (
+        <div role="status" className="p-4 text-sm text-muted-foreground">Cargando reclamo…</div>
+      )}
+      {detailError && !selectedTicket && (
+        <div role="alert" className="p-4 text-sm text-red-700">{detailError}</div>
+      )}
       </div>
     </ErrorBoundary>
   );
@@ -321,7 +353,7 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
 
 /**
  * UnitTicketForm: Form for creating a maintenance request (resident view)
- * - Title, description, category, priority
+ * - Title, description, category
  * - unitId is pre-filled and not editable
  */
 function UnitTicketForm({
@@ -339,8 +371,7 @@ function UnitTicketForm({
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('MAINTENANCE');
-  const [priority, setPriority] = useState('MEDIUM');
+  const [category, setCategory] = useState<TicketCategory>('MAINTENANCE');
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState('');
 
@@ -372,7 +403,6 @@ function UnitTicketForm({
         title: title.trim(),
         description: description.trim(),
         category,
-        priority: priority as TicketPriority,
         unitId, // Pre-filled from unit context
       });
 
@@ -425,7 +455,7 @@ function UnitTicketForm({
           <label className="block text-sm font-medium mb-1">{t('tickets.category')} *</label>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => setCategory(e.target.value as TicketCategory)}
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >
@@ -433,22 +463,9 @@ function UnitTicketForm({
             <option value="REPAIR">{t('tickets.categories.repair')}</option>
             <option value="CLEANING">{t('tickets.categories.cleaning')}</option>
             <option value="COMPLAINT">{t('tickets.categories.complaint')}</option>
+            <option value="SAFETY">{t('tickets.categories.safety')}</option>
+            <option value="BILLING">{t('tickets.categories.billing')}</option>
             <option value="OTHER">{t('tickets.categories.other')}</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">{t('tickets.priority')}</label>
-          <select
-            value={priority}
-            onChange={(e) => setPriority(e.target.value)}
-            className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={submitting}
-          >
-            <option value="LOW">{t('tickets.priorities.low')}</option>
-            <option value="MEDIUM">{t('tickets.priorities.medium')}</option>
-            <option value="HIGH">{t('tickets.priorities.high')}</option>
-            <option value="URGENT">{t('tickets.priorities.urgent')}</option>
           </select>
         </div>
       </div>
