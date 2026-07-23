@@ -7,7 +7,7 @@ import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
-import { Bell, CreditCard, X, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import { listNotifications, markAsRead, type Notification } from '@/features/notifications/notifications.api';
@@ -57,25 +57,36 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   // Filter notifications based on role
   const allNotifs = notificationResult?.notifications ?? [];
   
+  const TICKET_TYPES = new Set([
+    'TICKET_STATUS_CHANGED',
+    'TICKET_COMMENT_ADDED',
+    'SUPPORT_TICKET_CREATED',
+    'URGENT_TICKET_UNASSIGNED',
+  ]);
+
   let filteredNotifications: Notification[] = [];
   let badgeCount = 0;
 
   if (isAdmin) {
-    // Admin: show BUILDING_ALERT for new payments pending review
-    filteredNotifications = allNotifs.filter((n: Notification) => 
+    // Admin: payments + ticket notifications
+    filteredNotifications = allNotifs.filter((n: Notification) =>
       (n.type === 'BUILDING_ALERT' && n.data?.event === 'PAYMENT_SUBMITTED') ||
-      n.data?.paymentId
+      n.data?.paymentId ||
+      TICKET_TYPES.has(n.type)
     );
-    badgeCount = pendingCount; // Badge shows pending payments count
+    const unreadTicketCount = filteredNotifications.filter(
+      (n: Notification) => !n.isRead && TICKET_TYPES.has(n.type),
+    ).length;
+    badgeCount = pendingCount + unreadTicketCount;
   } else {
-    // Resident: show PAYMENT_RECEIVED and PAYMENT_REJECTED
-    filteredNotifications = allNotifs.filter((n: Notification) => 
-      n.type === 'PAYMENT_RECEIVED' || 
+    // Resident: payments + ticket notifications
+    filteredNotifications = allNotifs.filter((n: Notification) =>
+      n.type === 'PAYMENT_RECEIVED' ||
       n.type === 'PAYMENT_REJECTED' ||
       n.data?.event === 'PAYMENT_APPROVED' ||
-      n.data?.event === 'PAYMENT_REJECTED'
+      n.data?.event === 'PAYMENT_REJECTED' ||
+      TICKET_TYPES.has(n.type)
     );
-    // Badge shows count of unread personal payment notifications
     badgeCount = filteredNotifications.filter((n: Notification) => !n.isRead).length;
   }
 
@@ -96,8 +107,15 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       await markReadMutation.mutateAsync(notification.id);
     }
     
-    // Route based on role
-    if (isAdmin) {
+    // Route based on notification type
+    if (TICKET_TYPES.has(notification.type)) {
+      if (isAdmin) {
+        const buildingId = notification.data?.buildingId;
+        router.push(buildingId ? `/${tenantId}/buildings/${buildingId}/tickets` : `/${tenantId}/support`);
+      } else {
+        router.push(`/${tenantId}/resident/tickets`);
+      }
+    } else if (isAdmin) {
       router.push(`/${tenantId}/finanzas?tab=payments`);
     } else {
       router.push(`/${tenantId}/resident/payments`);
@@ -124,15 +142,18 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     if (notification.type === 'BUILDING_ALERT') {
       return <Clock className="w-4 h-4 text-amber-600" />;
     }
+    if (TICKET_TYPES.has(notification.type)) {
+      return <MessageSquare className="w-4 h-4 text-blue-600" />;
+    }
     return <CreditCard className="w-4 h-4 text-blue-600" />;
   };
 
   // Determine empty state message based on role
   const getEmptyMessage = () => {
     if (isAdmin) {
-      return { icon: <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />, text: 'No hay pagos pendientes por revisar' };
+      return { icon: <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />, text: 'No hay notificaciones nuevas' };
     } else {
-      return { icon: <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />, text: 'No tenés notificaciones de pagos' };
+      return { icon: <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />, text: 'No tenés notificaciones nuevas' };
     }
   };
 
@@ -143,7 +164,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 rounded-lg hover:bg-muted transition-colors"
-        title={isAdmin ? 'Pagos pendientes por aprobar' : 'Mis notificaciones de pagos'}
+        title="Notificaciones"
       >
         <Bell className="w-5 h-5" />
         {badgeCount > 0 && (
@@ -157,7 +178,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
         <div className="absolute right-0 top-full mt-2 w-80 bg-card border rounded-lg shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold">
-              {isAdmin ? 'Pagos pendientes' : 'Mis pagos'}
+              Notificaciones
             </span>
             <button 
               onClick={() => setIsOpen(false)}
