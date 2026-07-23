@@ -98,7 +98,13 @@ compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --
 "${compose[@]}" --profile migrate config --quiet
 
 "${compose[@]}" --profile migrate build api-migrate
-"${compose[@]}" --profile migrate run --rm --no-deps api-migrate
+"${compose[@]}" \
+  --profile migrate \
+  run \
+  --rm \
+  --no-deps \
+  -T \
+  api-migrate < /dev/null
 "${compose[@]}" build buildingos-api buildingos-web
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 
