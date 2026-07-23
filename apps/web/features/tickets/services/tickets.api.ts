@@ -21,27 +21,29 @@ export interface AiCategorySuggestion {
   reasoning: string;
 }
 
+export type TicketCategory =
+  | 'MAINTENANCE' | 'REPAIR' | 'CLEANING' | 'COMPLAINT'
+  | 'SAFETY' | 'BILLING' | 'OTHER';
+
 export interface Ticket {
   id: string;
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   title: string;
   description: string;
-  category: string;
+  category: TicketCategory;
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
   createdBy: {
     id: string;
     name: string;
-    email: string;
   };
   assignedTo: {
     id: string;
     user: {
       id: string;
       name: string;
-      email: string;
     };
   } | null;
   building: {
@@ -65,7 +67,6 @@ export interface TicketComment {
   author: {
     id: string;
     name: string;
-    email: string;
   };
   createdAt: string;
 }
@@ -73,7 +74,7 @@ export interface TicketComment {
 export interface CreateTicketInput {
   title: string;
   description: string;
-  category: string;
+  category: TicketCategory;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   unitId?: string;
   assignedToMembershipId?: string;
@@ -82,7 +83,7 @@ export interface CreateTicketInput {
 export interface UpdateTicketInput {
   title?: string;
   description?: string;
-  category?: string;
+  category?: TicketCategory;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
   unitId?: string | null;

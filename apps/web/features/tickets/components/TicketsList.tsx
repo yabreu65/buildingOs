@@ -188,6 +188,8 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
       REPAIR: 'Reparación',
       CLEANING: 'Limpieza',
       COMPLAINT: 'Reclamo',
+      SAFETY: 'Seguridad',
+      BILLING: 'Facturación',
       OTHER: 'Otro',
     };
     return config[category] || category;

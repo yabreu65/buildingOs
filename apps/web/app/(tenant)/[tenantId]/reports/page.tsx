@@ -85,7 +85,7 @@ const ReportsPage = () => {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold">Reportes</h1>
-          <p className="text-gray-600">Vista general de operaciones del edificio</p>
+          <p className="text-muted-foreground">Vista general de operaciones del edificio</p>
         </div>
         <FeatureGatedButton
           features={features}
@@ -116,8 +116,8 @@ const ReportsPage = () => {
       />
 
       {/* Tabs */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="flex border-b border-gray-200">
+      <div className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
+        <div className="flex border-b border-border">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -125,7 +125,7 @@ const ReportsPage = () => {
               className={`px-6 py-3 font-medium text-sm transition-colors ${
                 activeTab === tab.id
                   ? 'border-b-2 border-blue-600 text-blue-600'
-                  : 'text-gray-600 hover:text-gray-900'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {tab.label}

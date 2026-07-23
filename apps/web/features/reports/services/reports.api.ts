@@ -39,6 +39,21 @@ export interface TicketsReport {
   topCategories: Array<{ category: string; count: number }>;
   avgTimeToFirstResponseHours: number;
   avgTimeToResolveHours: number;
+  tickets: ReportTicket[];
+}
+
+export interface ReportTicket {
+  id: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  status: string;
+  priority: string;
+  category: string;
+  buildingId: string;
+  building: { id: string; name: string };
+  unitId: string | null;
+  unit: { id: string; label: string | null; code: string } | null;
 }
 
 export interface DelinquentUnit {

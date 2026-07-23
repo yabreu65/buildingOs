@@ -9,8 +9,9 @@ import {
   UseGuards,
   Request,
   Query,
+  ForbiddenException,
 } from '@nestjs/common';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { TicketCategory, TicketPriority, TicketStatus } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { TicketsService } from './tickets.service';
@@ -21,6 +22,8 @@ import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import type { TenantContextRequest } from '../common/types/request.types';
+import { can } from '../rbac/can';
+import type { Permission } from '../rbac/permissions';
 
 /**
  * TicketsController: Tickets management endpoints
@@ -66,6 +69,18 @@ export class TicketsController {
   private readonly ticketPriorities = Object.values(TicketPriority);
   private readonly ticketStatuses = Object.values(TicketStatus);
 
+  private sanitizeResidentTicket(ticket: object): object {
+    const safeTicket = { ...ticket } as Record<string, unknown>;
+    delete safeTicket.assignedTo;
+    return safeTicket;
+  }
+
+  private requirePermission(req: TenantContextRequest, permission: Permission): void {
+    if (!can(req.user.roles || [], permission)) {
+      throw new ForbiddenException(`Missing required ticket permission: ${permission}`);
+    }
+  }
+
   /**
    * Check if user has RESIDENT role in their current memberships
    */
@@ -92,6 +107,7 @@ export class TicketsController {
     @Body() dto: CreateTicketDto,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.write');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -103,11 +119,15 @@ export class TicketsController {
       await this.ticketsService.validateResidentUnitAccess(tenantId, userId, dto.unitId, buildingId);
     }
 
+    const residentDto = this.shouldEnforceResidentScope(userRoles)
+      ? { ...dto, category: dto.category ?? TicketCategory.OTHER, priority: TicketPriority.MEDIUM, assignedToMembershipId: undefined }
+      : dto;
+
     return await this.ticketsService.create(
       tenantId,
       buildingId,
       userId,
-      dto,
+      residentDto,
     );
   }
 
@@ -140,6 +160,7 @@ export class TicketsController {
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
   ) {
+    this.requirePermission(req, 'tickets.read');
     const tenantId = req.tenantId;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -171,7 +192,10 @@ export class TicketsController {
       filters.sortOrder = sortOrder as NonNullable<typeof filters.sortOrder>;
     }
 
-    return await this.ticketsService.findAll(tenantId, buildingId, filters);
+    const result = await this.ticketsService.findAll(tenantId, buildingId, filters);
+    return this.shouldEnforceResidentScope(userRoles)
+      ? { ...result, tickets: result.tickets.map((ticket) => this.sanitizeResidentTicket(ticket)) }
+      : result;
   }
 
   /**
@@ -189,6 +213,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.read');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -206,7 +231,9 @@ export class TicketsController {
       );
     }
 
-    return ticket;
+    return this.shouldEnforceResidentScope(userRoles)
+      ? this.sanitizeResidentTicket(ticket)
+      : ticket;
   }
 
   /**
@@ -231,14 +258,11 @@ export class TicketsController {
     @Body() dto: UpdateTicketDto,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.manage');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
-    const userId = req.user.id;
     const userRoles = req.user.roles || [];
     if (this.shouldEnforceResidentScope(userRoles)) {
-      const ticket = await this.ticketsService.findOne(tenantId, buildingId, ticketId);
-      if (!ticket.unitId) throw new BadRequestException('Residents can only access unit-scoped tickets');
-      await this.ticketsService.validateResidentUnitAccess(tenantId, userId, ticket.unitId, buildingId);
-      if (dto.unitId) await this.ticketsService.validateResidentUnitAccess(tenantId, userId, dto.unitId, buildingId);
+      throw new BadRequestException('Residents cannot modify tickets');
     }
 
     // If status is changing, validate transition first
@@ -267,11 +291,10 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.manage');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     if (this.shouldEnforceResidentScope(req.user.roles || [])) {
-      const ticket = await this.ticketsService.findOne(tenantId, buildingId, ticketId);
-      if (!ticket.unitId) throw new BadRequestException('Residents can only access unit-scoped tickets');
-      await this.ticketsService.validateResidentUnitAccess(tenantId, req.user.id, ticket.unitId, buildingId);
+      throw new BadRequestException('Residents cannot delete tickets');
     }
     return await this.ticketsService.remove(tenantId, buildingId, ticketId);
   }
@@ -295,6 +318,7 @@ export class TicketsController {
     @Body() dto: AddTicketCommentDto,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.read');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -334,6 +358,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Request() req: TenantContextRequest,
   ) {
+    this.requirePermission(req, 'tickets.read');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
     if (this.shouldEnforceResidentScope(req.user.roles || [])) {
       const ticket = await this.ticketsService.findOne(tenantId, buildingId, ticketId);

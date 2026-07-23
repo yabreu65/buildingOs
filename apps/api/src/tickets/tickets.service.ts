@@ -47,9 +47,9 @@ interface TicketFilters {
 
 const ticketFindAllArgs = Prisma.validator<Prisma.TicketDefaultArgs>()({
   include: {
-    createdBy: { select: { id: true, name: true, email: true } },
+    createdBy: { select: { id: true, name: true } },
     assignedTo: {
-      include: { user: { select: { id: true, name: true, email: true } } },
+      include: { user: { select: { id: true, name: true } } },
     },
     building: { select: { id: true, name: true } },
     unit: { select: { id: true, label: true, code: true } },
@@ -211,9 +211,9 @@ export class TicketsService {
         status: 'OPEN',
       },
       include: {
-        createdBy: { select: { id: true, name: true, email: true } },
+        createdBy: { select: { id: true, name: true } },
         assignedTo: {
-          include: { user: { select: { id: true, name: true, email: true } } },
+          include: { user: { select: { id: true, name: true } } },
         },
         building: { select: { id: true, name: true } },
         unit: { select: { id: true, label: true, code: true } },
@@ -234,6 +234,9 @@ export class TicketsService {
         unitId: ticket.unitId,
       },
     });
+
+    // Fire-and-forget: notify tenant admins of new ticket
+    void this.notifyTicketCreated(tenantId, buildingId, ticket);
 
     // FASE 2: Fire-and-forget AI categorization (never blocks user response)
     // Only run if user didn't explicitly provide category/priority
@@ -423,15 +426,15 @@ export class TicketsService {
     const ticket = await this.prisma.ticket.findFirst({
       where: { id: ticketId, tenantId, buildingId },
       include: {
-        createdBy: { select: { id: true, name: true, email: true } },
+        createdBy: { select: { id: true, name: true } },
         assignedTo: {
-          include: { user: { select: { id: true, name: true, email: true } } },
+          include: { user: { select: { id: true, name: true } } },
         },
         building: { select: { id: true, name: true } },
         unit: { select: { id: true, label: true, code: true } },
         comments: {
           orderBy: { createdAt: 'asc' },
-          include: { author: { select: { id: true, name: true, email: true } } },
+          include: { author: { select: { id: true, name: true } } },
         },
       },
     });
@@ -558,9 +561,9 @@ export class TicketsService {
       where: { id: ticketId },
       data,
       include: {
-        createdBy: { select: { id: true, name: true, email: true } },
+        createdBy: { select: { id: true, name: true } },
         assignedTo: {
-          include: { user: { select: { id: true, name: true, email: true } } },
+          include: { user: { select: { id: true, name: true } } },
         },
         building: { select: { id: true, name: true } },
         unit: { select: { id: true, label: true, code: true } },
@@ -585,6 +588,15 @@ export class TicketsService {
           newStatus: dto.status,
         },
       });
+
+      // Fire-and-forget: notify ticket creator of status change
+      void this.notifyTicketStatusChanged(
+        tenantId,
+        currentTicket.createdByUserId,
+        ticket,
+        currentTicket.status,
+        dto.status,
+      );
     }
 
     return ticket;
@@ -606,7 +618,7 @@ export class TicketsService {
       },
       include: {
         user: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true },
         },
         roles: {
           select: { role: true },
@@ -667,7 +679,7 @@ export class TicketsService {
         body: dto.body,
       },
       include: {
-        author: { select: { id: true, name: true, email: true } },
+        author: { select: { id: true, name: true } },
       },
     });
 
@@ -682,6 +694,9 @@ export class TicketsService {
         ticketId,
       },
     });
+
+    // Fire-and-forget: notify ticket participants of new comment
+    void this.notifyTicketCommentAdded(tenantId, ticketId, userId, comment);
 
     return comment;
   }
@@ -707,7 +722,7 @@ export class TicketsService {
     return await this.prisma.ticketComment.findMany({
       where: { ticketId, tenantId },
       include: {
-        author: { select: { id: true, name: true, email: true } },
+        author: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -803,5 +818,152 @@ export class TicketsService {
     }
 
     return { escalatedCount };
+  }
+
+  /**
+   * Fire-and-forget: notify tenant admins when a new ticket is created
+   */
+  private async notifyTicketCreated(
+    tenantId: string,
+    buildingId: string,
+    ticket: Ticket & { building?: { name: string } | null; unit?: { label: string | null; code: string | null } | null },
+  ): Promise<void> {
+    try {
+      const admins = await this.prisma.tenantMember.findMany({
+        where: {
+          tenantId,
+          role: 'TENANT_ADMIN',
+          status: 'ACTIVE',
+          userId: { not: null },
+        },
+        include: { user: { select: { id: true } } },
+      });
+
+      const buildingName = ticket.building?.name || 'Edificio';
+      const unitLabel = ticket.unit?.label || ticket.unit?.code || '';
+
+      for (const admin of admins) {
+        if (!admin.user?.id) continue;
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId: admin.user.id,
+          type: 'SUPPORT_TICKET_CREATED',
+          title: `Nuevo reclamo: ${ticket.title}`,
+          body: `Se creó un reclamo en ${buildingName}${unitLabel ? ` (${unitLabel})` : ''}. Categoría: ${ticket.category}.`,
+          data: {
+            ticketId: ticket.id,
+            ticketTitle: ticket.title,
+            buildingId,
+            buildingName,
+            category: ticket.category,
+          },
+          deliveryMethods: ['IN_APP'],
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `[notifyTicketCreated] Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Fire-and-forget: notify ticket creator when status changes
+   */
+  private async notifyTicketStatusChanged(
+    tenantId: string,
+    creatorUserId: string,
+    ticket: Ticket & { building?: { name: string } | null },
+    oldStatus: string,
+    newStatus: string,
+  ): Promise<void> {
+    try {
+      const statusLabels: Record<string, string> = {
+        OPEN: 'Abierto',
+        IN_PROGRESS: 'En progreso',
+        RESOLVED: 'Resuelto',
+        CLOSED: 'Cerrado',
+      };
+
+      await this.notificationsService.createNotification({
+        tenantId,
+        userId: creatorUserId,
+        type: 'TICKET_STATUS_CHANGED',
+        title: `Estado actualizado: ${ticket.title}`,
+        body: `Tu reclamo pasó de "${statusLabels[oldStatus] || oldStatus}" a "${statusLabels[newStatus] || newStatus}".`,
+        data: {
+          ticketId: ticket.id,
+          ticketTitle: ticket.title,
+          oldStatus,
+          newStatus,
+          buildingName: ticket.building?.name || '',
+        },
+        deliveryMethods: ['IN_APP'],
+      });
+    } catch (err) {
+      this.logger.error(
+        `[notifyTicketStatusChanged] Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Fire-and-forget: notify ticket participants when a comment is added
+   */
+  private async notifyTicketCommentAdded(
+    tenantId: string,
+    ticketId: string,
+    authorUserId: string,
+    comment: TicketComment & { author?: { name: string | null } | null },
+  ): Promise<void> {
+    try {
+      const ticket = await this.prisma.ticket.findFirst({
+        where: { id: ticketId },
+        select: { createdByUserId: true, title: true, assignedToMembershipId: true },
+      });
+
+      if (!ticket) return;
+
+      const recipientIds: string[] = [];
+
+      // Notify ticket creator (if not the author)
+      if (ticket.createdByUserId !== authorUserId) {
+        recipientIds.push(ticket.createdByUserId);
+      }
+
+      // Notify assigned operator (if not the author)
+      if (ticket.assignedToMembershipId) {
+        const assignee = await this.prisma.membership.findFirst({
+          where: { id: ticket.assignedToMembershipId },
+          select: { userId: true },
+        });
+        if (assignee?.userId && assignee.userId !== authorUserId) {
+          recipientIds.push(assignee.userId);
+        }
+      }
+
+      const authorName = comment.author?.name || 'Alguien';
+
+      for (const recipientId of recipientIds) {
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId: recipientId,
+          type: 'TICKET_COMMENT_ADDED',
+          title: `Nuevo comentario: ${ticket.title}`,
+          body: `${authorName} comentó: "${comment.body.slice(0, 100)}${comment.body.length > 100 ? '...' : ''}"`,
+          data: {
+            ticketId,
+            ticketTitle: ticket.title,
+            commentId: comment.id,
+            authorName,
+          },
+          deliveryMethods: ['IN_APP'],
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `[notifyTicketCommentAdded] Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
