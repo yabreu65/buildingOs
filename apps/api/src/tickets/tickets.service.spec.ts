@@ -89,6 +89,7 @@ describe('TicketsService', () => {
         {
           provide: ResidentAccessService,
           useValue: {
+            shouldEnforce: jest.fn(),
             getActiveUnitIds: jest.fn(),
             assertUnitAccess: jest.fn(),
           },
@@ -394,10 +395,151 @@ describe('TicketsService', () => {
 
   // ========== TESTS: FIND ONE ==========
   describe('findOne', () => {
-    it('should skip findOne tests - complex validator dependencies', () => {
-      // These tests require complex mocks for TicketsValidators
-      // that are beyond unit test scope. Integration tests recommended.
-      expect(true).toBe(true);
+    it('returns the full ticket detail when scope validation passes', async () => {
+      const tenantId = 'tenant-123';
+      const buildingId = 'building-123';
+      const ticketId = 'ticket-123';
+
+      const expectedTicket = {
+        id: ticketId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        createdByUserId: 'creator-1',
+        title: 'Leak',
+        description: 'Water leak',
+        category: 'MAINTENANCE',
+        priority: 'HIGH',
+        status: 'OPEN',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        closedAt: null,
+        building: { id: buildingId, name: 'Building A' },
+        unit: { id: 'unit-123', label: '101', code: 'A01' },
+        createdBy: { id: 'creator-1', name: 'Creator' },
+        assignedTo: null,
+        comments: [],
+      };
+
+      jest.spyOn(validators, 'validateTicketScope').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue(expectedTicket as never);
+
+      await expect(service.findOne(tenantId, buildingId, ticketId)).resolves.toEqual(expectedTicket);
+      expect(validators.validateTicketScope).toHaveBeenCalledWith(tenantId, buildingId, ticketId);
+    });
+  });
+
+  describe('findOneByTenantAndId', () => {
+    const ticketId = 'ticket-123';
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const unitId = 'unit-123';
+
+    const makeActor = (roles: Array<{ role: string; scopeType?: string; scopeBuildingId?: string | null; scopeUnitId?: string | null }> ) => ({
+      id: 'user-123',
+      memberships: [
+        {
+          tenantId,
+          roles: roles.map((role) => role.role),
+          scopedRoles: roles.map((role, index) => ({
+            id: `role-${index}`,
+            role: role.role as never,
+            scopeType: (role.scopeType || 'TENANT') as never,
+            scopeBuildingId: role.scopeBuildingId ?? null,
+            scopeUnitId: role.scopeUnitId ?? null,
+          })),
+        },
+      ],
+    } as never);
+
+    beforeEach(() => {
+      jest.spyOn(service, 'findOne').mockResolvedValue({
+        id: ticketId,
+        tenantId,
+        buildingId,
+        unitId,
+        createdByUserId: 'creator-1',
+        title: 'Leak',
+        description: 'Water leak',
+        category: 'MAINTENANCE',
+        priority: 'HIGH',
+        status: 'OPEN',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        closedAt: null,
+        building: { id: buildingId, name: 'Building A' },
+        unit: { id: unitId, label: '101', code: 'A01' },
+        createdBy: { id: 'creator-1', name: 'Creator' },
+        assignedTo: null,
+        comments: [],
+      } as never);
+    });
+
+    beforeEach(() => {
+      residentAccess.shouldEnforce.mockReturnValue(false);
+    });
+
+    it('allows a tenant-scoped administrator to obtain the ticket', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId, unitId } as never);
+
+      const result = await service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'TENANT_ADMIN', scopeType: 'TENANT' },
+      ]));
+
+      expect(result.building.id).toBe(buildingId);
+      expect(service.findOne).toHaveBeenCalledWith(tenantId, buildingId, ticketId);
+    });
+
+    it('allows a building-scoped operator to obtain the ticket in scope', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId, unitId } as never);
+
+      await expect(service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'OPERATOR', scopeType: 'BUILDING', scopeBuildingId: buildingId },
+      ]))).resolves.toMatchObject({ id: ticketId, building: { id: buildingId } });
+    });
+
+    it('rejects a building-scoped operator when the ticket is in another building', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId: 'building-999', unitId } as never);
+
+      await expect(service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'OPERATOR', scopeType: 'BUILDING', scopeBuildingId: buildingId },
+      ]))).rejects.toThrow('No tiene acceso al ticket solicitado');
+    });
+
+    it('allows a unit-scoped operator when the ticket belongs to the same unit', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId, unitId } as never);
+
+      await expect(service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'OPERATOR', scopeType: 'UNIT', scopeUnitId: unitId },
+      ]))).resolves.toMatchObject({ id: ticketId, building: { id: buildingId } });
+    });
+
+    it('returns 404 when the ticket does not belong to the tenant', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue(null);
+
+      await expect(service.findOneByTenantAndId('other-tenant', ticketId, makeActor([
+        { role: 'TENANT_ADMIN', scopeType: 'TENANT' },
+      ]))).rejects.toThrow(NotFoundException);
+    });
+
+    it('allows a resident to obtain their own unit ticket', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId, unitId } as never);
+      residentAccess.assertUnitAccess.mockResolvedValue(undefined);
+      residentAccess.shouldEnforce.mockReturnValue(true);
+
+      await expect(service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'RESIDENT', scopeType: 'TENANT' },
+      ]))).resolves.toMatchObject({ id: ticketId, building: { id: buildingId } });
+      expect(residentAccess.assertUnitAccess).toHaveBeenCalledWith(tenantId, 'user-123', unitId, buildingId);
+    });
+
+    it('rejects a resident when the ticket is not unit-scoped', async () => {
+      jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({ buildingId, unitId: null } as never);
+      residentAccess.shouldEnforce.mockReturnValue(true);
+
+      await expect(service.findOneByTenantAndId(tenantId, ticketId, makeActor([
+        { role: 'RESIDENT', scopeType: 'TENANT' },
+      ]))).rejects.toThrow('Ticket not found or does not belong to you');
     });
   });
 
