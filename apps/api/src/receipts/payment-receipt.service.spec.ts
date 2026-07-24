@@ -1,6 +1,6 @@
 import { PaymentReceiptService } from './payment-receipt.service';
 import { ReceiptStatus } from '@prisma/client';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 describe('PaymentReceiptService', () => {
@@ -130,13 +130,10 @@ describe('PaymentReceiptService', () => {
     expect(normalizedPdfText).toContain('ARS 40.500,00');
     writeFileSync(tmpReceiptPath, uploadedBuffer);
     expect(execFileSync('file', [tmpReceiptPath], { encoding: 'utf8' })).toContain('PDF document');
-    try {
-      const pdfInfo = execFileSync('pdfinfo', [tmpReceiptPath], { encoding: 'utf8' });
-      expect(pdfInfo).toContain('Pages:');
-    } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
+    const pdfInfo = spawnSync('pdfinfo', [tmpReceiptPath], { encoding: 'utf8' });
+    if (!pdfInfo.error || (pdfInfo.error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      expect(pdfInfo.status).toBe(0);
+      expect(pdfInfo.stdout).toContain('Pages:');
     }
     expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
