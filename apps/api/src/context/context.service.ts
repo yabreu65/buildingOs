@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthorizeService } from '../rbac/authorize.service';
-import { ResidentAccessService } from '../resident-access/resident-access.service';
+import {
+  ResidentAccessService,
+  type ActiveResidentOccupancy,
+} from '../resident-access/resident-access.service';
 
 interface MembershipRoleShape {
   role: string;
@@ -36,17 +39,121 @@ export class ContextService {
     private readonly residentAccess: ResidentAccessService,
   ) {}
 
+  private async persistContext(
+    membershipId: string,
+    tenantId: string,
+    activeBuildingId: string | null,
+    activeUnitId: string | null,
+  ): Promise<UserContextData> {
+    const userContext = await this.prisma.userContext.upsert({
+      where: { membershipId },
+      update: {
+        tenantId,
+        activeBuildingId,
+        activeUnitId,
+      },
+      create: {
+        tenantId,
+        membershipId,
+        activeBuildingId,
+        activeUnitId,
+      },
+    });
+
+    return {
+      tenantId,
+      activeBuildingId: userContext.activeBuildingId,
+      activeUnitId: userContext.activeUnitId,
+    };
+  }
+
+  private async resolveResidentContextState(
+    tenantId: string,
+    userId: string,
+    currentContext?: { activeBuildingId?: string | null; activeUnitId?: string | null } | null,
+  ): Promise<ActiveResidentOccupancy | null> {
+    const activeBuildingId = currentContext?.activeBuildingId ?? null;
+    const activeUnitId = currentContext?.activeUnitId ?? null;
+
+    if (activeUnitId) {
+      const selectedOccupancy = await this.residentAccess.resolveActiveResidentOccupancy({
+        tenantId,
+        userId,
+        unitId: activeUnitId,
+      });
+
+      if (selectedOccupancy) {
+        return selectedOccupancy;
+      }
+    }
+
+    if (activeBuildingId) {
+      const selectedOccupancy = await this.residentAccess.resolveActiveResidentOccupancy({
+        tenantId,
+        userId,
+        buildingId: activeBuildingId,
+      });
+
+      if (selectedOccupancy) {
+        return selectedOccupancy;
+      }
+    }
+
+    return this.residentAccess.resolveActiveResidentOccupancy({
+      tenantId,
+      userId,
+    });
+  }
+
   /**
    * Get current context for user/tenant
    */
   async getContext(userId: string, tenantId: string): Promise<UserContextData> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { userContext: true },
+      include: {
+        userContext: true,
+        roles: { where: { tenantId } },
+      },
     });
 
     if (!membership) {
       throw new NotFoundException('Membership not found');
+    }
+
+    const roles = membership.roles || [];
+    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
+
+    if (isResident) {
+      const resolvedOccupancy = await this.resolveResidentContextState(
+        tenantId,
+        userId,
+        membership.userContext,
+      );
+
+      const nextBuildingId = resolvedOccupancy?.buildingId ?? null;
+      const nextUnitId = resolvedOccupancy?.unitId ?? null;
+      const currentBuildingId = membership.userContext?.activeBuildingId ?? null;
+      const currentUnitId = membership.userContext?.activeUnitId ?? null;
+
+      if (
+        !membership.userContext ||
+        currentBuildingId !== nextBuildingId ||
+        currentUnitId !== nextUnitId
+      ) {
+        return this.persistContext(
+          membership.id,
+          tenantId,
+          nextBuildingId,
+          nextUnitId,
+        );
+      }
+
+      return {
+        tenantId,
+        activeBuildingId: currentBuildingId,
+        activeUnitId: currentUnitId,
+      };
     }
 
     // Auto-initialize if no context exists OR if context is empty (both null — never properly initialized)
@@ -110,6 +217,37 @@ export class ContextService {
     const rolesForCheck = membership.roles || [];
     const isResidentForBuildingCheck = this.residentAccess.shouldEnforce(rolesForCheck.map((role) => role.role));
 
+    if (isResidentForBuildingCheck) {
+      if (effectiveUnitId) {
+        const occupancy = await this.residentAccess.resolveActiveResidentOccupancy({
+          tenantId,
+          userId,
+          unitId: effectiveUnitId,
+          buildingId: effectiveBuildingId ?? undefined,
+        });
+
+        if (!occupancy) {
+          throw new NotFoundException('Unit not found or does not belong to you');
+        }
+
+        effectiveBuildingId = occupancy.buildingId;
+        effectiveUnitId = occupancy.unitId;
+      } else if (effectiveBuildingId) {
+        const occupancy = await this.residentAccess.resolveActiveResidentOccupancy({
+          tenantId,
+          userId,
+          buildingId: effectiveBuildingId,
+        });
+
+        if (!occupancy) {
+          throw new NotFoundException('Building not found or does not belong to this tenant');
+        }
+
+        effectiveBuildingId = occupancy.buildingId;
+        effectiveUnitId = occupancy.unitId;
+      }
+    }
+
     // Validate building if specified
     if (effectiveBuildingId) {
       const building = await this.prisma.building.findFirst({
@@ -167,27 +305,12 @@ export class ContextService {
       }
     }
 
-    // Upsert or update UserContext
-    const userContext = await this.prisma.userContext.upsert({
-      where: { membershipId: membership.id },
-      update: {
-        tenantId,
-        activeBuildingId: effectiveBuildingId,
-        activeUnitId: effectiveUnitId,
-      },
-      create: {
-        tenantId,
-        membershipId: membership.id,
-        activeBuildingId: effectiveBuildingId,
-        activeUnitId: effectiveUnitId,
-      },
-    });
-
-    return {
+    return this.persistContext(
+      membership.id,
       tenantId,
-      activeBuildingId: userContext.activeBuildingId,
-      activeUnitId: userContext.activeUnitId,
-    };
+      effectiveBuildingId,
+      effectiveUnitId,
+    );
   }
 
   /**
@@ -250,19 +373,27 @@ export class ContextService {
     if (isResident) {
       const buildingIds = await this.residentAccess.getActiveBuildingIds(tenantId, userId);
       if (buildingIds.length === 0) return [];
-      return this.prisma.building.findMany({
+      const buildings = await this.prisma.building.findMany({
         where: { tenantId, id: { in: buildingIds }, deletedAt: null },
         select: { id: true, name: true },
       });
+      return buildings.sort((a, b) =>
+        a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     // Non-RESIDENT: check scope
     const hasTenantScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'TENANT');
     if (hasTenantScope) {
-      return this.prisma.building.findMany({
+      const buildings = await this.prisma.building.findMany({
         where: { tenantId },
         select: { id: true, name: true },
       });
+      return buildings.sort((a, b) =>
+        a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     const buildingScopedRoles = roles.filter((r: MembershipRoleShape) => r.scopeType === 'BUILDING');
@@ -271,10 +402,14 @@ export class ContextService {
       .filter((id: string | null) => id !== null);
 
     if (buildingIds.length > 0) {
-      return this.prisma.building.findMany({
+      const buildings = await this.prisma.building.findMany({
         where: { tenantId, id: { in: buildingIds } },
         select: { id: true, name: true },
       });
+      return buildings.sort((a, b) =>
+        a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     return [];
@@ -302,18 +437,28 @@ export class ContextService {
     if (isResident) {
       const unitIds = await this.residentAccess.getActiveUnitIds(_tenantId, userId, buildingId);
       if (unitIds.length === 0) return [];
-      return this.prisma.unit.findMany({
+      const units = await this.prisma.unit.findMany({
         where: { tenantId: _tenantId, buildingId, id: { in: unitIds } },
         select: { id: true, code: true, label: true },
       });
+      return units.sort((a, b) =>
+        (a.code ?? '').localeCompare(b.code ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        (a.label ?? '').localeCompare(b.label ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     // If TENANT or BUILDING scoped: return all units in building
     if (hasTenantScope || hasBuildingScope) {
-      return this.prisma.unit.findMany({
+      const units = await this.prisma.unit.findMany({
         where: { tenantId: _tenantId, buildingId },
         select: { id: true, code: true, label: true },
       });
+      return units.sort((a, b) =>
+        (a.code ?? '').localeCompare(b.code ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        (a.label ?? '').localeCompare(b.label ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     // If only UNIT-scoped: return units in this building that user has scope for
@@ -323,7 +468,7 @@ export class ContextService {
         .map((r: MembershipRoleShape) => r.scopeUnitId)
         .filter((id): id is string => id !== null && id !== undefined);
 
-      return this.prisma.unit.findMany({
+      const units = await this.prisma.unit.findMany({
         where: {
           tenantId: _tenantId,
           buildingId,
@@ -331,6 +476,11 @@ export class ContextService {
         },
         select: { id: true, code: true, label: true },
       });
+      return units.sort((a, b) =>
+        (a.code ?? '').localeCompare(b.code ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        (a.label ?? '').localeCompare(b.label ?? '', 'es', { numeric: true, sensitivity: 'base' }) ||
+        a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+      );
     }
 
     return [];
@@ -353,6 +503,20 @@ export class ContextService {
         activeBuildingId: membership?.userContext?.activeBuildingId ?? null,
         activeUnitId: membership?.userContext?.activeUnitId ?? null,
       };
+    }
+
+    const roles = membership.roles || [];
+    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
+
+    if (isResident) {
+      const resolvedOccupancy = await this.resolveResidentContextState(tenantId, userId, null);
+
+      return this.persistContext(
+        membership.id,
+        tenantId,
+        resolvedOccupancy?.buildingId ?? null,
+        resolvedOccupancy?.unitId ?? null,
+      );
     }
 
     // Auto-select building if only one is accessible

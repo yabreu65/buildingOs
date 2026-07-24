@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
 import { useContextOptions } from '../../../../../features/context/useContextOptions';
+import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
@@ -171,6 +172,8 @@ function matchesSearch(doc: Document, query: string): boolean {
 export default function ResidentDocumentsPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
+  const session = useAuthSession();
+  const userId = session?.user.id ?? null;
 
   const [openError, setOpenError] = useState<string | null>(null);
   const [openErrorDocumentTitle, setOpenErrorDocumentTitle] = useState<string | null>(null);
@@ -216,9 +219,9 @@ export default function ResidentDocumentsPage() {
     error: docsErrorValue,
     refetch,
   } = useQuery<Document[]>({
-    queryKey: ['residentDocuments', tenantId, buildingId, unitId],
+    queryKey: ['residentDocuments', tenantId, userId, buildingId, unitId],
     queryFn: () => listDocuments(tenantId!, { buildingId: buildingId ?? undefined, unitId: unitId ?? undefined }),
-    enabled: !!tenantId && !!buildingId && !!unitId,
+    enabled: !!tenantId && !!userId && !!buildingId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
 
