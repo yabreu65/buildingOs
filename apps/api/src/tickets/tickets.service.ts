@@ -823,30 +823,66 @@ export class TicketsService {
   /**
    * Fire-and-forget: notify tenant admins when a new ticket is created
    */
+  private async resolveAdministrativeRecipientIds(
+    tenantId: string,
+    buildingId: string,
+    unitId?: string | null,
+  ): Promise<string[]> {
+    const adminMemberships = await this.prisma.membership.findMany({
+      where: {
+        tenantId,
+        roles: {
+          some: {
+            role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
+            OR: [
+              { scopeType: 'TENANT' },
+              { scopeType: 'BUILDING', scopeBuildingId: buildingId },
+              ...(unitId ? [{ scopeType: 'UNIT' as const, scopeUnitId: unitId }] : []),
+            ],
+          },
+        },
+      },
+      include: { user: { select: { id: true } } },
+    });
+
+    const adminTenantMembers = await this.prisma.tenantMember.findMany({
+      where: {
+        tenantId,
+        role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
+        status: 'ACTIVE',
+        userId: { not: null },
+      },
+      include: { user: { select: { id: true } } },
+    });
+
+    const recipientIds = new Set<string>();
+    for (const userId of [
+      ...adminMemberships.map((admin) => admin.user?.id),
+      ...adminTenantMembers.map((admin) => admin.user?.id),
+    ]) {
+      if (userId) recipientIds.add(userId);
+    }
+
+    this.logger.debug(
+      `[resolveAdministrativeRecipientIds] Found ${recipientIds.size} recipients for tenant ${tenantId}, building ${buildingId}`,
+    );
+    return [...recipientIds];
+  }
+
   private async notifyTicketCreated(
     tenantId: string,
     buildingId: string,
     ticket: Ticket & { building?: { name: string } | null; unit?: { label: string | null; code: string | null } | null },
   ): Promise<void> {
     try {
-      const admins = await this.prisma.tenantMember.findMany({
-        where: {
-          tenantId,
-          role: 'TENANT_ADMIN',
-          status: 'ACTIVE',
-          userId: { not: null },
-        },
-        include: { user: { select: { id: true } } },
-      });
-
       const buildingName = ticket.building?.name || 'Edificio';
       const unitLabel = ticket.unit?.label || ticket.unit?.code || '';
 
-      for (const admin of admins) {
-        if (!admin.user?.id) continue;
+      const recipients = await this.resolveAdministrativeRecipientIds(tenantId, buildingId, ticket.unitId);
+      for (const userId of recipients) {
         await this.notificationsService.createNotification({
           tenantId,
-          userId: admin.user.id,
+          userId,
           type: 'SUPPORT_TICKET_CREATED',
           title: `Nuevo reclamo: ${ticket.title}`,
           body: `Se creó un reclamo en ${buildingName}${unitLabel ? ` (${unitLabel})` : ''}. Categoría: ${ticket.category}.`,
@@ -918,44 +954,60 @@ export class TicketsService {
   ): Promise<void> {
     try {
       const ticket = await this.prisma.ticket.findFirst({
-        where: { id: ticketId },
-        select: { createdByUserId: true, title: true, assignedToMembershipId: true },
+        where: { id: ticketId, tenantId },
+        select: {
+          createdByUserId: true,
+          title: true,
+          buildingId: true,
+          unitId: true,
+          assignedToMembershipId: true,
+        },
       });
 
       if (!ticket) return;
 
-      const recipientIds: string[] = [];
+      const authorIsAdministrator = Boolean(await this.prisma.membership.findFirst({
+        where: {
+          tenantId,
+          userId: authorUserId,
+          roles: {
+            some: {
+              role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
+              OR: [
+                { scopeType: 'TENANT' },
+                { scopeType: 'BUILDING', scopeBuildingId: ticket.buildingId },
+                ...(ticket.unitId ? [{ scopeType: 'UNIT' as const, scopeUnitId: ticket.unitId }] : []),
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      }));
 
-      // Notify ticket creator (if not the author)
-      if (ticket.createdByUserId !== authorUserId) {
-        recipientIds.push(ticket.createdByUserId);
-      }
-
-      // Notify assigned operator (if not the author)
-      if (ticket.assignedToMembershipId) {
-        const assignee = await this.prisma.membership.findFirst({
-          where: { id: ticket.assignedToMembershipId },
-          select: { userId: true },
-        });
-        if (assignee?.userId && assignee.userId !== authorUserId) {
-          recipientIds.push(assignee.userId);
-        }
-      }
+      const recipientIds = authorIsAdministrator
+        ? [ticket.createdByUserId]
+        : await this.resolveAdministrativeRecipientIds(tenantId, ticket.buildingId, ticket.unitId);
 
       const authorName = comment.author?.name || 'Alguien';
 
-      for (const recipientId of recipientIds) {
+      for (const recipientId of new Set(recipientIds.filter((id) => id !== authorUserId))) {
         await this.notificationsService.createNotification({
           tenantId,
           userId: recipientId,
           type: 'TICKET_COMMENT_ADDED',
-          title: `Nuevo comentario: ${ticket.title}`,
+          title: authorIsAdministrator
+            ? `La administración respondió: ${ticket.title}`
+            : 'El residente agregó una respuesta',
           body: `${authorName} comentó: "${comment.body.slice(0, 100)}${comment.body.length > 100 ? '...' : ''}"`,
           data: {
             ticketId,
             ticketTitle: ticket.title,
             commentId: comment.id,
             authorName,
+            authorId: authorUserId,
+            actorType: authorIsAdministrator ? 'ADMIN' : 'RESIDENT',
+            buildingId: ticket.buildingId,
+            unitId: ticket.unitId,
           },
           deliveryMethods: ['IN_APP'],
         });
