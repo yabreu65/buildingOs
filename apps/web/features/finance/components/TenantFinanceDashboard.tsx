@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
 import Button from '@/shared/components/ui/Button';
@@ -38,20 +38,20 @@ interface Params {
  */
 export const TenantFinanceDashboard = () => {
   const params = useParams<Params>();
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const initialTab = (() => {
+  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'payments', 'charges', 'delinquent', 'reports', 'notas'];
+  const activeTab = (() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam && ['overview', 'rubros', 'expenses', 'payments', 'charges', 'delinquent', 'reports', 'notas'].includes(tabParam)) {
+    if (tabParam && allowedTabs.includes(tabParam as Tab)) {
       return tabParam as Tab;
     }
 
     return 'overview';
   })();
-  
-  // Initialize tab from URL query param
-  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [period, setPeriod] = useState<string>(currentMonth);
   const periodInputId = 'tenant-finance-period';
 
@@ -98,6 +98,20 @@ export const TenantFinanceDashboard = () => {
     () => buildings.reduce((acc, b) => ({ ...acc, [b.id]: b.name }), {} as Record<string, string>),
     [buildings]
   );
+
+  const updateTab = (nextTab: Tab) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (nextTab === 'overview') {
+      nextParams.delete('tab');
+    } else {
+      nextParams.set('tab', nextTab);
+    }
+
+    const nextQuery = nextParams.toString();
+    if (nextQuery === searchParams.toString()) return;
+
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
 
   // Convert React Query error to string message
   const errorMsg = error ? (error instanceof Error ? error.message : String(error)) : null;
@@ -166,7 +180,7 @@ export const TenantFinanceDashboard = () => {
              ].map((tab) => (
              <button
                key={tab.id}
-               onClick={() => setActiveTab(tab.id as Tab)}
+               onClick={() => updateTab(tab.id as Tab)}
                className={cn(
                  'px-3 py-2 rounded-md text-sm font-medium transition-all',
                  activeTab === tab.id

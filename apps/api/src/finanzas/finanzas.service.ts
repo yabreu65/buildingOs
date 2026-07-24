@@ -863,7 +863,17 @@ export class FinanzasService {
             status: { notIn: [ChargeStatus.PAID, ChargeStatus.CANCELED] },
             canceledAt: null,
           },
-          include: { paymentAllocations: true },
+          include: {
+            paymentAllocations: {
+              include: {
+                payment: {
+                  select: {
+                    status: true,
+                  },
+                },
+              },
+            },
+          },
           orderBy: { dueDate: 'asc' },
         });
 
@@ -873,7 +883,8 @@ export class FinanzasService {
           if (remainingAmount <= 0) break;
 
           const alreadyAllocated = charge.paymentAllocations.reduce(
-            (sum, a) => sum + a.amount,
+            (sum, a) =>
+              sum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0),
             0,
           );
           const outstanding = charge.amount - alreadyAllocated;
@@ -1244,11 +1255,7 @@ export class FinanzasService {
 
     const allocationsSum = charge.paymentAllocations.reduce(
       (sum, a) => {
-        const status = a.payment?.status;
-        if (
-          status === PaymentStatus.APPROVED ||
-          status === PaymentStatus.RECONCILED
-        ) {
+        if (this.isEffectivePaymentStatus(a.payment?.status)) {
           return sum + a.amount;
         }
         return sum;
@@ -1278,8 +1285,7 @@ export class FinanzasService {
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
     const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-      const status = allocation.payment?.status;
-      if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+      if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
         return sum + allocation.amount;
       }
 
@@ -1287,6 +1293,10 @@ export class FinanzasService {
     }, 0);
 
     return Math.max(0, charge.amount - approvedAllocated);
+  }
+
+  private isEffectivePaymentStatus(status?: PaymentStatus | null): boolean {
+    return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED;
   }
 
   // ============================================================================
@@ -1350,12 +1360,7 @@ export class FinanzasService {
     // 3. Calculate totals using approved/reconciled payments across ALL charges
     const chargesAnnotated = charges.map((c) => {
       const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum +
-          (a.payment &&
-          (a.payment.status === PaymentStatus.APPROVED ||
-            a.payment.status === PaymentStatus.RECONCILED)
-            ? a.amount
-            : 0);
+        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
       }, 0);
 
       return {
@@ -1728,8 +1733,7 @@ export class FinanzasService {
     // and only for charges with real outstanding > 0.
     const chargesWithApprovedAllocated = charges.map((charge) => {
       const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+        if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
           return sum + allocation.amount;
         }
         return sum;
@@ -2090,12 +2094,7 @@ export class FinanzasService {
     // 3. Calculate totals using the original charge amount and the approved allocations
     const chargesAnnotated = charges.map((c) => {
       const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum +
-          (a.payment &&
-          (a.payment.status === PaymentStatus.APPROVED ||
-            a.payment.status === PaymentStatus.RECONCILED)
-            ? a.amount
-            : 0);
+        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
       }, 0);
 
       return {
@@ -2560,6 +2559,17 @@ export class FinanzasService {
               status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
               canceledAt: null,
             },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
             orderBy: { dueDate: 'asc' },
           });
 
@@ -2569,11 +2579,13 @@ export class FinanzasService {
             if (remainingAmount <= 0) break;
 
             const allocatedAmount = Math.min(remainingAmount, charge.amount);
-            const existingAllocations = await tx.paymentAllocation.aggregate({
-              where: { chargeId: charge.id },
-              _sum: { amount: true },
-            });
-            const alreadyAllocated = existingAllocations._sum.amount || 0;
+            const alreadyAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
+              if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
+                return sum + allocation.amount;
+              }
+
+              return sum;
+            }, 0);
             const chargeRemaining = charge.amount - alreadyAllocated;
 
             const allocationAmount = Math.min(allocatedAmount, chargeRemaining);

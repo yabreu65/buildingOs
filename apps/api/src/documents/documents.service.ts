@@ -3,10 +3,12 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
   PayloadTooLargeException,
   Logger,
 } from '@nestjs/common';
 import { Document, AuditAction } from '@prisma/client';
+import { posix as pathPosix } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
@@ -190,6 +192,21 @@ export class DocumentsService {
         tenantId,
         dto.buildingId,
         dto.unitId,
+      );
+    }
+
+    this.validateUploadedObjectKeyOwnership(tenantId, uploadFile.objectKey);
+
+    const existingFile = await this.prisma.file.findFirst({
+      where: {
+        tenantId,
+        objectKey: uploadFile.objectKey,
+      },
+      select: { id: true },
+    });
+    if (existingFile) {
+      throw new ConflictException(
+        'El archivo ya fue vinculado a un documento y no puede reutilizarse',
       );
     }
 
@@ -718,6 +735,35 @@ export class DocumentsService {
       throw new PayloadTooLargeException(
         `El archivo supera el máximo de ${this.maxUploadBytes} bytes`,
       );
+    }
+  }
+
+  private validateUploadedObjectKeyOwnership(tenantId: string, objectKey: string): void {
+    if (!objectKey || objectKey.trim().length === 0) {
+      throw new BadRequestException('The uploaded file key is invalid');
+    }
+
+    if (objectKey.includes('\\')) {
+      throw new BadRequestException('The uploaded file key is invalid');
+    }
+
+    const normalized = pathPosix.normalize(objectKey);
+    if (
+      normalized !== objectKey ||
+      normalized.startsWith('..') ||
+      pathPosix.isAbsolute(objectKey)
+    ) {
+      throw new BadRequestException('The uploaded file key is invalid');
+    }
+
+    const allowedPrefix = `tenant-${tenantId}/documents/`;
+    if (!objectKey.startsWith(allowedPrefix)) {
+      throw new ForbiddenException('The uploaded file key does not belong to this tenant');
+    }
+
+    const relativePath = objectKey.slice(allowedPrefix.length);
+    if (!relativePath || relativePath.includes('..') || relativePath.includes('//')) {
+      throw new BadRequestException('The uploaded file key is invalid');
     }
   }
 

@@ -53,6 +53,7 @@ describe('FinanzasService', () => {
             },
             paymentAllocation: {
               create: jest.fn(),
+              findFirst: jest.fn(),
               findMany: jest.fn(),
               delete: jest.fn(),
             },
@@ -776,6 +777,62 @@ describe('FinanzasService', () => {
       );
     });
 
+    it('ignores submitted and rejected allocations when approving a legacy FIFO payment', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValueOnce({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        paymentAllocations: [],
+      } as any);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+        {
+          id: 'charge-123',
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: ChargeStatus.PARTIAL,
+          paymentAllocations: [
+            {
+              amount: 5000,
+              payment: { status: PaymentStatus.SUBMITTED },
+            },
+            {
+              amount: 3000,
+              payment: { status: PaymentStatus.REJECTED },
+            },
+          ],
+        },
+      ] as any);
+
+      const result = await service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+
+      expect(result.status).toBe(PaymentStatus.APPROVED);
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paymentId,
+            chargeId: 'charge-123',
+            amount: 10000,
+          }),
+        }),
+      );
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
+    });
+
     it('rejects approval when the charge balance changed after submission', async () => {
       jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
         id: 'charge-123',
@@ -1110,6 +1167,52 @@ describe('FinanzasService', () => {
         ],
         currency: 'ARS',
       });
+    });
+
+    it('ignores submitted and rejected allocations in the tenant summary balance', async () => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-mixed',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-mixed',
+          amount: 10000,
+          paymentAllocations: [
+            {
+              amount: 3000,
+              payment: { status: PaymentStatus.SUBMITTED },
+            },
+            {
+              amount: 2000,
+              payment: { status: PaymentStatus.REJECTED },
+            },
+            {
+              amount: 4000,
+              payment: { status: PaymentStatus.APPROVED },
+            },
+            {
+              amount: 1000,
+              payment: { status: PaymentStatus.RECONCILED },
+            },
+          ],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-mixed',
+          label: '0303',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
+
+      expect(result.totalCharges).toBe(10000);
+      expect(result.totalPaid).toBe(5000);
+      expect(result.totalOutstanding).toBe(5000);
+      expect(result.delinquentUnitsCount).toBe(1);
     });
   });
 

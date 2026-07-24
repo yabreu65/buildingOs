@@ -1,4 +1,10 @@
-import { BadRequestException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { Readable } from 'node:stream';
 import { DocumentsService } from './documents.service';
 import { DocumentsValidators } from './documents.validators';
@@ -18,6 +24,7 @@ describe('DocumentsService', () => {
       findUnique: jest.fn(),
     },
     file: {
+      findFirst: jest.fn(),
       create: jest.fn(),
     },
     tenant: {
@@ -67,7 +74,7 @@ describe('DocumentsService', () => {
 
   const uploadFile = {
     bucket: DEFAULT_BUCKET,
-    objectKey: 'tenant-1/documents/proof.pdf',
+    objectKey: 'tenant-tenant-1/documents/proof.pdf',
     originalName: 'proof.pdf',
     mimeType: 'application/pdf',
     size: 1024,
@@ -91,6 +98,7 @@ describe('DocumentsService', () => {
     validators.canAccessDocument.mockReturnValue(true);
     validators.validateResidentDocumentAccess.mockResolvedValue(undefined);
     residentAccess.shouldEnforce.mockReturnValue(false);
+    prisma.file.findFirst.mockResolvedValue(null);
     prisma.document.findFirst.mockResolvedValue({
       id: 'document-1',
       tenantId: 'tenant-1',
@@ -140,6 +148,61 @@ describe('DocumentsService', () => {
     })).rejects.toBeInstanceOf(BadRequestException);
 
     expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects object keys from another tenant before touching storage', async () => {
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: { ...uploadFile, objectKey: 'tenant-tenant-2/documents/proof.pdf' },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.file.findFirst).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'tenant-tenant-1/documents/../tenant-tenant-2/proof.pdf',
+    'tenant-tenant-1/documents\\proof.pdf',
+    'tenant-tenant-1/documents//proof.pdf',
+  ])('rejects invalid object keys without touching storage: %s', async (objectKey) => {
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: { ...uploadFile, objectKey },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.file.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reused object key before cleanup can delete it', async () => {
+    prisma.file.findFirst.mockResolvedValueOnce({ id: 'file-1' } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(ConflictException);
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
   });
