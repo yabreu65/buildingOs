@@ -10,76 +10,95 @@ import Select from '../ui/Select';
 import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
-import { listNotifications, markAsRead, type Notification } from '@/features/notifications/notifications.api';
+import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
 
-function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
+const TICKET_TYPES = new Set([
+  'TICKET_STATUS_CHANGED',
+  'TICKET_COMMENT_ADDED',
+  'SUPPORT_TICKET_CREATED',
+  'URGENT_TICKET_UNASSIGNED',
+]);
+const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
+
+const POLL_INTERVAL = 30_000;
+
+export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
-  // Get user role from session
   const session = getSession();
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
-  const role = activeMembership?.roles?.[0] || 'RESIDENT';
-  
-  const isAdmin = ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN'].includes(role);
+  const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
+  const hasSession = Boolean(session);
 
-  // For admin: show pending SUBMITTED payments in badge
+  // 1. Always-polling unread count for the badge
+  const { data: unreadCount = 0 } = useQuery({
+    queryKey: ['notificationUnreadCount', tenantId],
+    queryFn: () => getUnreadCount(tenantId),
+    enabled: hasSession && Boolean(tenantId),
+    refetchInterval: POLL_INTERVAL,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
+  });
+
+  // 2. Pending payments (admin only)
   const { data: pendingPayments = [] } = useQuery({
     queryKey: ['pendingPaymentsCount', tenantId],
     queryFn: () => listPendingPayments(tenantId, { status: PaymentStatus.SUBMITTED }),
     enabled: isAdmin,
-    refetchInterval: 180000, // Poll every 3 minutes
+    refetchInterval: POLL_INTERVAL,
     refetchOnWindowFocus: true,
   });
 
   const pendingCount = pendingPayments.length;
 
-  // For everyone: get notifications (different filter based on role)
-  const { data: notificationResult } = useQuery({
+  // 3. Notification list — only when dropdown is open
+  const {
+    data: notificationResult,
+    isLoading: listLoading,
+    error: listError,
+  } = useQuery({
     queryKey: ['notificationList', tenantId],
-    queryFn: () => listNotifications({ take: 20, isRead: false }),
-    enabled: isOpen,
-    refetchInterval: 180000,
+    queryFn: () => listNotifications(tenantId, { take: 20 }),
+    enabled: hasSession && Boolean(tenantId) && isOpen,
+    refetchInterval: isOpen ? POLL_INTERVAL : false,
+    refetchOnWindowFocus: true,
   });
 
+  // 4. Mutations
   const markReadMutation = useMutation({
-    mutationFn: markAsRead,
+    mutationFn: (notificationId: string) => markAsRead(tenantId, notificationId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notificationList'] });
+      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['notificationList', tenantId] });
     },
   });
 
-  // Filter notifications based on role
+  const markAllReadMutation = useMutation({
+    mutationFn: () => markAllAsRead(tenantId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['notificationList', tenantId] });
+    },
+  });
+
+  // 5. Filter notifications for display
   const allNotifs = notificationResult?.notifications ?? [];
-  
-  const TICKET_TYPES = new Set([
-    'TICKET_STATUS_CHANGED',
-    'TICKET_COMMENT_ADDED',
-    'SUPPORT_TICKET_CREATED',
-    'URGENT_TICKET_UNASSIGNED',
-  ]);
 
   let filteredNotifications: Notification[] = [];
-  let badgeCount = 0;
-
   if (isAdmin) {
-    // Admin: payments + ticket notifications
     filteredNotifications = allNotifs.filter((n: Notification) =>
       (n.type === 'BUILDING_ALERT' && n.data?.event === 'PAYMENT_SUBMITTED') ||
       n.data?.paymentId ||
       TICKET_TYPES.has(n.type)
     );
-    const unreadTicketCount = filteredNotifications.filter(
-      (n: Notification) => !n.isRead && TICKET_TYPES.has(n.type),
-    ).length;
-    badgeCount = pendingCount + unreadTicketCount;
   } else {
-    // Resident: payments + ticket notifications
     filteredNotifications = allNotifs.filter((n: Notification) =>
       n.type === 'PAYMENT_RECEIVED' ||
       n.type === 'PAYMENT_REJECTED' ||
@@ -87,27 +106,49 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       n.data?.event === 'PAYMENT_REJECTED' ||
       TICKET_TYPES.has(n.type)
     );
-    badgeCount = filteredNotifications.filter((n: Notification) => !n.isRead).length;
   }
 
-  // Close dropdown when clicking outside
+  // Badge: pending payments (admin) + unread notifications
+  const badgeCount = isAdmin ? pendingCount + unreadCount : unreadCount;
+
+  // 6. Close on click outside
   useEffect(() => {
+    if (!isOpen) return;
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isOpen]);
+
+  // 7. Close on Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen]);
+
+  // 8. Handlers
+  const handleToggle = () => setIsOpen((prev) => !prev);
 
   const handleNotificationClick = async (notification: Notification) => {
-    // Mark as read
     if (!notification.isRead) {
       await markReadMutation.mutateAsync(notification.id);
     }
-    
-    // Route based on notification type
+
     if (TICKET_TYPES.has(notification.type)) {
       if (isAdmin) {
         const buildingId = notification.data?.buildingId;
@@ -123,15 +164,10 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     setIsOpen(false);
   };
 
-  const handleMarkAllRead = async () => {
-    for (const n of filteredNotifications) {
-      if (!n.isRead) {
-        await markReadMutation.mutateAsync(n.id);
-      }
-    }
+  const handleMarkAllRead = () => {
+    markAllReadMutation.mutate();
   };
 
-  // Get icon and color based on notification type
   const getNotificationIcon = (notification: Notification) => {
     if (notification.type === 'PAYMENT_RECEIVED' || notification.data?.event === 'PAYMENT_APPROVED') {
       return <CheckCircle className="w-4 h-4 text-green-600" />;
@@ -148,62 +184,72 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     return <CreditCard className="w-4 h-4 text-blue-600" />;
   };
 
-  // Determine empty state message based on role
-  const getEmptyMessage = () => {
-    if (isAdmin) {
-      return { icon: <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />, text: 'No hay notificaciones nuevas' };
-    } else {
-      return { icon: <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />, text: 'No tenés notificaciones nuevas' };
-    }
-  };
-
-  const emptyState = getEmptyMessage();
-
   return (
     <div className="relative" ref={dropdownRef}>
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 rounded-lg hover:bg-muted transition-colors"
+        ref={buttonRef}
+        onClick={handleToggle}
+        className="relative p-2 rounded-lg hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         title="Notificaciones"
+        aria-label={`Notificaciones${badgeCount > 0 ? `, ${badgeCount} sin leer` : ''}`}
+        aria-expanded={isOpen}
+        aria-controls="notification-dropdown"
       >
         <Bell className="w-5 h-5" />
         {badgeCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center" aria-hidden="true">
             {badgeCount > 9 ? '9+' : badgeCount}
           </span>
         )}
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-80 bg-card border rounded-lg shadow-lg z-50 overflow-hidden">
+        <div
+          id="notification-dropdown"
+          role="menu"
+          className="absolute right-0 top-full mt-2 w-80 bg-card border rounded-lg shadow-lg z-50 overflow-hidden"
+        >
           <div className="flex items-center justify-between p-3 border-b">
-            <span className="font-semibold">
-              Notificaciones
-            </span>
-            <button 
+            <span className="font-semibold">Notificaciones</span>
+            <button
               onClick={() => setIsOpen(false)}
               className="text-muted-foreground hover:text-foreground"
+              aria-label="Cerrar notificaciones"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
           <div className="max-h-96 overflow-y-auto">
-            {filteredNotifications.length === 0 && pendingCount === 0 ? (
-              <div className="p-4 text-center text-muted-foreground">
-                {emptyState.icon}
-                <p className="text-sm">{emptyState.text}</p>
+            {listLoading && (
+              <div className="p-4 text-center text-muted-foreground text-sm">
+                Cargando notificaciones…
               </div>
-            ) : filteredNotifications.length === 0 && pendingCount > 0 ? (
+            )}
+
+            {listError && (
+              <div className="p-4 text-center text-red-600 text-sm" role="alert">
+                No se pudieron cargar las notificaciones
+              </div>
+            )}
+
+            {!listLoading && !listError && filteredNotifications.length === 0 && pendingCount === 0 && (
+              <div className="p-4 text-center text-muted-foreground">
+                <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No hay notificaciones nuevas</p>
+              </div>
+            )}
+
+            {!listLoading && !listError && filteredNotifications.length === 0 && pendingCount > 0 && (
               <div className="p-4">
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 dark:bg-amber-950 dark:border-amber-800">
                   <div className="flex items-start gap-2">
                     <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-medium text-sm text-amber-800">
+                      <p className="font-medium text-sm text-amber-800 dark:text-amber-200">
                         {pendingCount} pago{pendingCount > 1 ? 's' : ''} pendiente{pendingCount > 1 ? 's' : ''} por revisar
                       </p>
-                      <p className="text-xs text-amber-700 mt-1">
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
                         Hay pagos que necesitan aprobación
                       </p>
                     </div>
@@ -219,14 +265,17 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
                   Revisar pagos →
                 </button>
               </div>
-            ) : (
+            )}
+
+            {!listLoading && !listError && filteredNotifications.length > 0 && (
               <div>
                 {filteredNotifications.map((notification) => (
                   <button
                     key={notification.id}
+                    role="menuitem"
                     onClick={() => handleNotificationClick(notification)}
                     className={`w-full text-left p-3 border-b hover:bg-muted/50 transition-colors ${
-                      !notification.isRead ? 'bg-blue-50/50' : ''
+                      !notification.isRead ? 'bg-blue-50/50 dark:bg-blue-950/30' : ''
                     }`}
                   >
                     <div className="flex items-start gap-2">
@@ -251,7 +300,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
                         </p>
                       </div>
                       {!notification.isRead && (
-                        <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" />
+                        <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" aria-label="No leída" />
                       )}
                     </div>
                   </button>
@@ -265,10 +314,10 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
               {filteredNotifications.length > 0 && (
                 <button
                   onClick={handleMarkAllRead}
-                  disabled={markReadMutation.isPending}
-                  className="w-full text-xs text-blue-600 hover:text-blue-800 font-medium"
+                  disabled={markAllReadMutation.isPending}
+                  className="w-full text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
                 >
-                  {markReadMutation.isPending ? 'Marcando...' : 'Marcar todas como leídas'}
+                  {markAllReadMutation.isPending ? 'Marcando…' : 'Marcar todas como leídas'}
                 </button>
               )}
               <button
@@ -278,7 +327,7 @@ function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
                 }}
                 className="w-full text-xs text-muted-foreground hover:text-foreground mt-1"
               >
-                Ver todos los pagos →
+                Ver pagos →
               </button>
             </div>
           )}

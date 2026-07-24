@@ -21,10 +21,12 @@ describe('TicketsService', () => {
   let auditService: AuditService;
   let validators: TicketsValidators;
   let residentAccess: jest.Mocked<ResidentAccessService>;
+  let notificationsService: jest.Mocked<NotificationsService>;
+  let testingModule: TestingModule;
 
   // ========== SETUP ==========
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
+    testingModule = await Test.createTestingModule({
       providers: [
         TicketsService,
         {
@@ -48,9 +50,11 @@ describe('TicketsService', () => {
             },
             tenantMember: {
               findFirst: jest.fn(),
+              findMany: jest.fn().mockResolvedValue([]),
             },
             membership: {
               findFirst: jest.fn(),
+              findMany: jest.fn().mockResolvedValue([]),
             },
           },
         },
@@ -65,6 +69,8 @@ describe('TicketsService', () => {
           useValue: {
             validateBuildingBelongsToTenant: jest.fn(),
             validateUnitBelongsToBuildingAndTenant: jest.fn(),
+            validateTicketBelongsToBuildingAndTenant: jest.fn(),
+            validateTicketScope: jest.fn(),
             canStatusTransition: jest.fn(),
           },
         },
@@ -90,19 +96,18 @@ describe('TicketsService', () => {
         {
           provide: NotificationsService,
           useValue: {
-            notifyTicketCreated: jest.fn(),
-            notifyTicketUpdated: jest.fn(),
-            notifyTicketCommentAdded: jest.fn(),
+            createNotification: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],
     }).compile();
 
-    service = module.get<TicketsService>(TicketsService);
-    prismaService = module.get<PrismaService>(PrismaService);
-    auditService = module.get<AuditService>(AuditService);
-    validators = module.get<TicketsValidators>(TicketsValidators);
-    residentAccess = module.get(ResidentAccessService);
+    service = testingModule.get<TicketsService>(TicketsService);
+    prismaService = testingModule.get<PrismaService>(PrismaService);
+    auditService = testingModule.get<AuditService>(AuditService);
+    validators = testingModule.get<TicketsValidators>(TicketsValidators);
+    residentAccess = testingModule.get(ResidentAccessService);
+    notificationsService = testingModule.get(NotificationsService);
   });
 
   // ========== CLEANUP ==========
@@ -461,6 +466,349 @@ describe('TicketsService', () => {
     it('should skip delete tests - method may not exist or requires complex setup', () => {
       // Service may use soft delete or have different patterns
       expect(true).toBe(true);
+    });
+  });
+
+  // ========== TESTS: NOTIFICATIONS ==========
+  describe('notifications', () => {
+    describe('create → notifyTicketCreated', () => {
+      it('should notify all tenant admins when a ticket is created', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const userId = 'user-resident';
+
+        const dto: CreateTicketDto = {
+          title: 'Fuga de agua',
+          description: 'Hay una fuga en el baño',
+          category: 'MAINTENANCE',
+          priority: 'HIGH',
+          unitId: 'unit-1',
+        };
+
+        const expectedTicket = {
+          id: 'ticket-new',
+          tenantId,
+          buildingId,
+          unitId: 'unit-1',
+          createdByUserId: userId,
+          title: 'Fuga de agua',
+          description: 'Hay una fuga en el baño',
+          category: 'MAINTENANCE',
+          priority: 'HIGH',
+          status: 'OPEN',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          createdBy: { id: userId, name: 'Residente' },
+          assignedTo: null,
+          building: { id: buildingId, name: 'Edificio A' },
+          unit: { id: 'unit-1', label: '101', code: 'A01' },
+          comments: [],
+        };
+
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(validators, 'validateUnitBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticket, 'create').mockResolvedValue(expectedTicket as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.membership, 'findMany').mockResolvedValue([
+          { id: 'membership-1', userId: 'owner-1', user: { id: 'owner-1' }, roles: [{ role: 'TENANT_OWNER' }] },
+          { id: 'membership-2', userId: 'admin-1', user: { id: 'admin-1' }, roles: [{ role: 'TENANT_ADMIN' }] },
+          { id: 'membership-3', userId: 'operator-1', user: { id: 'operator-1' }, roles: [{ role: 'OPERATOR' }] },
+          { id: 'membership-4', userId: 'owner-1', user: { id: 'owner-1' }, roles: [{ role: 'TENANT_OWNER' }] },
+        ] as any);
+
+        await service.create(tenantId, buildingId, userId, dto);
+
+        // Wait for fire-and-forget
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledTimes(3);
+        expect(prismaService.membership.findMany).toHaveBeenCalledWith(expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId,
+            roles: expect.objectContaining({
+              some: expect.objectContaining({
+                role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
+                OR: expect.arrayContaining([
+                  { scopeType: 'TENANT' },
+                  { scopeType: 'BUILDING', scopeBuildingId: buildingId },
+                  { scopeType: 'UNIT', scopeUnitId: 'unit-1' },
+                ]),
+              }),
+            }),
+          }),
+        }));
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: 'owner-1',
+            type: 'SUPPORT_TICKET_CREATED',
+            title: expect.stringContaining('Fuga de agua'),
+            deliveryMethods: ['IN_APP'],
+          }),
+        );
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: 'admin-1',
+            type: 'SUPPORT_TICKET_CREATED',
+          }),
+        );
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: 'operator-1',
+            type: 'SUPPORT_TICKET_CREATED',
+          }),
+        );
+      });
+
+      it('should include buildingId and ticketId in notification data', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticket, 'create').mockResolvedValue({
+          id: 'ticket-data',
+          tenantId,
+          buildingId,
+          unitId: null,
+          createdByUserId: 'user-1',
+          title: 'Test',
+          description: 'Test',
+          category: 'OTHER',
+          priority: 'MEDIUM',
+          status: 'OPEN',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          createdBy: { id: 'user-1', name: 'User' },
+          assignedTo: null,
+          building: { id: buildingId, name: 'Building' },
+          unit: null,
+          comments: [],
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.membership, 'findMany').mockResolvedValue([
+          { id: 'membership-1', userId: 'admin-1', user: { id: 'admin-1' } },
+        ] as any);
+
+        await service.create(tenantId, buildingId, 'user-1', {
+          title: 'Test',
+          description: 'Test',
+          category: 'OTHER',
+        });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              ticketId: 'ticket-data',
+              buildingId,
+            }),
+          }),
+        );
+      });
+    });
+
+    describe('update → notifyTicketStatusChanged', () => {
+      it('should notify ticket creator when status changes', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const ticketId = 'ticket-status';
+        const creatorId = 'creator-1';
+
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: ticketId,
+          tenantId,
+          buildingId,
+          status: 'OPEN',
+          createdByUserId: creatorId,
+        } as any);
+        jest.spyOn(prismaService.ticket, 'update').mockResolvedValue({
+          id: ticketId,
+          tenantId,
+          buildingId,
+          status: 'IN_PROGRESS',
+          createdByUserId: creatorId,
+          building: { name: 'Edificio A' },
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.update(tenantId, buildingId, ticketId, { status: 'IN_PROGRESS' });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: creatorId,
+            type: 'TICKET_STATUS_CHANGED',
+            title: expect.stringContaining('Estado actualizado'),
+            data: expect.objectContaining({
+              oldStatus: 'OPEN',
+              newStatus: 'IN_PROGRESS',
+            }),
+          }),
+        );
+      });
+
+      it('should not notify anyone when status does not change', async () => {
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: 'ticket-same',
+          tenantId: 'tenant-123',
+          buildingId: 'building-123',
+          status: 'OPEN',
+          createdByUserId: 'creator-1',
+        } as any);
+        jest.spyOn(prismaService.ticket, 'update').mockResolvedValue({
+          id: 'ticket-same',
+          status: 'OPEN',
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.update('tenant-123', 'building-123', 'ticket-same', {
+          title: 'Updated title only',
+        });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('addComment → notifyTicketCommentAdded', () => {
+      it('should notify ticket creator when admin adds a comment', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const ticketId = 'ticket-comment';
+        const creatorId = 'creator-1';
+        const adminId = 'admin-1';
+
+        jest.spyOn(validators, 'validateTicketBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticketComment, 'create').mockResolvedValue({
+          id: 'comment-1',
+          tenantId,
+          ticketId,
+          authorUserId: adminId,
+          body: 'Estamos revisando el problema',
+          createdAt: new Date(),
+          author: { id: adminId, name: 'Admin User' },
+        } as any);
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: ticketId,
+          createdByUserId: creatorId,
+          title: 'Fuga de agua',
+          buildingId,
+          unitId: 'unit-1',
+        } as any);
+        jest.spyOn(prismaService.membership, 'findFirst').mockResolvedValue({ id: 'admin-membership' } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.addComment(tenantId, buildingId, ticketId, adminId, {
+          body: 'Estamos revisando el problema',
+        });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: creatorId,
+            type: 'TICKET_COMMENT_ADDED',
+            title: expect.stringContaining('Fuga de agua'),
+          }),
+        );
+      });
+
+      it('should not notify the author of the comment', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const ticketId = 'ticket-self';
+        const creatorId = 'creator-1';
+
+        jest.spyOn(validators, 'validateTicketBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticketComment, 'create').mockResolvedValue({
+          id: 'comment-self',
+          tenantId,
+          ticketId,
+          authorUserId: creatorId,
+          body: 'Gracias',
+          createdAt: new Date(),
+          author: { id: creatorId, name: 'Creator' },
+        } as any);
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: ticketId,
+          createdByUserId: creatorId,
+          title: 'My ticket',
+          assignedToMembershipId: null,
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.addComment(tenantId, buildingId, ticketId, creatorId, {
+          body: 'Gracias',
+        });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      });
+
+      it('should notify authorized administrators when resident comments on their ticket', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const ticketId = 'ticket-assign';
+        const creatorId = 'creator-1';
+        const operatorUserId = 'operator-1';
+
+        jest.spyOn(validators, 'validateTicketBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticketComment, 'create').mockResolvedValue({
+          id: 'comment-assign',
+          tenantId,
+          ticketId,
+          authorUserId: creatorId,
+          body: 'Siguen las goteras',
+          createdAt: new Date(),
+          author: { id: creatorId, name: 'Creator' },
+        } as any);
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: ticketId,
+          createdByUserId: creatorId,
+          title: 'Fuga persistente',
+          buildingId,
+          unitId: 'unit-1',
+        } as any);
+        jest.spyOn(prismaService.membership, 'findFirst').mockResolvedValue(null);
+        jest.spyOn(prismaService.membership, 'findMany').mockResolvedValue([
+          { userId: operatorUserId, user: { id: operatorUserId } },
+          { userId: 'owner-1', user: { id: 'owner-1' } },
+        ] as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.addComment(tenantId, buildingId, ticketId, creatorId, {
+          body: 'Siguen las goteras',
+        });
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: operatorUserId,
+            type: 'TICKET_COMMENT_ADDED',
+            title: 'El residente agregó una respuesta',
+            data: expect.objectContaining({
+              ticketId,
+              buildingId,
+              unitId: 'unit-1',
+              authorId: creatorId,
+              actorType: 'RESIDENT',
+            }),
+          }),
+        );
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({ tenantId, userId: 'owner-1', type: 'TICKET_COMMENT_ADDED' }),
+        );
+      });
     });
   });
 });
