@@ -63,6 +63,20 @@ export function buildingTickets(tenantId: string, buildingId: string): string {
 }
 
 /**
+ * Canonical ticket detail route shared by all entrances.
+ */
+export function ticketDetailPath(tenantId: string, ticketId: string): string {
+  return `/${encodeURIComponent(tenantId)}/tickets/${encodeURIComponent(ticketId)}`;
+}
+
+/**
+ * Resident tickets list.
+ */
+export function residentTicketsPath(tenantId: string): string {
+  return `/${encodeURIComponent(tenantId)}/resident/tickets`;
+}
+
+/**
  * Building payments page
  */
 export function buildingPayments(tenantId: string, buildingId: string): string {
