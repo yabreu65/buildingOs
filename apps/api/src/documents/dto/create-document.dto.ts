@@ -3,10 +3,32 @@ import {
   IsEnum,
   IsOptional,
   Length,
-  IsInt,
-  Min,
+  ValidateNested,
+  IsDefined,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { DocumentCategory, DocumentVisibility } from '@prisma/client';
+
+export class DocumentUploadFileDto {
+  @IsString()
+  @Length(1, 512)
+  objectKey!: string;
+
+  @IsString()
+  @Length(1, 255)
+  originalName!: string;
+
+  @IsString()
+  @Length(1, 100)
+  mimeType!: string;
+
+  @IsOptional()
+  size?: number;
+
+  @IsOptional()
+  @IsString()
+  checksum?: string;
+}
 
 /**
  * Create a Document after file upload
@@ -30,16 +52,10 @@ export class CreateDocumentDto {
   @IsOptional()
   visibility?: DocumentVisibility; // Default: TENANT_ADMINS
 
-  @IsString()
-  objectKey!: string; // MinIO objectKey from presign response (validates file was uploaded)
-
-  @IsInt()
-  @Min(0)
-  size!: number; // File size in bytes (from upload response)
-
-  @IsOptional()
-  @IsString()
-  checksum?: string; // SHA-256 hash from MinIO (for integrity check)
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => DocumentUploadFileDto)
+  file!: DocumentUploadFileDto; // Uploaded file metadata from presign/upload flow
 
   // Scope fields
   @IsOptional()

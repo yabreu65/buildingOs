@@ -1,12 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import * as Minio from 'minio';
+import type { Readable } from 'node:stream';
 
 interface MinioErrorLike {
   code?: string;
   statusCode?: number;
   message?: string;
   stack?: string;
+}
+
+export interface MinioObjectStat {
+  size: number;
+  etag?: string;
+  lastModified?: Date;
+  metaData?: Record<string, string>;
 }
 
 /**
@@ -79,6 +87,13 @@ export class MinioService {
   }
 
   /**
+   * Return the configured default bucket for the current environment.
+   */
+  getDefaultBucket(): string {
+    return this.bucket;
+  }
+
+  /**
    * Generate presigned URL for file upload (PUT)
    *
    * @param bucketName - Bucket name (or undefined to use default)
@@ -87,7 +102,8 @@ export class MinioService {
    * @returns Presigned URL for PUT request
    *
    * @example
-   * const url = await minioService.presignUpload('documents', 'tenant-123/docs/file.pdf', 3600);
+   * const bucket = minioService.getDefaultBucket();
+   * const url = await minioService.presignUpload(bucket, 'tenant-123/docs/file.pdf', 3600);
    * // Client can then: fetch(url, { method: 'PUT', body: file })
    */
   async presignUpload(
@@ -123,7 +139,8 @@ export class MinioService {
    * @returns Presigned URL for GET request
    *
    * @example
-   * const url = await minioService.presignDownload('documents', 'tenant-123/docs/file.pdf', 3600);
+   * const bucket = minioService.getDefaultBucket();
+   * const url = await minioService.presignDownload(bucket, 'tenant-123/docs/file.pdf', 3600);
    * // Client can then: window.location.href = url;
    */
   async presignDownload(
@@ -151,13 +168,32 @@ export class MinioService {
   }
 
   /**
+   * Get object metadata from MinIO.
+   * Useful for real size validation before persisting document metadata.
+   */
+  async statObject(
+    bucketName: string = this.bucket,
+    objectKey: string,
+  ): Promise<MinioObjectStat> {
+    try {
+      return await this.minioClient.statObject(bucketName, objectKey) as MinioObjectStat;
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to stat object: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Delete an object from MinIO
    *
    * @param bucketName - Bucket name (or undefined to use default)
    * @param objectKey - Object path in bucket
    *
    * @example
-   * await minioService.deleteObject('documents', 'tenant-123/docs/file.pdf');
+   * await minioService.deleteObject(minioService.getDefaultBucket(), 'tenant-123/docs/file.pdf');
    */
   async deleteObject(
     bucketName: string = this.bucket,
@@ -183,7 +219,7 @@ export class MinioService {
    * @returns true if object exists, false otherwise
    *
    * @example
-   * const exists = await minioService.objectExists('documents', 'tenant-123/docs/file.pdf');
+   * const exists = await minioService.objectExists(minioService.getDefaultBucket(), 'tenant-123/docs/file.pdf');
    */
   async objectExists(
     bucketName: string = this.bucket,
@@ -325,6 +361,24 @@ export class MinioService {
   }
 
   /**
+   * Read an object from MinIO as a stream.
+   */
+  async getObjectStream(
+    bucketName: string = this.bucket,
+    objectKey: string,
+  ): Promise<Readable> {
+    try {
+      return await this.minioClient.getObject(bucketName, objectKey);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to open object stream: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Upload a buffer directly to MinIO
    *
    * @param bucketName - Bucket name
@@ -333,7 +387,7 @@ export class MinioService {
    * @param contentType - MIME type (default: application/octet-stream)
    *
    * @example
-   * await minioService.uploadBuffer('documents', 'tenant-123/receipt.pdf', buffer, 'application/pdf');
+   * await minioService.uploadBuffer(minioService.getDefaultBucket(), 'tenant-123/receipt.pdf', buffer, 'application/pdf');
    */
   async uploadBuffer(
     bucketName: string = this.bucket,

@@ -42,6 +42,7 @@ describe('FinanzasService', () => {
             unit: {
               findMany: jest.fn(),
               findFirst: jest.fn(),
+              findUnique: jest.fn(),
             },
             payment: {
               create: jest.fn(),
@@ -54,6 +55,9 @@ describe('FinanzasService', () => {
               create: jest.fn(),
               findMany: jest.fn(),
               delete: jest.fn(),
+            },
+            paymentAuditLog: {
+              create: jest.fn(),
             },
             expense: {
               findMany: jest.fn(),
@@ -79,8 +83,8 @@ describe('FinanzasService', () => {
         {
           provide: PaymentReceiptService,
           useValue: {
-            generateForApprovedPayment: jest.fn(),
-            ensureReceiptForPayment: jest.fn(),
+            generateForApprovedPayment: jest.fn().mockResolvedValue(undefined),
+            ensureReceiptForPayment: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -113,6 +117,10 @@ describe('FinanzasService', () => {
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<FinanzasValidators>(FinanzasValidators);
     expensesService = module.get<ExpensesService>(ExpensesService);
+
+    jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
+      return callback(prismaService as never);
+    });
   });
 
   // ========== CLEANUP ==========
@@ -488,6 +496,16 @@ describe('FinanzasService', () => {
         .spyOn(validators, 'validateUnitBelongsToBuildingAndTenant')
         .mockResolvedValue(undefined);
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [],
+      } as any);
       jest
         .spyOn(service as any, 'notifyAdminsOfPaymentSubmitted')
         .mockResolvedValue(undefined);
@@ -503,9 +521,12 @@ describe('FinanzasService', () => {
         proofFileId: 'file-123',
         createdByUserId: userId,
       } as any);
+      jest.spyOn(prismaService.paymentAllocation, 'create').mockResolvedValue({
+        id: 'allocation-123',
+      } as any);
     });
 
-    it('should create a submitted transfer payment with proof', async () => {
+    it('should create a submitted transfer payment against a selected charge with proof', async () => {
       const result = await service.submitPayment(
         tenantId,
         buildingId,
@@ -513,6 +534,7 @@ describe('FinanzasService', () => {
         userRoles,
         {
           unitId,
+          chargeId: 'charge-123',
           amount: 10000,
           currency: 'ARS',
           method: PaymentMethod.TRANSFER,
@@ -528,9 +550,59 @@ describe('FinanzasService', () => {
           buildingId,
           unitId,
           amount: 10000,
+          currency: 'ARS',
           method: PaymentMethod.TRANSFER,
           proofFileId: 'file-123',
         }),
+      });
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith({
+        data: {
+          tenantId,
+          paymentId: 'payment-123',
+          chargeId: 'charge-123',
+          amount: 10000,
+        },
+      });
+    });
+
+    it('should accept an overdue resident charge as long as it still has outstanding balance', async () => {
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        dueDate: new Date('2026-04-21T00:00:00.000Z'),
+        paymentAllocations: [],
+      } as any);
+
+      const result = await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        userRoles,
+        {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-OVERDUE',
+          proofFileId: 'file-123',
+        },
+      );
+
+      expect(result.status).toBe(PaymentStatus.SUBMITTED);
+      expect(prismaService.payment.create).toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith({
+        data: {
+          tenantId,
+          paymentId: 'payment-123',
+          chargeId: 'charge-123',
+          amount: 10000,
+        },
       });
     });
 
@@ -538,6 +610,7 @@ describe('FinanzasService', () => {
       await expect(
         service.submitPayment(tenantId, buildingId, userId, userRoles, {
           unitId,
+          chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.TRANSFER,
           reference: 'TRX-123',
@@ -551,6 +624,7 @@ describe('FinanzasService', () => {
       await expect(
         service.submitPayment(tenantId, buildingId, userId, userRoles, {
           unitId,
+          chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.CARD,
           reference: 'CARD-123',
@@ -569,6 +643,7 @@ describe('FinanzasService', () => {
       await expect(
         service.submitPayment(tenantId, buildingId, userId, userRoles, {
           unitId: 'other-unit',
+          chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.TRANSFER,
           reference: 'TRX-123',
@@ -585,12 +660,152 @@ describe('FinanzasService', () => {
       await expect(
         service.submitPayment(tenantId, buildingId, userId, userRoles, {
           unitId,
+          chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.TRANSFER,
           reference: 'TRX-123',
           proofFileId: 'file-123',
         }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject resident payments that do not cover the full outstanding balance', async () => {
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 4050000,
+        currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
+        paymentAllocations: [
+          {
+            amount: 5000,
+            payment: { status: PaymentStatus.APPROVED },
+          },
+        ],
+      } as any);
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 4040000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+          proofFileId: 'file-123',
+        }),
+      ).rejects.toThrow('El monto debe coincidir con el saldo pendiente completo del período.');
+
+      expect(prismaService.payment.create).not.toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== TESTS: APPROVE PAYMENT ==========
+  describe('approvePayment', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const paymentId = 'payment-123';
+    const membershipId = 'membership-123';
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        paymentAllocations: [
+          {
+            chargeId: 'charge-123',
+            amount: 10000,
+          },
+        ],
+      } as any);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [
+          {
+            amount: 10000,
+            payment: { status: PaymentStatus.SUBMITTED },
+          },
+        ],
+      } as any);
+      jest.spyOn(prismaService.payment, 'update').mockResolvedValue({
+        id: paymentId,
+        status: PaymentStatus.APPROVED,
+        paidAt: new Date('2026-07-24T12:00:00.000Z'),
+      } as any);
+      jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue(null);
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue(null);
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as any);
+    });
+
+    it('keeps a resident-selected payment on a single charge without FIFO allocation', async () => {
+      const result = await service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+      expect(result.status).toBe(PaymentStatus.APPROVED);
+      expect(prismaService.charge.findMany).not.toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(prismaService.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: paymentId },
+          data: expect.objectContaining({
+            status: PaymentStatus.APPROVED,
+            reviewedByMembershipId: membershipId,
+          }),
+        }),
+      );
+    });
+
+    it('rejects approval when the charge balance changed after submission', async () => {
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
+        paymentAllocations: [
+          {
+            amount: 5000,
+            payment: { status: PaymentStatus.APPROVED },
+          },
+        ],
+      } as any);
+
+      await expect(
+        service.approvePayment(
+          tenantId,
+          buildingId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+          {},
+        ),
+      ).rejects.toThrow('El monto debe coincidir con el saldo pendiente completo del período.');
+
+      expect(prismaService.payment.update).not.toHaveBeenCalled();
+      expect(prismaService.charge.findMany).not.toHaveBeenCalled();
     });
   });
 
@@ -841,6 +1056,60 @@ describe('FinanzasService', () => {
           period: '2026-06',
         }),
       }));
+    });
+
+    it('keeps totalCharges stable when an approved payment fully settles one charge', async () => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-paid',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-paid',
+          amount: 4_950_000,
+          paymentAllocations: [
+            {
+              amount: 4_950_000,
+              payment: { status: PaymentStatus.APPROVED },
+            },
+          ],
+        },
+        {
+          id: 'charge-open',
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          unitId: 'unit-open',
+          amount: 1_102_050_000,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
+        {
+          id: 'unit-open',
+          label: '0202',
+          buildingId: 'building-1',
+          building: { name: 'Edificio A' },
+        },
+      ] as never);
+
+      const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
+
+      expect(result).toEqual({
+        totalCharges: 1_107_000_000,
+        totalPaid: 4_950_000,
+        totalOutstanding: 1_102_050_000,
+        delinquentUnitsCount: 1,
+        topDelinquentUnits: [
+          {
+            unitId: 'unit-open',
+            unitLabel: '0202',
+            buildingId: 'building-1',
+            buildingName: 'Edificio A',
+            outstanding: 1_102_050_000,
+          },
+        ],
+        currency: 'ARS',
+      });
     });
   });
 

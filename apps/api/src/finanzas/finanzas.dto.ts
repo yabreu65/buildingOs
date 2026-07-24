@@ -80,6 +80,10 @@ export class SubmitPaymentDto {
   @IsString()
   unitId?: string;
 
+  @IsOptional()
+  @IsString()
+  chargeId?: string;
+
   @IsInt()
   @IsPositive()
   amount!: number; // In cents
@@ -347,6 +351,9 @@ export interface PaymentDetailDto {
   proofFileId: string | null;
   createdByUserId: string;
   reviewedByMembershipId: string | null;
+  rejectionReason?: string | null;
+  rejectionComment?: string | null;
+  reviewedAt?: Date | null;
   // Receipt fields
   receiptDocumentId?: string | null;
   receiptNumber?: string | null;

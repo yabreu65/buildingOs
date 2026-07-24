@@ -1,4 +1,4 @@
-import { IsString, IsEnum, Length } from 'class-validator';
+import { IsString, Length, IsOptional, IsInt, Min } from 'class-validator';
 
 /**
  * Request to generate a presigned upload URL
@@ -12,6 +12,11 @@ export class PresignUploadDto {
   @IsString()
   @Length(1, 100)
   mimeType!: string; // MIME type (e.g., "application/pdf")
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  size?: number; // Client-provided hint for early rejection
 }
 
 /**

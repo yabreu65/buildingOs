@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CreditCard,
   AlertCircle,
@@ -19,7 +19,7 @@ import { getResidentLedger, type UnitLedger } from '@/features/resident/api/resi
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus } from '@/features/finance/services/finance.api';
 import {
-  getDownloadUrl,
+  downloadDocumentContent,
   presignUpload,
   uploadFileToMinio,
   createDocument,
@@ -29,15 +29,16 @@ import Input from '@/shared/components/ui/Input';
 import Select from '@/shared/components/ui/Select';
 import Button from '@/shared/components/ui/Button';
 import Skeleton from '@/shared/components/ui/Skeleton';
-import { formatCurrency, toCents, getLocaleForCurrency } from '@/shared/lib/format/money';
+import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '—';
-  return new Intl.DateTimeFormat('es-AR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(new Date(dateStr));
+
+  const [datePart] = dateStr.split('T');
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return dateStr;
+
+  return `${day}/${month}/${year}`;
 }
 
 function getChargeStatusFromDebt(amount: number, allocated: number | undefined, status: ChargeStatus): string {
@@ -69,11 +70,210 @@ function paymentStatusColor(status: string): string {
 }
 
 interface PaymentFormData {
-  amount: number;
+  selectedChargeId: string;
   method: PaymentMethod;
   reference: string;
   paidAt: string;
   proofFileId?: string;
+}
+
+interface PaymentConfirmationData {
+  chargeId: string;
+  amountMinor: number;
+  amountLabel: string;
+  chargeLabel: string;
+  currency: string;
+  paidAtLabel: string;
+  referenceLabel?: string;
+  proofFileName: string;
+}
+
+const MAX_PAYMENT_PROOF_SIZE_BYTES = 10 * 1024 * 1024;
+const PAYMENT_PROOF_ALLOWED_MIME_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+] as const;
+
+const PAYMENT_REJECTION_REASON_LABELS: Record<string, string> = {
+  MONTO_INCORRECTO: 'Monto incorrecto',
+  REFERENCIA_INVALIDA: 'Referencia inválida',
+  SIN_COMPROBANTE: 'Sin comprobante',
+  COMPROBANTE_ILEGIBLE: 'Comprobante ilegible',
+  PAGO_DUPLICADO: 'Pago duplicado',
+  CUENTA_DESTINO_INVALIDA: 'Cuenta destino inválida',
+  OTRO: 'Otro',
+};
+
+function getPaymentRejectionReasonLabel(reason?: string | null): string | null {
+  if (!reason) return null;
+  return PAYMENT_REJECTION_REASON_LABELS[reason] ?? reason;
+}
+
+interface PaymentConfirmDialogProps {
+  isOpen: boolean;
+  data: PaymentConfirmationData | null;
+  errorMessage: string | null;
+  isLoading: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+function PaymentConfirmDialog({
+  isOpen,
+  data,
+  errorMessage,
+  isLoading,
+  onCancel,
+  onConfirm,
+}: PaymentConfirmDialogProps) {
+  const dialogSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      lastFocusedElementRef.current?.focus();
+      lastFocusedElementRef.current = null;
+      return;
+    }
+
+    lastFocusedElementRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    const timer = window.setTimeout(() => {
+      dialogSurfaceRef.current?.querySelector<HTMLButtonElement>('[data-payment-confirm-primary]')?.focus();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (!isLoading) {
+          onCancel();
+        }
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        dialogSurfaceRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [],
+      );
+      if (focusable.length === 0) return;
+
+      const activeElement = document.activeElement as HTMLElement | null;
+      const currentIndex = activeElement ? focusable.indexOf(activeElement) : -1;
+      const nextIndex = event.shiftKey
+        ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+        : (currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+
+      event.preventDefault();
+      focusable[nextIndex]?.focus();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isLoading, isOpen, onCancel]);
+
+  if (!isOpen || !data) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div
+        ref={dialogSurfaceRef}
+        className="w-full max-w-lg rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="payment-confirm-title"
+        aria-describedby="payment-confirm-description"
+      >
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h2 id="payment-confirm-title" className="text-lg font-semibold text-foreground">
+              Confirmar reporte de pago
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Revisá los datos antes de enviarlo a administración.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            disabled={isLoading}
+            aria-label="Cerrar confirmación"
+            data-payment-confirm-close
+          >
+            ×
+          </Button>
+        </div>
+
+        <div id="payment-confirm-description" className="space-y-3">
+          <div className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">
+            <span className="font-medium text-muted-foreground">Monto</span>
+            <span className="text-foreground">{data.amountLabel}</span>
+
+            <span className="font-medium text-muted-foreground">Fecha de pago</span>
+            <span className="text-foreground">{data.paidAtLabel}</span>
+
+            <span className="font-medium text-muted-foreground">Cargo / período</span>
+            <span className="text-foreground">{data.chargeLabel}</span>
+
+            {data.referenceLabel ? (
+              <>
+                <span className="font-medium text-muted-foreground">Referencia</span>
+                <span className="text-foreground">{data.referenceLabel}</span>
+              </>
+            ) : null}
+
+            <span className="font-medium text-muted-foreground">Comprobante</span>
+            <span className="text-foreground">{data.proofFileName}</span>
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            La administración revisará el comprobante antes de aprobarlo.
+          </p>
+
+          {errorMessage ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900/60 dark:bg-red-950/40">
+              <p className="text-sm text-red-700 dark:text-red-200" aria-live="polite">
+                {errorMessage}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onCancel}
+            disabled={isLoading}
+            data-payment-confirm-cancel
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="gap-2"
+            data-payment-confirm-primary
+          >
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+            {isLoading ? 'Confirmando...' : 'Confirmar pago'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -147,7 +347,7 @@ export const ResidentPaymentsPage = () => {
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState<PaymentFormData>({
-    amount: 0,
+    selectedChargeId: '',
     method: PaymentMethod.TRANSFER,
     reference: '',
     paidAt: new Date().toISOString().split('T')[0],
@@ -159,24 +359,43 @@ export const ResidentPaymentsPage = () => {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadUrls, setDownloadUrls] = useState<Record<string, string>>({});
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(null);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [paymentToConfirm, setPaymentToConfirm] = useState<PaymentConfirmationData | null>(null);
+  const activeDownloadObjectUrlsRef = useRef<string[]>([]);
+  const activeDownloadTimersRef = useRef<number[]>([]);
 
-  const handleViewProof = async (paymentId: string, documentId: string) => {
-    if (downloadUrls[paymentId]) {
-      window.open(downloadUrls[paymentId], '_blank');
+  useEffect(() => {
+    return () => {
+      activeDownloadTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      activeDownloadTimersRef.current = [];
+      activeDownloadObjectUrlsRef.current.forEach((objectUrl) => window.URL.revokeObjectURL(objectUrl));
+      activeDownloadObjectUrlsRef.current = [];
+    };
+  }, []);
+
+  const handleOpenDocument = async (documentId: string) => {
+    if (downloadingDocumentId) {
       return;
     }
-    setDownloadingId(paymentId);
+    setDownloadingDocumentId(documentId);
     try {
       setDownloadError(null);
-      const response = await getDownloadUrl(tenantId, documentId);
-      setDownloadUrls((prev) => ({ ...prev, [paymentId]: response.url }));
-      window.open(response.url, '_blank');
+      const blob = await downloadDocumentContent(tenantId, documentId);
+      const objectUrl = window.URL.createObjectURL(blob);
+      activeDownloadObjectUrlsRef.current.push(objectUrl);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+
+      const timerId = window.setTimeout(() => {
+        window.URL.revokeObjectURL(objectUrl);
+        activeDownloadObjectUrlsRef.current = activeDownloadObjectUrlsRef.current.filter((url) => url !== objectUrl);
+        activeDownloadTimersRef.current = activeDownloadTimersRef.current.filter((id) => id !== timerId);
+      }, 60_000);
+      activeDownloadTimersRef.current.push(timerId);
     } catch (error) {
-      setDownloadError(error instanceof Error ? error.message : 'No pudimos abrir el comprobante. Intentá nuevamente.');
+      setDownloadError(error instanceof Error ? error.message : 'No pudimos abrir el documento. Intentá nuevamente.');
     } finally {
-      setDownloadingId(null);
+      setDownloadingDocumentId(null);
     }
   };
 
@@ -184,8 +403,13 @@ export const ResidentPaymentsPage = () => {
     const file = e.target.files?.[0];
     if (!file || !tenantId) return;
 
-    if (file.size > 10 * 1024 * 1024) {
-      setSubmitError('El archivo no puede superar 10MB');
+    if (file.size > MAX_PAYMENT_PROOF_SIZE_BYTES) {
+      setSubmitError(`El archivo no puede superar ${Math.round(MAX_PAYMENT_PROOF_SIZE_BYTES / 1024 / 1024)}MB`);
+      return;
+    }
+
+    if (!PAYMENT_PROOF_ALLOWED_MIME_TYPES.includes(file.type as (typeof PAYMENT_PROOF_ALLOWED_MIME_TYPES)[number])) {
+      setSubmitError('El comprobante debe ser PDF, JPG o PNG');
       return;
     }
 
@@ -222,7 +446,7 @@ export const ResidentPaymentsPage = () => {
 
   const resetForm = () => {
     setFormData({
-      amount: 0,
+      selectedChargeId: '',
       method: PaymentMethod.TRANSFER,
       reference: '',
       paidAt: new Date().toISOString().split('T')[0],
@@ -234,12 +458,16 @@ export const ResidentPaymentsPage = () => {
   const pendingCharges = ledger?.charges?.filter(
     (c) => (c.amount - (c.allocated ?? 0)) > 0
   ) ?? [];
+  const selectedChargeId = pendingCharges.some((charge) => charge.id === formData.selectedChargeId)
+    ? formData.selectedChargeId
+    : pendingCharges[0]?.id ?? '';
+  const selectedCharge = pendingCharges.find((charge) => charge.id === selectedChargeId) ?? null;
+  const selectedChargeOutstandingMinor = selectedCharge ? selectedCharge.amount - (selectedCharge.allocated ?? 0) : 0;
 
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
 
-  const canSubmit = !!proofFileId;
-  const paymentAmountId = 'resident-payment-amount';
+  const canSubmit = !!proofFileId && !!selectedCharge && selectedChargeOutstandingMinor > 0;
   const paymentDateId = 'resident-payment-date';
   const paymentReferenceId = 'resident-payment-reference';
   const paymentMethodId = 'resident-payment-method';
@@ -258,19 +486,43 @@ export const ResidentPaymentsPage = () => {
     e.preventDefault();
     if (!buildingId || !unitId) return;
 
-    const amountLabel = formatCurrency(formData.amount || 0, currency, getLocaleForCurrency(currency));
-    const chargeLabel = nextDueCharge
-      ? `${nextDueCharge.concept} • Período ${nextDueCharge.period}`
-      : 'Tu saldo actual';
-    const confirmationMessage = [
-      `Vas a enviar un reporte de pago por ${amountLabel}.`,
-      `Cargo o período de referencia: ${chargeLabel}.`,
-      'La administración revisará el comprobante antes de aprobarlo.',
-    ].join('\n\n');
-
-    if (!window.confirm(confirmationMessage)) {
+    if (!selectedCharge) {
+      setSubmitError('Seleccioná un cargo pendiente para continuar.');
       return;
     }
+
+    const amountMinor = selectedChargeOutstandingMinor;
+    if (amountMinor <= 0) {
+      setSubmitError('Ese cargo ya no tiene saldo pendiente. Actualizá la información.');
+      refetchLedger();
+      refetchPayments();
+      return;
+    }
+
+    const amountLabel = formatCurrency(amountMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency));
+    const chargeLabel = `${selectedCharge.concept} • Período ${selectedCharge.period}`;
+    if (!proofFileId || !proofFile) {
+      setSubmitError('Subí un comprobante antes de continuar.');
+      return;
+    }
+
+    setSubmitError(null);
+    setSubmitSuccess(false);
+    setPaymentToConfirm({
+      chargeId: selectedCharge.id,
+      amountMinor,
+      amountLabel,
+      chargeLabel,
+      currency: selectedCharge.currency,
+      paidAtLabel: formatDate(formData.paidAt),
+      referenceLabel: formData.reference.trim() || undefined,
+      proofFileName: proofFile.name,
+    });
+    setIsConfirmOpen(true);
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!buildingId || !unitId || !paymentToConfirm || submitting) return;
 
     setSubmitting(true);
     setSubmitError(null);
@@ -279,8 +531,9 @@ export const ResidentPaymentsPage = () => {
     try {
       await submitPayment(buildingId, {
         unitId,
-        amount: toCents(formData.amount),
-        currency,
+        chargeId: paymentToConfirm.chargeId,
+        amount: paymentToConfirm.amountMinor,
+        currency: paymentToConfirm.currency,
         method: formData.method,
         reference: formData.reference.trim() || undefined,
         paidAt: formData.paidAt || undefined,
@@ -289,6 +542,8 @@ export const ResidentPaymentsPage = () => {
 
       setSubmitSuccess(true);
       resetForm();
+      setIsConfirmOpen(false);
+      setPaymentToConfirm(null);
       refetchLedger();
       refetchPayments();
       setTimeout(() => {
@@ -297,6 +552,8 @@ export const ResidentPaymentsPage = () => {
       }, 2000);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Error al enviar pago');
+      void refetchLedger();
+      void refetchPayments();
     } finally {
       setSubmitting(false);
     }
@@ -444,7 +701,7 @@ export const ResidentPaymentsPage = () => {
           <div className="flex items-start gap-3">
             <AlertCircle className="text-red-600 mt-0.5" size={20} />
             <div className="space-y-1">
-              <p className="font-medium text-red-800">No pudimos abrir el comprobante.</p>
+              <p className="font-medium text-red-800">No pudimos abrir el documento.</p>
               <p className="text-sm text-red-700">{downloadError}</p>
             </div>
           </div>
@@ -568,40 +825,77 @@ export const ResidentPaymentsPage = () => {
           <div className="space-y-2">
             {payments.map((payment) => {
               const proofDocumentId = payment.proofDocumentId;
+              const receiptDocumentId = payment.receiptDocumentId;
+              const rejectionReasonLabel = getPaymentRejectionReasonLabel(payment.rejectionReason);
+              const hasReceipt = !!receiptDocumentId;
+              const hasProof = !!proofDocumentId;
+              const downloadDisabled = downloadingDocumentId !== null;
+              const paymentDate = formatDate(payment.paidAt ?? payment.createdAt);
 
               return (
-              <div key={payment.id} className="flex justify-between items-start gap-3 p-3 bg-muted/50 rounded-lg">
-                <div className="flex-1">
-                  <p className="font-medium">{formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {payment.method} • {formatDate(payment.paidAt ?? payment.createdAt)}
-                    {payment.reference && ` • ${payment.reference}`}
-                  </p>
+                <div key={payment.id} className="flex justify-between items-start gap-3 p-3 bg-muted/50 rounded-lg">
+                  <div className="flex-1 space-y-1">
+                    <p className="font-medium">{formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {payment.method} • {paymentDate}
+                      {payment.reference && ` • ${payment.reference}`}
+                    </p>
+                    {payment.status === 'REJECTED' && (rejectionReasonLabel || payment.rejectionComment) && (
+                      <p className="text-sm text-red-700">
+                        {rejectionReasonLabel && <span className="font-medium">Motivo: {rejectionReasonLabel}</span>}
+                        {rejectionReasonLabel && payment.rejectionComment ? ' — ' : null}
+                        {payment.rejectionComment}
+                      </p>
+                    )}
+                    {payment.status === 'APPROVED' && !hasReceipt && payment.receiptStatus === 'PENDING' && (
+                      <p className="text-sm text-muted-foreground">Recibo en generación</p>
+                    )}
+                    {payment.status === 'APPROVED' && !hasReceipt && payment.receiptStatus === 'FAILED' && (
+                      <p className="text-sm text-red-700">
+                        No pudimos generar el recibo. La administración ya fue notificada.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {hasProof ? (
+                      <button
+                        onClick={() => handleOpenDocument(proofDocumentId)}
+                        disabled={downloadDisabled}
+                        type="button"
+                        aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                        className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+                      >
+                        {downloadingDocumentId === proofDocumentId ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <FileText className="w-4 h-4" />
+                        )}
+                        Ver comprobante
+                      </button>
+                    ) : payment.proofFileId ? (
+                      <span className="text-xs text-amber-600">Comprobante en procesamiento</span>
+                    ) : null}
+                    {hasReceipt ? (
+                      <button
+                        onClick={() => handleOpenDocument(receiptDocumentId)}
+                        disabled={downloadDisabled}
+                        type="button"
+                        aria-label={`Ver recibo del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                        className="flex items-center gap-1 text-emerald-600 hover:text-emerald-800 text-sm disabled:opacity-50"
+                      >
+                        {downloadingDocumentId === receiptDocumentId ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <FileText className="w-4 h-4" />
+                        )}
+                        Ver recibo
+                      </button>
+                    ) : null}
+                    <span className={`px-2 py-1 rounded text-xs font-medium border whitespace-nowrap ${paymentStatusColor(payment.status)}`}>
+                      {paymentStatusLabel(payment.status)}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {proofDocumentId ? (
-                    <button
-                      onClick={() => handleViewProof(payment.id, proofDocumentId)}
-                      disabled={downloadingId === payment.id}
-                      type="button"
-                      aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
-                      className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
-                    >
-                      {downloadingId === payment.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <FileText className="w-4 h-4" />
-                      )}
-                      Ver
-                    </button>
-                  ) : payment.proofFileId ? (
-                    <span className="text-xs text-amber-600">Subiendo...</span>
-                  ) : null}
-                  <span className={`px-2 py-1 rounded text-xs font-medium border whitespace-nowrap ${paymentStatusColor(payment.status)}`}>
-                    {paymentStatusLabel(payment.status)}
-                  </span>
-                </div>
-              </div>
               );
             })}
           </div>
@@ -615,18 +909,45 @@ export const ResidentPaymentsPage = () => {
           <form onSubmit={handleSubmitPayment} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label htmlFor={paymentAmountId} className="block text-sm font-medium mb-1">Monto ({currency})</label>
-                <Input
-                  id={paymentAmountId}
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max="999999.99"
-                  value={formData.amount || ''}
-                  onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-                  placeholder="Ej: 350.00"
-                  required
-                />
+                <label htmlFor="resident-payment-charge" className="block text-sm font-medium mb-1">
+                  Cargo pendiente
+                </label>
+                <Select
+                  id="resident-payment-charge"
+                  value={selectedChargeId}
+                  onChange={(e) => setFormData((current) => ({ ...current, selectedChargeId: e.target.value }))}
+                  disabled={pendingCharges.length === 0}
+                >
+                  {pendingCharges.length === 0 ? (
+                    <option value="">No tenés cargos pendientes</option>
+                  ) : (
+                    pendingCharges.map((charge) => {
+                      const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+                      return (
+                        <option key={charge.id} value={charge.id}>
+                          {charge.concept} • Período {charge.period} • {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
+                        </option>
+                      );
+                    })
+                  )}
+                </Select>
+                {selectedCharge ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Los pagos informados por residentes deben cubrir el saldo completo del período.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    No hay cargos pendientes disponibles para reportar.
+                  </p>
+                )}
+                {selectedCharge ? (
+                  <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Monto a reportar</p>
+                    <p className="text-lg font-semibold">
+                      {formatCurrency(selectedChargeOutstandingMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency))}
+                    </p>
+                  </div>
+                ) : null}
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1" htmlFor={paymentMethodId}>Método de pago</label>
@@ -670,7 +991,7 @@ export const ResidentPaymentsPage = () => {
               <input
                 id={paymentProofId}
                 type="file"
-                accept="image/*,.pdf"
+                accept=".pdf,image/jpeg,image/png"
                 onChange={handleFileChange}
                 className="block w-full text-sm text-muted-foreground
                   file:mr-4 file:py-2 file:px-4
@@ -719,9 +1040,16 @@ export const ResidentPaymentsPage = () => {
                 type="submit" 
                 disabled={submitting || !canSubmit} 
                 className="gap-2"
+                id="resident-payment-submit-trigger"
               >
                 {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                {submitting ? 'Enviando...' : !canSubmit ? 'Subí el comprobante' : 'Enviar pago'}
+                {submitting
+                  ? 'Enviando...'
+                  : !selectedCharge
+                    ? 'Seleccioná un cargo'
+                    : !proofFile
+                      ? 'Subí el comprobante'
+                      : 'Enviar pago'}
               </Button>
               <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
                 Cancelar
@@ -730,6 +1058,21 @@ export const ResidentPaymentsPage = () => {
           </form>
         </Card>
       )}
+
+      <PaymentConfirmDialog
+        isOpen={isConfirmOpen}
+        data={paymentToConfirm}
+        errorMessage={submitError}
+        isLoading={submitting}
+        onCancel={() => {
+          setIsConfirmOpen(false);
+          setPaymentToConfirm(null);
+          window.setTimeout(() => {
+            document.getElementById('resident-payment-submit-trigger')?.focus();
+          }, 0);
+        }}
+        onConfirm={handleConfirmPayment}
+      />
     </div>
   );
 };

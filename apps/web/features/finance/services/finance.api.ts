@@ -94,6 +94,9 @@ export interface Payment {
     user: { name: string };
   };
   // Receipt fields
+  rejectionReason?: string | null;
+  rejectionComment?: string | null;
+  reviewedAt?: string | null;
   receiptDocumentId?: string;
   receiptNumber?: string;
   receiptStatus?: 'PENDING' | 'READY' | 'FAILED';
@@ -330,6 +333,7 @@ export async function submitPayment(
   buildingId: string,
   data: {
     unitId?: string;
+    chargeId?: string;
     amount: number;
     currency?: string;
     method: PaymentMethod;

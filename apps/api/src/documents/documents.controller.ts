@@ -11,6 +11,8 @@ import {
   Query,
   ForbiddenException,
   BadRequestException,
+  Header,
+  StreamableFile,
 } from '@nestjs/common';
 import { DocumentCategory, DocumentVisibility } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -122,7 +124,7 @@ export class DocumentsController {
    * POST /documents/presign
    * Generate presigned URL for file upload to MinIO
    *
-   * Body: { originalName, mimeType }
+   * Body: { originalName, mimeType, size? }
    * Returns: { url, bucket, objectKey, expiresAt }
    *
    * No permission check (any authenticated user can presign)
@@ -137,6 +139,7 @@ export class DocumentsController {
       tenantId,
       dto.originalName,
       dto.mimeType,
+      dto.size,
     );
   }
 
@@ -144,7 +147,7 @@ export class DocumentsController {
    * POST /documents
    * Create a document after file upload
    *
-   * Body: CreateDocumentDto (includes objectKey from presign)
+   * Body: CreateDocumentDto (includes nested file metadata from presign)
    * Returns: Document with file metadata
    *
    * Permission rules:
@@ -381,5 +384,40 @@ export class DocumentsController {
       userRoles,
       isSuperAdmin,
     );
+  }
+
+  /**
+   * GET /documents/:id/content
+   * Stream document content through BuildingOS
+   *
+   * Returns a protected stream with sanitized headers.
+   */
+  @Get(':documentId/content')
+  @Header('Cache-Control', 'private, no-store, max-age=0, must-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('X-Content-Type-Options', 'nosniff')
+  async getContent(
+    @Param('documentId') documentId: string,
+    @Request() req: TenantContextRequest,
+  ): Promise<StreamableFile> {
+    const tenantId = this.getTenantId(req);
+    const userId = req.user.id;
+    const userRoles = this.getUserRoles(req);
+    const userMemberships = req.user.memberships || [];
+    const isSuperAdmin = this.isSuperAdmin(userMemberships);
+
+    const content = await this.documentsService.getDocumentContent(
+      tenantId,
+      documentId,
+      userId,
+      userRoles,
+      isSuperAdmin,
+    );
+
+    return new StreamableFile(content.stream, {
+      type: content.contentType,
+      disposition: `${content.disposition}; filename="${content.fileName}"`,
+      length: content.contentLength,
+    });
   }
 }

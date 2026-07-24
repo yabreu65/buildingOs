@@ -18,6 +18,7 @@ interface BuildingFinanceSummary {
 
 interface BuildingsFinanceSummaryProps {
   tenantId: string;
+  period?: string;
   buildingIds: string[];
   buildingNames: Record<string, string>;
 }
@@ -27,6 +28,7 @@ const formatPercentage = (val: number) => `${Math.round(val)}%`;
 export function BuildingsFinanceSummary({
   buildingIds,
   buildingNames,
+  period,
 }: BuildingsFinanceSummaryProps) {
   const { format } = useTenantCurrency();
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
@@ -41,7 +43,7 @@ export function BuildingsFinanceSummary({
         const results = await Promise.all(
           buildingIds.map(async (bId) => {
             try {
-              const summary = await financeApi.getFinancialSummary(bId);
+              const summary = await financeApi.getFinancialSummary(bId, period);
               return {
                 buildingId: bId,
                 buildingName: buildingNames[bId] || bId,
@@ -79,7 +81,7 @@ export function BuildingsFinanceSummary({
     if (buildingIds.length > 0) {
       fetchSummaries();
     }
-  }, [buildingIds, buildingNames]);
+  }, [buildingIds, buildingNames, period]);
 
   if (loading) {
     return (

@@ -3,9 +3,11 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  PayloadTooLargeException,
   Logger,
 } from '@nestjs/common';
 import { Document, AuditAction } from '@prisma/client';
+import type { Readable } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -14,6 +16,7 @@ import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import { ConfigService } from '../config/config.service';
 import {
   PresignedUrlResponse,
   DocumentResponseDto,
@@ -47,6 +50,29 @@ type UnitOccupantNotificationRecipient = Prisma.UnitOccupantGetPayload<{
   };
 }>;
 
+type DocumentContentResponse = {
+  stream: Readable;
+  contentType: string;
+  contentLength: number;
+  fileName: string;
+  disposition: 'inline' | 'attachment';
+};
+
+const ALLOWED_UPLOAD_MIME_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+];
+
 /**
  * DocumentsService: CRUD operations for Documents and Files with MinIO integration
  *
@@ -77,6 +103,7 @@ type UnitOccupantNotificationRecipient = Prisma.UnitOccupantGetPayload<{
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
+  private readonly maxUploadBytes: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -85,7 +112,10 @@ export class DocumentsService {
     private readonly notificationsService: NotificationsService,
     private readonly auditService: AuditService,
     private readonly residentAccess: ResidentAccessService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.maxUploadBytes = this.configService.getValue('uploadMaxBytes');
+  }
 
   /**
    * Generate presigned URL for file upload to MinIO
@@ -99,20 +129,25 @@ export class DocumentsService {
     tenantId: string,
     originalName: string,
     mimeType: string,
+    size?: number,
   ): Promise<PresignedUrlResponse> {
     // Validate file type (prevent malicious uploads)
     this.validateMimeType(mimeType);
+    if (size != null) {
+      this.validateUploadSize(size);
+    }
 
     // Generate objectKey with tenant isolation
     const objectKey = this.generateObjectKey(tenantId, originalName);
+    const bucket = this.minio.getDefaultBucket();
 
     // Generate presigned URL from MinIO (24 hours expiration)
     const expirySeconds = 24 * 60 * 60;
-    const url = await this.minio.presignUpload('documents', objectKey, expirySeconds);
+    const url = await this.minio.presignUpload(bucket, objectKey, expirySeconds);
 
     return {
       url,
-      bucket: 'documents',
+      bucket,
       objectKey,
       expiresAt: new Date(Date.now() + expirySeconds * 1000),
     };
@@ -136,6 +171,8 @@ export class DocumentsService {
     userMembershipId: string,
     dto: CreateDocumentDto,
   ): Promise<DocumentWithFileResponseDto> {
+    const uploadFile = dto.file;
+
     // Validate scope constraint
     this.validators.validateDocumentScope(dto.buildingId, dto.unitId);
 
@@ -156,46 +193,82 @@ export class DocumentsService {
       );
     }
 
+    // Validate file metadata before touching storage records
+    try {
+      this.validateMimeType(uploadFile.mimeType);
+    } catch (error) {
+      await this.deleteUploadedObject(uploadFile.objectKey);
+      throw error;
+    }
+
     // Validate objectKey exists in MinIO before creating document record
-    const fileExists = await this.minio.objectExists('documents', dto.objectKey);
+    const bucket = this.minio.getDefaultBucket();
+
+    const fileExists = await this.minio.objectExists(bucket, uploadFile.objectKey);
     if (!fileExists) {
       throw new BadRequestException(
         'File not found in storage. Upload the file first and try again.',
       );
     }
 
-    // Create File and Document atomically
-    const file = await this.prisma.file.create({
-      data: {
-        tenantId,
-        bucket: 'documents', // Standard bucket for all documents
-        objectKey: dto.objectKey,
-        originalName: dto.objectKey.split('/').pop() || 'document',
-        mimeType: 'application/octet-stream', // Will be overwritten by client
-        size: dto.size,
-        checksum: dto.checksum,
-        createdByMembershipId: userMembershipId,
-      },
-    });
+    const uploadedObject = await this.minio.statObject(bucket, uploadFile.objectKey);
+    if (uploadedObject.size <= 0) {
+      await this.deleteUploadedObject(uploadFile.objectKey);
+      throw new BadRequestException('El archivo no puede estar vacío');
+    }
 
-    const document = await this.prisma.document.create({
-      data: {
-        tenantId,
-        fileId: file.id,
-        title: dto.title,
-        category: dto.category,
-        visibility: dto.visibility ?? 'TENANT_ADMINS',
-        buildingId: dto.buildingId,
-        unitId: dto.unitId,
-        createdByMembershipId: userMembershipId,
-      },
-      include: {
-        file: true,
-        createdByMembership: {
-          include: { user: true },
-        },
-      },
-    });
+    if (uploadedObject.size > this.maxUploadBytes) {
+      await this.deleteUploadedObject(uploadFile.objectKey);
+      throw new PayloadTooLargeException(
+        `El archivo supera el máximo de ${this.maxUploadBytes} bytes`,
+      );
+    }
+
+    let document: DocumentNotificationTarget | null = null;
+
+    try {
+      document = await this.prisma.$transaction(async (tx) => {
+        const file = await tx.file.create({
+          data: {
+            tenantId,
+            bucket,
+            objectKey: uploadFile.objectKey,
+            originalName: this.sanitizeFileName(uploadFile.originalName),
+            mimeType: uploadFile.mimeType,
+            size: uploadedObject.size,
+            checksum: uploadFile.checksum,
+            createdByMembershipId: userMembershipId,
+          },
+        });
+
+        return await tx.document.create({
+          data: {
+            tenantId,
+            fileId: file.id,
+            title: dto.title,
+            category: dto.category,
+            visibility: dto.visibility ?? 'TENANT_ADMINS',
+            buildingId: dto.buildingId,
+            unitId: dto.unitId,
+            createdByMembershipId: userMembershipId,
+          },
+          include: {
+            file: true,
+            createdByMembership: {
+              include: { user: true },
+            },
+          },
+        });
+      });
+    } catch (error) {
+      await this.deleteUploadedObject(uploadFile.objectKey);
+      throw error;
+    }
+
+    if (!document) {
+      await this.deleteUploadedObject(uploadFile.objectKey);
+      throw new BadRequestException('Failed to persist document metadata');
+    }
 
     // [PHASE 2 QUICK #6] Send DOCUMENT_SHARED notification if visibility=RESIDENTS
     void this.sendDocumentSharedNotification(tenantId, document, dto);
@@ -576,30 +649,83 @@ export class DocumentsService {
   }
 
   /**
+   * Get a protected document stream for authenticated downloads.
+   *
+   * Keeps the browser inside BuildingOS and never exposes MinIO URLs.
+   */
+  async getDocumentContent(
+    tenantId: string,
+    documentId: string,
+    userId: string,
+    userRoles: string[],
+    isSuperAdmin: boolean,
+  ): Promise<DocumentContentResponse> {
+    const document = await this.getDocument(
+      tenantId,
+      documentId,
+      userId,
+      userRoles,
+      isSuperAdmin,
+    );
+
+    if (!document.file) {
+      throw new NotFoundException('Document file not found');
+    }
+
+    const bucket = document.file.bucket;
+    const objectKey = document.file.objectKey;
+    const exists = await this.minio.objectExists(bucket, objectKey);
+    if (!exists) {
+      throw new NotFoundException('Document file not found');
+    }
+
+    const uploadedObject = await this.minio.statObject(bucket, objectKey);
+    if (uploadedObject.size <= 0) {
+      throw new NotFoundException('Document file not found');
+    }
+
+    const stream = await this.minio.getObjectStream(bucket, objectKey);
+    const contentType = document.file.mimeType || 'application/octet-stream';
+
+    return {
+      stream,
+      contentType,
+      contentLength: uploadedObject.size,
+      fileName: this.sanitizeDownloadFileName(document.file.originalName),
+      disposition: this.shouldRenderInline(contentType) ? 'inline' : 'attachment',
+    };
+  }
+
+  /**
    * Validate MIME type (prevent unsafe uploads)
    * Allowed: PDF, images, Office docs, spreadsheets, etc.
    * Blocked: executables, scripts, etc.
    */
   private validateMimeType(mimeType: string): void {
-    const allowedTypes = [
-      'application/pdf',
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'text/plain',
-      'text/csv',
-    ];
-
-    if (!allowedTypes.includes(mimeType)) {
+    if (!ALLOWED_UPLOAD_MIME_TYPES.includes(mimeType)) {
       throw new BadRequestException(
         `File type not allowed: ${mimeType}`,
       );
+    }
+  }
+
+  private validateUploadSize(size: number): void {
+    if (size <= 0) {
+      throw new BadRequestException('El archivo no puede estar vacío');
+    }
+
+    if (size > this.maxUploadBytes) {
+      throw new PayloadTooLargeException(
+        `El archivo supera el máximo de ${this.maxUploadBytes} bytes`,
+      );
+    }
+  }
+
+  private async deleteUploadedObject(objectKey: string): Promise<void> {
+    try {
+      await this.minio.deleteObject(this.minio.getDefaultBucket(), objectKey);
+    } catch (error) {
+      this.logger.warn(`Unable to clean up rejected upload ${objectKey}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -609,8 +735,22 @@ export class DocumentsService {
    */
   private generateObjectKey(tenantId: string, originalName: string): string {
     const uuid = this.generateUuid();
-    const sanitized = originalName.replace(/[^a-z0-9._-]/gi, '_');
+    const sanitized = this.sanitizeFileName(originalName);
     return `tenant-${tenantId}/documents/${uuid}-${sanitized}`;
+  }
+
+  private sanitizeFileName(originalName: string): string {
+    return originalName.replace(/[^a-z0-9._-]/gi, '_');
+  }
+
+  private sanitizeDownloadFileName(originalName: string): string {
+    return this.sanitizeFileName(originalName)
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'document';
+  }
+
+  private shouldRenderInline(mimeType: string): boolean {
+    return mimeType.startsWith('application/pdf') || mimeType.startsWith('image/');
   }
 
   /**

@@ -33,15 +33,32 @@ type PaymentReceiptPayment = Prisma.PaymentGetPayload<{
   };
 }>;
 
+type ChargeWithAllocations = Prisma.ChargeGetPayload<{
+  include: {
+    paymentAllocations: {
+      include: {
+        payment: {
+          select: {
+            status: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
 @Injectable()
 export class PaymentReceiptService {
   private readonly logger = new Logger(PaymentReceiptService.name);
+  private readonly bucket: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly minio: MinioService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+  ) {
+    this.bucket = this.minio.getDefaultBucket();
+  }
 
   /**
    * Ensure a receipt exists for the given payment.
@@ -91,7 +108,7 @@ export class PaymentReceiptService {
       });
 
       if (document?.file) {
-        const url = await this.minio.presignDownload('documents', document.file.objectKey, 3600);
+        const url = await this.minio.presignDownload(document.file.bucket, document.file.objectKey, 3600);
         return {
           receiptNumber: payment.receiptNumber,
           documentId: payment.receiptDocumentId,
@@ -114,13 +131,13 @@ export class PaymentReceiptService {
 
       // Save to storage
       const objectKey = `tenant/${payment.tenantId}/payments/${paymentId}/receipt_${receiptNumber}.pdf`;
-      await this.minio.uploadBuffer('documents', objectKey, pdfContent, 'application/pdf');
+      await this.minio.uploadBuffer(this.bucket, objectKey, pdfContent, 'application/pdf');
 
       // Create File record
       const file = await this.prisma.file.create({
         data: {
           tenantId: payment.tenantId,
-          bucket: 'documents',
+          bucket: this.bucket,
           objectKey,
           originalName: `receipt_${receiptNumber}.pdf`,
           mimeType: 'application/pdf',
@@ -174,7 +191,7 @@ export class PaymentReceiptService {
         },
       });
 
-      const url = await this.minio.presignDownload('documents', objectKey, 3600);
+      const url = await this.minio.presignDownload(this.bucket, objectKey, 3600);
 
       // Notify resident
       await this.notifyResidentReceiptReady(payment, receiptNumber, url, approvedByUserName);
@@ -258,7 +275,6 @@ export class PaymentReceiptService {
 
   /**
    * Generate receipt PDF content.
-   * Currently returns simple text - can be upgraded to proper PDF library later.
    */
   private async generateReceiptPDF(
     payment: PaymentReceiptPayment,
@@ -271,69 +287,176 @@ export class PaymentReceiptService {
     });
     const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
 
-    const approvedBy = approvedByUserName;
-    const approvedAt = payment.approvedAt 
-      ? new Date(payment.approvedAt).toLocaleString('es-AR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-      : new Date().toLocaleString('es-AR');
-
+    const approvedAt = this.formatReceiptDate(payment.approvedAt ?? new Date());
     const unitLabel = payment.unit?.label || payment.unitId || 'N/A';
     const buildingName = payment.building?.name || 'Edificio';
-    const amountFormatted = (payment.amount / 100).toFixed(2);
     const currency = payment.currency || 'ARS';
-
-    // Build allocations text
-    let allocationsText = '';
-    if (payment.paymentAllocations && payment.paymentAllocations.length > 0) {
-      allocationsText = payment.paymentAllocations
-        .map((alloc) => {
+    const amountFormatted = this.formatCurrencyForReceipt(payment.amount, currency);
+    const allocations = payment.paymentAllocations?.length
+      ? payment.paymentAllocations.map((alloc, index) => {
           const expensePeriod = alloc.charge?.expensePeriod;
           const period = expensePeriod
             ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, '0')}`
             : alloc.charge?.period || 'N/A';
           const concept = alloc.charge?.concept || 'Cargo';
-          const amount = (alloc.amount / 100).toFixed(2);
-          return `  - ${period}: ${concept} = ${currency} ${amount}`;
+          return `${period} - ${concept} - ${this.formatCurrencyForReceipt(alloc.amount, currency)}`;
         })
-        .join('\n');
-    } else {
-      allocationsText = '  (Sin aplicación específica - saldo a favor)';
+      : ['Sin aplicación específica - saldo a favor'];
+    const primaryPeriod = payment.paymentAllocations?.[0]
+      ? (() => {
+          const expensePeriod = payment.paymentAllocations[0].charge?.expensePeriod;
+          return expensePeriod
+            ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, '0')}`
+            : payment.paymentAllocations[0].charge?.period || 'N/A';
+        })()
+      : 'N/A';
+
+    return this.buildReceiptPdfBuffer({
+      tenantDisplayName,
+      receiptNumber,
+      approvedAt,
+      approvedByUserName,
+      unitLabel,
+      buildingName,
+      amountFormatted,
+      method: payment.method,
+      reference: payment.reference || 'N/A',
+      primaryPeriod,
+      allocations,
+    });
+  }
+
+  private buildReceiptPdfBuffer(input: {
+    tenantDisplayName: string;
+    receiptNumber: string;
+    approvedAt: string;
+    approvedByUserName: string;
+    unitLabel: string;
+    buildingName: string;
+    amountFormatted: string;
+    method: string;
+    reference: string;
+    primaryPeriod: string;
+    allocations: readonly string[];
+  }): Buffer {
+    const contentCommands = [
+      'BT',
+      '/F2 18 Tf',
+      '22 TL',
+      '72 792 Td',
+      this.pdfText(input.tenantDisplayName),
+      '/F1 11 Tf',
+      '14 TL',
+      'T*',
+      this.pdfText('Recibo de pago aprobado'),
+      'T*',
+      this.pdfText(`Emitido por la Administración del ${input.tenantDisplayName}`),
+      'T*',
+      'T*',
+      '/F2 12 Tf',
+      this.pdfText('Datos del recibo'),
+      '/F1 11 Tf',
+      '14 TL',
+      'T*',
+      this.pdfText(`Número de recibo: ${input.receiptNumber}`),
+      'T*',
+      this.pdfText(`Fecha de aprobación: ${input.approvedAt}`),
+      'T*',
+      this.pdfText(`Aprobado por: ${input.approvedByUserName}`),
+      'T*',
+      'T*',
+      '/F2 12 Tf',
+      this.pdfText('Datos del pago'),
+      '/F1 11 Tf',
+      '14 TL',
+      'T*',
+      this.pdfText(`Unidad: ${input.unitLabel}`),
+      'T*',
+      this.pdfText(`Edificio: ${input.buildingName}`),
+      'T*',
+      this.pdfText(`Monto: ${input.amountFormatted}`),
+      'T*',
+      this.pdfText(`Método: ${input.method}`),
+      'T*',
+      this.pdfText(`Referencia: ${input.reference}`),
+      'T*',
+      this.pdfText(`Período aplicado: ${input.primaryPeriod}`),
+      'T*',
+      'T*',
+      '/F2 12 Tf',
+      this.pdfText('Aplicación del pago'),
+      '/F1 11 Tf',
+      '14 TL',
+      ...input.allocations.flatMap((allocation) => [
+        'T*',
+        this.pdfText(allocation),
+      ]),
+      'T*',
+      this.pdfText('Este documento es una constancia de pago y no constituye factura fiscal.'),
+      'T*',
+      this.pdfText(`Documento generado por la Administración del ${input.tenantDisplayName}.`),
+      'ET',
+    ];
+
+    const contentStreamText = contentCommands.join('\n');
+    const contentStream = Buffer.from(contentStreamText, 'latin1');
+    const objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+      `<< /Length ${contentStream.length} >>\nstream\n${contentStreamText}\nendstream`,
+    ];
+
+    const header = '%PDF-1.4\n%âãÏÓ\n';
+    const objectBuffers = objects.map((body, index) => Buffer.from(`${index + 1} 0 obj\n${body}\nendobj\n`, 'latin1'));
+    const offsets = ['0000000000 65535 f \n'];
+    let offset = Buffer.byteLength(header, 'latin1');
+
+    for (const objectBuffer of objectBuffers) {
+      offsets.push(`${String(offset).padStart(10, '0')} 00000 n \n`);
+      offset += objectBuffer.length;
     }
 
-    const content = `
-================================================================================
-                         ${tenantDisplayName.toUpperCase()}
-================================================================================
+    const xref = `xref\n0 ${objects.length + 1}\n${offsets.join('')}`;
+    const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${offset}\n%%EOF\n`;
 
-RECIBO DE PAGO APROBADO
---------------------------------------------------------------------------------
-Número de recibo: ${receiptNumber}
-Fecha de aprobación: ${approvedAt}
+    return Buffer.concat([
+      Buffer.from(header, 'latin1'),
+      ...objectBuffers,
+      Buffer.from(xref + trailer, 'latin1'),
+    ]);
+  }
 
-DATOS DEL PAGO
---------------------------------------------------------------------------------
-Unidad: ${unitLabel}
-Edificio: ${buildingName}
-Monto: ${currency} ${amountFormatted}
-Método: ${payment.method}
-Referencia: ${payment.reference || 'N/A'}
+  private pdfText(text: string): string {
+    return `(${this.escapePdfText(text)}) Tj`;
+  }
 
-APLICACIÓN DEL PAGO
---------------------------------------------------------------------------------
-${allocationsText}
+  private escapePdfText(text: string): string {
+    return text
+      .replace(/\\/g, '\\\\')
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)');
+  }
 
-================================================================================
-Aprobado por: ${approvedBy}
-Este documento es una CONSTANCIA DE PAGO, no constituye factura fiscal.
-================================================================================
-    `.trim();
+  private formatCurrencyForReceipt(amountMinor: number, currency: string): string {
+    const safeCurrency = /^[A-Z]{3}$/.test(currency) ? currency : 'ARS';
+    return new Intl.NumberFormat('es-AR', {
+      style: 'currency',
+      currency: safeCurrency,
+      currencyDisplay: 'code',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amountMinor / 100);
+  }
 
-    return Buffer.from(content, 'utf-8');
+  private formatReceiptDate(dateValue: string | Date): string {
+    const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+    return new Intl.DateTimeFormat('es-AR', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(date);
   }
 
   /**

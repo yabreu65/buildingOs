@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import Card from '@/shared/components/ui/Card';
@@ -41,19 +41,19 @@ export const TenantFinanceDashboard = () => {
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
   const currentMonth = new Date().toISOString().slice(0, 7);
-  
-  // Initialize tab from URL query param
-  const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [period, setPeriod] = useState<string>(currentMonth);
-  const periodInputId = 'tenant-finance-period';
-  
-  // Set initial tab from URL after mount
-  useEffect(() => {
+  const initialTab = (() => {
     const tabParam = searchParams.get('tab');
     if (tabParam && ['overview', 'rubros', 'expenses', 'payments', 'charges', 'delinquent', 'reports', 'notas'].includes(tabParam)) {
-      setActiveTab(tabParam as Tab);
+      return tabParam as Tab;
     }
-  }, [searchParams]);
+
+    return 'overview';
+  })();
+  
+  // Initialize tab from URL query param
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const [period, setPeriod] = useState<string>(currentMonth);
+  const periodInputId = 'tenant-finance-period';
 
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
   const [downloadingProof, setDownloadingProof] = useState<string | null>(null);
@@ -200,6 +200,7 @@ export const TenantFinanceDashboard = () => {
             ) : (
               <BuildingsFinanceSummary
                 tenantId={tenantId || ''}
+                period={period}
                 buildingIds={buildingIds}
                 buildingNames={buildingNames}
               />
