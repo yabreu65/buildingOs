@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useMemo, useCallback } from 'react';
 import { useTickets } from '../hooks/useTickets';
 import { useUnits, useBuildings } from '@/features/buildings/hooks';
@@ -9,13 +10,11 @@ import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
-import { Ticket as TicketIcon, Plus, Filter, AlertCircle, Clock, CheckCircle, XCircle, Search, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Ticket as TicketIcon, Plus, AlertCircle, Clock, CheckCircle, XCircle, Search, ChevronLeft, ChevronRight, ArrowUp, ArrowDown } from 'lucide-react';
 import Input from '@/shared/components/ui/Input';
 import TicketForm from './TicketForm';
 import { t } from '@/i18n';
-import TicketDetail from './TicketDetail';
-import type { Ticket } from '../services/tickets.api';
-import type { TicketStatus } from '@/types/enums';
+import { ticketDetailPath } from '@/shared/lib/routes';
 
 interface TicketsListProps {
   buildingId: string;
@@ -30,7 +29,6 @@ type StatusFilterValue = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'all_o
 export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
   const { toast } = useToast();
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all_open');
   const [priorityFilter, setPriorityFilter] = useState<string>('');
   const [unitIdFilter, setUnitIdFilter] = useState<string>('');
@@ -51,16 +49,12 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
     tickets, 
     loading, 
     error, 
-    create, 
-    update, 
-    addComment, 
     refetch,
     pagination,
     goToPage,
     nextPage,
     prevPage,
     setPageSize,
-    search,
     updateSearch,
     sortBy,
     sortOrder,
@@ -93,55 +87,11 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
     return ticketList;
   }, [tickets, statusFilter]);
 
-  const handleCreateSuccess = useCallback(async (ticket: Ticket) => {
+  const handleCreateSuccess = useCallback(async () => {
     setShowCreateForm(false);
     toast(t('tickets.created'), 'success');
     await refetch();
   }, [toast, refetch]);
-
-  const handleStatusChange = useCallback(async (ticketId: string, newStatus: string) => {
-    try {
-      await update(ticketId, { status: newStatus as TicketStatus });
-      toast(t('tickets.statusUpdated') || 'Estado actualizado', 'success');
-      setSelectedTicket(null);
-      await refetch();
-    } catch {
-      toast(t('tickets.errors.statusUpdateFailed') || 'Error al actualizar estado', 'error');
-    }
-  }, [update, refetch, toast]);
-
-  const handleAddComment = useCallback(async (ticketId: string, body: string) => {
-    try {
-      await addComment(ticketId, { body });
-      toast(t('tickets.commentAdded'), 'success');
-      const updated = tickets.find((tk) => tk.id === ticketId);
-      if (updated) {
-        setSelectedTicket(updated);
-      }
-    } catch {
-      toast(t('tickets.errors.commentFailed'), 'error');
-    }
-  }, [addComment, tickets, toast]);
-
-  const handleAssign = useCallback(async (ticketId: string, membershipId: string) => {
-    try {
-      await update(ticketId, { 
-        assignedToMembershipId: membershipId || null 
-      });
-      toast('Asignación actualizada', 'success');
-      await refetch();
-      const updated = tickets.find((tk) => tk.id === ticketId);
-      if (updated) {
-        setSelectedTicket(updated);
-      }
-    } catch {
-      toast('Error al asignar a', 'error');
-    }
-  }, [update, refetch, tickets, toast]);
-
-  const handleTicketClick = useCallback((ticket: Ticket) => {
-    setSelectedTicket(ticket);
-  }, []);
 
   const getStatusBadge = (status: string) => {
     const config: Record<string, { label: string; className: string }> = {
@@ -335,7 +285,7 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
           <label className="text-sm text-muted-foreground">Ordenar:</label>
           <select
             value={sortBy}
-            onChange={(e) => updateSort(e.target.value as any)}
+            onChange={(e) => updateSort(e.target.value as 'createdAt' | 'updatedAt' | 'priority' | 'status')}
             className="px-2 py-1 border rounded text-sm"
           >
             <option value="createdAt">Fecha creación</option>
@@ -380,62 +330,67 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
           {visibleTickets.map((ticket) => (
             <Card
               key={ticket.id}
-              className="cursor-pointer hover:shadow-md transition p-4"
-              onClick={() => handleTicketClick(ticket)}
+              className="hover:shadow-md transition p-4"
             >
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs text-muted-foreground font-mono">#{ticket.id.slice(-6)}</span>
-                    {getPriorityBadge(ticket.priority)}
-                  </div>
-                  <h3 className="font-semibold text-foreground">{ticket.title}</h3>
-                  <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                    {ticket.description}
-                  </p>
-                </div>
-                {getStatusBadge(ticket.status)}
-              </div>
-              <div className="mt-3 pt-3 border-t text-xs text-muted-foreground space-y-2">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <span className="bg-muted px-2 py-0.5 rounded">
-                    {getCategoryLabel(ticket.category)}
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground/80">Unidad afectada:</span>{' '}
-                    {ticket.unit ? ticket.unit.label : 'Sin unidad asociada'}
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground/80">Reportado por:</span>{' '}
-                    {ticket.createdBy?.name || 'Sin dato'}
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground/80">Asignado a:</span>{' '}
-                    {ticket.assignedTo ? ticket.assignedTo.user.name : 'Sin asignar'}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-4">
-                    <span>
-                      <span className="font-medium text-foreground/80">Estado:</span>{' '}
-                      {getStatusBadge(ticket.status)}
-                    </span>
-                    <span>
-                      <span className="font-medium text-foreground/80">Prioridad:</span>{' '}
+              <Link
+                href={ticketDetailPath(tenantId, ticket.id)}
+                className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label={`Ver detalle del ticket ${ticket.title}`}
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs text-muted-foreground font-mono">#{ticket.id.slice(-6)}</span>
                       {getPriorityBadge(ticket.priority)}
+                    </div>
+                    <h3 className="font-semibold text-foreground">{ticket.title}</h3>
+                    <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
+                      {ticket.description}
+                    </p>
+                  </div>
+                  {getStatusBadge(ticket.status)}
+                </div>
+                <div className="mt-3 pt-3 border-t text-xs text-muted-foreground space-y-2">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="bg-muted px-2 py-0.5 rounded">
+                      {getCategoryLabel(ticket.category)}
+                    </span>
+                    <span>
+                      <span className="font-medium text-foreground/80">Unidad afectada:</span>{' '}
+                      {ticket.unit ? ticket.unit.label : 'Sin unidad asociada'}
+                    </span>
+                    <span>
+                      <span className="font-medium text-foreground/80">Reportado por:</span>{' '}
+                      {ticket.createdBy?.name || 'Sin dato'}
+                    </span>
+                    <span>
+                      <span className="font-medium text-foreground/80">Asignado a:</span>{' '}
+                      {ticket.assignedTo ? ticket.assignedTo.user.name : 'Sin asignar'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span>
-                      <span className="font-medium text-foreground/80">Fecha:</span>{' '}
-                      {formatDate(ticket.createdAt)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      💬 {ticket.comments?.length || 0}
-                    </span>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-4">
+                      <span>
+                        <span className="font-medium text-foreground/80">Estado:</span>{' '}
+                        {getStatusBadge(ticket.status)}
+                      </span>
+                      <span>
+                        <span className="font-medium text-foreground/80">Prioridad:</span>{' '}
+                        {getPriorityBadge(ticket.priority)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span>
+                        <span className="font-medium text-foreground/80">Fecha:</span>{' '}
+                        {formatDate(ticket.createdAt)}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        💬 {ticket.comments?.length || 0}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </Link>
             </Card>
           ))}
         </div>
@@ -493,18 +448,6 @@ export function TicketsList({ buildingId, tenantId }: TicketsListProps) {
             </Button>
           </div>
         </div>
-      )}
-
-      {selectedTicket && (
-        <TicketDetail
-          buildingId={buildingId}
-          tenantId={tenantId}
-          ticket={selectedTicket}
-          onClose={() => setSelectedTicket(null)}
-          onStatusChange={handleStatusChange}
-          onAddComment={handleAddComment}
-          onAssign={handleAssign}
-        />
       )}
     </div>
   );

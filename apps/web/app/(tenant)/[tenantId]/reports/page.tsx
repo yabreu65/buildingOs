@@ -92,7 +92,6 @@ const ReportsPage = () => {
           featureKey="canExportReports"
           requiredPlan="BASIC"
           onClick={() => {
-            // TODO: Implement export functionality
             alert('Export feature coming soon');
           }}
         >
@@ -137,6 +136,7 @@ const ReportsPage = () => {
         <div className="p-6">
           {activeTab === 'tickets' && (
             <TicketsReportComponent
+              tenantId={tenantId}
               data={ticketsReport.data}
               loading={ticketsReport.loading}
               error={ticketsReport.error}

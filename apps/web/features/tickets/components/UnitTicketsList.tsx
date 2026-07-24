@@ -1,20 +1,23 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listTickets, getTicket, addComment as addCommentApi, createTicket } from '../services/tickets.api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
+import { listTickets, createTicket } from '../services/tickets.api';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { useToast } from '@/shared/components/ui/Toast';
-import { Ticket as TicketIcon, Plus, Send, X, AlertCircle, ChevronRight } from 'lucide-react';
+import { Ticket as TicketIcon, Plus, ChevronRight } from 'lucide-react';
 import type { Ticket, TicketCategory } from '../services/tickets.api';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { ticketCategoryLabel, ticketPriorityLabel, ticketStatusLabel } from '../ticket-labels';
+import { ticketDetailPath } from '@/shared/lib/routes';
 interface UnitTicketsListProps {
+  tenantId: string;
   buildingId: string;
   unitId: string;
 }
@@ -26,16 +29,10 @@ interface UnitTicketsListProps {
  * - Can add comments
  * - Cannot assign or manage tickets (admin-only actions)
  */
-export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
+export function UnitTicketsList({ tenantId, buildingId, unitId }: UnitTicketsListProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [commentBody, setCommentBody] = useState('');
-  const [addingComment, setAddingComment] = useState(false);
-  const [commentError, setCommentError] = useState<string | null>(null);
 
   // Fetch tickets using React Query for better caching and no flash
   const { data: ticketsData, isLoading: loading, error, refetch } = useQuery({
@@ -48,58 +45,11 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
 
   const tickets = ticketsData?.tickets || [];
 
-  // Mutation for adding comments
-  const addCommentMutation = useMutation({
-    mutationFn: ({ ticketId, body }: { ticketId: string; body: string }) =>
-      addCommentApi(buildingId, ticketId, { body }),
-    onSuccess: (_, { ticketId }) => {
-      queryClient.invalidateQueries({ queryKey: ['unit-tickets', buildingId, unitId] });
-    },
-  });
-
-  const handleCreateSuccess = async (ticket: Ticket) => {
+  const handleCreateSuccess = async () => {
     setShowCreateForm(false);
     toast(t('tickets.created'), 'success');
     // Invalidate and refetch with React Query
     await queryClient.invalidateQueries({ queryKey: ['unit-tickets', buildingId, unitId] });
-  };
-
-  const handleAddComment = async () => {
-    if (!selectedTicket || !commentBody.trim()) {
-      toast(t('tickets.errors.commentEmpty'), 'error');
-      return;
-    }
-
-    setAddingComment(true);
-    setCommentError(null);
-    try {
-      await addCommentMutation.mutateAsync({
-        ticketId: selectedTicket.id,
-        body: commentBody,
-      });
-      toast(t('tickets.commentAdded'), 'success');
-      setCommentBody('');
-      // React Query automatically invalidates, but update selected ticket manually
-      await refetch();
-      setSelectedTicket(await getTicket(buildingId, selectedTicket.id));
-    } catch (err) {
-      setCommentError(err instanceof Error ? err.message : t('tickets.errors.commentFailed'));
-      toast(t('tickets.errors.commentFailed'), 'error');
-    } finally {
-      setAddingComment(false);
-    }
-  };
-
-  const openTicketDetail = async (ticketId: string) => {
-    setDetailLoading(true);
-    setDetailError(null);
-    try {
-      setSelectedTicket(await getTicket(buildingId, ticketId));
-    } catch (err) {
-      setDetailError(err instanceof Error ? err.message : 'No pudimos cargar el reclamo.');
-    } finally {
-      setDetailLoading(false);
-    }
   };
 
   return (
@@ -173,178 +123,47 @@ export function UnitTicketsList({ buildingId, unitId }: UnitTicketsListProps) {
               key={ticket.id}
               className="hover:shadow-md transition p-4"
             >
-              <button
-                type="button"
-                className="w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 rounded cursor-pointer"
-                onClick={() => void openTicketDetail(ticket.id)}
-                disabled={detailLoading}
+              <Link
+                href={ticketDetailPath(tenantId, ticket.id)}
+                className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 aria-label={`Ver reclamo ${ticket.title}`}
               >
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex-1">
-                  <h3 className="font-semibold text-foreground">{ticket.title}</h3>
-                  <p className="text-sm text-muted-foreground line-clamp-2">
-                    {ticket.description}
-                  </p>
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-foreground">{ticket.title}</h3>
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {ticket.description}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4">
+                    <span
+                      className={`text-xs font-medium px-2 py-1 rounded ${getStatusColor(
+                        ticket.status
+                      )}`}
+                    >
+                      {ticketStatusLabel(ticket.status)}
+                    </span>
+                    <span
+                      className={`text-xs font-medium px-2 py-1 rounded ${getPriorityColor(
+                        ticket.priority
+                      )}`}
+                    >
+                      {ticketPriorityLabel(ticket.priority)}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex gap-2 ml-4">
-                  <span
-                    className={`text-xs font-medium px-2 py-1 rounded ${getStatusColor(
-                      ticket.status
-                    )}`}
-                  >
-                    {ticketStatusLabel(ticket.status)}
-                  </span>
-                  <span
-                    className={`text-xs font-medium px-2 py-1 rounded ${getPriorityColor(
-                      ticket.priority
-                    )}`}
-                  >
-                    {ticketPriorityLabel(ticket.priority)}
-                  </span>
+                <div className="flex justify-between items-center text-xs text-muted-foreground">
+                  <span>{ticketCategoryLabel(ticket.category)}</span>
+                  <span>{ticket.comments?.length || 0} {t('common.comments')}</span>
                 </div>
-              </div>
-              <div className="flex justify-between items-center text-xs text-muted-foreground">
-                <span>{ticketCategoryLabel(ticket.category)}</span>
-                <span>{ticket.comments?.length || 0} {t('common.comments')}</span>
-              </div>
-              <div className="flex items-center justify-end gap-1 mt-3 text-sm text-blue-600 font-medium">
-                {t('tickets.viewDetail')}
-                <ChevronRight className="w-4 h-4" />
-              </div>
-              </button>
+                <div className="flex items-center justify-end gap-1 mt-3 text-sm text-blue-600 font-medium">
+                  {t('tickets.viewDetail')}
+                  <ChevronRight className="w-4 h-4" />
+                </div>
+              </Link>
             </Card>
           ))}
         </div>
-      )}
-
-      {/* Ticket Detail Modal - Read-only view */}
-      {selectedTicket && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center">
-          <Card className="w-full sm:w-[600px] max-h-[90vh] overflow-hidden flex flex-col rounded-t-lg sm:rounded-lg">
-            {/* Header */}
-            <div className="flex justify-between items-center p-6 border-b">
-              <h2 className="text-xl font-bold">{selectedTicket.title}</h2>
-              <button
-                onClick={() => setSelectedTicket(null)}
-                className="text-gray-500 hover:text-gray-700 p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Body - Scrollable */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Status & Priority (Read-only) */}
-              <div className="flex gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-muted-foreground mb-1">
-                    {t('tickets.status')}
-                  </label>
-                  <div className="inline-block px-3 py-1 rounded bg-blue-100 text-blue-700 text-sm font-medium">
-                    {selectedTicket.status}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {t('tickets.statusManagedByStaff')}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-muted-foreground mb-1">
-                    {t('tickets.priority')}
-                  </label>
-                  <span className="text-sm font-medium px-2 py-1 rounded bg-orange-50 text-orange-700">
-                    {selectedTicket.priority}
-                  </span>
-                </div>
-              </div>
-
-              {/* Timestamps */}
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-2">
-                  {t('tickets.timeline')}
-                </label>
-                <div className="text-sm space-y-1 text-muted-foreground">
-                  <div>Created: {new Date(selectedTicket.createdAt).toLocaleString()}</div>
-                  <div>Updated: {new Date(selectedTicket.updatedAt).toLocaleString()}</div>
-                  {selectedTicket.closedAt && (
-                    <div>Closed: {new Date(selectedTicket.closedAt).toLocaleString()}</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-2">
-                  {t('tickets.description')}
-                </label>
-                <p className="text-sm text-foreground">{selectedTicket.description}</p>
-              </div>
-
-              {/* Category */}
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  {t('tickets.category')}
-                </label>
-                <p className="text-sm">{ticketCategoryLabel(selectedTicket.category)}</p>
-              </div>
-
-              {/* Comments */}
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-3">
-                  {t('common.comments')} ({selectedTicket.comments?.length || 0})
-                </label>
-                <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
-                  {(!selectedTicket.comments || selectedTicket.comments.length === 0) && (
-                    <p className="text-sm text-muted-foreground">
-                      {t('tickets.noCommentsFirst')}
-                    </p>
-                  )}
-                  {selectedTicket.comments?.map((comment) => (
-                    <div
-                      key={comment.id}
-                      className="p-3 bg-muted rounded-md space-y-1"
-                    >
-                      <div className="flex justify-between items-start">
-                        <p className="text-sm font-medium">{comment.author.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(comment.createdAt).toLocaleString()}
-                        </p>
-                      </div>
-                      <p className="text-sm text-foreground">{comment.body}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Add Comment Form */}
-                {commentError && <p role="alert" className="mb-2 text-sm text-red-700">{commentError}</p>}
-                <div className="flex gap-2">
-                  <textarea
-                    value={commentBody}
-                    onChange={(e) => setCommentBody(e.target.value)}
-                    placeholder={t('tickets.commentPlaceholder')}
-                    className="flex-1 px-3 py-2 border rounded-md text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    rows={2}
-                  />
-                  <Button
-                    onClick={handleAddComment}
-                    disabled={addingComment || !commentBody.trim()}
-                    size="sm"
-                    className="self-end"
-                  >
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-      {detailLoading && !selectedTicket && (
-        <div role="status" className="p-4 text-sm text-muted-foreground">Cargando reclamo…</div>
-      )}
-      {detailError && !selectedTicket && (
-        <div role="alert" className="p-4 text-sm text-red-700">{detailError}</div>
       )}
       </div>
     </ErrorBoundary>

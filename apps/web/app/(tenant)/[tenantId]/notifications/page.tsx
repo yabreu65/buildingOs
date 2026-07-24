@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useNotifications } from '@/features/notifications/useNotifications';
 import {
   Card,
@@ -14,10 +15,15 @@ import {
 } from '@/shared/components/ui';
 import { Trash2, Check, CheckCheck } from 'lucide-react';
 import { t } from '@/i18n';
+import { useAuthSession } from '@/features/auth/useAuthSession';
+import { resolveNotificationPath } from '@/shared/lib/notification-routes';
+import type { Notification } from '@/features/notifications/notifications.api';
 
 const NotificationsPage = () => {
   const params = useParams();
+  const router = useRouter();
   const tenantId = params.tenantId as string;
+  const session = useAuthSession();
   const [isRead, setIsRead] = useState<boolean | undefined>(undefined);
   const [skip, setSkip] = useState(0);
 
@@ -26,6 +32,17 @@ const NotificationsPage = () => {
 
   const { toast } = useToast();
   const take = 50;
+  const activeMembership = useMemo(
+    () => session?.memberships?.find((membership) => membership.tenantId === tenantId),
+    [session, tenantId],
+  );
+  const roleContext = useMemo(
+    () => ({
+      isAdmin: activeMembership?.roles?.some((role) => ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR', 'SUPER_ADMIN'].includes(role)) ?? false,
+      isResident: activeMembership?.roles?.includes('RESIDENT') ?? false,
+    }),
+    [activeMembership],
+  );
 
   // Fetch notifications on mount and when filters change
   useEffect(() => {
@@ -57,6 +74,20 @@ const NotificationsPage = () => {
       toast(t('notifications.success'), 'success');
     } catch (err) {
       toast(err instanceof Error ? err.message : t('notifications.deleteError'), 'error');
+    }
+  };
+
+  const handleOpenNotification = async (notification: Notification) => {
+    try {
+      if (!notification.isRead) {
+        await markAsRead(notification.id);
+      }
+      const targetPath = resolveNotificationPath(notification, tenantId, roleContext);
+      if (targetPath) {
+        router.push(targetPath);
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : t('notifications.markReadError'), 'error');
     }
   };
 
@@ -172,6 +203,13 @@ const NotificationsPage = () => {
 
               {/* Actions */}
               <div className="mt-4 pt-4 border-t flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void handleOpenNotification(notification)}
+                >
+                  Abrir
+                </Button>
                 {!notification.isRead && (
                   <Button
                     variant="secondary"

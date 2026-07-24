@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   MessageSquare,
@@ -15,12 +16,13 @@ import {
 } from 'lucide-react';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
 import { getResidentTickets } from '../../../../../features/resident/api/resident-context.api';
-import { createTicket, getTicket, addComment, type Ticket } from '../../../../../features/tickets/services/tickets.api';
+import { createTicket, type Ticket } from '../../../../../features/tickets/services/tickets.api';
 import { ticketCategoryLabel } from '../../../../../features/tickets/ticket-labels';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
+import { ticketDetailPath } from '../../../../../shared/lib/routes';
 
 function ticketStatusLabel(status: Ticket['status']): string {
   const labels: Record<Ticket['status'], string> = {
@@ -87,11 +89,6 @@ export default function ResidentTicketsPage() {
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [commentBody, setCommentBody] = useState('');
-  const [commentLoading, setCommentLoading] = useState(false);
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
@@ -105,10 +102,7 @@ export default function ResidentTicketsPage() {
 
   useEffect(() => {
     queueMicrotask(() => {
-      setSelectedTicket(null);
       setShowCreateForm(false);
-      setCommentBody('');
-      setDetailError(null);
       setError(null);
       setSuccess(null);
     });
@@ -170,35 +164,6 @@ export default function ResidentTicketsPage() {
   const filteredTickets = statusFilter === 'all' 
     ? tickets 
     : tickets.filter(t => t.status === statusFilter);
-
-  const openTicketDetail = async (ticketId: string) => {
-    if (!identityMatchesRoute || !buildingId) return;
-    setDetailLoading(true);
-    setDetailError(null);
-    try {
-      setSelectedTicket(await getTicket(buildingId, ticketId));
-    } catch (err) {
-      setDetailError(err instanceof Error ? err.message : 'No pudimos cargar el reclamo.');
-    } finally {
-      setDetailLoading(false);
-    }
-  };
-
-  const submitComment = async () => {
-    if (!identityMatchesRoute || !selectedTicket || !buildingId || !commentBody.trim()) return;
-    setCommentLoading(true);
-    setDetailError(null);
-    try {
-      await addComment(buildingId, selectedTicket.id, { body: commentBody.trim() });
-      setCommentBody('');
-      setSelectedTicket(await getTicket(buildingId, selectedTicket.id));
-      void queryClient.invalidateQueries({ queryKey: ['residentTickets'] });
-    } catch (err) {
-      setDetailError(err instanceof Error ? err.message : 'No pudimos enviar el comentario.');
-    } finally {
-      setCommentLoading(false);
-    }
-  };
 
   if (contextLoading) {
     return (
@@ -382,86 +347,42 @@ export default function ResidentTicketsPage() {
         <div className="space-y-3">
           {filteredTickets.map((ticket) => (
             <Card key={ticket.id} className="p-4 hover:shadow-md transition">
-              <button
-                type="button"
-                className="w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 rounded cursor-pointer"
-                onClick={() => void openTicketDetail(ticket.id)}
-                disabled={detailLoading}
+              <Link
+                href={ticketDetailPath(tenantId, ticket.id)}
+                className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 aria-label={`Ver reclamo ${ticket.title}`}
               >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-medium truncate">{ticket.title}</h3>
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${priorityColor(ticket.priority)}`}>
-                      {priorityLabel(ticket.priority)}
-                    </span>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-medium truncate">{ticket.title}</h3>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${priorityColor(ticket.priority)}`}>
+                        {priorityLabel(ticket.priority)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground line-clamp-2">{ticket.description}</p>
+                    <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {formatDate(ticket.createdAt)}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Filter className="w-3 h-3" />
+                        {ticketCategoryLabel(ticket.category)}
+                      </span>
+                    </div>
                   </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2">{ticket.description}</p>
-                  <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {formatDate(ticket.createdAt)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Filter className="w-3 h-3" />
-                      {ticketCategoryLabel(ticket.category)}
-                    </span>
+                  <div className={`font-medium text-sm ${statusColor(ticket.status)}`}>
+                    {ticketStatusLabel(ticket.status)}
                   </div>
                 </div>
-                <div className={`font-medium text-sm ${statusColor(ticket.status)}`}>
-                  {ticketStatusLabel(ticket.status)}
+                <div className="flex items-center justify-end gap-1 mt-3 text-sm text-blue-600 font-medium">
+                  Ver reclamo
+                  <ChevronRight className="w-4 h-4" />
                 </div>
-              </div>
-              <div className="flex items-center justify-end gap-1 mt-3 text-sm text-blue-600 font-medium">
-                Ver reclamo
-                <ChevronRight className="w-4 h-4" />
-              </div>
-              </button>
+              </Link>
             </Card>
           ))}
-        </div>
-      )}
-
-      {detailLoading && <p role="status" className="mt-4 text-sm text-muted-foreground">Cargando reclamo…</p>}
-      {detailError && !selectedTicket && <p role="alert" className="mt-4 text-sm text-red-700">{detailError}</p>}
-      {selectedTicket && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/50 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="resident-ticket-detail-title">
-          <Card className="w-full max-h-[90vh] overflow-y-auto rounded-t-lg p-6 sm:mx-auto sm:w-[600px] sm:rounded-lg">
-            <div className="flex items-start justify-between gap-4">
-              <h2 id="resident-ticket-detail-title" className="text-xl font-semibold">{selectedTicket.title}</h2>
-              <button type="button" onClick={() => setSelectedTicket(null)} aria-label="Cerrar detalle" className="text-gray-500">×</button>
-            </div>
-            <p className="mt-4 text-sm">{selectedTicket.description}</p>
-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-muted-foreground">
-              <span>Estado: {ticketStatusLabel(selectedTicket.status)}</span>
-              <span>Prioridad: {priorityLabel(selectedTicket.priority)}</span>
-              <span>Categoría: {ticketCategoryLabel(selectedTicket.category)}</span>
-              <span>Fecha: {formatDate(selectedTicket.createdAt)}</span>
-              <span>Unidad: {selectedTicket.unit?.label ?? selectedTicket.unit?.code ?? 'Tu unidad'}</span>
-            </div>
-            {detailError && <p role="alert" className="mt-3 text-sm text-red-700">{detailError}</p>}
-            <div className="mt-6 space-y-3">
-              <h3 className="font-medium">Comentarios ({selectedTicket.comments?.length ?? 0})</h3>
-              {selectedTicket.comments?.length ? selectedTicket.comments.map((comment) => (
-                <div key={comment.id} className="rounded bg-muted p-3 text-sm">
-                  <p className="font-medium">{comment.author.name}</p>
-                  <p className="mt-1">{comment.body}</p>
-                </div>
-              )) : <p className="text-sm text-muted-foreground">Todavía no hay comentarios.</p>}
-              <textarea
-                value={commentBody}
-                onChange={(event) => setCommentBody(event.target.value)}
-                placeholder="Escribí un comentario"
-                rows={3}
-                disabled={commentLoading}
-                className="w-full rounded border p-2"
-              />
-              <button type="button" onClick={() => void submitComment()} disabled={commentLoading || !commentBody.trim()} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">
-                {commentLoading ? 'Enviando…' : 'Enviar comentario'}
-              </button>
-            </div>
-          </Card>
         </div>
       )}
     </div>

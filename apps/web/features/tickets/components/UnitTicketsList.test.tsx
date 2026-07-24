@@ -2,22 +2,21 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/shared/components/ui/Toast';
 import { UnitTicketsList } from './UnitTicketsList';
 import * as ticketsApi from '../services/tickets.api';
 import type { Ticket, PaginatedTickets } from '../services/tickets.api';
+import { ticketDetailPath } from '@/shared/lib/routes';
 
 jest.mock('../services/tickets.api', () => ({
   listTickets: jest.fn(),
-  getTicket: jest.fn(),
   addComment: jest.fn(),
   createTicket: jest.fn(),
 }));
 
 const mockListTickets = jest.mocked(ticketsApi.listTickets);
-const mockGetTicket = jest.mocked(ticketsApi.getTicket);
 
 function renderWithProviders(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -81,7 +80,7 @@ describe('UnitTicketsList', () => {
   });
 
   it('renders visible "Ver reclamo" text as visible content (not only aria-label)', async () => {
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
       expect(screen.getAllByText('Ver reclamo')).toHaveLength(2);
@@ -95,7 +94,7 @@ describe('UnitTicketsList', () => {
   });
 
   it('renders ticket titles correctly', async () => {
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
       expect(screen.getByText('Fuga de agua en baño')).toBeTruthy();
@@ -103,27 +102,20 @@ describe('UnitTicketsList', () => {
     });
   });
 
-  it('calls openTicketDetail with correct ticketId when card is clicked', async () => {
-    mockGetTicket.mockResolvedValue(mockTicket1);
-
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+  it('links each ticket to the canonical ticket detail route', async () => {
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Fuga de agua en baño')).toBeTruthy();
+      expect(screen.getAllByRole('link', { name: /Ver reclamo/ })).toHaveLength(2);
     });
 
-    const buttons = screen.getAllByRole('button', { name: /Ver reclamo/ });
-    expect(buttons).toHaveLength(2);
-
-    fireEvent.click(buttons[0]);
-
-    await waitFor(() => {
-      expect(mockGetTicket).toHaveBeenCalledWith('b1', 'ticket-1');
-    });
+    const links = screen.getAllByRole('link', { name: /Ver reclamo/ });
+    expect(links[0].getAttribute('href')).toBe(ticketDetailPath('tenant-1', 'ticket-1'));
+    expect(links[1].getAttribute('href')).toBe(ticketDetailPath('tenant-1', 'ticket-2'));
   });
 
   it('does not render admin-only controls', async () => {
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
       expect(screen.getByText('Fuga de agua en baño')).toBeTruthy();
@@ -135,29 +127,29 @@ describe('UnitTicketsList', () => {
   });
 
   it('each ticket button is a single button element (no nested buttons)', async () => {
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
       expect(screen.getByText('Fuga de agua en baño')).toBeTruthy();
     });
 
-    const outerButtons = screen.getAllByRole('button', { name: /Ver reclamo/ });
-    outerButtons.forEach((btn) => {
-      const nestedButtons = btn.querySelectorAll('button');
+    const outerLinks = screen.getAllByRole('link', { name: /Ver reclamo/ });
+    outerLinks.forEach((link) => {
+      const nestedButtons = link.querySelectorAll('button');
       expect(nestedButtons).toHaveLength(0);
     });
   });
 
-  it('ticket button has cursor-pointer class', async () => {
-    renderWithProviders(<UnitTicketsList buildingId="b1" unitId="u1" />);
+  it('ticket link has a visible focusable class', async () => {
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
 
     await waitFor(() => {
       expect(screen.getByText('Fuga de agua en baño')).toBeTruthy();
     });
 
-    const buttons = screen.getAllByRole('button', { name: /Ver reclamo/ });
-    buttons.forEach((btn) => {
-      expect(btn.className).toContain('cursor-pointer');
+    const links = screen.getAllByRole('link', { name: /Ver reclamo/ });
+    links.forEach((link) => {
+      expect(link.className).toContain('focus:ring-2');
     });
   });
 });

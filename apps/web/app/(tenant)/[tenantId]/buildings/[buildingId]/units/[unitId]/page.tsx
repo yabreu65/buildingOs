@@ -450,7 +450,7 @@ const UnitDashboardPage = () => {
         {/* Tickets Tab */}
         {activeTab === 'tickets' && (
           <div>
-            <UnitTicketsList buildingId={buildingId} unitId={unitId} />
+            <UnitTicketsList tenantId={tenantId} buildingId={buildingId} unitId={unitId} />
           </div>
         )}
 
