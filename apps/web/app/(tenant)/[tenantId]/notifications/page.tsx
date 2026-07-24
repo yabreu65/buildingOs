@@ -22,7 +22,7 @@ const NotificationsPage = () => {
   const [skip, setSkip] = useState(0);
 
   const { notifications, total, unreadCount, loading, error, fetch, markAsRead, markAllAsRead, deleteNotification } =
-    useNotifications();
+    useNotifications(tenantId);
 
   const { toast } = useToast();
   const take = 50;
