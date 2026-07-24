@@ -1,85 +1,129 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
-import { X, Send, AlertCircle, Plus, FileText, Wrench, Lightbulb, UserPlus, History } from 'lucide-react';
+import { X, Lightbulb, ArrowLeft } from 'lucide-react';
 import type { Ticket } from '../services/tickets.api';
 import { getTicketReplySuggestions } from '../services/tickets.api';
 import { useAuth } from '@/features/auth';
-import { useQuotes, useWorkOrders, QuoteCreateModal, WorkOrderCreateModal } from '@/features/vendors';
 import { t } from '@/i18n';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
-import { formatCurrency } from '@/shared/lib/format/money';
 import { useAssignableTicketMembers } from '@/features/memberships/useAssignableTicketMembers';
 
+type TicketDetailVariant = 'modal' | 'page';
+type TicketPriority = Ticket['priority'];
+type TicketStatus = Ticket['status'];
+
 interface TicketDetailProps {
-  buildingId: string;
   ticket: Ticket;
   tenantId: string;
-  onClose: () => void;
+  variant?: TicketDetailVariant;
+  onClose?: () => void;
+  onBack?: () => void;
   onStatusChange: (ticketId: string, newStatus: string) => Promise<void>;
+  onPriorityChange?: (ticketId: string, newPriority: TicketPriority) => Promise<void>;
   onAddComment: (ticketId: string, body: string) => Promise<void>;
   onAssign?: (ticketId: string, membershipId: string) => Promise<void>;
 }
 
-const VALID_TRANSITIONS: Record<string, string[]> = {
+const VALID_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   OPEN: ['IN_PROGRESS', 'CLOSED'],
   IN_PROGRESS: ['RESOLVED', 'OPEN'],
   RESOLVED: ['CLOSED', 'IN_PROGRESS'],
   CLOSED: ['OPEN'],
 };
 
-export default function TicketDetail({
-  buildingId,
+const STATUS_LABELS: Record<TicketStatus, string> = {
+  OPEN: 'Abierto',
+  IN_PROGRESS: 'En progreso',
+  RESOLVED: 'Resuelto',
+  CLOSED: 'Cerrado',
+};
+
+const PRIORITY_LABELS: Record<TicketPriority, string> = {
+  LOW: 'Baja',
+  MEDIUM: 'Media',
+  HIGH: 'Alta',
+  URGENT: 'Urgente',
+};
+
+const CATEGORY_LABELS: Record<Ticket['category'], string> = {
+  MAINTENANCE: 'Mantenimiento',
+  REPAIR: 'Reparación',
+  CLEANING: 'Limpieza',
+  COMPLAINT: 'Reclamo',
+  SAFETY: 'Seguridad',
+  BILLING: 'Facturación',
+  OTHER: 'Otro',
+};
+
+const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR']);
+
+function isAdminRole(roles: string[] | undefined): boolean {
+  return roles?.some((role) => ADMIN_ROLES.has(role)) ?? false;
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString('es-AR');
+}
+
+export function TicketDetail({
   ticket,
   tenantId,
+  variant = 'page',
   onClose,
+  onBack,
   onStatusChange,
+  onPriorityChange,
   onAddComment,
   onAssign,
 }: TicketDetailProps) {
   const { toast } = useToast();
   const { currentUser } = useAuth();
   const [commentBody, setCommentBody] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
   const [addingComment, setAddingComment] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
+  const [changingPriority, setChangingPriority] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
-  const [showCreateQuote, setShowCreateQuote] = useState(false);
-  const [showCreateWorkOrder, setShowCreateWorkOrder] = useState(false);
   const [showSmartReplies, setShowSmartReplies] = useState(false);
   const [smartReplies, setSmartReplies] = useState<string[]>([]);
   const [loadingReplies, setLoadingReplies] = useState(false);
 
-  const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r)) ?? false;
+  const isAdmin = isAdminRole(currentUser?.roles);
+  const adminTenantId = isAdmin ? tenantId : '';
 
-  const { data: members = [], isLoading: loadingAssignableMembers } = useAssignableTicketMembers(tenantId);
+  const { data: members = [], isLoading: loadingAssignableMembers } = useAssignableTicketMembers(adminTenantId);
   const [assigning, setAssigning] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState(ticket.assignedTo?.id || '');
-
-  const { quotes, refetch: refetchQuotes } = useQuotes({
-    buildingId,
-    filters: { ticketId: ticket.id },
-  });
-
-  const { workOrders, refetch: refetchWorkOrders } = useWorkOrders({
-    buildingId,
-    filters: { ticketId: ticket.id },
-  });
+  const [selectedPriority, setSelectedPriority] = useState<TicketPriority>(ticket.priority);
 
   const allowedTransitions = VALID_TRANSITIONS[ticket.status] || [];
+  const backHandler = onBack ?? onClose;
+  const selfAssignableMember = useMemo(
+    () => members.find((member) => member.email === currentUser?.email),
+    [currentUser?.email, members],
+  );
 
   const handleAddComment = async () => {
     if (!commentBody.trim()) {
+      setActionError(t('tickets.errors.commentEmpty'));
       toast(t('tickets.errors.commentEmpty'), 'error');
       return;
     }
 
     setAddingComment(true);
     try {
+      setActionError(null);
       await onAddComment(ticket.id, commentBody);
       setCommentBody('');
+      toast(t('tickets.commentAdded'), 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('tickets.errors.commentFailed');
+      setActionError(message);
+      toast(message, 'error');
     } finally {
       setAddingComment(false);
     }
@@ -88,11 +132,17 @@ export default function TicketDetail({
   const handleStatusChange = async (newStatus: string) => {
     setChangingStatus(true);
     try {
+      setActionError(null);
       if (newStatus === 'CLOSED') {
         setShowCloseConfirm(true);
       } else {
         await onStatusChange(ticket.id, newStatus);
+        toast(t('tickets.statusUpdated') || 'Estado actualizado', 'success');
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('tickets.errors.statusUpdateFailed') || 'Error al actualizar estado';
+      setActionError(message);
+      toast(message, 'error');
     } finally {
       setChangingStatus(false);
     }
@@ -101,9 +151,29 @@ export default function TicketDetail({
   const confirmClose = async () => {
     setShowCloseConfirm(false);
     try {
+      setActionError(null);
       await onStatusChange(ticket.id, 'CLOSED');
-    } catch {
-      // Error already handled in onStatusChange
+      toast(t('tickets.statusUpdated') || 'Estado actualizado', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('tickets.errors.statusUpdateFailed') || 'Error al actualizar estado';
+      setActionError(message);
+      toast(message, 'error');
+    }
+  };
+
+  const handlePriorityChange = async () => {
+    if (!onPriorityChange) return;
+    setChangingPriority(true);
+    try {
+      setActionError(null);
+      await onPriorityChange(ticket.id, selectedPriority);
+      toast(t('tickets.statusUpdated') || 'Prioridad actualizada', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Error al actualizar prioridad';
+      setActionError(message);
+      toast(message, 'error');
+    } finally {
+      setChangingPriority(false);
     }
   };
 
@@ -111,25 +181,16 @@ export default function TicketDetail({
     if (!onAssign) return;
     setAssigning(true);
     try {
+      setActionError(null);
       await onAssign(ticket.id, selectedMemberId || '');
       toast(selectedMemberId ? 'Asignación actualizada' : 'Asignación removida', 'success');
-    } catch {
-      toast('Error al asignar a', 'error');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Error al asignar a';
+      setActionError(message);
+      toast(message, 'error');
     } finally {
       setAssigning(false);
     }
-  };
-
-  const handleQuoteCreated = async () => {
-    setShowCreateQuote(false);
-    toast(t('vendors.quotes.created'), 'success');
-    await refetchQuotes();
-  };
-
-  const handleWorkOrderCreated = async () => {
-    setShowCreateWorkOrder(false);
-    toast(t('vendors.workOrders.created'), 'success');
-    await refetchWorkOrders();
   };
 
   const handleFetchSmartReplies = async () => {
@@ -143,7 +204,7 @@ export default function TicketDetail({
       );
       setSmartReplies(result.replies);
       setShowSmartReplies(true);
-    } catch (error) {
+    } catch {
       toast('Failed to load reply suggestions', 'error');
     } finally {
       setLoadingReplies(false);
@@ -155,455 +216,356 @@ export default function TicketDetail({
     setShowSmartReplies(false);
   };
 
-  return (
-    <ErrorBoundary level="feature">
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center">
-        <Card className="w-full sm:w-[600px] max-h-[90vh] overflow-hidden flex flex-col rounded-t-lg sm:rounded-lg">
-        {/* Header */}
-        <div className="flex justify-between items-start p-6 border-b">
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-bold">{ticket.title}</h2>
-              {/* AI Categorized Badge */}
-              {ticket.aiSuggestedCategory && (
-                <div
-                  className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
-                  title={ticket.aiCategorySuggestion?.reasoning || 'AI-suggested category'}
-                >
-                  🤖 IA sugirió
-                </div>
-              )}
+  if (variant === 'page') {
+    const statusBadgeClass = ticket.status === 'OPEN'
+      ? 'bg-blue-50 text-blue-700 border-blue-200'
+      : ticket.status === 'IN_PROGRESS'
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : ticket.status === 'RESOLVED'
+          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+          : 'bg-muted text-muted-foreground border-border';
+
+    const priorityBadgeClass = ticket.priority === 'LOW'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : ticket.priority === 'MEDIUM'
+        ? 'bg-blue-50 text-blue-700 border-blue-200'
+        : ticket.priority === 'HIGH'
+          ? 'bg-orange-50 text-orange-700 border-orange-200'
+          : 'bg-red-50 text-red-700 border-red-200';
+
+    const commonInfoRows = [
+      { label: 'Edificio', value: ticket.building?.name || '—' },
+      { label: 'Unidad', value: ticket.unit ? `${ticket.unit.label} (${ticket.unit.code})` : 'Sin unidad asociada' },
+      { label: 'Reportado por', value: ticket.createdBy?.name || '—' },
+      { label: 'Creado', value: formatDateTime(ticket.createdAt) },
+      { label: 'Actualizado', value: formatDateTime(ticket.updatedAt) },
+      { label: 'Categoría', value: CATEGORY_LABELS[ticket.category] },
+    ];
+
+    return (
+      <ErrorBoundary level="feature">
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => backHandler?.()}
+              className="inline-flex items-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver
+            </Button>
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Detalle operativo</p>
+              <p className="text-sm text-muted-foreground">URL canónica recargable</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 p-1"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
 
-        {/* Body - Scrollable */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Status & Priority */}
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Acciones
-            </label>
-          </div>
-          <div className="flex gap-4">
-            <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">
-                Estado
-              </label>
-              <div className="space-y-2">
-                <div className={`inline-block px-3 py-1 rounded text-sm font-medium ${
-                  ticket.status === 'OPEN' ? 'bg-blue-100 text-blue-700' :
-                  ticket.status === 'IN_PROGRESS' ? 'bg-yellow-100 text-yellow-700' :
-                  ticket.status === 'RESOLVED' ? 'bg-green-100 text-green-700' :
-                  'bg-gray-100 text-gray-700'
-                }`}>
-                  {ticket.status === 'OPEN' ? 'Abierta' :
-                   ticket.status === 'IN_PROGRESS' ? 'En progreso' :
-                   ticket.status === 'RESOLVED' ? 'Resuelta' :
-                   ticket.status === 'CLOSED' ? 'Cerrada' : ticket.status}
+          <header className="space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="space-y-2 min-w-0">
+                <p className="text-sm text-muted-foreground break-all">Ticket #{ticket.id}</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-3xl font-semibold tracking-tight text-foreground break-words">{ticket.title}</h1>
+                  {ticket.aiSuggestedCategory && (
+                    <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                      IA sugirió
+                    </span>
+                  )}
                 </div>
-                {allowedTransitions.length > 0 && (
-                  <div className="space-y-1">
-                    {allowedTransitions.map((status) => (
+                <p className="text-sm text-muted-foreground">
+                  {ticket.building?.name || 'Sin edificio'} · {ticket.unit ? `${ticket.unit.label} (${ticket.unit.code})` : 'Sin unidad asociada'}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${statusBadgeClass}`}>
+                  {STATUS_LABELS[ticket.status]}
+                </span>
+                <span className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${priorityBadgeClass}`}>
+                  {PRIORITY_LABELS[ticket.priority]}
+                </span>
+              </div>
+            </div>
+          </header>
+
+          {actionError && (
+            <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
+
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">
+            <main className="space-y-6">
+              <Card className="p-6 space-y-4 bg-card text-card-foreground border-border">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold">Descripción inicial</h2>
+                  <p className="text-xs text-muted-foreground">Contenido original del ticket</p>
+                </div>
+                <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{ticket.description}</p>
+              </Card>
+
+              <Card className="p-6 space-y-5 bg-card text-card-foreground border-border">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold">{t('common.comments')} ({ticket.comments?.length || 0})</h2>
+                  <p className="text-xs text-muted-foreground">Conversación real del ticket</p>
+                </div>
+
+                <div className="space-y-3">
+                  {(!ticket.comments || ticket.comments.length === 0) && (
+                    <p className="text-sm text-muted-foreground">{t('tickets.noComments')}</p>
+                  )}
+                  {ticket.comments?.map((comment) => (
+                    <div key={comment.id} className="rounded-lg border border-border bg-muted/30 p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-medium text-foreground">{comment.author.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {comment.author.id === ticket.createdBy?.id ? 'Residente' : 'Administración'}
+                          </p>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{formatDateTime(comment.createdAt)}</p>
+                      </div>
+                      <p className="text-sm leading-6 text-foreground whitespace-pre-wrap">{comment.body}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-3">
+                  <label htmlFor="ticket-comment" className="block text-sm font-medium text-foreground">
+                    Responder
+                  </label>
+                  <textarea
+                    id="ticket-comment"
+                    value={commentBody}
+                    onChange={(e) => setCommentBody(e.target.value)}
+                    placeholder="Escribir una respuesta..."
+                    className="min-h-28 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      onClick={handleAddComment}
+                      disabled={addingComment || !commentBody.trim()}
+                      className="inline-flex items-center gap-2"
+                    >
+                      {addingComment ? 'Enviando...' : 'Enviar respuesta'}
+                    </Button>
+                    {isAdmin && (
                       <Button
-                        key={status}
-                        size="sm"
+                        onClick={handleFetchSmartReplies}
+                        disabled={loadingReplies}
                         variant="secondary"
-                        onClick={() => handleStatusChange(status)}
-                        disabled={changingStatus}
-                        className="w-full justify-start"
+                        className="inline-flex items-center gap-2"
                       >
-                        {status === 'CLOSED' && <AlertCircle className="w-3 h-3 mr-2" />}
-                        {status === 'OPEN' ? 'Abrir' :
-                         status === 'IN_PROGRESS' ? 'En progreso' :
-                         status === 'RESOLVED' ? 'Resolver' :
-                         status === 'CLOSED' ? 'Cerrar' : status}
+                        <Lightbulb className="w-4 h-4" />
+                        {loadingReplies ? 'Cargando sugerencias...' : 'Sugerencias IA'}
                       </Button>
-                    ))}
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
+              </Card>
+            </main>
 
-            <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">
-                Prioridad
-              </label>
-              <span className={`text-sm font-medium px-2 py-1 rounded ${
-                ticket.priority === 'LOW' ? 'bg-green-50 text-green-700' :
-                ticket.priority === 'MEDIUM' ? 'bg-blue-50 text-blue-700' :
-                ticket.priority === 'HIGH' ? 'bg-orange-50 text-orange-700' :
-                ticket.priority === 'URGENT' ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-700'
-              }`}>
-                {ticket.priority === 'LOW' ? 'Baja' :
-                 ticket.priority === 'MEDIUM' ? 'Media' :
-                 ticket.priority === 'HIGH' ? 'Alta' :
-                 ticket.priority === 'URGENT' ? 'Urgente' : ticket.priority}
-              </span>
-            </div>
-          </div>
+            <aside className="space-y-4">
+              <Card className="p-5 space-y-4 bg-card text-card-foreground border-border">
+                <h2 className="text-base font-semibold">Información del ticket</h2>
+                <dl className="space-y-3 text-sm">
+                  {commonInfoRows.map((row) => (
+                    <div key={row.label} className="space-y-0.5">
+                      <dt className="text-muted-foreground">{row.label}</dt>
+                      <dd className="font-medium text-foreground break-words">{row.value}</dd>
+                    </div>
+                  ))}
+                  {ticket.closedAt && (
+                    <div className="space-y-0.5">
+                      <dt className="text-muted-foreground">Cerrado</dt>
+                      <dd className="font-medium text-foreground">{formatDateTime(ticket.closedAt)}</dd>
+                    </div>
+                  )}
+                </dl>
+              </Card>
 
-          {/* Timestamps */}
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Historial
-            </label>
-            <div className="text-sm space-y-1 text-muted-foreground">
-              <div>Creado: {new Date(ticket.createdAt).toLocaleString('es-AR')}</div>
-              <div>Actualizado: {new Date(ticket.updatedAt).toLocaleString('es-AR')}</div>
-              {ticket.closedAt && (
-                <div>Cerrado: {new Date(ticket.closedAt).toLocaleString('es-AR')}</div>
+              {isAdmin && (
+                <Card className="p-5 space-y-4 bg-card text-card-foreground border-border">
+                  <h2 className="text-base font-semibold">Acciones administrativas</h2>
+
+                  <div className="space-y-2">
+                    <label htmlFor="ticket-status" className="block text-sm font-medium text-foreground">
+                      Estado
+                    </label>
+                    <div className="flex flex-col gap-2">
+                      <select
+                        id="ticket-status"
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            void handleStatusChange(e.target.value);
+                            e.currentTarget.value = '';
+                          }
+                        }}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                      >
+                        <option value="">Cambiar estado</option>
+                        {allowedTransitions.map((status) => (
+                          <option key={status} value={status}>{STATUS_LABELS[status]}</option>
+                        ))}
+                      </select>
+                      {changingStatus && <p className="text-xs text-muted-foreground">Actualizando estado...</p>}
+                    </div>
+                  </div>
+
+                  {onPriorityChange && (
+                    <div className="space-y-2">
+                      <label htmlFor="ticket-priority" className="block text-sm font-medium text-foreground">
+                        Prioridad
+                      </label>
+                      <div className="flex flex-col gap-2">
+                        <select
+                          id="ticket-priority"
+                          value={selectedPriority}
+                          onChange={(e) => setSelectedPriority(e.target.value as TicketPriority)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                        >
+                          {Object.keys(PRIORITY_LABELS).map((priority) => (
+                            <option key={priority} value={priority}>
+                              {PRIORITY_LABELS[priority as TicketPriority]}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="secondary"
+                          onClick={() => void handlePriorityChange()}
+                          disabled={changingPriority}
+                        >
+                          {changingPriority ? 'Guardando...' : 'Guardar prioridad'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {onAssign && (
+                    <div className="space-y-2">
+                      <label htmlFor="ticket-assignee" className="block text-sm font-medium text-foreground">
+                        Responsable
+                      </label>
+                      {loadingAssignableMembers ? (
+                        <p className="text-sm text-muted-foreground">Cargando personal operativo...</p>
+                      ) : members.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No hay personal operativo disponible para asignar.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          <select
+                            id="ticket-assignee"
+                            value={selectedMemberId}
+                            onChange={(e) => setSelectedMemberId(e.target.value)}
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                          >
+                            <option value="">Sin asignar</option>
+                            {members.map((member) => (
+                              <option key={member.membershipId} value={member.membershipId}>
+                                {member.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex flex-wrap gap-2">
+                            {selfAssignableMember && (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => setSelectedMemberId(selfAssignableMember.membershipId)}
+                              >
+                                Asignarme
+                              </Button>
+                            )}
+                            <Button size="sm" onClick={handleAssign} disabled={assigning}>
+                              {assigning ? 'Asignando...' : 'Guardar responsable'}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
               )}
-            </div>
+
+              <Card className="p-5 space-y-3 bg-card text-card-foreground border-border">
+                <h2 className="text-base font-semibold">Transiciones válidas</h2>
+                <div className="flex flex-wrap gap-2">
+                  {allowedTransitions.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No hay transiciones disponibles.</p>
+                  ) : (
+                    allowedTransitions.map((status) => (
+                      <span key={status} className="rounded-full border border-border bg-muted px-3 py-1 text-sm text-foreground">
+                        {STATUS_LABELS[status]}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </Card>
+            </aside>
           </div>
 
-          {/* Description */}
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Descripción
-            </label>
-            <p className="text-sm text-foreground">{ticket.description}</p>
-          </div>
-
-          {/* Unit, Reporter & Assignee */}
-          <div className="grid grid-cols-2 gap-4">
-            {ticket.unit && (
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Unidad afectada
-                </label>
-                <p className="text-sm">{ticket.unit.label} ({ticket.unit.code})</p>
-              </div>
-            )}
-            {ticket.createdBy && (
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Reportado por
-                </label>
-                <p className="text-sm">{ticket.createdBy.name}</p>
-              </div>
-            )}
-            {ticket.assignedTo && (
-              <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1">
-                  Asignado a
-                </label>
-                <p className="text-sm">{ticket.assignedTo.user.name}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Assign Responsible (Admin Only) */}
-          {isAdmin && (
-            <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1 flex items-center gap-2">
-                <UserPlus className="w-4 h-4" />
-                Asignar a
-              </label>
-              {loadingAssignableMembers ? (
-                <p className="text-sm text-muted-foreground">Cargando personal operativo...</p>
-                ) : members.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 p-3 text-sm text-muted-foreground">
-                    <p>No hay personal operativo disponible para asignar.</p>
-                    <p className="mt-1">
-                    Agrega administradores u operadores desde Configuración → Mi equipo.
-                    </p>
-                  </div>
-                ) : (
-                <div className="flex gap-2">
-                  <select
-                    value={selectedMemberId}
-                    onChange={(e) => setSelectedMemberId(e.target.value)}
-                    className="flex-1 px-3 py-2 border rounded-md text-sm"
-                  >
-                    <option value="">Sin asignar</option>
-                    {members.map((member) => (
-                      <option key={member.membershipId} value={member.membershipId}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    size="sm"
-                    onClick={handleAssign}
-                    disabled={assigning}
-                  >
-                    {assigning ? 'Asignando...' : 'Asignar a'}
+          {showCloseConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <Card className="w-[400px] p-6 space-y-4">
+                <h3 className="text-lg font-bold">{t('tickets.closeConfirmTitle')}</h3>
+                <p className="text-sm text-muted-foreground">{t('tickets.closeConfirmMessage')}</p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="secondary" onClick={() => setShowCloseConfirm(false)}>
+                    {t('common.cancel')}
+                  </Button>
+                  <Button onClick={confirmClose} className="bg-red-600 hover:bg-red-700">
+                    {t('tickets.closeButton')}
                   </Button>
                 </div>
-              )}
+              </Card>
             </div>
           )}
 
-          {/* Quotes Section (Admin Only) */}
-          {isAdmin && (
-            <div>
-              <div className="flex justify-between items-center mb-3">
-                <label className="block text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <FileText className="w-4 h-4" />
-                  {t('vendors.quotes.title')} ({quotes.length})
-                </label>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setShowCreateQuote(true)}
-                  className="flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  {t('common.add')}
-                </Button>
-              </div>
-              {quotes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t('vendors.quotes.empty')}</p>
-              ) : (
-                <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                  {quotes.map((quote) => (
-                    <div key={quote.id} className="p-2 bg-muted rounded-md text-sm">
-                      <p className="font-medium">{quote.vendor?.name}</p>
-                      <p className="text-muted-foreground">
-                        {formatCurrency(quote.amount, quote.currency)} - {quote.status}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Work Orders Section (Admin Only) */}
-          {isAdmin && (
-            <div>
-              <div className="flex justify-between items-center mb-3">
-                <label className="block text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Wrench className="w-4 h-4" />
-                  {t('vendors.workOrders.title')} ({workOrders.length})
-                </label>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setShowCreateWorkOrder(true)}
-                  className="flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  {t('common.add')}
-                </Button>
-              </div>
-              {workOrders.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t('vendors.workOrders.empty')}</p>
-              ) : (
-                <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                  {workOrders.map((wo) => (
-                    <div key={wo.id} className="p-2 bg-muted rounded-md text-sm">
-                      <p className="font-medium">{wo.vendor?.name || wo.assignedTo?.user?.name}</p>
-                      <p className="text-muted-foreground">{wo.status}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Status History */}
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
-              <History className="w-4 h-4" />
-              Historial de cambios
-            </label>
-            <div className="space-y-2">
-              <div className="flex items-start gap-2 text-sm">
-                <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-500" />
-                <div>
-                  <p className="font-medium">Ticket creado</p>
-                  <p className="text-xs text-muted-foreground">
-                    {new Date(ticket.createdAt).toLocaleString('es-AR')}
-                    {ticket.createdBy && ` por ${ticket.createdBy.name}`}
-                  </p>
-                </div>
-              </div>
-              {ticket.updatedAt !== ticket.createdAt && (
-                <div className="flex items-start gap-2 text-sm">
-                  <div className="w-2 h-2 mt-1.5 rounded-full bg-yellow-500" />
-                  <div>
-                    <p className="font-medium">Última actualización</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(ticket.updatedAt).toLocaleString('es-AR')}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {ticket.closedAt && (
-                <div className="flex items-start gap-2 text-sm">
-                  <div className="w-2 h-2 mt-1.5 rounded-full bg-green-500" />
-                  <div>
-                    <p className="font-medium">Ticket cerrado</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(ticket.closedAt).toLocaleString('es-AR')}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Comments */}
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-3">
-              {t('common.comments')} ({ticket.comments?.length || 0})
-            </label>
-            <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
-              {(!ticket.comments || ticket.comments.length === 0) && (
-                <p className="text-sm text-muted-foreground">{t('tickets.noComments')}</p>
-              )}
-              {ticket.comments?.map((comment) => (
-                <div
-                  key={comment.id}
-                  className="p-3 bg-muted rounded-md space-y-1"
-                >
-                  <div className="flex justify-between items-start">
-                    <p className="text-sm font-medium">{comment.author.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(comment.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                  <p className="text-sm text-foreground">{comment.body}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Add Comment Form */}
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <textarea
-                  value={commentBody}
-                  onChange={(e) => setCommentBody(e.target.value)}
-                  placeholder={t('tickets.commentPlaceholder')}
-                  className="flex-1 px-3 py-2 border rounded-md text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows={2}
-                />
-                <Button
-                  onClick={handleAddComment}
-                  disabled={addingComment || !commentBody.trim()}
-                  size="sm"
-                  className="self-end"
-                >
-                  <Send className="w-4 h-4" />
-                </Button>
-              </div>
-
-              {/* Smart Reply Suggestions Button (Admin Only) */}
-              {isAdmin && (
-                <Button
-                  onClick={handleFetchSmartReplies}
-                  disabled={loadingReplies}
-                  variant="secondary"
-                  size="sm"
-                  className="flex items-center gap-2 w-full justify-center"
-                >
-                  <Lightbulb className="w-4 h-4" />
-                  {loadingReplies ? 'Cargando...' : '💡 IA Sugerencias de Respuesta'}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Create Quote Modal */}
-        {showCreateQuote && (
-          <QuoteCreateModal
-            buildingId={buildingId}
-            vendors={[]}
-            presetTicketId={ticket.id}
-            onSave={handleQuoteCreated}
-            onClose={() => setShowCreateQuote(false)}
-          />
-        )}
-
-        {/* Create Work Order Modal */}
-        {showCreateWorkOrder && (
-          <WorkOrderCreateModal
-            buildingId={buildingId}
-            vendors={[]}
-            presetTicketId={ticket.id}
-            onSave={handleWorkOrderCreated}
-            onClose={() => setShowCreateWorkOrder(false)}
-          />
-        )}
-
-        {/* Close Confirmation Modal */}
-        {showCloseConfirm && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <Card className="w-[400px] p-6 space-y-4">
-              <h3 className="text-lg font-bold">{t('tickets.closeConfirmTitle')}</h3>
-              <p className="text-sm text-muted-foreground">
-                {t('tickets.closeConfirmMessage')}
-              </p>
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="secondary"
-                  onClick={() => setShowCloseConfirm(false)}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={confirmClose}
-                  className="bg-red-600 hover:bg-red-700"
-                >
-                  {t('tickets.closeButton')}
-                </Button>
-              </div>
-            </Card>
-          </div>
-        )}
-
-        {/* Smart Replies Modal */}
-        {showSmartReplies && smartReplies.length > 0 && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <Card className="w-[500px] max-h-[80vh] overflow-hidden flex flex-col p-6 rounded-lg">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold flex items-center gap-2">
-                  <Lightbulb className="w-5 h-5" />
-                  Sugerencias de Respuesta IA
-                </h3>
-                <button
-                  onClick={() => setShowSmartReplies(false)}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto space-y-3 mb-4">
-                {smartReplies.map((reply, index) => (
-                  <div
-                    key={index}
-                    className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition"
-                    onClick={() => handleSelectSmartReply(reply)}
+          {showSmartReplies && smartReplies.length > 0 && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <Card className="w-[500px] max-h-[80vh] overflow-hidden flex flex-col p-6 rounded-lg">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold flex items-center gap-2">
+                    <Lightbulb className="w-5 h-5" />
+                    Sugerencias de Respuesta IA
+                  </h3>
+                  <button
+                    onClick={() => setShowSmartReplies(false)}
+                    className="text-gray-500 hover:text-gray-700"
                   >
-                    <p className="text-sm text-gray-700">{reply}</p>
-                  </div>
-                ))}
-              </div>
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
 
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => setShowSmartReplies(false)}
-                  className="flex-1"
-                >
-                  {t('common.cancel')}
-                </Button>
-              </div>
-            </Card>
-          </div>
-        )}
-        </Card>
-      </div>
-    </ErrorBoundary>
-  );
+                <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+                  {smartReplies.map((reply, index) => (
+                    <div
+                      key={index}
+                      className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition"
+                      onClick={() => handleSelectSmartReply(reply)}
+                    >
+                      <p className="text-sm text-gray-700">{reply}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowSmartReplies(false)}
+                    className="flex-1"
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
+        </div>
+      </ErrorBoundary>
+    );
+  }
+
 }
+
+export default TicketDetail;

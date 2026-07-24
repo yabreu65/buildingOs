@@ -33,6 +33,9 @@ export default function BuildingReportsPage() {
   const tenantIdStr = typeof tenantId === 'string' ? tenantId : undefined;
   const buildingIdStr = typeof buildingId === 'string' ? buildingId : undefined;
   const [buildingName, setBuildingName] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<TabType>('tickets');
+  const [filters, setFilters] = useState<ReportStateFilters>({});
+  const canLoadReports = Boolean(tenantIdStr && buildingIdStr);
 
   useEffect(() => {
     if (!tenantIdStr || !buildingIdStr) return;
@@ -41,31 +44,24 @@ export default function BuildingReportsPage() {
       .catch(() => setBuildingName(''));
   }, [tenantIdStr, buildingIdStr]);
 
-  if (!tenantIdStr || !buildingIdStr) {
-    return <div>Invalid parameters</div>;
-  }
-
-  const [activeTab, setActiveTab] = useState<TabType>('tickets');
-  const [filters, setFilters] = useState<ReportStateFilters>({});
-
   // Lazy-load reports only when their tab is active
   const ticketsReport = useTicketsReport(
-    activeTab === 'tickets' ? tenantIdStr : undefined,
+    canLoadReports && activeTab === 'tickets' ? tenantIdStr : undefined,
     { buildingId: buildingIdStr, from: filters.from, to: filters.to }
   );
 
   const financeReport = useFinanceReport(
-    activeTab === 'finance' ? tenantIdStr : undefined,
+    canLoadReports && activeTab === 'finance' ? tenantIdStr : undefined,
     { buildingId: buildingIdStr, period: filters.period }
   );
 
   const communicationsReport = useCommunicationsReport(
-    activeTab === 'communications' ? tenantIdStr : undefined,
+    canLoadReports && activeTab === 'communications' ? tenantIdStr : undefined,
     { buildingId: buildingIdStr, from: filters.from, to: filters.to }
   );
 
   const activityReport = useActivityReport(
-    activeTab === 'activity' ? tenantIdStr : undefined,
+    canLoadReports && activeTab === 'activity' ? tenantIdStr : undefined,
     { buildingId: buildingIdStr, from: filters.from, to: filters.to }
   );
 
@@ -75,6 +71,10 @@ export default function BuildingReportsPage() {
     { id: 'communications', label: 'Comunicados' },
     { id: 'activity', label: 'Actividad' },
   ];
+
+  if (!tenantIdStr || !buildingIdStr) {
+    return <div>Invalid parameters</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -130,6 +130,7 @@ export default function BuildingReportsPage() {
         <div className="p-4 md:p-6">
           {activeTab === 'tickets' && (
             <TicketsReportComponent
+              tenantId={tenantIdStr}
               data={ticketsReport.data}
               loading={ticketsReport.loading}
               error={ticketsReport.error}

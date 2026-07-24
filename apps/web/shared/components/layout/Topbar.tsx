@@ -14,10 +14,12 @@ import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Noti
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
+import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 
 const TICKET_TYPES = new Set([
   'TICKET_STATUS_CHANGED',
   'TICKET_COMMENT_ADDED',
+  'TICKET_CREATED',
   'SUPPORT_TICKET_CREATED',
   'URGENT_TICKET_UNASSIGNED',
 ]);
@@ -35,6 +37,10 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const session = getSession();
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
+  const roleContext = {
+    isAdmin,
+    isResident: activeMembership?.roles?.includes('RESIDENT') ?? false,
+  };
   const hasSession = Boolean(session);
 
   // 1. Always-polling unread count for the badge
@@ -149,13 +155,9 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       await markReadMutation.mutateAsync(notification.id);
     }
 
-    if (TICKET_TYPES.has(notification.type)) {
-      if (isAdmin) {
-        const buildingId = notification.data?.buildingId;
-        router.push(buildingId ? `/${tenantId}/buildings/${buildingId}/tickets` : `/${tenantId}/support`);
-      } else {
-        router.push(`/${tenantId}/resident/tickets`);
-      }
+    const targetPath = resolveNotificationPath(notification, tenantId, roleContext);
+    if (targetPath) {
+      router.push(targetPath);
     } else if (isAdmin) {
       router.push(`/${tenantId}/finanzas?tab=payments`);
     } else {

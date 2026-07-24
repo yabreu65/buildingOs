@@ -198,7 +198,7 @@ describe('PaymentNotificationBell', () => {
           type: 'TICKET_STATUS_CHANGED',
           title: 'Estado actualizado',
           body: 'Tu reclamo cambió de estado',
-          data: { buildingId: 'building-1' },
+          data: { buildingId: 'building-1', ticketId: 'ticket-1' },
           deliveryMethods: ['IN_APP'],
           isRead: false,
           createdAt: '2025-01-15T10:00:00Z',
@@ -218,7 +218,7 @@ describe('PaymentNotificationBell', () => {
 
     await waitFor(() => {
       expect(mockMarkAsRead).toHaveBeenCalledWith(TENANT_ID, 'n1');
-      expect(mockPush).toHaveBeenCalledWith('/tenant-1/resident/tickets');
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/tickets/ticket-1');
     });
   });
 

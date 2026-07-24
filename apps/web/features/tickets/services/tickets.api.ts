@@ -5,8 +5,6 @@
 
 import { apiClient, HttpError } from '@/shared/lib/http/client';
 
-const isDev = process.env.NODE_ENV === 'development';
-
 // ============================================
 // Types
 // ============================================
@@ -94,16 +92,7 @@ export interface CreateCommentInput {
   body: string;
 }
 
-// ============================================
-// Logging Helper (Dev Only)
-// ============================================
-function logRequest(method: string, endpoint: string, body?: unknown) {
-  if (!isDev) return;
-  console.log(`[API] ${method} ${endpoint}`, body && JSON.stringify(body));
-}
-
 function logError(endpoint: string, status: number, message: string) {
-  if (!isDev) return;
   console.error(`[API ERROR] ${endpoint} (${status})`, message);
 }
 
@@ -151,7 +140,6 @@ export async function listTickets(
   if (params?.sortOrder) query.append('sortOrder', params.sortOrder);
 
   const endpoint = `/buildings/${buildingId}/tickets${query.toString() ? '?' + query.toString() : ''}`;
-  logRequest('GET', endpoint);
 
   try {
     const data = await apiClient<PaginatedTickets>({
@@ -171,7 +159,25 @@ export async function listTickets(
  */
 export async function getTicket(buildingId: string, ticketId: string): Promise<Ticket> {
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}`;
-  logRequest('GET', endpoint);
+
+  try {
+    const data = await apiClient<Ticket>({
+      path: endpoint,
+      method: 'GET',
+    });
+    return data;
+  } catch (error) {
+    const httpError = error instanceof HttpError ? error : new HttpError(500, 'Unknown', String(error));
+    logError(endpoint, httpError.status, httpError.message);
+    throw error;
+  }
+}
+
+/**
+ * Get a single ticket using the canonical tenant-scoped route.
+ */
+export async function getTicketByTenant(tenantId: string, ticketId: string): Promise<Ticket> {
+  const endpoint = `/tenants/${tenantId}/tickets/${ticketId}`;
 
   try {
     const data = await apiClient<Ticket>({
@@ -194,7 +200,6 @@ export async function createTicket(
   input: CreateTicketInput
 ): Promise<Ticket> {
   const endpoint = `/buildings/${buildingId}/tickets`;
-  logRequest('POST', endpoint, input);
 
   try {
     const data = await apiClient<Ticket, CreateTicketInput>({
@@ -219,7 +224,6 @@ export async function updateTicket(
   input: UpdateTicketInput
 ): Promise<Ticket> {
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}`;
-  logRequest('PATCH', endpoint, input);
 
   try {
     const data = await apiClient<Ticket, UpdateTicketInput>({
@@ -244,7 +248,6 @@ export async function addComment(
   input: CreateCommentInput
 ): Promise<TicketComment> {
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}/comments`;
-  logRequest('POST', endpoint, input);
 
   try {
     const data = await apiClient<TicketComment, CreateCommentInput>({
@@ -268,7 +271,6 @@ export async function getComments(
   ticketId: string
 ): Promise<TicketComment[]> {
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}/comments`;
-  logRequest('GET', endpoint);
 
   try {
     const data = await apiClient<TicketComment[]>({
@@ -296,7 +298,6 @@ export async function getTicketReplySuggestions(
   description: string
 ): Promise<{ replies: string[] }> {
   const endpoint = `/tenants/${tenantId}/assistant/ticket-replies`;
-  logRequest('POST', endpoint, { ticketId, title, description });
 
   try {
     const data = await apiClient<{ replies: string[] }, { ticketId: string; title: string; description: string }>({

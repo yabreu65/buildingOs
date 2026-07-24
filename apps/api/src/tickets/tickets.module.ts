@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TicketsController } from './tickets.controller';
+import { TenantTicketsController } from './tenant-tickets.controller';
 import { TicketsService } from './tickets.service';
 import { TicketsValidators } from './tickets.validators';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -8,7 +9,7 @@ import { AssistantModule } from '../assistant/assistant.module';
 
 @Module({
   imports: [PrismaModule, ResidentAccessModule, AssistantModule],
-  controllers: [TicketsController],
+  controllers: [TicketsController, TenantTicketsController],
   providers: [TicketsService, TicketsValidators],
   exports: [TicketsService, TicketsValidators],
 })

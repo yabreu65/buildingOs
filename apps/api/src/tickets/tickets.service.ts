@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   Ticket,
@@ -14,6 +15,7 @@ import {
   TicketPriority,
   TicketStatus,
 } from '@prisma/client';
+import type { ScopedRole } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -25,6 +27,8 @@ import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
 import { ASSIGNABLE_TICKET_ROLES } from '../memberships/memberships.constants';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
+import type { AuthenticatedServiceActor } from '../common/types/request.types';
+import { PERMISSIONS } from '../rbac/permissions';
 
 /**
  * TicketsService: CRUD operations for Tickets with scope validation
@@ -449,6 +453,58 @@ export class TicketsService {
   }
 
   /**
+   * Get a single ticket using the canonical tenant-scoped route.
+   *
+   * The ticket is first located by tenant + id, then the actor's memberships
+   * are used to enforce either resident self-scope or scoped operational RBAC.
+   *
+   * @throws NotFoundException when the ticket does not belong to the tenant
+   * @throws ForbiddenException when the actor has no access to the ticket
+   */
+  async findOneByTenantAndId(
+    tenantId: string,
+    ticketId: string,
+    actor: AuthenticatedServiceActor,
+  ): Promise<Ticket & { comments: unknown[] }> {
+    const ticket = await this.prisma.ticket.findFirst({
+      where: { id: ticketId, tenantId },
+      select: {
+        buildingId: true,
+        unitId: true,
+      },
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found or does not belong to this tenant');
+    }
+
+    const actorMembership = actor.memberships?.find((membership) => membership.tenantId === tenantId);
+    if (!actorMembership) {
+      throw new ForbiddenException('No tiene acceso al ticket solicitado');
+    }
+
+    const scopedRoles = this.getScopedRoles(actorMembership);
+    const roleNames = scopedRoles.map((role) => role.role);
+
+    if (this.residentAccess.shouldEnforce(roleNames)) {
+      if (!ticket.unitId) {
+        throw new NotFoundException('Ticket not found or does not belong to you');
+      }
+
+      await this.residentAccess.assertUnitAccess(
+        tenantId,
+        actor.id,
+        ticket.unitId,
+        ticket.buildingId,
+      );
+    } else if (!this.canReadTicket(scopedRoles, ticket.buildingId, ticket.unitId)) {
+      throw new ForbiddenException('No tiene acceso al ticket solicitado');
+    }
+
+    return this.findOne(tenantId, ticket.buildingId, ticketId);
+  }
+
+  /**
    * Update a ticket
    *
    * Validates:
@@ -627,6 +683,47 @@ export class TicketsService {
     });
 
     return membership;
+  }
+
+  private getScopedRoles(membership: NonNullable<AuthenticatedServiceActor['memberships']>[number]): ScopedRole[] {
+    if (membership.scopedRoles && membership.scopedRoles.length > 0) {
+      return membership.scopedRoles;
+    }
+
+    return (membership.roles || []).map((role) => ({
+      id: `${membership.tenantId}:${role}`,
+      role,
+      scopeType: 'TENANT',
+      scopeBuildingId: null,
+      scopeUnitId: null,
+    }));
+  }
+
+  private canReadTicket(
+    scopedRoles: ScopedRole[],
+    buildingId: string,
+    unitId?: string | null,
+  ): boolean {
+    return scopedRoles.some((scopedRole) => {
+      const permissions = PERMISSIONS[scopedRole.role] || [];
+      if (!permissions.includes('tickets.read')) {
+        return false;
+      }
+
+      if (scopedRole.scopeType === 'TENANT') {
+        return true;
+      }
+
+      if (scopedRole.scopeType === 'BUILDING') {
+        return scopedRole.scopeBuildingId === buildingId;
+      }
+
+      if (scopedRole.scopeType === 'UNIT') {
+        return !!unitId && scopedRole.scopeUnitId === unitId;
+      }
+
+      return false;
+    });
   }
 
   /**

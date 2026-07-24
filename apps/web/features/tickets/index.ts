@@ -5,7 +5,7 @@ export * from './components/TicketDetail';
 export * from './components/TicketForm';
 
 // Hooks
-export * from './hooks/useTickets';
+export * from './hooks';
 
 // Services
 export * from './services/tickets.api';

@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useMemo } from 'react';
+import Link from 'next/link';
 import Card from "@/shared/components/ui/Card";
 import Skeleton from "@/shared/components/ui/Skeleton";
 import { OnboardingChecklist } from "@/features/onboarding/OnboardingChecklist";
@@ -12,6 +13,7 @@ import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
 import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
+import { ticketDetailPath } from "@/shared/lib/routes";
 import {
   AlertCircle,
   CheckCircle,
@@ -445,11 +447,15 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
               {queues?.tickets.top && queues.tickets.top.length > 0 && (
                 <div className="space-y-2 border-t border-border pt-3">
                   {queues.tickets.top.slice(0, 5).map((t) => (
-                    <div key={t.id} className="flex items-center gap-2 text-sm">
+                    <Link
+                      key={t.id}
+                      href={ticketDetailPath(tenantId, t.id)}
+                      className="flex items-center gap-2 text-sm rounded-md px-1 py-0.5 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === 'OPEN' ? 'bg-red-400' : 'bg-yellow-400'}`} />
                       <span className="truncate flex-1">{t.title}</span>
                       <span className="text-xs text-muted-foreground shrink-0">{t.buildingName}</span>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}
