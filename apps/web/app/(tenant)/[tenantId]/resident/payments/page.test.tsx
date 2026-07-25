@@ -297,6 +297,88 @@ describe('ResidentPaymentsPage', () => {
     expect(screen.queryByText('Recibo en generación')).toBeNull();
   });
 
+  it('shows receipt generation progress for approved and reconciled payments only', async () => {
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'payment-approved-pending',
+        status: PaymentStatus.APPROVED,
+        receiptStatus: 'PENDING',
+        receiptDocumentId: undefined,
+        receiptError: undefined,
+      }),
+      makePayment({
+        id: 'payment-reconciled-pending',
+        status: PaymentStatus.RECONCILED,
+        receiptStatus: 'PENDING',
+        receiptDocumentId: undefined,
+        receiptError: undefined,
+      }),
+      makePayment({
+        id: 'payment-submitted-pending',
+        status: PaymentStatus.SUBMITTED,
+        receiptStatus: 'PENDING',
+        receiptDocumentId: undefined,
+        receiptError: undefined,
+      }),
+      makePayment({
+        id: 'payment-rejected-pending',
+        status: PaymentStatus.REJECTED,
+        receiptStatus: 'PENDING',
+        receiptDocumentId: undefined,
+        receiptError: undefined,
+      }),
+    ]);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    expect(await screen.findAllByText('Recibo en generación')).toHaveLength(2);
+    expect(screen.queryByText('No pudimos generar el recibo. La administración ya fue notificada.')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ver recibo del pago de/i })).toBeNull();
+  });
+
+  it('shows receipt errors for approved and reconciled payments and allows opening the reconciled receipt', async () => {
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'payment-approved-failed',
+        status: PaymentStatus.APPROVED,
+        receiptStatus: 'FAILED',
+        receiptError: 'Error al generar el recibo aprobado',
+        receiptDocumentId: undefined,
+      }),
+      makePayment({
+        id: 'payment-reconciled-failed',
+        status: PaymentStatus.RECONCILED,
+        receiptStatus: 'FAILED',
+        receiptError: 'Error al generar el recibo conciliado',
+        receiptDocumentId: undefined,
+      }),
+      makePayment({
+        id: 'payment-reconciled-ready',
+        status: PaymentStatus.RECONCILED,
+        receiptStatus: 'READY',
+        receiptDocumentId: 'receipt-doc-1',
+        receiptError: undefined,
+      }),
+    ]);
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    expect(await screen.findByText('Error al generar el recibo aprobado')).toBeTruthy();
+    expect(screen.getByText('Error al generar el recibo conciliado')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /ver recibo del pago de/i }));
+
+    await waitFor(() => {
+      expect(mockedDownloadDocumentContent).toHaveBeenCalledWith('tenant-1', 'receipt-doc-1');
+      expect(openSpy).toHaveBeenCalledWith('blob:download-url', '_blank', 'noopener,noreferrer');
+    });
+
+    openSpy.mockRestore();
+  });
+
   it('does not show an invalid receipt action for payments without an approved receipt', async () => {
     mockedListPayments.mockResolvedValueOnce([
       makePayment({

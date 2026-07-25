@@ -745,7 +745,7 @@ export class DocumentsService {
       throw new BadRequestException('The uploaded file key is invalid');
     }
 
-    if (objectKey.includes('\\')) {
+    if (objectKey.includes('\\') || objectKey.includes('\0')) {
       throw new BadRequestException('The uploaded file key is invalid');
     }
 
@@ -764,7 +764,14 @@ export class DocumentsService {
     }
 
     const relativePath = objectKey.slice(allowedPrefix.length);
-    if (!relativePath || relativePath.includes('..') || relativePath.includes('//')) {
+    if (!relativePath) {
+      throw new BadRequestException('The uploaded file key is invalid');
+    }
+
+    const segments = objectKey.split('/');
+    if (
+      segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+    ) {
       throw new BadRequestException('The uploaded file key is invalid');
     }
   }

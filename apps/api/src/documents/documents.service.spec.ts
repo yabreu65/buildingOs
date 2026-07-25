@@ -142,6 +142,45 @@ describe('DocumentsService', () => {
     expect(result.bucket).toBe(DEFAULT_BUCKET);
   });
 
+  it('preserves double dots inside generated filenames and accepts the generated key', async () => {
+    minio.presignUpload.mockResolvedValue('https://upload.example/expensas.pdf');
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      createdByMembership: { user: { id: 'admin-1', name: 'Admin' } },
+      file: { bucket: DEFAULT_BUCKET, objectKey: 'tenant-tenant-1/documents/generated-expensas..julio.pdf' },
+    } as never);
+
+    const presignResult = await service.presignUpload('tenant-1', 'expensas..julio.pdf', 'application/pdf', 1024);
+    expect(presignResult.objectKey).toContain('expensas..julio.pdf');
+
+    const result = await service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: {
+        bucket: DEFAULT_BUCKET,
+        objectKey: 'tenant-tenant-1/documents/generated-expensas..julio.pdf',
+        originalName: 'expensas..julio.pdf',
+        mimeType: 'application/pdf',
+        size: 1024,
+      },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(result.file.objectKey).toContain('expensas..julio.pdf');
+  });
+
   it('rejects empty uploads before creating the document record', async () => {
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: 0 } as never);
@@ -178,8 +217,10 @@ describe('DocumentsService', () => {
 
   it.each([
     'tenant-tenant-1/documents/../tenant-tenant-2/proof.pdf',
+    'tenant-tenant-1/documents/./proof.pdf',
     'tenant-tenant-1/documents\\proof.pdf',
     'tenant-tenant-1/documents//proof.pdf',
+    'tenant-tenant-1/documents/proof\0.pdf',
   ])('rejects invalid object keys without touching storage: %s', async (objectKey) => {
     await expect(service.createDocument('tenant-1', 'membership-1', {
       title: 'Receipt',

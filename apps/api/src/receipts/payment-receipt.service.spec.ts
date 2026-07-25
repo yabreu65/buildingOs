@@ -6,6 +6,35 @@ import { writeFileSync } from 'node:fs';
 describe('PaymentReceiptService', () => {
   const DEFAULT_BUCKET = 'buildingos-test';
   const RECEIPT_MAX_TEXT_WIDTH = 595 - 72 - 72;
+  const WIN_ANSI_DECODE_MAP: Record<number, string> = {
+    0x80: '€',
+    0x82: '‚',
+    0x83: 'ƒ',
+    0x84: '„',
+    0x85: '…',
+    0x86: '†',
+    0x87: '‡',
+    0x88: 'ˆ',
+    0x89: '‰',
+    0x8a: 'Š',
+    0x8b: '‹',
+    0x8c: 'Œ',
+    0x8e: 'Ž',
+    0x91: '‘',
+    0x92: '’',
+    0x93: '“',
+    0x94: '”',
+    0x95: '•',
+    0x96: '–',
+    0x97: '—',
+    0x98: '˜',
+    0x99: '™',
+    0x9a: 'š',
+    0x9b: '›',
+    0x9c: 'œ',
+    0x9e: 'ž',
+    0x9f: 'Ÿ',
+  };
 
   const prisma = {
     payment: {
@@ -58,6 +87,17 @@ describe('PaymentReceiptService', () => {
         .replace(/\\\)/g, ')')
         .replace(/\\\\/g, '\\'),
     );
+  }
+
+  function decodeWinAnsiText(text: string): string {
+    return Array.from(text, (character) => {
+      const code = character.charCodeAt(0);
+      return WIN_ANSI_DECODE_MAP[code] ?? character;
+    }).join('');
+  }
+
+  function extractDecodedPdfTextLines(buffer: Buffer): string[] {
+    return extractPdfTextLines(buffer).map(decodeWinAnsiText);
   }
 
   function measureReceiptTextWidth(text: string): number {
@@ -256,6 +296,92 @@ describe('PaymentReceiptService', () => {
       3600,
     );
     expect(result?.fileKey).toContain('/receipt_R-');
+  });
+
+  it('encodes WinAnsi punctuation and falls back safely for unsupported characters', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      name: 'Consorcio “Central”',
+      brandName: 'Administración “Central” — Horizonte €',
+    } as never);
+    prisma.user.findUnique.mockResolvedValue({ name: 'Niñez' } as never);
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: 'Referencia “curva” € 🙂 / validado \\ soporte',
+      paymentAllocations: [{
+        chargeId: 'charge-1',
+        amount: 4050000,
+        charge: {
+          period: '2025-10',
+          concept: 'Condominio – especial…',
+          expensePeriod: { year: 2025, month: 10 },
+        },
+      }],
+      unit: { label: 'TN-01-01' },
+      building: { name: 'Torre “A”' },
+      receiptDocumentId: null,
+      receiptNumber: null,
+    } as never);
+
+    await service.ensureReceiptForPayment('payment-1');
+
+    const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
+    const decodedPdfText = extractDecodedPdfTextLines(uploadedBuffer).join('\n');
+
+    expect(decodedPdfText).toContain('Administración “Central” — Horizonte €');
+    expect(decodedPdfText).toContain('Niñez');
+    expect(decodedPdfText).toContain('Referencia “curva” € ? / validado \\ soporte');
+    expect(decodedPdfText).toContain('Condominio – especial…');
+    expect(decodedPdfText).toContain('Torre “A”');
+    expect(decodedPdfText).toContain('Página 1 de 1');
+    expect(decodedPdfText).not.toContain('🙂');
+    expect(uploadedBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
+
+  it('escapes parentheses and backslashes in the PDF stream after WinAnsi encoding', async () => {
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: 'Pago (confirmado) \\ soporte',
+      paymentAllocations: [{
+        chargeId: 'charge-1',
+        amount: 4050000,
+        charge: {
+          period: '2025-10',
+          concept: 'Condominio ordinario 2025-10',
+          expensePeriod: { year: 2025, month: 10 },
+        },
+      }],
+      unit: { label: 'TN-01-01' },
+      building: { name: 'Complejo Horizonte' },
+      receiptDocumentId: null,
+      receiptNumber: null,
+    } as never);
+
+    await service.ensureReceiptForPayment('payment-1');
+
+    const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
+    const pdfText = uploadedBuffer.toString('latin1');
+
+    expect(pdfText).toContain('\\(confirmado\\)');
+    expect(pdfText).toContain('\\\\ soporte');
+    expect(uploadedBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
 
   it('uses the persisted file bucket when reusing an existing receipt', async () => {

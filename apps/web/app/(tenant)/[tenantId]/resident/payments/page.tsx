@@ -17,7 +17,7 @@ import { useResidentContext } from '@/features/resident/hooks/useResidentContext
 import { useContextOptions } from '@/features/context/useContextOptions';
 import { getResidentLedger, type UnitLedger } from '@/features/resident/api/resident-context.api';
 import { useTenants } from '@/features/tenants/tenants.hooks';
-import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus } from '@/features/finance/services/finance.api';
+import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus, PaymentStatus } from '@/features/finance/services/finance.api';
 import {
   downloadDocumentContent,
   presignUpload,
@@ -860,6 +860,17 @@ export const ResidentPaymentsPage = () => {
               const rejectionReasonLabel = getPaymentRejectionReasonLabel(payment.rejectionReason);
               const hasReceipt = !!receiptDocumentId;
               const hasProof = !!proofDocumentId;
+              const isReceiptTrackingPayment =
+                payment.status === PaymentStatus.APPROVED ||
+                payment.status === PaymentStatus.RECONCILED;
+              const showReceiptGenerationState =
+                isReceiptTrackingPayment &&
+                !hasReceipt &&
+                payment.receiptStatus === 'PENDING';
+              const showReceiptErrorState =
+                isReceiptTrackingPayment &&
+                !hasReceipt &&
+                payment.receiptStatus === 'FAILED';
               const downloadDisabled = downloadingDocumentId !== null;
               const paymentDate = formatPaymentDisplayDate(payment.paidAt ?? payment.createdAt);
 
@@ -878,12 +889,12 @@ export const ResidentPaymentsPage = () => {
                         {payment.rejectionComment}
                       </p>
                     )}
-                    {payment.status === 'APPROVED' && !hasReceipt && payment.receiptStatus === 'PENDING' && (
+                    {showReceiptGenerationState && (
                       <p className="text-sm text-muted-foreground">Recibo en generación</p>
                     )}
-                    {payment.status === 'APPROVED' && !hasReceipt && payment.receiptStatus === 'FAILED' && (
+                    {showReceiptErrorState && (
                       <p className="text-sm text-red-700">
-                        No pudimos generar el recibo. La administración ya fue notificada.
+                        {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
                       </p>
                     )}
                   </div>

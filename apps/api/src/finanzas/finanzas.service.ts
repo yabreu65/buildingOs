@@ -1020,6 +1020,10 @@ export class FinanzasService {
         data: {
           status: PaymentStatus.REJECTED,
           reviewedByMembershipId: membershipId,
+          rejectionReason: dto.reason as RejectionReason,
+          rejectionComment: dto.comment || null,
+          reviewedAt: new Date(),
+          notes: dto.notes || null,
           updatedAt: new Date(),
         },
       });

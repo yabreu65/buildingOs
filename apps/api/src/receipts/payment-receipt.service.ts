@@ -58,6 +58,36 @@ const RECEIPT_PDF_MARGIN_RIGHT = 72;
 const RECEIPT_PDF_MAX_TEXT_WIDTH = RECEIPT_PDF_PAGE_WIDTH - RECEIPT_PDF_MARGIN_LEFT - RECEIPT_PDF_MARGIN_RIGHT;
 const RECEIPT_PDF_MAX_BODY_LINES_PER_PAGE = 22;
 
+const WIN_ANSI_CHAR_MAP: Record<string, string> = {
+  '€': String.fromCharCode(0x80),
+  '‚': String.fromCharCode(0x82),
+  'ƒ': String.fromCharCode(0x83),
+  '„': String.fromCharCode(0x84),
+  '…': String.fromCharCode(0x85),
+  '†': String.fromCharCode(0x86),
+  '‡': String.fromCharCode(0x87),
+  'ˆ': String.fromCharCode(0x88),
+  '‰': String.fromCharCode(0x89),
+  'Š': String.fromCharCode(0x8A),
+  '‹': String.fromCharCode(0x8B),
+  'Œ': String.fromCharCode(0x8C),
+  'Ž': String.fromCharCode(0x8E),
+  '‘': String.fromCharCode(0x91),
+  '’': String.fromCharCode(0x92),
+  '“': String.fromCharCode(0x93),
+  '”': String.fromCharCode(0x94),
+  '•': String.fromCharCode(0x95),
+  '–': String.fromCharCode(0x96),
+  '—': String.fromCharCode(0x97),
+  '˜': String.fromCharCode(0x98),
+  '™': String.fromCharCode(0x99),
+  'š': String.fromCharCode(0x9A),
+  '›': String.fromCharCode(0x9B),
+  'œ': String.fromCharCode(0x9C),
+  'ž': String.fromCharCode(0x9E),
+  'Ÿ': String.fromCharCode(0x9F),
+};
+
 @Injectable()
 export class PaymentReceiptService {
   private readonly logger = new Logger(PaymentReceiptService.name);
@@ -624,6 +654,14 @@ export class PaymentReceiptService {
       '(': 3.5,
       ')': 3.5,
       '%': 7,
+      '€': 5.5,
+      '‘': 2.5,
+      '’': 2.5,
+      '“': 3.5,
+      '”': 3.5,
+      '–': 4.5,
+      '—': 6,
+      '…': 7,
       'Ñ': 7,
       'Á': 6,
       'É': 6,
@@ -697,7 +735,7 @@ export class PaymentReceiptService {
   }
 
   private pdfText(text: string): string {
-    return `(${this.escapePdfText(text)}) Tj`;
+    return `(${this.escapePdfText(this.encodeWinAnsi(text))}) Tj`;
   }
 
   private escapePdfText(text: string): string {
@@ -705,6 +743,33 @@ export class PaymentReceiptService {
       .replace(/\\/g, '\\\\')
       .replace(/\(/g, '\\(')
       .replace(/\)/g, '\\)');
+  }
+
+  private encodeWinAnsi(text: string): string {
+    let encoded = '';
+
+    for (const character of text) {
+      const mappedCharacter = WIN_ANSI_CHAR_MAP[character];
+      if (mappedCharacter) {
+        encoded += mappedCharacter;
+        continue;
+      }
+
+      const codePoint = character.codePointAt(0) ?? 0;
+      if (codePoint >= 0x20 && codePoint <= 0x7E) {
+        encoded += character;
+        continue;
+      }
+
+      if (codePoint >= 0xA0 && codePoint <= 0xFF) {
+        encoded += character;
+        continue;
+      }
+
+      encoded += '?';
+    }
+
+    return encoded;
   }
 
   private formatCurrencyForReceipt(amountMinor: number, currency: string): string {
