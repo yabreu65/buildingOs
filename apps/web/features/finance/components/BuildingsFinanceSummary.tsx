@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { financeApi } from '../services/finance.api';
 import { Skeleton } from '@/shared/components/ui';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
@@ -18,6 +18,7 @@ interface BuildingFinanceSummary {
 
 interface BuildingsFinanceSummaryProps {
   tenantId: string;
+  period?: string;
   buildingIds: string[];
   buildingNames: Record<string, string>;
 }
@@ -27,21 +28,26 @@ const formatPercentage = (val: number) => `${Math.round(val)}%`;
 export function BuildingsFinanceSummary({
   buildingIds,
   buildingNames,
+  period,
 }: BuildingsFinanceSummaryProps) {
   const { format } = useTenantCurrency();
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(buildingIds.length > 0);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
   const failedCount = summaries.filter((summary) => summary.errorMessage).length;
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
+    let cancelled = false;
+
     const fetchSummaries = async () => {
       try {
         setLoading(true);
         const results = await Promise.all(
           buildingIds.map(async (bId) => {
             try {
-              const summary = await financeApi.getFinancialSummary(bId);
+              const summary = await financeApi.getFinancialSummary(bId, period);
               return {
                 buildingId: bId,
                 buildingName: buildingNames[bId] || bId,
@@ -66,12 +72,25 @@ export function BuildingsFinanceSummary({
             }
           }),
         );
+
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setSummaries(results);
         setError(null);
       } catch (err) {
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setError(err instanceof Error ? err : new Error('Failed to fetch summaries'));
         setSummaries([]);
       } finally {
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setLoading(false);
       }
     };
@@ -79,7 +98,11 @@ export function BuildingsFinanceSummary({
     if (buildingIds.length > 0) {
       fetchSummaries();
     }
-  }, [buildingIds, buildingNames]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [buildingIds, buildingNames, period]);
 
   if (loading) {
     return (

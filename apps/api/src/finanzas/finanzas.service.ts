@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -64,6 +64,33 @@ interface RawDelinquencyTotalsRow {
   periodDebt: bigint | number | string;
   accumulatedDebt: bigint | number | string;
 }
+
+type ChargeWithAllocations = Prisma.ChargeGetPayload<{
+  include: {
+    paymentAllocations: {
+      include: {
+        payment: {
+          select: {
+            status: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
+type PaymentWithAllocations = Prisma.PaymentGetPayload<{
+  include: {
+    paymentAllocations: {
+      include: {
+        charge: true;
+      };
+    };
+  };
+}>;
+
+const RESIDENT_DIRECTED_PAYMENT_PREFIX = 'resident-charge-selection-requires-resubmission';
+const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
 
 @Injectable()
 export class FinanzasService {
@@ -425,6 +452,7 @@ export class FinanzasService {
     if (!this.validators.canSubmitPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'submit');
     }
+    const isResidentPayment = this.validators.isResidentOrOwner(userRoles);
 
     // 2. Validate building
     await this.validators.validateBuildingBelongsToTenant(
@@ -433,7 +461,7 @@ export class FinanzasService {
     );
 
     // 3. If RESIDENT/OWNER, unitId is REQUIRED
-    if (this.validators.isResidentOrOwner(userRoles)) {
+    if (isResidentPayment) {
       if (!dto.unitId) {
         throw new BadRequestException(
           'RESIDENT must specify unitId when submitting a payment',
@@ -444,6 +472,11 @@ export class FinanzasService {
         userId,
         dto.unitId,
       );
+      if (!dto.chargeId) {
+        throw new BadRequestException(
+          'RESIDENT must specify chargeId when submitting a payment',
+        );
+      }
     }
 
     // 4. If unitId provided, validate it belongs to building
@@ -469,10 +502,21 @@ export class FinanzasService {
       where: {
         tenantId,
         buildingId,
+        unitId: dto.unitId ?? undefined,
         amount: dto.amount,
         reference: dto.reference,
         createdAt: { gte: duplicateWindow },
         status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
+        ...(isResidentPayment
+          ? {
+              paymentAllocations: {
+                some: {
+                  tenantId,
+                  chargeId: dto.chargeId!,
+                },
+              },
+            }
+          : {}),
       },
     });
 
@@ -487,6 +531,88 @@ export class FinanzasService {
       throw new BadRequestException(
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );
+    }
+    await this.validatePaymentProofFile(tenantId, dto.proofFileId);
+
+    if (isResidentPayment) {
+      const payment = await this.prisma.$transaction(async (tx) => {
+        const charge = await tx.charge.findFirst({
+          where: {
+            id: dto.chargeId,
+            tenantId,
+            buildingId,
+            unitId: dto.unitId,
+            canceledAt: null,
+          },
+          include: {
+            paymentAllocations: {
+              include: {
+                payment: {
+                  select: {
+                    status: true,
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        if (!charge) {
+          throw new NotFoundException(
+            'Charge not found or does not belong to this unit/building/tenant',
+          );
+        }
+
+        if (charge.status === ChargeStatus.CANCELED || charge.status === ChargeStatus.PAID) {
+          throw new ConflictException(
+            'El cargo seleccionado no admite pagos',
+          );
+        }
+
+        const paymentCurrency = dto.currency || charge.currency;
+        if (paymentCurrency !== charge.currency) {
+          throw new BadRequestException(
+            'La moneda del pago debe coincidir con la moneda del cargo',
+          );
+        }
+
+        const outstanding = this.calculateApprovedChargeOutstanding(charge);
+        if (dto.amount !== outstanding) {
+          throw new ConflictException(
+            'El monto debe coincidir con el saldo pendiente completo del período.',
+          );
+        }
+
+        const payment = await tx.payment.create({
+          data: {
+            tenantId,
+            buildingId,
+            unitId: dto.unitId || null,
+            amount: dto.amount,
+            currency: paymentCurrency,
+            method: dto.method,
+            status: PaymentStatus.SUBMITTED,
+            reference: dto.reference,
+            proofFileId: dto.proofFileId || null,
+            createdByUserId: userId,
+            notes: this.createResidentDirectedPaymentMarker(),
+          },
+        });
+
+        await tx.paymentAllocation.create({
+          data: {
+            tenantId,
+            paymentId: payment.id,
+            chargeId: charge.id,
+            amount: outstanding,
+          },
+        });
+
+        return payment;
+      });
+
+      void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
+      return this.sanitizePaymentForResponse(payment);
     }
 
     // 8. Create payment with SUBMITTED status
@@ -508,7 +634,7 @@ export class FinanzasService {
     // 9. Notify admins about new payment submitted
     void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
 
-    return payment;
+    return this.sanitizePaymentForResponse(payment);
   }
 
   /**
@@ -612,7 +738,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments as Payment[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as Payment[];
   }
 
   /**
@@ -634,33 +760,101 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'approve');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // Validate payment is in SUBMITTED status (can only approve submitted payments)
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new ConflictException(
-        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
-      );
-    }
-
-    // 3. Approve + FIFO allocation in transaction
+    // 2. Approve payment with either resident-selected allocations or legacy FIFO allocation
     const result = await this.prisma.$transaction(async (tx) => {
-      // 3a. Update to APPROVED
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
+      );
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new ConflictException(
+          `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new ConflictException('Cannot approve a canceled payment');
+      }
+
+      if (payment.paymentAllocations.length > 0) {
+        const totalAllocated = payment.paymentAllocations.reduce(
+          (sum, allocation) => sum + allocation.amount,
+          0,
+        );
+
+        if (totalAllocated !== payment.amount) {
+          throw new ConflictException(
+            'El monto debe coincidir con el saldo pendiente completo del período.',
+          );
+        }
+
+        for (const allocation of payment.paymentAllocations) {
+          await this.lockChargeForApproval(tx, allocation.chargeId);
+          const charge = await tx.charge.findFirst({
+            where: {
+              id: allocation.chargeId,
+              tenantId,
+              buildingId,
+              unitId: payment.unitId ?? undefined,
+              canceledAt: null,
+            },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!charge) {
+            throw new NotFoundException(
+              'Charge not found or does not belong to this building/tenant',
+            );
+          }
+
+          if (charge.status === ChargeStatus.PAID || charge.status === ChargeStatus.CANCELED) {
+            throw new ConflictException(
+              'El cargo seleccionado no admite pagos',
+            );
+          }
+
+          const outstanding = this.calculateApprovedChargeOutstanding(charge);
+          if (allocation.amount !== outstanding) {
+            throw new ConflictException(
+              'El monto debe coincidir con el saldo pendiente completo del período.',
+            );
+          }
+        }
+
+        const approvedPayment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.APPROVED,
+            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+            reviewedByMembershipId: membershipId,
+            updatedAt: new Date(),
+          },
+        });
+
+        for (const allocation of payment.paymentAllocations) {
+          await this.recalculateChargeStatus(allocation.chargeId, tx);
+        }
+
+        await this.tryReconcilePayment(payment.id, tx);
+        return approvedPayment;
+      }
+
+      // Legacy FIFO allocation for admin-submitted payments without an explicit charge selection
       const approvedPayment = await tx.payment.update({
-        where: { id: paymentId },
+        where: { id: payment.id },
         data: {
           status: PaymentStatus.APPROVED,
           paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
@@ -669,8 +863,6 @@ export class FinanzasService {
         },
       });
 
-      // 3b. FIFO allocation: if unitId exists, auto-allocate to oldest charges
-      // Include all charges except PAID and CANCELED (some may be incorrectly marked PAID without allocations)
       if (payment.unitId) {
         const pendingCharges = await tx.charge.findMany({
           where: {
@@ -680,17 +872,54 @@ export class FinanzasService {
             status: { notIn: [ChargeStatus.PAID, ChargeStatus.CANCELED] },
             canceledAt: null,
           },
-          include: { paymentAllocations: true },
-          orderBy: { dueDate: 'asc' }, // FIFO: oldest first
+          include: {
+            paymentAllocations: {
+              include: {
+                payment: {
+                  select: {
+                    status: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { dueDate: 'asc' },
         });
 
         let remainingAmount = payment.amount;
 
-        for (const charge of pendingCharges) {
+        for (const pendingCharge of pendingCharges) {
           if (remainingAmount <= 0) break;
 
+          await this.lockChargeForApproval(tx, pendingCharge.id);
+          const charge = await tx.charge.findFirst({
+            where: {
+              id: pendingCharge.id,
+              tenantId,
+              buildingId,
+              unitId: payment.unitId,
+              canceledAt: null,
+            },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!charge) {
+            continue;
+          }
+
           const alreadyAllocated = charge.paymentAllocations.reduce(
-            (sum, a) => sum + a.amount,
+            (sum, a) =>
+              sum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0),
             0,
           );
           const outstanding = charge.amount - alreadyAllocated;
@@ -698,7 +927,6 @@ export class FinanzasService {
 
           if (toAllocate <= 0) continue;
 
-          // Verify no existing allocation for this pair
           const existingAllocation = await tx.paymentAllocation.findFirst({
             where: { tenantId, paymentId, chargeId: charge.id },
           });
@@ -718,9 +946,7 @@ export class FinanzasService {
         }
       }
 
-      // 3c. Try to reconcile if all charges are paid
-      await this.tryReconcilePayment(paymentId, tx);
-
+      await this.tryReconcilePayment(payment.id, tx);
       return approvedPayment;
     });
 
@@ -732,21 +958,21 @@ export class FinanzasService {
       entityType: 'Payment',
       entityId: paymentId,
       metadata: {
-        amount: payment.amount,
+        amount: result.amount,
         paidAt: result.paidAt,
-        fifoAllocated: payment.unitId ? true : false,
+        fifoAllocated: result.unitId ? true : false,
       },
     });
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    void this.sendPaymentReceivedNotification(tenantId, payment);
+    void this.sendPaymentReceivedNotification(tenantId, result);
 
     // Generate receipt for approved payment (async, non-blocking)
     void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -763,52 +989,75 @@ export class FinanzasService {
     membershipId: string,
     dto: RejectPaymentDto,
   ): Promise<Payment> {
-    // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
         tenantId,
+        paymentId,
         buildingId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
       );
-    }
 
-    // 3. Update to REJECTED
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.REJECTED,
-        reviewedByMembershipId: membershipId,
-        updatedAt: new Date(),
-      },
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot reject a canceled payment');
+      }
+
+      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+        tx,
+        paymentId,
+        tenantId,
+      );
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
+
+      const rejectedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.REJECTED,
+          reviewedByMembershipId: membershipId,
+          rejectionReason: dto.reason as RejectionReason,
+          rejectionComment: dto.comment || null,
+          reviewedAt: new Date(),
+          notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
+          updatedAt: new Date(),
+        },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.REJECTED,
+          membershipId,
+          reason: dto.reason,
+          comment: dto.comment || null,
+          metadata: {
+            amount: payment.amount,
+            currency: payment.currency,
+            method: payment.method,
+            reference: payment.reference,
+          },
+        },
+      });
+
+      return rejectedPayment;
     });
 
-    // Audit: PAYMENT_REJECT
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId: membershipId,
-      action: AuditAction.PAYMENT_REJECT,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: {
-        reason: dto.reason,
-      },
-    });
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
 
-    // [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
-    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
-
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   // ============================================================================
@@ -1064,11 +1313,7 @@ export class FinanzasService {
 
     const allocationsSum = charge.paymentAllocations.reduce(
       (sum, a) => {
-        const status = a.payment?.status;
-        if (
-          status === PaymentStatus.APPROVED ||
-          status === PaymentStatus.RECONCILED
-        ) {
+        if (this.isEffectivePaymentStatus(a.payment?.status)) {
           return sum + a.amount;
         }
         return sum;
@@ -1094,6 +1339,166 @@ export class FinanzasService {
         },
       });
     }
+  }
+
+  private async releaseSubmittedPaymentAllocations(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    tenantId: string,
+  ): Promise<Array<{ chargeId: string; amount: number }>> {
+    const allocations = await tx.paymentAllocation.findMany({
+      where: {
+        tenantId,
+        paymentId,
+      },
+      select: {
+        chargeId: true,
+        amount: true,
+      },
+    });
+
+    if (allocations.length === 0) {
+      return [];
+    }
+
+    await tx.paymentAllocation.deleteMany({
+      where: {
+        tenantId,
+        paymentId,
+      },
+    });
+
+    return allocations;
+  }
+
+  private async validatePaymentProofFile(
+    tenantId: string,
+    proofFileId: string,
+  ): Promise<void> {
+    const proofFile = await this.prisma.file.findFirst({
+      where: { id: proofFileId, tenantId },
+      select: { id: true, size: true },
+    });
+
+    if (!proofFile) {
+      throw new NotFoundException('El comprobante de pago no existe en este tenant');
+    }
+
+    if (proofFile.size <= 0) {
+      throw new BadRequestException('El comprobante de pago no puede estar vacío');
+    }
+
+    if (proofFile.size > PAYMENT_PROOF_MAX_BYTES) {
+      throw new PayloadTooLargeException('El comprobante de pago supera el máximo de 10 MB');
+    }
+  }
+
+  private createResidentDirectedPaymentMarker(): string {
+    return RESIDENT_DIRECTED_PAYMENT_PREFIX;
+  }
+
+  private hasResidentDirectedPaymentMarker(notes: string | null | undefined): boolean {
+    return notes?.split('\n').some((line) => line === RESIDENT_DIRECTED_PAYMENT_PREFIX) ?? false;
+  }
+
+  private mergeResidentResubmissionMarker(
+    existingNotes: string | null | undefined,
+    reviewerNotes: string | undefined,
+  ): string | null {
+    if (!this.hasResidentDirectedPaymentMarker(existingNotes)) {
+      return reviewerNotes || null;
+    }
+
+    return reviewerNotes
+      ? `${RESIDENT_DIRECTED_PAYMENT_PREFIX}\n${reviewerNotes}`
+      : RESIDENT_DIRECTED_PAYMENT_PREFIX;
+  }
+
+  private stripInternalPaymentMarkers(notes: string | null | undefined): string | null {
+    if (!notes) {
+      return null;
+    }
+
+    const publicNotes = notes
+      .split('\n')
+      .filter((line) => line !== RESIDENT_DIRECTED_PAYMENT_PREFIX)
+      .join('\n');
+
+    return publicNotes || null;
+  }
+
+  private sanitizePaymentForResponse<T extends { notes?: string | null }>(payment: T): T {
+    const publicNotes = this.stripInternalPaymentMarkers(payment.notes);
+    const { notes: _internalNotes, ...publicPayment } = payment;
+
+    return (publicNotes === null
+      ? publicPayment
+      : { ...publicPayment, notes: publicNotes }) as T;
+  }
+
+  private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
+    const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
+      if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
+        return sum + allocation.amount;
+      }
+
+      return sum;
+    }, 0);
+
+    return Math.max(0, charge.amount - approvedAllocated);
+  }
+
+  private async lockChargeForApproval(
+    tx: Prisma.TransactionClient,
+    chargeId: string,
+  ): Promise<void> {
+    await tx.$queryRaw(Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} FOR UPDATE`);
+  }
+
+  private async lockSubmittedPaymentForApproval(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    paymentId: string,
+    buildingId?: string,
+  ): Promise<PaymentWithAllocations> {
+    if (buildingId) {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT 1 FROM "Payment" WHERE id = ${paymentId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
+      );
+    } else {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT 1 FROM "Payment" WHERE id = ${paymentId} AND "tenantId" = ${tenantId} FOR UPDATE`,
+      );
+    }
+
+    const payment = await tx.payment.findFirst({
+      where: {
+        id: paymentId,
+        tenantId,
+        ...(buildingId ? { buildingId } : {}),
+      },
+      include: {
+        paymentAllocations: {
+          include: {
+            charge: true,
+          },
+        },
+      },
+    });
+
+    if (!payment) {
+      throw buildingId
+        ? new NotFoundException(
+          'Payment not found or does not belong to this building/tenant',
+        )
+        : new NotFoundException('Payment not found');
+    }
+
+    return payment;
+  }
+
+  private isEffectivePaymentStatus(status?: PaymentStatus | null): boolean {
+    return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED;
   }
 
   // ============================================================================
@@ -1157,12 +1562,7 @@ export class FinanzasService {
     // 3. Calculate totals using approved/reconciled payments across ALL charges
     const chargesAnnotated = charges.map((c) => {
       const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum +
-          (a.payment &&
-          (a.payment.status === PaymentStatus.APPROVED ||
-            a.payment.status === PaymentStatus.RECONCILED)
-            ? a.amount
-            : 0);
+        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
       }, 0);
 
       return {
@@ -1535,8 +1935,7 @@ export class FinanzasService {
     // and only for charges with real outstanding > 0.
     const chargesWithApprovedAllocated = charges.map((charge) => {
       const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-        const status = allocation.payment?.status;
-        if (status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) {
+        if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
           return sum + allocation.amount;
         }
         return sum;
@@ -1677,30 +2076,36 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'revive');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId, buildingId },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
       );
-    }
 
-    // 3. Validate status is REJECTED
-    if (payment.status !== PaymentStatus.REJECTED) {
-      throw new ConflictException(`Only REJECTED payments can be revived`);
-    }
+      if (payment.status !== PaymentStatus.REJECTED) {
+        throw new ConflictException('Only REJECTED payments can be revived');
+      }
 
-    // 4. Update to SUBMITTED
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.SUBMITTED,
-        reviewedByMembershipId: null,
-        updatedAt: new Date(),
-      },
+      if (payment.canceledAt) {
+        throw new ConflictException('No se puede reactivar un pago cancelado');
+      }
+
+      if (this.hasResidentDirectedPaymentMarker(payment.notes)) {
+        throw new BadRequestException(
+          'No se puede reactivar este pago porque perdió la asociación con el cargo seleccionado. El residente debe reportarlo nuevamente.',
+        );
+      }
+
+      return tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: PaymentStatus.SUBMITTED,
+          reviewedByMembershipId: null,
+          updatedAt: new Date(),
+        },
+      });
     });
 
     // Audit
@@ -1713,7 +2118,7 @@ export class FinanzasService {
       metadata: { action: 'REVIVED', previousStatus: 'REJECTED' },
     });
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -1773,7 +2178,7 @@ export class FinanzasService {
       );
     }
 
-    return payment as Payment & { paymentAllocations: PaymentAllocation[] };
+    return this.sanitizePaymentForResponse(payment) as Payment & { paymentAllocations: PaymentAllocation[] };
   }
 
   /**
@@ -1796,45 +2201,61 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'cancel');
     }
 
-    // 2. Validate payment (only active payments)
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId, buildingId, canceledAt: null },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
       );
-    }
 
-    // 3. Cannot cancel if has allocations
-    const allocationCount = await this.prisma.paymentAllocation.count({
-      where: { tenantId, paymentId },
+      if (payment.canceledAt) {
+        throw new NotFoundException(
+          `Payment not found or does not belong to this building/tenant`,
+        );
+      }
+
+      const allocationCount = await tx.paymentAllocation.count({
+        where: { tenantId, paymentId },
+      });
+
+      if (payment.status !== PaymentStatus.SUBMITTED && allocationCount > 0) {
+        throw new ConflictException(
+          `Cannot cancel payment with existing allocations. Remove allocations first.`,
+        );
+      }
+
+      const releasedAllocations =
+        payment.status === PaymentStatus.SUBMITTED
+          ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)
+          : [];
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
+
+      const canceledPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: { canceledAt: new Date(), updatedAt: new Date() },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.CANCELLED,
+          membershipId,
+          reason: reason || 'No reason provided',
+          comment: null,
+          metadata: { reason: reason || 'No reason provided' },
+        },
+      });
+
+      return canceledPayment;
     });
 
-    if (allocationCount > 0) {
-      throw new ConflictException(
-        `Cannot cancel payment with existing allocations. Remove allocations first.`,
-      );
-    }
-
-    // 4. Update canceledAt
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: { canceledAt: new Date(), updatedAt: new Date() },
-    });
-
-    // Audit
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId: membershipId,
-      action: AuditAction.PAYMENT_CANCEL,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: { reason: reason || 'No reason provided' },
-    });
-
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -1894,39 +2315,36 @@ export class FinanzasService {
       },
     });
 
-    // 3. Calculate totals by REAL outstanding using approved/reconciled payments
-    const chargesWithOutstanding = charges
-      .map((c) => {
-        const allocated = c.paymentAllocations.reduce((asum, a) => {
-          return asum +
-            (a.payment &&
-            (a.payment.status === PaymentStatus.APPROVED ||
-              a.payment.status === PaymentStatus.RECONCILED)
-              ? a.amount
-              : 0);
-        }, 0);
+    // 3. Calculate totals using the original charge amount and the approved allocations
+    const chargesAnnotated = charges.map((c) => {
+      const allocated = c.paymentAllocations.reduce((asum, a) => {
+        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
+      }, 0);
 
-        return {
-          charge: c,
-          allocated,
-          outstanding: Math.max(0, c.amount - allocated),
-        };
-      })
-      .filter((item) => item.outstanding > 0);
+      return {
+        charge: c,
+        allocated,
+        outstanding: Math.max(0, c.amount - allocated),
+      };
+    });
 
-    const totalCharges = chargesWithOutstanding.reduce(
+    const totalCharges = chargesAnnotated.reduce(
       (sum, item) => sum + item.charge.amount,
       0,
     );
 
-    const totalPaid = chargesWithOutstanding.reduce(
+    const totalPaid = chargesAnnotated.reduce(
       (sum, item) => sum + item.allocated,
       0,
     );
 
-    const totalOutstanding = chargesWithOutstanding.reduce(
-      (sum, item) => sum + item.outstanding,
+    const totalOutstanding = Math.max(
       0,
+      chargesAnnotated.reduce((sum, item) => sum + item.outstanding, 0),
+    );
+
+    const chargesWithOutstanding = chargesAnnotated.filter(
+      (item) => item.outstanding > 0,
     );
 
     // 4. Find delinquent units by real outstanding
@@ -2226,7 +2644,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments as PendingPaymentListItem[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as PendingPaymentListItem[];
   }
 
   /**
@@ -2244,100 +2662,209 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'approve');
     }
 
-    // Find payment - tenant level (any building)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-      },
-      include: {
-        paymentAllocations: true,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
-
-    // Validate current status
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new BadRequestException(
-        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
-      );
-    }
-
-    if (payment.canceledAt) {
-      throw new BadRequestException('Cannot approve a canceled payment');
-    }
-
-    // Execute approval with auto-allocation
+    // Execute approval with either explicit resident allocation or legacy FIFO allocation
     let approvedPaymentResult: Payment | null = null;
-    
-    await this.prisma.$transaction(async (tx) => {
-      // Update payment status
-      const approvedPayment = await tx.payment.update({
-        where: { id: paymentId },
-        data: {
-          status: PaymentStatus.APPROVED,
-          reviewedByMembershipId: membershipId,
-          reviewedAt: new Date(),
-          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
-          updatedAt: new Date(),
-        },
-      });
-      
-      approvedPaymentResult = approvedPayment;
 
-      // Auto-allocation: find pending charges for the unit and allocate
-      if (payment.unitId) {
-        const pendingCharges = await tx.charge.findMany({
-          where: {
-            tenantId,
-            buildingId: payment.buildingId,
-            unitId: payment.unitId,
-            status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
-            canceledAt: null,
+    await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(tx, tenantId, paymentId);
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot approve a canceled payment');
+      }
+
+      if (payment.paymentAllocations.length > 0) {
+        const totalAllocated = payment.paymentAllocations.reduce(
+          (sum, allocation) => sum + allocation.amount,
+          0,
+        );
+
+        if (totalAllocated !== payment.amount) {
+          throw new ConflictException(
+            'El monto debe coincidir con el saldo pendiente completo del período.',
+          );
+        }
+
+        for (const allocation of payment.paymentAllocations) {
+          await this.lockChargeForApproval(tx, allocation.chargeId);
+          const charge = await tx.charge.findFirst({
+            where: {
+              id: allocation.chargeId,
+              tenantId,
+              buildingId: payment.buildingId,
+              unitId: payment.unitId ?? undefined,
+              canceledAt: null,
+            },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!charge) {
+            throw new NotFoundException(
+              'Charge not found or does not belong to this building/tenant',
+            );
+          }
+
+          if (charge.status === ChargeStatus.PAID || charge.status === ChargeStatus.CANCELED) {
+            throw new ConflictException('El cargo seleccionado no admite pagos');
+          }
+
+          const outstanding = this.calculateApprovedChargeOutstanding(charge);
+          if (allocation.amount !== outstanding) {
+            throw new ConflictException(
+              'El monto debe coincidir con el saldo pendiente completo del período.',
+            );
+          }
+        }
+
+        const approvedPayment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.APPROVED,
+            reviewedByMembershipId: membershipId,
+            reviewedAt: new Date(),
+            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+            updatedAt: new Date(),
           },
-          orderBy: { dueDate: 'asc' }, // FIFO by due date
         });
 
-        let remainingAmount = payment.amount;
+        approvedPaymentResult = approvedPayment;
 
-        for (const charge of pendingCharges) {
-          if (remainingAmount <= 0) break;
+        for (const allocation of payment.paymentAllocations) {
+          await this.recalculateChargeStatus(allocation.chargeId, tx);
+        }
 
-          const allocatedAmount = Math.min(remainingAmount, charge.amount);
-          const existingAllocations = await tx.paymentAllocation.aggregate({
-            where: { chargeId: charge.id },
-            _sum: { amount: true },
+        await this.tryReconcilePayment(payment.id, tx);
+        const reconciledPayment = await tx.payment.findUnique({
+          where: { id: payment.id },
+        });
+        if (reconciledPayment) {
+          approvedPaymentResult = reconciledPayment;
+        }
+      } else {
+        const approvedPayment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.APPROVED,
+            reviewedByMembershipId: membershipId,
+            reviewedAt: new Date(),
+            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+            updatedAt: new Date(),
+          },
+        });
+
+        approvedPaymentResult = approvedPayment;
+
+        if (payment.unitId) {
+          const pendingCharges = await tx.charge.findMany({
+            where: {
+              tenantId,
+              buildingId: payment.buildingId,
+              unitId: payment.unitId,
+              status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+              canceledAt: null,
+            },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { dueDate: 'asc' },
           });
-          const alreadyAllocated = existingAllocations._sum.amount || 0;
-          const chargeRemaining = charge.amount - alreadyAllocated;
 
-          const allocationAmount = Math.min(allocatedAmount, chargeRemaining);
+          let remainingAmount = payment.amount;
 
-          if (allocationAmount > 0) {
-            await tx.paymentAllocation.create({
-              data: {
+          for (const pendingCharge of pendingCharges) {
+            if (remainingAmount <= 0) break;
+
+            await this.lockChargeForApproval(tx, pendingCharge.id);
+            const charge = await tx.charge.findFirst({
+              where: {
+                id: pendingCharge.id,
                 tenantId,
-                paymentId: payment.id,
-                chargeId: charge.id,
-                amount: allocationAmount,
+                buildingId: payment.buildingId,
+                unitId: payment.unitId,
+                canceledAt: null,
+              },
+              include: {
+                paymentAllocations: {
+                  include: {
+                    payment: {
+                      select: {
+                        status: true,
+                      },
+                    },
+                  },
+                },
               },
             });
 
-            // Update charge status
-            const newChargeAllocated = alreadyAllocated + allocationAmount;
-            const newChargeStatus =
-              newChargeAllocated >= charge.amount ? ChargeStatus.PAID : ChargeStatus.PARTIAL;
+            if (!charge) {
+              continue;
+            }
 
-            await tx.charge.update({
-              where: { id: charge.id },
-              data: { status: newChargeStatus, updatedAt: new Date() },
-            });
+            const allocatedAmount = Math.min(remainingAmount, charge.amount);
+            const alreadyAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
+              if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
+                return sum + allocation.amount;
+              }
 
-            remainingAmount -= allocationAmount;
+              return sum;
+            }, 0);
+            const chargeRemaining = charge.amount - alreadyAllocated;
+
+            const allocationAmount = Math.min(allocatedAmount, chargeRemaining);
+
+            if (allocationAmount > 0) {
+              await tx.paymentAllocation.create({
+                data: {
+                  tenantId,
+                  paymentId: payment.id,
+                  chargeId: charge.id,
+                  amount: allocationAmount,
+                },
+              });
+
+              const newChargeAllocated = alreadyAllocated + allocationAmount;
+              const newChargeStatus =
+                newChargeAllocated >= charge.amount ? ChargeStatus.PAID : ChargeStatus.PARTIAL;
+
+              await tx.charge.update({
+                where: { id: charge.id },
+                data: { status: newChargeStatus, updatedAt: new Date() },
+              });
+
+              remainingAmount -= allocationAmount;
+            }
           }
+        }
+
+        await this.tryReconcilePayment(payment.id, tx);
+        const reconciledPayment = await tx.payment.findUnique({
+          where: { id: payment.id },
+        });
+        if (reconciledPayment) {
+          approvedPaymentResult = reconciledPayment;
         }
       }
 
@@ -2359,7 +2886,7 @@ export class FinanzasService {
         },
       });
 
-      return approvedPayment;
+      return approvedPaymentResult;
     });
 
     // Send notification to resident about approval (outside transaction, using returned payment)
@@ -2372,7 +2899,7 @@ export class FinanzasService {
       });
     }
 
-    return approvedPaymentResult!;
+    return this.sanitizePaymentForResponse(approvedPaymentResult!);
   }
 
   /**
@@ -2385,75 +2912,78 @@ export class FinanzasService {
     membershipId: string,
     dto: RejectPaymentDto,
   ): Promise<Payment> {
-    // Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }
 
-    // Validate reason
     if (!dto.reason || dto.reason.trim().length === 0) {
       throw new BadRequestException('Rejection reason is required');
     }
 
-    // Find payment - tenant level (any building)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
-
-    // Validate current status
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new BadRequestException(
-        `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
-      );
-    }
-
-    if (payment.canceledAt) {
-      throw new BadRequestException('Cannot reject a canceled payment');
-    }
-
-    // Update payment status with full audit trail
-    const rejectedPayment = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.REJECTED,
-        reviewedByMembershipId: membershipId,
-        rejectionReason: dto.reason as RejectionReason,
-        rejectionComment: dto.comment || null,
-        reviewedAt: new Date(),
-        notes: dto.notes || null,
-        updatedAt: new Date(),
-      },
-    });
-
-    // Registrar auditoría
-    await this.prisma.paymentAuditLog.create({
-      data: {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
         tenantId,
         paymentId,
-        action: PaymentAuditAction.REJECTED,
-        membershipId,
-        reason: dto.reason,
-        comment: dto.comment || null,
-        metadata: {
-          amount: payment.amount,
-          currency: payment.currency,
-          method: payment.method,
-          reference: payment.reference,
+      );
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot reject a canceled payment');
+      }
+
+      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+        tx,
+        paymentId,
+        tenantId,
+      );
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
+
+      const rejectedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.REJECTED,
+          reviewedByMembershipId: membershipId,
+          rejectionReason: dto.reason as RejectionReason,
+          rejectionComment: dto.comment || null,
+          reviewedAt: new Date(),
+          notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
+          updatedAt: new Date(),
         },
-      },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.REJECTED,
+          membershipId,
+          reason: dto.reason,
+          comment: dto.comment || null,
+          metadata: {
+            amount: payment.amount,
+            currency: payment.currency,
+            method: payment.method,
+            reference: payment.reference,
+          },
+        },
+      });
+
+      return rejectedPayment;
     });
 
-    // Send notification to resident
-    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
 
-    return rejectedPayment;
+    return this.sanitizePaymentForResponse(result);
   }
 
   // ============================================================================
@@ -2649,6 +3179,7 @@ export class FinanzasService {
       where: {
         tenantId,
         id: { not: paymentId }, // Exclude self
+        unitId: payment.unitId ?? undefined,
         amount: payment.amount,
         reference: payment.reference,
         createdAt: { gte: duplicateWindow },

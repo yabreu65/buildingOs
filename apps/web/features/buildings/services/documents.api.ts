@@ -131,9 +131,10 @@ export async function presignUpload(
   originalName: string,
   mimeType: string,
   size?: number,
+  purpose: 'GENERAL_DOCUMENT' | 'PAYMENT_PROOF' = 'GENERAL_DOCUMENT',
 ): Promise<PresignResponse> {
   const endpoint = `/tenants/${tenantId}/documents/presign`;
-  const body = { originalName, mimeType, ...(size && { size }) };
+  const body = { originalName, mimeType, ...(size && { size }), purpose };
   logRequest('POST', endpoint, body);
 
   try {
@@ -364,6 +365,33 @@ export async function getDownloadUrl(
     });
   } catch (error) {
     const message = `Failed to get download URL: ${(error as Error).message}`;
+    logError(endpoint, 500, message);
+    throw error;
+  }
+}
+
+/**
+ * Download protected document content through the BuildingOS API.
+ *
+ * GET /documents/:id/content
+ * response: Blob
+ */
+export async function downloadDocumentContent(
+  tenantId: string,
+  documentId: string,
+): Promise<Blob> {
+  const endpoint = `/tenants/${tenantId}/documents/${documentId}/content`;
+  logRequest('GET', endpoint);
+
+  try {
+    return await apiClient<Blob>({
+      path: endpoint,
+      method: 'GET',
+      headers: getTenantHeaders(tenantId),
+      responseType: 'blob',
+    });
+  } catch (error) {
+    const message = `Failed to download document content: ${(error as Error).message}`;
     logError(endpoint, 500, message);
     throw error;
   }
