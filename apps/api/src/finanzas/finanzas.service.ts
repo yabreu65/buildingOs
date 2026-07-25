@@ -2191,28 +2191,30 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'cancel');
     }
 
-    // 2. Validate payment (only active payments)
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId, buildingId, canceledAt: null },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    const allocationCount = await this.prisma.paymentAllocation.count({
-      where: { tenantId, paymentId },
-    });
-
-    if (payment.status !== PaymentStatus.SUBMITTED && allocationCount > 0) {
-      throw new ConflictException(
-        `Cannot cancel payment with existing allocations. Remove allocations first.`,
-      );
-    }
-
     const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
+      );
+
+      if (payment.canceledAt) {
+        throw new NotFoundException(
+          `Payment not found or does not belong to this building/tenant`,
+        );
+      }
+
+      const allocationCount = await tx.paymentAllocation.count({
+        where: { tenantId, paymentId },
+      });
+
+      if (payment.status !== PaymentStatus.SUBMITTED && allocationCount > 0) {
+        throw new ConflictException(
+          `Cannot cancel payment with existing allocations. Remove allocations first.`,
+        );
+      }
+
       const releasedAllocations =
         payment.status === PaymentStatus.SUBMITTED
           ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)

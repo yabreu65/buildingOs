@@ -1663,6 +1663,121 @@ describe('FinanzasService', () => {
       expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
       expect(prismaService.paymentAuditLog.create).not.toHaveBeenCalled();
     });
+
+    it('keeps approved allocations intact when cancellation waits for an in-flight approval', async () => {
+      installSharedApprovalState();
+      paymentStates[paymentId] = {
+        ...paymentStates[paymentId]!,
+        amount: 5000,
+      };
+
+      let resolveApprovalLock!: () => void;
+      const approvalLocked = new Promise<void>((resolve) => {
+        resolveApprovalLock = resolve;
+      });
+      let releaseApproval!: () => void;
+      const approvalRelease = new Promise<void>((resolve) => {
+        releaseApproval = resolve;
+      });
+      let releasePaymentLock!: () => void;
+      const paymentLockReleased = new Promise<void>((resolve) => {
+        releasePaymentLock = resolve;
+      });
+      let paymentLockHeld = false;
+      let paymentLockAttempts = 0;
+      let resolveSecondLockAttempted!: () => void;
+      const secondLockAttempted = new Promise<void>((resolve) => {
+        resolveSecondLockAttempted = resolve;
+      });
+
+      jest.spyOn(prismaService, '$transaction').mockImplementation(
+        async (callback: (tx: never) => Promise<unknown>) => {
+          const tx = {
+            ...prismaService,
+            $queryRaw: jest.fn(async (query: { values?: readonly unknown[] }) => {
+              const lockedRecordId = String(query.values?.[0] ?? '');
+
+              if (lockedRecordId !== paymentId) {
+                return [];
+              }
+
+              paymentLockAttempts += 1;
+              if (paymentLockHeld) {
+                resolveSecondLockAttempted();
+                await paymentLockReleased;
+                return [];
+              }
+
+              paymentLockHeld = true;
+              resolveApprovalLock();
+              await approvalRelease;
+              return [];
+            }),
+          } as never;
+
+          try {
+            return await callback(tx);
+          } finally {
+            if (paymentLockHeld) {
+              paymentLockHeld = false;
+              releasePaymentLock();
+            }
+          }
+        },
+      );
+      jest.spyOn(prismaService.paymentAllocation, 'count').mockImplementation(async () =>
+        paymentStates[paymentId]!.paymentAllocations.length as never,
+      );
+      jest.spyOn(prismaService.paymentAllocation, 'findMany').mockImplementation(async () =>
+        paymentStates[paymentId]!.paymentAllocations.map((allocation) => ({
+          chargeId: allocation.chargeId,
+          amount: allocation.amount,
+        })) as never,
+      );
+
+      const approval = service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+      await approvalLocked;
+
+      const cancellation = service.cancelPayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        'Manual cancellation',
+      );
+
+      await secondLockAttempted;
+      expect(paymentLockAttempts).toBe(2);
+      releaseApproval();
+
+      await expect(approval).resolves.toEqual(
+        expect.objectContaining({ status: PaymentStatus.APPROVED }),
+      );
+      await expect(cancellation).rejects.toThrow(
+        'Cannot cancel payment with existing allocations. Remove allocations first.',
+      );
+
+      expect(paymentStates[paymentId]).toEqual(
+        expect.objectContaining({
+          status: PaymentStatus.APPROVED,
+          canceledAt: null,
+          paymentAllocations: [expect.objectContaining({ chargeId, amount: 5000 })],
+        }),
+      );
+      expect(chargeStates[chargeId]).toEqual(
+        expect.objectContaining({ status: ChargeStatus.PARTIAL }),
+      );
+      expect(prismaService.paymentAllocation.deleteMany).not.toHaveBeenCalled();
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ========== TESTS: REJECT / CANCEL PAYMENT PROVISIONAL ALLOCATIONS ==========
