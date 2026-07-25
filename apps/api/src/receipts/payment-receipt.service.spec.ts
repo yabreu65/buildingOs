@@ -89,6 +89,13 @@ describe('PaymentReceiptService', () => {
     );
   }
 
+  function extractPdfContentStreams(buffer: Buffer): string[] {
+    const pdfText = buffer.toString('latin1');
+    return Array.from(pdfText.matchAll(/stream\n([\s\S]*?)\nendstream/g)).map(
+      (match) => match[1],
+    );
+  }
+
   function decodeWinAnsiText(text: string): string {
     return Array.from(text, (character) => {
       const code = character.charCodeAt(0);
@@ -453,9 +460,20 @@ describe('PaymentReceiptService', () => {
 
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const pdfText = uploadedBuffer.toString('latin1');
+    const contentStreams = extractPdfContentStreams(uploadedBuffer);
     const pageObjects = pdfText.match(/\/Type \/Page(?!s)/g) || [];
 
     expect(pageObjects.length).toBe(2);
+    expect(contentStreams).toHaveLength(2);
+    for (const streamText of contentStreams) {
+      expect(streamText).toContain('BT');
+      expect(streamText).toContain('ET');
+    }
+    expect(contentStreams[0]).toContain('14 TL');
+    const continuationLeadingIndex = contentStreams[1].indexOf('14 TL');
+    const continuationAdvanceIndex = contentStreams[1].indexOf('T*');
+    expect(continuationLeadingIndex).toBeGreaterThan(-1);
+    expect(continuationLeadingIndex).toBeLessThan(continuationAdvanceIndex);
     expect(pdfText).toContain('Continúa en la siguiente página.');
     expect(pdfText).toContain('Página 1 de 2');
     expect(pdfText).toContain('Página 2 de 2');

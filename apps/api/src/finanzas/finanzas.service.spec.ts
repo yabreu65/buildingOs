@@ -20,6 +20,7 @@ describe('FinanzasService', () => {
   let auditService: AuditService;
   let validators: FinanzasValidators;
   let expensesService: ExpensesService;
+  let receiptService: PaymentReceiptService;
 
   // ========== SETUP ==========
   beforeEach(async () => {
@@ -120,6 +121,7 @@ describe('FinanzasService', () => {
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<FinanzasValidators>(FinanzasValidators);
     expensesService = module.get<ExpensesService>(ExpensesService);
+    receiptService = module.get<PaymentReceiptService>(PaymentReceiptService);
 
     jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       return callback(prismaService as never);
@@ -889,9 +891,12 @@ describe('FinanzasService', () => {
         { paidAt: '2026-07-24T12:00:00.000Z' },
       );
 
-      expect(prismaService.$queryRaw).toHaveBeenCalledTimes(1);
-      const rawQuery = (prismaService.$queryRaw as jest.Mock).mock.calls[0][0] as { strings?: string[] };
-      expect(rawQuery.strings?.join(' ')).toContain('FOR UPDATE');
+      expect(prismaService.$queryRaw).toHaveBeenCalledTimes(2);
+      const rawQueries = (prismaService.$queryRaw as jest.Mock).mock.calls.map(
+        ([query]) => (query as { strings?: string[] }).strings?.join(' '),
+      );
+      expect(rawQueries.some((query) => query?.includes('FROM "Payment"'))).toBe(true);
+      expect(rawQueries.some((query) => query?.includes('FROM "Charge"'))).toBe(true);
     });
   });
 
@@ -1106,6 +1111,512 @@ describe('FinanzasService', () => {
           }),
         }),
       );
+    });
+  });
+
+  // ========== TESTS: APPROVAL LOCKING ==========
+  describe('payment approval locking', () => {
+    const tenantId = 'tenant-lock-123';
+    const buildingId = 'building-lock-123';
+    const paymentId = 'payment-lock-123';
+    const secondPaymentId = 'payment-lock-456';
+    const membershipId = 'membership-lock-123';
+    const chargeId = 'charge-lock-123';
+
+    type PaymentState = {
+      id: string;
+      tenantId: string;
+      buildingId: string;
+      unitId: string;
+      amount: number;
+      currency: string;
+      status: PaymentStatus;
+      canceledAt: Date | null;
+      reviewedByMembershipId?: string | null;
+      reviewedAt?: Date | null;
+      paidAt?: Date | null;
+      updatedAt?: Date | null;
+      rejectionReason?: string | null;
+      rejectionComment?: string | null;
+      notes?: string | null;
+      paymentAllocations: Array<{
+        chargeId: string;
+        amount: number;
+      }>;
+    };
+
+    type ChargeState = {
+      id: string;
+      tenantId: string;
+      buildingId: string;
+      unitId: string;
+      amount: number;
+      currency: string;
+      status: ChargeStatus;
+      paymentAllocations: Array<{
+        amount: number;
+        paymentStatus: PaymentStatus;
+      }>;
+    };
+
+    let paymentStates: Record<string, PaymentState>;
+    let chargeStates: Record<string, ChargeState>;
+
+    const toPaymentRecord = (paymentIdToRead: string): any => {
+      const paymentState = paymentStates[paymentIdToRead]!;
+
+      return {
+        id: paymentState.id,
+        tenantId: paymentState.tenantId,
+        buildingId: paymentState.buildingId,
+        unitId: paymentState.unitId,
+        amount: paymentState.amount,
+        currency: paymentState.currency,
+        status: paymentState.status,
+        canceledAt: paymentState.canceledAt,
+        paymentAllocations: paymentState.paymentAllocations.map((allocation) => ({
+          chargeId: allocation.chargeId,
+          amount: allocation.amount,
+          payment: { status: paymentState.status },
+        })),
+      };
+    };
+
+    const toChargeRecord = (chargeIdToRead: string): any => {
+      const chargeState = chargeStates[chargeIdToRead]!;
+
+      return {
+        id: chargeState.id,
+        tenantId: chargeState.tenantId,
+        buildingId: chargeState.buildingId,
+        unitId: chargeState.unitId,
+        amount: chargeState.amount,
+        currency: chargeState.currency,
+        status: chargeState.status,
+        paymentAllocations: chargeState.paymentAllocations.map((allocation) => ({
+          amount: allocation.amount,
+          payment: { status: allocation.paymentStatus },
+        })),
+      };
+    };
+
+    const installSerializedPaymentLock = () => {
+      const locks = new Map<string, { held: boolean; waiters: Array<() => void> }>();
+
+      jest.spyOn(prismaService, '$transaction').mockImplementation(
+        async (callback: (tx: never) => Promise<unknown>) => {
+          const tx = {
+            ...prismaService,
+            $queryRaw: jest.fn(async (query: { values?: readonly unknown[] }) => {
+              const paymentLockId = String(query.values?.[0] ?? '');
+              const lock = locks.get(paymentLockId) ?? { held: false, waiters: [] as Array<() => void> };
+
+              if (lock.held) {
+                await new Promise<void>((resolve) => {
+                  lock.waiters.push(resolve);
+                });
+              }
+
+              lock.held = true;
+              locks.set(paymentLockId, lock);
+              return [];
+            }),
+          } as never;
+
+          try {
+            return await callback(tx);
+          } finally {
+            for (const lock of locks.values()) {
+              lock.held = false;
+              const next = lock.waiters.shift();
+              if (next) {
+                next();
+              }
+            }
+          }
+        },
+      );
+    };
+
+    const installSharedApprovalState = () => {
+      paymentStates = {
+        [paymentId]: {
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: PaymentStatus.SUBMITTED,
+          canceledAt: null,
+          paymentAllocations: [],
+        },
+        [secondPaymentId]: {
+          id: secondPaymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-456',
+          amount: 5000,
+          currency: 'ARS',
+          status: PaymentStatus.SUBMITTED,
+          canceledAt: null,
+          paymentAllocations: [],
+        },
+      };
+
+      chargeStates = {
+        [chargeId]: {
+          id: chargeId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          paymentAllocations: [],
+        },
+        'charge-lock-456': {
+          id: 'charge-lock-456',
+          tenantId,
+          buildingId,
+          unitId: 'unit-456',
+          amount: 5000,
+          currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          paymentAllocations: [],
+        },
+      };
+
+      jest.spyOn(prismaService.payment, 'findFirst').mockImplementation(async ({ where }) => {
+        const paymentState = paymentStates[where.id];
+        if (
+          !paymentState ||
+          paymentState.tenantId !== where.tenantId ||
+          (where.buildingId && where.buildingId !== paymentState.buildingId)
+        ) {
+          return null as never;
+        }
+
+        return toPaymentRecord(where.id);
+      });
+
+      jest.spyOn(prismaService.payment, 'findUnique').mockImplementation(async ({ where }) => {
+        const paymentState = paymentStates[where.id];
+        if (!paymentState) {
+          return null as never;
+        }
+
+        return {
+          ...toPaymentRecord(where.id),
+          paymentAllocations: paymentState.paymentAllocations.map((allocation) => ({
+            amount: allocation.amount,
+            charge: { status: chargeStates[allocation.chargeId]?.status ?? ChargeStatus.PENDING },
+          })),
+        } as never;
+      });
+
+      jest.spyOn(prismaService.payment, 'update').mockImplementation(async ({ where, data }) => {
+        const paymentState = paymentStates[where.id];
+        if (!paymentState) {
+          throw new Error(`Missing payment state for ${where.id}`);
+        }
+
+        paymentStates[where.id] = {
+          ...paymentState,
+          status: data.status ?? paymentState.status,
+          reviewedByMembershipId: data.reviewedByMembershipId ?? null,
+          reviewedAt: data.reviewedAt ?? null,
+          paidAt: data.paidAt ?? null,
+          updatedAt: data.updatedAt ?? new Date(),
+          canceledAt: data.canceledAt ?? paymentState.canceledAt,
+        } as PaymentState;
+
+        return toPaymentRecord(where.id);
+      });
+
+      jest.spyOn(prismaService.charge, 'findMany').mockImplementation(async ({ where }) => {
+        const charges = Object.values(chargeStates).filter(
+          (chargeState) =>
+            chargeState.tenantId === where.tenantId &&
+            chargeState.buildingId === where.buildingId &&
+            chargeState.unitId === where.unitId &&
+            chargeState.status !== ChargeStatus.PAID &&
+            chargeState.status !== ChargeStatus.CANCELED,
+        );
+
+        return charges.map((chargeState) => toChargeRecord(chargeState.id)) as never;
+      });
+      jest.spyOn(prismaService.charge, 'findFirst').mockImplementation(async ({ where }) => {
+        const chargeState = chargeStates[where.id];
+        if (
+          !chargeState ||
+          chargeState.tenantId !== where.tenantId ||
+          chargeState.buildingId !== where.buildingId ||
+          chargeState.unitId !== where.unitId
+        ) {
+          return null as never;
+        }
+
+        return toChargeRecord(where.id);
+      });
+      jest.spyOn(prismaService.charge, 'findUnique').mockImplementation(async ({ where }) => {
+        const chargeState = chargeStates[where.id];
+        if (!chargeState) {
+          return null as never;
+        }
+
+        return toChargeRecord(where.id);
+      });
+      jest.spyOn(prismaService.charge, 'update').mockImplementation(async ({ where, data }) => {
+        const chargeState = chargeStates[where.id];
+        if (!chargeState) {
+          throw new Error(`Missing charge state for ${where.id}`);
+        }
+
+        chargeStates[where.id] = {
+          ...chargeState,
+          status: data.status ?? chargeState.status,
+        };
+
+        return toChargeRecord(where.id);
+      });
+      jest.spyOn(prismaService.paymentAllocation, 'create').mockImplementation(async ({ data }) => {
+        const paymentState = paymentStates[data.paymentId];
+        const chargeState = chargeStates[data.chargeId];
+
+        if (!paymentState || !chargeState) {
+          throw new Error('Missing payment or charge state for allocation');
+        }
+
+        paymentStates[data.paymentId] = {
+          ...paymentState,
+          paymentAllocations: [
+            ...paymentState.paymentAllocations,
+            {
+              chargeId: data.chargeId,
+              amount: data.amount,
+            },
+          ],
+        };
+        chargeStates[data.chargeId] = {
+          ...chargeState,
+          paymentAllocations: [
+            ...chargeState.paymentAllocations,
+            {
+              amount: data.amount,
+              paymentStatus: paymentStates[data.paymentId].status,
+            },
+          ],
+        };
+
+        return {
+          id: `allocation-${paymentStates[data.paymentId].paymentAllocations.length}`,
+          tenantId: data.tenantId,
+          paymentId: data.paymentId,
+          chargeId: data.chargeId,
+          amount: data.amount,
+        } as never;
+      });
+
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as never);
+    };
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
+      jest.spyOn(service as any, 'sendPaymentReceivedNotification').mockResolvedValue(undefined);
+      jest.spyOn(receiptService, 'ensureReceiptForPayment').mockResolvedValue(undefined);
+    });
+
+    it('serializes approvePayment so the same payment cannot be applied twice', async () => {
+      installSerializedPaymentLock();
+      installSharedApprovalState();
+
+      const firstApproval = service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+      const secondApproval = service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+
+      const [firstResult, secondResult] = await Promise.allSettled([
+        firstApproval,
+        secondApproval,
+      ]);
+
+      expect(firstResult).toEqual(
+        expect.objectContaining({
+          status: 'fulfilled',
+          value: expect.objectContaining({
+            status: PaymentStatus.APPROVED,
+          }),
+        }),
+      );
+      expect(secondResult).toEqual(
+        expect.objectContaining({
+          status: 'rejected',
+          reason: expect.objectContaining({
+            message: 'Cannot approve payment in status RECONCILED. Only SUBMITTED payments can be approved.',
+          }),
+        }),
+      );
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+      expect(auditService.createLog).toHaveBeenCalledTimes(1);
+      expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('serializes approvePaymentTenant so the same payment cannot be applied twice', async () => {
+      installSerializedPaymentLock();
+      installSharedApprovalState();
+
+      const firstApproval = service.approvePaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+      const secondApproval = service.approvePaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+
+      const [firstResult, secondResult] = await Promise.allSettled([
+        firstApproval,
+        secondApproval,
+      ]);
+
+      expect(firstResult).toEqual(
+        expect.objectContaining({
+          status: 'fulfilled',
+          value: expect.objectContaining({
+            status: PaymentStatus.RECONCILED,
+          }),
+        }),
+      );
+      expect(secondResult).toEqual(
+        expect.objectContaining({
+          status: 'rejected',
+          reason: expect.objectContaining({
+            message: 'Cannot approve payment in status RECONCILED. Only SUBMITTED payments can be approved.',
+          }),
+        }),
+      );
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+      expect(prismaService.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+      expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('allows two different payments to approve concurrently', async () => {
+      installSerializedPaymentLock();
+      installSharedApprovalState();
+
+      const firstApproval = service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+      const secondApproval = service.approvePayment(
+        tenantId,
+        buildingId,
+        secondPaymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+
+      const [firstResult, secondResult] = await Promise.allSettled([
+        firstApproval,
+        secondApproval,
+      ]);
+
+      expect(firstResult).toEqual(
+        expect.objectContaining({
+          status: 'fulfilled',
+          value: expect.objectContaining({ status: PaymentStatus.APPROVED }),
+        }),
+      );
+      expect(secondResult).toEqual(
+        expect.objectContaining({
+          status: 'fulfilled',
+          value: expect.objectContaining({ status: PaymentStatus.APPROVED }),
+        }),
+      );
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(2);
+      expect(auditService.createLog).toHaveBeenCalledTimes(2);
+      expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+      'rejects %s payments after the lock is reacquired',
+      async (status) => {
+        installSerializedPaymentLock();
+        installSharedApprovalState();
+        paymentStates[paymentId] = {
+          ...paymentStates[paymentId]!,
+          status,
+        };
+
+        await expect(
+          service.approvePayment(
+            tenantId,
+            buildingId,
+            paymentId,
+            ['TENANT_ADMIN'],
+            membershipId,
+            {},
+          ),
+        ).rejects.toThrow(
+          `Cannot approve payment in status ${status}. Only SUBMITTED payments can be approved.`,
+        );
+
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.paymentAuditLog.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects canceled payments after the lock is reacquired', async () => {
+      installSerializedPaymentLock();
+      installSharedApprovalState();
+      paymentStates[paymentId] = {
+        ...paymentStates[paymentId]!,
+        canceledAt: new Date('2026-07-24T12:00:00.000Z'),
+      };
+
+      await expect(
+        service.approvePaymentTenant(
+          tenantId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+          {},
+        ),
+      ).rejects.toThrow('Cannot approve a canceled payment');
+
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(prismaService.paymentAuditLog.create).not.toHaveBeenCalled();
     });
   });
 

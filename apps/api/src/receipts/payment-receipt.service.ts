@@ -459,7 +459,7 @@ export class PaymentReceiptService {
     const lines = input.lines;
     const contentCommands: string[] = ['BT', '72 792 Td'];
     let currentFont = '';
-    let currentLeading = 14;
+    let currentLeading: number | null = null;
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]!;

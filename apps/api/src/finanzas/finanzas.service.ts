@@ -745,33 +745,25 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'approve');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-        buildingId,
-      },
-      include: {
-        paymentAllocations: true,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // Validate payment is in SUBMITTED status (can only approve submitted payments)
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new ConflictException(
-        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
-      );
-    }
-
-    // 3. Approve payment with either resident-selected allocations or legacy FIFO allocation
+    // 2. Approve payment with either resident-selected allocations or legacy FIFO allocation
     const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
+      );
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new ConflictException(
+          `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new ConflictException('Cannot approve a canceled payment');
+      }
+
       if (payment.paymentAllocations.length > 0) {
         const totalAllocated = payment.paymentAllocations.reduce(
           (sum, allocation) => sum + allocation.amount,
@@ -828,7 +820,7 @@ export class FinanzasService {
         }
 
         const approvedPayment = await tx.payment.update({
-          where: { id: paymentId },
+          where: { id: payment.id },
           data: {
             status: PaymentStatus.APPROVED,
             paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
@@ -841,13 +833,13 @@ export class FinanzasService {
           await this.recalculateChargeStatus(allocation.chargeId, tx);
         }
 
-        await this.tryReconcilePayment(paymentId, tx);
+        await this.tryReconcilePayment(payment.id, tx);
         return approvedPayment;
       }
 
       // Legacy FIFO allocation for admin-submitted payments without an explicit charge selection
       const approvedPayment = await tx.payment.update({
-        where: { id: paymentId },
+        where: { id: payment.id },
         data: {
           status: PaymentStatus.APPROVED,
           paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
@@ -939,7 +931,7 @@ export class FinanzasService {
         }
       }
 
-      await this.tryReconcilePayment(paymentId, tx);
+      await this.tryReconcilePayment(payment.id, tx);
       return approvedPayment;
     });
 
@@ -951,14 +943,14 @@ export class FinanzasService {
       entityType: 'Payment',
       entityId: paymentId,
       metadata: {
-        amount: payment.amount,
+        amount: result.amount,
         paidAt: result.paidAt,
-        fifoAllocated: payment.unitId ? true : false,
+        fifoAllocated: result.unitId ? true : false,
       },
     });
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    void this.sendPaymentReceivedNotification(tenantId, payment);
+    void this.sendPaymentReceivedNotification(tenantId, result);
 
     // Generate receipt for approved payment (async, non-blocking)
     void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
@@ -1385,6 +1377,48 @@ export class FinanzasService {
     chargeId: string,
   ): Promise<void> {
     await tx.$queryRaw(Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} FOR UPDATE`);
+  }
+
+  private async lockSubmittedPaymentForApproval(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    paymentId: string,
+    buildingId?: string,
+  ): Promise<PaymentWithAllocations> {
+    if (buildingId) {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT 1 FROM "Payment" WHERE id = ${paymentId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
+      );
+    } else {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT 1 FROM "Payment" WHERE id = ${paymentId} AND "tenantId" = ${tenantId} FOR UPDATE`,
+      );
+    }
+
+    const payment = await tx.payment.findFirst({
+      where: {
+        id: paymentId,
+        tenantId,
+        ...(buildingId ? { buildingId } : {}),
+      },
+      include: {
+        paymentAllocations: {
+          include: {
+            charge: true,
+          },
+        },
+      },
+    });
+
+    if (!payment) {
+      throw buildingId
+        ? new NotFoundException(
+          'Payment not found or does not belong to this building/tenant',
+        )
+        : new NotFoundException('Payment not found');
+    }
+
+    return payment;
   }
 
   private isEffectivePaymentStatus(status?: PaymentStatus | null): boolean {
@@ -2543,36 +2577,22 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'approve');
     }
 
-    // Find payment - tenant level (any building)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-      },
-      include: {
-        paymentAllocations: true,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
-
-    // Validate current status
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new BadRequestException(
-        `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
-      );
-    }
-
-    if (payment.canceledAt) {
-      throw new BadRequestException('Cannot approve a canceled payment');
-    }
-
     // Execute approval with either explicit resident allocation or legacy FIFO allocation
     let approvedPaymentResult: Payment | null = null;
 
     await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(tx, tenantId, paymentId);
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot approve payment in status ${payment.status}. Only SUBMITTED payments can be approved.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot approve a canceled payment');
+      }
+
       if (payment.paymentAllocations.length > 0) {
         const totalAllocated = payment.paymentAllocations.reduce(
           (sum, allocation) => sum + allocation.amount,
@@ -2627,7 +2647,7 @@ export class FinanzasService {
         }
 
         const approvedPayment = await tx.payment.update({
-          where: { id: paymentId },
+          where: { id: payment.id },
           data: {
             status: PaymentStatus.APPROVED,
             reviewedByMembershipId: membershipId,
@@ -2643,16 +2663,16 @@ export class FinanzasService {
           await this.recalculateChargeStatus(allocation.chargeId, tx);
         }
 
-        await this.tryReconcilePayment(paymentId, tx);
+        await this.tryReconcilePayment(payment.id, tx);
         const reconciledPayment = await tx.payment.findUnique({
-          where: { id: paymentId },
+          where: { id: payment.id },
         });
         if (reconciledPayment) {
           approvedPaymentResult = reconciledPayment;
         }
       } else {
         const approvedPayment = await tx.payment.update({
-          where: { id: paymentId },
+          where: { id: payment.id },
           data: {
             status: PaymentStatus.APPROVED,
             reviewedByMembershipId: membershipId,
@@ -2754,9 +2774,9 @@ export class FinanzasService {
           }
         }
 
-        await this.tryReconcilePayment(paymentId, tx);
+        await this.tryReconcilePayment(payment.id, tx);
         const reconciledPayment = await tx.payment.findUnique({
-          where: { id: paymentId },
+          where: { id: payment.id },
         });
         if (reconciledPayment) {
           approvedPaymentResult = reconciledPayment;
