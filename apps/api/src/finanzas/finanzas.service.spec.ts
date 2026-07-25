@@ -702,7 +702,7 @@ describe('FinanzasService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('should reject duplicate transfer reference in the last 48 hours', async () => {
+    it('should reject a recent duplicate payment for the same selected charge', async () => {
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
         id: 'payment-duplicate',
       } as any);
@@ -713,7 +713,6 @@ describe('FinanzasService', () => {
           chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.TRANSFER,
-          reference: 'TRX-123',
           proofFileId: 'file-123',
         }),
       ).rejects.toThrow(ConflictException);
@@ -725,8 +724,82 @@ describe('FinanzasService', () => {
             buildingId,
             unitId,
             amount: 10000,
-            reference: 'TRX-123',
+            reference: undefined,
+            paymentAllocations: {
+              some: {
+                tenantId,
+                chargeId: 'charge-123',
+              },
+            },
+            createdAt: expect.objectContaining({ gte: expect.any(Date) }),
+            status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
           }),
+        }),
+      );
+    });
+
+    it('should allow the same unit and amount when the selected charge is different', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
+        id: 'charge-456',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [],
+      } as any);
+
+      const result = await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        userRoles,
+        {
+          unitId,
+          chargeId: 'charge-456',
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          proofFileId: 'file-123',
+        },
+      );
+
+      expect(result.status).toBe(PaymentStatus.SUBMITTED);
+      expect(prismaService.payment.create).toHaveBeenCalled();
+      expect(prismaService.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            paymentAllocations: {
+              some: {
+                tenantId,
+                chargeId: 'charge-456',
+              },
+            },
+          }),
+        }),
+      );
+    });
+
+    it('should preserve legacy duplicate detection for admin payments', async () => {
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(false);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: 'payment-legacy-duplicate',
+      } as any);
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, ['TENANT_ADMIN'], {
+          unitId,
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-123',
+          proofFileId: 'file-123',
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prismaService.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ paymentAllocations: expect.anything() }),
         }),
       );
     });

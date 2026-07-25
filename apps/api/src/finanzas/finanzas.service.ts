@@ -507,6 +507,16 @@ export class FinanzasService {
         reference: dto.reference,
         createdAt: { gte: duplicateWindow },
         status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
+        ...(isResidentPayment
+          ? {
+              paymentAllocations: {
+                some: {
+                  tenantId,
+                  chargeId: dto.chargeId!,
+                },
+              },
+            }
+          : {}),
       },
     });
 
