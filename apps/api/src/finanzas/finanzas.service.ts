@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -88,6 +88,9 @@ type PaymentWithAllocations = Prisma.PaymentGetPayload<{
     };
   };
 }>;
+
+const RESIDENT_DIRECTED_PAYMENT_PREFIX = 'resident-charge-selection-requires-resubmission';
+const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
 
 @Injectable()
 export class FinanzasService {
@@ -519,6 +522,7 @@ export class FinanzasService {
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );
     }
+    await this.validatePaymentProofFile(tenantId, dto.proofFileId);
 
     if (isResidentPayment) {
       const payment = await this.prisma.$transaction(async (tx) => {
@@ -581,6 +585,7 @@ export class FinanzasService {
             reference: dto.reference,
             proofFileId: dto.proofFileId || null,
             createdByUserId: userId,
+            notes: this.createResidentDirectedPaymentMarker(),
           },
         });
 
@@ -597,7 +602,7 @@ export class FinanzasService {
       });
 
       void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
-      return payment;
+      return this.sanitizePaymentForResponse(payment);
     }
 
     // 8. Create payment with SUBMITTED status
@@ -619,7 +624,7 @@ export class FinanzasService {
     // 9. Notify admins about new payment submitted
     void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
 
-    return payment;
+    return this.sanitizePaymentForResponse(payment);
   }
 
   /**
@@ -723,7 +728,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments as Payment[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as Payment[];
   }
 
   /**
@@ -957,7 +962,7 @@ export class FinanzasService {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -974,38 +979,34 @@ export class FinanzasService {
     membershipId: string,
     dto: RejectPaymentDto,
   ): Promise<Payment> {
-    // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new BadRequestException(
-        `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
-      );
-    }
-
-    if (payment.canceledAt) {
-      throw new BadRequestException('Cannot reject a canceled payment');
-    }
-
     const result = await this.prisma.$transaction(async (tx) => {
-      const chargeIds = await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId);
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
+      );
+
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+        );
+      }
+
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot reject a canceled payment');
+      }
+
+      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+        tx,
+        paymentId,
+        tenantId,
+      );
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
 
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
@@ -1015,7 +1016,7 @@ export class FinanzasService {
           rejectionReason: dto.reason as RejectionReason,
           rejectionComment: dto.comment || null,
           reviewedAt: new Date(),
-          notes: dto.notes || null,
+          notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
           updatedAt: new Date(),
         },
       });
@@ -1044,10 +1045,9 @@ export class FinanzasService {
       return rejectedPayment;
     });
 
-    // [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
-    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   // ============================================================================
@@ -1335,7 +1335,7 @@ export class FinanzasService {
     tx: Prisma.TransactionClient,
     paymentId: string,
     tenantId: string,
-  ): Promise<string[]> {
+  ): Promise<Array<{ chargeId: string; amount: number }>> {
     const allocations = await tx.paymentAllocation.findMany({
       where: {
         tenantId,
@@ -1343,6 +1343,7 @@ export class FinanzasService {
       },
       select: {
         chargeId: true,
+        amount: true,
       },
     });
 
@@ -1357,7 +1358,72 @@ export class FinanzasService {
       },
     });
 
-    return [...new Set(allocations.map((allocation) => allocation.chargeId))];
+    return allocations;
+  }
+
+  private async validatePaymentProofFile(
+    tenantId: string,
+    proofFileId: string,
+  ): Promise<void> {
+    const proofFile = await this.prisma.file.findFirst({
+      where: { id: proofFileId, tenantId },
+      select: { id: true, size: true },
+    });
+
+    if (!proofFile) {
+      throw new NotFoundException('El comprobante de pago no existe en este tenant');
+    }
+
+    if (proofFile.size <= 0) {
+      throw new BadRequestException('El comprobante de pago no puede estar vacío');
+    }
+
+    if (proofFile.size > PAYMENT_PROOF_MAX_BYTES) {
+      throw new PayloadTooLargeException('El comprobante de pago supera el máximo de 10 MB');
+    }
+  }
+
+  private createResidentDirectedPaymentMarker(): string {
+    return RESIDENT_DIRECTED_PAYMENT_PREFIX;
+  }
+
+  private hasResidentDirectedPaymentMarker(notes: string | null | undefined): boolean {
+    return notes?.split('\n').some((line) => line === RESIDENT_DIRECTED_PAYMENT_PREFIX) ?? false;
+  }
+
+  private mergeResidentResubmissionMarker(
+    existingNotes: string | null | undefined,
+    reviewerNotes: string | undefined,
+  ): string | null {
+    if (!this.hasResidentDirectedPaymentMarker(existingNotes)) {
+      return reviewerNotes || null;
+    }
+
+    return reviewerNotes
+      ? `${RESIDENT_DIRECTED_PAYMENT_PREFIX}\n${reviewerNotes}`
+      : RESIDENT_DIRECTED_PAYMENT_PREFIX;
+  }
+
+  private stripInternalPaymentMarkers(notes: string | null | undefined): string | null {
+    if (!notes) {
+      return null;
+    }
+
+    const publicNotes = notes
+      .split('\n')
+      .filter((line) => line !== RESIDENT_DIRECTED_PAYMENT_PREFIX)
+      .join('\n');
+
+    return publicNotes || null;
+  }
+
+  private sanitizePaymentForResponse<T extends { notes?: string | null }>(payment: T): T {
+    const publicNotes = this.stripInternalPaymentMarkers(payment.notes);
+    const { notes: _internalNotes, ...publicPayment } = payment;
+
+    return (publicNotes === null
+      ? publicPayment
+      : { ...publicPayment, notes: publicNotes }) as T;
   }
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
@@ -2000,30 +2066,36 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'revive');
     }
 
-    // 2. Validate payment
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId, buildingId },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
+        tenantId,
+        paymentId,
+        buildingId,
       );
-    }
 
-    // 3. Validate status is REJECTED
-    if (payment.status !== PaymentStatus.REJECTED) {
-      throw new ConflictException(`Only REJECTED payments can be revived`);
-    }
+      if (payment.status !== PaymentStatus.REJECTED) {
+        throw new ConflictException('Only REJECTED payments can be revived');
+      }
 
-    // 4. Update to SUBMITTED
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.SUBMITTED,
-        reviewedByMembershipId: null,
-        updatedAt: new Date(),
-      },
+      if (payment.canceledAt) {
+        throw new ConflictException('No se puede reactivar un pago cancelado');
+      }
+
+      if (this.hasResidentDirectedPaymentMarker(payment.notes)) {
+        throw new BadRequestException(
+          'No se puede reactivar este pago porque perdió la asociación con el cargo seleccionado. El residente debe reportarlo nuevamente.',
+        );
+      }
+
+      return tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: PaymentStatus.SUBMITTED,
+          reviewedByMembershipId: null,
+          updatedAt: new Date(),
+        },
+      });
     });
 
     // Audit
@@ -2036,7 +2108,7 @@ export class FinanzasService {
       metadata: { action: 'REVIVED', previousStatus: 'REJECTED' },
     });
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -2096,7 +2168,7 @@ export class FinanzasService {
       );
     }
 
-    return payment as Payment & { paymentAllocations: PaymentAllocation[] };
+    return this.sanitizePaymentForResponse(payment) as Payment & { paymentAllocations: PaymentAllocation[] };
   }
 
   /**
@@ -2141,10 +2213,11 @@ export class FinanzasService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const chargeIds =
+      const releasedAllocations =
         payment.status === PaymentStatus.SUBMITTED
           ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)
           : [];
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
 
       const canceledPayment = await tx.payment.update({
         where: { id: paymentId },
@@ -2170,7 +2243,7 @@ export class FinanzasService {
       return canceledPayment;
     });
 
-    return result;
+    return this.sanitizePaymentForResponse(result);
   }
 
   /**
@@ -2559,7 +2632,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments as PendingPaymentListItem[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as PendingPaymentListItem[];
   }
 
   /**
@@ -2814,7 +2887,7 @@ export class FinanzasService {
       });
     }
 
-    return approvedPaymentResult!;
+    return this.sanitizePaymentForResponse(approvedPaymentResult!);
   }
 
   /**
@@ -2827,43 +2900,39 @@ export class FinanzasService {
     membershipId: string,
     dto: RejectPaymentDto,
   ): Promise<Payment> {
-    // Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }
 
-    // Validate reason
     if (!dto.reason || dto.reason.trim().length === 0) {
       throw new BadRequestException('Rejection reason is required');
     }
 
-    // Find payment - tenant level (any building)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.lockSubmittedPaymentForApproval(
+        tx,
         tenantId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
-
-    // Validate current status
-    if (payment.status !== PaymentStatus.SUBMITTED) {
-      throw new BadRequestException(
-        `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+        paymentId,
       );
-    }
 
-    if (payment.canceledAt) {
-      throw new BadRequestException('Cannot reject a canceled payment');
-    }
+      if (payment.status !== PaymentStatus.SUBMITTED) {
+        throw new BadRequestException(
+          `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+        );
+      }
 
-    const rejectedPayment = await this.prisma.$transaction(async (tx) => {
-      const chargeIds = await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId);
+      if (payment.canceledAt) {
+        throw new BadRequestException('Cannot reject a canceled payment');
+      }
 
-      const updatedPayment = await tx.payment.update({
+      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+        tx,
+        paymentId,
+        tenantId,
+      );
+      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
+
+      const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
           status: PaymentStatus.REJECTED,
@@ -2871,7 +2940,7 @@ export class FinanzasService {
           rejectionReason: dto.reason as RejectionReason,
           rejectionComment: dto.comment || null,
           reviewedAt: new Date(),
-          notes: dto.notes || null,
+          notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
           updatedAt: new Date(),
         },
       });
@@ -2897,13 +2966,12 @@ export class FinanzasService {
         },
       });
 
-      return updatedPayment;
+      return rejectedPayment;
     });
 
-    // Send notification to resident
-    void this.sendPaymentRejectedNotification(tenantId, payment, dto.reason);
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
 
-    return rejectedPayment;
+    return this.sanitizePaymentForResponse(result);
   }
 
   // ============================================================================

@@ -140,6 +140,7 @@ export class DocumentsController {
       dto.originalName,
       dto.mimeType,
       dto.size,
+      dto.purpose,
     );
   }
 

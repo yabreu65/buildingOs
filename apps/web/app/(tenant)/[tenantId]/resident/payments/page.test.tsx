@@ -524,6 +524,13 @@ describe('ResidentPaymentsPage', () => {
     });
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
+    expect(mockedPresignUpload).toHaveBeenCalledWith(
+      'tenant-1',
+      'proof.pdf',
+      'application/pdf',
+      3,
+      'PAYMENT_PROOF',
+    );
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
     expect(screen.getByText('Monto a reportar')).toBeTruthy();
 

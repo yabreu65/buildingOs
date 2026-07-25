@@ -18,7 +18,7 @@ import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { ConfigService } from '../config/config.service';
+import { DocumentUploadPurpose } from './dto/presign-upload.dto';
 import {
   PresignedUrlResponse,
   DocumentResponseDto,
@@ -75,6 +75,9 @@ const ALLOWED_UPLOAD_MIME_TYPES = [
   'text/csv',
 ];
 
+const GENERAL_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
+const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
+
 /**
  * DocumentsService: CRUD operations for Documents and Files with MinIO integration
  *
@@ -105,7 +108,6 @@ const ALLOWED_UPLOAD_MIME_TYPES = [
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
-  private readonly maxUploadBytes: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -114,10 +116,7 @@ export class DocumentsService {
     private readonly notificationsService: NotificationsService,
     private readonly auditService: AuditService,
     private readonly residentAccess: ResidentAccessService,
-    private readonly configService: ConfigService,
-  ) {
-    this.maxUploadBytes = this.configService.getValue('uploadMaxBytes');
-  }
+  ) {}
 
   /**
    * Generate presigned URL for file upload to MinIO
@@ -132,15 +131,16 @@ export class DocumentsService {
     originalName: string,
     mimeType: string,
     size?: number,
+    purpose: DocumentUploadPurpose = DocumentUploadPurpose.GENERAL_DOCUMENT,
   ): Promise<PresignedUrlResponse> {
     // Validate file type (prevent malicious uploads)
     this.validateMimeType(mimeType);
     if (size != null) {
-      this.validateUploadSize(size);
+      this.validateUploadSize(size, purpose);
     }
 
     // Generate objectKey with tenant isolation
-    const objectKey = this.generateObjectKey(tenantId, originalName);
+    const objectKey = this.generateObjectKey(tenantId, originalName, purpose);
     const bucket = this.minio.getDefaultBucket();
 
     // Generate presigned URL from MinIO (24 hours expiration)
@@ -195,7 +195,10 @@ export class DocumentsService {
       );
     }
 
-    this.validateUploadedObjectKeyOwnership(tenantId, uploadFile.objectKey);
+    const uploadPurpose = this.validateUploadedObjectKeyOwnership(
+      tenantId,
+      uploadFile.objectKey,
+    );
 
     const existingFile = await this.prisma.file.findFirst({
       where: {
@@ -234,10 +237,10 @@ export class DocumentsService {
       throw new BadRequestException('El archivo no puede estar vacío');
     }
 
-    if (uploadedObject.size > this.maxUploadBytes) {
+    if (uploadedObject.size > this.maxUploadBytesFor(uploadPurpose)) {
       await this.deleteUploadedObject(uploadFile.objectKey);
       throw new PayloadTooLargeException(
-        `El archivo supera el máximo de ${this.maxUploadBytes} bytes`,
+        `El archivo supera el máximo de ${this.maxUploadMegabytesFor(uploadPurpose)} MB`,
       );
     }
 
@@ -278,7 +281,7 @@ export class DocumentsService {
         });
       });
     } catch (error) {
-      if (!(await this.shouldPreserveUploadedObject(uploadFile.objectKey, error))) {
+      if (!(await this.shouldPreserveUploadedObject(tenantId, bucket, uploadFile.objectKey, error))) {
         await this.deleteUploadedObject(uploadFile.objectKey);
       }
       throw error;
@@ -728,19 +731,22 @@ export class DocumentsService {
     }
   }
 
-  private validateUploadSize(size: number): void {
+  private validateUploadSize(size: number, purpose: DocumentUploadPurpose): void {
     if (size <= 0) {
       throw new BadRequestException('El archivo no puede estar vacío');
     }
 
-    if (size > this.maxUploadBytes) {
+    if (size > this.maxUploadBytesFor(purpose)) {
       throw new PayloadTooLargeException(
-        `El archivo supera el máximo de ${this.maxUploadBytes} bytes`,
+        `El archivo supera el máximo de ${this.maxUploadMegabytesFor(purpose)} MB`,
       );
     }
   }
 
-  private validateUploadedObjectKeyOwnership(tenantId: string, objectKey: string): void {
+  private validateUploadedObjectKeyOwnership(
+    tenantId: string,
+    objectKey: string,
+  ): DocumentUploadPurpose {
     if (!objectKey || objectKey.trim().length === 0) {
       throw new BadRequestException('The uploaded file key is invalid');
     }
@@ -758,12 +764,16 @@ export class DocumentsService {
       throw new BadRequestException('The uploaded file key is invalid');
     }
 
-    const allowedPrefix = `tenant-${tenantId}/documents/`;
-    if (!objectKey.startsWith(allowedPrefix)) {
+    const prefixes: ReadonlyArray<readonly [string, DocumentUploadPurpose]> = [
+      [`tenant-${tenantId}/documents/`, DocumentUploadPurpose.GENERAL_DOCUMENT],
+      [`tenant-${tenantId}/payment-proofs/`, DocumentUploadPurpose.PAYMENT_PROOF],
+    ];
+    const prefixMatch = prefixes.find(([prefix]) => objectKey.startsWith(prefix));
+    if (!prefixMatch) {
       throw new ForbiddenException('The uploaded file key does not belong to this tenant');
     }
 
-    const relativePath = objectKey.slice(allowedPrefix.length);
+    const relativePath = objectKey.slice(prefixMatch[0].length);
     if (!relativePath) {
       throw new BadRequestException('The uploaded file key is invalid');
     }
@@ -774,6 +784,18 @@ export class DocumentsService {
     ) {
       throw new BadRequestException('The uploaded file key is invalid');
     }
+
+    return prefixMatch[1];
+  }
+
+  private maxUploadBytesFor(purpose: DocumentUploadPurpose): number {
+    return purpose === DocumentUploadPurpose.PAYMENT_PROOF
+      ? PAYMENT_PROOF_MAX_BYTES
+      : GENERAL_DOCUMENT_MAX_BYTES;
+  }
+
+  private maxUploadMegabytesFor(purpose: DocumentUploadPurpose): number {
+    return this.maxUploadBytesFor(purpose) / 1024 / 1024;
   }
 
   private async deleteUploadedObject(objectKey: string): Promise<void> {
@@ -784,15 +806,26 @@ export class DocumentsService {
     }
   }
 
-  private async shouldPreserveUploadedObject(objectKey: string, error: unknown): Promise<boolean> {
+  private async shouldPreserveUploadedObject(
+    tenantId: string,
+    bucket: string,
+    objectKey: string,
+    error: unknown,
+  ): Promise<boolean> {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    const objectKeyTenantId = this.extractTenantIdFromObjectKey(objectKey);
+    if (!objectKeyTenantId || objectKeyTenantId !== tenantId) {
       return false;
     }
 
     try {
       const existingFile = await this.prisma.file.findFirst({
         where: {
-          tenantId: this.extractTenantIdFromObjectKey(objectKey),
+          tenantId,
+          bucket,
           objectKey,
         },
         select: { id: true },
@@ -808,24 +841,42 @@ export class DocumentsService {
   }
 
   private extractTenantIdFromObjectKey(objectKey: string): string {
-    const prefix = 'tenant-';
-    const documentsSegment = '/documents/';
-
-    if (!objectKey.startsWith(prefix) || !objectKey.includes(documentsSegment)) {
+    const match = /^tenant-([^/]+)\/(?:documents|payment-proofs)\/(.+)$/.exec(objectKey);
+    if (!match) {
       return '';
     }
 
-    return objectKey.slice(prefix.length, objectKey.indexOf(documentsSegment));
+    const [, tenantId, relativePath] = match;
+    if (!tenantId || !relativePath) {
+      return '';
+    }
+
+    const normalized = pathPosix.normalize(objectKey);
+    if (
+      normalized !== objectKey ||
+      relativePath.split('/').some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+    ) {
+      return '';
+    }
+
+    return tenantId;
   }
 
   /**
    * Generate object key with tenant isolation
    * Format: tenant-{tenantId}/documents/{uuid}-{originalName}
    */
-  private generateObjectKey(tenantId: string, originalName: string): string {
+  private generateObjectKey(
+    tenantId: string,
+    originalName: string,
+    purpose: DocumentUploadPurpose,
+  ): string {
     const uuid = this.generateUuid();
     const sanitized = this.sanitizeFileName(originalName);
-    return `tenant-${tenantId}/documents/${uuid}-${sanitized}`;
+    const directory = purpose === DocumentUploadPurpose.PAYMENT_PROOF
+      ? 'payment-proofs'
+      : 'documents';
+    return `tenant-${tenantId}/${directory}/${uuid}-${sanitized}`;
   }
 
   private sanitizeFileName(originalName: string): string {

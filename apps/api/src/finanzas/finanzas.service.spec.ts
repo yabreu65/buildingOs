@@ -63,6 +63,9 @@ describe('FinanzasService', () => {
             paymentAuditLog: {
               create: jest.fn(),
             },
+            file: {
+              findFirst: jest.fn(),
+            },
             expense: {
               findMany: jest.fn(),
             },
@@ -126,6 +129,10 @@ describe('FinanzasService', () => {
     jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       return callback(prismaService as never);
     });
+    jest.spyOn(prismaService.file, 'findFirst').mockResolvedValue({
+      id: 'file-123',
+      size: 1024,
+    } as never);
   });
 
   // ========== CLEANUP ==========
@@ -525,6 +532,7 @@ describe('FinanzasService', () => {
         status: PaymentStatus.SUBMITTED,
         proofFileId: 'file-123',
         createdByUserId: userId,
+        notes: 'resident-charge-selection-requires-resubmission',
       } as any);
       jest.spyOn(prismaService.paymentAllocation, 'create').mockResolvedValue({
         id: 'allocation-123',
@@ -549,6 +557,7 @@ describe('FinanzasService', () => {
       );
 
       expect(result.status).toBe(PaymentStatus.SUBMITTED);
+      expect(result).not.toHaveProperty('notes');
       expect(prismaService.payment.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           tenantId,
@@ -558,6 +567,7 @@ describe('FinanzasService', () => {
           currency: 'ARS',
           method: PaymentMethod.TRANSFER,
           proofFileId: 'file-123',
+          notes: 'resident-charge-selection-requires-resubmission',
         }),
       });
       expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith({
@@ -623,6 +633,41 @@ describe('FinanzasService', () => {
       ).rejects.toThrow(BadRequestException);
 
       expect(prismaService.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects payment proofs larger than 10 MiB even when a client bypasses presign purpose', async () => {
+      jest.spyOn(prismaService.file, 'findFirst').mockResolvedValueOnce({
+        id: 'file-oversized',
+        size: 10 * 1024 * 1024 + 1,
+      } as never);
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-OVERSIZED-PROOF',
+          proofFileId: 'file-oversized',
+        }),
+      ).rejects.toThrow('El comprobante de pago supera el máximo de 10 MB');
+
+      expect(prismaService.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects proof files outside the payment tenant', async () => {
+      jest.spyOn(prismaService.file, 'findFirst').mockResolvedValueOnce(null as never);
+
+      await expect(
+        service.submitPayment(tenantId, buildingId, userId, userRoles, {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-FOREIGN-PROOF',
+          proofFileId: 'file-other-tenant',
+        }),
+      ).rejects.toThrow('El comprobante de pago no existe en este tenant');
     });
 
     it('should reject unsupported payment methods while provider is transfer-only', async () => {
@@ -1635,6 +1680,7 @@ describe('FinanzasService', () => {
     const mockSubmittedPaymentState = (
       status: PaymentStatus = PaymentStatus.SUBMITTED,
       updateStatus: PaymentStatus = status,
+      notes: string | null = null,
     ) => {
       allocationStore = [{ tenantId, paymentId, chargeId }];
 
@@ -1649,6 +1695,7 @@ describe('FinanzasService', () => {
         reference: 'TRX-123',
         status,
         canceledAt: null,
+        notes,
         paymentAllocations: makeAllocation().map((allocation) => ({
           tenantId: allocation.tenantId,
           paymentId: allocation.paymentId,
@@ -1661,7 +1708,7 @@ describe('FinanzasService', () => {
       jest.spyOn(prismaService.paymentAllocation, 'findMany').mockImplementation(async ({ where }) =>
         makeAllocation()
           .filter((allocation) => allocation.tenantId === where.tenantId && allocation.paymentId === where.paymentId)
-          .map((allocation) => ({ chargeId: allocation.chargeId })) as any,
+          .map((allocation) => ({ chargeId: allocation.chargeId, amount: 10000 })) as any,
       );
 
       jest.spyOn(prismaService.paymentAllocation, 'count').mockImplementation(async ({ where }) =>
@@ -1761,7 +1808,11 @@ describe('FinanzasService', () => {
     });
 
     it('rejectPayment removes provisional allocations and unblocks the charge', async () => {
-      mockSubmittedPaymentState(PaymentStatus.SUBMITTED, PaymentStatus.REJECTED);
+      mockSubmittedPaymentState(
+        PaymentStatus.SUBMITTED,
+        PaymentStatus.REJECTED,
+        'resident-charge-selection-requires-resubmission',
+      );
       const notificationSpy = jest
         .spyOn(service as any, 'sendPaymentRejectedNotification')
         .mockResolvedValue(undefined);
@@ -1791,13 +1842,14 @@ describe('FinanzasService', () => {
       expect(result.reviewedByMembershipId).toBe(membershipId);
       expect(result.reviewedAt).toEqual(expect.any(Date));
       expect(result.notes).toBe('Reviewed against bank statement');
+      expect(result.notes).not.toContain('resident-charge-selection-requires-resubmission');
       expect(prismaService.payment.update).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           status: PaymentStatus.REJECTED,
           reviewedByMembershipId: membershipId,
           rejectionReason: 'OTHER',
           rejectionComment: 'Rejected by admin',
-          notes: 'Reviewed against bank statement',
+          notes: 'resident-charge-selection-requires-resubmission\nReviewed against bank statement',
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
@@ -1818,7 +1870,11 @@ describe('FinanzasService', () => {
     });
 
     it('rejectPaymentTenant removes provisional allocations for the tenant payment', async () => {
-      mockSubmittedPaymentState(PaymentStatus.SUBMITTED, PaymentStatus.REJECTED);
+      mockSubmittedPaymentState(
+        PaymentStatus.SUBMITTED,
+        PaymentStatus.REJECTED,
+        'resident-charge-selection-requires-resubmission',
+      );
       const notificationSpy = jest
         .spyOn(service as any, 'sendPaymentRejectedNotification')
         .mockResolvedValue(undefined);
@@ -1841,13 +1897,14 @@ describe('FinanzasService', () => {
       expect(result.reviewedByMembershipId).toBe(membershipId);
       expect(result.reviewedAt).toEqual(expect.any(Date));
       expect(result.notes).toBe('Tenant review notes');
+      expect(result.notes).not.toContain('resident-charge-selection-requires-resubmission');
       expect(prismaService.payment.update).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           status: PaymentStatus.REJECTED,
           reviewedByMembershipId: membershipId,
           rejectionReason: 'OTHER',
           rejectionComment: 'Rejected at tenant level',
-          notes: 'Tenant review notes',
+          notes: 'resident-charge-selection-requires-resubmission\nTenant review notes',
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
@@ -1875,6 +1932,239 @@ describe('FinanzasService', () => {
       });
       expect(makeAllocation()).toHaveLength(0);
     });
+
+    it('blocks revival of a rejected resident-directed payment instead of falling back to FIFO', async () => {
+      allocationStore = [];
+      mockSubmittedPaymentState(
+        PaymentStatus.REJECTED,
+        PaymentStatus.SUBMITTED,
+        'resident-charge-selection-requires-resubmission',
+      );
+      allocationStore = [];
+      jest.spyOn(prismaService, '$queryRaw').mockResolvedValue([] as never);
+
+      await expect(
+        service.revivePayment(
+          tenantId,
+          buildingId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+        ),
+      ).rejects.toThrow(
+        'No se puede reactivar este pago porque perdió la asociación con el cargo seleccionado.',
+      );
+
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(prismaService.payment.update).not.toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: PaymentStatus.SUBMITTED }),
+      }));
+    });
+
+    it('serializes overlapping rejection requests so the second request rereads REJECTED without overwriting the marker', async () => {
+      const marker = 'resident-charge-selection-requires-resubmission';
+      let paymentState = {
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        reference: 'TRX-123',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        notes: marker,
+        paymentAllocations: [],
+      };
+      allocationStore = [{ tenantId, paymentId, chargeId }];
+
+      let resolveFirstRead!: () => void;
+      const firstReadEntered = new Promise<void>((resolve) => {
+        resolveFirstRead = resolve;
+      });
+      let releaseFirstRequest!: () => void;
+      const firstRequestReleased = new Promise<void>((resolve) => {
+        releaseFirstRequest = resolve;
+      });
+      let releasePaymentLock!: () => void;
+      const paymentLockReleased = new Promise<void>((resolve) => {
+        releasePaymentLock = resolve;
+      });
+      let lockAttempts = 0;
+      let firstRead = true;
+
+      jest.spyOn(prismaService, '$queryRaw').mockImplementation(async () => {
+        lockAttempts += 1;
+        if (lockAttempts === 2) {
+          await paymentLockReleased;
+        }
+
+        return [] as never;
+      });
+      jest.spyOn(prismaService.payment, 'findFirst').mockImplementation(async () => {
+        if (firstRead) {
+          firstRead = false;
+          resolveFirstRead();
+          await firstRequestReleased;
+        }
+
+        return paymentState as never;
+      });
+      jest.spyOn(prismaService.payment, 'update').mockImplementation(async ({ data }) => {
+        paymentState = { ...paymentState, ...data } as typeof paymentState;
+        releasePaymentLock();
+        return paymentState as never;
+      });
+      jest.spyOn(prismaService.paymentAllocation, 'findMany').mockImplementation(async () =>
+        allocationStore.map((allocation) => ({ chargeId: allocation.chargeId, amount: 10000 })) as never,
+      );
+      jest.spyOn(prismaService.paymentAllocation, 'deleteMany').mockImplementation(async () => {
+        allocationStore = [];
+        return { count: 1 } as never;
+      });
+      jest.spyOn(service as never, 'recalculateChargeStatus').mockResolvedValue(undefined);
+      jest.spyOn(service as never, 'sendPaymentRejectedNotification').mockResolvedValue(undefined);
+
+      const firstRequest = service.rejectPayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { reason: 'OTHER', notes: 'First reviewer note' },
+      );
+
+      await firstReadEntered;
+      const secondRequest = service.rejectPaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { reason: 'OTHER', notes: 'Stale second reviewer note' },
+      );
+      await Promise.resolve();
+
+      expect(lockAttempts).toBe(2);
+      expect(paymentState.status).toBe(PaymentStatus.SUBMITTED);
+
+      releaseFirstRequest();
+
+      await expect(firstRequest).resolves.toEqual(expect.objectContaining({
+        status: PaymentStatus.REJECTED,
+        notes: 'First reviewer note',
+      }));
+      await expect(secondRequest).rejects.toThrow('Cannot reject payment in status REJECTED');
+
+      expect(paymentState.notes).toBe(`${marker}\nFirst reviewer note`);
+      expect(prismaService.payment.update).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.update).not.toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ notes: expect.stringContaining('Stale second reviewer note') }),
+      }));
+    });
+
+    it('removes only exact internal marker lines from public payment notes', () => {
+      const marker = 'resident-charge-selection-requires-resubmission';
+      const sanitizer = service as unknown as {
+        sanitizePaymentForResponse<T extends { notes?: string | null }>(payment: T): T;
+      };
+
+      const markerOnly = sanitizer.sanitizePaymentForResponse({
+        id: paymentId,
+        notes: marker,
+      });
+      const publicPayment = sanitizer.sanitizePaymentForResponse({
+        id: paymentId,
+        notes: `${marker}\nVisible reviewer note\n${marker}-similar-visible-note`,
+      });
+
+      expect(markerOnly).not.toHaveProperty('notes');
+      expect(publicPayment.notes).toBe(`Visible reviewer note\n${marker}-similar-visible-note`);
+    });
+
+    it('keeps an unmarked legacy payment with a full allocation on the existing revive path', async () => {
+      mockSubmittedPaymentState(PaymentStatus.REJECTED, PaymentStatus.SUBMITTED, null);
+      jest.spyOn(prismaService, '$queryRaw').mockResolvedValue([] as never);
+
+      await expect(
+        service.revivePayment(
+          tenantId,
+          buildingId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ status: PaymentStatus.SUBMITTED }));
+
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+
+    it('does not revive a payment from another tenant', async () => {
+      mockSubmittedPaymentState(PaymentStatus.REJECTED, PaymentStatus.SUBMITTED);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValueOnce(null as never);
+      jest.spyOn(prismaService, '$queryRaw').mockResolvedValue([] as never);
+
+      await expect(
+        service.revivePayment(
+          tenantId,
+          buildingId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+        ),
+      ).rejects.toThrow('Payment not found or does not belong to this building/tenant');
+
+      expect(prismaService.payment.update).not.toHaveBeenCalled();
+    });
+
+    it('does not revive canceled rejected payments', async () => {
+      mockSubmittedPaymentState(PaymentStatus.REJECTED, PaymentStatus.SUBMITTED);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValueOnce({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        status: PaymentStatus.REJECTED,
+        canceledAt: new Date('2026-07-24T12:00:00.000Z'),
+        notes: null,
+        paymentAllocations: [],
+      } as never);
+      jest.spyOn(prismaService, '$queryRaw').mockResolvedValue([] as never);
+
+      await expect(
+        service.revivePayment(
+          tenantId,
+          buildingId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+        ),
+      ).rejects.toThrow('No se puede reactivar un pago cancelado');
+
+      expect(prismaService.payment.update).not.toHaveBeenCalled();
+    });
+
+    it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+      'does not revive %s payments',
+      async (status) => {
+        allocationStore = [];
+        mockSubmittedPaymentState(status, PaymentStatus.SUBMITTED);
+        jest.spyOn(prismaService, '$queryRaw').mockResolvedValue([] as never);
+
+        await expect(
+          service.revivePayment(
+            tenantId,
+            buildingId,
+            paymentId,
+            ['TENANT_ADMIN'],
+            membershipId,
+          ),
+        ).rejects.toThrow('Only REJECTED payments can be revived');
+
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      },
+    );
 
     it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
       'does not remove allocations for %s payments',

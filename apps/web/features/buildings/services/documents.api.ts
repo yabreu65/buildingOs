@@ -131,9 +131,10 @@ export async function presignUpload(
   originalName: string,
   mimeType: string,
   size?: number,
+  purpose: 'GENERAL_DOCUMENT' | 'PAYMENT_PROOF' = 'GENERAL_DOCUMENT',
 ): Promise<PresignResponse> {
   const endpoint = `/tenants/${tenantId}/documents/presign`;
-  const body = { originalName, mimeType, ...(size && { size }) };
+  const body = { originalName, mimeType, ...(size && { size }), purpose };
   logRequest('POST', endpoint, body);
 
   try {

@@ -1,4 +1,9 @@
-import { IsString, Length, IsOptional, IsInt, Min } from 'class-validator';
+import { IsString, Length, IsOptional, IsInt, Min, IsEnum } from 'class-validator';
+
+export enum DocumentUploadPurpose {
+  GENERAL_DOCUMENT = 'GENERAL_DOCUMENT',
+  PAYMENT_PROOF = 'PAYMENT_PROOF',
+}
 
 /**
  * Request to generate a presigned upload URL
@@ -17,6 +22,10 @@ export class PresignUploadDto {
   @IsInt()
   @Min(1)
   size?: number; // Client-provided hint for early rejection
+
+  @IsOptional()
+  @IsEnum(DocumentUploadPurpose)
+  purpose?: DocumentUploadPurpose;
 }
 
 /**

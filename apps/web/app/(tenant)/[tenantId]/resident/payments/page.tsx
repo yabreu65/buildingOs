@@ -448,7 +448,13 @@ export const ResidentPaymentsPage = () => {
     setSubmitError(null);
 
     try {
-      const presignRes = await presignUpload(tenantId, file.name, file.type, file.size);
+      const presignRes = await presignUpload(
+        tenantId,
+        file.name,
+        file.type,
+        file.size,
+        'PAYMENT_PROOF',
+      );
       await uploadFileToMinio(presignRes.url, file);
       const createdDocument = await createDocument(tenantId, {
         title: `Comprobante pago - ${file.name}`,

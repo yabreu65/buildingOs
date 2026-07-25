@@ -7,11 +7,13 @@ import {
 } from '@nestjs/common';
 import { Readable } from 'node:stream';
 import { DocumentsService } from './documents.service';
+import { DocumentUploadPurpose } from './dto/presign-upload.dto';
 import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { Prisma } from '@prisma/client';
 
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
+const GENERAL_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
 const DEFAULT_BUCKET = 'buildingos-test';
 
 function createPrismaKnownRequestError(code: string): Prisma.PrismaClientKnownRequestError {
@@ -37,6 +39,9 @@ describe('DocumentsService', () => {
     },
     tenant: {
       findUnique: jest.fn(),
+    },
+    unitOccupant: {
+      findMany: jest.fn(),
     },
   };
   const validators = {
@@ -64,12 +69,6 @@ describe('DocumentsService', () => {
   const residentAccess = {
     shouldEnforce: jest.fn(),
   } as unknown as jest.Mocked<ResidentAccessService>;
-  const configService = {
-    getValue: jest.fn((key: string) => {
-      if (key === 'uploadMaxBytes') return MAX_UPLOAD_BYTES;
-      return undefined;
-    }),
-  };
   const service = new DocumentsService(
     prisma as never,
     validators,
@@ -77,7 +76,6 @@ describe('DocumentsService', () => {
     notifications as never,
     audit as never,
     residentAccess,
-    configService as never,
   );
 
   const uploadFile = {
@@ -107,6 +105,7 @@ describe('DocumentsService', () => {
     validators.validateResidentDocumentAccess.mockResolvedValue(undefined);
     residentAccess.shouldEnforce.mockReturnValue(false);
     prisma.file.findFirst.mockResolvedValue(null);
+    prisma.unitOccupant.findMany.mockResolvedValue([]);
     prisma.document.findFirst.mockResolvedValue({
       id: 'document-1',
       tenantId: 'tenant-1',
@@ -120,10 +119,56 @@ describe('DocumentsService', () => {
     } as never);
   });
 
-  it('rejects presign requests that exceed the backend upload limit', async () => {
+  it.each([9, 10, 50, 100])('allows general document presign requests at %i MiB', async (sizeInMiB) => {
+    minio.presignUpload.mockResolvedValue('https://upload.example/general.pdf');
+
     await expect(
-      service.presignUpload('tenant-1', 'proof.pdf', 'application/pdf', MAX_UPLOAD_BYTES + 1),
-    ).rejects.toBeInstanceOf(PayloadTooLargeException);
+      service.presignUpload(
+        'tenant-1',
+        'general.pdf',
+        'application/pdf',
+        sizeInMiB * 1024 * 1024,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ objectKey: expect.stringContaining('/documents/') }));
+  });
+
+  it('rejects general document presign requests over 100 MiB with a 100 MB message', async () => {
+    await expect(
+      service.presignUpload(
+        'tenant-1',
+        'general.pdf',
+        'application/pdf',
+        GENERAL_DOCUMENT_MAX_BYTES + 1,
+      ),
+    ).rejects.toThrow('100 MB');
+
+    expect(minio.presignUpload).not.toHaveBeenCalled();
+  });
+
+  it.each([9, 10])('allows payment proof presign requests at %i MiB', async (sizeInMiB) => {
+    minio.presignUpload.mockResolvedValue('https://upload.example/proof.pdf');
+
+    await expect(
+      service.presignUpload(
+        'tenant-1',
+        'proof.pdf',
+        'application/pdf',
+        sizeInMiB * 1024 * 1024,
+        DocumentUploadPurpose.PAYMENT_PROOF,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ objectKey: expect.stringContaining('/payment-proofs/') }));
+  });
+
+  it('rejects payment proof presign requests over 10 MiB with a 10 MB message', async () => {
+    await expect(
+      service.presignUpload(
+        'tenant-1',
+        'proof.pdf',
+        'application/pdf',
+        PAYMENT_PROOF_MAX_BYTES + 1,
+        DocumentUploadPurpose.PAYMENT_PROOF,
+      ),
+    ).rejects.toThrow('10 MB');
 
     expect(minio.presignUpload).not.toHaveBeenCalled();
   });
@@ -275,9 +320,157 @@ describe('DocumentsService', () => {
     expect(prisma.document.create).not.toHaveBeenCalled();
   });
 
+  it('preserves a winning payment-proof object during a concurrent P2002 cleanup', async () => {
+    const paymentProof = {
+      ...uploadFile,
+      objectKey: 'tenant-tenant-1/payment-proofs/shared-proof.pdf',
+    };
+    const winnerFile = { id: 'file-winner' };
+    let resolveWinnerFilePersisted!: () => void;
+    const winnerFilePersisted = new Promise<void>((resolve) => {
+      resolveWinnerFilePersisted = resolve;
+    });
+    let releaseWinnerDocument!: () => void;
+    const winnerDocumentReleased = new Promise<void>((resolve) => {
+      releaseWinnerDocument = resolve;
+    });
+    let fileLookupCount = 0;
+    let fileCreateCount = 0;
+    let documentCreateCount = 0;
+
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.findFirst.mockImplementation(async () => {
+      fileLookupCount += 1;
+      return fileLookupCount <= 2 ? null as never : winnerFile as never;
+    });
+    prisma.file.create.mockImplementation(async () => {
+      fileCreateCount += 1;
+      if (fileCreateCount === 1) {
+        resolveWinnerFilePersisted();
+        return winnerFile as never;
+      }
+
+      await winnerFilePersisted;
+      throw createPrismaKnownRequestError('P2002');
+    });
+    prisma.document.create.mockImplementation(async () => {
+      documentCreateCount += 1;
+      if (documentCreateCount === 1) {
+        await winnerDocumentReleased;
+      }
+
+      return {
+        id: 'document-winner',
+        tenantId: 'tenant-1',
+        file: paymentProof,
+        createdByMembership: { user: { id: 'resident-1', name: 'Resident' } },
+      } as never;
+    });
+
+    const winnerRequest = service.createDocument('tenant-1', 'membership-1', {
+      title: 'Payment proof',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: paymentProof,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    await winnerFilePersisted;
+    const losingRequest = service.createDocument('tenant-1', 'membership-1', {
+      title: 'Payment proof',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: paymentProof,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    await expect(losingRequest).rejects.toMatchObject({ code: 'P2002' });
+
+    expect(prisma.file.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        bucket: DEFAULT_BUCKET,
+        objectKey: paymentProof.objectKey,
+      },
+      select: { id: true },
+    });
+    expect(minio.statObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+
+    releaseWinnerDocument();
+    await expect(winnerRequest).resolves.toEqual(expect.objectContaining({ id: 'document-winner' }));
+  });
+
+  it('cleans up an orphaned payment-proof object after a P2002', async () => {
+    const paymentProof = {
+      ...uploadFile,
+      objectKey: 'tenant-tenant-1/payment-proofs/orphaned-proof.pdf',
+    };
+
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockRejectedValueOnce(createPrismaKnownRequestError('P2002'));
+    prisma.file.findFirst.mockResolvedValue(null);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Payment proof',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: paymentProof,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toMatchObject({ code: 'P2002' });
+
+    expect(prisma.file.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        bucket: DEFAULT_BUCKET,
+        objectKey: paymentProof.objectKey,
+      },
+      select: { id: true },
+    });
+    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
+  });
+
+  it('rejects payment-proof keys from another tenant before storage or cleanup', async () => {
+    const foreignPaymentProof = {
+      ...uploadFile,
+      objectKey: 'tenant-tenant-2/payment-proofs/foreign-proof.pdf',
+    };
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Payment proof',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: foreignPaymentProof,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('extracts tenant ids only from valid document and payment-proof keys', () => {
+    const documentService = service as unknown as {
+      extractTenantIdFromObjectKey(objectKey: string): string;
+    };
+
+    expect(documentService.extractTenantIdFromObjectKey('tenant-tenant-1/documents/file.pdf')).toBe('tenant-1');
+    expect(documentService.extractTenantIdFromObjectKey('tenant-tenant-1/payment-proofs/file.pdf')).toBe('tenant-1');
+    expect(documentService.extractTenantIdFromObjectKey('tenant-/payment-proofs/file.pdf')).toBe('');
+    expect(documentService.extractTenantIdFromObjectKey('payment-proofs/tenant-1/file.pdf')).toBe('');
+    expect(documentService.extractTenantIdFromObjectKey('tenant-tenant-1/payment-proofs/../file.pdf')).toBe('');
+    expect(documentService.extractTenantIdFromObjectKey('tenant-tenant-2/payment-proofs/file.pdf')).toBe('tenant-2');
+  });
+
   it('rejects uploaded files that exceed the backend limit using the real storage size', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: MAX_UPLOAD_BYTES + 1 } as never);
+    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES + 1 } as never);
 
     await expect(service.createDocument('tenant-1', 'membership-1', {
       title: 'Receipt',
@@ -347,6 +540,75 @@ describe('DocumentsService', () => {
     expect(prisma.file.create).toHaveBeenCalled();
     expect(prisma.document.create).toHaveBeenCalled();
     expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+  });
+
+  it('accepts a 100 MiB general document using the real storage size', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      title: 'Large document',
+      category: 'OTHER',
+      visibility: 'TENANT_ADMINS',
+      file: { ...uploadFile, size: GENERAL_DOCUMENT_MAX_BYTES },
+      createdByMembership: { user: { id: 'admin-1', name: 'Admin' } },
+    } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Large document',
+      category: 'OTHER',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).resolves.toEqual(expect.objectContaining({ id: 'document-1' }));
+  });
+
+  it.each([
+    [PAYMENT_PROOF_MAX_BYTES, true],
+    [PAYMENT_PROOF_MAX_BYTES + 1, false],
+  ])('enforces the 10 MiB real-storage limit for payment proofs (%i bytes)', async (size, allowed) => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size } as never);
+    const paymentProof = {
+      ...uploadFile,
+      objectKey: 'tenant-tenant-1/payment-proofs/proof.pdf',
+    };
+
+    if (allowed) {
+      prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
+      prisma.document.create.mockResolvedValueOnce({
+        id: 'document-1',
+        tenantId: 'tenant-1',
+        title: 'Payment proof',
+        category: 'RECEIPT',
+        visibility: 'RESIDENTS',
+        file: paymentProof,
+        createdByMembership: { user: { id: 'resident-1', name: 'Resident' } },
+      } as never);
+
+      await expect(service.createDocument('tenant-1', 'membership-1', {
+        title: 'Payment proof',
+        category: 'RECEIPT',
+        visibility: 'RESIDENTS',
+        file: paymentProof,
+        buildingId: 'building-1',
+        unitId: 'unit-1',
+      })).resolves.toEqual(expect.objectContaining({ id: 'document-1' }));
+      return;
+    }
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Payment proof',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: paymentProof,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toThrow('10 MB');
+    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
   });
 
   it('rejects unsafe MIME types and cleans up the uploaded object', async () => {
