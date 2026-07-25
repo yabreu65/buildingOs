@@ -165,6 +165,8 @@ function makeCharge(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe('ResidentPaymentsPage', () => {
   beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-24T12:00:00.000Z'));
     jest.clearAllMocks();
     mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
     mockedUseTenants.mockReturnValue({
@@ -214,6 +216,9 @@ describe('ResidentPaymentsPage', () => {
       createObjectURL: jest.Mock;
       revokeObjectURL: jest.Mock;
     }).revokeObjectURL = jest.fn();
+  });
+
+  afterEach(() => {
     jest.useRealTimers();
   });
 
