@@ -22,14 +22,15 @@ function createClientMock(): ClientMock {
   };
 }
 
-function createConfig(overrides: Record<string, string | undefined> = {}): ConfigService {
-  const values: Record<string, string | undefined> = {
+function createConfig(overrides: Record<string, string | boolean | undefined> = {}): ConfigService {
+  const values: Record<string, string | boolean | undefined> = {
     nodeEnv: 'test',
     s3Endpoint: 'http://minio:9000',
     s3PublicBaseUrl: 'https://buildingos-staging-files.31-220-98-21.sslip.io',
     s3Region: 'us-east-1',
     s3AccessKey: 'access-key',
     s3SecretKey: 'secret-key',
+    s3ForcePathStyle: true,
     s3Bucket: 'buildingos-staging',
     ...overrides,
   };
@@ -97,7 +98,28 @@ describe('MinioService', () => {
     );
   });
 
-  it('preserves the public protocol, host, and explicit port when signing URLs', () => {
+  it('uses the protocol default port for a public HTTP endpoint', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    publicClient.presignedPutObject.mockResolvedValue(
+      'http://files.example.test/buildingos-staging/proof.pdf?signature=abc',
+    );
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig({ s3PublicBaseUrl: 'http://files.example.test' }));
+    const signedUrl = await service.presignUpload('buildingos-staging', 'proof.pdf');
+
+    expect(minioClientConstructor).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      endPoint: 'files.example.test',
+      port: 80,
+      useSSL: false,
+    }));
+    expect(signedUrl).not.toContain(':9000');
+  });
+
+  it('preserves an explicit public port when signing URLs', () => {
     const internalClient = createClientMock();
     const publicClient = createClientMock();
     minioClientConstructor
@@ -110,8 +132,20 @@ describe('MinioService', () => {
       endPoint: 'files.example.test',
       port: 9443,
       useSSL: false,
-      pathStyle: true,
     }));
+  });
+
+  it.each([true, false])('passes s3ForcePathStyle=%s to both clients', (pathStyle) => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    new MinioService(createConfig({ s3ForcePathStyle: pathStyle }));
+
+    expect(minioClientConstructor).toHaveBeenNthCalledWith(1, expect.objectContaining({ pathStyle }));
+    expect(minioClientConstructor).toHaveBeenNthCalledWith(2, expect.objectContaining({ pathStyle }));
   });
 
   it('falls back to the internal local endpoint for presigning when no public endpoint is configured', () => {

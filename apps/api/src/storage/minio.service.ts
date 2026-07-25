@@ -23,7 +23,7 @@ export interface MinioObjectStat {
  * Uses S3-compatible MinIO endpoint configured via environment variables:
  * - S3_ENDPOINT: localhost only for local development fallback
  * - S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET: required outside development
- * - S3_FORCE_PATH_STYLE: true (required for MinIO)
+ * - S3_FORCE_PATH_STYLE: controls whether bucket names are included in the URL path
  */
 @Injectable()
 export class MinioService {
@@ -60,6 +60,7 @@ export class MinioService {
       throw new Error('S3_ENDPOINT is required outside development');
     }
     const region = this.configService.getValue('s3Region') || 'us-east-1';
+    const pathStyle = this.configService.getValue('s3ForcePathStyle');
     const accessKey = this.configService.getValue('s3AccessKey');
     const secretKey = this.configService.getValue('s3SecretKey');
     const bucket = this.configService.getValue('s3Bucket');
@@ -76,12 +77,14 @@ export class MinioService {
       accessKey,
       secretKey,
       region,
+      pathStyle,
     );
     this.presignClient = this.createClient(
       publicEndpoint,
       accessKey,
       secretKey,
       region,
+      pathStyle,
     );
 
     this.logger.log(`MinIO client initialized: ${new URL(internalEndpoint).host} (bucket: ${this.bucket})`);
@@ -92,13 +95,14 @@ export class MinioService {
     accessKey: string,
     secretKey: string,
     region: string,
+    pathStyle: boolean,
   ): Minio.Client {
     const url = new URL(endpoint);
     const port = url.port
       ? Number.parseInt(url.port, 10)
       : url.protocol === 'https:'
         ? 443
-        : 9000;
+        : 80;
 
     return new Minio.Client({
       endPoint: url.hostname,
@@ -107,7 +111,7 @@ export class MinioService {
       accessKey,
       secretKey,
       region,
-      pathStyle: true,
+      pathStyle,
     });
   }
 
