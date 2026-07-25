@@ -893,6 +893,220 @@ describe('FinanzasService', () => {
     });
   });
 
+  // ========== TESTS: APPROVE PAYMENT TENANT ==========
+  describe('approvePaymentTenant', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const paymentId = 'payment-tenant-123';
+    const membershipId = 'membership-123';
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as any);
+      jest.spyOn(prismaService.charge, 'update').mockResolvedValue({
+        id: 'charge-123',
+        status: ChargeStatus.PAID,
+      } as any);
+    });
+
+    it('reconciles tenant-approved payments when all explicit allocations settle their charges', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        paymentAllocations: [
+          {
+            chargeId: 'charge-123',
+            amount: 10000,
+          },
+        ],
+      } as any);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [],
+      } as any);
+      const paymentUpdateSpy = jest
+        .spyOn(prismaService.payment, 'update')
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.APPROVED,
+          paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        } as any)
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.RECONCILED,
+          paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        } as any);
+      jest.spyOn(prismaService.payment, 'findUnique')
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: PaymentStatus.APPROVED,
+          paymentAllocations: [
+            {
+              amount: 10000,
+              charge: { status: ChargeStatus.PAID },
+            },
+          ],
+        } as any)
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.RECONCILED,
+          paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        } as any)
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.RECONCILED,
+          paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        } as any);
+
+      const result = await service.approvePaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+      expect(result.status).toBe(PaymentStatus.RECONCILED);
+      expect(paymentUpdateSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: { id: paymentId },
+          data: expect.objectContaining({
+            status: PaymentStatus.APPROVED,
+            reviewedByMembershipId: membershipId,
+          }),
+        }),
+      );
+      expect(paymentUpdateSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: { id: paymentId },
+          data: expect.objectContaining({
+            status: PaymentStatus.RECONCILED,
+          }),
+        }),
+      );
+    });
+
+    it('keeps tenant-approved payments approved when the remaining balance is still open', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 5000,
+        currency: 'ARS',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        paymentAllocations: [
+          {
+            chargeId: 'charge-123',
+            amount: 5000,
+          },
+        ],
+      } as any);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue({
+        id: 'charge-123',
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
+        paymentAllocations: [
+          {
+            amount: 5000,
+            payment: { status: PaymentStatus.APPROVED },
+          },
+        ],
+      } as any);
+      const paymentUpdateSpy = jest
+        .spyOn(prismaService.payment, 'update')
+        .mockResolvedValueOnce({
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 5000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.APPROVED,
+          paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        } as any);
+      jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValueOnce({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 5000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.APPROVED,
+        paidAt: new Date('2026-07-24T12:00:00.000Z'),
+        paymentAllocations: [],
+      } as any);
+
+      const result = await service.approvePaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {},
+      );
+
+      expect(result.status).toBe(PaymentStatus.APPROVED);
+      expect(paymentUpdateSpy).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: PaymentStatus.APPROVED,
+          }),
+        }),
+      );
+    });
+  });
+
   // ========== TESTS: CHECK PAYMENT DUPLICATE ==========
   describe('checkPaymentDuplicate', () => {
     it('scopes duplicate detection to the payment unit', async () => {

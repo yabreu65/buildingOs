@@ -5,6 +5,7 @@ import { writeFileSync } from 'node:fs';
 
 describe('PaymentReceiptService', () => {
   const DEFAULT_BUCKET = 'buildingos-test';
+  const RECEIPT_MAX_TEXT_WIDTH = 595 - 72 - 72;
 
   const prisma = {
     payment: {
@@ -48,6 +49,105 @@ describe('PaymentReceiptService', () => {
     minio as never,
     notificationsService as never,
   );
+
+  function extractPdfTextLines(buffer: Buffer): string[] {
+    const pdfText = buffer.toString('latin1');
+    return Array.from(pdfText.matchAll(/\(([^()]*)\) Tj/g)).map((match) =>
+      match[1]
+        .replace(/\\\(/g, '(')
+        .replace(/\\\)/g, ')')
+        .replace(/\\\\/g, '\\'),
+    );
+  }
+
+  function measureReceiptTextWidth(text: string): number {
+    const widths: Record<string, number> = {
+      ' ': 2.5,
+      '.': 2.5,
+      ',': 2.5,
+      ':': 2.5,
+      ';': 2.5,
+      '!': 2.5,
+      '?': 4.5,
+      '|': 2.5,
+      'i': 2.75,
+      'l': 2.75,
+      'I': 3,
+      'j': 2.75,
+      't': 3.5,
+      'f': 3.5,
+      'r': 3.5,
+      's': 4.25,
+      'a': 4.5,
+      'c': 4.5,
+      'e': 4.5,
+      'o': 4.5,
+      'n': 4.5,
+      'u': 4.5,
+      'v': 4.5,
+      'x': 4.5,
+      'y': 4.5,
+      'k': 4.75,
+      'd': 4.75,
+      'g': 4.75,
+      'h': 4.75,
+      'b': 4.75,
+      'p': 4.75,
+      'm': 7.25,
+      'w': 7.25,
+      'M': 8.5,
+      'W': 8.5,
+      '0': 5,
+      '1': 5,
+      '2': 5,
+      '3': 5,
+      '4': 5,
+      '5': 5,
+      '6': 5,
+      '7': 5,
+      '8': 5,
+      '9': 5,
+      '-': 3.5,
+      '/': 3.5,
+      '(': 3.5,
+      ')': 3.5,
+      '%': 7,
+      'Ñ': 7,
+      'Á': 6,
+      'É': 6,
+      'Í': 6,
+      'Ó': 6,
+      'Ú': 6,
+      'Ü': 6,
+      'ñ': 4.75,
+      'á': 4.5,
+      'é': 4.5,
+      'í': 4.5,
+      'ó': 4.5,
+      'ú': 4.5,
+      'ü': 4.5,
+    };
+
+    let width = 0;
+    for (const character of text) {
+      if (widths[character] !== undefined) {
+        width += widths[character];
+      } else if (character.toUpperCase() === character && character.toLowerCase() !== character.toUpperCase()) {
+        width += 6;
+      } else {
+        width += 5;
+      }
+    }
+
+    return width;
+  }
+
+  function expectPdfTextWithinWidth(lines: string[]) {
+    for (const line of lines) {
+      if (!line) continue;
+      expect(measureReceiptTextWidth(line)).toBeLessThanOrEqual(RECEIPT_MAX_TEXT_WIDTH);
+    }
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -124,6 +224,7 @@ describe('PaymentReceiptService', () => {
     expect(normalizedPdfText).toContain('Aplicación del pago');
     expect(normalizedPdfText).toContain('Período aplicado: 2025-10');
     expect(normalizedPdfText).toContain('2025-10 - Condominio ordinario 2025-10 - ARS 40.500,00');
+    expect(normalizedPdfText).toContain('Página 1 de 1');
     expect(normalizedPdfText).not.toContain('œ');
     expect(normalizedPdfText).not.toContain('Ø');
     expect(normalizedPdfText).not.toContain('¢');
@@ -230,5 +331,61 @@ describe('PaymentReceiptService', () => {
 
     expect(pageObjects.length).toBe(2);
     expect(pdfText).toContain('Continúa en la siguiente página.');
+    expect(pdfText).toContain('Página 1 de 2');
+    expect(pdfText).toContain('Página 2 de 2');
+  });
+
+  it('wraps long receipt fields and keeps every line within the available width', async () => {
+    const longTenantName = 'Consorcio Complejo Residencial Horizonte Torre Norte y Torre Sur con Administración Extendida y Consejo Vecinal';
+    const longBuildingName = 'Torre Horizonte A con Hall Principal, Cocheras y SUM del Complejo Residencial Horizonte';
+    const longReference = 'TRANSFERENCIA-EXTREMADAMENTE-LARGA-SIN-ESPACIOS-0123456789ABCDEFGHIJKLMN';
+    const longConcept = 'Condominio ordinario con descripción extremadamente larga para validar el wrapping del PDF multipágina';
+
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: longReference,
+      paymentAllocations: [{
+        chargeId: 'charge-1',
+        amount: 4050000,
+        charge: {
+          period: '2025-10',
+          concept: longConcept,
+          expensePeriod: { year: 2025, month: 10 },
+        },
+      }],
+      unit: { label: 'TN-01-01-BIS-EXTRA-LARGA' },
+      building: { name: longBuildingName },
+      receiptDocumentId: null,
+      receiptNumber: null,
+    } as never);
+    prisma.tenant.findUnique.mockResolvedValueOnce({ name: longTenantName, brandName: null } as never);
+    prisma.user.findUnique.mockResolvedValueOnce({ name: 'Admin' } as never);
+
+    const result = await service.ensureReceiptForPayment('payment-1');
+    expect(result?.documentId).toBe('document-1');
+
+    const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
+    const pdfText = uploadedBuffer.toString('latin1');
+    const normalizedPdfText = pdfText.replace(/\u00a0/g, ' ');
+    const pdfLines = extractPdfTextLines(uploadedBuffer);
+    const wrappedLines = pdfLines.filter((line) => line.length > 0);
+    const reconstructedText = wrappedLines.join(' ');
+
+    expect(uploadedBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    expect(reconstructedText).toContain(longBuildingName);
+    expect(normalizedPdfText).toContain('Página 1 de 1');
+    expect(normalizedPdfText).toContain('Documento generado por la Administración del');
+    expect(reconstructedText).toContain(longConcept);
+    expect(reconstructedText).toContain(longReference);
+    expectPdfTextWithinWidth(wrappedLines);
   });
 });

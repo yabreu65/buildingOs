@@ -2572,6 +2572,14 @@ export class FinanzasService {
         for (const allocation of payment.paymentAllocations) {
           await this.recalculateChargeStatus(allocation.chargeId, tx);
         }
+
+        await this.tryReconcilePayment(paymentId, tx);
+        const reconciledPayment = await tx.payment.findUnique({
+          where: { id: paymentId },
+        });
+        if (reconciledPayment) {
+          approvedPaymentResult = reconciledPayment;
+        }
       } else {
         const approvedPayment = await tx.payment.update({
           where: { id: paymentId },
@@ -2674,6 +2682,14 @@ export class FinanzasService {
               remainingAmount -= allocationAmount;
             }
           }
+        }
+
+        await this.tryReconcilePayment(paymentId, tx);
+        const reconciledPayment = await tx.payment.findUnique({
+          where: { id: paymentId },
+        });
+        if (reconciledPayment) {
+          approvedPaymentResult = reconciledPayment;
         }
       }
 

@@ -136,9 +136,9 @@ function makePayment(overrides: Partial<Payment> = {}): Payment {
     receiptNumber: undefined,
     receiptStatus: 'PENDING',
     receiptError: undefined,
-    createdAt: '2026-07-01T00:00:00.000Z',
+    createdAt: '2026-07-01',
     updatedAt: '2026-07-01T00:00:00.000Z',
-    paidAt: '2026-07-01T00:00:00.000Z',
+    paidAt: '2026-07-01',
     rejectionReason: null,
     rejectionComment: null,
     ...overrides,
@@ -155,7 +155,7 @@ function makeCharge(overrides: Partial<Record<string, unknown>> = {}) {
     amount: 9998,
     allocated: 0,
     currency: 'ARS',
-    dueDate: '2026-07-24T00:00:00.000Z',
+    dueDate: '2026-07-24',
     status: ChargeStatus.PENDING,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-01T00:00:00.000Z',
@@ -546,8 +546,8 @@ describe('ResidentPaymentsPage', () => {
     mockedListPayments.mockResolvedValueOnce([
       makePayment({
         id: 'payment-existing',
-        paidAt: '2026-07-24T00:00:00.000Z',
-        createdAt: '2026-07-24T00:00:00.000Z',
+        paidAt: '2026-07-24',
+        createdAt: '2026-07-24',
       }),
     ]);
 
@@ -580,6 +580,58 @@ describe('ResidentPaymentsPage', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /confirmar reporte de pago/i })).toBeNull());
     expect((screen.getByLabelText(/fecha de pago/i) as HTMLInputElement).value).toBe('2026-07-24');
+  });
+
+  it('keeps civil dates exact and formats timestamps in local time in the history list', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [] }));
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'payment-civil',
+        paidAt: '2026-07-24',
+        createdAt: '2026-07-24',
+        reference: 'CIVIL',
+      }),
+      makePayment({
+        id: 'payment-timestamp',
+        paidAt: '2026-07-26T01:00:00.000Z',
+        createdAt: '2026-07-26T01:00:00.000Z',
+        reference: 'TIMESTAMP',
+      }),
+      makePayment({
+        id: 'payment-fallback',
+        paidAt: undefined,
+        createdAt: '2026-07-26T01:00:00.000Z',
+        reference: 'FALLBACK',
+      }),
+      makePayment({
+        id: 'payment-invalid',
+        paidAt: 'invalid-date',
+        createdAt: 'invalid-date',
+        reference: 'INVALID',
+      }),
+    ]);
+
+    const expectedTimestampDate = new Intl.DateTimeFormat('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date('2026-07-26T01:00:00.000Z'));
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    await screen.findByText('Historial de pagos');
+
+    expect(
+      screen.getByText((_, element) => element?.tagName === 'P' && element.textContent?.includes('24/07/2026') === true),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        (_, element) => element?.tagName === 'P' && element.textContent?.includes(expectedTimestampDate) === true,
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByText('23/07/2026')).toBeNull();
+    expect(screen.queryByText('invalid-date')).toBeNull();
   });
 
   it('lets the resident switch pending charges and always shows the selected full balance', async () => {

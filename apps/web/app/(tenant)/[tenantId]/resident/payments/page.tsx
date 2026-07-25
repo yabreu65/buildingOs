@@ -31,14 +31,45 @@ import Button from '@/shared/components/ui/Button';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
-function formatDate(dateStr: string | undefined): string {
-  if (!dateStr) return '—';
+const CIVIL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-  const [datePart] = dateStr.split('T');
-  const [year, month, day] = datePart.split('-');
-  if (!year || !month || !day) return dateStr;
+function formatCivilDate(dateValue: string | undefined | null): string {
+  if (!dateValue || !CIVIL_DATE_PATTERN.test(dateValue)) return '—';
+
+  const [year, month, day] = dateValue.split('-');
+  if (!year || !month || !day) return '—';
 
   return `${day}/${month}/${year}`;
+}
+
+function formatLocalTimestampDate(dateValue: string | undefined | null): string {
+  if (!dateValue) return '—';
+
+  const parsedDate = new Date(dateValue);
+  if (Number.isNaN(parsedDate.getTime())) return '—';
+
+  return new Intl.DateTimeFormat('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(parsedDate);
+}
+
+function formatPaymentDisplayDate(dateValue: string | undefined | null): string {
+  if (!dateValue) return '—';
+
+  return CIVIL_DATE_PATTERN.test(dateValue)
+    ? formatCivilDate(dateValue)
+    : formatLocalTimestampDate(dateValue);
+}
+
+function getCurrentCivilDateInputValue(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
 function getChargeStatusFromDebt(amount: number, allocated: number | undefined, status: ChargeStatus): string {
@@ -350,7 +381,7 @@ export const ResidentPaymentsPage = () => {
     selectedChargeId: '',
     method: PaymentMethod.TRANSFER,
     reference: '',
-    paidAt: new Date().toISOString().split('T')[0],
+    paidAt: getCurrentCivilDateInputValue(),
   });
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofFileId, setProofFileId] = useState<string | null>(null);
@@ -449,7 +480,7 @@ export const ResidentPaymentsPage = () => {
       selectedChargeId: '',
       method: PaymentMethod.TRANSFER,
       reference: '',
-      paidAt: new Date().toISOString().split('T')[0],
+      paidAt: getCurrentCivilDateInputValue(),
     });
     setProofFile(null);
     setProofFileId(null);
@@ -514,7 +545,7 @@ export const ResidentPaymentsPage = () => {
       amountLabel,
       chargeLabel,
       currency: selectedCharge.currency,
-      paidAtLabel: formatDate(formData.paidAt),
+      paidAtLabel: formatCivilDate(formData.paidAt),
       referenceLabel: formData.reference.trim() || undefined,
       proofFileName: proofFile.name,
     });
@@ -734,7 +765,7 @@ export const ResidentPaymentsPage = () => {
             <div>
               <p className="text-sm font-medium text-muted-foreground">Próximo vencimiento</p>
               <p className="text-2xl font-bold text-gray-900">
-                {nextDueCharge ? formatDate(nextDueCharge.dueDate) : '—'}
+                {nextDueCharge ? formatPaymentDisplayDate(nextDueCharge.dueDate) : '—'}
               </p>
               {nextDueCharge && (
                 <p className="text-xs text-muted-foreground">
@@ -755,7 +786,7 @@ export const ResidentPaymentsPage = () => {
               </p>
               {lastPayment && (
                 <p className="text-xs text-muted-foreground">
-                  {formatDate(lastPayment.paidAt ?? lastPayment.createdAt)}
+                  {formatPaymentDisplayDate(lastPayment.paidAt ?? lastPayment.createdAt)}
                 </p>
               )}
             </div>
@@ -778,7 +809,7 @@ export const ResidentPaymentsPage = () => {
                 <div>
                   <p className="font-medium">{charge.concept}</p>
                   <p className="text-sm text-muted-foreground">
-                    Período {charge.period} • Vence: {formatDate(charge.dueDate)}
+                    Período {charge.period} • Vence: {formatPaymentDisplayDate(charge.dueDate)}
                   </p>
                 </div>
                 <div className="text-right">
@@ -830,7 +861,7 @@ export const ResidentPaymentsPage = () => {
               const hasReceipt = !!receiptDocumentId;
               const hasProof = !!proofDocumentId;
               const downloadDisabled = downloadingDocumentId !== null;
-              const paymentDate = formatDate(payment.paidAt ?? payment.createdAt);
+              const paymentDate = formatPaymentDisplayDate(payment.paidAt ?? payment.createdAt);
 
               return (
                 <div key={payment.id} className="flex justify-between items-start gap-3 p-3 bg-muted/50 rounded-lg">

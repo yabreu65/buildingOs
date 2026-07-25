@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { financeApi } from '../services/finance.api';
 import { Skeleton } from '@/shared/components/ui';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
@@ -32,11 +32,15 @@ export function BuildingsFinanceSummary({
 }: BuildingsFinanceSummaryProps) {
   const { format } = useTenantCurrency();
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(buildingIds.length > 0);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
   const failedCount = summaries.filter((summary) => summary.errorMessage).length;
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
+    let cancelled = false;
+
     const fetchSummaries = async () => {
       try {
         setLoading(true);
@@ -68,12 +72,25 @@ export function BuildingsFinanceSummary({
             }
           }),
         );
+
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setSummaries(results);
         setError(null);
       } catch (err) {
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setError(err instanceof Error ? err : new Error('Failed to fetch summaries'));
         setSummaries([]);
       } finally {
+        if (cancelled || requestId !== requestIdRef.current) {
+          return;
+        }
+
         setLoading(false);
       }
     };
@@ -81,6 +98,10 @@ export function BuildingsFinanceSummary({
     if (buildingIds.length > 0) {
       fetchSummaries();
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [buildingIds, buildingNames, period]);
 
   if (loading) {

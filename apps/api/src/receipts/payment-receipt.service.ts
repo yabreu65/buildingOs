@@ -47,6 +47,17 @@ type ChargeWithAllocations = Prisma.ChargeGetPayload<{
   };
 }>;
 
+interface ReceiptPdfLine {
+  text: string;
+  kind: 'title' | 'heading' | 'body' | 'blank';
+}
+
+const RECEIPT_PDF_PAGE_WIDTH = 595;
+const RECEIPT_PDF_MARGIN_LEFT = 72;
+const RECEIPT_PDF_MARGIN_RIGHT = 72;
+const RECEIPT_PDF_MAX_TEXT_WIDTH = RECEIPT_PDF_PAGE_WIDTH - RECEIPT_PDF_MARGIN_LEFT - RECEIPT_PDF_MARGIN_RIGHT;
+const RECEIPT_PDF_MAX_BODY_LINES_PER_PAGE = 22;
+
 @Injectable()
 export class PaymentReceiptService {
   private readonly logger = new Logger(PaymentReceiptService.name);
@@ -339,20 +350,65 @@ export class PaymentReceiptService {
     primaryPeriod: string;
     allocations: readonly string[];
   }): Buffer {
-    const allocations = input.allocations.length > 0
-      ? [...input.allocations]
-      : ['Sin aplicación específica - saldo a favor'];
-    const allocationPages = this.chunkReceiptAllocations(allocations);
-    const contentStreams = allocationPages.map((allocationPage, index) =>
+    const bodyLines = this.buildReceiptBodyLines(input);
+    const allocationPages = this.chunkReceiptBodyLines(bodyLines);
+    const contentStreams = allocationPages.map((pageLines, index) =>
       this.buildReceiptPageContent({
         ...input,
-        allocations: allocationPage,
+        lines: pageLines,
         pageIndex: index,
         pageCount: allocationPages.length,
       }),
     );
 
     return this.serializePdf(contentStreams);
+  }
+
+  private buildReceiptBodyLines(input: {
+    tenantDisplayName: string;
+    receiptNumber: string;
+    approvedAt: string;
+    approvedByUserName: string;
+    unitLabel: string;
+    buildingName: string;
+    amountFormatted: string;
+    method: string;
+    reference: string;
+    primaryPeriod: string;
+    allocations: readonly string[];
+  }): ReceiptPdfLine[] {
+    const lines: ReceiptPdfLine[] = [];
+
+    this.pushWrappedReceiptLine(lines, input.tenantDisplayName, 'title');
+    this.pushBlankReceiptLine(lines);
+    this.pushWrappedReceiptLine(lines, 'Recibo de pago aprobado', 'heading');
+    this.pushWrappedReceiptLine(lines, `Emitido por la Administración del ${input.tenantDisplayName}`);
+    this.pushBlankReceiptLine(lines);
+
+    this.pushWrappedReceiptLine(lines, 'Datos del recibo', 'heading');
+    this.pushWrappedReceiptLine(lines, `Número de recibo: ${input.receiptNumber}`);
+    this.pushWrappedReceiptLine(lines, `Fecha de aprobación: ${input.approvedAt}`);
+    this.pushWrappedReceiptLine(lines, `Aprobado por: ${input.approvedByUserName}`);
+    this.pushBlankReceiptLine(lines);
+
+    this.pushWrappedReceiptLine(lines, 'Datos del pago', 'heading');
+    this.pushWrappedReceiptLine(lines, `Unidad: ${input.unitLabel}`);
+    this.pushWrappedReceiptLine(lines, `Edificio: ${input.buildingName}`);
+    this.pushWrappedReceiptLine(lines, `Monto: ${input.amountFormatted}`);
+    this.pushWrappedReceiptLine(lines, `Método: ${input.method}`);
+    this.pushWrappedReceiptLine(lines, `Referencia: ${input.reference}`);
+    this.pushWrappedReceiptLine(lines, `Período aplicado: ${input.primaryPeriod}`);
+    this.pushBlankReceiptLine(lines);
+
+    this.pushWrappedReceiptLine(lines, 'Aplicación del pago', 'heading');
+    const allocations = input.allocations.length > 0
+      ? [...input.allocations]
+      : ['Sin aplicación específica - saldo a favor'];
+    for (const allocation of allocations) {
+      this.pushWrappedReceiptLine(lines, allocation);
+    }
+
+    return lines;
   }
 
   private buildReceiptPageContent(input: {
@@ -366,90 +422,239 @@ export class PaymentReceiptService {
     method: string;
     reference: string;
     primaryPeriod: string;
-    allocations: readonly string[];
+    lines: readonly ReceiptPdfLine[];
     pageIndex: number;
     pageCount: number;
   }): string {
-    const contentCommands = [
-      'BT',
-      '/F2 18 Tf',
-      '22 TL',
-      '72 792 Td',
-      this.pdfText(input.tenantDisplayName),
-      '/F1 11 Tf',
-      '14 TL',
-      'T*',
-      this.pdfText('Recibo de pago aprobado'),
-      'T*',
-      this.pdfText(`Emitido por la Administración del ${input.tenantDisplayName}`),
-      'T*',
-      'T*',
-      '/F2 12 Tf',
-      this.pdfText('Datos del recibo'),
-      '/F1 11 Tf',
-      '14 TL',
-      'T*',
-      this.pdfText(`Número de recibo: ${input.receiptNumber}`),
-      'T*',
-      this.pdfText(`Fecha de aprobación: ${input.approvedAt}`),
-      'T*',
-      this.pdfText(`Aprobado por: ${input.approvedByUserName}`),
-      'T*',
-      'T*',
-      '/F2 12 Tf',
-      this.pdfText('Datos del pago'),
-      '/F1 11 Tf',
-      '14 TL',
-      'T*',
-      this.pdfText(`Unidad: ${input.unitLabel}`),
-      'T*',
-      this.pdfText(`Edificio: ${input.buildingName}`),
-      'T*',
-      this.pdfText(`Monto: ${input.amountFormatted}`),
-      'T*',
-      this.pdfText(`Método: ${input.method}`),
-      'T*',
-      this.pdfText(`Referencia: ${input.reference}`),
-      'T*',
-      this.pdfText(`Período aplicado: ${input.primaryPeriod}`),
-      'T*',
-      'T*',
-      '/F2 12 Tf',
-      this.pdfText(input.pageCount > 1 && input.pageIndex > 0 ? 'Aplicación del pago (continuación)' : 'Aplicación del pago'),
-      '/F1 11 Tf',
-      '14 TL',
-      ...input.allocations.flatMap((allocation) => [
-        'T*',
-        this.pdfText(allocation),
-      ]),
-      'T*',
-    ];
+    const lines = input.lines;
+    const contentCommands: string[] = ['BT', '72 792 Td'];
+    let currentFont = '';
+    let currentLeading = 14;
 
-    if (input.pageIndex === input.pageCount - 1) {
-      contentCommands.push(
-        this.pdfText('Este documento es una constancia de pago y no constituye factura fiscal.'),
-        'T*',
-        this.pdfText(`Documento generado por la Administración del ${input.tenantDisplayName}.`),
-      );
-    } else {
-      contentCommands.push(
-        this.pdfText('Continúa en la siguiente página.'),
-      );
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]!;
+      const renderedText = line.kind === 'heading' && line.text === 'Aplicación del pago' && input.pageIndex > 0
+        ? 'Aplicación del pago (continuación)'
+        : line.text;
+
+      if (index > 0) {
+        contentCommands.push('T*');
+      }
+
+      const fontCommand = line.kind === 'title'
+        ? '/F2 18 Tf'
+        : line.kind === 'heading'
+          ? '/F2 12 Tf'
+          : '/F1 11 Tf';
+      const leading = line.kind === 'title'
+        ? 22
+        : line.kind === 'heading'
+          ? 14
+          : 14;
+
+      if (currentFont !== fontCommand) {
+        contentCommands.push(fontCommand);
+        currentFont = fontCommand;
+      }
+
+      if (currentLeading !== leading) {
+        contentCommands.push(`${leading} TL`);
+        currentLeading = leading;
+      }
+
+      if (line.kind !== 'blank') {
+        contentCommands.push(this.pdfText(renderedText));
+      }
     }
 
+    contentCommands.push('T*');
+    if (input.pageIndex === input.pageCount - 1) {
+      contentCommands.push('/F1 10 Tf', '12 TL');
+      contentCommands.push(this.pdfText('Este documento es una constancia de pago y no constituye factura fiscal.'));
+      contentCommands.push('T*');
+      contentCommands.push(this.pdfText(`Documento generado por la Administración del ${input.tenantDisplayName}.`));
+    } else {
+      contentCommands.push('/F1 10 Tf', '12 TL');
+      contentCommands.push(this.pdfText('Continúa en la siguiente página.'));
+    }
+
+    contentCommands.push('T*');
+    contentCommands.push(this.pdfText(`Página ${input.pageIndex + 1} de ${input.pageCount}`));
     contentCommands.push('ET');
     return contentCommands.join('\n');
   }
 
-  private chunkReceiptAllocations(allocations: readonly string[]): string[][] {
-    const chunkSize = 8;
-    const pages: string[][] = [];
-
-    for (let index = 0; index < allocations.length; index += chunkSize) {
-      pages.push(allocations.slice(index, index + chunkSize));
+  private chunkReceiptBodyLines(lines: readonly ReceiptPdfLine[]): ReceiptPdfLine[][] {
+    const pages: ReceiptPdfLine[][] = [];
+    for (let index = 0; index < lines.length; index += RECEIPT_PDF_MAX_BODY_LINES_PER_PAGE) {
+      pages.push(lines.slice(index, index + RECEIPT_PDF_MAX_BODY_LINES_PER_PAGE));
     }
 
-    return pages.length > 0 ? pages : [['Sin aplicación específica - saldo a favor']];
+    return pages.length > 0 ? pages : [[{ text: 'Sin aplicación específica - saldo a favor', kind: 'body' }]];
+  }
+
+  private pushBlankReceiptLine(lines: ReceiptPdfLine[]): void {
+    lines.push({ text: '', kind: 'blank' });
+  }
+
+  private pushWrappedReceiptLine(
+    lines: ReceiptPdfLine[],
+    text: string,
+    kind: 'title' | 'heading' | 'body' = 'body',
+  ): void {
+    const wrappedLines = this.wrapReceiptText(text);
+    for (const wrappedLine of wrappedLines) {
+      lines.push({ text: wrappedLine, kind });
+    }
+  }
+
+  private wrapReceiptText(text: string): string[] {
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      return [''];
+    }
+
+    const words = trimmedText.split(/\s+/);
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+      const candidateLine = currentLine ? `${currentLine} ${word}` : word;
+      if (this.measureReceiptTextWidth(candidateLine) <= RECEIPT_PDF_MAX_TEXT_WIDTH) {
+        currentLine = candidateLine;
+        continue;
+      }
+
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = '';
+      }
+
+      if (this.measureReceiptTextWidth(word) <= RECEIPT_PDF_MAX_TEXT_WIDTH) {
+        currentLine = word;
+        continue;
+      }
+
+      const splitTokenLines = this.splitReceiptToken(word);
+      for (let index = 0; index < splitTokenLines.length - 1; index += 1) {
+        lines.push(splitTokenLines[index]!);
+      }
+      currentLine = splitTokenLines[splitTokenLines.length - 1] ?? '';
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+
+    return lines.length > 0 ? lines : [''];
+  }
+
+  private splitReceiptToken(token: string): string[] {
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const character of token) {
+      const candidateLine = `${currentLine}${character}`;
+      if (this.measureReceiptTextWidth(candidateLine) <= RECEIPT_PDF_MAX_TEXT_WIDTH) {
+        currentLine = candidateLine;
+      } else {
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        currentLine = character;
+      }
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+
+    return lines.length > 0 ? lines : [token];
+  }
+
+  private measureReceiptTextWidth(text: string): number {
+    const widths: Record<string, number> = {
+      ' ': 2.5,
+      '.': 2.5,
+      ',': 2.5,
+      ':': 2.5,
+      ';': 2.5,
+      '!': 2.5,
+      '?': 4.5,
+      '|': 2.5,
+      'i': 2.75,
+      'l': 2.75,
+      'I': 3,
+      'j': 2.75,
+      't': 3.5,
+      'f': 3.5,
+      'r': 3.5,
+      's': 4.25,
+      'a': 4.5,
+      'c': 4.5,
+      'e': 4.5,
+      'o': 4.5,
+      'n': 4.5,
+      'u': 4.5,
+      'v': 4.5,
+      'x': 4.5,
+      'y': 4.5,
+      'k': 4.75,
+      'd': 4.75,
+      'g': 4.75,
+      'h': 4.75,
+      'b': 4.75,
+      'p': 4.75,
+      'm': 7.25,
+      'w': 7.25,
+      'M': 8.5,
+      'W': 8.5,
+      '0': 5,
+      '1': 5,
+      '2': 5,
+      '3': 5,
+      '4': 5,
+      '5': 5,
+      '6': 5,
+      '7': 5,
+      '8': 5,
+      '9': 5,
+      '-': 3.5,
+      '/': 3.5,
+      '(': 3.5,
+      ')': 3.5,
+      '%': 7,
+      'Ñ': 7,
+      'Á': 6,
+      'É': 6,
+      'Í': 6,
+      'Ó': 6,
+      'Ú': 6,
+      'Ü': 6,
+      'ñ': 4.75,
+      'á': 4.5,
+      'é': 4.5,
+      'í': 4.5,
+      'ó': 4.5,
+      'ú': 4.5,
+      'ü': 4.5,
+    };
+
+    let width = 0;
+    for (const character of text) {
+      if (widths[character] !== undefined) {
+        width += widths[character];
+        continue;
+      }
+
+      if (character.toUpperCase() === character && character.toLowerCase() !== character.toUpperCase()) {
+        width += 6;
+      } else {
+        width += 5;
+      }
+    }
+
+    return width;
   }
 
   private serializePdf(contentStreams: readonly string[]): Buffer {
