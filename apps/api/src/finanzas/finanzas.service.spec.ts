@@ -55,7 +55,9 @@ describe('FinanzasService', () => {
               create: jest.fn(),
               findFirst: jest.fn(),
               findMany: jest.fn(),
+              count: jest.fn(),
               delete: jest.fn(),
+              deleteMany: jest.fn(),
             },
             paymentAuditLog: {
               create: jest.fn(),
@@ -1104,6 +1106,274 @@ describe('FinanzasService', () => {
           }),
         }),
       );
+    });
+  });
+
+  // ========== TESTS: REJECT / CANCEL PAYMENT PROVISIONAL ALLOCATIONS ==========
+  describe('reject and cancel payment allocations', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const paymentId = 'payment-123';
+    const chargeId = 'charge-123';
+    const membershipId = 'membership-123';
+
+    let allocationStore: Array<{ tenantId: string; paymentId: string; chargeId: string }> = [];
+
+    const makeAllocation = (): { tenantId: string; paymentId: string; chargeId: string }[] => allocationStore.map((allocation) => ({ ...allocation }));
+
+    const mockSubmittedPaymentState = (
+      status: PaymentStatus = PaymentStatus.SUBMITTED,
+      updateStatus: PaymentStatus = status,
+    ) => {
+      allocationStore = [{ tenantId, paymentId, chargeId }];
+
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        reference: 'TRX-123',
+        status,
+        canceledAt: null,
+        paymentAllocations: makeAllocation().map((allocation) => ({
+          tenantId: allocation.tenantId,
+          paymentId: allocation.paymentId,
+          chargeId: allocation.chargeId,
+          amount: 10000,
+          payment: { status },
+        })),
+      } as any);
+
+      jest.spyOn(prismaService.paymentAllocation, 'findMany').mockImplementation(async ({ where }) =>
+        makeAllocation()
+          .filter((allocation) => allocation.tenantId === where.tenantId && allocation.paymentId === where.paymentId)
+          .map((allocation) => ({ chargeId: allocation.chargeId })) as any,
+      );
+
+      jest.spyOn(prismaService.paymentAllocation, 'count').mockImplementation(async ({ where }) =>
+        makeAllocation().filter((allocation) => allocation.tenantId === where.tenantId && allocation.paymentId === where.paymentId).length as any,
+      );
+
+      jest.spyOn(prismaService.paymentAllocation, 'deleteMany').mockImplementation(async ({ where }) => {
+        const before = allocationStore.length;
+        allocationStore = allocationStore.filter(
+          (allocation) => !(allocation.tenantId === where.tenantId && allocation.paymentId === where.paymentId),
+        );
+        return { count: before - allocationStore.length } as any;
+      });
+
+      jest.spyOn(prismaService.charge, 'findFirst').mockImplementation(async ({ where }) => {
+        if (where.id !== chargeId) return null as any;
+
+        const chargeAllocations = makeAllocation().map(() => ({
+          amount: 10000,
+          payment: { status },
+        }));
+
+        return {
+          id: chargeId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: chargeAllocations.length > 0 ? ChargeStatus.PARTIAL : ChargeStatus.PENDING,
+          paymentAllocations: chargeAllocations,
+        } as any;
+      });
+
+      jest.spyOn(prismaService.charge, 'findUnique').mockImplementation(async ({ where }) => {
+        if (where.id !== chargeId) return null as any;
+
+        const chargeAllocations = makeAllocation().map(() => ({
+          amount: 10000,
+          payment: { status },
+        }));
+
+        return {
+          id: chargeId,
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: chargeAllocations.length > 0 ? ChargeStatus.PARTIAL : ChargeStatus.PENDING,
+          paymentAllocations: chargeAllocations,
+        } as any;
+      });
+
+      jest.spyOn(prismaService.charge, 'update').mockResolvedValue({
+        id: chargeId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [],
+      } as any);
+
+      jest.spyOn(prismaService.payment, 'update').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        status: updateStatus,
+        canceledAt:
+          updateStatus === PaymentStatus.SUBMITTED
+            ? new Date('2026-07-24T12:00:00.000Z')
+            : null,
+      } as any);
+
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as any);
+    };
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
+      jest.spyOn(validators, 'canWriteCharges').mockReturnValue(true);
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest
+        .spyOn(validators, 'validateUnitBelongsToBuildingAndTenant')
+        .mockResolvedValue(undefined);
+    });
+
+    it('rejectPayment removes provisional allocations and unblocks the charge', async () => {
+      mockSubmittedPaymentState(PaymentStatus.SUBMITTED, PaymentStatus.REJECTED);
+
+      await expect(
+        service.updateCharge(tenantId, buildingId, chargeId, ['TENANT_ADMIN'], {
+          concept: 'Updated concept before rejection',
+        }),
+      ).rejects.toThrow('Cannot update charge that has payment allocations');
+
+      const result = await service.rejectPayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {
+          reason: 'OTHER',
+          comment: 'Rejected by admin',
+        },
+      );
+
+      expect(result.status).toBe(PaymentStatus.REJECTED);
+      expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
+        where: { tenantId, paymentId },
+      });
+      expect(makeAllocation()).toHaveLength(0);
+
+      await expect(
+        service.updateCharge(tenantId, buildingId, chargeId, ['TENANT_ADMIN'], {
+          concept: 'Updated concept after rejection',
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          id: chargeId,
+        }),
+      );
+    });
+
+    it('rejectPaymentTenant removes provisional allocations for the tenant payment', async () => {
+      mockSubmittedPaymentState(PaymentStatus.SUBMITTED, PaymentStatus.REJECTED);
+
+      const result = await service.rejectPaymentTenant(
+        tenantId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        {
+          reason: 'OTHER',
+          comment: 'Rejected at tenant level',
+        },
+      );
+
+      expect(result.status).toBe(PaymentStatus.REJECTED);
+      expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
+        where: { tenantId, paymentId },
+      });
+      expect(makeAllocation()).toHaveLength(0);
+    });
+
+    it('cancelPayment removes provisional allocations for submitted payments', async () => {
+      mockSubmittedPaymentState(PaymentStatus.SUBMITTED);
+
+      const result = await service.cancelPayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        'Resident withdrew the report',
+      );
+
+      expect(result.canceledAt).toBeTruthy();
+      expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
+        where: { tenantId, paymentId },
+      });
+      expect(makeAllocation()).toHaveLength(0);
+    });
+
+    it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+      'does not remove allocations for %s payments',
+      async (status) => {
+        mockSubmittedPaymentState(status);
+        jest.spyOn(prismaService.paymentAllocation, 'count').mockResolvedValue(1 as never);
+
+        await expect(
+          service.cancelPayment(
+            tenantId,
+            buildingId,
+            paymentId,
+            ['TENANT_ADMIN'],
+            membershipId,
+            'Manual cancellation',
+          ),
+        ).rejects.toThrow('Cannot cancel payment with existing allocations. Remove allocations first.');
+
+        expect(prismaService.paymentAllocation.deleteMany).not.toHaveBeenCalled();
+        expect(makeAllocation()).toHaveLength(1);
+      },
+    );
+
+    it('rolls back provisional allocation release when rejection fails', async () => {
+      mockSubmittedPaymentState(PaymentStatus.SUBMITTED, PaymentStatus.REJECTED);
+
+      const snapshot = makeAllocation();
+      jest.spyOn(prismaService, '$transaction').mockImplementationOnce(async (callback: (tx: never) => Promise<unknown>) => {
+        try {
+          return await callback(prismaService as never);
+        } catch (error) {
+          allocationStore = snapshot;
+          throw error;
+        }
+      });
+      jest.spyOn(prismaService.payment, 'update').mockRejectedValueOnce(new Error('boom'));
+
+      await expect(
+        service.rejectPaymentTenant(
+          tenantId,
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+          {
+            reason: 'OTHER',
+            comment: 'This should rollback',
+          },
+        ),
+      ).rejects.toThrow('boom');
+
+      expect(makeAllocation()).toHaveLength(1);
+      expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
+        where: { tenantId, paymentId },
+      });
     });
   });
 

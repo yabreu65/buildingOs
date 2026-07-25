@@ -1002,26 +1002,50 @@ export class FinanzasService {
       );
     }
 
-    // 3. Update to REJECTED
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.REJECTED,
-        reviewedByMembershipId: membershipId,
-        updatedAt: new Date(),
-      },
-    });
+    if (payment.status !== PaymentStatus.SUBMITTED) {
+      throw new BadRequestException(
+        `Cannot reject payment in status ${payment.status}. Only SUBMITTED payments can be rejected.`,
+      );
+    }
 
-    // Audit: PAYMENT_REJECT
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId: membershipId,
-      action: AuditAction.PAYMENT_REJECT,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: {
-        reason: dto.reason,
-      },
+    if (payment.canceledAt) {
+      throw new BadRequestException('Cannot reject a canceled payment');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const chargeIds = await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId);
+
+      const rejectedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.REJECTED,
+          reviewedByMembershipId: membershipId,
+          updatedAt: new Date(),
+        },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.REJECTED,
+          membershipId,
+          reason: dto.reason,
+          comment: dto.comment || null,
+          metadata: {
+            amount: payment.amount,
+            currency: payment.currency,
+            method: payment.method,
+            reference: payment.reference,
+          },
+        },
+      });
+
+      return rejectedPayment;
     });
 
     // [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
@@ -1309,6 +1333,35 @@ export class FinanzasService {
         },
       });
     }
+  }
+
+  private async releaseSubmittedPaymentAllocations(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    tenantId: string,
+  ): Promise<string[]> {
+    const allocations = await tx.paymentAllocation.findMany({
+      where: {
+        tenantId,
+        paymentId,
+      },
+      select: {
+        chargeId: true,
+      },
+    });
+
+    if (allocations.length === 0) {
+      return [];
+    }
+
+    await tx.paymentAllocation.deleteMany({
+      where: {
+        tenantId,
+        paymentId,
+      },
+    });
+
+    return [...new Set(allocations.map((allocation) => allocation.chargeId))];
   }
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
@@ -2039,31 +2092,44 @@ export class FinanzasService {
       );
     }
 
-    // 3. Cannot cancel if has allocations
     const allocationCount = await this.prisma.paymentAllocation.count({
       where: { tenantId, paymentId },
     });
 
-    if (allocationCount > 0) {
+    if (payment.status !== PaymentStatus.SUBMITTED && allocationCount > 0) {
       throw new ConflictException(
         `Cannot cancel payment with existing allocations. Remove allocations first.`,
       );
     }
 
-    // 4. Update canceledAt
-    const result = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: { canceledAt: new Date(), updatedAt: new Date() },
-    });
+    const result = await this.prisma.$transaction(async (tx) => {
+      const chargeIds =
+        payment.status === PaymentStatus.SUBMITTED
+          ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)
+          : [];
 
-    // Audit
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId: membershipId,
-      action: AuditAction.PAYMENT_CANCEL,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: { reason: reason || 'No reason provided' },
+      const canceledPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: { canceledAt: new Date(), updatedAt: new Date() },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.CANCELLED,
+          membershipId,
+          reason: reason || 'No reason provided',
+          comment: null,
+          metadata: { reason: reason || 'No reason provided' },
+        },
+      });
+
+      return canceledPayment;
     });
 
     return result;
@@ -2770,36 +2836,44 @@ export class FinanzasService {
       throw new BadRequestException('Cannot reject a canceled payment');
     }
 
-    // Update payment status with full audit trail
-    const rejectedPayment = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: PaymentStatus.REJECTED,
-        reviewedByMembershipId: membershipId,
-        rejectionReason: dto.reason as RejectionReason,
-        rejectionComment: dto.comment || null,
-        reviewedAt: new Date(),
-        notes: dto.notes || null,
-        updatedAt: new Date(),
-      },
-    });
+    const rejectedPayment = await this.prisma.$transaction(async (tx) => {
+      const chargeIds = await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId);
 
-    // Registrar auditoría
-    await this.prisma.paymentAuditLog.create({
-      data: {
-        tenantId,
-        paymentId,
-        action: PaymentAuditAction.REJECTED,
-        membershipId,
-        reason: dto.reason,
-        comment: dto.comment || null,
-        metadata: {
-          amount: payment.amount,
-          currency: payment.currency,
-          method: payment.method,
-          reference: payment.reference,
+      const updatedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.REJECTED,
+          reviewedByMembershipId: membershipId,
+          rejectionReason: dto.reason as RejectionReason,
+          rejectionComment: dto.comment || null,
+          reviewedAt: new Date(),
+          notes: dto.notes || null,
+          updatedAt: new Date(),
         },
-      },
+      });
+
+      for (const chargeId of chargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId,
+          paymentId,
+          action: PaymentAuditAction.REJECTED,
+          membershipId,
+          reason: dto.reason,
+          comment: dto.comment || null,
+          metadata: {
+            amount: payment.amount,
+            currency: payment.currency,
+            method: payment.method,
+            reference: payment.reference,
+          },
+        },
+      });
+
+      return updatedPayment;
     });
 
     // Send notification to resident
