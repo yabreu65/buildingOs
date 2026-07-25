@@ -278,7 +278,9 @@ export class DocumentsService {
         });
       });
     } catch (error) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      if (!(await this.shouldPreserveUploadedObject(uploadFile.objectKey, error))) {
+        await this.deleteUploadedObject(uploadFile.objectKey);
+      }
       throw error;
     }
 
@@ -773,6 +775,40 @@ export class DocumentsService {
     } catch (error) {
       this.logger.warn(`Unable to clean up rejected upload ${objectKey}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private async shouldPreserveUploadedObject(objectKey: string, error: unknown): Promise<boolean> {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    try {
+      const existingFile = await this.prisma.file.findFirst({
+        where: {
+          tenantId: this.extractTenantIdFromObjectKey(objectKey),
+          objectKey,
+        },
+        select: { id: true },
+      });
+
+      return !!existingFile;
+    } catch (lookupError) {
+      this.logger.warn(
+        `Unable to verify concurrent file ownership for ${objectKey}: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
+      );
+      return false;
+    }
+  }
+
+  private extractTenantIdFromObjectKey(objectKey: string): string {
+    const prefix = 'tenant-';
+    const documentsSegment = '/documents/';
+
+    if (!objectKey.startsWith(prefix) || !objectKey.includes(documentsSegment)) {
+      return '';
+    }
+
+    return objectKey.slice(prefix.length, objectKey.indexOf(documentsSegment));
   }
 
   /**

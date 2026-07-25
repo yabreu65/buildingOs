@@ -499,6 +499,7 @@ export class FinanzasService {
       where: {
         tenantId,
         buildingId,
+        unitId: dto.unitId ?? undefined,
         amount: dto.amount,
         reference: dto.reference,
         createdAt: { gte: duplicateWindow },
@@ -784,6 +785,7 @@ export class FinanzasService {
         }
 
         for (const allocation of payment.paymentAllocations) {
+          await this.lockChargeForApproval(tx, allocation.chargeId);
           const charge = await tx.charge.findFirst({
             where: {
               id: allocation.chargeId,
@@ -879,8 +881,34 @@ export class FinanzasService {
 
         let remainingAmount = payment.amount;
 
-        for (const charge of pendingCharges) {
+        for (const pendingCharge of pendingCharges) {
           if (remainingAmount <= 0) break;
+
+          await this.lockChargeForApproval(tx, pendingCharge.id);
+          const charge = await tx.charge.findFirst({
+            where: {
+              id: pendingCharge.id,
+              tenantId,
+              buildingId,
+              unitId: payment.unitId,
+              canceledAt: null,
+            },
+            include: {
+              paymentAllocations: {
+                include: {
+                  payment: {
+                    select: {
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!charge) {
+            continue;
+          }
 
           const alreadyAllocated = charge.paymentAllocations.reduce(
             (sum, a) =>
@@ -1293,6 +1321,13 @@ export class FinanzasService {
     }, 0);
 
     return Math.max(0, charge.amount - approvedAllocated);
+  }
+
+  private async lockChargeForApproval(
+    tx: Prisma.TransactionClient,
+    chargeId: string,
+  ): Promise<void> {
+    await tx.$queryRaw(Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} FOR UPDATE`);
   }
 
   private isEffectivePaymentStatus(status?: PaymentStatus | null): boolean {
@@ -2481,6 +2516,7 @@ export class FinanzasService {
         }
 
         for (const allocation of payment.paymentAllocations) {
+          await this.lockChargeForApproval(tx, allocation.chargeId);
           const charge = await tx.charge.findFirst({
             where: {
               id: allocation.chargeId,
@@ -2575,8 +2611,34 @@ export class FinanzasService {
 
           let remainingAmount = payment.amount;
 
-          for (const charge of pendingCharges) {
+          for (const pendingCharge of pendingCharges) {
             if (remainingAmount <= 0) break;
+
+            await this.lockChargeForApproval(tx, pendingCharge.id);
+            const charge = await tx.charge.findFirst({
+              where: {
+                id: pendingCharge.id,
+                tenantId,
+                buildingId: payment.buildingId,
+                unitId: payment.unitId,
+                canceledAt: null,
+              },
+              include: {
+                paymentAllocations: {
+                  include: {
+                    payment: {
+                      select: {
+                        status: true,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+
+            if (!charge) {
+              continue;
+            }
 
             const allocatedAmount = Math.min(remainingAmount, charge.amount);
             const alreadyAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
@@ -2923,6 +2985,7 @@ export class FinanzasService {
       where: {
         tenantId,
         id: { not: paymentId }, // Exclude self
+        unitId: payment.unitId ?? undefined,
         amount: payment.amount,
         reference: payment.reference,
         createdAt: { gte: duplicateWindow },

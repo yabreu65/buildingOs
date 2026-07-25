@@ -668,6 +668,18 @@ describe('FinanzasService', () => {
           proofFileId: 'file-123',
         }),
       ).rejects.toThrow(ConflictException);
+
+      expect(prismaService.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId,
+            buildingId,
+            unitId,
+            amount: 10000,
+            reference: 'TRX-123',
+          }),
+        }),
+      );
     });
 
     it('should reject resident payments that do not cover the full outstanding balance', async () => {
@@ -863,6 +875,53 @@ describe('FinanzasService', () => {
 
       expect(prismaService.payment.update).not.toHaveBeenCalled();
       expect(prismaService.charge.findMany).not.toHaveBeenCalled();
+    });
+
+    it('locks the selected charge before approving a resident-selected payment', async () => {
+      await service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+      expect(prismaService.$queryRaw).toHaveBeenCalledTimes(1);
+      const rawQuery = (prismaService.$queryRaw as jest.Mock).mock.calls[0][0] as { strings?: string[] };
+      expect(rawQuery.strings?.join(' ')).toContain('FOR UPDATE');
+    });
+  });
+
+  // ========== TESTS: CHECK PAYMENT DUPLICATE ==========
+  describe('checkPaymentDuplicate', () => {
+    it('scopes duplicate detection to the payment unit', async () => {
+      jest
+        .spyOn(prismaService.payment, 'findFirst')
+        .mockResolvedValueOnce({
+          id: 'payment-123',
+          tenantId: 'tenant-123',
+          buildingId: 'building-123',
+          unitId: 'unit-123',
+          amount: 10000,
+          reference: 'TRX-123',
+        } as any)
+        .mockResolvedValueOnce({ id: 'payment-duplicate', amount: 10000, reference: 'TRX-123' } as any);
+
+      const result = await service.checkPaymentDuplicate('tenant-123', 'payment-123');
+
+      expect(result.hasDuplicate).toBe(true);
+      expect(prismaService.payment.findFirst).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId: 'tenant-123',
+            unitId: 'unit-123',
+            amount: 10000,
+            reference: 'TRX-123',
+          }),
+        }),
+      );
     });
   });
 

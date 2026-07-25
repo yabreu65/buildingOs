@@ -339,6 +339,37 @@ export class PaymentReceiptService {
     primaryPeriod: string;
     allocations: readonly string[];
   }): Buffer {
+    const allocations = input.allocations.length > 0
+      ? [...input.allocations]
+      : ['Sin aplicación específica - saldo a favor'];
+    const allocationPages = this.chunkReceiptAllocations(allocations);
+    const contentStreams = allocationPages.map((allocationPage, index) =>
+      this.buildReceiptPageContent({
+        ...input,
+        allocations: allocationPage,
+        pageIndex: index,
+        pageCount: allocationPages.length,
+      }),
+    );
+
+    return this.serializePdf(contentStreams);
+  }
+
+  private buildReceiptPageContent(input: {
+    tenantDisplayName: string;
+    receiptNumber: string;
+    approvedAt: string;
+    approvedByUserName: string;
+    unitLabel: string;
+    buildingName: string;
+    amountFormatted: string;
+    method: string;
+    reference: string;
+    primaryPeriod: string;
+    allocations: readonly string[];
+    pageIndex: number;
+    pageCount: number;
+  }): string {
     const contentCommands = [
       'BT',
       '/F2 18 Tf',
@@ -384,7 +415,7 @@ export class PaymentReceiptService {
       'T*',
       'T*',
       '/F2 12 Tf',
-      this.pdfText('Aplicación del pago'),
+      this.pdfText(input.pageCount > 1 && input.pageIndex > 0 ? 'Aplicación del pago (continuación)' : 'Aplicación del pago'),
       '/F1 11 Tf',
       '14 TL',
       ...input.allocations.flatMap((allocation) => [
@@ -392,21 +423,52 @@ export class PaymentReceiptService {
         this.pdfText(allocation),
       ]),
       'T*',
-      this.pdfText('Este documento es una constancia de pago y no constituye factura fiscal.'),
-      'T*',
-      this.pdfText(`Documento generado por la Administración del ${input.tenantDisplayName}.`),
-      'ET',
     ];
 
-    const contentStreamText = contentCommands.join('\n');
-    const contentStream = Buffer.from(contentStreamText, 'latin1');
+    if (input.pageIndex === input.pageCount - 1) {
+      contentCommands.push(
+        this.pdfText('Este documento es una constancia de pago y no constituye factura fiscal.'),
+        'T*',
+        this.pdfText(`Documento generado por la Administración del ${input.tenantDisplayName}.`),
+      );
+    } else {
+      contentCommands.push(
+        this.pdfText('Continúa en la siguiente página.'),
+      );
+    }
+
+    contentCommands.push('ET');
+    return contentCommands.join('\n');
+  }
+
+  private chunkReceiptAllocations(allocations: readonly string[]): string[][] {
+    const chunkSize = 8;
+    const pages: string[][] = [];
+
+    for (let index = 0; index < allocations.length; index += chunkSize) {
+      pages.push(allocations.slice(index, index + chunkSize));
+    }
+
+    return pages.length > 0 ? pages : [['Sin aplicación específica - saldo a favor']];
+  }
+
+  private serializePdf(contentStreams: readonly string[]): Buffer {
+    const pageCount = contentStreams.length;
+    const fontObjectNumber = 3 + pageCount;
+    const boldFontObjectNumber = 4 + pageCount;
+    const contentStartObjectNumber = 5 + pageCount;
+    const pageObjectNumbers = Array.from({ length: pageCount }, (_, index) => 3 + index);
+
     const objects = [
       '<< /Type /Catalog /Pages 2 0 R >>',
-      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>',
+      `<< /Type /Pages /Kids [${pageObjectNumbers.map((objectNumber) => `${objectNumber} 0 R`).join(' ')}] /Count ${pageCount} >>`,
+      ...pageObjectNumbers.map((pageObjectNumber, index) => {
+        const contentObjectNumber = contentStartObjectNumber + index;
+        return `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontObjectNumber} 0 R /F2 ${boldFontObjectNumber} 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`;
+      }),
       '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
       '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
-      `<< /Length ${contentStream.length} >>\nstream\n${contentStreamText}\nendstream`,
+      ...contentStreams.map((contentStreamText) => `<< /Length ${Buffer.byteLength(contentStreamText, 'latin1')} >>\nstream\n${contentStreamText}\nendstream`),
     ];
 
     const header = '%PDF-1.4\n%âãÏÓ\n';

@@ -193,4 +193,42 @@ describe('PaymentReceiptService', () => {
       url: 'https://download.example/receipt.pdf',
     });
   });
+
+  it('splits long allocation lists across multiple PDF pages', async () => {
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: 'TRX-001',
+      paymentAllocations: Array.from({ length: 10 }, (_, index) => ({
+        chargeId: `charge-${index + 1}`,
+        amount: 405000,
+        charge: {
+          period: `2025-${String(index + 1).padStart(2, '0')}`,
+          concept: `Condominio ${index + 1}`,
+          expensePeriod: { year: 2025, month: index + 1 },
+        },
+      })),
+      unit: { label: 'TN-01-01' },
+      building: { name: 'Complejo Horizonte' },
+      receiptDocumentId: null,
+      receiptNumber: null,
+    } as never);
+
+    await service.ensureReceiptForPayment('payment-1');
+
+    const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
+    const pdfText = uploadedBuffer.toString('latin1');
+    const pageObjects = pdfText.match(/\/Type \/Page(?!s)/g) || [];
+
+    expect(pageObjects.length).toBe(2);
+    expect(pdfText).toContain('Continúa en la siguiente página.');
+  });
 });

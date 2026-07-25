@@ -9,9 +9,17 @@ import { Readable } from 'node:stream';
 import { DocumentsService } from './documents.service';
 import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
+import { Prisma } from '@prisma/client';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const DEFAULT_BUCKET = 'buildingos-test';
+
+function createPrismaKnownRequestError(code: string): Prisma.PrismaClientKnownRequestError {
+  const error = new Error('Prisma known request error');
+  Object.assign(error, { code });
+  Object.setPrototypeOf(error, Prisma.PrismaClientKnownRequestError.prototype);
+  return error as Prisma.PrismaClientKnownRequestError;
+}
 
 describe('DocumentsService', () => {
   const prisma = {
@@ -204,6 +212,25 @@ describe('DocumentsService', () => {
     expect(minio.statObject).not.toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
     expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves the uploaded object when a concurrent create already persisted the file row', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockRejectedValueOnce(createPrismaKnownRequestError('P2002'));
+    prisma.file.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'file-1' } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toMatchObject({ code: 'P2002' });
+
+    expect(minio.deleteObject).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
   });
 
