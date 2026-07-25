@@ -28,6 +28,9 @@ export interface MinioObjectStat {
 @Injectable()
 export class MinioService {
   private readonly logger = new Logger(MinioService.name);
+  private readonly minioClient: Minio.Client;
+  private readonly presignClient: Minio.Client;
+  private readonly bucket: string;
 
   private getErrorLike(error: unknown): MinioErrorLike | undefined {
     return typeof error === 'object' && error !== null
@@ -49,9 +52,6 @@ export class MinioService {
       || errorLike?.statusCode === 404
       || errorLike?.message?.includes('NotFound') === true;
   }
-  private readonly minioClient: Minio.Client;
-  private readonly bucket: string;
-
   constructor(private configService: ConfigService) {
     const nodeEnv = this.configService.getValue('nodeEnv');
     const isDevelopment = nodeEnv === 'development' || nodeEnv === 'test';
@@ -68,22 +68,47 @@ export class MinioService {
     }
     this.bucket = bucket || 'buildingos-local';
 
-    // Parse endpoint to extract host and port
-    const url = new URL(endpoint || 'http://localhost:9000');
-    const host = url.hostname;
-    const port = url.port ? parseInt(url.port, 10) : url.protocol === 'https:' ? 443 : 9000;
-    const useSSL = url.protocol === 'https:';
+    const internalEndpoint = endpoint || 'http://localhost:9000';
+    const publicEndpoint = this.configService.getValue('s3PublicBaseUrl') || internalEndpoint;
 
-    this.minioClient = new Minio.Client({
-      endPoint: host,
-      port,
-      useSSL,
+    this.minioClient = this.createClient(
+      internalEndpoint,
       accessKey,
       secretKey,
       region,
-    });
+    );
+    this.presignClient = this.createClient(
+      publicEndpoint,
+      accessKey,
+      secretKey,
+      region,
+    );
 
-    this.logger.log(`MinIO client initialized: ${host}:${port} (bucket: ${this.bucket})`);
+    this.logger.log(`MinIO client initialized: ${new URL(internalEndpoint).host} (bucket: ${this.bucket})`);
+  }
+
+  private createClient(
+    endpoint: string,
+    accessKey: string,
+    secretKey: string,
+    region: string,
+  ): Minio.Client {
+    const url = new URL(endpoint);
+    const port = url.port
+      ? Number.parseInt(url.port, 10)
+      : url.protocol === 'https:'
+        ? 443
+        : 9000;
+
+    return new Minio.Client({
+      endPoint: url.hostname,
+      port,
+      useSSL: url.protocol === 'https:',
+      accessKey,
+      secretKey,
+      region,
+      pathStyle: true,
+    });
   }
 
   /**
@@ -112,7 +137,7 @@ export class MinioService {
     expirySeconds: number = 3600,
   ): Promise<string> {
     try {
-      const url = await this.minioClient.presignedPutObject(
+      const url = await this.presignClient.presignedPutObject(
         bucketName,
         objectKey,
         expirySeconds,
@@ -149,7 +174,7 @@ export class MinioService {
     expirySeconds: number = 3600,
   ): Promise<string> {
     try {
-      const url = await this.minioClient.presignedGetObject(
+      const url = await this.presignClient.presignedGetObject(
         bucketName,
         objectKey,
         expirySeconds,
