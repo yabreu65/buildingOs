@@ -8,7 +8,7 @@
  * 3. POST /documents → create Document record with file metadata
  */
 
-import { apiClient } from '@/shared/lib/http/client';
+import { apiClient, apiClientWithResponse } from '@/shared/lib/http/client';
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -62,6 +62,12 @@ export interface DownloadUrlResponse {
   expiresAt: string;
 }
 
+export interface ProtectedDocumentContent {
+  blob: Blob;
+  fileName: string;
+  contentType: string;
+}
+
 export interface CreateDocumentInput {
   title: string;
   category: DocumentCategory;
@@ -113,6 +119,33 @@ function getTenantHeaders(tenantId: string): Record<string, string> {
   return {
     'X-Tenant-Id': tenantId,
   };
+}
+
+function decodeContentDispositionValue(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/^"|"$/g, '').trim());
+  } catch {
+    return value.replace(/^"|"$/g, '').trim();
+  }
+}
+
+function parseContentDispositionFileName(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null;
+
+  const filenameStarMatch = contentDisposition.match(/filename\*\s*=\s*([^;]+)/i);
+  if (filenameStarMatch?.[1]) {
+    const rawValue = filenameStarMatch[1].trim();
+    const utf8Match = rawValue.match(/^UTF-8''(.+)$/i);
+    const candidate = utf8Match?.[1] ?? rawValue;
+    return decodeContentDispositionValue(candidate);
+  }
+
+  const filenameMatch = contentDisposition.match(/filename\s*=\s*([^;]+)/i);
+  if (filenameMatch?.[1]) {
+    return decodeContentDispositionValue(filenameMatch[1]);
+  }
+
+  return null;
 }
 
 // ============================================
@@ -374,25 +407,40 @@ export async function getDownloadUrl(
  * Download protected document content through the BuildingOS API.
  *
  * GET /documents/:id/content
- * response: Blob
+ * response: Blob + response headers
  */
-export async function downloadDocumentContent(
+export async function downloadProtectedDocumentContent(
   tenantId: string,
   documentId: string,
-): Promise<Blob> {
+  fallbackFileName?: string,
+): Promise<ProtectedDocumentContent> {
   const endpoint = `/tenants/${tenantId}/documents/${documentId}/content`;
   logRequest('GET', endpoint);
 
   try {
-    return await apiClient<Blob>({
+    const { data: blob, response } = await apiClientWithResponse<Blob>({
       path: endpoint,
       method: 'GET',
       headers: getTenantHeaders(tenantId),
       responseType: 'blob',
     });
+
+    const headerFileName = parseContentDispositionFileName(response.headers.get('content-disposition'));
+    const fileName = headerFileName ?? fallbackFileName ?? `document-${documentId}`;
+    const contentType = blob.type || response.headers.get('content-type') || 'application/octet-stream';
+
+    return { blob, fileName, contentType };
   } catch (error) {
     const message = `Failed to download document content: ${(error as Error).message}`;
     logError(endpoint, 500, message);
     throw error;
   }
+}
+
+export async function downloadDocumentContent(
+  tenantId: string,
+  documentId: string,
+): Promise<Blob> {
+  const { blob } = await downloadProtectedDocumentContent(tenantId, documentId);
+  return blob;
 }

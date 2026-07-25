@@ -12,6 +12,11 @@ export interface HttpRequestConfig<TReq = never> {
   responseType?: 'json' | 'blob' | 'text' | 'arrayBuffer';
 }
 
+export interface HttpResponse<TRes> {
+  data: TRes;
+  response: Response;
+}
+
 export interface ErrorResponseData {
   code?: string;
   message?: string | string[];
@@ -99,6 +104,86 @@ async function readResponse<TRes>(
   }
 }
 
+async function performRequest(
+  path: string,
+  init: RequestInit,
+  method: string,
+): Promise<Response> {
+  const url = `${API_URL}${path}`;
+
+  try {
+    const response = await fetch(url, init);
+    captureResponseContext(response, method, path);
+    return response;
+  } catch (error) {
+    recordApiResponseContext({
+      requestId: undefined,
+      method,
+      path,
+      statusCode: 0,
+    });
+    throw error;
+  }
+}
+
+async function executeRequest<TRes, TReq = never>(
+  config: HttpRequestConfig<TReq>,
+): Promise<HttpResponse<TRes>> {
+  const { path, method = 'GET', body, headers: customHeaders, responseType = 'json' } = config;
+
+  const token = getCurrentImpersonationToken();
+  const hasBody = body !== undefined;
+  const shouldUseBinaryBody = hasBody && isBinaryBody(body);
+
+  const headers: Record<string, string> = {
+    ...customHeaders,
+  };
+
+  if (hasBody && !shouldUseBinaryBody && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const init: RequestInit = {
+    method,
+    headers,
+    credentials: 'include',
+  };
+
+  if (hasBody && method !== 'GET') {
+    init.body = shouldUseBinaryBody ? (body as BodyInit) : JSON.stringify(body);
+  }
+
+  let response = await performRequest(path, init, method);
+
+  if (!response.ok && response.status === 401) {
+    const hasImpersonationToken = !!getCurrentImpersonationToken();
+
+    if (!hasImpersonationToken && !isAuthRoute(path)) {
+      try {
+        await ensureSharedRefreshPromise();
+      } catch {
+        throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Vuelve a iniciar sesión.');
+      }
+
+      response = await performRequest(path, init, method);
+    }
+  }
+
+  if (!response.ok) {
+    const { message, data } = await parseErrorResponse(response);
+    throw new HttpError(response.status, response.statusText, message, data);
+  }
+
+  return {
+    data: await readResponse<TRes>(response, responseType),
+    response,
+  };
+}
+
 function isAuthRoute(path: string): boolean {
   return (
     path === '/auth/refresh' ||
@@ -173,83 +258,12 @@ function captureResponseContext(
 export async function apiClient<TRes, TReq = never>(
   config: HttpRequestConfig<TReq>,
 ): Promise<TRes> {
-  const { path, method = 'GET', body, headers: customHeaders, responseType = 'json' } = config;
+  const { data } = await executeRequest<TRes, TReq>(config);
+  return data;
+}
 
-  const url = `${API_URL}${path}`;
-  const token = getCurrentImpersonationToken();
-  const hasBody = body !== undefined;
-  const shouldUseBinaryBody = hasBody && isBinaryBody(body);
-
-  const headers: Record<string, string> = {
-    ...customHeaders,
-  };
-
-  if (hasBody && !shouldUseBinaryBody && headers['Content-Type'] === undefined) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const init: RequestInit = {
-    method,
-    headers,
-    credentials: 'include',
-  };
-
-  if (hasBody && method !== 'GET') {
-    init.body = shouldUseBinaryBody ? (body as BodyInit) : JSON.stringify(body);
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch (error) {
-    recordApiResponseContext({
-      requestId: undefined,
-      method,
-      path,
-      statusCode: 0,
-    });
-    throw error;
-  }
-  captureResponseContext(response, method, path);
-
-  if (!response.ok) {
-    // Centralized 401 handler: try refresh cookie once, then emit an auth-expired event.
-    if (response.status === 401) {
-      const hasImpersonationToken = !!getCurrentImpersonationToken();
-
-      if (!hasImpersonationToken && !isAuthRoute(path)) {
-        try {
-          await ensureSharedRefreshPromise();
-        } catch {
-          throw new HttpError(401, 'Unauthorized', 'Sesión expirada. Vuelve a iniciar sesión.');
-        }
-
-        const retryResponse = await fetch(url, init);
-        captureResponseContext(retryResponse, method, path);
-        if (retryResponse.ok) {
-          return readResponse<TRes>(retryResponse, responseType);
-        }
-
-        const retryError = await parseErrorResponse(retryResponse);
-        throw new HttpError(
-          retryResponse.status,
-          retryResponse.statusText,
-          retryError.message,
-          retryError.data,
-        );
-      }
-
-      const { message, data } = await parseErrorResponse(response);
-      throw new HttpError(response.status, response.statusText, message, data);
-    }
-
-    const { message, data } = await parseErrorResponse(response);
-    throw new HttpError(response.status, response.statusText, message, data);
-  }
-
-  return readResponse<TRes>(response, responseType);
+export async function apiClientWithResponse<TRes, TReq = never>(
+  config: HttpRequestConfig<TReq>,
+): Promise<HttpResponse<TRes>> {
+  return executeRequest<TRes, TReq>(config);
 }
