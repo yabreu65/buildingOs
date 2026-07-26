@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
 import { getSession, setSession, setLastTenant, clearAuth } from '../../../features/auth/session.storage';
 import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
@@ -24,6 +24,7 @@ const POLL_INTERVAL = 30_000;
 export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -31,9 +32,12 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const session = getSession();
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
+  const isResident = activeMembership?.roles?.includes('RESIDENT') ?? false;
+  const portalContext: 'resident' | 'admin' = pathname?.includes('/resident/') ? 'resident' : 'admin';
   const roleContext = {
     isAdmin,
-    isResident: activeMembership?.roles?.includes('RESIDENT') ?? false,
+    isResident,
+    portalContext,
   };
   const hasSession = Boolean(session);
 
@@ -166,6 +170,8 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
         return <CreditCard className="w-4 h-4 text-blue-600" />;
       case 'ticket':
         return <MessageSquare className="w-4 h-4 text-blue-600" />;
+      case 'support':
+        return <MessageSquare className="w-4 h-4 text-purple-600" />;
       case 'document':
         return <FileText className="w-4 h-4 text-yellow-600" />;
       case 'unit':

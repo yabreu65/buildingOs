@@ -5,6 +5,7 @@ import {
 } from './routes';
 import {
   TICKET_NOTIFICATION_TYPES,
+  SUPPORT_TICKET_NOTIFICATION_TYPES,
   PAYMENT_NOTIFICATION_TYPES,
   DOCUMENT_NOTIFICATION_TYPES,
   UNIT_NOTIFICATION_TYPES,
@@ -14,6 +15,7 @@ import type { Notification } from '@/features/notifications/notifications.api';
 export interface NotificationRoleContext {
   readonly isAdmin: boolean;
   readonly isResident: boolean;
+  readonly portalContext?: 'resident' | 'admin';
 }
 
 const ADMIN_PATH_SEGMENTS = [
@@ -68,6 +70,7 @@ function isSafeResidentPath(path: string, tenantId: string): boolean {
 
 function isSafeAdminPath(path: string, tenantId: string): boolean {
   if (!path.startsWith(`/${tenantId}/`)) return false;
+  if (path.startsWith(`/${tenantId}/resident/`)) return false;
   if (isAdminPath(path, tenantId)) return false;
 
   const decoded = decodeSafe(path);
@@ -83,8 +86,20 @@ function isTicketType(type: string): boolean {
   return (TICKET_NOTIFICATION_TYPES as readonly string[]).includes(type);
 }
 
+function isSupportTicketType(type: string): boolean {
+  return (SUPPORT_TICKET_NOTIFICATION_TYPES as readonly string[]).includes(type);
+}
+
 function isPaymentType(type: string): boolean {
   return (PAYMENT_NOTIFICATION_TYPES as readonly string[]).includes(type);
+}
+
+function isResidentContext(ctx: NotificationRoleContext): boolean {
+  return ctx.portalContext === 'resident' || (!ctx.portalContext && ctx.isResident && !ctx.isAdmin);
+}
+
+function isAdminContext(ctx: NotificationRoleContext): boolean {
+  return ctx.portalContext === 'admin' || (!ctx.portalContext && ctx.isAdmin);
 }
 
 export function resolveNotificationPath(
@@ -95,33 +110,38 @@ export function resolveNotificationPath(
   const { type, data } = notification;
   const ticketId = data?.ticketId;
 
-  // 1. Ticket types: first confirm type, then use ticketId if available
+  // 1. Support ticket types — route to support module, not building tickets
+  if (isSupportTicketType(type)) {
+    return `/${tenantId}/support`;
+  }
+
+  // 2. Building ticket types: first confirm type, then use ticketId if available
   if (isTicketType(type)) {
     if (ticketId && typeof ticketId === 'string') {
       return ticketDetailPath(tenantId, ticketId);
     }
-    if (roleContext.isAdmin) {
+    if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;
       return buildingId
         ? buildingTickets(tenantId, buildingId)
         : `/${tenantId}/tickets`;
     }
-    if (roleContext.isResident) {
+    if (isResidentContext(roleContext)) {
       return residentTicketsPath(tenantId);
     }
     return `/${tenantId}/tickets`;
   }
 
-  // 2. Payment types
+  // 3. Payment types
   if (isPaymentType(type)) {
-    return roleContext.isAdmin
+    return isAdminContext(roleContext)
       ? `/${tenantId}/finanzas?tab=payments`
       : `/${tenantId}/resident/payments`;
   }
 
-  // 3. Document types
+  // 4. Document types
   if ((DOCUMENT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
-    if (roleContext.isAdmin) {
+    if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;
       return buildingId
         ? `/${tenantId}/buildings/${buildingId}/documents`
@@ -130,9 +150,9 @@ export function resolveNotificationPath(
     return `/${tenantId}/resident/documents`;
   }
 
-  // 4. Unit types
+  // 5. Unit types
   if ((UNIT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
-    if (roleContext.isAdmin) {
+    if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;
       return buildingId
         ? `/${tenantId}/buildings/${buildingId}/units`
@@ -141,17 +161,17 @@ export function resolveNotificationPath(
     return `/${tenantId}/resident/unit`;
   }
 
-  // 5. Fallback URL — strict validation only for known types
+  // 6. Fallback URL — strict validation only for known types
   const fallbackUrl = data?.url;
   if (typeof fallbackUrl !== 'string' || !fallbackUrl.startsWith('/')) {
     return null;
   }
 
-  if (roleContext.isResident && isSafeResidentPath(fallbackUrl, tenantId)) {
+  if (isResidentContext(roleContext) && isSafeResidentPath(fallbackUrl, tenantId)) {
     return fallbackUrl;
   }
 
-  if (roleContext.isAdmin && isSafeAdminPath(fallbackUrl, tenantId)) {
+  if (isAdminContext(roleContext) && isSafeAdminPath(fallbackUrl, tenantId)) {
     return fallbackUrl;
   }
 

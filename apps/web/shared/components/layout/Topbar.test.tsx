@@ -43,6 +43,7 @@ jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useParams: () => ({ tenantId: 'tenant-1' }),
+  usePathname: () => '/tenant-1/dashboard',
 }));
 
 const mockGetUnreadCount = jest.mocked(notificationsApi.getUnreadCount);
@@ -702,5 +703,127 @@ describe('PaymentNotificationBell', () => {
     });
 
     invalidateSpy.mockRestore();
+  });
+
+  it('SUPPORT_TICKET_STATUS_CHANGED navigates to support page', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-support',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'SUPPORT_TICKET_STATUS_CHANGED',
+          title: 'Estado de solicitud',
+          body: 'Tu solicitud fue actualizada',
+          data: { ticketId: 'support-42' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Estado de solicitud')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Estado de solicitud'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/support');
+    });
+  });
+
+  it('mixed role user in resident portal navigates to resident payment route', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-payment',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_RECEIVED',
+          title: 'Pago recibido',
+          body: 'Tu pago fue procesado',
+          data: { paymentId: 'pay-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pago recibido')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Pago recibido'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/resident/payments');
+    });
+  });
+
+  it('mixed role user in admin portal navigates to admin payment route', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/dashboard';
+
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-payment',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_RECEIVED',
+          title: 'Pago recibido',
+          body: 'Tu pago fue procesado',
+          data: { paymentId: 'pay-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pago recibido')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Pago recibido'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/finanzas?tab=payments');
+    });
   });
 });

@@ -3,15 +3,22 @@ import type { Notification } from '@/features/notifications/notifications.api';
 type FrontendNotificationType = Notification['type'];
 
 /**
- * Ticket-related notification types.
- * Used for icon classification and navigation routing.
+ * Building ticket notification types (module: /tickets).
+ * These use ticketDetailPath or buildingTickets routing.
  */
 export const TICKET_NOTIFICATION_TYPES: readonly FrontendNotificationType[] = [
   'TICKET_STATUS_CHANGED',
   'TICKET_COMMENT_ADDED',
+  'URGENT_TICKET_UNASSIGNED',
+] as const;
+
+/**
+ * Support ticket notification types (module: /support).
+ * These route to the support page, not building tickets.
+ */
+export const SUPPORT_TICKET_NOTIFICATION_TYPES: readonly FrontendNotificationType[] = [
   'SUPPORT_TICKET_CREATED',
   'SUPPORT_TICKET_STATUS_CHANGED',
-  'URGENT_TICKET_UNASSIGNED',
 ] as const;
 
 /**
@@ -44,11 +51,13 @@ export const UNIT_NOTIFICATION_TYPES: readonly FrontendNotificationType[] = [
  */
 export function getNotificationCategory(type: FrontendNotificationType):
   | 'ticket'
+  | 'support'
   | 'payment'
   | 'document'
   | 'unit'
   | 'other' {
   if ((TICKET_NOTIFICATION_TYPES as readonly string[]).includes(type)) return 'ticket';
+  if ((SUPPORT_TICKET_NOTIFICATION_TYPES as readonly string[]).includes(type)) return 'support';
   if ((PAYMENT_NOTIFICATION_TYPES as readonly string[]).includes(type)) return 'payment';
   if ((DOCUMENT_NOTIFICATION_TYPES as readonly string[]).includes(type)) return 'document';
   if ((UNIT_NOTIFICATION_TYPES as readonly string[]).includes(type)) return 'unit';

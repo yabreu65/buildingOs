@@ -5,6 +5,8 @@ const TENANT_ID = 'tenant-1';
 
 const adminContext: NotificationRoleContext = { isAdmin: true, isResident: false };
 const residentContext: NotificationRoleContext = { isAdmin: false, isResident: true };
+const mixedResidentPortal: NotificationRoleContext = { isAdmin: true, isResident: true, portalContext: 'resident' };
+const mixedAdminPortal: NotificationRoleContext = { isAdmin: true, isResident: true, portalContext: 'admin' };
 
 function makeNotification(overrides: Partial<Notification> & { type: string }): Notification {
   return {
@@ -40,10 +42,10 @@ describe('resolveNotificationPath', () => {
       );
     });
 
-    it('resolves SUPPORT_TICKET_STATUS_CHANGED without ticketId to resident tickets list', () => {
+    it('resolves SUPPORT_TICKET_STATUS_CHANGED to support page', () => {
       const n = makeNotification({ type: 'SUPPORT_TICKET_STATUS_CHANGED', data: {} });
       expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
-        `/${TENANT_ID}/resident/tickets`
+        `/${TENANT_ID}/support`
       );
     });
 
@@ -70,6 +72,42 @@ describe('resolveNotificationPath', () => {
         data: { ticketId: 'ticket-42' },
       });
       expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBeNull();
+    });
+  });
+
+  describe('support ticket types', () => {
+    it('resolves SUPPORT_TICKET_STATUS_CHANGED to support page regardless of ticketId', () => {
+      const n = makeNotification({
+        type: 'SUPPORT_TICKET_STATUS_CHANGED',
+        data: { ticketId: 'support-42' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
+        `/${TENANT_ID}/support`
+      );
+    });
+
+    it('resolves SUPPORT_TICKET_CREATED to support page', () => {
+      const n = makeNotification({ type: 'SUPPORT_TICKET_CREATED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
+        `/${TENANT_ID}/support`
+      );
+    });
+
+    it('resolves SUPPORT_TICKET_STATUS_CHANGED for admin to support page', () => {
+      const n = makeNotification({ type: 'SUPPORT_TICKET_STATUS_CHANGED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBe(
+        `/${TENANT_ID}/support`
+      );
+    });
+
+    it('does not use ticketDetailPath for support ticket types', () => {
+      const n = makeNotification({
+        type: 'SUPPORT_TICKET_STATUS_CHANGED',
+        data: { ticketId: 'support-42', buildingId: 'b-1' },
+      });
+      const path = resolveNotificationPath(n, TENANT_ID, adminContext);
+      expect(path).toBe(`/${TENANT_ID}/support`);
+      expect(path).not.toContain('/tickets/');
     });
   });
 
@@ -273,6 +311,92 @@ describe('resolveNotificationPath', () => {
     it('returns null for unknown type without valid fallback', () => {
       const n = makeNotification({ type: 'UNKNOWN_TYPE', data: {} });
       expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBeNull();
+    });
+  });
+
+  describe('portalContext for mixed roles', () => {
+    it('resolves payment to resident path when portalContext is resident', () => {
+      const n = makeNotification({ type: 'PAYMENT_RECEIVED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/resident/payments`
+      );
+    });
+
+    it('resolves payment to admin path when portalContext is admin', () => {
+      const n = makeNotification({ type: 'PAYMENT_RECEIVED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBe(
+        `/${TENANT_ID}/finanzas?tab=payments`
+      );
+    });
+
+    it('resolves document to resident path when portalContext is resident', () => {
+      const n = makeNotification({ type: 'DOCUMENT_SHARED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/resident/documents`
+      );
+    });
+
+    it('resolves document to admin path when portalContext is admin', () => {
+      const n = makeNotification({ type: 'DOCUMENT_SHARED', data: { buildingId: 'b-1' } });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBe(
+        `/${TENANT_ID}/buildings/b-1/documents`
+      );
+    });
+
+    it('resolves unit to resident path when portalContext is resident', () => {
+      const n = makeNotification({ type: 'OCCUPANT_ASSIGNED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/resident/unit`
+      );
+    });
+
+    it('resolves unit to admin path when portalContext is admin', () => {
+      const n = makeNotification({ type: 'OCCUPANT_ASSIGNED', data: { buildingId: 'b-1' } });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBe(
+        `/${TENANT_ID}/buildings/b-1/units`
+      );
+    });
+
+    it('resolves ticket to resident path when portalContext is resident', () => {
+      const n = makeNotification({ type: 'TICKET_COMMENT_ADDED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/resident/tickets`
+      );
+    });
+
+    it('resolves ticket to admin path when portalContext is admin', () => {
+      const n = makeNotification({ type: 'TICKET_STATUS_CHANGED', data: { buildingId: 'b-1' } });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBe(
+        `/${TENANT_ID}/buildings/b-1/tickets`
+      );
+    });
+
+    it('resolves fallback URL to resident path when portalContext is resident', () => {
+      const n = makeNotification({
+        type: 'SYSTEM_ALERT',
+        data: { url: `/${TENANT_ID}/resident/dashboard` },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/resident/dashboard`
+      );
+    });
+
+    it('rejects resident fallback URL when portalContext is admin', () => {
+      const n = makeNotification({
+        type: 'SYSTEM_ALERT',
+        data: { url: `/${TENANT_ID}/resident/dashboard` },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBeNull();
+    });
+
+    it('resolves support ticket to support page regardless of portalContext', () => {
+      const n = makeNotification({ type: 'SUPPORT_TICKET_STATUS_CHANGED', data: {} });
+      expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
+        `/${TENANT_ID}/support`
+      );
+      expect(resolveNotificationPath(n, TENANT_ID, mixedAdminPortal)).toBe(
+        `/${TENANT_ID}/support`
+      );
     });
   });
 });
