@@ -180,6 +180,7 @@ export default function ResidentDocumentsPage() {
   const triggerButtonRef = useRef<HTMLButtonElement>(null);
   const previewBlobUrlRef = useRef<string | null>(null);
   const previewUrlListenerRef = useRef<(() => void) | null>(null);
+  const previewRequestRef = useRef(0);
 
   const [typeFilter, setTypeFilter] = useState<FunctionalTypeFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -260,6 +261,8 @@ export default function ResidentDocumentsPage() {
   const handleViewDocument = async (document: Document) => {
     if (!tenantId) return;
 
+    const requestId = ++previewRequestRef.current;
+
     setPreviewDocument(document);
     setPreviewContent(null);
     setPreviewError(null);
@@ -272,6 +275,8 @@ export default function ResidentDocumentsPage() {
         getSafeFileName(document),
       );
 
+      if (requestId !== previewRequestRef.current) return;
+
       if (!protectedContent.blob || protectedContent.blob.size <= 0) {
         setPreviewError('El archivo está vacío o no se pudo descargar.');
         return;
@@ -283,12 +288,14 @@ export default function ResidentDocumentsPage() {
         fileName: protectedContent.fileName || getSafeFileName(document),
       });
     } catch (error) {
+      if (requestId !== previewRequestRef.current) return;
       setPreviewError(
         error instanceof Error
           ? error.message
           : 'No se pudo cargar el documento. Intentá nuevamente.',
       );
     } finally {
+      if (requestId !== previewRequestRef.current) return;
       setPreviewLoading(false);
     }
   };
@@ -328,6 +335,7 @@ export default function ResidentDocumentsPage() {
   }, [previewContent]);
 
   const handleClosePreview = useCallback(() => {
+    previewRequestRef.current++;
     setPreviewDocument(null);
     setPreviewContent(null);
     setPreviewError(null);

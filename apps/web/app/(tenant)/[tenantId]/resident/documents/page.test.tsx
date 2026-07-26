@@ -1212,4 +1212,236 @@ describe('ResidentDocumentsPage', () => {
       expect(revokeSpy).toHaveBeenCalled();
     });
   });
+
+  describe('Stale response protection', () => {
+    it('keeps showing B when A resolves after B', async () => {
+      const docA = makeDocument({ id: 'doc-a', title: 'Doc A' });
+      const docB = makeDocument({ id: 'doc-b', title: 'Doc B' });
+
+      let resolveA: (v: unknown) => void;
+      let resolveB: (v: unknown) => void;
+      const promiseA = new Promise((r) => { resolveA = r; });
+      const promiseB = new Promise((r) => { resolveB = r; });
+
+      let callCount = 0;
+      mockedDownloadProtectedDocumentContent.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? promiseA as never : promiseB as never;
+      });
+
+      mockedUseQuery.mockReturnValue({
+        data: [docA, docB],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      // Click A first
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc a/i }));
+
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(1);
+      });
+
+      // Click B while A is still pending
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc b/i }));
+
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(2);
+      });
+
+      // Resolve B first
+      await act(async () => {
+        resolveB!({
+          blob: new Blob(['content-b'], { type: 'application/pdf' }),
+          fileName: 'doc-b.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+
+      // Modal should show B (use modal-title to scope, since list also has "Doc B")
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(screen.getByTestId('modal-title').textContent).toBe('Doc B');
+
+      // Resolve A after B (stale)
+      await act(async () => {
+        resolveA!({
+          blob: new Blob(['content-a'], { type: 'application/pdf' }),
+          fileName: 'doc-a.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+
+      // Modal should still show B, not A
+      expect(screen.getByTestId('modal-title').textContent).toBe('Doc B');
+    });
+
+    it('late error from A does not show over B', async () => {
+      const docA = makeDocument({ id: 'doc-a', title: 'Doc A' });
+      const docB = makeDocument({ id: 'doc-b', title: 'Doc B' });
+
+      let rejectA: (e: Error) => void;
+      let resolveB: (v: unknown) => void;
+      const promiseA = new Promise((_r, rej) => { rejectA = rej; });
+      const promiseB = new Promise((r) => { resolveB = r; });
+
+      let callCount = 0;
+      mockedDownloadProtectedDocumentContent.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? promiseA as never : promiseB as never;
+      });
+
+      mockedUseQuery.mockReturnValue({
+        data: [docA, docB],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc a/i }));
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(1);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc b/i }));
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(2);
+      });
+
+      // Resolve B successfully
+      await act(async () => {
+        resolveB!({
+          blob: new Blob(['content-b'], { type: 'application/pdf' }),
+          fileName: 'doc-b.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(screen.getByTestId('modal-title').textContent).toBe('Doc B');
+
+      // Reject A with error (stale)
+      await act(async () => {
+        rejectA!(new Error('Network error from A'));
+      });
+
+      // No error should appear — B is still displayed correctly
+      expect(screen.queryByText('Network error from A')).toBeNull();
+      expect(screen.getByTestId('modal-title').textContent).toBe('Doc B');
+    });
+
+    it('closing modal before resolution invalidates pending request', async () => {
+      const docA = makeDocument({ id: 'doc-a', title: 'Doc A' });
+
+      let resolveA: (v: unknown) => void;
+      const promiseA = new Promise((r) => { resolveA = r; });
+
+      mockedDownloadProtectedDocumentContent.mockReturnValue(promiseA as never);
+
+      mockedUseQuery.mockReturnValue({
+        data: [docA],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc a/i }));
+
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(1);
+      });
+
+      // Close modal while request is pending
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).toBeNull();
+      });
+
+      // Resolve the pending request — should NOT reopen or error
+      await act(async () => {
+        resolveA!({
+          blob: new Blob(['content-a'], { type: 'application/pdf' }),
+          fileName: 'doc-a.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+
+      // Dialog should remain closed
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // Loading should not be stuck
+      expect(screen.queryByText('Cargando documento...')).toBeNull();
+    });
+
+    it('download uses the latest document, not a stale one', async () => {
+      const docA = makeDocument({ id: 'doc-a', title: 'Doc A' });
+      const docB = makeDocument({ id: 'doc-b', title: 'Doc B' });
+
+      let resolveA: (v: unknown) => void;
+      let resolveB: (v: unknown) => void;
+      const promiseA = new Promise((r) => { resolveA = r; });
+      const promiseB = new Promise((r) => { resolveB = r; });
+
+      let callCount = 0;
+      mockedDownloadProtectedDocumentContent.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? promiseA as never : promiseB as never;
+      });
+
+      mockedUseQuery.mockReturnValue({
+        data: [docA, docB],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc a/i }));
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(1);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /ver documento doc b/i }));
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(2);
+      });
+
+      // Resolve both — A stale, B current
+      await act(async () => {
+        resolveB!({
+          blob: new Blob(['content-b'], { type: 'application/pdf' }),
+          fileName: 'doc-b.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+      await act(async () => {
+        resolveA!({
+          blob: new Blob(['content-a'], { type: 'application/pdf' }),
+          fileName: 'doc-a.pdf',
+          contentType: 'application/pdf',
+        });
+      });
+
+      // Click download — should use B's content
+      fireEvent.click(screen.getByText('Descargar'));
+
+      await waitFor(() => {
+        expect(mockedDownloadProtectedDocumentContent).toHaveBeenCalledTimes(2);
+      });
+
+      // The dialog title should be B
+      expect(screen.getByTestId('modal-title').textContent).toBe('Doc B');
+    });
+  });
 });

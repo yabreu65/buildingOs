@@ -957,6 +957,7 @@ export class DocumentsService {
     const relatedPayments = await this.prisma.payment.findMany({
       where: {
         tenantId,
+        canceledAt: null,
         OR: [
           { receiptDocumentId: { in: documentIds } },
           { proofFileId: { in: fileIds } },
@@ -982,7 +983,9 @@ export class DocumentsService {
               },
             },
           },
-          take: 1,
+          // take: 2 distinguishes 0, 1, or 2+ allocations in a single query.
+          // With 2+ allocations, period is set to null (ambiguous multi-period).
+          take: 2,
         },
       },
     });
