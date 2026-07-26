@@ -1,4 +1,14 @@
-import { buildingTickets, residentTicketsPath, ticketDetailPath } from './routes';
+import {
+  ticketDetailPath,
+  residentTicketsPath,
+  buildingTickets,
+} from './routes';
+import {
+  TICKET_NOTIFICATION_TYPES,
+  PAYMENT_NOTIFICATION_TYPES,
+  DOCUMENT_NOTIFICATION_TYPES,
+  UNIT_NOTIFICATION_TYPES,
+} from './notification-types';
 import type { Notification } from '@/features/notifications/notifications.api';
 
 export interface NotificationRoleContext {
@@ -6,8 +16,75 @@ export interface NotificationRoleContext {
   readonly isResident: boolean;
 }
 
-function isInternalPath(path: string | undefined): path is string {
-  return Boolean(path && path.startsWith('/'));
+const ADMIN_PATH_SEGMENTS = [
+  '/finanzas',
+  '/finance',
+  '/buildings',
+  '/super-admin',
+  '/admin',
+  '/settings',
+  '/reports',
+  '/communications',
+  '/support',
+];
+
+function hasProtocol(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value);
+}
+
+function decodeSafe(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function hasTraversalOrSlash(value: string): boolean {
+  return value.includes('..') || value.includes('\\');
+}
+
+function hasDoubleSlash(value: string): boolean {
+  return value.startsWith('//');
+}
+
+function isAdminPath(path: string, tenantId: string): boolean {
+  return ADMIN_PATH_SEGMENTS.some((seg) =>
+    path.startsWith(`/${tenantId}${seg}`)
+  );
+}
+
+function isSafeResidentPath(path: string, tenantId: string): boolean {
+  if (!path.startsWith(`/${tenantId}/resident/`)) return false;
+
+  const decoded = decodeSafe(path);
+  if (decoded === null) return false;
+  if (hasProtocol(decoded)) return false;
+  if (hasDoubleSlash(decoded)) return false;
+  if (hasTraversalOrSlash(decoded)) return false;
+
+  return true;
+}
+
+function isSafeAdminPath(path: string, tenantId: string): boolean {
+  if (!path.startsWith(`/${tenantId}/`)) return false;
+  if (isAdminPath(path, tenantId)) return false;
+
+  const decoded = decodeSafe(path);
+  if (decoded === null) return false;
+  if (hasProtocol(decoded)) return false;
+  if (hasDoubleSlash(decoded)) return false;
+  if (hasTraversalOrSlash(decoded)) return false;
+
+  return true;
+}
+
+function isTicketType(type: string): boolean {
+  return (TICKET_NOTIFICATION_TYPES as readonly string[]).includes(type);
+}
+
+function isPaymentType(type: string): boolean {
+  return (PAYMENT_NOTIFICATION_TYPES as readonly string[]).includes(type);
 }
 
 export function resolveNotificationPath(
@@ -15,40 +92,66 @@ export function resolveNotificationPath(
   tenantId: string,
   roleContext: NotificationRoleContext,
 ): string | null {
-  const ticketId = notification.data?.ticketId;
-  if (ticketId) {
-    return ticketDetailPath(tenantId, ticketId);
-  }
+  const { type, data } = notification;
+  const ticketId = data?.ticketId;
 
-  const ticketRelatedTypes = new Set([
-    'TICKET_STATUS_CHANGED',
-    'TICKET_COMMENT_ADDED',
-    'TICKET_CREATED',
-    'TICKET_ASSIGNED',
-    'URGENT_TICKET_UNASSIGNED',
-  ]);
-
-  if (ticketRelatedTypes.has(notification.type)) {
-    if (roleContext.isAdmin) {
-      const buildingId = notification.data?.buildingId;
-      return buildingId ? buildingTickets(tenantId, buildingId) : `/${tenantId}/tickets`;
+  // 1. Ticket types: first confirm type, then use ticketId if available
+  if (isTicketType(type)) {
+    if (ticketId && typeof ticketId === 'string') {
+      return ticketDetailPath(tenantId, ticketId);
     }
-
+    if (roleContext.isAdmin) {
+      const buildingId = data?.buildingId;
+      return buildingId
+        ? buildingTickets(tenantId, buildingId)
+        : `/${tenantId}/tickets`;
+    }
     if (roleContext.isResident) {
       return residentTicketsPath(tenantId);
     }
-
     return `/${tenantId}/tickets`;
   }
 
-  if (notification.type === 'PAYMENT_RECEIVED' || notification.type === 'PAYMENT_REJECTED') {
+  // 2. Payment types
+  if (isPaymentType(type)) {
     return roleContext.isAdmin
       ? `/${tenantId}/finanzas?tab=payments`
       : `/${tenantId}/resident/payments`;
   }
 
-  const fallbackUrl = notification.data?.url;
-  if (isInternalPath(fallbackUrl)) {
+  // 3. Document types
+  if ((DOCUMENT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
+    if (roleContext.isAdmin) {
+      const buildingId = data?.buildingId;
+      return buildingId
+        ? `/${tenantId}/buildings/${buildingId}/documents`
+        : `/${tenantId}/buildings`;
+    }
+    return `/${tenantId}/resident/documents`;
+  }
+
+  // 4. Unit types
+  if ((UNIT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
+    if (roleContext.isAdmin) {
+      const buildingId = data?.buildingId;
+      return buildingId
+        ? `/${tenantId}/buildings/${buildingId}/units`
+        : `/${tenantId}/buildings`;
+    }
+    return `/${tenantId}/resident/unit`;
+  }
+
+  // 5. Fallback URL — strict validation only for known types
+  const fallbackUrl = data?.url;
+  if (typeof fallbackUrl !== 'string' || !fallbackUrl.startsWith('/')) {
+    return null;
+  }
+
+  if (roleContext.isResident && isSafeResidentPath(fallbackUrl, tenantId)) {
+    return fallbackUrl;
+  }
+
+  if (roleContext.isAdmin && isSafeAdminPath(fallbackUrl, tenantId)) {
     return fallbackUrl;
   }
 

@@ -85,6 +85,8 @@ const NotificationsPage = () => {
       const targetPath = resolveNotificationPath(notification, tenantId, roleContext);
       if (targetPath) {
         router.push(targetPath);
+      } else {
+        toast('Esta notificación no tiene una acción disponible', 'info');
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : t('notifications.markReadError'), 'error');
