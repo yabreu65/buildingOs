@@ -28,6 +28,7 @@ describe('DocumentsService', () => {
     $transaction: jest.fn(),
     document: {
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
       create: jest.fn(),
@@ -36,6 +37,9 @@ describe('DocumentsService', () => {
     file: {
       findFirst: jest.fn(),
       create: jest.fn(),
+    },
+    payment: {
+      findMany: jest.fn(),
     },
     tenant: {
       findUnique: jest.fn(),
@@ -105,6 +109,7 @@ describe('DocumentsService', () => {
     validators.validateResidentDocumentAccess.mockResolvedValue(undefined);
     residentAccess.shouldEnforce.mockReturnValue(false);
     prisma.file.findFirst.mockResolvedValue(null);
+    prisma.payment.findMany.mockResolvedValue([]);
     prisma.unitOccupant.findMany.mockResolvedValue([]);
     prisma.document.findFirst.mockResolvedValue({
       id: 'document-1',
@@ -785,5 +790,301 @@ describe('DocumentsService', () => {
     )).rejects.toThrow('Document not found or does not belong to you');
 
     expect(prisma.document.delete).not.toHaveBeenCalled();
+  });
+
+  describe('Payment enrichment (functionalType / origin / payment)', () => {
+    beforeEach(() => {
+      prisma.payment.findMany.mockResolvedValue([]);
+    });
+
+    it('sets functionalType=PAYMENT_RECEIPT and origin=GENERATED when receiptDocumentId matches', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-receipt-1',
+          tenantId: 'tenant-1',
+          fileId: 'file-receipt-1',
+          title: 'Comprobante pago - transfer.pdf',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([
+        {
+          id: 'pay-1',
+          amount: 500000,
+          currency: 'UYU',
+          status: 'APPROVED',
+          reference: 'TR-001',
+          receiptNumber: 'REC-2025-001',
+          receiptDocumentId: 'doc-receipt-1',
+          proofFileId: null,
+          paymentAllocations: [{
+            charge: { period: '2025-07', expensePeriod: { year: 2025, month: 7 } },
+          }],
+        },
+      ] as never);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].functionalType).toBe('PAYMENT_RECEIPT');
+      expect(result[0].origin).toBe('GENERATED');
+      expect(result[0].payment).toEqual({
+        id: 'pay-1',
+        amount: 500000,
+        currency: 'UYU',
+        status: 'APPROVED',
+        reference: 'TR-001',
+        receiptNumber: 'REC-2025-001',
+        period: '2025-07',
+      });
+    });
+
+    it('sets functionalType=PAYMENT_PROOF and origin=UPLOADED when proofFileId matches', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-proof-1',
+          tenantId: 'tenant-1',
+          fileId: 'file-proof-1',
+          title: 'Comprobante pago - transfer.pdf',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([
+        {
+          id: 'pay-2',
+          amount: 350000,
+          currency: 'UYU',
+          status: 'SUBMITTED',
+          reference: null,
+          receiptNumber: null,
+          receiptDocumentId: null,
+          proofFileId: 'file-proof-1',
+          paymentAllocations: [],
+        },
+      ] as never);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].functionalType).toBe('PAYMENT_PROOF');
+      expect(result[0].origin).toBe('UPLOADED');
+      expect(result[0].payment).toEqual({
+        id: 'pay-2',
+        amount: 350000,
+        currency: 'UYU',
+        status: 'SUBMITTED',
+        reference: null,
+        receiptNumber: null,
+        period: null,
+      });
+    });
+
+    it('prefers receipt over proof when both match', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-both',
+          tenantId: 'tenant-1',
+          fileId: 'file-both',
+          title: 'Comprobante pago - transfer.pdf',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([
+        {
+          id: 'pay-proof',
+          amount: 100000,
+          currency: 'UYU',
+          status: 'SUBMITTED',
+          reference: null,
+          receiptNumber: null,
+          receiptDocumentId: null,
+          proofFileId: 'file-both',
+          paymentAllocations: [],
+        },
+        {
+          id: 'pay-receipt',
+          amount: 100000,
+          currency: 'UYU',
+          status: 'APPROVED',
+          reference: 'TR-002',
+          receiptNumber: 'REC-002',
+          receiptDocumentId: 'doc-both',
+          proofFileId: null,
+          paymentAllocations: [],
+        },
+      ] as never);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].functionalType).toBe('PAYMENT_RECEIPT');
+      expect(result[0].origin).toBe('GENERATED');
+      expect(result[0].payment?.id).toBe('pay-receipt');
+    });
+
+    it('returns null functionalType for documents not linked to any payment', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-general',
+          tenantId: 'tenant-1',
+          fileId: 'file-general',
+          title: 'Contrato',
+          category: 'OTHER',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'contracts/contract.pdf', originalName: 'contract.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].functionalType).toBeNull();
+      expect(result[0].origin).toBeNull();
+      expect(result[0].payment).toBeNull();
+    });
+
+    it('resolves period from expensePeriod when single allocation exists', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-period',
+          tenantId: 'tenant-1',
+          fileId: 'file-period',
+          title: 'Comprobante',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([
+        {
+          id: 'pay-period',
+          amount: 200000,
+          currency: 'UYU',
+          status: 'APPROVED',
+          reference: null,
+          receiptNumber: 'REC-003',
+          receiptDocumentId: 'doc-period',
+          proofFileId: null,
+          paymentAllocations: [{
+            charge: { period: '2025-08', expensePeriod: { year: 2025, month: 8 } },
+          }],
+        },
+      ] as never);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].payment?.period).toBe('2025-08');
+    });
+
+    it('returns null period when multiple allocations exist', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-multi',
+          tenantId: 'tenant-1',
+          fileId: 'file-multi',
+          title: 'Comprobante',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([
+        {
+          id: 'pay-multi',
+          amount: 400000,
+          currency: 'UYU',
+          status: 'APPROVED',
+          reference: null,
+          receiptNumber: 'REC-004',
+          receiptDocumentId: 'doc-multi',
+          proofFileId: null,
+          paymentAllocations: [
+            { charge: { period: '2025-07', expensePeriod: { year: 2025, month: 7 } } },
+            { charge: { period: '2025-08', expensePeriod: { year: 2025, month: 8 } } },
+          ],
+        },
+      ] as never);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result[0].payment?.period).toBeNull();
+    });
+
+    it('never queries payments when document list is empty', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(result).toEqual([]);
+      expect(prisma.payment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('scopes payment query by tenantId', async () => {
+      prisma.document.findMany.mockResolvedValueOnce([
+        {
+          id: 'doc-tenant-check',
+          tenantId: 'tenant-1',
+          fileId: 'file-tenant-check',
+          title: 'Comprobante',
+          category: 'RECEIPT',
+          visibility: 'RESIDENTS',
+          buildingId: null,
+          unitId: null,
+          createdByMembership: { userId: 'resident-1' },
+          file: { bucket: DEFAULT_BUCKET, objectKey: 'proofs/proof.pdf', originalName: 'proof.pdf', mimeType: 'application/pdf' },
+        },
+      ] as never);
+
+      validators.canAccessDocument.mockReturnValue(true);
+
+      prisma.payment.findMany.mockResolvedValueOnce([]);
+
+      await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT']);
+
+      expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 'tenant-1',
+        }),
+      }));
+    });
   });
 });
