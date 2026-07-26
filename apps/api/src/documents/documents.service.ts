@@ -24,6 +24,7 @@ import {
   DocumentResponseDto,
   DocumentWithFileResponseDto,
   DownloadUrlResponseDto,
+  DocumentPaymentMetadataDto,
 } from './dto';
 import { DocumentCategory, DocumentVisibility, Role, Prisma } from '@prisma/client';
 
@@ -423,7 +424,10 @@ export class DocumentsService {
       documents = filteredDocs.filter((doc): doc is typeof documents[0] => doc !== null);
     }
 
-    return documents as unknown as DocumentWithFileResponseDto[];
+    // Enrich documents with payment metadata (batch, no N+1)
+    const enriched = await this.enrichDocumentsWithPaymentMetadata(tenantId, documents);
+
+    return enriched as unknown as DocumentWithFileResponseDto[];
   }
 
   /**
@@ -920,6 +924,161 @@ export class DocumentsService {
       if (error instanceof NotFoundException || error instanceof ForbiddenException) return false;
       throw error;
     }
+  }
+
+  /**
+   * Enrich documents with payment metadata using batch queries (no N+1).
+   *
+   * For each document, resolves:
+   * - functionalType: PAYMENT_PROOF | PAYMENT_RECEIPT | null
+   * - origin: UPLOADED | GENERATED | null
+   * - payment: { id, amount, currency, status, reference, receiptNumber, period } | null
+   *
+   * Classification rules (mutually exclusive, receipt takes precedence):
+   * 1. Payment.receiptDocumentId === Document.id → PAYMENT_RECEIPT
+   * 2. Payment.proofFileId === Document.fileId → PAYMENT_PROOF
+   * 3. No match → null (not a financial document)
+   */
+  private async enrichDocumentsWithPaymentMetadata(
+    tenantId: string,
+    documents: Array<{
+      id: string;
+      fileId: string;
+      [key: string]: unknown;
+    }>,
+  ): Promise<Array<Record<string, unknown>>> {
+    if (documents.length === 0) return documents;
+
+    const documentIds = documents.map((d) => d.id);
+    const fileIds = documents.map((d) => d.fileId);
+
+    // Single batch query: find all payments in this tenant that match
+    // either receiptDocumentId or proofFileId from the authorized documents
+    const relatedPayments = await this.prisma.payment.findMany({
+      where: {
+        tenantId,
+        canceledAt: null,
+        OR: [
+          { receiptDocumentId: { in: documentIds } },
+          { proofFileId: { in: fileIds } },
+        ],
+      },
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        status: true,
+        reference: true,
+        receiptNumber: true,
+        receiptDocumentId: true,
+        proofFileId: true,
+        paymentAllocations: {
+          select: {
+            charge: {
+              select: {
+                period: true,
+                expensePeriod: {
+                  select: { year: true, month: true },
+                },
+              },
+            },
+          },
+          // take: 2 distinguishes 0, 1, or 2+ allocations in a single query.
+          // With 2+ allocations, period is set to null (ambiguous multi-period).
+          take: 2,
+        },
+      },
+    });
+
+    // Build lookup maps
+    const receiptMap = new Map<string, (typeof relatedPayments)[number]>();
+    const proofMap = new Map<string, (typeof relatedPayments)[number]>();
+
+    for (const payment of relatedPayments) {
+      if (payment.receiptDocumentId) {
+        receiptMap.set(payment.receiptDocumentId, payment);
+      }
+      if (payment.proofFileId) {
+        proofMap.set(payment.proofFileId, payment);
+      }
+    }
+
+    // Enrich documents
+    return documents.map((doc) => {
+      // Prefer receipt (direct Document relationship) over proof (File relationship)
+      const receiptPayment = receiptMap.get(doc.id);
+      if (receiptPayment) {
+        return {
+          ...doc,
+          functionalType: 'PAYMENT_RECEIPT' as const,
+          origin: 'GENERATED' as const,
+          payment: this.buildPaymentMetadata(receiptPayment),
+        };
+      }
+
+      const proofPayment = proofMap.get(doc.fileId);
+      if (proofPayment) {
+        return {
+          ...doc,
+          functionalType: 'PAYMENT_PROOF' as const,
+          origin: 'UPLOADED' as const,
+          payment: this.buildPaymentMetadata(proofPayment),
+        };
+      }
+
+      // Not linked to any payment
+      return {
+        ...doc,
+        functionalType: null,
+        origin: null,
+        payment: null,
+      };
+    });
+  }
+
+  /**
+   * Build payment metadata DTO from a payment record.
+   * Period is resolved only when there is a single allocation with an
+   * unambiguous expensePeriod. Multiple allocations or missing period
+   * result in null.
+   */
+  private buildPaymentMetadata(
+    payment: {
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      reference?: string | null;
+      receiptNumber?: string | null;
+      paymentAllocations: Array<{
+        charge: {
+          period: string | null;
+          expensePeriod: { year: number; month: number } | null;
+        };
+      }>;
+    },
+  ): DocumentPaymentMetadataDto {
+    let period: string | null = null;
+
+    if (payment.paymentAllocations.length === 1) {
+      const allocation = payment.paymentAllocations[0];
+      if (allocation?.charge.expensePeriod) {
+        const { year, month } = allocation.charge.expensePeriod;
+        period = `${year}-${String(month).padStart(2, '0')}`;
+      } else if (allocation?.charge.period) {
+        period = allocation.charge.period;
+      }
+    }
+
+    return {
+      id: payment.id,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      reference: payment.reference ?? null,
+      receiptNumber: payment.receiptNumber ?? null,
+      period,
+    };
   }
 
   /**

@@ -8,4 +8,5 @@ export {
   FileResponseDto,
   UserResponseDto,
   MembershipResponseDto,
+  DocumentPaymentMetadataDto,
 } from './document-response.dto';
