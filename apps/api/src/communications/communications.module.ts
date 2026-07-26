@@ -11,11 +11,12 @@ import { EmailBounceController } from './email/webhooks/email-bounce.controller'
 import { DeliveryTrackingService } from './email/delivery-tracking.service';
 import { resolveEmailDelivery } from './email/email-delivery.resolver';
 import { PushDeliveryService } from '../push/push-delivery.service';
+import { ResidentAccessModule } from '../resident-access/resident-access.module';
 
 const emailOptions = resolveEmailDelivery();
 
 @Module({
-  imports: [PrismaModule, AppConfigModule, EmailDeliveryModule.register(emailOptions)],
+  imports: [PrismaModule, AppConfigModule, EmailDeliveryModule.register(emailOptions), ResidentAccessModule],
   controllers: [
     CommunicationsController,
     CommunicationsUserController,
