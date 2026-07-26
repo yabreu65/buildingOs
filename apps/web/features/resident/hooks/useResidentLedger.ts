@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import { getResidentLedger, type UnitLedger } from '../api/resident-context.api';
 
 /**
@@ -11,10 +12,13 @@ export function useResidentLedger(
   tenantId: string | null | undefined,
   unitId: string | null | undefined,
 ) {
+  const session = useAuthSession();
+  const userId = session?.user.id ?? null;
+
   return useQuery<UnitLedger>({
-    queryKey: ['residentLedger', tenantId, unitId],
+    queryKey: ['residentLedger', tenantId, userId, unitId],
     queryFn: () => getResidentLedger(tenantId!, unitId!),
-    enabled: !!tenantId && !!unitId,
+    enabled: !!tenantId && !!unitId && !!userId,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,
     retry: 1,

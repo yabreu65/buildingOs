@@ -9,6 +9,7 @@ import { useParams } from 'next/navigation';
 import ResidentPaymentsPage from './page';
 import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
 import { useContextOptions } from '@/features/context/useContextOptions';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { getResidentLedger } from '@/features/resident/api/resident-context.api';
 import { listPayments, submitPayment, PaymentMethod, PaymentStatus, ChargeStatus, ChargeType, type Payment } from '@/features/finance/services/finance.api';
@@ -24,6 +25,10 @@ jest.mock('@/features/resident/hooks/useResidentContext', () => ({
 
 jest.mock('@/features/context/useContextOptions', () => ({
   useContextOptions: jest.fn(),
+}));
+
+jest.mock('@/features/auth/useAuthSession', () => ({
+  useAuthSession: jest.fn(),
 }));
 
 jest.mock('@/features/tenants/tenants.hooks', () => ({
@@ -67,6 +72,7 @@ jest.mock('@/features/buildings/services/documents.api', () => ({
 const mockedUseParams = jest.mocked(useParams);
 const mockedUseResidentContext = jest.mocked(useResidentContext);
 const mockedUseContextOptions = jest.mocked(useContextOptions);
+const mockedUseAuthSession = jest.mocked(useAuthSession);
 const mockedUseTenants = jest.mocked(useTenants);
 const mockedGetResidentLedger = jest.mocked(getResidentLedger);
 const mockedListPayments = jest.mocked(listPayments);
@@ -169,6 +175,20 @@ describe('ResidentPaymentsPage', () => {
     jest.setSystemTime(new Date('2026-07-24T12:00:00.000Z'));
     jest.clearAllMocks();
     mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
+    mockedUseAuthSession.mockReturnValue({
+      user: {
+        id: 'resident-user-1',
+        email: 'resident@example.com',
+        name: 'Resident Test',
+      },
+      memberships: [
+        {
+          tenantId: 'tenant-1',
+          roles: ['RESIDENT'],
+        },
+      ],
+      activeTenantId: 'tenant-1',
+    } as never);
     mockedUseTenants.mockReturnValue({
       data: [{ id: 'tenant-1', name: 'Complejo Horizonte' }],
     } as never);

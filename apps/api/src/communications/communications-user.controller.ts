@@ -24,6 +24,7 @@ import {
   ResidentCommunicationsQuerySchema,
 } from '@buildingos/contracts';
 import type { AuthenticatedRequest } from '../common/types/request.types';
+import { ResidentAccessService } from '../resident-access/resident-access.service';
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -540,6 +541,7 @@ export class ResidentCommunicationsController {
   constructor(
     private communicationsService: CommunicationsService,
     private validators: CommunicationsValidators,
+    private residentAccessService: ResidentAccessService,
   ) {}
 
   /**
@@ -547,6 +549,8 @@ export class ResidentCommunicationsController {
    * Resident inbox with cursor pagination
    *
    * Query params:
+   * - buildingId: required, active building context
+   * - unitId: required, active unit context
    * - limit: number (default 20, max 100)
    * - cursor: opaque cursor string (base64 encoded)
    *
@@ -554,16 +558,27 @@ export class ResidentCommunicationsController {
    *
    * Ordering: publishedAt DESC, id DESC (mapped to sentAt internally)
    *
-   * No permission required (authenticated users only)
+   * Security:
+   * 1. JwtAuthGuard: Requires valid JWT token
+   * 2. X-Tenant-Id header: Required, validated against user memberships
+   * 3. assertUnitAccess: Validates user has active occupancy for the unit
    */
   @Get('communications')
   async getResidentCommunications(
     @Query() rawQuery: Record<string, unknown>,
     @Request() req: AuthenticatedRequest,
   ): Promise<ResidentCommunicationListResponse> {
-    const userMemberships = req.user?.memberships;
-    if (!userMemberships || userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
+    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
+    if (!xTenantId) {
+      throw new BadRequestException('X-Tenant-Id header is required');
+    }
+
+    const userMemberships = req.user?.memberships || [];
+    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+    if (!membership) {
+      throw new BadRequestException(
+        'User does not have membership in the specified tenant',
+      );
     }
 
     const parsedQuery = ResidentCommunicationsQuerySchema.safeParse(rawQuery);
@@ -574,13 +589,22 @@ export class ResidentCommunicationsController {
       });
     }
 
-    const { limit, cursor } = parsedQuery.data;
-    const tenantId = userMemberships[0]!.tenantId;
+    const { buildingId, unitId, limit, cursor } = parsedQuery.data;
+    const tenantId = xTenantId;
     const userId = req.user.id;
+
+    await this.residentAccessService.assertUnitAccess(
+      tenantId,
+      userId,
+      unitId,
+      buildingId,
+    );
 
     return await this.communicationsService.findForResidentV2(
       tenantId,
       userId,
+      buildingId,
+      unitId,
       limit,
       cursor,
     );
@@ -592,19 +616,29 @@ export class ResidentCommunicationsController {
    *
    * Returns: { readAt: Date | null }
    *
-   * No permission required (authenticated users only)
+   * Security:
+   * 1. JwtAuthGuard: Requires valid JWT token
+   * 2. X-Tenant-Id header: Required, validated against user memberships
    */
   @Post('communications/:communicationId/read')
   async markResidentAsRead(
     @Param('communicationId') communicationId: string,
     @Request() req: AuthenticatedRequest,
   ): Promise<{ readAt: Date | null }> {
-    const userMemberships = req.user?.memberships;
-    if (!userMemberships || userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
+    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
+    if (!xTenantId) {
+      throw new BadRequestException('X-Tenant-Id header is required');
     }
 
-    const tenantId = userMemberships[0]!.tenantId;
+    const userMemberships = req.user?.memberships || [];
+    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
+    if (!membership) {
+      throw new BadRequestException(
+        'User does not have membership in the specified tenant',
+      );
+    }
+
+    const tenantId = xTenantId;
     const userId = req.user.id;
 
     await this.validators.validateCommunicationBelongsToTenant(

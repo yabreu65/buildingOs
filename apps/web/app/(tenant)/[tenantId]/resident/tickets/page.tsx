@@ -116,7 +116,7 @@ export default function ResidentTicketsPage() {
     error: ticketsErrorValue,
     refetch,
   } = useQuery<Ticket[]>({
-    queryKey: ['residentTickets', userId, tenantId, buildingId, unitId],
+    queryKey: ['residentTickets', tenantId, userId, buildingId, unitId],
     queryFn: () => getResidentTickets(buildingId!, unitId!, 50),
     enabled: identityMatchesRoute && !!buildingId && !!unitId && !contextLoading,
     staleTime: 30_000,

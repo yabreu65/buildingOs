@@ -340,3 +340,185 @@ function buildDeliveryResult(status: PushDeliveryResult['status']): PushDelivery
     skipped: status === 'skipped_disabled' ? true : undefined,
   };
 }
+
+const buildingId = 'building-1';
+const unitId = 'unit-1';
+const otherBuildingId = 'building-other';
+const otherUnitId = 'unit-other';
+
+interface ReceiptDelegateMock {
+  readonly findMany: jest.Mock;
+}
+
+interface PrismaResidentMock {
+  readonly communicationReceipt: ReceiptDelegateMock;
+}
+
+function buildTarget(targetType: string, targetId?: string) {
+  return { targetType, targetId: targetId ?? null };
+}
+
+function buildReceiptWithComm(
+  commId: string,
+  targets: Array<{ targetType: string; targetId?: string }>,
+  readAt: Date | null = null,
+) {
+  return {
+    id: `receipt-${commId}`,
+    tenantId,
+    userId: userOneId,
+    communicationId: commId,
+    readAt,
+    deliveredAt: null,
+    createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    communication: {
+      id: commId,
+      tenantId,
+      buildingId: null,
+      title: `Communication ${commId}`,
+      body: `Body ${commId}`,
+      channel: 'IN_APP',
+      status: 'SENT',
+      priority: 'NORMAL',
+      scheduledAt: null,
+      sentAt: new Date('2026-07-01T00:00:00.000Z'),
+      createdByMembershipId: 'membership-1',
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      deletedAt: null,
+      targets,
+    },
+  };
+}
+
+describe('CommunicationsService findForResidentV2 scope filtering', () => {
+  let prisma: PrismaResidentMock;
+  let service: CommunicationsService;
+
+  beforeEach(() => {
+    prisma = {
+      communicationReceipt: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    service = new CommunicationsService(
+      prisma as unknown as PrismaService,
+      { validateCommunicationBelongsToTenant: jest.fn() } as unknown as CommunicationsValidators,
+      { isFeatureEnabled: jest.fn() } as unknown as ConfigService,
+      { sendToSubscription: jest.fn() } as unknown as PushDeliveryService,
+    );
+  });
+
+  it('allows ALL_TENANT communications regardless of buildingId/unitId', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([
+      buildReceiptWithComm('comm-1', [buildTarget('ALL_TENANT')]),
+    ]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.id).toBe('comm-1');
+    expect(prisma.communicationReceipt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          communication: expect.objectContaining({
+            targets: expect.objectContaining({
+              some: expect.objectContaining({
+                OR: expect.arrayContaining([
+                  { targetType: 'ALL_TENANT' },
+                  { targetType: 'ROLE' },
+                  { targetType: 'BUILDING', targetId: buildingId },
+                  { targetType: 'UNIT', targetId: unitId },
+                ]),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('allows ROLE communications', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([
+      buildReceiptWithComm('comm-role', [buildTarget('ROLE', 'RESIDENT')]),
+    ]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.id).toBe('comm-role');
+  });
+
+  it('allows BUILDING communications matching the selected buildingId', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([
+      buildReceiptWithComm('comm-bld', [buildTarget('BUILDING', buildingId)]),
+    ]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.id).toBe('comm-bld');
+  });
+
+  it('allows UNIT communications matching the selected unitId', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([
+      buildReceiptWithComm('comm-unit', [buildTarget('UNIT', unitId)]),
+    ]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.id).toBe('comm-unit');
+  });
+
+  it('excludes communications targeted exclusively to another building', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(0);
+
+    const callWhere = prisma.communicationReceipt.findMany.mock.calls[0][0].where;
+    const orConditions = callWhere.communication.targets.some.OR;
+    const buildingConditions = orConditions.filter(
+      (c: { targetType: string }) => c.targetType === 'BUILDING',
+    );
+    expect(buildingConditions).toEqual([{ targetType: 'BUILDING', targetId: buildingId }]);
+  });
+
+  it('excludes communications targeted exclusively to another unit', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([]);
+
+    const result = await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    expect(result.items).toHaveLength(0);
+
+    const callWhere = prisma.communicationReceipt.findMany.mock.calls[0][0].where;
+    const orConditions = callWhere.communication.targets.some.OR;
+    const unitConditions = orConditions.filter(
+      (c: { targetType: string }) => c.targetType === 'UNIT',
+    );
+    expect(unitConditions).toEqual([{ targetType: 'UNIT', targetId: unitId }]);
+  });
+
+  it('does not include other buildingId or unitId in the scope filter OR', async () => {
+    prisma.communicationReceipt.findMany.mockResolvedValue([]);
+
+    await service.findForResidentV2(tenantId, userOneId, buildingId, unitId, 20);
+
+    const callWhere = prisma.communicationReceipt.findMany.mock.calls[0][0].where;
+    const orConditions = callWhere.communication.targets.some.OR;
+
+    const buildingConditions = orConditions.filter(
+      (c: { targetType: string }) => c.targetType === 'BUILDING',
+    );
+    expect(buildingConditions).toHaveLength(1);
+    expect(buildingConditions[0]).toEqual({ targetType: 'BUILDING', targetId: buildingId });
+
+    const unitConditions = orConditions.filter(
+      (c: { targetType: string }) => c.targetType === 'UNIT',
+    );
+    expect(unitConditions).toHaveLength(1);
+    expect(unitConditions[0]).toEqual({ targetType: 'UNIT', targetId: unitId });
+  });
+});

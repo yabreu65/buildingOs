@@ -1,62 +1,110 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   getResidentCommunications,
   markResidentAsRead,
   type ResidentCommunicationItem,
 } from '@/features/communications/services/communications.api';
 import { useTenantId } from '@/features/tenancy/tenant.hooks';
+import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
 import { BuildingIcon, Bell, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
 import Card from '@/shared/components/ui/Card';
 
 const ResidentAnnouncementsPage = () => {
   const tenantId = useTenantId();
+  const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
+  const buildingId = context?.activeBuildingId ?? null;
+  const unitId = context?.activeUnitId ?? null;
+
   const [communications, setCommunications] = useState<ResidentCommunicationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [markReadError, setMarkReadError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [hasMore, setHasMore] = useState(false);
 
-  const fetchCommunications = useCallback(async (cursor?: string, isLoadMore = false) => {
-    if (!tenantId) return;
+  const contextKey = `${tenantId ?? ''}:${buildingId ?? ''}:${unitId ?? ''}`;
+  const contextKeyRef = useRef(contextKey);
+  const fetchIdRef = useRef(0);
+  const mountedRef = useRef(false);
 
-    try {
-      if (isLoadMore) {
-        setLoadingMore(true);
-      } else {
-        setLoading(true);
+  const fetchCommunications = useCallback(
+    async (cursor?: string, isLoadMore = false) => {
+      if (!tenantId || !buildingId || !unitId) return;
+
+      const currentFetchId = ++fetchIdRef.current;
+
+      try {
+        if (isLoadMore) {
+          setLoadingMore(true);
+        } else {
+          setLoading(true);
+        }
+        setError(null);
+
+        const response = await getResidentCommunications(tenantId, buildingId, unitId, 20, cursor);
+
+        if (currentFetchId !== fetchIdRef.current) return;
+
+        if (isLoadMore) {
+          setCommunications((prev) => [...prev, ...response.items]);
+        } else {
+          setCommunications(response.items);
+        }
+
+        setNextCursor(response.nextCursor);
+        setHasMore(!!response.nextCursor);
+      } catch (err) {
+        if (currentFetchId !== fetchIdRef.current) return;
+        setError(err instanceof Error ? err.message : 'Error al cargar comunicados');
+      } finally {
+        if (currentFetchId === fetchIdRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
-      setError(null);
+    },
+    [tenantId, buildingId, unitId],
+  );
 
-      const response = await getResidentCommunications(20, cursor);
-
-      if (isLoadMore) {
-        setCommunications((prev) => [...prev, ...response.items]);
-      } else {
-        setCommunications(response.items);
-      }
-
-      setNextCursor(response.nextCursor);
-      setHasMore(!!response.nextCursor);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al cargar comunicados');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [tenantId]);
+  const fetchCommunicationsRef = useRef(fetchCommunications);
 
   useEffect(() => {
-    fetchCommunications();
-  }, [fetchCommunications]);
+    fetchCommunicationsRef.current = fetchCommunications;
+  });
+
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      if (tenantId && buildingId && unitId) {
+        fetchCommunicationsRef.current();
+      }
+      return;
+    }
+
+    if (contextKey !== contextKeyRef.current) {
+      contextKeyRef.current = contextKey;
+      fetchIdRef.current++;
+      setCommunications([]);
+      setNextCursor(undefined);
+      setHasMore(false);
+      setError(null);
+      setMarkReadError(null);
+      if (tenantId && buildingId && unitId) {
+        fetchCommunicationsRef.current();
+      }
+    }
+  }, [contextKey, tenantId, buildingId, unitId]);
 
   const handleMarkAsRead = async (communicationId: string) => {
+    if (!tenantId) return;
+    const snapshotKey = contextKey;
     try {
       setMarkReadError(null);
-      const result = await markResidentAsRead(communicationId);
+      const result = await markResidentAsRead(tenantId, communicationId);
+      if (snapshotKey !== contextKeyRef.current) return;
       setCommunications((prev) =>
         prev.map((c) =>
           c.id === communicationId
@@ -65,6 +113,7 @@ const ResidentAnnouncementsPage = () => {
         )
       );
     } catch (err) {
+      if (snapshotKey !== contextKeyRef.current) return;
       console.error('Failed to mark as read:', err);
       setMarkReadError(
         err instanceof Error
@@ -95,6 +144,25 @@ const ResidentAnnouncementsPage = () => {
       year: 'numeric',
     });
   };
+
+  if (contextLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!buildingId || !unitId) {
+    return (
+      <div className="text-center py-12">
+        <Bell className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+        <p className="text-muted-foreground">
+          Seleccioná un edificio y una unidad para ver los comunicados.
+        </p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

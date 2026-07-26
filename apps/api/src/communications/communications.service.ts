@@ -1058,11 +1058,21 @@ export class CommunicationsService {
    *
    * Ordering: publishedAt DESC, id DESC (mapped to sentAt DESC, id DESC internally)
    *
+   * Filters by context:
+   * - ALL_TENANT: always visible
+   * - ROLE: visible (applies to user within tenant)
+   * - BUILDING: visible only when targetId matches buildingId
+   * - UNIT: visible only when targetId matches unitId
+   *
+   * Excludes communications targeted exclusively to another building or unit.
+   *
    * @returns ResidentCommunicationListResponse with typed items
    */
   async findForResidentV2(
     tenantId: string,
     userId: string,
+    buildingId: string,
+    unitId: string,
     limit: number = 20,
     cursor?: string,
   ): Promise<ResidentCommunicationListResponse> {
@@ -1084,6 +1094,16 @@ export class CommunicationsService {
       communication: {
         status: 'SENT',
         sentAt: { not: null },
+        targets: {
+          some: {
+            OR: [
+              { targetType: 'ALL_TENANT' },
+              { targetType: 'ROLE' },
+              { targetType: 'BUILDING', targetId: buildingId },
+              { targetType: 'UNIT', targetId: unitId },
+            ],
+          },
+        },
       },
     };
 

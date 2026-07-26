@@ -389,20 +389,26 @@ export interface CreateCommunicationV2Input {
 }
 
 export async function getResidentCommunications(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
   limit?: number,
   cursor?: string,
 ): Promise<ResidentCommunicationsResponse> {
   const params = new URLSearchParams();
+  params.append('buildingId', buildingId);
+  params.append('unitId', unitId);
   if (limit) params.append('limit', String(limit));
   if (cursor) params.append('cursor', cursor);
 
-  const endpoint = `/resident/communications${params.toString() ? '?' + params.toString() : ''}`;
+  const endpoint = `/resident/communications?${params.toString()}`;
   logRequest('GET', endpoint);
 
   try {
     return await apiClient<ResidentCommunicationsResponse>({
       path: endpoint,
       method: 'GET',
+      headers: { 'X-Tenant-Id': tenantId },
     });
   } catch (error) {
     const message = `Failed to get resident communications: ${(error as Error).message}`;
@@ -411,7 +417,10 @@ export async function getResidentCommunications(
   }
 }
 
-export async function markResidentAsRead(communicationId: string): Promise<{ readAt: string | null }> {
+export async function markResidentAsRead(
+  tenantId: string,
+  communicationId: string,
+): Promise<{ readAt: string | null }> {
   const endpoint = `/resident/communications/${communicationId}/read`;
   logRequest('POST', endpoint);
 
@@ -419,6 +428,7 @@ export async function markResidentAsRead(communicationId: string): Promise<{ rea
     return await apiClient<{ readAt: string | null }>({
       path: endpoint,
       method: 'POST',
+      headers: { 'X-Tenant-Id': tenantId },
     });
   } catch (error) {
     const message = `Failed to mark as read: ${(error as Error).message}`;

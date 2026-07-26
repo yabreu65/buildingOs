@@ -16,6 +16,7 @@ import {
 import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
 import { useContextOptions } from '@/features/context/useContextOptions';
 import { getResidentLedger, type UnitLedger } from '@/features/resident/api/resident-context.api';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { listPayments, submitPayment, type Payment, PaymentMethod, ChargeStatus, PaymentStatus } from '@/features/finance/services/finance.api';
 import {
@@ -316,6 +317,8 @@ function PaymentConfirmDialog({
 export const ResidentPaymentsPage = () => {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
+  const session = useAuthSession();
+  const userId = session?.user.id ?? null;
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
@@ -347,7 +350,7 @@ export const ResidentPaymentsPage = () => {
     error: ledgerErrorValue,
     refetch: refetchLedger,
   } = useQuery<UnitLedger>({
-    queryKey: ['residentLedger', tenantId, unitId],
+    queryKey: ['residentLedger', tenantId, userId, unitId],
     queryFn: () => {
       if (!tenantId || !unitId) {
         throw new Error('Missing tenant or unit context for resident ledger');
@@ -365,14 +368,14 @@ export const ResidentPaymentsPage = () => {
     error: paymentsErrorValue,
     refetch: refetchPayments,
   } = useQuery<Payment[]>({
-    queryKey: ['residentPayments', buildingId, unitId],
+    queryKey: ['residentPayments', tenantId, userId, buildingId, unitId],
     queryFn: () => {
       if (!buildingId || !unitId) {
         throw new Error('Missing building or unit context for resident payments');
       }
       return listPayments(buildingId, undefined, unitId, 20);
     },
-    enabled: !!buildingId && !!unitId,
+    enabled: !!tenantId && !!userId && !!buildingId && !!unitId,
     staleTime: 5 * 60 * 1000,
   });
 

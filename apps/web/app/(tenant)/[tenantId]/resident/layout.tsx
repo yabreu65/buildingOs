@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useHasRole, useAuthSession } from '../../../../features/auth/useAuthSession';
 import { getSession } from '../../../../features/auth/session.storage';
 import { useBoStorageTick } from '../../../../shared/lib/storage/useBoStorage';
+import { ResidentContextSwitcher } from '../../../../features/resident/components/ResidentContextSwitcher';
 
 interface TenantParams { tenantId?: string; [key: string]: string | string[] | undefined; }
 
@@ -40,7 +41,14 @@ const ResidentLayout = ({ children }: ResidentLayoutProps) => {
     return () => window.clearTimeout(timer);
   }, [session, router, storageTick]);
 
-  return <>{children}</>;
+  return (
+    <div className="space-y-6">
+      {session && isResident && (
+        <ResidentContextSwitcher tenantId={tenantId} />
+      )}
+      {children}
+    </div>
+  );
 };
 
 export default ResidentLayout;

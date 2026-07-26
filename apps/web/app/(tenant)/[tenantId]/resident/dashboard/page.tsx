@@ -81,6 +81,7 @@ const ResidentDashboardPage = () => {
   const tenantId = params.tenantId;
   const session = useAuthSession();
   const userName = session?.user?.name ?? '';
+  const userId = session?.user?.id ?? null;
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
@@ -124,9 +125,9 @@ const ResidentDashboardPage = () => {
     isError: ticketsError,
     error: ticketsErrorValue,
   } = useQuery<Ticket[]>({
-    queryKey: ['residentTickets', buildingId, unitId],
+    queryKey: ['residentTickets', tenantId, userId, buildingId, unitId],
     queryFn: () => getResidentTickets(buildingId!, unitId!, 3),
-    enabled: !!buildingId && !!unitId,
+    enabled: !!buildingId && !!unitId && !!userId,
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 1,
