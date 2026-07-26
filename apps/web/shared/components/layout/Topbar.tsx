@@ -1,13 +1,13 @@
 'use client';
 
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
 import { getSession, setSession, setLastTenant, clearAuth } from '../../../features/auth/session.storage';
 import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
-import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare } from 'lucide-react';
+import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
@@ -15,14 +15,8 @@ import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
 import { resolveNotificationPath } from '@/shared/lib/notification-routes';
+import { getNotificationCategory } from '@/shared/lib/notification-types';
 
-const TICKET_TYPES = new Set([
-  'TICKET_STATUS_CHANGED',
-  'TICKET_COMMENT_ADDED',
-  'TICKET_CREATED',
-  'SUPPORT_TICKET_CREATED',
-  'URGENT_TICKET_UNASSIGNED',
-]);
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 
 const POLL_INTERVAL = 30_000;
@@ -30,6 +24,7 @@ const POLL_INTERVAL = 30_000;
 export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -37,9 +32,12 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   const session = getSession();
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
+  const isResident = activeMembership?.roles?.includes('RESIDENT') ?? false;
+  const portalContext: 'resident' | 'admin' = pathname?.includes('/resident/') ? 'resident' : 'admin';
   const roleContext = {
     isAdmin,
-    isResident: activeMembership?.roles?.includes('RESIDENT') ?? false,
+    isResident,
+    portalContext,
   };
   const hasSession = Boolean(session);
 
@@ -94,25 +92,18 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     },
   });
 
-  // 5. Filter notifications for display
+  // 5. Notifications for display
+  // Residents see ALL notifications returned by the backend.
+  // Admins filter to payment submissions and ticket types only.
   const allNotifs = notificationResult?.notifications ?? [];
 
-  let filteredNotifications: Notification[] = [];
-  if (isAdmin) {
-    filteredNotifications = allNotifs.filter((n: Notification) =>
-      (n.type === 'BUILDING_ALERT' && n.data?.event === 'PAYMENT_SUBMITTED') ||
-      n.data?.paymentId ||
-      TICKET_TYPES.has(n.type)
-    );
-  } else {
-    filteredNotifications = allNotifs.filter((n: Notification) =>
-      n.type === 'PAYMENT_RECEIVED' ||
-      n.type === 'PAYMENT_REJECTED' ||
-      n.data?.event === 'PAYMENT_APPROVED' ||
-      n.data?.event === 'PAYMENT_REJECTED' ||
-      TICKET_TYPES.has(n.type)
-    );
-  }
+  const filteredNotifications: Notification[] = isAdmin
+    ? allNotifs.filter((n: Notification) =>
+        (n.type === 'BUILDING_ALERT' && n.data?.event === 'PAYMENT_SUBMITTED') ||
+        n.data?.paymentId ||
+        getNotificationCategory(n.type) === 'ticket'
+      )
+    : allNotifs;
 
   // Badge: pending payments (admin) + unread notifications
   const badgeCount = isAdmin ? pendingCount + unreadCount : unreadCount;
@@ -158,10 +149,6 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     const targetPath = resolveNotificationPath(notification, tenantId, roleContext);
     if (targetPath) {
       router.push(targetPath);
-    } else if (isAdmin) {
-      router.push(`/${tenantId}/finanzas?tab=payments`);
-    } else {
-      router.push(`/${tenantId}/resident/payments`);
     }
     setIsOpen(false);
   };
@@ -171,19 +158,30 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   };
 
   const getNotificationIcon = (notification: Notification) => {
-    if (notification.type === 'PAYMENT_RECEIVED' || notification.data?.event === 'PAYMENT_APPROVED') {
-      return <CheckCircle className="w-4 h-4 text-green-600" />;
+    const category = getNotificationCategory(notification.type);
+    switch (category) {
+      case 'payment':
+        if (notification.type === 'PAYMENT_RECEIVED' || notification.data?.event === 'PAYMENT_APPROVED') {
+          return <CheckCircle className="w-4 h-4 text-green-600" />;
+        }
+        if (notification.type === 'PAYMENT_REJECTED' || notification.data?.event === 'PAYMENT_REJECTED') {
+          return <XCircle className="w-4 h-4 text-red-600" />;
+        }
+        return <CreditCard className="w-4 h-4 text-blue-600" />;
+      case 'ticket':
+        return <MessageSquare className="w-4 h-4 text-blue-600" />;
+      case 'support':
+        return <MessageSquare className="w-4 h-4 text-purple-600" />;
+      case 'document':
+        return <FileText className="w-4 h-4 text-yellow-600" />;
+      case 'unit':
+        return <Home className="w-4 h-4 text-cyan-600" />;
+      default:
+        if (notification.type === 'BUILDING_ALERT') {
+          return <Clock className="w-4 h-4 text-amber-600" />;
+        }
+        return <Bell className="w-4 h-4 text-gray-600" />;
     }
-    if (notification.type === 'PAYMENT_REJECTED' || notification.data?.event === 'PAYMENT_REJECTED') {
-      return <XCircle className="w-4 h-4 text-red-600" />;
-    }
-    if (notification.type === 'BUILDING_ALERT') {
-      return <Clock className="w-4 h-4 text-amber-600" />;
-    }
-    if (TICKET_TYPES.has(notification.type)) {
-      return <MessageSquare className="w-4 h-4 text-blue-600" />;
-    }
-    return <CreditCard className="w-4 h-4 text-blue-600" />;
   };
 
   return (

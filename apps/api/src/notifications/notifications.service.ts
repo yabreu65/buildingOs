@@ -311,13 +311,28 @@ export class NotificationsService {
   }
 
   /**
+   * Private: Escape HTML special characters to prevent injection
+   */
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
    * Private: Wrap text body in HTML
    */
   private wrapHtmlBody(body: string, title: string): string {
+    const safeTitle = this.escapeHtml(title).replace(/\r?\n/g, '<br>');
+    const safeBody = this.escapeHtml(body).replace(/\r?\n/g, '<br>');
+
     return `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">
-        <h2 style="color: #1E3A8A; margin-bottom: 16px;">${title}</h2>
-        <p>${body}</p>
+        <h2 style="color: #1E3A8A; margin-bottom: 16px;">${safeTitle}</h2>
+        <p>${safeBody}</p>
         <p style="margin-top: 24px; color: #666; font-size: 12px;">
           This is an automated notification from BuildingOS. You can manage your notification preferences in your account settings.
         </p>

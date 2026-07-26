@@ -43,6 +43,7 @@ jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useParams: () => ({ tenantId: 'tenant-1' }),
+  usePathname: () => '/tenant-1/dashboard',
 }));
 
 const mockGetUnreadCount = jest.mocked(notificationsApi.getUnreadCount);
@@ -351,6 +352,478 @@ describe('PaymentNotificationBell', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/1 pago pendiente por revisar/)).toBeTruthy();
+    });
+  });
+
+  it('resident sees DOCUMENT_SHARED notification in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-doc',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'DOCUMENT_SHARED',
+          title: 'Documento compartido',
+          body: 'Te compartieron un documento',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Documento compartido')).toBeTruthy();
+    });
+  });
+
+  it('resident sees OCCUPANT_ASSIGNED notification in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-occ',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'OCCUPANT_ASSIGNED',
+          title: 'Asignado a unidad',
+          body: 'Fuiste asignado a una unidad',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Asignado a unidad')).toBeTruthy();
+    });
+  });
+
+  it('resident sees CHARGE_PUBLISHED notification in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-charge',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'CHARGE_PUBLISHED',
+          title: 'Nuevo cargo',
+          body: 'Se publicó un cargo',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Nuevo cargo')).toBeTruthy();
+    });
+  });
+
+  it('resident sees PAYMENT_REMINDER notification in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-remind',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_REMINDER',
+          title: 'Recordatorio de pago',
+          body: 'Tu pago vence pronto',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Recordatorio de pago')).toBeTruthy();
+    });
+  });
+
+  it('resident sees PAYMENT_OVERDUE notification in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-overdue',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_OVERDUE',
+          title: 'Pago vencido',
+          body: 'Tu pago está vencido',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pago vencido')).toBeTruthy();
+    });
+  });
+
+  it('resident sees SUPPORT_TICKET_STATUS_CHANGED when they are the recipient', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-support',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'SUPPORT_TICKET_STATUS_CHANGED',
+          title: 'Estado de solicitud',
+          body: 'Tu solicitud fue actualizada',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Estado de solicitud')).toBeTruthy();
+    });
+  });
+
+  it('unknown notification type remains visible in dropdown', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-unknown',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'CUSTOM_EVENT',
+          title: 'Evento custom',
+          body: 'Algo nuevo',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Evento custom')).toBeTruthy();
+    });
+  });
+
+  it('unknown notification type without valid route does not navigate to payments', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-unknown',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'CUSTOM_EVENT',
+          title: 'Evento custom',
+          body: 'Algo nuevo',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Evento custom')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Evento custom'));
+
+    await waitFor(() => {
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+  });
+
+  it('badge preserves backend unreadCount without recalculation', async () => {
+    mockGetUnreadCount.mockResolvedValue(5);
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n1',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'DOCUMENT_SHARED',
+          title: 'Doc',
+          body: 'Body',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+        {
+          id: 'n2',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'CUSTOM_TYPE',
+          title: 'Custom',
+          body: 'Body',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 2,
+    });
+
+    renderBell();
+
+    await waitFor(() => {
+      expect(screen.getByText('5')).toBeTruthy();
+    });
+  });
+
+  it('markAsRead invalidates both notification queries', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n1',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'TICKET_STATUS_CHANGED',
+          title: 'Ticket update',
+          body: 'Body',
+          data: { ticketId: 't-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    const { queryClient } = renderBell();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ticket update')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Ticket update'));
+
+    await waitFor(() => {
+      expect(mockMarkAsRead).toHaveBeenCalledWith(TENANT_ID, 'n1');
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['notificationUnreadCount', TENANT_ID] })
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['notificationList', TENANT_ID] })
+      );
+    });
+
+    invalidateSpy.mockRestore();
+  });
+
+  it('markAllAsRead invalidates both notification queries', async () => {
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n1',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'TICKET_COMMENT_ADDED',
+          title: 'Test',
+          body: 'Body',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    const { queryClient } = renderBell();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Test')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Marcar todas como leídas'));
+
+    await waitFor(() => {
+      expect(mockMarkAllAsRead).toHaveBeenCalledWith(TENANT_ID);
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['notificationUnreadCount', TENANT_ID] })
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['notificationList', TENANT_ID] })
+      );
+    });
+
+    invalidateSpy.mockRestore();
+  });
+
+  it('SUPPORT_TICKET_STATUS_CHANGED navigates to support page', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-support',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'SUPPORT_TICKET_STATUS_CHANGED',
+          title: 'Estado de solicitud',
+          body: 'Tu solicitud fue actualizada',
+          data: { ticketId: 'support-42' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Estado de solicitud')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Estado de solicitud'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/support');
+    });
+  });
+
+  it('mixed role user in resident portal navigates to resident payment route', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-payment',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_RECEIVED',
+          title: 'Pago recibido',
+          body: 'Tu pago fue procesado',
+          data: { paymentId: 'pay-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pago recibido')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Pago recibido'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/resident/payments');
+    });
+  });
+
+  it('mixed role user in admin portal navigates to admin payment route', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/dashboard';
+
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-payment',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_RECEIVED',
+          title: 'Pago recibido',
+          body: 'Tu pago fue procesado',
+          data: { paymentId: 'pay-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pago recibido')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Pago recibido'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/finanzas?tab=payments');
     });
   });
 });

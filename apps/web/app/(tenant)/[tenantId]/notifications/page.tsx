@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import { useRouter } from 'next/navigation';
 import { useNotifications } from '@/features/notifications/useNotifications';
 import {
@@ -21,6 +21,7 @@ import type { Notification } from '@/features/notifications/notifications.api';
 
 const NotificationsPage = () => {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const tenantId = params.tenantId as string;
   const session = useAuthSession();
@@ -36,12 +37,14 @@ const NotificationsPage = () => {
     () => session?.memberships?.find((membership) => membership.tenantId === tenantId),
     [session, tenantId],
   );
+  const portalContext: 'resident' | 'admin' = pathname?.includes('/resident/') ? 'resident' : 'admin';
   const roleContext = useMemo(
     () => ({
       isAdmin: activeMembership?.roles?.some((role) => ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR', 'SUPER_ADMIN'].includes(role)) ?? false,
       isResident: activeMembership?.roles?.includes('RESIDENT') ?? false,
+      portalContext,
     }),
-    [activeMembership],
+    [activeMembership, portalContext],
   );
 
   // Fetch notifications on mount and when filters change
@@ -85,6 +88,8 @@ const NotificationsPage = () => {
       const targetPath = resolveNotificationPath(notification, tenantId, roleContext);
       if (targetPath) {
         router.push(targetPath);
+      } else {
+        toast('Esta notificación no tiene una acción disponible', 'info');
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : t('notifications.markReadError'), 'error');
