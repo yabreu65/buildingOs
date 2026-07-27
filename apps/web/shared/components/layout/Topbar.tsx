@@ -420,15 +420,16 @@ export default function Topbar({
   const canSelectTenant = session.memberships.length > 1;
 
   // Fallback si no hay tenants cargados: mostrar por ID
-  const fallbackTenants: TenantSummary[] = tenants || session.memberships.map((membership: Membership) => ({
+  const fallbackTenants: TenantSummary[] = tenants?.length ? tenants : session.memberships.map((membership: Membership) => ({
     id: membership.tenantId,
     name: membership.tenantId,
     type: 'EDIFICIO_AUTOGESTION' as const,
   }));
 
   return (
-    <header className="flex min-h-14 items-center justify-between gap-2 border-b border-border bg-card px-3 text-card-foreground sm:px-4">
-      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+    <header className="border-b border-border bg-card text-card-foreground">
+      <div className="flex min-h-14 items-center justify-between gap-2 px-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-4">
         {onMobileMenuToggle && (
           <button
             ref={menuButtonRef}
@@ -445,15 +446,15 @@ export default function Topbar({
         <div className="truncate text-sm font-semibold">BuildingOS</div>
 
         {canSelectTenant ? (
-          <div className="hidden items-center gap-2 lg:flex">
-            <label htmlFor="tenant-select" className="text-xs text-muted-foreground">
+          <div className="hidden min-w-0 items-center gap-2 lg:flex">
+            <label htmlFor="tenant-select-desktop" className="text-xs text-muted-foreground">
               {isLoading ? 'Cargando...' : 'Edificio:'}
             </label>
             <Select
-              id="tenant-select"
+              id="tenant-select-desktop"
               value={activeTenantId}
               onChange={(e) => handleTenantChange(e.target.value)}
-              className="text-xs"
+              className="min-h-11 min-w-0 text-xs"
               disabled={isLoading}
             >
               {fallbackTenants.map((tenant) => (
@@ -475,7 +476,7 @@ export default function Topbar({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 sm:gap-3">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-3">
         {urlTenantId && <div className="hidden lg:block"><PushPermissionControl tenantId={urlTenantId} /></div>}
         {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} />}
         <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
@@ -488,7 +489,34 @@ export default function Topbar({
         >
           Cerrar sesión
         </button>
+        </div>
       </div>
+
+      {canSelectTenant && (
+        <div className="flex min-w-0 items-center gap-2 border-t border-border px-3 py-2 lg:hidden sm:px-4">
+          <label htmlFor="tenant-select-mobile" className="shrink-0 text-xs text-muted-foreground">
+            {isLoading ? 'Cargando...' : 'Edificio:'}
+          </label>
+          <Select
+            id="tenant-select-mobile"
+            value={activeTenantId}
+            onChange={(e) => handleTenantChange(e.target.value)}
+            className="min-h-11 min-w-0 flex-1 truncate text-xs"
+            disabled={isLoading}
+          >
+            {fallbackTenants.map((tenant) => (
+              <option key={tenant.id} value={tenant.id}>
+                {tenant.name}
+              </option>
+            ))}
+          </Select>
+          {error && (
+            <span className="shrink-0 text-xs text-red-500" title="Error al cargar tenants">
+              ⚠️
+            </span>
+          )}
+        </div>
+      )}
     </header>
   );
 }

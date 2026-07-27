@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AppShell from "./AppShell";
 
 jest.mock("next/navigation", () => ({
@@ -48,7 +48,7 @@ jest.mock("../../../features/impersonation/ImpersonationBanner", () => ({
 }));
 
 jest.mock("@/shared/components/assistant", () => ({
-  AssistantWidget: () => null,
+  AssistantWidget: () => <button type="button">Asistente disponible</button>,
   useAssistantContext: () => ({}),
 }));
 
@@ -83,6 +83,110 @@ describe("AppShell mobile drawer", () => {
     closeButton.focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(lastControl);
+  });
+
+
+  it("recalculates focusable drawer controls on every Tab event", () => {
+    render(<AppShell>Contenido</AppShell>);
+    openDrawer();
+
+    const drawer = screen.getByRole("dialog", { name: "Navegación principal" });
+    const closeButton = screen.getByRole("button", { name: "Cerrar menú" });
+    const existingLastControl = screen.getByRole("button", { name: "Ir a pagos" });
+    const dynamicControl = document.createElement("button");
+    dynamicControl.type = "button";
+    dynamicControl.textContent = "Control dinámico";
+    dynamicControl.disabled = true;
+    drawer.appendChild(dynamicControl);
+
+    existingLastControl.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(closeButton);
+
+    dynamicControl.disabled = false;
+    dynamicControl.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(closeButton);
+
+    closeButton.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(dynamicControl);
+  });
+
+  it("closes the drawer and restores scroll when the desktop breakpoint becomes active", async () => {
+    let changeListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const addEventListener = jest.fn((event: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (event === "change") changeListener = listener;
+    });
+    const removeEventListener = jest.fn();
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: jest.fn(() => ({
+        matches: false,
+        addEventListener,
+        removeEventListener,
+      })),
+    });
+
+    try {
+      render(<AppShell>Contenido</AppShell>);
+      const trigger = openDrawer();
+      const triggerFocus = jest.spyOn(trigger, "focus");
+      triggerFocus.mockClear();
+
+      expect(document.body.style.overflow).toBe("hidden");
+      act(() => {
+        changeListener?.({ matches: true } as MediaQueryListEvent);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("mobile-navigation-drawer")).toBeNull();
+        expect(trigger.getAttribute("aria-expanded")).toBe("false");
+        expect(document.body.style.overflow).toBe("");
+      });
+      expect(triggerFocus).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: originalMatchMedia });
+    }
+  });
+
+  it("removes the desktop breakpoint listener on unmount", () => {
+    const removeEventListener = jest.fn();
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: jest.fn(() => ({
+        matches: false,
+        addEventListener: jest.fn(),
+        removeEventListener,
+      })),
+    });
+
+    try {
+      const { unmount } = render(<AppShell>Contenido</AppShell>);
+      unmount();
+      expect(removeEventListener).toHaveBeenCalledWith("change", expect.any(Function));
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: originalMatchMedia });
+    }
+  });
+
+  it("suppresses the assistant surface without unmounting it while the drawer is open", () => {
+    render(<AppShell>Contenido</AppShell>);
+    const assistantSurface = screen.getByTestId("assistant-shell-surface");
+
+    expect(assistantSurface.getAttribute("aria-hidden")).toBe("false");
+    expect(assistantSurface.querySelector("button")).toBeTruthy();
+
+    openDrawer();
+    expect(assistantSurface.getAttribute("aria-hidden")).toBe("true");
+    expect(assistantSurface.className).toContain("invisible");
+    expect(assistantSurface.className).toContain("pointer-events-none");
+    expect(assistantSurface.querySelector("button")).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(assistantSurface.getAttribute("aria-hidden")).toBe("false");
   });
 
   it("locks body scroll and restores trigger focus after Escape", async () => {

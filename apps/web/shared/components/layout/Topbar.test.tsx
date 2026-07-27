@@ -8,6 +8,8 @@ import * as notificationsApi from '@/features/notifications/notifications.api';
 import * as financeApi from '@/features/finance/services/finance.api';
 import * as sessionModule from '@/features/auth/session.storage';
 
+let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTION' }> = [];
+
 jest.mock('@/features/notifications/notifications.api', () => ({
   listNotifications: jest.fn(),
   getUnreadCount: jest.fn(),
@@ -33,7 +35,7 @@ jest.mock('@/features/impersonation/impersonation.storage', () => ({
 }));
 
 jest.mock('@/features/tenants/tenants.hooks', () => ({
-  useTenants: () => ({ data: [], isLoading: false, error: null }),
+  useTenants: () => ({ data: mockTenantData, isLoading: false, error: null }),
 }));
 
 jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
@@ -52,6 +54,8 @@ const mockMarkAsRead = jest.mocked(notificationsApi.markAsRead);
 const mockMarkAllAsRead = jest.mocked(notificationsApi.markAllAsRead);
 const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
+const mockSetSession = jest.mocked(sessionModule.setSession);
+const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
 
 const TENANT_ID = 'tenant-1';
 
@@ -887,5 +891,88 @@ describe('PaymentNotificationBell responsive dropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cerrar notificaciones' }));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+});
+
+
+describe('Topbar responsive tenant selector', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTenantData = [];
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace: jest.fn() });
+  });
+
+  it('renders distinct mobile and desktop selectors for multiple tenant memberships', () => {
+    const longTenantName = 'Complejo Residencial con una denominación extensa que debe permanecer contenida';
+    mockTenantData = [
+      { id: 'tenant-1', name: longTenantName, type: 'EDIFICIO_AUTOGESTION' },
+      { id: 'tenant-2', name: 'Edificio B', type: 'EDIFICIO_AUTOGESTION' },
+    ];
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+      activeTenantId: 'tenant-1',
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    const mobileSelect = document.getElementById('tenant-select-mobile') as HTMLSelectElement;
+    const desktopSelect = document.getElementById('tenant-select-desktop') as HTMLSelectElement;
+
+    expect(mobileSelect).toBeTruthy();
+    expect(desktopSelect).toBeTruthy();
+    expect(mobileSelect.className).toContain('min-h-11');
+    expect(mobileSelect.className).toContain('min-w-0');
+    expect(mobileSelect.parentElement?.className).toContain('lg:hidden');
+    expect(desktopSelect.parentElement?.className).toContain('hidden');
+    expect(desktopSelect.parentElement?.className).toContain('lg:flex');
+    expect(mobileSelect.id).not.toBe(desktopSelect.id);
+    expect(mobileSelect.className).toContain('flex-1');
+    expect(mobileSelect.options[0]?.text).toBe(longTenantName);
+  });
+
+  it('uses the existing tenant change logic from the mobile selector', async () => {
+    const replace = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace });
+    const session: NonNullable<ReturnType<typeof sessionModule.getSession>> = {
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+      activeTenantId: 'tenant-1',
+    };
+    mockGetSession.mockReturnValue(session);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    fireEvent.change(document.getElementById('tenant-select-mobile') as HTMLSelectElement, {
+      target: { value: 'tenant-2' },
+    });
+
+    await waitFor(() => {
+      expect(mockSetSession).toHaveBeenCalledWith({ ...session, activeTenantId: 'tenant-2' });
+      expect(mockSetLastTenant).toHaveBeenCalledWith('tenant-2');
+      expect(replace).toHaveBeenCalledWith('/tenant-2/dashboard');
+    });
+  });
+
+  it('does not render either selector for a single tenant membership', () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
+      activeTenantId: 'tenant-1',
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    expect(document.getElementById('tenant-select-mobile')).toBeNull();
+    expect(document.getElementById('tenant-select-desktop')).toBeNull();
   });
 });

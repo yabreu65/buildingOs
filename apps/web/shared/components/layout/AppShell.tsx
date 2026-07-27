@@ -9,9 +9,17 @@ import { ImpersonationBanner } from "../../../features/impersonation/Impersonati
 import { AssistantWidget, useAssistantContext } from "@/shared/components/assistant";
 import { PushPermissionControl } from "@/features/notifications/components/PushPermissionControl";
 
-function AssistantWrapper() {
+function AssistantWrapper({ isDrawerOpen }: { readonly isDrawerOpen: boolean }) {
   const context = useAssistantContext();
-  return <AssistantWidget context={context} defaultUseLlm={false} />;
+  return (
+    <div
+      data-testid="assistant-shell-surface"
+      aria-hidden={isDrawerOpen}
+      className={isDrawerOpen ? "invisible pointer-events-none" : undefined}
+    >
+      <AssistantWidget context={context} defaultUseLlm={false} />
+    </div>
+  );
 }
 
 function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
@@ -47,9 +55,6 @@ export default function AppShell({ children }: { readonly children: ReactNode })
     if (!isDrawerOpen) return;
 
     const previousOverflow = document.body.style.overflow;
-    const focusableElements = getFocusableElements(drawerPanelRef.current);
-    const firstFocusableElement = focusableElements[0];
-    const lastFocusableElement = focusableElements.at(-1);
 
     drawerCloseButtonRef.current?.focus();
     document.body.style.overflow = "hidden";
@@ -60,7 +65,12 @@ export default function AppShell({ children }: { readonly children: ReactNode })
         return;
       }
 
-      if (event.key !== "Tab" || !firstFocusableElement || !lastFocusableElement) return;
+      if (event.key !== "Tab") return;
+
+      const focusableElements = getFocusableElements(drawerPanelRef.current);
+      const firstFocusableElement = focusableElements[0];
+      const lastFocusableElement = focusableElements.at(-1);
+      if (!firstFocusableElement || !lastFocusableElement) return;
 
       const activeElement = document.activeElement;
       const isFocusInsideDrawer = drawerPanelRef.current?.contains(activeElement);
@@ -85,6 +95,20 @@ export default function AppShell({ children }: { readonly children: ReactNode })
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [closeDrawer, isDrawerOpen]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+
+    const desktopMediaQuery = window.matchMedia("(min-width: 1024px)");
+    const handleBreakpointChange = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        closeDrawer(false);
+      }
+    };
+
+    desktopMediaQuery.addEventListener("change", handleBreakpointChange);
+    return () => desktopMediaQuery.removeEventListener("change", handleBreakpointChange);
+  }, [closeDrawer]);
 
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
@@ -142,7 +166,7 @@ export default function AppShell({ children }: { readonly children: ReactNode })
           </div>
         </div>
       )}
-      <AssistantWrapper />
+      <AssistantWrapper isDrawerOpen={isDrawerOpen} />
     </div>
   );
 }
