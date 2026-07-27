@@ -55,4 +55,48 @@ describe('ContextSelector', () => {
       expect(onUnitChange).toHaveBeenCalledWith('building-2', 'unit-3');
     });
   });
+
+  it('keeps mobile controls contained and preserves callbacks with long labels', async () => {
+    const onBuildingChange = jest.fn().mockResolvedValue(undefined);
+    const onUnitChange = jest.fn().mockResolvedValue(undefined);
+    const longBuildingName = 'Edificio Residencial con una denominación muy larga para una pantalla móvil';
+
+    const { container } = render(
+      <ContextSelector
+        tenantId="tenant-1"
+        context={{ tenantId: 'tenant-1', activeBuildingId: 'building-1', activeUnitId: 'unit-1' }}
+        options={[{ id: 'building-1', name: longBuildingName }, { id: 'building-2', name: 'Edificio B' }]}
+        unitsByBuilding={{
+          'building-1': [{ id: 'unit-1', label: 'Unidad con una referencia extensa para móvil' }],
+          'building-2': [{ id: 'unit-2', label: 'B-01' }],
+        }}
+        onBuildingChange={onBuildingChange}
+        onUnitChange={onUnitChange}
+      />,
+    );
+
+    const root = container.firstElementChild;
+    const buildingSelect = screen.getByLabelText('Edificio');
+    const unitSelect = screen.getByLabelText('Unidad');
+
+    expect(root?.className).toContain('min-w-0');
+    expect(root?.className).toContain('sm:flex-row');
+    expect(buildingSelect.className).toContain('w-full');
+    expect(buildingSelect.className).toContain('min-h-11');
+    expect(unitSelect.className).toContain('w-full');
+    const longUnitLabel = 'Unidad con una referencia extensa para móvil';
+    const unitSummary = container.querySelector(`[title="${longUnitLabel}"]`);
+
+    expect(container.querySelector(`[title="${longBuildingName}"]`)?.getAttribute('title')).toBe(longBuildingName);
+    expect(unitSummary?.className).toContain('truncate');
+    expect(unitSummary?.className).toContain('min-w-0');
+    expect(unitSummary?.className).not.toContain('shrink-0');
+    expect(unitSummary?.textContent).toBe(longUnitLabel);
+
+    fireEvent.change(unitSelect, { target: { value: 'unit-1' } });
+
+    await waitFor(() => {
+      expect(onUnitChange).toHaveBeenCalledWith('building-1', 'unit-1');
+    });
+  });
 });

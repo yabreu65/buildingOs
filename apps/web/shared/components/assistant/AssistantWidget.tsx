@@ -1,26 +1,25 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { useRouter, useParams } from 'next/navigation';
-import { Send, Bot, Sparkles, X, Minimize2, ArrowRight, ExternalLink } from 'lucide-react';
-import type { AssistantMessage, AssistantAction, AssistantContext } from './useAssistant';
-import { getAssistantActionPath } from './action-route-map';
-import { createActionClickEvent, trackAssistantActionClick, getOrCreateSessionId } from './assistant-analytics';
-import { assistantApi, AssistantApiError, StructuredResponse } from '@/features/assistant/services/assistant.api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams } from 'next/navigation';
+import { Send, Bot, Sparkles, X, Minimize2 } from 'lucide-react';
+import type { AssistantMessage, AssistantContext } from './useAssistant';
+import { assistantApi, AssistantApiError } from '@/features/assistant/services/assistant.api';
 import { AssistantResponseRenderer } from './renderers';
 
 export interface AssistantWidgetProps {
   context: AssistantContext;
   defaultUseLlm?: boolean;
   className?: string;
+  suspendEscapeHandling?: boolean;
 }
 
 export function AssistantWidget({ 
   context, 
   defaultUseLlm = false,
-  className = '' 
+  className = '',
+  suspendEscapeHandling = false,
 }: AssistantWidgetProps) {
-  const router = useRouter();
   const params = useParams();
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -31,18 +30,43 @@ export function AssistantWidget({
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const toggleButtonRef = useRef<HTMLButtonElement>(null);
 
   const tenantId = params?.tenantId as string | undefined || context.tenantId;
   
-  const [sessionId] = useState(() => getOrCreateSessionId());
-
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
+
+  const closeAssistant = useCallback((restoreFocus = true) => {
+    setIsOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => toggleButtonRef.current?.focus());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    inputRef.current?.focus();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || suspendEscapeHandling) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeAssistant();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [closeAssistant, isOpen, suspendEscapeHandling]);
 
   const [conversationId] = useState(() => `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
 
@@ -150,38 +174,17 @@ export function AssistantWidget({
     setError(null);
   };
 
-  const handleActionClick = (action: AssistantAction, messageId: string, actionIndex: number, totalActions: number) => {
-    const path = getAssistantActionPath(action.key, tenantId);
-    const isMapped = path !== null;
-
-    const event = createActionClickEvent({
-      actionKey: action.key,
-      actionLabel: action.label,
-      tenantId,
-      currentRoute: context.route,
-      currentModule: context.currentModule,
-      targetPath: path,
-      isMapped,
-      sessionId,
-      messageId,
-      actionIndex,
-      totalActions,
-    });
-
-    trackAssistantActionClick(event);
-
-    if (path) {
-      router.push(path);
-    }
-  };
-
   return (
     <>
       {/* Toggle Button - Floating */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-colors ${className}`}
+        ref={toggleButtonRef}
+        type="button"
+        onClick={() => (isOpen ? closeAssistant(false) : setIsOpen(true))}
+        className={`fixed right-2 bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-50 flex min-h-11 max-w-[calc(100vw-1rem)] items-center justify-center gap-2 rounded-full bg-primary px-4 py-3 text-primary-foreground shadow-lg transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 sm:bottom-4 sm:right-4 sm:w-auto ${className}`}
         aria-label={isOpen ? 'Cerrar asistente' : 'Abrir asistente'}
+        aria-expanded={isOpen}
+        aria-controls="assistant-panel"
       >
         {isOpen ? <Minimize2 size={20} /> : <Bot size={20} />}
         {!isOpen && <span className="font-medium">Asistente</span>}
@@ -189,28 +192,37 @@ export function AssistantWidget({
 
       {/* Panel */}
       {isOpen && (
-        <div className="fixed bottom-20 right-4 w-96 h-[500px] bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col z-50">
+        <div
+          id="assistant-panel"
+          role="region"
+          aria-label="Asistente AI"
+          className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+3.5rem)] z-50 flex max-h-[calc(100dvh-env(safe-area-inset-top)-5rem)] min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl sm:inset-x-auto sm:bottom-20 sm:right-4 sm:h-[min(500px,calc(100dvh-6rem))] sm:w-96"
+        >
           {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center justify-between border-b border-border p-4">
+            <div className="flex min-w-0 items-center gap-2">
               <Bot size={24} className="text-blue-600" />
-              <div>
-                <h3 className="font-semibold text-gray-900 dark:text-white">Asistente AI</h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{context.role} • {context.currentModule || context.route}</p>
+              <div className="min-w-0">
+                <h3 className="truncate font-semibold">Asistente AI</h3>
+                <p className="truncate text-xs text-muted-foreground">{context.role} • {context.currentModule || context.route}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={clearChat}
-                className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                className="inline-flex size-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 title="Limpiar chat"
+                aria-label="Limpiar chat"
               >
                 <X size={18} />
               </button>
               <button
-                onClick={() => setIsOpen(false)}
-                className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                type="button"
+                onClick={() => closeAssistant()}
+                className="inline-flex size-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 title="Minimizar"
+                aria-label="Minimizar asistente"
               >
                 <Minimize2 size={18} />
               </button>
@@ -218,8 +230,8 @@ export function AssistantWidget({
           </div>
 
           {/* LLM Toggle */}
-          <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
+          <div className="shrink-0 border-b border-border bg-muted/50 px-4 py-2">
+            <label className="flex min-h-11 min-w-0 items-center gap-2 text-sm text-muted-foreground">
               <input
                 type="checkbox"
                 checked={useLlm}
@@ -232,7 +244,7 @@ export function AssistantWidget({
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {messages.length === 0 && (
               <div className="text-center text-gray-500 dark:text-gray-400 py-8">
                 <Bot size={40} className="mx-auto mb-2 opacity-50" />
@@ -265,7 +277,7 @@ export function AssistantWidget({
                       }}
                     />
                   ) : (
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    <p className="break-words text-sm whitespace-pre-wrap">{msg.content}</p>
                   )}
                   
                   {msg.role === 'assistant' && msg.llmUsed !== undefined && (
@@ -317,21 +329,24 @@ export function AssistantWidget({
           </div>
 
           {/* Input */}
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-            <div className="flex gap-2">
+          <div className="shrink-0 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="flex min-w-0 gap-2">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Escribí tu pregunta..."
-                className="flex-1 min-h-[40px] max-h-[120px] resize-none rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:text-white"
+                className="min-h-11 min-w-0 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 disabled={isLoading}
+                aria-label="Escribí tu pregunta"
               />
               <button
+                type="button"
                 onClick={sendMessage}
                 disabled={!input.trim() || isLoading}
-                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Enviar mensaje"
               >
                 <Send size={20} />
               </button>

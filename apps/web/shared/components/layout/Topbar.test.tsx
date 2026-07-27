@@ -3,10 +3,13 @@
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as notificationsApi from '@/features/notifications/notifications.api';
 import * as financeApi from '@/features/finance/services/finance.api';
 import * as sessionModule from '@/features/auth/session.storage';
+
+let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTION' }> = [];
 
 jest.mock('@/features/notifications/notifications.api', () => ({
   listNotifications: jest.fn(),
@@ -33,7 +36,7 @@ jest.mock('@/features/impersonation/impersonation.storage', () => ({
 }));
 
 jest.mock('@/features/tenants/tenants.hooks', () => ({
-  useTenants: () => ({ data: [], isLoading: false, error: null }),
+  useTenants: () => ({ data: mockTenantData, isLoading: false, error: null }),
 }));
 
 jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
@@ -52,14 +55,22 @@ const mockMarkAsRead = jest.mocked(notificationsApi.markAsRead);
 const mockMarkAllAsRead = jest.mocked(notificationsApi.markAllAsRead);
 const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
+const mockSetSession = jest.mocked(sessionModule.setSession);
+const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
 
 const TENANT_ID = 'tenant-1';
 
 let PaymentNotificationBell: React.ComponentType<{ tenantId: string }>;
+let Topbar: React.ComponentType<{
+  isMobileMenuOpen?: boolean;
+  menuButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  onMobileMenuToggle?: () => void;
+}>;
 
 beforeAll(async () => {
   const mod = await import('@/shared/components/layout/Topbar');
   PaymentNotificationBell = mod.PaymentNotificationBell;
+  Topbar = mod.default;
 });
 
 function renderBell(tenantId = TENANT_ID) {
@@ -824,6 +835,227 @@ describe('PaymentNotificationBell', () => {
 
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/tenant-1/finanzas?tab=payments');
+    });
+  });
+});
+
+
+describe("Topbar mobile menu trigger", () => {
+  it("exposes the mobile navigation trigger with its expanded state", () => {
+    const toggle = jest.fn();
+    const buttonRef = { current: null } as React.RefObject<HTMLButtonElement | null>;
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} menuButtonRef={buttonRef} onMobileMenuToggle={toggle} />
+      </QueryClientProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Abrir menú de navegación" });
+    expect(trigger.getAttribute("aria-controls")).toBe("mobile-navigation");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(trigger);
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PaymentNotificationBell responsive dropdown', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockGetUnreadCount.mockResolvedValue(0);
+    mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
+    mockListPendingPayments.mockResolvedValue([]);
+  });
+
+  it('keeps the mobile dropdown inside the viewport and restores focus after closing', async () => {
+    renderBell();
+    const trigger = screen.getByRole('button', { name: /notificaciones/i });
+
+    fireEvent.click(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByRole('menu')).toBeTruthy();
+    });
+
+    const dropdown = screen.getByRole('menu');
+    expect(dropdown.className).toContain('fixed');
+    expect(dropdown.className).toContain('inset-x-2');
+    expect(dropdown.className).toContain('max-h-[calc(100dvh-env(safe-area-inset-top)-4.5rem)]');
+    expect(dropdown.className).toContain('lg:absolute');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar notificaciones' }));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+});
+
+
+describe('Topbar responsive tenant selector', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTenantData = [];
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace: jest.fn() });
+  });
+
+  it('renders distinct mobile and desktop selectors for multiple tenant memberships', () => {
+    const longTenantName = 'Complejo Residencial con una denominación extensa que debe permanecer contenida';
+    mockTenantData = [
+      { id: 'tenant-1', name: longTenantName, type: 'EDIFICIO_AUTOGESTION' },
+      { id: 'tenant-2', name: 'Edificio B', type: 'EDIFICIO_AUTOGESTION' },
+    ];
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+      activeTenantId: 'tenant-1',
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    const mobileSelect = document.getElementById('tenant-select-mobile') as HTMLSelectElement;
+    const desktopSelect = document.getElementById('tenant-select-desktop') as HTMLSelectElement;
+
+    expect(mobileSelect).toBeTruthy();
+    expect(desktopSelect).toBeTruthy();
+    expect(mobileSelect.className).toContain('min-h-11');
+    expect(mobileSelect.className).toContain('min-w-0');
+    expect(mobileSelect.parentElement?.className).toContain('lg:hidden');
+    expect(desktopSelect.parentElement?.className).toContain('hidden');
+    expect(desktopSelect.parentElement?.className).toContain('lg:flex');
+    expect(mobileSelect.id).not.toBe(desktopSelect.id);
+    expect(mobileSelect.className).toContain('flex-1');
+    expect(mobileSelect.options[0]?.text).toBe(longTenantName);
+  });
+
+  it('uses the existing tenant change logic from the mobile selector', async () => {
+    const replace = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace });
+    const session: NonNullable<ReturnType<typeof sessionModule.getSession>> = {
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+      activeTenantId: 'tenant-1',
+    };
+    mockGetSession.mockReturnValue(session);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    fireEvent.change(document.getElementById('tenant-select-mobile') as HTMLSelectElement, {
+      target: { value: 'tenant-2' },
+    });
+
+    await waitFor(() => {
+      expect(mockSetSession).toHaveBeenCalledWith({ ...session, activeTenantId: 'tenant-2' });
+      expect(mockSetLastTenant).toHaveBeenCalledWith('tenant-2');
+      expect(replace).toHaveBeenCalledWith('/tenant-2/dashboard');
+    });
+  });
+
+  it('does not render either selector for a single tenant membership', () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
+      activeTenantId: 'tenant-1',
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Topbar /></QueryClientProvider>);
+
+    expect(document.getElementById('tenant-select-mobile')).toBeNull();
+    expect(document.getElementById('tenant-select-desktop')).toBeNull();
+  });
+});
+
+
+function MobileMenuHarness() {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  return (
+    <Topbar
+      isMobileMenuOpen={isMobileMenuOpen}
+      onMobileMenuToggle={() => setIsMobileMenuOpen((open) => !open)}
+    />
+  );
+}
+
+describe('PaymentNotificationBell drawer coordination', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTenantData = [];
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockGetUnreadCount.mockResolvedValue(0);
+    mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
+    mockListPendingPayments.mockResolvedValue([]);
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace: jest.fn() });
+  });
+
+  it('closes an open notification dropdown when mobile-menu state changes programmatically', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} />
+      </QueryClientProvider>,
+    );
+    const notificationButton = screen.getByRole('button', { name: /notificaciones/i });
+
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(notificationButton.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+  });
+
+  it('closes notifications through the hamburger interaction without requiring mousedown', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MobileMenuHarness />
+      </QueryClientProvider>,
+    );
+
+    const notificationButton = screen.getByRole('button', { name: /notificaciones/i });
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir menú de navegación' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(notificationButton.getAttribute('aria-expanded')).toBe('false');
     });
   });
 });

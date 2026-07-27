@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { routes } from "../../../shared/lib/routes";
@@ -10,81 +11,113 @@ import { useTenants } from "../../../features/tenants/tenants.hooks";
 import { t } from "@/i18n";
 
 interface NavItemProps {
-  href: string;
-  label: string;
+  readonly href: string;
+  readonly label: string;
+  readonly isActive: boolean;
+  readonly onNavigate?: () => void;
+  readonly variant: "desktop" | "drawer";
 }
 
-const NavItem = ({ href, label }: NavItemProps) => {
-  const pathname = usePathname();
-  const isActive = pathname === href;
+interface SidebarProps {
+  readonly className?: string;
+  readonly footer?: ReactNode;
+  readonly id?: string;
+  readonly onNavigate?: () => void;
+  readonly variant?: "desktop" | "drawer";
+}
 
-  return (
-    <Link
-      href={href}
-      className={[
-        "px-3 py-2 rounded-md text-sm transition-colors",
-        "hover:bg-muted",
-        isActive
-          ? "bg-primary text-primary-foreground"
-          : "text-foreground",
-      ].join(" ")}
-    >
-      {label}
-    </Link>
-  );
-};
+const NavItem = ({ href, label, isActive, onNavigate, variant }: NavItemProps) => (
+  <Link
+    href={href}
+    onClick={onNavigate}
+    className={[
+      variant === "drawer"
+        ? "flex min-h-11 items-center rounded-md px-3 text-sm transition-colors"
+        : "rounded-md px-3 py-2 text-sm transition-colors",
+      "hover:bg-muted",
+      isActive ? "bg-primary text-primary-foreground" : "text-foreground",
+    ].join(" ")}
+  >
+    {label}
+  </Link>
+);
 
-export const Sidebar = () => {
+export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop" }: SidebarProps) => {
   const tenantId = useTenantId();
+  const pathname = usePathname();
   const { data: tenants } = useTenants();
-  const tenantName = tenants?.find(t => t.id === tenantId)?.name;
+  const tenantName = tenants?.find((tenant) => tenant.id === tenantId)?.name;
   const isSuperAdmin = useIsSuperAdmin();
   const isResident = useHasRole("RESIDENT");
   const { isImpersonating } = useImpersonation();
 
   if ((isSuperAdmin && !isImpersonating) || !tenantId) return null;
 
+  const isActive = (href: string) =>
+    pathname === href || (
+      isResident &&
+      href === `/${tenantId}/resident/tickets` &&
+      pathname.startsWith(`/${tenantId}/tickets/`)
+    );
+
+  const navItem = (href: string, label: string) => (
+    <NavItem
+      key={href}
+      href={href}
+      label={label}
+      isActive={isActive(href)}
+      onNavigate={onNavigate}
+      variant={variant}
+    />
+  );
+
   return (
-    <aside className="w-64 border-r border-border bg-card text-card-foreground">
+    <aside
+      id={id}
+      className={className ?? (
+        variant === "drawer"
+          ? "block min-h-0 w-full flex-1 border-r border-border bg-card text-card-foreground"
+          : "hidden w-64 border-r border-border bg-card text-card-foreground lg:block"
+      )}
+    >
       <div className="p-4">
-        <div className="font-semibold text-base">BuildingOS</div>
+        <div className="text-base font-semibold">BuildingOS</div>
         {tenantName && (
           <div className="mt-1 text-xs text-muted-foreground">
-            {t('common.condominium')}: <span className="font-medium text-foreground">{tenantName}</span>
+            {t("common.condominium")}: <span className="font-medium text-foreground">{tenantName}</span>
           </div>
         )}
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-4">
-        <NavItem href={routes.tenantDashboard(tenantId)} label={t('navigation.dashboard')} />
+        {navItem(routes.tenantDashboard(tenantId), t("navigation.dashboard"))}
 
         {isResident ? (
           <>
-            <NavItem href={`/${tenantId}/resident/payments`} label={t('navigation.payments')} />
-            <NavItem href={`/${tenantId}/resident/announcements`} label={t('navigation.communications')} />
-            <NavItem href={`/${tenantId}/resident/tickets`} label={t('navigation.tickets')} />
-            <NavItem href={`/${tenantId}/resident/unit`} label={t('navigation.myUnit')} />
-            <NavItem href={`/${tenantId}/resident/documents`} label={t('navigation.documents')} />
+            {navItem(`/${tenantId}/resident/payments`, t("navigation.payments"))}
+            {navItem(`/${tenantId}/resident/announcements`, t("navigation.communications"))}
+            {navItem(`/${tenantId}/resident/tickets`, t("navigation.tickets"))}
+            {navItem(`/${tenantId}/resident/unit`, t("navigation.myUnit"))}
+            {navItem(`/${tenantId}/resident/documents`, t("navigation.documents"))}
           </>
         ) : (
           <>
-            <NavItem href={routes.buildingsList(tenantId)} label={t('navigation.buildings')} />
-            <NavItem href={`/${tenantId}/units`} label={t('navigation.units')} />
-            <NavItem href={`/${tenantId}/finanzas`} label={t('navigation.finanzas')} />
-            <NavItem href={`/${tenantId}/finance/categories`} label={t('navigation.rubros')} />
-            <NavItem href={routes.tenantReports(tenantId)} label={t('navigation.reports')} />
-
-
-            <div className="mt-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              {t('navigation.settings')}
+            {navItem(routes.buildingsList(tenantId), t("navigation.buildings"))}
+            {navItem(`/${tenantId}/units`, t("navigation.units"))}
+            {navItem(`/${tenantId}/finanzas`, t("navigation.finanzas"))}
+            {navItem(`/${tenantId}/finance/categories`, t("navigation.rubros"))}
+            {navItem(routes.tenantReports(tenantId), t("navigation.reports"))}
+            <div className="mt-3 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("navigation.settings")}
             </div>
-            <NavItem href={`/${tenantId}/settings/general`} label={t('settings.general')} />
-            <NavItem href={routes.onboardingImport(tenantId)} label="Onboarding import" />
-            <NavItem href={`/${tenantId}/settings/members`} label={t('navigation.residents')} />
-            <NavItem href={`/${tenantId}/settings/team`} label={t('sidebar.team')} />
+            {navItem(`/${tenantId}/settings/general`, t("settings.general"))}
+            {navItem(routes.onboardingImport(tenantId), "Onboarding import")}
+            {navItem(`/${tenantId}/settings/members`, t("navigation.residents"))}
+            {navItem(`/${tenantId}/settings/team`, t("sidebar.team"))}
           </>
         )}
       </nav>
+      {footer}
     </aside>
   );
 };

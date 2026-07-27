@@ -59,7 +59,8 @@ describe('ResidentContextSwitcher', () => {
     );
 
     expect(screen.getByText('Contexto activo')).toBeTruthy();
-    expect(screen.getByText('Edificio A · A-01')).toBeTruthy();
+    expect(screen.getByText('Edificio A')).toBeTruthy();
+    expect(screen.getByText('A-01')).toBeTruthy();
     expect(screen.queryByLabelText('Edificio')).toBeNull();
   });
 
@@ -112,5 +113,47 @@ describe('ResidentContextSwitcher', () => {
       expect(setActiveUnit).toHaveBeenCalledWith('building-2', 'unit-2');
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['residentContext', 'tenant-1', 'user-1'] });
     });
+  });
+
+  it('contains a long building name while keeping the selected unit visible', () => {
+    const longBuildingName = 'Complejo Residencial con un nombre largo que no debe ampliar el viewport móvil';
+    mockedUseAuthSession.mockReturnValue({
+      user: { id: 'user-1', email: 'resident@test.com', name: 'Resident' },
+      memberships: [],
+      activeTenantId: 'tenant-1',
+    });
+    mockedUseContextManager.mockReturnValue({
+      context: { tenantId: 'tenant-1', activeBuildingId: 'building-1', activeUnitId: 'unit-1' },
+      options: {
+        buildings: [{ id: 'building-1', name: longBuildingName }],
+        unitsByBuilding: {
+          'building-1': [{
+            id: 'unit-1',
+            code: 'A-01',
+            label: 'Unidad con una referencia extensa para una pantalla móvil',
+          }],
+        },
+      },
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+      setActiveBuilding: jest.fn(),
+      setActiveUnit: jest.fn(),
+    });
+
+    const { container } = render(
+      <ResidentContextSwitcher tenantId="tenant-1" />,
+      { wrapper: createWrapper(new QueryClient()) },
+    );
+
+    const longUnitLabel = 'Unidad con una referencia extensa para una pantalla móvil';
+    const unitSummary = container.querySelector(`[title="${longUnitLabel}"]`);
+
+    expect(container.querySelector(`[title="${longBuildingName}"]`)?.getAttribute('title')).toBe(longBuildingName);
+    expect(unitSummary?.className).toContain('truncate');
+    expect(unitSummary?.className).toContain('min-w-0');
+    expect(unitSummary?.className).not.toContain('shrink-0');
+    expect(screen.getByText(longUnitLabel)).toBeTruthy();
+    expect(container.querySelector('[class*="min-w-0"]')).toBeTruthy();
   });
 });

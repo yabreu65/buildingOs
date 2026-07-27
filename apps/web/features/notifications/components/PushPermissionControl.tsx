@@ -1,123 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import { BellOff, BellRing } from 'lucide-react';
-import {
-  getExistingPushSubscription,
-  getVapidPublicKey,
-  isWebPushSupported,
-  PushSubscriptionError,
-  subscribeToWebPush,
-  unsubscribeFromWebPush,
-} from '../push-subscription.api';
+import { usePushPermission } from './PushPermissionProvider';
 
-type PermissionState = NotificationPermission | 'unsupported';
-
-interface PushStatus {
-  browserSubscribed: boolean;
-  configured: boolean;
-  permission: PermissionState;
-  subscribed: boolean;
-  supported: boolean;
-}
-
-interface PushPermissionControlProps {
-  tenantId: string;
-}
-
-const initialStatus: PushStatus = {
-  browserSubscribed: false,
-  configured: false,
-  permission: 'default',
-  subscribed: false,
-  supported: false,
-};
-
-export function PushPermissionControl({ tenantId }: PushPermissionControlProps) {
-  const [status, setStatus] = useState<PushStatus>(initialStatus);
-  const [isBusy, setIsBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshStatus = useCallback(async (activeTenantSubscribed?: boolean) => {
-    const supported = isWebPushSupported();
-    const configured = Boolean(getVapidPublicKey());
-
-    if (!supported) {
-      setStatus({
-        browserSubscribed: false,
-        configured,
-        permission: 'unsupported',
-        subscribed: false,
-        supported,
-      });
-      return;
-    }
-
-    const baseStatus = {
-      configured,
-      permission: Notification.permission,
-      supported,
-    } satisfies Pick<PushStatus, 'configured' | 'permission' | 'supported'>;
-
-    setStatus((current) => ({
-      ...current,
-      ...baseStatus,
-      subscribed: activeTenantSubscribed ?? current.subscribed,
-    }));
-
-    const subscription = await getExistingPushSubscription();
-    setStatus((current) => ({
-      ...current,
-      ...baseStatus,
-      browserSubscribed: Boolean(subscription),
-      subscribed: activeTenantSubscribed ?? current.subscribed,
-    }));
-  }, []);
-
-  useEffect(() => {
-    refreshStatus().catch(() => {
-      setError('No pudimos revisar el estado de alertas push.');
-    });
-  }, [refreshStatus]);
-
-  const handleEnable = async () => {
-    setIsBusy(true);
-    setError(null);
-    setMessage(null);
-
-    try {
-      await subscribeToWebPush(tenantId);
-      setMessage('Alertas push activadas en este dispositivo.');
-      await refreshStatus(true);
-    } catch (caught) {
-      setError(getUserFacingError(caught));
-      await refreshStatus().catch(() => undefined);
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const handleDisable = async () => {
-    setIsBusy(true);
-    setError(null);
-    setMessage(null);
-
-    try {
-      const result = await unsubscribeFromWebPush(tenantId);
-      if (result.unsubscribed) {
-        setMessage('Alertas push desactivadas en este dispositivo.');
-      } else {
-        setError(getIncompleteUnsubscribeMessage(result.endpoint));
-      }
-      await refreshStatus(false);
-    } catch (caught) {
-      setError(getUserFacingError(caught));
-      await refreshStatus().catch(() => undefined);
-    } finally {
-      setIsBusy(false);
-    }
-  };
+export function PushPermissionControl() {
+  const { error, handleDisable, handleEnable, isBusy, message, status } = usePushPermission();
 
   const disabledReason = getDisabledReason(status);
   const isDisabled = isBusy || Boolean(disabledReason);
@@ -138,7 +25,7 @@ export function PushPermissionControl({ tenantId }: PushPermissionControlProps) 
       </div>
       <button
         type="button"
-        className="whitespace-nowrap rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={status.subscribed ? handleDisable : handleEnable}
         disabled={isDisabled}
         title={disabledReason ?? actionLabel}
@@ -149,7 +36,12 @@ export function PushPermissionControl({ tenantId }: PushPermissionControlProps) 
   );
 }
 
-function getStatusLabel(status: PushStatus): string {
+function getStatusLabel(status: {
+  readonly configured: boolean;
+  readonly permission: NotificationPermission | 'unsupported';
+  readonly subscribed: boolean;
+  readonly supported: boolean;
+}): string {
   if (!status.supported) {
     return 'Alertas no compatibles';
   }
@@ -165,7 +57,11 @@ function getStatusLabel(status: PushStatus): string {
   return 'Alertas push disponibles';
 }
 
-function getDisabledReason(status: PushStatus): string | null {
+function getDisabledReason(status: {
+  readonly configured: boolean;
+  readonly permission: NotificationPermission | 'unsupported';
+  readonly supported: boolean;
+}): string | null {
   if (!status.supported) {
     return 'Este navegador no permite alertas push.';
   }
@@ -176,34 +72,4 @@ function getDisabledReason(status: PushStatus): string | null {
     return 'El permiso está bloqueado en el navegador.';
   }
   return null;
-}
-
-function getUserFacingError(caught: unknown): string {
-  if (caught instanceof PushSubscriptionError) {
-    if (caught.code === 'permission-denied') {
-      return 'No activamos alertas porque el permiso no fue concedido.';
-    }
-    if (caught.code === 'missing-public-key') {
-      return 'Falta configurar la clave pública VAPID.';
-    }
-    if (caught.code === 'missing-tenant') {
-      return 'Falta el contexto del consorcio activo.';
-    }
-    if (caught.code === 'missing-subscription-keys') {
-      return 'No pudimos activar alertas porque el navegador no entregó las claves necesarias.';
-    }
-    if (caught.code === 'unsupported') {
-      return 'Este navegador no permite alertas push.';
-    }
-  }
-
-  return 'No pudimos actualizar las alertas push.';
-}
-
-function getIncompleteUnsubscribeMessage(endpoint: string | null): string {
-  if (!endpoint) {
-    return 'No encontramos una suscripción push local para desactivar.';
-  }
-
-  return 'Desactivamos el registro, pero el navegador no confirmó la baja local.';
 }
