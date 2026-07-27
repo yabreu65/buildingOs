@@ -29,6 +29,7 @@ import Card from '@/shared/components/ui/Card';
 import Input from '@/shared/components/ui/Input';
 import Select from '@/shared/components/ui/Select';
 import Button from '@/shared/components/ui/Button';
+import Badge, { type BadgeVariant } from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
@@ -91,14 +92,14 @@ function paymentStatusLabel(status: string): string {
   return labels[status] ?? status;
 }
 
-function paymentStatusColor(status: string): string {
-  const colors: Record<string, string> = {
-    SUBMITTED: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    APPROVED: 'bg-green-100 text-green-700 border-green-200',
-    REJECTED: 'bg-red-100 text-red-700 border-red-200',
-    RECONCILED: 'bg-blue-100 text-blue-700 border-blue-200',
+function paymentStatusVariant(status: string): BadgeVariant {
+  const variants: Record<string, BadgeVariant> = {
+    SUBMITTED: 'warning',
+    APPROVED: 'success',
+    REJECTED: 'danger',
+    RECONCILED: 'info',
   };
-  return colors[status] ?? 'bg-muted text-muted-foreground border-border';
+  return variants[status] ?? 'muted';
 }
 
 interface PaymentFormData {
@@ -773,7 +774,7 @@ export const ResidentPaymentsPage = () => {
             <DollarSign className="text-blue-500 mt-0.5" size={22} />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Próximo vencimiento</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-2xl font-bold text-foreground">
                 {nextDueCharge ? formatPaymentDisplayDate(nextDueCharge.dueDate) : '—'}
               </p>
               {nextDueCharge && (
@@ -790,7 +791,7 @@ export const ResidentPaymentsPage = () => {
             <CreditCard className="text-green-500 mt-0.5" size={22} />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Último pago</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-2xl font-bold text-foreground">
                 {lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency, getLocaleForCurrency(lastPayment.currency)) : '—'}
               </p>
               {lastPayment && (
@@ -942,9 +943,9 @@ export const ResidentPaymentsPage = () => {
                         Ver recibo
                       </button>
                     ) : null}
-                    <span className={`px-2 py-1 rounded text-xs font-medium border whitespace-nowrap ${paymentStatusColor(payment.status)}`}>
+                    <Badge variant={paymentStatusVariant(payment.status)} className="whitespace-nowrap">
                       {paymentStatusLabel(payment.status)}
-                    </span>
+                    </Badge>
                   </div>
                 </div>
               );

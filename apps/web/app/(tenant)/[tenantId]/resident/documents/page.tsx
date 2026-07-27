@@ -19,6 +19,7 @@ import { useContextOptions } from '../../../../../features/context/useContextOpt
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import Card from '../../../../../shared/components/ui/Card';
+import Badge, { type BadgeVariant } from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import {
   Document,
@@ -56,11 +57,11 @@ const PAYMENT_STATUS_LABELS: Record<string, string> = {
   RECONCILED: 'Conciliado',
 };
 
-const PAYMENT_STATUS_STYLES: Record<string, string> = {
-  SUBMITTED: 'bg-yellow-100 text-yellow-800',
-  APPROVED: 'bg-green-100 text-green-800',
-  REJECTED: 'bg-red-100 text-red-800',
-  RECONCILED: 'bg-blue-100 text-blue-800',
+const PAYMENT_STATUS_VARIANTS: Record<string, BadgeVariant> = {
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  RECONCILED: 'info',
 };
 
 function formatDate(dateValue: string): string {
@@ -430,12 +431,12 @@ export default function ResidentDocumentsPage() {
         </h1>
         <p className="mt-1 text-muted-foreground">{tenantName}</p>
 
-        <Card className="mt-6 border-yellow-300 bg-yellow-50 p-4">
+        <Card className="mt-6 border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-900/60 dark:bg-yellow-950/40">
           <div className="flex items-center gap-2">
-            <AlertCircle className="text-yellow-600" size={20} />
+            <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
             <div>
-              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
-              <p className="text-sm text-yellow-700">Comunicate con la administración para que te asignen una unidad.</p>
+              <p className="font-medium text-yellow-800 dark:text-yellow-200">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
             </div>
           </div>
         </Card>
@@ -457,16 +458,16 @@ export default function ResidentDocumentsPage() {
       </div>
 
       {listErrorMessage && (
-        <Card className="border-red-200 bg-red-50 p-4">
+        <Card className="border-red-200 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-950/40">
           <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 text-red-600" size={20} />
+            <AlertCircle className="mt-0.5 text-red-600 dark:text-red-400" size={20} />
             <div className="space-y-1">
-              <p className="font-medium text-red-800">No pudimos cargar los documentos</p>
-              <p className="text-sm text-red-700">{listErrorMessage}</p>
+              <p className="font-medium text-red-800 dark:text-red-200">No pudimos cargar los documentos</p>
+              <p className="text-sm text-red-700 dark:text-red-300">{listErrorMessage}</p>
               <button
                 type="button"
                 onClick={() => void refetch()}
-                className="text-sm font-medium text-red-700 hover:underline"
+                className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
               >
                 Reintentar
               </button>
@@ -476,23 +477,23 @@ export default function ResidentDocumentsPage() {
       )}
 
       {openError && (
-        <Card className="border-red-200 bg-red-50 p-4">
+        <Card className="border-red-200 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-950/40">
           <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 text-red-600" size={20} />
+            <AlertCircle className="mt-0.5 text-red-600 dark:text-red-400" size={20} />
             <div className="space-y-1">
-              <p className="font-medium text-red-800">
+              <p className="font-medium text-red-800 dark:text-red-200">
                 {openErrorDocumentTitle
                   ? `No pudimos abrir "${openErrorDocumentTitle}"`
                   : 'No pudimos abrir el documento'}
               </p>
-              <p className="text-sm text-red-700">{openError}</p>
+              <p className="text-sm text-red-700 dark:text-red-300">{openError}</p>
               <button
                 type="button"
                 onClick={() => {
                   setOpenError(null);
                   setOpenErrorDocumentTitle(null);
                 }}
-                className="text-sm font-medium text-red-700 hover:underline"
+                className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
               >
                 Cerrar
               </button>
@@ -628,13 +629,9 @@ export default function ResidentDocumentsPage() {
                             {formatCurrency(document.payment.amount, document.payment.currency)}
                           </span>
                           {document.payment.status && (
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                PAYMENT_STATUS_STYLES[document.payment.status] ?? 'bg-gray-100 text-gray-800'
-                              }`}
-                            >
+                            <Badge variant={PAYMENT_STATUS_VARIANTS[document.payment.status] ?? 'muted'}>
                               {PAYMENT_STATUS_LABELS[document.payment.status] ?? document.payment.status}
-                            </span>
+                            </Badge>
                           )}
                           {document.payment.period && (
                             <span className="text-muted-foreground">

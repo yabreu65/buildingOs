@@ -10,6 +10,7 @@ import { useTenantId } from '@/features/tenancy/tenant.hooks';
 import { useResidentContext } from '@/features/resident/hooks/useResidentContext';
 import { BuildingIcon, Bell, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
 import Card from '@/shared/components/ui/Card';
+import Badge from '@/shared/components/ui/Badge';
 
 const ResidentAnnouncementsPage = () => {
   const tenantId = useTenantId();
@@ -174,12 +175,12 @@ const ResidentAnnouncementsPage = () => {
 
   if (error) {
     return (
-      <Card className="p-6 border-red-200 bg-red-50">
+      <Card className="p-6 border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/40">
         <div className="flex items-start gap-3">
-          <AlertCircle className="text-red-600 mt-0.5" size={20} />
+          <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
           <div className="space-y-1">
-            <p className="font-medium text-red-800">No pudimos cargar los comunicados</p>
-            <p className="text-sm text-red-700">{error}</p>
+            <p className="font-medium text-red-800 dark:text-red-200">No pudimos cargar los comunicados</p>
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
           </div>
         </div>
         <button
@@ -208,13 +209,13 @@ const ResidentAnnouncementsPage = () => {
       </div>
 
       {markReadError && (
-        <Card className="p-4 mb-4 border-amber-200 bg-amber-50">
-          <p className="text-sm text-amber-800">{markReadError}</p>
-          <button
-            type="button"
-            onClick={() => setMarkReadError(null)}
-            className="mt-2 text-sm font-medium text-amber-800 hover:underline"
-          >
+      <Card className="p-4 mb-4 border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/40">
+        <p className="text-sm text-amber-800 dark:text-amber-200">{markReadError}</p>
+        <button
+          type="button"
+          onClick={() => setMarkReadError(null)}
+          className="mt-2 text-sm font-medium text-amber-800 hover:underline dark:text-amber-200"
+        >
             Cerrar
           </button>
         </Card>
@@ -260,9 +261,7 @@ const ResidentAnnouncementsPage = () => {
                         <span>{formatDate(comm.publishedAt)}</span>
                       )}
                       {comm.priority === 'URGENT' && (
-                        <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium">
-                          Urgente
-                        </span>
+                        <Badge variant="danger">Urgente</Badge>
                       )}
                       {comm.scopeType === 'BUILDING' && comm.buildingIds.length > 0 && (
                         <span className="flex items-center gap-1">
