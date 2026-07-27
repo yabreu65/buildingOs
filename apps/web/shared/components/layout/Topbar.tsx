@@ -7,9 +7,9 @@ import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
-import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home } from 'lucide-react';
+import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type RefObject } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
@@ -189,7 +189,7 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       <button
         ref={buttonRef}
         onClick={handleToggle}
-        className="relative p-2 rounded-lg hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        className="relative inline-flex size-11 items-center justify-center rounded-lg hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         title="Notificaciones"
         aria-label={`Notificaciones${badgeCount > 0 ? `, ${badgeCount} sin leer` : ''}`}
         aria-expanded={isOpen}
@@ -207,7 +207,7 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
         <div
           id="notification-dropdown"
           role="menu"
-          className="absolute right-0 top-full mt-2 w-80 bg-card border rounded-lg shadow-lg z-50 overflow-hidden"
+          className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 max-h-[calc(100dvh-5rem)] overflow-hidden rounded-lg border bg-card shadow-lg sm:inset-x-auto sm:right-3 sm:w-80 lg:absolute lg:right-0 lg:top-full lg:mt-2 lg:w-80"
         >
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold">Notificaciones</span>
@@ -337,7 +337,17 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   );
 }
 
-export default function Topbar() {
+interface TopbarProps {
+  readonly isMobileMenuOpen?: boolean;
+  readonly menuButtonRef?: RefObject<HTMLButtonElement | null>;
+  readonly onMobileMenuToggle?: () => void;
+}
+
+export default function Topbar({
+  isMobileMenuOpen = false,
+  menuButtonRef,
+  onMobileMenuToggle,
+}: TopbarProps) {
   const router = useRouter();
   const params = useParams();
   const urlTenantId = params?.tenantId as string | undefined;
@@ -410,12 +420,25 @@ export default function Topbar() {
   }));
 
   return (
-    <header className="h-14 border-b border-border bg-card text-card-foreground flex items-center justify-between px-4">
-      <div className="flex items-center gap-4">
-        <div className="text-sm font-semibold">BuildingOS</div>
+    <header className="flex min-h-14 items-center justify-between gap-2 border-b border-border bg-card px-3 text-card-foreground sm:px-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+        {onMobileMenuToggle && (
+          <button
+            ref={menuButtonRef}
+            type="button"
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring lg:hidden"
+            onClick={onMobileMenuToggle}
+            aria-label="Abrir menú de navegación"
+            aria-expanded={isMobileMenuOpen}
+            aria-controls="mobile-navigation"
+          >
+            <Menu className="size-5" aria-hidden="true" />
+          </button>
+        )}
+        <div className="truncate text-sm font-semibold">BuildingOS</div>
 
         {canSelectTenant ? (
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 lg:flex">
             <label htmlFor="tenant-select" className="text-xs text-muted-foreground">
               {isLoading ? 'Cargando...' : 'Edificio:'}
             </label>
@@ -439,21 +462,21 @@ export default function Topbar() {
             )}
           </div>
         ) : (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium">
+          <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
             {activeTenantName}
           </span>
         )}
       </div>
 
-      <div className="flex items-center gap-3">
-        {urlTenantId && <PushPermissionControl tenantId={urlTenantId} />}
+      <div className="flex shrink-0 items-center gap-1 sm:gap-3">
+        {urlTenantId && <div className="hidden lg:block"><PushPermissionControl tenantId={urlTenantId} /></div>}
         {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} />}
-        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium">
+        <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
           {roleLabel}
         </span>
 
         <button
-          className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 transition"
+          className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
           onClick={handleLogout}
         >
           Cerrar sesión

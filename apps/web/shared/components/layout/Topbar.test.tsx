@@ -56,10 +56,16 @@ const mockGetSession = jest.mocked(sessionModule.getSession);
 const TENANT_ID = 'tenant-1';
 
 let PaymentNotificationBell: React.ComponentType<{ tenantId: string }>;
+let Topbar: React.ComponentType<{
+  isMobileMenuOpen?: boolean;
+  menuButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  onMobileMenuToggle?: () => void;
+}>;
 
 beforeAll(async () => {
   const mod = await import('@/shared/components/layout/Topbar');
   PaymentNotificationBell = mod.PaymentNotificationBell;
+  Topbar = mod.default;
 });
 
 function renderBell(tenantId = TENANT_ID) {
@@ -825,5 +831,27 @@ describe('PaymentNotificationBell', () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/tenant-1/finanzas?tab=payments');
     });
+  });
+});
+
+
+describe("Topbar mobile menu trigger", () => {
+  it("exposes the mobile navigation trigger with its expanded state", () => {
+    const toggle = jest.fn();
+    const buttonRef = { current: null } as React.RefObject<HTMLButtonElement | null>;
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} menuButtonRef={buttonRef} onMobileMenuToggle={toggle} />
+      </QueryClientProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Abrir menú de navegación" });
+    expect(trigger.getAttribute("aria-controls")).toBe("mobile-navigation");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(trigger);
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
 });
