@@ -855,3 +855,37 @@ describe("Topbar mobile menu trigger", () => {
     expect(toggle).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PaymentNotificationBell responsive dropdown', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockGetUnreadCount.mockResolvedValue(0);
+    mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
+    mockListPendingPayments.mockResolvedValue([]);
+  });
+
+  it('keeps the mobile dropdown inside the viewport and restores focus after closing', async () => {
+    renderBell();
+    const trigger = screen.getByRole('button', { name: /notificaciones/i });
+
+    fireEvent.click(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByRole('menu')).toBeTruthy();
+    });
+
+    const dropdown = screen.getByRole('menu');
+    expect(dropdown.className).toContain('fixed');
+    expect(dropdown.className).toContain('inset-x-2');
+    expect(dropdown.className).toContain('max-h-[calc(100dvh-env(safe-area-inset-top)-4.5rem)]');
+    expect(dropdown.className).toContain('lg:absolute');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar notificaciones' }));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+});

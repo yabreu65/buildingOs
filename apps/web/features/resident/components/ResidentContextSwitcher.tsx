@@ -56,8 +56,8 @@ export function ResidentContextSwitcher({ tenantId }: ResidentContextSwitcherPro
 
   if (loading && !context && !options) {
     return (
-      <Card className="p-4">
-        <div className="space-y-3">
+      <Card className="w-full min-w-0 p-4">
+        <div className="min-w-0 space-y-3">
           <Skeleton className="h-4 w-40" />
           <Skeleton className="h-10 w-full max-w-md" />
         </div>
@@ -67,10 +67,10 @@ export function ResidentContextSwitcher({ tenantId }: ResidentContextSwitcherPro
 
   if (error && !options) {
     return (
-      <Card className="border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/30">
-        <div className="flex items-start gap-3">
-          <AlertCircle className="mt-0.5 text-red-600 dark:text-red-300" size={20} />
-          <div className="space-y-1">
+      <Card className="w-full min-w-0 border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/30">
+        <div className="flex min-w-0 items-start gap-3">
+          <AlertCircle className="mt-0.5 shrink-0 text-red-600 dark:text-red-300" size={20} />
+          <div className="min-w-0 space-y-1">
             <p className="font-medium text-red-800 dark:text-red-100">No pudimos cargar tu contexto residente.</p>
             <p className="text-sm text-red-700 dark:text-red-200">
               {error}
@@ -90,16 +90,23 @@ export function ResidentContextSwitcher({ tenantId }: ResidentContextSwitcherPro
 
   if (totalUnits <= 1) {
     return (
-      <Card className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="rounded-lg bg-primary/10 p-2 text-primary">
+      <Card className="w-full min-w-0 p-4">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
+          <div className="w-fit shrink-0 rounded-lg bg-primary/10 p-2 text-primary">
             <Home size={18} />
           </div>
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <p className="text-sm font-semibold text-foreground">Contexto activo</p>
             {context?.activeUnitId && selectedBuilding && selectedUnit ? (
-              <p className="text-sm text-muted-foreground">
-                {selectedBuilding.name} · {selectedUnit.label || selectedUnit.code}
+              <p className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate" title={selectedBuilding.name}>{selectedBuilding.name}</span>
+                <span className="shrink-0" aria-hidden="true">·</span>
+                <span
+                  className="min-w-0 max-w-[min(16rem,calc(100vw-8rem))] truncate"
+                  title={selectedUnit.label || selectedUnit.code}
+                >
+                  {selectedUnit.label || selectedUnit.code}
+                </span>
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">Sin unidad activa autorizada.</p>
@@ -116,12 +123,12 @@ export function ResidentContextSwitcher({ tenantId }: ResidentContextSwitcherPro
   }
 
   return (
-    <Card className="p-4">
-      <div className="mb-3 flex items-start gap-3">
-        <div className="rounded-lg bg-primary/10 p-2 text-primary">
+    <Card className="w-full min-w-0 p-4">
+      <div className="mb-3 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
+        <div className="w-fit shrink-0 rounded-lg bg-primary/10 p-2 text-primary">
           <Building2 size={18} />
         </div>
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <p className="text-sm font-semibold text-foreground">Elegí tu unidad activa</p>
           <p className="text-xs text-muted-foreground">
             El portal residente usa siempre la ocupación seleccionada. Si cambiás de unidad, los datos se actualizan en toda la pantalla.

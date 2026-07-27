@@ -9,7 +9,7 @@ import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
 import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useState, useEffect, useRef, type RefObject } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
@@ -108,6 +108,13 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
   // Badge: pending payments (admin) + unread notifications
   const badgeCount = isAdmin ? pendingCount + unreadCount : unreadCount;
 
+  const closeDropdown = useCallback((restoreFocus = false) => {
+    setIsOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => buttonRef.current?.focus());
+    }
+  }, []);
+
   // 6. Close on click outside
   useEffect(() => {
     if (!isOpen) return;
@@ -118,25 +125,24 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
         buttonRef.current &&
         !buttonRef.current.contains(event.target as Node)
       ) {
-        setIsOpen(false);
+        closeDropdown();
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
+  }, [closeDropdown, isOpen]);
 
   // 7. Close on Escape
   useEffect(() => {
     if (!isOpen) return;
     function handleEscape(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        setIsOpen(false);
-        buttonRef.current?.focus();
+        closeDropdown(true);
       }
     }
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen]);
+  }, [closeDropdown, isOpen]);
 
   // 8. Handlers
   const handleToggle = () => setIsOpen((prev) => !prev);
@@ -150,7 +156,7 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
     if (targetPath) {
       router.push(targetPath);
     }
-    setIsOpen(false);
+    closeDropdown(false);
   };
 
   const handleMarkAllRead = () => {
@@ -207,20 +213,21 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
         <div
           id="notification-dropdown"
           role="menu"
-          className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 max-h-[calc(100dvh-5rem)] overflow-hidden rounded-lg border bg-card shadow-lg sm:inset-x-auto sm:right-3 sm:w-80 lg:absolute lg:right-0 lg:top-full lg:mt-2 lg:w-80"
+          className="fixed inset-x-2 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 flex max-h-[calc(100dvh-env(safe-area-inset-top)-4.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-lg sm:inset-x-auto sm:right-3 sm:w-80 lg:absolute lg:right-0 lg:top-full lg:mt-2 lg:w-80"
         >
-          <div className="flex items-center justify-between p-3 border-b">
+          <div className="flex shrink-0 items-center justify-between border-b border-border p-3">
             <span className="font-semibold">Notificaciones</span>
             <button
-              onClick={() => setIsOpen(false)}
-              className="text-muted-foreground hover:text-foreground"
+              type="button"
+              onClick={() => closeDropdown(true)}
+              className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               aria-label="Cerrar notificaciones"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="max-h-96 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
             {listLoading && (
               <div className="p-4 text-center text-muted-foreground text-sm">
                 Cargando notificaciones…
@@ -258,9 +265,9 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
                 <button
                   onClick={() => {
                     router.push(`/${tenantId}/finanzas?tab=payments`);
-                    setIsOpen(false);
+                    closeDropdown(false);
                   }}
-                  className="w-full py-2 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                  className="min-h-11 w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90"
                 >
                   Revisar pagos →
                 </button>
@@ -274,7 +281,7 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
                     key={notification.id}
                     role="menuitem"
                     onClick={() => handleNotificationClick(notification)}
-                    className={`w-full text-left p-3 border-b hover:bg-muted/50 transition-colors ${
+                    className={`min-h-11 w-full text-left p-3 border-b border-border hover:bg-muted/50 transition-colors ${
                       !notification.isRead ? 'bg-blue-50/50 dark:bg-blue-950/30' : ''
                     }`}
                   >
@@ -310,12 +317,12 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
           </div>
 
           {(filteredNotifications.length > 0 || pendingCount > 0) && (
-            <div className="p-2 border-t bg-muted/30">
+            <div className="shrink-0 border-t border-border bg-muted/30 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               {filteredNotifications.length > 0 && (
                 <button
                   onClick={handleMarkAllRead}
                   disabled={markAllReadMutation.isPending}
-                  className="w-full text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+                  className="min-h-11 w-full text-xs font-medium text-primary hover:opacity-80 disabled:opacity-50"
                 >
                   {markAllReadMutation.isPending ? 'Marcando…' : 'Marcar todas como leídas'}
                 </button>
@@ -323,9 +330,9 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
               <button
                 onClick={() => {
                   router.push(isAdmin ? `/${tenantId}/finanzas?tab=payments` : `/${tenantId}/resident/payments`);
-                  setIsOpen(false);
+                  closeDropdown(false);
                 }}
-                className="w-full text-xs text-muted-foreground hover:text-foreground mt-1"
+                className="mt-1 min-h-11 w-full text-xs text-muted-foreground hover:text-foreground"
               >
                 Ver pagos →
               </button>
