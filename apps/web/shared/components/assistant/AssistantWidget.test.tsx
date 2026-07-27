@@ -96,6 +96,51 @@ describe('AssistantWidget responsive panel', () => {
     });
   });
 
+  it('suspends Escape handling without resetting state and resumes it without stealing focus', async () => {
+    const { rerender } = render(
+      <>
+        <button type="button">Fuera</button>
+        <AssistantWidget context={context} suspendEscapeHandling />
+      </>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Abrir asistente' });
+    const outsideButton = screen.getByRole('button', { name: 'Fuera' });
+
+    fireEvent.click(trigger);
+    fireEvent.change(screen.getByLabelText('Escribí tu pregunta'), { target: { value: 'Necesito ayuda' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar mensaje' }));
+
+    await waitFor(() => {
+      expect(mockChatV2).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ message: 'Necesito ayuda' }));
+      expect(screen.getByText('Necesito ayuda')).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Escribí tu pregunta'), { target: { value: 'Borrador' } });
+    outsideButton.focus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'Cerrar asistente' }).getAttribute('aria-expanded')).toBe('true');
+    expect((screen.getByLabelText('Escribí tu pregunta') as HTMLTextAreaElement).value).toBe('Borrador');
+    expect(screen.getByText('Necesito ayuda')).toBeTruthy();
+
+    rerender(
+      <>
+        <button type="button">Fuera</button>
+        <AssistantWidget context={context} suspendEscapeHandling={false} />
+      </>,
+    );
+
+    expect(document.activeElement).toBe(outsideButton);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'Asistente AI' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Abrir asistente' }).getAttribute('aria-expanded')).toBe('false');
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Abrir asistente' }));
+    });
+  });
+
   it('keeps close and message submission controls operational', async () => {
     render(<AssistantWidget context={context} />);
     const trigger = screen.getByRole('button', { name: 'Abrir asistente' });

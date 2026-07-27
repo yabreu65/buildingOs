@@ -11,12 +11,14 @@ export interface AssistantWidgetProps {
   context: AssistantContext;
   defaultUseLlm?: boolean;
   className?: string;
+  suspendEscapeHandling?: boolean;
 }
 
 export function AssistantWidget({ 
   context, 
   defaultUseLlm = false,
-  className = '' 
+  className = '',
+  suspendEscapeHandling = false,
 }: AssistantWidgetProps) {
   const params = useParams();
   const [isOpen, setIsOpen] = useState(false);
@@ -51,6 +53,11 @@ export function AssistantWidget({
     if (!isOpen) return;
 
     inputRef.current?.focus();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || suspendEscapeHandling) return;
+
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         closeAssistant();
@@ -59,7 +66,7 @@ export function AssistantWidget({
 
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [closeAssistant, isOpen]);
+  }, [closeAssistant, isOpen, suspendEscapeHandling]);
 
   const [conversationId] = useState(() => `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
 

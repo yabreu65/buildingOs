@@ -8,6 +8,7 @@ import Topbar from "./Topbar";
 import { ImpersonationBanner } from "../../../features/impersonation/ImpersonationBanner";
 import { AssistantWidget, useAssistantContext } from "@/shared/components/assistant";
 import { PushPermissionControl } from "@/features/notifications/components/PushPermissionControl";
+import { PushPermissionProvider } from "@/features/notifications/components/PushPermissionProvider";
 
 function AssistantWrapper({ isDrawerOpen }: { readonly isDrawerOpen: boolean }) {
   const context = useAssistantContext();
@@ -17,7 +18,7 @@ function AssistantWrapper({ isDrawerOpen }: { readonly isDrawerOpen: boolean }) 
       aria-hidden={isDrawerOpen}
       className={isDrawerOpen ? "invisible pointer-events-none" : undefined}
     >
-      <AssistantWidget context={context} defaultUseLlm={false} />
+      <AssistantWidget context={context} defaultUseLlm={false} suspendEscapeHandling={isDrawerOpen} />
     </div>
   );
 }
@@ -113,60 +114,66 @@ export default function AppShell({ children }: { readonly children: ReactNode })
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
       <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <ImpersonationBanner />
-        <Topbar
-          isMobileMenuOpen={isDrawerOpen}
-          menuButtonRef={menuButtonRef}
-          onMobileMenuToggle={toggleDrawer}
-        />
-        <main className="min-w-0 flex-1 p-3 sm:p-4 lg:p-6">
-          <div className="mx-auto w-full max-w-6xl">
-            <div className="overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm">
-              <div className="min-w-0 overflow-x-auto p-3 sm:p-4 lg:p-6">{children}</div>
-            </div>
-          </div>
-        </main>
-      </div>
-
-      {isDrawerOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden" data-testid="mobile-navigation-drawer">
-          <button
-            type="button"
-            aria-label="Cerrar menú de navegación"
-            className="absolute inset-0 bg-black/50"
-            onClick={() => closeDrawer()}
+      <PushPermissionProvider key={tenantId ?? "tenant-unavailable"} tenantId={tenantId ?? ""}>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ImpersonationBanner />
+          <Topbar
+            isMobileMenuOpen={isDrawerOpen}
+            menuButtonRef={menuButtonRef}
+            onMobileMenuToggle={toggleDrawer}
           />
-          <div
-            ref={drawerPanelRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Navegación principal"
-            className="relative z-10 flex h-full w-[min(20rem,calc(100vw-2rem))] flex-col overflow-y-auto border-r border-border bg-card pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] text-card-foreground shadow-xl"
-          >
-            <div className="flex items-center justify-between px-4 pb-2">
-              <span className="font-semibold">BuildingOS</span>
-              <button
-                ref={drawerCloseButtonRef}
-                type="button"
-                aria-label="Cerrar menú"
-                className="inline-flex size-11 items-center justify-center rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
-                onClick={() => closeDrawer()}
-              >
-                <X className="size-5" aria-hidden="true" />
-              </button>
+          <main className="min-w-0 flex-1 p-3 sm:p-4 lg:p-6">
+            <div className="mx-auto w-full max-w-6xl">
+              <div className="overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm">
+                <div className="min-w-0 overflow-x-auto p-3 sm:p-4 lg:p-6">{children}</div>
+              </div>
             </div>
-            <Sidebar
-              id="mobile-navigation"
-              variant="drawer"
-              className="min-h-0 w-full flex-1 border-0"
-              onNavigate={() => closeDrawer(false)}
-              footer={tenantId ? <div className="border-t border-border p-4"><PushPermissionControl tenantId={tenantId} /></div> : null}
-            />
-          </div>
+          </main>
         </div>
-      )}
-      <AssistantWrapper isDrawerOpen={isDrawerOpen} />
+
+        {isDrawerOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden" data-testid="mobile-navigation-drawer">
+            <button
+              type="button"
+              aria-label="Cerrar menú de navegación"
+              className="absolute inset-0 bg-black/50"
+              onClick={() => closeDrawer()}
+            />
+            <div
+              ref={drawerPanelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navegación principal"
+              className="relative z-10 flex h-full w-[min(20rem,calc(100vw-2rem))] flex-col overflow-y-auto border-r border-border bg-card pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] text-card-foreground shadow-xl"
+            >
+              <div className="flex items-center justify-between px-4 pb-2">
+                <span className="font-semibold">BuildingOS</span>
+                <button
+                  ref={drawerCloseButtonRef}
+                  type="button"
+                  aria-label="Cerrar menú"
+                  className="inline-flex size-11 items-center justify-center rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
+                  onClick={() => closeDrawer()}
+                >
+                  <X className="size-5" aria-hidden="true" />
+                </button>
+              </div>
+              <Sidebar
+                id="mobile-navigation"
+                variant="drawer"
+                className="min-h-0 w-full flex-1 border-0"
+                onNavigate={() => closeDrawer(false)}
+                footer={tenantId ? (
+                  <div className="border-t border-border p-4">
+                    <PushPermissionControl />
+                  </div>
+                ) : null}
+              />
+            </div>
+          </div>
+        )}
+        <AssistantWrapper isDrawerOpen={isDrawerOpen} />
+      </PushPermissionProvider>
     </div>
   );
 }

@@ -498,7 +498,7 @@ export default function Topbar({
       </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-3">
-        {urlTenantId && <div className="hidden lg:block"><PushPermissionControl tenantId={urlTenantId} /></div>}
+        {urlTenantId && <div className="hidden lg:block"><PushPermissionControl /></div>}
         {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} isMobileMenuOpen={isMobileMenuOpen} />}
         <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
           {roleLabel}
