@@ -21,6 +21,7 @@ import { ticketCategoryLabel } from '../../../../../features/tickets/ticket-labe
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import Card from '../../../../../shared/components/ui/Card';
+import Badge, { type BadgeVariant } from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { ticketDetailPath } from '../../../../../shared/lib/routes';
 
@@ -44,24 +45,24 @@ function priorityLabel(priority: Ticket['priority']): string {
   return labels[priority] ?? priority;
 }
 
-function priorityColor(priority: Ticket['priority']): string {
-  const colors: Record<Ticket['priority'], string> = {
-    LOW: 'bg-gray-100 text-gray-700',
-    MEDIUM: 'bg-blue-100 text-blue-700',
-    HIGH: 'bg-orange-100 text-orange-700',
-    URGENT: 'bg-red-100 text-red-700',
+function priorityVariant(priority: Ticket['priority']): BadgeVariant {
+  const variants: Record<Ticket['priority'], BadgeVariant> = {
+    LOW: 'muted',
+    MEDIUM: 'info',
+    HIGH: 'warning',
+    URGENT: 'danger',
   };
-  return colors[priority] ?? 'bg-gray-100 text-gray-700';
+  return variants[priority] ?? 'muted';
 }
 
 function statusColor(status: Ticket['status']): string {
   const colors: Record<Ticket['status'], string> = {
-    OPEN: 'text-orange-600',
-    IN_PROGRESS: 'text-blue-600',
-    RESOLVED: 'text-green-600',
-    CLOSED: 'text-gray-600',
+    OPEN: 'text-orange-600 dark:text-orange-400',
+    IN_PROGRESS: 'text-blue-600 dark:text-blue-400',
+    RESOLVED: 'text-green-600 dark:text-green-400',
+    CLOSED: 'text-gray-600 dark:text-gray-400',
   };
-  return colors[status] ?? 'text-gray-600';
+  return colors[status] ?? 'text-gray-600 dark:text-gray-400';
 }
 
 function formatDate(dateStr: string | undefined): string {
@@ -187,15 +188,15 @@ export default function ResidentTicketsPage() {
         </h1>
         <p className="text-muted-foreground mt-1">{tenantName}</p>
         
-        <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="text-yellow-600" size={20} />
-            <div>
-              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
-              <p className="text-sm text-yellow-700">Comunicate con la administración para que te asignen una unidad.</p>
-            </div>
+      <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50 dark:border-yellow-900/60 dark:bg-yellow-950/40">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
+          <div>
+            <p className="font-medium text-yellow-800 dark:text-yellow-200">Sin unidad asignada</p>
+            <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
           </div>
-        </Card>
+        </div>
+      </Card>
       </div>
     );
   }
@@ -276,11 +277,11 @@ export default function ResidentTicketsPage() {
               </div>
             </div>
             {error && (
-              <p id="resident-ticket-error" className="text-red-600 text-sm" aria-live="polite">
+              <p id="resident-ticket-error" className="text-red-600 dark:text-red-400 text-sm" aria-live="polite">
                 {error}
               </p>
             )}
-            {success && <p className="text-green-600 text-sm" aria-live="polite">{success}</p>}
+            {success && <p className="text-green-600 dark:text-green-400 text-sm" aria-live="polite">{success}</p>}
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -309,18 +310,18 @@ export default function ResidentTicketsPage() {
       )}
 
       {(ticketsError || ticketsErrorValue) && (
-        <Card className="p-4 mb-6 border-red-200 bg-red-50">
+        <Card className="p-4 mb-6 border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/40">
           <div className="flex items-start gap-3">
-            <AlertCircle className="text-red-600 mt-0.5" size={20} />
+            <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
             <div className="space-y-1">
-              <p className="font-medium text-red-800">No pudimos cargar tus reclamos</p>
-              <p className="text-sm text-red-700">
+              <p className="font-medium text-red-800 dark:text-red-200">No pudimos cargar tus reclamos</p>
+              <p className="text-sm text-red-700 dark:text-red-300">
                 {ticketsErrorValue instanceof Error ? ticketsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
               </p>
               <button
                 type="button"
                 onClick={() => refetch()}
-                className="text-sm font-medium text-red-700 hover:underline"
+                className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
               >
                 Reintentar
               </button>
@@ -356,9 +357,9 @@ export default function ResidentTicketsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="font-medium truncate">{ticket.title}</h3>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${priorityColor(ticket.priority)}`}>
+                      <Badge variant={priorityVariant(ticket.priority)}>
                         {priorityLabel(ticket.priority)}
-                      </span>
+                      </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground line-clamp-2">{ticket.description}</p>
                     <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">

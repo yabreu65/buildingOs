@@ -7,8 +7,6 @@ import {
   User,
   Users,
   AlertCircle,
-  CheckCircle,
-  Loader2,
   Building2,
 } from 'lucide-react';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
@@ -16,6 +14,7 @@ import { useContextOptions } from '../../../../../features/context/useContextOpt
 import { getUnit, type Unit } from '../../../../../features/units/units.api';
 import { useTenants } from '../../../../../features/tenants/tenants.hooks';
 import Card from '../../../../../shared/components/ui/Card';
+import Badge, { type BadgeVariant } from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 
 function unitTypeLabel(type: Unit['unitType']): string {
@@ -39,13 +38,13 @@ function occupancyStatusLabel(status: Unit['occupancyStatus']): string {
   return labels[status] ?? status;
 }
 
-function occupancyStatusColor(status: Unit['occupancyStatus']): string {
-  const colors: Record<Unit['occupancyStatus'], string> = {
-    OCCUPIED: 'bg-green-100 text-green-700 border-green-200',
-    VACANT: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    UNKNOWN: 'bg-gray-100 text-gray-700 border-gray-200',
+function occupancyStatusVariant(status: Unit['occupancyStatus']): BadgeVariant {
+  const variants: Record<Unit['occupancyStatus'], BadgeVariant> = {
+    OCCUPIED: 'success',
+    VACANT: 'warning',
+    UNKNOWN: 'muted',
   };
-  return colors[status] ?? 'bg-gray-100 text-gray-700 border-gray-200';
+  return variants[status] ?? 'muted';
 }
 
 function roleLabel(role: 'OWNER' | 'RESIDENT'): string {
@@ -99,12 +98,12 @@ export default function ResidentUnitPage() {
         </h1>
         <p className="text-muted-foreground mt-1">{tenantName}</p>
 
-        <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50">
+        <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50 dark:border-yellow-900/60 dark:bg-yellow-950/40">
           <div className="flex items-center gap-2">
-            <AlertCircle className="text-yellow-600" size={20} />
+            <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
             <div>
-              <p className="font-medium text-yellow-800">Sin unidad asignada</p>
-              <p className="text-sm text-yellow-700">Comunicate con la administración para que te asignen una unidad.</p>
+              <p className="font-medium text-yellow-800 dark:text-yellow-200">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
             </div>
           </div>
         </Card>
@@ -164,9 +163,9 @@ export default function ResidentUnitPage() {
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Estado de ocupación</p>
-            <span className={`inline-block px-2 py-1 rounded text-sm font-medium border ${unit?.occupancyStatus ? occupancyStatusColor(unit.occupancyStatus) : ''}`}>
+            <Badge variant={unit?.occupancyStatus ? occupancyStatusVariant(unit.occupancyStatus) : 'muted'} className="text-sm">
               {unit?.occupancyStatus ? occupancyStatusLabel(unit.occupancyStatus) : '—'}
-            </span>
+            </Badge>
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Categoría</p>
@@ -209,13 +208,13 @@ export default function ResidentUnitPage() {
                     )}
                   </div>
                 </div>
-                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                  occupant.role === 'OWNER'
-                    ? 'bg-purple-100 text-purple-700'
-                    : 'bg-blue-100 text-blue-700'
-                }`}>
-                  {roleLabel(occupant.role)}
-                </span>
+                {occupant.role === 'OWNER' ? (
+                  <span className="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300">
+                    {roleLabel(occupant.role)}
+                  </span>
+                ) : (
+                  <Badge variant="info">{roleLabel(occupant.role)}</Badge>
+                )}
               </div>
             ))}
           </div>

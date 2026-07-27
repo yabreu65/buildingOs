@@ -813,4 +813,73 @@ describe('ResidentPaymentsPage', () => {
     expect(screen.getByText(/El archivo supera el máximo/)).toBeTruthy();
     expect(mockedSubmitPayment).not.toHaveBeenCalled();
   });
+
+  it('uses text-foreground for KPI values instead of text-gray-900', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(
+      makeLedger({
+        charges: [
+          makeCharge({ dueDate: '2026-08-15', amount: 5000 }),
+        ],
+        totals: { balance: 5000, currency: 'ARS', totalCharges: 5000, totalPaid: 0, totalAllocated: 0 },
+      }),
+    );
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({ id: 'pay-last', amount: 3000, paidAt: '2026-07-20', status: PaymentStatus.APPROVED }),
+    ]);
+
+    const Wrapper = createWrapper();
+    const { container } = render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    await screen.findByText('Historial de pagos');
+
+    const kpiElements = container.querySelectorAll('.text-foreground');
+    expect(kpiElements.length).toBeGreaterThanOrEqual(2);
+
+    const gray900Elements = container.querySelectorAll('.text-gray-900');
+    expect(gray900Elements).toHaveLength(0);
+  });
+
+  it('does not use text-black in KPI elements', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger());
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const Wrapper = createWrapper();
+    const { container } = render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    await screen.findByText('Historial de pagos');
+
+    const blackElements = container.querySelectorAll('.text-black');
+    expect(blackElements).toHaveLength(0);
+  });
+
+  it('renders payment status badges with semantic variant classes', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger());
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({ id: 'pay-sub', status: PaymentStatus.SUBMITTED }),
+      makePayment({ id: 'pay-apr', status: PaymentStatus.APPROVED }),
+      makePayment({ id: 'pay-rej', status: PaymentStatus.REJECTED }),
+      makePayment({ id: 'pay-rec', status: PaymentStatus.RECONCILED }),
+    ]);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    await screen.findByText('Historial de pagos');
+
+    const submittedBadge = screen.getByText('Enviado');
+    expect(submittedBadge.className).toContain('bg-amber-100');
+    expect(submittedBadge.className).toContain('dark:bg-amber-950/40');
+
+    const approvedBadge = screen.getByText('Aprobado');
+    expect(approvedBadge.className).toContain('bg-green-100');
+    expect(approvedBadge.className).toContain('dark:bg-green-950/40');
+
+    const rejectedBadge = screen.getByText('Rechazado');
+    expect(rejectedBadge.className).toContain('bg-red-100');
+    expect(rejectedBadge.className).toContain('dark:bg-red-950/40');
+
+    const reconciledBadge = screen.getByText('Conciliado');
+    expect(reconciledBadge.className).toContain('bg-blue-100');
+    expect(reconciledBadge.className).toContain('dark:bg-blue-950/40');
+  });
 });
