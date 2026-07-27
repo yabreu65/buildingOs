@@ -9,7 +9,7 @@ import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
 import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useState, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useState, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
@@ -21,7 +21,13 @@ const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_
 
 const POLL_INTERVAL = 30_000;
 
-export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
+export function PaymentNotificationBell({
+  tenantId,
+  isMobileMenuOpen = false,
+}: {
+  readonly tenantId: string;
+  readonly isMobileMenuOpen?: boolean;
+}) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
@@ -114,6 +120,21 @@ export function PaymentNotificationBell({ tenantId }: { tenantId: string }) {
       requestAnimationFrame(() => buttonRef.current?.focus());
     }
   }, []);
+
+  useLayoutEffect(() => {
+    if (!isMobileMenuOpen || !isOpen) return;
+
+    let isCurrentEffect = true;
+    queueMicrotask(() => {
+      if (isCurrentEffect) {
+        closeDropdown(false);
+      }
+    });
+
+    return () => {
+      isCurrentEffect = false;
+    };
+  }, [closeDropdown, isMobileMenuOpen, isOpen]);
 
   // 6. Close on click outside
   useEffect(() => {
@@ -478,7 +499,7 @@ export default function Topbar({
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-3">
         {urlTenantId && <div className="hidden lg:block"><PushPermissionControl tenantId={urlTenantId} /></div>}
-        {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} />}
+        {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} isMobileMenuOpen={isMobileMenuOpen} />}
         <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
           {roleLabel}
         </span>

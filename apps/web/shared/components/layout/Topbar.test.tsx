@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as notificationsApi from '@/features/notifications/notifications.api';
 import * as financeApi from '@/features/finance/services/finance.api';
@@ -974,5 +975,87 @@ describe('Topbar responsive tenant selector', () => {
 
     expect(document.getElementById('tenant-select-mobile')).toBeNull();
     expect(document.getElementById('tenant-select-desktop')).toBeNull();
+  });
+});
+
+
+function MobileMenuHarness() {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  return (
+    <Topbar
+      isMobileMenuOpen={isMobileMenuOpen}
+      onMobileMenuToggle={() => setIsMobileMenuOpen((open) => !open)}
+    />
+  );
+}
+
+describe('PaymentNotificationBell drawer coordination', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTenantData = [];
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockGetUnreadCount.mockResolvedValue(0);
+    mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
+    mockListPendingPayments.mockResolvedValue([]);
+    jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace: jest.fn() });
+  });
+
+  it('closes an open notification dropdown when mobile-menu state changes programmatically', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} />
+      </QueryClientProvider>,
+    );
+    const notificationButton = screen.getByRole('button', { name: /notificaciones/i });
+
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(notificationButton.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Topbar isMobileMenuOpen={false} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+  });
+
+  it('closes notifications through the hamburger interaction without requiring mousedown', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MobileMenuHarness />
+      </QueryClientProvider>,
+    );
+
+    const notificationButton = screen.getByRole('button', { name: /notificaciones/i });
+    fireEvent.click(notificationButton);
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir menú de navegación' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(notificationButton.getAttribute('aria-expanded')).toBe('false');
+    });
   });
 });
