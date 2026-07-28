@@ -37,6 +37,7 @@ import { ObservabilityModule } from './observability/observability.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { LeadsModule } from './leads/leads.module';
 import { TenantMembersModule } from './tenant-members/tenant-members.module';
+import { ProfileModule } from './profile/profile.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PushController } from './push/push.controller';
 import { PushDeliveryService } from './push/push-delivery.service';
@@ -81,6 +82,7 @@ import { ReceiptsModule } from './receipts/receipts.module';
     AssistantModule,
     LeadsModule,
     TenantMembersModule,
+    ProfileModule,
     DashboardModule,
     ReceiptsModule,
   ],

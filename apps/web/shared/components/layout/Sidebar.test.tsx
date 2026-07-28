@@ -37,6 +37,7 @@ jest.mock("@/i18n", () => ({
   t: (key: string) => ({
     "common.condominium": "Condominio",
     "navigation.dashboard": "Panel",
+    "navigation.myProfile": "Mi perfil",
     "navigation.payments": "Pagos",
     "navigation.communications": "Comunicados",
     "navigation.tickets": "Solicitudes",
@@ -70,6 +71,14 @@ describe("Sidebar", () => {
       expect(link.className).toContain("min-h-11");
       expect(link.className).toContain("items-center");
     });
+  });
+
+  it("keeps Mi perfil active on the resident profile route", () => {
+    pathname = "/tenant-1/resident/profile";
+
+    render(<Sidebar variant="drawer" />);
+
+    expect(screen.getByRole("link", { name: "Mi perfil" }).className).toContain("bg-primary");
   });
 
   it("keeps Solicitudes active for the canonical resident ticket detail route", () => {
