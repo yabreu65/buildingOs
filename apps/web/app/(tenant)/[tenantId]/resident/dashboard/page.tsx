@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import { useAuthSession } from '../../../../../features/auth/useAuthSession';
+import { useResidentProfile } from '../../../../../features/resident/profile/useResidentProfile';
 import { useResidentContext } from '../../../../../features/resident/hooks/useResidentContext';
 import { useResidentLedger } from '../../../../../features/resident/hooks/useResidentLedger';
 import { useResidentCommunications } from '../../../../../features/resident/hooks/useResidentCommunications';
@@ -80,8 +81,12 @@ const ResidentDashboardPage = () => {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
   const session = useAuthSession();
-  const userName = session?.user?.name ?? '';
+  const userName = session?.user?.name?.trim() ?? '';
   const userId = session?.user?.id ?? null;
+  const { profileQuery: residentProfileQuery } = useResidentProfile(tenantId ?? null);
+  const residentProfileName = residentProfileQuery.data?.name?.trim() ?? '';
+  const greetingName = residentProfileName || userName;
+  const greeting = greetingName ? `Hola, ${greetingName}` : 'Mi portal';
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
@@ -173,7 +178,7 @@ const ResidentDashboardPage = () => {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold">
-            {userName ? `Hola, ${userName}` : 'Mi portal'}
+            {greeting}
           </h1>
           <p className="text-muted-foreground">{tenantName}</p>
         </div>
@@ -204,7 +209,7 @@ const ResidentDashboardPage = () => {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold">
-            {userName ? `Hola, ${userName}` : 'Mi portal'}
+            {greeting}
           </h1>
           <p className="text-muted-foreground">{tenantName}</p>
         </div>
@@ -235,7 +240,7 @@ const ResidentDashboardPage = () => {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold">
-          {userName ? `Hola, ${userName}` : 'Mi portal'}
+          {greeting}
         </h1>
         <p className="text-muted-foreground">
           {tenantName}
