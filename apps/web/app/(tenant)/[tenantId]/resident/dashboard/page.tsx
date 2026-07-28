@@ -24,7 +24,7 @@ import type { Ticket } from '../../../../../features/resident/api/resident-conte
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { formatCurrency } from '../../../../../shared/lib/format/money';
-import { ticketDetailPath } from '../../../../../shared/lib/routes';
+import { residentTicketDetailPath } from '../../../../../shared/lib/routes';
 
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '—';
@@ -403,7 +403,7 @@ const ResidentDashboardPage = () => {
               {tickets.slice(0, 3).map((ticket) => (
                 <Link
                   key={ticket.id}
-                  href={ticketDetailPath(tenantId, ticket.id)}
+                  href={residentTicketDetailPath(tenantId, ticket.id)}
                   className="flex justify-between text-sm rounded-md px-1 py-0.5 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <span className="truncate flex-1">{ticket.title}</span>

@@ -49,8 +49,7 @@ describe('TicketsService', () => {
               findMany: jest.fn(),
             },
             tenantMember: {
-              findFirst: jest.fn(),
-              findMany: jest.fn().mockResolvedValue([]),
+              findMany: jest.fn(),
             },
             membership: {
               findFirst: jest.fn(),
@@ -214,7 +213,7 @@ describe('TicketsService', () => {
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
-      const result = await service.create(tenantId, buildingId, userId, dto);
+      const result = await service.create(tenantId, buildingId, userId, dto, 'resident');
 
       // ASSERT
       expect(result).toEqual(expectedTicket);
@@ -270,7 +269,7 @@ describe('TicketsService', () => {
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
-      const result = await service.create(tenantId, buildingId, userId, dto);
+      const result = await service.create(tenantId, buildingId, userId, dto, 'resident');
 
       // ASSERT
       expect(result.unitId).toBeNull();
@@ -295,7 +294,7 @@ describe('TicketsService', () => {
 
       // ACT & ASSERT
       await expect(
-        service.create(tenantId, buildingId, userId, dto),
+        service.create(tenantId, buildingId, userId, dto, 'resident'),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -321,7 +320,7 @@ describe('TicketsService', () => {
 
       // ACT & ASSERT
       await expect(
-        service.create(tenantId, buildingId, userId, dto),
+        service.create(tenantId, buildingId, userId, dto, 'resident'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -373,7 +372,7 @@ describe('TicketsService', () => {
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       await expect(
-        service.create(tenantId, buildingId, userId, dto),
+        service.create(tenantId, buildingId, userId, dto, 'resident'),
       ).resolves.toEqual(expectedTicket);
     });
   });
@@ -658,7 +657,7 @@ describe('TicketsService', () => {
           { id: 'membership-4', userId: 'owner-1', user: { id: 'owner-1' }, roles: [{ role: 'TENANT_OWNER' }] },
         ] as any);
 
-        await service.create(tenantId, buildingId, userId, dto);
+        await service.create(tenantId, buildingId, userId, dto, 'resident');
 
         // Wait for fire-and-forget
         await new Promise((r) => setTimeout(r, 10));
@@ -737,7 +736,7 @@ describe('TicketsService', () => {
           title: 'Test',
           description: 'Test',
           category: 'OTHER',
-        });
+        }, 'resident');
 
         await new Promise((r) => setTimeout(r, 10));
 
@@ -749,6 +748,99 @@ describe('TicketsService', () => {
             }),
           }),
         );
+      });
+
+      it('should not notify the resident when they also hold an admin role', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const userId = 'user-admin-resident';
+
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(validators, 'validateUnitBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticket, 'create').mockResolvedValue({
+          id: 'ticket-self',
+          tenantId,
+          buildingId,
+          unitId: 'unit-1',
+          createdByUserId: userId,
+          title: 'Self notify',
+          description: 'Should not self notify',
+          category: 'OTHER',
+          priority: 'MEDIUM',
+          status: 'OPEN',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          createdBy: { id: userId, name: 'Resident Admin' },
+          assignedTo: null,
+          building: { id: buildingId, name: 'Edificio A' },
+          unit: { id: 'unit-1', label: '101', code: 'A01' },
+          comments: [],
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.membership, 'findMany').mockResolvedValue([
+          { id: 'membership-self', userId, user: { id: userId }, roles: [{ role: 'TENANT_ADMIN' }] },
+          { id: 'membership-admin', userId: 'admin-2', user: { id: 'admin-2' }, roles: [{ role: 'TENANT_ADMIN' }] },
+        ] as any);
+
+        await service.create(tenantId, buildingId, userId, {
+          title: 'Self notify',
+          description: 'Should not self notify',
+          category: 'OTHER',
+          unitId: 'unit-1',
+        }, 'resident');
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId,
+            userId: 'admin-2',
+            type: 'SUPPORT_TICKET_CREATED',
+          }),
+        );
+        expect(notificationsService.createNotification).not.toHaveBeenCalledWith(
+          expect.objectContaining({ userId }),
+        );
+      });
+
+      it('should skip resident-origin notifications when the ticket is created from the admin portal', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const userId = 'user-admin';
+
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.ticket, 'create').mockResolvedValue({
+          id: 'ticket-admin',
+          tenantId,
+          buildingId,
+          unitId: 'unit-1',
+          createdByUserId: userId,
+          title: 'Admin ticket',
+          description: 'Created from admin portal',
+          category: 'OTHER',
+          priority: 'MEDIUM',
+          status: 'OPEN',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          createdBy: { id: userId, name: 'Admin' },
+          assignedTo: null,
+          building: { id: buildingId, name: 'Edificio A' },
+          unit: { id: 'unit-1', label: '101', code: 'A01' },
+          comments: [],
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.create(tenantId, buildingId, userId, {
+          title: 'Admin ticket',
+          description: 'Created from admin portal',
+          category: 'OTHER',
+          unitId: 'unit-1',
+        }, 'admin');
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
       });
     });
 
@@ -792,6 +884,36 @@ describe('TicketsService', () => {
             }),
           }),
         );
+      });
+
+      it('should not notify the actor when they are also the ticket creator', async () => {
+        const tenantId = 'tenant-123';
+        const buildingId = 'building-123';
+        const ticketId = 'ticket-self-status';
+        const creatorId = 'creator-admin';
+
+        jest.spyOn(prismaService.ticket, 'findFirst').mockResolvedValue({
+          id: ticketId,
+          tenantId,
+          buildingId,
+          status: 'OPEN',
+          createdByUserId: creatorId,
+        } as any);
+        jest.spyOn(prismaService.ticket, 'update').mockResolvedValue({
+          id: ticketId,
+          tenantId,
+          buildingId,
+          status: 'IN_PROGRESS',
+          createdByUserId: creatorId,
+          building: { name: 'Edificio A' },
+        } as any);
+        jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
+
+        await service.update(tenantId, buildingId, ticketId, { status: 'IN_PROGRESS' }, creatorId);
+
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
       });
 
       it('should not notify anyone when status does not change', async () => {
@@ -848,7 +970,7 @@ describe('TicketsService', () => {
 
         await service.addComment(tenantId, buildingId, ticketId, adminId, {
           body: 'Estamos revisando el problema',
-        });
+        }, 'admin');
 
         await new Promise((r) => setTimeout(r, 10));
 
@@ -888,7 +1010,7 @@ describe('TicketsService', () => {
 
         await service.addComment(tenantId, buildingId, ticketId, creatorId, {
           body: 'Gracias',
-        });
+        }, 'admin');
 
         await new Promise((r) => setTimeout(r, 10));
 
@@ -928,7 +1050,7 @@ describe('TicketsService', () => {
 
         await service.addComment(tenantId, buildingId, ticketId, creatorId, {
           body: 'Siguen las goteras',
-        });
+        }, 'resident');
 
         await new Promise((r) => setTimeout(r, 10));
 

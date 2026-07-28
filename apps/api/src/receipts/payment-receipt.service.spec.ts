@@ -305,6 +305,24 @@ describe('PaymentReceiptService', () => {
     expect(result?.fileKey).toContain('/receipt_R-');
   });
 
+  it('does not notify the receipt owner when excluded from the approval flow', async () => {
+    await (service as any).notifyResidentReceiptReady(
+      {
+        tenantId: 'tenant-1',
+        createdByUserId: 'resident-1',
+        amount: 4050000,
+        currency: 'ARS',
+        id: 'payment-1',
+      },
+      'R-2026-001',
+      'https://download.example/receipt.pdf',
+      'Admin',
+      'resident-1',
+    );
+
+    expect(notificationsService.createNotification).not.toHaveBeenCalled();
+  });
+
   it('encodes WinAnsi punctuation and falls back safely for unsupported characters', async () => {
     prisma.tenant.findUnique.mockResolvedValue({
       name: 'Consorcio “Central”',

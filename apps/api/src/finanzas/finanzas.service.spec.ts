@@ -12,13 +12,14 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import { CreateChargeDto, UpdateChargeDto } from './finanzas.dto';
 import { ExpensesService } from './expenses.service';
-import { ChargeStatus, PaymentStatus, PaymentMethod, AuditAction } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, ScopeType } from '@prisma/client';
 
 describe('FinanzasService', () => {
   let service: FinanzasService;
   let prismaService: PrismaService;
   let auditService: AuditService;
   let validators: FinanzasValidators;
+  let notificationsService: { createNotification: jest.Mock };
   let expensesService: ExpensesService;
   let receiptService: PaymentReceiptService;
 
@@ -45,6 +46,9 @@ describe('FinanzasService', () => {
               findFirst: jest.fn(),
               findUnique: jest.fn(),
             },
+            building: {
+              findUnique: jest.fn(),
+            },
             payment: {
               create: jest.fn(),
               findFirst: jest.fn(),
@@ -63,8 +67,15 @@ describe('FinanzasService', () => {
             paymentAuditLog: {
               create: jest.fn(),
             },
+            membership: {
+              findMany: jest.fn(),
+              findFirst: jest.fn(),
+            },
             file: {
               findFirst: jest.fn(),
+            },
+            user: {
+              findUnique: jest.fn(),
             },
             expense: {
               findMany: jest.fn(),
@@ -82,6 +93,7 @@ describe('FinanzasService', () => {
         {
           provide: NotificationsService,
           useValue: {
+            createNotification: jest.fn(),
             notifyPaymentApproved: jest.fn(),
             notifyPaymentRejected: jest.fn(),
             notifyTicketCreated: jest.fn(),
@@ -123,6 +135,7 @@ describe('FinanzasService', () => {
     prismaService = module.get<PrismaService>(PrismaService);
     auditService = module.get<AuditService>(AuditService);
     validators = module.get<FinanzasValidators>(FinanzasValidators);
+    notificationsService = module.get(NotificationsService) as never;
     expensesService = module.get<ExpensesService>(ExpensesService);
     receiptService = module.get<PaymentReceiptService>(PaymentReceiptService);
 
@@ -835,6 +848,90 @@ describe('FinanzasService', () => {
       expect(prismaService.payment.create).not.toHaveBeenCalled();
       expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
     });
+
+    it('notifies admins for a pure resident payment even when the portal context is omitted', async () => {
+      await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        userRoles,
+        {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-RESIDENT',
+          proofFileId: 'file-123',
+        },
+      );
+
+      expect((service as any).notifyAdminsOfPaymentSubmitted).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not notify admins for an admin-context payment', async () => {
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(false);
+
+      await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        ['TENANT_ADMIN'],
+        {
+          amount: 10000,
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-ADMIN',
+          proofFileId: 'file-123',
+        },
+        'admin',
+      );
+
+      expect((service as any).notifyAdminsOfPaymentSubmitted).not.toHaveBeenCalled();
+    });
+
+    it('respects mixed membership portal context and only notifies admins when the resident portal is explicit', async () => {
+      const mixedRoles = ['RESIDENT', 'TENANT_ADMIN'];
+
+      await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        mixedRoles,
+        {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-MIXED',
+          proofFileId: 'file-123',
+        },
+        'resident',
+      );
+
+      expect((service as any).notifyAdminsOfPaymentSubmitted).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not let an admin portal header suppress resident-origin payment notifications', async () => {
+      await service.submitPayment(
+        tenantId,
+        buildingId,
+        userId,
+        userRoles,
+        {
+          unitId,
+          chargeId: 'charge-123',
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-RESIDENT-ADMIN-HEADER',
+          proofFileId: 'file-123',
+        },
+        'admin',
+      );
+
+      expect((service as any).notifyAdminsOfPaymentSubmitted).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ========== TESTS: APPROVE PAYMENT ==========
@@ -1543,6 +1640,7 @@ describe('FinanzasService', () => {
       jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
       jest.spyOn(service as any, 'sendPaymentReceivedNotification').mockResolvedValue(undefined);
       jest.spyOn(receiptService, 'ensureReceiptForPayment').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.membership, 'findFirst').mockResolvedValue({ userId: 'member-user-1' } as never);
     });
 
     it('serializes approvePayment so the same payment cannot be applied twice', async () => {
@@ -2044,7 +2142,7 @@ describe('FinanzasService', () => {
         where: { tenantId, paymentId },
       });
       expect(makeAllocation()).toHaveLength(0);
-      expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER');
+      expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
 
       await expect(
         service.updateCharge(tenantId, buildingId, chargeId, ['TENANT_ADMIN'], {
@@ -2099,7 +2197,7 @@ describe('FinanzasService', () => {
         where: { tenantId, paymentId },
       });
       expect(makeAllocation()).toHaveLength(0);
-      expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER');
+      expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
     });
 
     it('cancelPayment removes provisional allocations for submitted payments', async () => {
@@ -2877,6 +2975,114 @@ describe('FinanzasService', () => {
           metadata: expect.objectContaining({ validatedCount: 2, errorCount: 0 }),
         }),
       );
+    });
+  });
+
+  describe('notification recipient filtering', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const unitId = 'unit-123';
+    const residentId = 'resident-1';
+    const adminId = 'admin-1';
+
+    beforeEach(() => {
+      jest.spyOn(prismaService.membership, 'findMany').mockResolvedValue([
+        { user: { id: residentId } },
+        { user: { id: adminId } },
+        { user: { id: adminId } },
+      ] as never);
+      jest.spyOn(prismaService.user, 'findUnique').mockResolvedValue({
+        name: 'Resident',
+        email: 'resident@example.com',
+      } as never);
+      jest.spyOn(prismaService.unit, 'findUnique').mockResolvedValue({
+        label: 'TN-01-01',
+        unitOccupants: [
+          { member: { user: { id: residentId } } },
+          { member: { user: { id: 'resident-2' } } },
+        ],
+      } as never);
+      jest.spyOn(prismaService.building, 'findUnique').mockResolvedValue({
+        name: 'Building A',
+      } as never);
+      jest.spyOn(notificationsService, 'createNotification').mockResolvedValue(undefined);
+    });
+
+    it('excludes the submitting resident from admin payment notifications', async () => {
+      await (service as any).notifyAdminsOfPaymentSubmitted(
+        tenantId,
+        {
+          id: 'payment-1',
+          tenantId,
+          buildingId,
+          unitId,
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: 'TRX-1',
+          createdByUserId: residentId,
+          proofFileId: 'file-1',
+        },
+        residentId,
+      );
+
+      expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId,
+        userId: adminId,
+        type: 'BUILDING_ALERT',
+      }));
+      expect(notificationsService.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+        userId: residentId,
+      }));
+      expect(prismaService.membership.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId,
+          roles: expect.objectContaining({
+            some: expect.objectContaining({
+              role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
+              OR: expect.arrayContaining([
+                { scopeType: ScopeType.TENANT },
+                { scopeType: ScopeType.BUILDING, scopeBuildingId: buildingId },
+                { scopeType: ScopeType.UNIT, scopeUnitId: unitId },
+              ]),
+            }),
+          }),
+        }),
+      }));
+    });
+
+    it.each([
+      ['sendPaymentReceivedNotification', 'PAYMENT_RECEIVED'],
+      ['sendPaymentRejectedNotification', 'PAYMENT_REJECTED'],
+    ])('excludes the actor from resident payment notifications (%s)', async (helperName, notificationType) => {
+      const payment = {
+        id: 'payment-1',
+        tenantId,
+        buildingId,
+        unitId,
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        createdByUserId: residentId,
+        reference: 'TRX-1',
+        paidAt: new Date('2026-07-24T12:00:00.000Z'),
+      };
+
+      if (helperName === 'sendPaymentRejectedNotification') {
+        await (service as any)[helperName](tenantId, payment, 'Not specified', residentId);
+      } else {
+        await (service as any)[helperName](tenantId, payment, residentId);
+      }
+
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId,
+        userId: 'resident-2',
+        type: notificationType,
+      }));
+      expect(notificationsService.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+        userId: residentId,
+      }));
     });
   });
 });

@@ -30,6 +30,8 @@ export enum PaymentMethod {
   ONLINE = 'ONLINE',
 }
 
+export type PortalContext = 'resident' | 'admin';
+
 export enum ChargeType {
   COMMON_EXPENSE = 'COMMON_EXPENSE',
   EXTRAORDINARY = 'EXTRAORDINARY',
@@ -340,12 +342,15 @@ export async function submitPayment(
     reference?: string;
     paidAt?: string;
     proofFileId?: string;
-  }
+  },
+  portalContext?: PortalContext,
 ): Promise<Payment> {
+  const headers = portalContext ? { 'X-Portal-Context': portalContext } : undefined;
   return apiClient<Payment, typeof data>({
     path: `/buildings/${buildingId}/payments`,
     method: 'POST',
     body: data,
+    headers,
   });
 }
 

@@ -89,11 +89,12 @@ describe('LiquidationsService', () => {
   beforeEach(async () => {
     tx = {
       membership: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'member-1',
-          tenantId: 'tenant-1',
-          roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
-        }),
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'member-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
+      }),
       },
       building: {
         findFirst: jest.fn().mockResolvedValue({ id: 'building-1' }),
@@ -159,11 +160,12 @@ describe('LiquidationsService', () => {
           provide: PrismaService,
           useValue: {
             membership: {
-              findFirst: jest.fn().mockResolvedValue({
-                id: 'member-1',
-                tenantId: 'tenant-1',
-                roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
-              }),
+            findFirst: jest.fn().mockResolvedValue({
+              id: 'member-1',
+              tenantId: 'tenant-1',
+              userId: 'user-1',
+              roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
+            }),
             },
             unit: {
               findMany: jest.fn().mockResolvedValue([
@@ -793,7 +795,19 @@ describe('LiquidationsService', () => {
         dueDate: '2026-06-10',
       }),
     ).resolves.toMatchObject({ status: 'PUBLISHED' });
-    expect(notifications).toHaveBeenCalledTimes(2);
+    expect(notifications).toHaveBeenCalledTimes(1);
+    expect(notifications).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        userId: 'user-2',
+      }),
+    );
+    expect(notifications).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      }),
+    );
     expect(auditService.createLogRequired).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: 'tenant-1',

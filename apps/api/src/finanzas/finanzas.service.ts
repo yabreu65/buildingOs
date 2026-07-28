@@ -1,10 +1,12 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException } from '@nestjs/common';
-import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus } from '@prisma/client';
+import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import type { PortalContext } from '../common/types/request.types';
+import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
 import {
   CreateChargeDto,
@@ -447,6 +449,7 @@ export class FinanzasService {
     userId: string,
     userRoles: string[],
     dto: SubmitPaymentDto,
+    portalContext?: PortalContext,
   ): Promise<Payment> {
     // 1. Permission check
     if (!this.validators.canSubmitPayments(userRoles)) {
@@ -611,7 +614,9 @@ export class FinanzasService {
         return payment;
       });
 
-      void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
+      if (resolveNotificationPortalContext(userRoles, portalContext) === 'resident') {
+        void this.notifyAdminsOfPaymentSubmitted(tenantId, payment, userId);
+      }
       return this.sanitizePaymentForResponse(payment);
     }
 
@@ -632,7 +637,9 @@ export class FinanzasService {
     });
 
     // 9. Notify admins about new payment submitted
-    void this.notifyAdminsOfPaymentSubmitted(tenantId, payment);
+    if (resolveNotificationPortalContext(userRoles, portalContext) === 'resident') {
+      void this.notifyAdminsOfPaymentSubmitted(tenantId, payment, userId);
+    }
 
     return this.sanitizePaymentForResponse(payment);
   }
@@ -965,10 +972,11 @@ export class FinanzasService {
     });
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    void this.sendPaymentReceivedNotification(tenantId, result);
+    const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
+    void this.sendPaymentReceivedNotification(tenantId, result, actorUserId ?? undefined);
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
+    void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
@@ -1055,7 +1063,8 @@ export class FinanzasService {
       return rejectedPayment;
     });
 
-    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
+    const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason, actorUserId ?? undefined);
 
     return this.sanitizePaymentForResponse(result);
   }
@@ -2891,10 +2900,11 @@ export class FinanzasService {
 
     // Send notification to resident about approval (outside transaction, using returned payment)
     if (approvedPaymentResult) {
-      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult);
+      const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
+      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId ?? undefined);
       
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(paymentId).catch((err) => {
+      void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
         this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
       });
     }
@@ -2981,7 +2991,8 @@ export class FinanzasService {
       return rejectedPayment;
     });
 
-    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason);
+    const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
+    void this.sendPaymentRejectedNotification(tenantId, result, dto.reason, actorUserId ?? undefined);
 
     return this.sanitizePaymentForResponse(result);
   }
@@ -3200,63 +3211,10 @@ export class FinanzasService {
    * [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
    * Fire-and-forget: logs errors but never throws
    */
-  private async sendPaymentReceivedNotification(tenantId: string, payment: Payment): Promise<void> {
-    try {
-      // Load unit occupants if this payment is unit-scoped
-      if (!payment.unitId) return;
-
-      const unit = await this.prisma.unit.findUnique({
-        where: { id: payment.unitId },
-        include: {
-          unitOccupants: {
-            where: { endDate: null }, // Active only
-            include: {
-              member: { select: { id: true, user: { select: { id: true } } } },
-            },
-          },
-        },
-      });
-
-      if (!unit) return;
-
-      // Send to all active residents
-      for (const occupant of unit.unitOccupants) {
-        if (occupant.member?.user?.id) {
-          const amount = (payment.amount / 100).toFixed(2);
-          await this.notificationsService.createNotification({
-            tenantId,
-            userId: occupant.member.user.id,
-            type: 'PAYMENT_RECEIVED',
-            title: 'Pago aprobado',
-            body: `Tu pago de ${amount} ${payment.currency} ha sido aprobado y procesado correctamente.`,
-            data: {
-              paymentId: payment.id,
-              paymentAmount: payment.amount / 100,
-              paymentCurrency: payment.currency,
-              reference: payment.reference || 'N/A',
-              paidAt: payment.paidAt?.toISOString(),
-            },
-            deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
-        }
-      }
-    } catch (error) {
-      // Fire-and-forget: log but never fail
-      this.logger.error(
-        `[FinanzasService] Failed to send payment received notification for payment ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-    }
-  }
-
-  /**
-   * [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
-   * Fire-and-forget: logs errors but never throws
-   */
-  private async sendPaymentRejectedNotification(
+  private async sendPaymentReceivedNotification(
     tenantId: string,
     payment: Payment,
-    reason?: string,
+    excludeUserId?: string,
   ): Promise<void> {
     try {
       // Load unit occupants if this payment is unit-scoped
@@ -3276,25 +3234,91 @@ export class FinanzasService {
 
       if (!unit) return;
 
+      const recipientIds = new Set(
+        unit.unitOccupants
+          .map((occupant) => occupant.member?.user?.id)
+          .filter((userId): userId is string => !!userId && userId !== excludeUserId),
+      );
+
       // Send to all active residents
-      for (const occupant of unit.unitOccupants) {
-        if (occupant.member?.user?.id) {
-          const amount = (payment.amount / 100).toFixed(2);
-          await this.notificationsService.createNotification({
-            tenantId,
-            userId: occupant.member.user.id,
-            type: 'PAYMENT_REJECTED',
-            title: 'Pago rechazado',
-            body: `Tu pago de ${amount} ${payment.currency} ha sido rechazado. Motivo: ${reason || 'No especificado'}. Por favor intenta nuevamente.`,
-            data: {
-              paymentId: payment.id,
-              paymentAmount: payment.amount / 100,
-              paymentCurrency: payment.currency,
-              rejectionReason: reason || 'No especificado',
+      for (const userId of recipientIds) {
+        const amount = (payment.amount / 100).toFixed(2);
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId,
+          type: 'PAYMENT_RECEIVED',
+          title: 'Pago aprobado',
+          body: `Tu pago de ${amount} ${payment.currency} ha sido aprobado y procesado correctamente.`,
+          data: {
+            paymentId: payment.id,
+            paymentAmount: payment.amount / 100,
+            paymentCurrency: payment.currency,
+            reference: payment.reference || 'N/A',
+            paidAt: payment.paidAt?.toISOString(),
+          },
+          deliveryMethods: ['IN_APP', 'EMAIL'],
+        });
+      }
+    } catch (error) {
+      // Fire-and-forget: log but never fail
+      this.logger.error(
+        `[FinanzasService] Failed to send payment received notification for payment ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  /**
+   * [PHASE 2 QUICK #4] Send PAYMENT_REJECTED notification
+   * Fire-and-forget: logs errors but never throws
+   */
+  private async sendPaymentRejectedNotification(
+    tenantId: string,
+    payment: Payment,
+    reason?: string,
+    excludeUserId?: string,
+  ): Promise<void> {
+    try {
+      // Load unit occupants if this payment is unit-scoped
+      if (!payment.unitId) return;
+
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: payment.unitId },
+        include: {
+          unitOccupants: {
+            where: { endDate: null }, // Active only
+            include: {
+              member: { select: { id: true, user: { select: { id: true } } } },
             },
-            deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
-        }
+          },
+        },
+      });
+
+      if (!unit) return;
+
+      const recipientIds = new Set(
+        unit.unitOccupants
+          .map((occupant) => occupant.member?.user?.id)
+          .filter((userId): userId is string => !!userId && userId !== excludeUserId),
+      );
+
+      // Send to all active residents
+      for (const userId of recipientIds) {
+        const amount = (payment.amount / 100).toFixed(2);
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId,
+          type: 'PAYMENT_REJECTED',
+          title: 'Pago rechazado',
+          body: `Tu pago de ${amount} ${payment.currency} ha sido rechazado. Motivo: ${reason || 'No especificado'}. Por favor intenta nuevamente.`,
+          data: {
+            paymentId: payment.id,
+            paymentAmount: payment.amount / 100,
+            paymentCurrency: payment.currency,
+            rejectionReason: reason || 'No especificado',
+          },
+          deliveryMethods: ['IN_APP', 'EMAIL'],
+        });
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
@@ -3309,54 +3333,20 @@ export class FinanzasService {
    * Notify admins when a new payment is submitted by a resident
    * Fire-and-forget: logs errors but never throws
    */
-  private async notifyAdminsOfPaymentSubmitted(tenantId: string, payment: Payment): Promise<void> {
+  private async notifyAdminsOfPaymentSubmitted(
+    tenantId: string,
+    payment: Payment,
+    actorUserId?: string,
+  ): Promise<void> {
     try {
-      // Get all admin/operator memberships for this tenant via MembershipRole
-      const adminMemberships = await this.prisma.membership.findMany({
-        where: {
-          tenantId,
-          roles: {
-            some: {
-              role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
-            },
-          },
-        },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-        },
-      });
+      const adminIds = await this.resolveAdministrativeRecipientIds(
+        tenantId,
+        payment.buildingId,
+        payment.unitId,
+        actorUserId ? [actorUserId] : [],
+      );
 
-      // Also check TenantMember for admins (fallback if MembershipRole is empty)
-      const adminTenantMembers = await this.prisma.tenantMember.findMany({
-        where: {
-          tenantId,
-          status: 'ACTIVE',
-          role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
-        },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-        },
-      });
-
-      // Merge unique users from both sources
-      const adminUserIds = new Set<string>();
-      const adminsToNotify: Array<{ id: string; name: string | null; email: string | null }> = [];
-
-      for (const m of adminMemberships) {
-        if (m.user && !adminUserIds.has(m.user.id)) {
-          adminUserIds.add(m.user.id);
-          adminsToNotify.push({ id: m.user.id, name: m.user.name, email: m.user.email });
-        }
-      }
-
-      for (const tm of adminTenantMembers) {
-        if (tm.user && !adminUserIds.has(tm.user.id)) {
-          adminUserIds.add(tm.user.id);
-          adminsToNotify.push({ id: tm.user.id, name: tm.user.name, email: tm.user.email });
-        }
-      }
-
-      if (adminsToNotify.length === 0) {
+      if (adminIds.length === 0) {
         this.logger.debug(`[FinanzasService] No admins found for tenant ${tenantId}, skipping notification`);
         return;
       }
@@ -3375,12 +3365,12 @@ export class FinanzasService {
         : null;
       const amount = (payment.amount / 100).toFixed(2);
 
-      this.logger.debug(`[FinanzasService] Notifying ${adminsToNotify.length} admins about payment ${payment.id}`);
+      this.logger.debug(`[FinanzasService] Notifying ${adminIds.length} admins about payment ${payment.id}`);
 
-      for (const admin of adminsToNotify) {
+      for (const adminId of adminIds) {
         await this.notificationsService.createNotification({
           tenantId,
-          userId: admin.id,
+          userId: adminId,
           type: 'BUILDING_ALERT',
           title: '💰 Nuevo pago pendiente de revisión',
           body: `El residente ${submittedByUser?.name || submittedByUser?.email || 'unknown'} envió un pago de ${amount} ${payment.currency} para la unidad ${unitLabel || payment.unitId || 'N/A'}${buildingName ? ` en ${buildingName}` : ''}. Método: ${payment.method}. ${payment.proofFileId ? '✅ Tiene comprobante.' : '⚠️ Sin comprobante.'}`,
@@ -3405,6 +3395,56 @@ export class FinanzasService {
         error instanceof Error ? error.stack : undefined,
       );
     }
+  }
+
+  private async resolveAdministrativeRecipientIds(
+    tenantId: string,
+    buildingId?: string | null,
+    unitId?: string | null,
+    excludedUserIds: readonly string[] = [],
+  ): Promise<string[]> {
+    const adminMemberships = await this.prisma.membership.findMany({
+      where: {
+        tenantId,
+        roles: {
+          some: {
+            role: { in: ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'] },
+            OR: [
+              { scopeType: ScopeType.TENANT },
+              ...(buildingId ? [{ scopeType: ScopeType.BUILDING, scopeBuildingId: buildingId }] : []),
+              ...(unitId ? [{ scopeType: ScopeType.UNIT, scopeUnitId: unitId }] : []),
+            ],
+          },
+        },
+      },
+      include: {
+        user: { select: { id: true } },
+      },
+    });
+
+    const excluded = new Set(excludedUserIds.filter((id): id is string => !!id));
+    const recipientIds = new Set<string>();
+    for (const userId of [
+      ...adminMemberships.map((admin) => admin.user?.id),
+    ]) {
+      if (userId && !excluded.has(userId)) {
+        recipientIds.add(userId);
+      }
+    }
+
+    return [...recipientIds];
+  }
+
+  private async resolveMembershipUserId(
+    tenantId: string,
+    membershipId: string,
+  ): Promise<string | null> {
+    const membership = await this.prisma.membership.findFirst({
+      where: { id: membershipId, tenantId },
+      select: { userId: true },
+    });
+
+    return membership?.userId ?? null;
   }
 
   /**
@@ -3637,6 +3677,7 @@ export class FinanzasService {
     tenantId: string,
     paymentId: string,
     userRoles: string[],
+    excludeUserId?: string,
   ): Promise<{ success: boolean; receiptNumber?: string; error?: string }> {
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'retry receipt');
@@ -3672,7 +3713,7 @@ export class FinanzasService {
     });
 
     // Try to generate receipt
-    const result = await this.receiptService.ensureReceiptForPayment(paymentId);
+    const result = await this.receiptService.ensureReceiptForPayment(paymentId, excludeUserId);
 
     if (result) {
       return {

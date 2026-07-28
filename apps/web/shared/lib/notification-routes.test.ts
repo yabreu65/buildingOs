@@ -1,4 +1,5 @@
 import { resolveNotificationPath, type NotificationRoleContext } from './notification-routes';
+import { residentTicketDetailPath } from './routes';
 import type { Notification } from '@/features/notifications/notifications.api';
 
 const TENANT_ID = 'tenant-1';
@@ -31,7 +32,7 @@ describe('resolveNotificationPath', () => {
         data: { ticketId: 'ticket-42', buildingId: 'b-1' },
       });
       expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
-        `/${TENANT_ID}/tickets/ticket-42`
+        residentTicketDetailPath(TENANT_ID, 'ticket-42')
       );
     });
 
@@ -358,9 +359,9 @@ describe('resolveNotificationPath', () => {
     });
 
     it('resolves ticket to resident path when portalContext is resident', () => {
-      const n = makeNotification({ type: 'TICKET_COMMENT_ADDED', data: {} });
+      const n = makeNotification({ type: 'TICKET_COMMENT_ADDED', data: { ticketId: 'ticket-42' } });
       expect(resolveNotificationPath(n, TENANT_ID, mixedResidentPortal)).toBe(
-        `/${TENANT_ID}/resident/tickets`
+        `/${TENANT_ID}/tickets/ticket-42?portal=resident`
       );
     });
 

@@ -217,13 +217,13 @@ function UnitTicketForm({
     }
 
     setSubmitting(true);
-    try {
-      const ticket = await createTicket(buildingId, {
-        title: title.trim(),
-        description: description.trim(),
-        category,
-        unitId, // Pre-filled from unit context
-      });
+      try {
+        const ticket = await createTicket(buildingId, {
+          title: title.trim(),
+          description: description.trim(),
+          category,
+          unitId, // Pre-filled from unit context
+        });
 
       if (ticket) {
         onSuccess(ticket);

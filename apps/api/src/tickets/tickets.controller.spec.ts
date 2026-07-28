@@ -42,6 +42,7 @@ describe('TicketsController', () => {
       'building-1',
       { title: 'Leak', description: 'Water leak', unitId: 'unit-1', assignedToMembershipId: 'member-1', priority: 'URGENT', category: 'REPAIR' } as never,
       { tenantId: 'tenant-1', user: { id: 'resident-1', roles: ['RESIDENT'] } } as never,
+      'resident',
     );
 
     expect(ticketsService.create).toHaveBeenCalledWith(
@@ -49,6 +50,7 @@ describe('TicketsController', () => {
       'building-1',
       'resident-1',
       expect.objectContaining({ category: 'REPAIR', priority: 'MEDIUM', assignedToMembershipId: undefined }),
+      'resident',
     );
   });
 
@@ -67,9 +69,11 @@ describe('TicketsController', () => {
     const operatorRequest = { tenantId: 'tenant-1', user: { id: 'operator-1', roles: ['OPERATOR'] } } as never;
     ticketsService.update.mockResolvedValue({ id: 'ticket-1', title: 'Updated' } as never);
     await expect(controller.update('building-1', 'ticket-1', { title: 'Updated' }, operatorRequest)).resolves.toEqual({ id: 'ticket-1', title: 'Updated' });
+    expect(ticketsService.update).toHaveBeenCalledWith('tenant-1', 'building-1', 'ticket-1', { title: 'Updated' }, 'operator-1');
 
     const adminRequest = { tenantId: 'tenant-1', user: { id: 'admin-1', roles: ['TENANT_ADMIN'] } } as never;
     await expect(controller.update('building-1', 'ticket-1', { title: 'Updated' }, adminRequest)).resolves.toEqual({ id: 'ticket-1', title: 'Updated' });
+    expect(ticketsService.update).toHaveBeenCalledWith('tenant-1', 'building-1', 'ticket-1', { title: 'Updated' }, 'admin-1');
   });
 
   it('allows an operator to add an administrative comment within the building scope', async () => {
@@ -81,6 +85,7 @@ describe('TicketsController', () => {
       'ticket-1',
       { body: 'Estamos revisando' },
       { tenantId: 'tenant-1', user: { id: 'operator-1', roles: ['OPERATOR'] } } as never,
+      'admin',
     )).resolves.toEqual({ id: 'comment-1', body: 'Estamos revisando' });
 
     expect(ticketsService.addComment).toHaveBeenCalledWith(
@@ -89,6 +94,7 @@ describe('TicketsController', () => {
       'ticket-1',
       'operator-1',
       { body: 'Estamos revisando' },
+      'admin',
     );
   });
 });

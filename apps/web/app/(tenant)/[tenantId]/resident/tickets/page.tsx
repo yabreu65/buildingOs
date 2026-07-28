@@ -23,7 +23,7 @@ import { useAuthSession } from '../../../../../features/auth/useAuthSession';
 import Card from '../../../../../shared/components/ui/Card';
 import Badge, { type BadgeVariant } from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
-import { ticketDetailPath } from '../../../../../shared/lib/routes';
+import { residentTicketDetailPath } from '../../../../../shared/lib/routes';
 
 function ticketStatusLabel(status: Ticket['status']): string {
   const labels: Record<Ticket['status'], string> = {
@@ -145,7 +145,7 @@ export default function ResidentTicketsPage() {
         description,
         category: newTicket.category as Ticket['category'],
         unitId,
-      });
+      }, 'resident');
       setSuccess('Reclamo creado correctamente');
       setNewTicket({
         title: '',
@@ -349,7 +349,7 @@ export default function ResidentTicketsPage() {
           {filteredTickets.map((ticket) => (
             <Card key={ticket.id} className="p-4 hover:shadow-md transition">
               <Link
-                href={ticketDetailPath(tenantId, ticket.id)}
+                href={residentTicketDetailPath(tenantId, ticket.id)}
                 className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 aria-label={`Ver reclamo ${ticket.title}`}
               >

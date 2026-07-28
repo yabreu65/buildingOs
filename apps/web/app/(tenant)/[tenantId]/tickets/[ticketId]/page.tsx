@@ -1,7 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import Card from '@/shared/components/ui/Card';
@@ -11,6 +10,9 @@ import { useAuth } from '@/features/auth';
 import { TicketDetail } from '@/features/tickets';
 import { addComment, updateTicket } from '@/features/tickets/services/tickets.api';
 import { ticketDetailKeys, useTicketDetail } from '@/features/tickets/hooks/useTicketDetail';
+import { residentTicketsPath } from '@/shared/lib/routes';
+
+const PRIVILEGED_ROLES = ['SUPER_ADMIN', 'TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] as const;
 
 interface TicketParams {
   tenantId: string;
@@ -21,6 +23,7 @@ interface TicketParams {
 export default function TicketDetailPage() {
   const params = useParams<TicketParams>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { currentUser } = useAuth();
 
@@ -29,14 +32,19 @@ export default function TicketDetailPage() {
 
   const { data: ticket, isLoading, error, refetch } = useTicketDetail(tenantId, ticketId);
 
-  const canManageTicket = useMemo(() => {
-    return currentUser?.roles?.some((role) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(role)) ?? false;
-  }, [currentUser?.roles]);
-  const isResident = useMemo(
-    () => currentUser?.roles?.includes('RESIDENT') && !canManageTicket,
-    [canManageTicket, currentUser?.roles],
-  );
-  const fallbackPath = isResident ? `/${tenantId}/resident/tickets` : `/${tenantId}/tickets`;
+  const userRoles = currentUser?.roles ?? [];
+  const hasResidentRole = userRoles.includes('RESIDENT');
+  const hasPrivilegedRole = userRoles.some((role) => PRIVILEGED_ROLES.includes(role as typeof PRIVILEGED_ROLES[number]));
+  const residentPortalRequested = searchParams?.get('portal') === 'resident' && hasResidentRole;
+  const portalContext: 'resident' | 'admin' = !hasResidentRole
+    ? 'admin'
+    : !hasPrivilegedRole
+      ? 'resident'
+      : residentPortalRequested
+        ? 'resident'
+        : 'admin';
+  const canManageTicket = userRoles.some((role) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(role));
+  const fallbackPath = portalContext === 'resident' ? residentTicketsPath(tenantId) : `/${tenantId}/tickets`;
 
   const handleBack = () => {
     if (typeof window !== 'undefined' && document.referrer.startsWith(window.location.origin)) {
@@ -70,7 +78,7 @@ export default function TicketDetailPage() {
   const handleAddComment = async (_ticketId: string, body: string) => {
     if (!ticket) return;
 
-    await addComment(ticket.building.id, ticket.id, { body });
+    await addComment(ticket.building.id, ticket.id, { body }, portalContext);
     await refreshTicket();
   };
 

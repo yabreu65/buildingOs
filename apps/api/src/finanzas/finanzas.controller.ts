@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Request,
+  Headers,
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { FinanzasService } from './finanzas.service';
 import { ExpenseImportService } from './expense-import.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { normalizePortalContextHeader } from '../common/portal-context';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -230,6 +232,7 @@ export class FinanzasController {
     @Param() params: CreatePaymentParamDto,
     @Body() dto: SubmitPaymentDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<PaymentDetailDto> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
@@ -240,6 +243,7 @@ export class FinanzasController {
       userId,
       userRoles,
       dto,
+      normalizePortalContextHeader(portalContext),
     );
   }
 

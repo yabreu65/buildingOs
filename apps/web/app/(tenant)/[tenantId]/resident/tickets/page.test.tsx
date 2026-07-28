@@ -12,7 +12,7 @@ import * as residentContextHook from '@/features/resident/hooks/useResidentConte
 import * as tenanciesHook from '@/features/tenants/tenants.hooks';
 import * as authHook from '@/features/auth/useAuthSession';
 import * as reactQuery from '@tanstack/react-query';
-import { ticketDetailPath } from '@/shared/lib/routes';
+import { residentTicketDetailPath } from '@/shared/lib/routes';
 
 jest.mock('next/navigation', () => ({
   useParams: jest.fn(),
@@ -96,6 +96,6 @@ describe('ResidentTicketsPage', () => {
     render(<ResidentTicketsPage />);
 
     const link = screen.getByRole('link', { name: /ver reclamo fuga de agua/i });
-    expect(link.getAttribute('href')).toBe(ticketDetailPath('tenant-1', 'ticket-1'));
+    expect(link.getAttribute('href')).toBe(residentTicketDetailPath('tenant-1', 'ticket-1'));
   });
 });

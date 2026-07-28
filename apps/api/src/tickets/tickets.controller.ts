@@ -9,6 +9,7 @@ import {
   UseGuards,
   Request,
   Query,
+  Headers,
   ForbiddenException,
 } from '@nestjs/common';
 import { TicketCategory, TicketPriority, TicketStatus } from '@prisma/client';
@@ -22,6 +23,7 @@ import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import type { TenantContextRequest } from '../common/types/request.types';
+import { normalizePortalContextHeader, resolveNotificationPortalContext } from '../common/portal-context';
 import { can } from '../rbac/can';
 import type { Permission } from '../rbac/permissions';
 
@@ -106,6 +108,7 @@ export class TicketsController {
     @Param('buildingId') buildingId: string,
     @Body() dto: CreateTicketDto,
     @Request() req: TenantContextRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ) {
     this.requirePermission(req, 'tickets.write');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
@@ -122,12 +125,17 @@ export class TicketsController {
     const residentDto = this.shouldEnforceResidentScope(userRoles)
       ? { ...dto, category: dto.category ?? TicketCategory.OTHER, priority: TicketPriority.MEDIUM, assignedToMembershipId: undefined }
       : dto;
+    const actorPortalContext = resolveNotificationPortalContext(
+      userRoles,
+      normalizePortalContextHeader(portalContext),
+    );
 
     return await this.ticketsService.create(
       tenantId,
       buildingId,
       userId,
       residentDto,
+      actorPortalContext,
     );
   }
 
@@ -276,6 +284,7 @@ export class TicketsController {
       buildingId,
       ticketId,
       dto,
+      req.user.id,
     );
   }
 
@@ -317,6 +326,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() dto: AddTicketCommentDto,
     @Request() req: TenantContextRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ) {
     this.requirePermission(req, 'tickets.read');
     const tenantId = req.tenantId; // Populated by BuildingAccessGuard
@@ -335,12 +345,18 @@ export class TicketsController {
       );
     }
 
+    const actorPortalContext = resolveNotificationPortalContext(
+      userRoles,
+      normalizePortalContextHeader(portalContext),
+    );
+
     return await this.ticketsService.addComment(
       tenantId,
       buildingId,
       ticketId,
       userId,
       dto,
+      actorPortalContext,
     );
   }
 

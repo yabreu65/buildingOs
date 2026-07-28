@@ -579,7 +579,7 @@ export const ResidentPaymentsPage = () => {
         reference: formData.reference.trim() || undefined,
         paidAt: formData.paidAt || undefined,
         proofFileId: proofFileId || undefined,
-      });
+      }, 'resident');
 
       setSubmitSuccess(true);
       resetForm();

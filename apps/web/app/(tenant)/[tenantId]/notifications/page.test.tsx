@@ -313,6 +313,47 @@ describe('NotificationsPage', () => {
     });
   });
 
+  it('routes resident ticket notifications to the resident detail view with portal context', async () => {
+    mockedUsePathname.mockReturnValue('/tenant-1/resident/notifications' as never);
+    mockedUseAuthSession.mockReturnValue({
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
+      user: { id: 'user-1', email: 'user@test.com', name: 'User' },
+    } as never);
+    mockedUseNotifications.mockReturnValue({
+      notifications: [
+        {
+          id: 'n-ticket',
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          type: 'TICKET_COMMENT_ADDED',
+          title: 'Reclamo actualizado',
+          body: 'Tu reclamo recibió una respuesta',
+          data: { ticketId: 'ticket-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-01T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+      unreadCount: 1,
+      loading: false,
+      error: null,
+      fetch,
+      markAsRead,
+      markAllAsRead,
+      deleteNotification,
+    } as never);
+
+    render(<NotificationsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /abrir/i }));
+
+    await waitFor(() => {
+      expect(push).toHaveBeenCalledWith('/tenant-1/tickets/ticket-1?portal=resident');
+    });
+  });
+
   it('SUPPORT_TICKET_STATUS_CHANGED routes to support page', async () => {
     mockedUseNotifications.mockReturnValue({
       notifications: [
