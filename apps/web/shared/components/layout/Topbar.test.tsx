@@ -348,6 +348,31 @@ describe('PaymentNotificationBell', () => {
     });
   });
 
+  it('uses unreadCount only for the badge when pending payments also exist', async () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockGetUnreadCount.mockResolvedValue(1);
+    mockListPendingPayments.mockResolvedValue([
+      { id: 'p1', status: 'SUBMITTED' },
+    ] as Awaited<ReturnType<typeof financeApi.listPendingPayments>>);
+
+    renderBell();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /notificaciones, 1 sin leer/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /notificaciones, 2 sin leer/i })).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones, 1 sin leer/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 pago pendiente por revisar/)).toBeTruthy();
+    });
+  });
+
   it('recognizes an admin when the membership also includes RESIDENT', async () => {
     mockGetSession.mockReturnValue({
       user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
@@ -752,6 +777,47 @@ describe('PaymentNotificationBell', () => {
     });
   });
 
+  it('SUPPORT_TICKET_CREATED with ticketId appears in the admin dropdown and opens the ticket detail', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-support-created',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'SUPPORT_TICKET_CREATED',
+          title: 'Nuevo reclamo',
+          body: 'Se creó un reclamo de edificio',
+          data: { ticketId: 'ticket-42', buildingId: 'building-1' },
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Nuevo reclamo')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Nuevo reclamo'));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/tickets/ticket-42');
+    });
+  });
+
   it('mixed role user in resident portal navigates to resident payment route', async () => {
     const mockPush = jest.fn();
     jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
@@ -836,6 +902,40 @@ describe('PaymentNotificationBell', () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/tenant-1/finanzas?tab=payments');
     });
+  });
+
+  it('mixed role admin portal does not show PAYMENT_REMINDER without paymentId in the dropdown', async () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-reminder',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'PAYMENT_REMINDER',
+          title: 'Recordatorio de pago',
+          body: 'Tu pago vence pronto',
+          data: {},
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/No hay notificaciones nuevas/i)).toBeTruthy();
+    });
+
+    expect(screen.queryByText('Recordatorio de pago')).toBeNull();
   });
 });
 

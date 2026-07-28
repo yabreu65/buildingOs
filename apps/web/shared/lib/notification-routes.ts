@@ -103,6 +103,10 @@ function isAdminContext(ctx: NotificationRoleContext): boolean {
   return ctx.portalContext === 'admin' || (!ctx.portalContext && ctx.isAdmin);
 }
 
+function hasTicketId(data: Notification['data']): data is Notification['data'] & { ticketId: string } {
+  return typeof data?.ticketId === 'string' && data.ticketId.length > 0;
+}
+
 export function resolveNotificationPath(
   notification: Notification,
   tenantId: string,
@@ -111,12 +115,19 @@ export function resolveNotificationPath(
   const { type, data } = notification;
   const ticketId = data?.ticketId;
 
-  // 1. Support ticket types — route to support module, not building tickets
+  // 1. Building ticket creation notifications with a ticketId route to the canonical ticket detail
+  if (type === 'SUPPORT_TICKET_CREATED' && hasTicketId(data)) {
+    return isResidentContext(roleContext)
+      ? residentTicketDetailPath(tenantId, data.ticketId)
+      : ticketDetailPath(tenantId, data.ticketId);
+  }
+
+  // 2. Support ticket status updates keep their historical support route
   if (isSupportTicketType(type)) {
     return `/${tenantId}/support`;
   }
 
-  // 2. Building ticket types: first confirm type, then use ticketId if available
+  // 3. Building ticket types: first confirm type, then use ticketId if available
   if (isTicketType(type)) {
     if (ticketId && typeof ticketId === 'string') {
       return isResidentContext(roleContext)
@@ -135,14 +146,21 @@ export function resolveNotificationPath(
     return `/${tenantId}/tickets`;
   }
 
-  // 3. Payment types
+  // 4. Resident payment submissions from building alerts behave like payments
+  if (type === 'BUILDING_ALERT' && data?.event === 'PAYMENT_SUBMITTED') {
+    return isAdminContext(roleContext)
+      ? `/${tenantId}/finanzas?tab=payments`
+      : `/${tenantId}/resident/payments`;
+  }
+
+  // 5. Payment types
   if (isPaymentType(type)) {
     return isAdminContext(roleContext)
       ? `/${tenantId}/finanzas?tab=payments`
       : `/${tenantId}/resident/payments`;
   }
 
-  // 4. Document types
+  // 6. Document types
   if ((DOCUMENT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
     if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;
@@ -153,7 +171,7 @@ export function resolveNotificationPath(
     return `/${tenantId}/resident/documents`;
   }
 
-  // 5. Unit types
+  // 7. Unit types
   if ((UNIT_NOTIFICATION_TYPES as readonly string[]).includes(type)) {
     if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;
@@ -164,7 +182,7 @@ export function resolveNotificationPath(
     return `/${tenantId}/resident/unit`;
   }
 
-  // 6. Fallback URL — strict validation only for known types
+  // 8. Fallback URL — strict validation only for known types
   const fallbackUrl = data?.url;
   if (typeof fallbackUrl !== 'string' || !fallbackUrl.startsWith('/')) {
     return null;

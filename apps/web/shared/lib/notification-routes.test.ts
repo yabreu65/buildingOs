@@ -1,5 +1,5 @@
 import { resolveNotificationPath, type NotificationRoleContext } from './notification-routes';
-import { residentTicketDetailPath } from './routes';
+import { ticketDetailPath, residentTicketDetailPath } from './routes';
 import type { Notification } from '@/features/notifications/notifications.api';
 
 const TENANT_ID = 'tenant-1';
@@ -94,6 +94,26 @@ describe('resolveNotificationPath', () => {
       );
     });
 
+    it('resolves SUPPORT_TICKET_CREATED with ticketId to ticket detail for admin', () => {
+      const n = makeNotification({
+        type: 'SUPPORT_TICKET_CREATED',
+        data: { ticketId: 'ticket-42', buildingId: 'b-1' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBe(
+        ticketDetailPath(TENANT_ID, 'ticket-42')
+      );
+    });
+
+    it('resolves SUPPORT_TICKET_CREATED with ticketId to resident ticket detail for resident', () => {
+      const n = makeNotification({
+        type: 'SUPPORT_TICKET_CREATED',
+        data: { ticketId: 'ticket-42', buildingId: 'b-1' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
+        residentTicketDetailPath(TENANT_ID, 'ticket-42')
+      );
+    });
+
     it('resolves SUPPORT_TICKET_STATUS_CHANGED for admin to support page', () => {
       const n = makeNotification({ type: 'SUPPORT_TICKET_STATUS_CHANGED', data: {} });
       expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBe(
@@ -137,6 +157,35 @@ describe('resolveNotificationPath', () => {
       expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBe(
         `/${TENANT_ID}/finanzas?tab=payments`
       );
+    });
+
+    it('resolves BUILDING_ALERT with PAYMENT_SUBMITTED event for admin to finanzas payments tab', () => {
+      const n = makeNotification({
+        type: 'BUILDING_ALERT',
+        data: { event: 'PAYMENT_SUBMITTED', paymentId: 'payment-1' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBe(
+        `/${TENANT_ID}/finanzas?tab=payments`
+      );
+    });
+
+    it('resolves BUILDING_ALERT with PAYMENT_SUBMITTED event for resident to resident payments', () => {
+      const n = makeNotification({
+        type: 'BUILDING_ALERT',
+        data: { event: 'PAYMENT_SUBMITTED', paymentId: 'payment-1' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBe(
+        `/${TENANT_ID}/resident/payments`
+      );
+    });
+
+    it('does not treat other BUILDING_ALERT events as payments', () => {
+      const n = makeNotification({
+        type: 'BUILDING_ALERT',
+        data: { event: 'SOMETHING_ELSE', paymentId: 'payment-1' },
+      });
+      expect(resolveNotificationPath(n, TENANT_ID, adminContext)).toBeNull();
+      expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBeNull();
     });
   });
 

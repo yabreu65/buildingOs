@@ -102,17 +102,24 @@ export function PaymentNotificationBell({
   // Residents see ALL notifications returned by the backend.
   // Admins filter to payment submissions and ticket types only.
   const allNotifs = notificationResult?.notifications ?? [];
+  const isSupportTicketCreatedWithTicketId = (notification: Notification): boolean =>
+    notification.type === 'SUPPORT_TICKET_CREATED' &&
+    typeof notification.data?.ticketId === 'string' &&
+    notification.data.ticketId.length > 0;
+  const isResidentPaymentSubmittedAlert = (notification: Notification): boolean =>
+    notification.type === 'BUILDING_ALERT' && notification.data?.event === 'PAYMENT_SUBMITTED';
 
   const filteredNotifications: Notification[] = isAdmin
     ? allNotifs.filter((n: Notification) =>
-        (n.type === 'BUILDING_ALERT' && n.data?.event === 'PAYMENT_SUBMITTED') ||
-        n.data?.paymentId ||
+        isResidentPaymentSubmittedAlert(n) ||
+        isSupportTicketCreatedWithTicketId(n) ||
+        Boolean(n.data?.paymentId) ||
         getNotificationCategory(n.type) === 'ticket'
       )
     : allNotifs;
 
-  // Badge: pending payments (admin) + unread notifications
-  const badgeCount = isAdmin ? pendingCount + unreadCount : unreadCount;
+  // Badge: unread notifications only. Pending payments remain in the auxiliary card.
+  const badgeCount = unreadCount;
 
   const closeDropdown = useCallback((restoreFocus = false) => {
     setIsOpen(false);
