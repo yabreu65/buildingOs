@@ -1,6 +1,8 @@
 import { Request } from 'express';
 import type { Role, ScopedRole } from '@buildingos/contracts';
 
+export type PortalContext = 'resident' | 'admin';
+
 export interface AuthenticatedMembership {
   id?: string;
   tenantId: string;

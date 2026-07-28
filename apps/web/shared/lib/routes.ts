@@ -70,6 +70,13 @@ export function ticketDetailPath(tenantId: string, ticketId: string): string {
 }
 
 /**
+ * Resident ticket detail route preserving portal context.
+ */
+export function residentTicketDetailPath(tenantId: string, ticketId: string): string {
+  return `${ticketDetailPath(tenantId, ticketId)}?portal=resident`;
+}
+
+/**
  * Resident tickets list.
  */
 export function residentTicketsPath(tenantId: string): string {
@@ -151,6 +158,8 @@ export const routes = {
   superAdminDashboard,
   tenantCategories,
   buildingCategories,
+  ticketDetailPath,
+  residentTicketDetailPath,
 };
 
 export default routes;

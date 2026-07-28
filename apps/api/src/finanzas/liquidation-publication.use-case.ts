@@ -25,6 +25,7 @@ export type NotificationPolicy = 'post-commit' | 'disabled';
 interface FinanceMembershipRecord {
   id: string;
   tenantId: string;
+  userId: string;
   roles: Array<{
     role: string;
     scopeType: 'TENANT' | 'BUILDING' | 'UNIT';
@@ -34,6 +35,7 @@ interface FinanceMembershipRecord {
 export interface FinanceMembershipContext {
   readonly id: string;
   readonly tenantId: string;
+  readonly userId: string;
   readonly roles: string[];
 }
 
@@ -44,6 +46,7 @@ interface FinanceMembershipClient {
       select: {
         id: boolean;
         tenantId: boolean;
+        userId: boolean;
         roles: { select: { role: boolean; scopeType: boolean } };
       };
     }) => Promise<FinanceMembershipRecord | null>;
@@ -123,6 +126,7 @@ export interface LiquidationWorkflowDependencies {
       buildingId: string;
       baseCurrency: string;
     },
+    excludeUserId?: string,
   ) => Promise<NotificationDispatchResult>;
 }
 
@@ -172,6 +176,7 @@ export async function requireFinanceMembership(
     select: {
       id: true,
       tenantId: true,
+      userId: true,
       roles: { select: { role: true, scopeType: true } },
     },
   });
@@ -191,6 +196,7 @@ export async function requireFinanceMembership(
   return {
     id: membership.id,
     tenantId: membership.tenantId,
+    userId: membership.userId,
     roles: tenantRoles,
   };
 }
@@ -227,6 +233,7 @@ export async function sendChargePublishedNotifications(
     buildingId: string;
     baseCurrency: string;
   },
+  excludeUserId?: string,
 ): Promise<NotificationDispatchResult> {
   const logger = new Logger(LiquidationPublicationUseCase.name);
   let sentCount = 0;
@@ -261,7 +268,7 @@ export async function sendChargePublishedNotifications(
     }
 
     for (const occupant of unit.unitOccupants) {
-      if (!occupant.member?.user?.id) {
+      if (!occupant.member?.user?.id || occupant.member.user.id === excludeUserId) {
         continue;
       }
 
@@ -320,13 +327,14 @@ export function createLiquidationWorkflowDependencies(params: {
     createAuditLogRequired: (input, tx) => params.auditService.createLogRequired(input, tx),
     createAuditLog: (input) => params.auditService.createLog(input),
     toPublishedLiquidationDto: (liquidation) => toLiquidationResponseDto(liquidation),
-    sendChargePublishedNotifications: (tenantId, liquidationId, liquidation) =>
+    sendChargePublishedNotifications: (tenantId, liquidationId, liquidation, excludeUserId) =>
       sendChargePublishedNotifications(
         params.prisma,
         params.notificationsService,
         tenantId,
         liquidationId,
         liquidation,
+        excludeUserId,
       ),
   };
 }
@@ -465,6 +473,7 @@ export class LiquidationPublicationUseCase {
     notificationPolicy: NotificationPolicy = 'post-commit',
   ): Promise<LiquidationResponseDto> {
     let publishResult: { liquidation: LiquidationResponseDto; publishedNow: boolean } | null = null;
+    let actorUserId: string | null = null;
 
     try {
       publishResult = await this.deps.prisma.$transaction(
@@ -475,6 +484,7 @@ export class LiquidationPublicationUseCase {
             membershipId,
             this.deps.isAdminOrOperator,
           );
+          actorUserId = membership.userId;
 
           const current = await tx.liquidation.findFirst({
             where: { id: liquidationId, tenantId },
@@ -746,6 +756,7 @@ export class LiquidationPublicationUseCase {
           buildingId: publishResult.liquidation.buildingId,
           baseCurrency: publishResult.liquidation.baseCurrency,
         },
+        actorUserId ?? undefined,
       );
 
       if (notificationResult.failedCount > 0) {

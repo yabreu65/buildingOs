@@ -106,7 +106,7 @@ export class PaymentReceiptService {
    * Idempotent: if receipt already exists, return it.
    * If generation fails, sets receiptStatus = FAILED with error message.
    */
-  async ensureReceiptForPayment(paymentId: string): Promise<ReceiptData | null> {
+  async ensureReceiptForPayment(paymentId: string, excludeUserId?: string): Promise<ReceiptData | null> {
     const payment = await this.prisma.payment.findUnique({
       where: { id: paymentId },
       include: {
@@ -235,7 +235,13 @@ export class PaymentReceiptService {
       const url = await this.minio.presignDownload(this.bucket, objectKey, 3600);
 
       // Notify resident
-      await this.notifyResidentReceiptReady(payment, receiptNumber, url, approvedByUserName);
+      await this.notifyResidentReceiptReady(
+        payment,
+        receiptNumber,
+        url,
+        approvedByUserName,
+        excludeUserId,
+      );
 
       this.logger.log(`Receipt ${receiptNumber} generated for payment ${paymentId}`);
 
@@ -799,8 +805,13 @@ export class PaymentReceiptService {
     receiptNumber: string,
     receiptUrl: string,
     approvedByUserName: string,
+    excludeUserId?: string,
   ) {
     try {
+      if (excludeUserId && payment.createdByUserId === excludeUserId) {
+        return;
+      }
+
       await this.notificationsService.createNotification({
         tenantId: payment.tenantId,
         userId: payment.createdByUserId,

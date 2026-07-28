@@ -293,8 +293,8 @@ export class DocumentsService {
       throw new BadRequestException('Failed to persist document metadata');
     }
 
-    // [PHASE 2 QUICK #6] Send DOCUMENT_SHARED notification if visibility=RESIDENTS
-    void this.sendDocumentSharedNotification(tenantId, document, dto);
+    // [PHASE 2 QUICK #6] Send transactional notification after document creation
+    void this.sendDocumentSharedNotification(tenantId, document, uploadPurpose);
 
     // [PHASE 2 QUICK #7] Audit: DOCUMENT_CREATE
     void this.auditService.createLog({
@@ -1088,68 +1088,68 @@ export class DocumentsService {
   private async sendDocumentSharedNotification(
     tenantId: string,
     document: DocumentNotificationTarget,
-    dto: CreateDocumentDto,
+    uploadPurpose: DocumentUploadPurpose,
   ): Promise<void> {
     try {
-      // Only notify for RESIDENTS visibility
+      const actorUserId = document.createdByMembership?.user?.id ?? null;
+
+      if (uploadPurpose === DocumentUploadPurpose.PAYMENT_PROOF) return;
+
+      // Only notify for RESIDENTS visibility on general documents
       if (document.visibility !== 'RESIDENTS') return;
 
-      let recipientUnitOccupants: UnitOccupantNotificationRecipient[] = [];
-
-      if (document.unitId) {
-        // Unit-scoped: notify occupants of that unit
-        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
-          where: {
-            tenantId,
-            unitId: document.unitId,
-            endDate: null, // Active only
-          },
-          include: {
-            member: { select: { user: { select: { id: true } } } },
-          },
-        });
-      } else if (document.buildingId) {
-        // Building-scoped: notify all occupants in that building
-        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
-          where: {
-            tenantId,
-            unit: { buildingId: document.buildingId },
-            endDate: null, // Active only
-          },
-          include: {
-            member: { select: { user: { select: { id: true } } } },
-          },
-        });
-      } else {
-        // Tenant-wide: notify all occupants
-        recipientUnitOccupants = await this.prisma.unitOccupant.findMany({
-          where: {
-            tenantId,
-            endDate: null, // Active only
-          },
-          include: {
-            member: { select: { user: { select: { id: true } } } },
-          },
-        });
-      }
-
-      // Send notification to each occupant
-      for (const occupant of recipientUnitOccupants) {
-        if (occupant.member?.user?.id) {
-          await this.notificationsService.createNotification({
-            tenantId,
-            userId: occupant.member.user.id,
-            type: 'DOCUMENT_SHARED',
-            title: 'Documento compartido contigo',
-            body: `Se ha compartido el documento "${document.title}" (${document.category}). Puedes descargarlo desde la sección Documentos.`,
-            data: {
-              documentId: document.id,
-              documentTitle: document.title,
-              documentCategory: document.category,
+      const recipientUnitOccupants: UnitOccupantNotificationRecipient[] = document.unitId
+        ? await this.prisma.unitOccupant.findMany({
+            where: {
+              tenantId,
+              unitId: document.unitId,
+              endDate: null, // Active only
             },
-            deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
-        }
+            include: {
+              member: { select: { user: { select: { id: true } } } },
+            },
+          })
+        : document.buildingId
+          ? await this.prisma.unitOccupant.findMany({
+              where: {
+                tenantId,
+                unit: { buildingId: document.buildingId },
+                endDate: null, // Active only
+              },
+              include: {
+                member: { select: { user: { select: { id: true } } } },
+              },
+            })
+          : await this.prisma.unitOccupant.findMany({
+              where: {
+                tenantId,
+                endDate: null, // Active only
+              },
+              include: {
+                member: { select: { user: { select: { id: true } } } },
+              },
+            });
+
+      const recipientIds = new Set(
+        recipientUnitOccupants
+          .map((occupant) => occupant.member?.user?.id)
+          .filter((userId): userId is string => !!userId && userId !== actorUserId),
+      );
+
+      for (const userId of recipientIds) {
+        await this.notificationsService.createNotification({
+          tenantId,
+          userId,
+          type: 'DOCUMENT_SHARED',
+          title: 'Documento compartido contigo',
+          body: `Se ha compartido el documento "${document.title}" (${document.category}). Puedes descargarlo desde la sección Documentos.`,
+          data: {
+            documentId: document.id,
+            documentTitle: document.title,
+            documentCategory: document.category,
+          },
+          deliveryMethods: ['IN_APP', 'EMAIL'],
+        });
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
@@ -1159,4 +1159,5 @@ export class DocumentsService {
       );
     }
   }
+
 }

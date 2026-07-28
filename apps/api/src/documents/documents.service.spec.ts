@@ -231,6 +231,80 @@ describe('DocumentsService', () => {
     expect(result.file.objectKey).toContain('expensas..julio.pdf');
   });
 
+  it('notifies admins instead of the uploading resident for payment proofs', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-proof' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-proof',
+      tenantId: 'tenant-1',
+      title: 'Pago de julio',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      createdByMembership: { user: { id: 'resident-1', name: 'Resident' } },
+      file: { bucket: DEFAULT_BUCKET, objectKey: 'tenant-tenant-1/payment-proofs/proof.pdf' },
+    } as never);
+    await service.createDocument('tenant-1', 'membership-1', {
+      title: 'Pago de julio',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: {
+        ...uploadFile,
+        objectKey: 'tenant-tenant-1/payment-proofs/proof.pdf',
+      },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    expect(prisma.unitOccupant.findMany).not.toHaveBeenCalled();
+    expect(notifications.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('excludes the uploading resident from general resident document notifications', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-doc' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-general',
+      tenantId: 'tenant-1',
+      title: 'Reglamento',
+      category: 'OTHER',
+      visibility: 'RESIDENTS',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      createdByMembership: { user: { id: 'resident-1', name: 'Resident' } },
+      file: { bucket: DEFAULT_BUCKET, objectKey: 'tenant-tenant-1/documents/reglamento.pdf' },
+    } as never);
+    prisma.unitOccupant.findMany.mockResolvedValueOnce([
+      { member: { user: { id: 'resident-1' } } },
+      { member: { user: { id: 'resident-2' } } },
+    ] as never);
+
+    await service.createDocument('tenant-1', 'membership-1', {
+      title: 'Reglamento',
+      category: 'OTHER',
+      visibility: 'RESIDENTS',
+      file: {
+        ...uploadFile,
+        objectKey: 'tenant-tenant-1/documents/reglamento.pdf',
+      },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    expect(notifications.createNotification).toHaveBeenCalledTimes(1);
+    expect(notifications.createNotification).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-1',
+      userId: 'resident-2',
+      type: 'DOCUMENT_SHARED',
+    }));
+    expect(notifications.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'resident-1',
+    }));
+  });
+
   it('rejects empty uploads before creating the document record', async () => {
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: 0 } as never);

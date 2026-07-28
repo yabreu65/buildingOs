@@ -5,6 +5,7 @@ import {
 import { Prisma } from '@prisma/client';
 import {
   LiquidationPublicationUseCase,
+  sendChargePublishedNotifications,
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
 
@@ -59,11 +60,12 @@ describe('LiquidationPublicationUseCase', () => {
   beforeEach(() => {
     tx = {
       membership: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'member-1',
-          tenantId: 'tenant-1',
-          roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
-        }),
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'member-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
+      }),
       },
       liquidation: {
         findFirst: jest
@@ -294,5 +296,57 @@ describe('LiquidationPublicationUseCase', () => {
         }),
       }),
     );
+  });
+
+  it('excludes the publishing actor from charge-published notifications', async () => {
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      charge: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'charge-1',
+            unitId: 'unit-1',
+            dueDate: new Date('2026-05-10T00:00:00.000Z'),
+            amount: 101,
+            currency: 'ARS',
+          },
+        ]),
+      },
+      unit: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'unit-1',
+          label: '1A',
+          unitOccupants: [
+            { member: { user: { id: 'user-1' } } },
+            { member: { user: { id: 'resident-2' } } },
+          ],
+        }),
+      },
+    } as never;
+
+    await sendChargePublishedNotifications(
+      prisma,
+      notificationsService,
+      'tenant-1',
+      'liq-1',
+      {
+        period: '2026-05',
+        buildingId: 'building-1',
+        baseCurrency: 'ARS',
+      },
+      'user-1',
+    );
+
+    expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+    expect(notificationsService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-1',
+      userId: 'resident-2',
+      type: 'CHARGE_PUBLISHED',
+    }));
+    expect(notificationsService.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+    }));
   });
 });

@@ -1,5 +1,6 @@
 import {
   ticketDetailPath,
+  residentTicketDetailPath,
   residentTicketsPath,
   buildingTickets,
 } from './routes';
@@ -118,7 +119,9 @@ export function resolveNotificationPath(
   // 2. Building ticket types: first confirm type, then use ticketId if available
   if (isTicketType(type)) {
     if (ticketId && typeof ticketId === 'string') {
-      return ticketDetailPath(tenantId, ticketId);
+      return isResidentContext(roleContext)
+        ? residentTicketDetailPath(tenantId, ticketId)
+        : ticketDetailPath(tenantId, ticketId);
     }
     if (isAdminContext(roleContext)) {
       const buildingId = data?.buildingId;

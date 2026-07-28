@@ -23,6 +23,8 @@ export type TicketCategory =
   | 'MAINTENANCE' | 'REPAIR' | 'CLEANING' | 'COMPLAINT'
   | 'SAFETY' | 'BILLING' | 'OTHER';
 
+export type PortalContext = 'resident' | 'admin';
+
 export interface Ticket {
   id: string;
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
@@ -197,15 +199,18 @@ export async function getTicketByTenant(tenantId: string, ticketId: string): Pro
  */
 export async function createTicket(
   buildingId: string,
-  input: CreateTicketInput
+  input: CreateTicketInput,
+  portalContext?: PortalContext,
 ): Promise<Ticket> {
   const endpoint = `/buildings/${buildingId}/tickets`;
+  const headers = portalContext ? { 'X-Portal-Context': portalContext } : undefined;
 
   try {
     const data = await apiClient<Ticket, CreateTicketInput>({
       path: endpoint,
       method: 'POST',
       body: input,
+      headers,
     });
     return data;
   } catch (error) {
@@ -245,15 +250,18 @@ export async function updateTicket(
 export async function addComment(
   buildingId: string,
   ticketId: string,
-  input: CreateCommentInput
+  input: CreateCommentInput,
+  portalContext?: PortalContext,
 ): Promise<TicketComment> {
   const endpoint = `/buildings/${buildingId}/tickets/${ticketId}/comments`;
+  const headers = portalContext ? { 'X-Portal-Context': portalContext } : undefined;
 
   try {
     const data = await apiClient<TicketComment, CreateCommentInput>({
       path: endpoint,
       method: 'POST',
       body: input,
+      headers,
     });
     return data;
   } catch (error) {

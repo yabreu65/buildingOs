@@ -27,7 +27,7 @@ import { AddTicketCommentDto } from './dto/add-ticket-comment.dto';
 import { AiTicketCategoryService } from '../assistant/ai-ticket-category.service';
 import { ASSIGNABLE_TICKET_ROLES } from '../memberships/memberships.constants';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
-import type { AuthenticatedServiceActor } from '../common/types/request.types';
+import type { AuthenticatedServiceActor, PortalContext } from '../common/types/request.types';
 import { PERMISSIONS } from '../rbac/permissions';
 
 /**
@@ -170,6 +170,7 @@ export class TicketsService {
     buildingId: string,
     userId: string,
     dto: CreateTicketDto,
+    actorPortalContext: PortalContext,
   ) {
     // 1. Validate building belongs to tenant
     await this.validators.validateBuildingBelongsToTenant(
@@ -239,8 +240,10 @@ export class TicketsService {
       },
     });
 
-    // Fire-and-forget: notify tenant admins of new ticket
-    void this.notifyTicketCreated(tenantId, buildingId, ticket);
+    // Fire-and-forget: notify tenant admins only when the ticket originates from the resident portal
+    if (actorPortalContext === 'resident') {
+      void this.notifyTicketCreated(tenantId, buildingId, ticket, userId);
+    }
 
     // FASE 2: Fire-and-forget AI categorization (never blocks user response)
     // Only run if user didn't explicitly provide category/priority
@@ -528,6 +531,7 @@ export class TicketsService {
     buildingId: string,
     ticketId: string,
     dto: UpdateTicketDto,
+    actorUserId?: string,
   ): Promise<Ticket> {
     // 1. Validate scope and fetch current ticket
     const currentTicket = await this.prisma.ticket.findFirst({
@@ -652,6 +656,7 @@ export class TicketsService {
         ticket,
         currentTicket.status,
         dto.status,
+        actorUserId,
       );
     }
 
@@ -759,6 +764,7 @@ export class TicketsService {
     ticketId: string,
     userId: string,
     dto: AddTicketCommentDto,
+    actorPortalContext: PortalContext,
   ): Promise<TicketComment> {
     // 1. Validate ticket scope
     await this.validators.validateTicketBelongsToBuildingAndTenant(
@@ -792,8 +798,8 @@ export class TicketsService {
       },
     });
 
-    // Fire-and-forget: notify ticket participants of new comment
-    void this.notifyTicketCommentAdded(tenantId, ticketId, userId, comment);
+    // Fire-and-forget: notify ticket participants using the explicit portal context
+    void this.notifyTicketCommentAdded(tenantId, ticketId, userId, comment, actorPortalContext);
 
     return comment;
   }
@@ -862,7 +868,6 @@ export class TicketsService {
         (Date.now() - ticket.createdAt.getTime()) / (1000 * 60 * 60),
       );
 
-      // Get all tenant admins for this building
       const tenantAdmins = await this.prisma.tenantMember.findMany({
         where: {
           tenantId: ticket.building.tenantId,
@@ -924,6 +929,7 @@ export class TicketsService {
     tenantId: string,
     buildingId: string,
     unitId?: string | null,
+    excludedUserIds: readonly string[] = [],
   ): Promise<string[]> {
     const adminMemberships = await this.prisma.membership.findMany({
       where: {
@@ -942,22 +948,12 @@ export class TicketsService {
       include: { user: { select: { id: true } } },
     });
 
-    const adminTenantMembers = await this.prisma.tenantMember.findMany({
-      where: {
-        tenantId,
-        role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
-        status: 'ACTIVE',
-        userId: { not: null },
-      },
-      include: { user: { select: { id: true } } },
-    });
-
+    const excluded = new Set(excludedUserIds.filter((id): id is string => !!id));
     const recipientIds = new Set<string>();
     for (const userId of [
       ...adminMemberships.map((admin) => admin.user?.id),
-      ...adminTenantMembers.map((admin) => admin.user?.id),
     ]) {
-      if (userId) recipientIds.add(userId);
+      if (userId && !excluded.has(userId)) recipientIds.add(userId);
     }
 
     this.logger.debug(
@@ -970,12 +966,18 @@ export class TicketsService {
     tenantId: string,
     buildingId: string,
     ticket: Ticket & { building?: { name: string } | null; unit?: { label: string | null; code: string | null } | null },
+    actorUserId?: string,
   ): Promise<void> {
     try {
       const buildingName = ticket.building?.name || 'Edificio';
       const unitLabel = ticket.unit?.label || ticket.unit?.code || '';
 
-      const recipients = await this.resolveAdministrativeRecipientIds(tenantId, buildingId, ticket.unitId);
+      const recipients = await this.resolveAdministrativeRecipientIds(
+        tenantId,
+        buildingId,
+        ticket.unitId,
+        actorUserId ? [actorUserId] : [],
+      );
       for (const userId of recipients) {
         await this.notificationsService.createNotification({
           tenantId,
@@ -1009,8 +1011,13 @@ export class TicketsService {
     ticket: Ticket & { building?: { name: string } | null },
     oldStatus: string,
     newStatus: string,
+    actorUserId?: string,
   ): Promise<void> {
     try {
+      if (actorUserId && creatorUserId === actorUserId) {
+        return;
+      }
+
       const statusLabels: Record<string, string> = {
         OPEN: 'Abierto',
         IN_PROGRESS: 'En progreso',
@@ -1048,6 +1055,7 @@ export class TicketsService {
     ticketId: string,
     authorUserId: string,
     comment: TicketComment & { author?: { name: string | null } | null },
+    actorPortalContext: PortalContext,
   ): Promise<void> {
     try {
       const ticket = await this.prisma.ticket.findFirst({
@@ -1063,27 +1071,14 @@ export class TicketsService {
 
       if (!ticket) return;
 
-      const authorIsAdministrator = Boolean(await this.prisma.membership.findFirst({
-        where: {
-          tenantId,
-          userId: authorUserId,
-          roles: {
-            some: {
-              role: { in: ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR'] },
-              OR: [
-                { scopeType: 'TENANT' },
-                { scopeType: 'BUILDING', scopeBuildingId: ticket.buildingId },
-                ...(ticket.unitId ? [{ scopeType: 'UNIT' as const, scopeUnitId: ticket.unitId }] : []),
-              ],
-            },
-          },
-        },
-        select: { id: true },
-      }));
-
-      const recipientIds = authorIsAdministrator
+      const recipientIds = actorPortalContext === 'admin'
         ? [ticket.createdByUserId]
-        : await this.resolveAdministrativeRecipientIds(tenantId, ticket.buildingId, ticket.unitId);
+        : await this.resolveAdministrativeRecipientIds(
+          tenantId,
+          ticket.buildingId,
+          ticket.unitId,
+          [authorUserId],
+        );
 
       const authorName = comment.author?.name || 'Alguien';
 
@@ -1092,7 +1087,7 @@ export class TicketsService {
           tenantId,
           userId: recipientId,
           type: 'TICKET_COMMENT_ADDED',
-          title: authorIsAdministrator
+          title: actorPortalContext === 'admin'
             ? `La administración respondió: ${ticket.title}`
             : 'El residente agregó una respuesta',
           body: `${authorName} comentó: "${comment.body.slice(0, 100)}${comment.body.length > 100 ? '...' : ''}"`,
@@ -1102,7 +1097,7 @@ export class TicketsService {
             commentId: comment.id,
             authorName,
             authorId: authorUserId,
-            actorType: authorIsAdministrator ? 'ADMIN' : 'RESIDENT',
+            actorType: actorPortalContext === 'admin' ? 'ADMIN' : 'RESIDENT',
             buildingId: ticket.buildingId,
             unitId: ticket.unitId,
           },

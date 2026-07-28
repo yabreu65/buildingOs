@@ -202,6 +202,6 @@ export class TenantFinanceController {
   ) {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
-    return this.finanzasService.retryReceiptGeneration(tenantId, paymentId, userRoles);
+    return this.finanzasService.retryReceiptGeneration(tenantId, paymentId, userRoles, req.user.id);
   }
 }

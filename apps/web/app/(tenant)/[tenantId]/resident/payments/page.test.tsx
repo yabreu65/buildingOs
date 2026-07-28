@@ -634,6 +634,7 @@ describe('ResidentPaymentsPage', () => {
           method: PaymentMethod.TRANSFER,
           proofFileId: 'file-1',
         }),
+        'resident',
       );
     });
     expect(mockedSubmitPayment).toHaveBeenCalledTimes(1);

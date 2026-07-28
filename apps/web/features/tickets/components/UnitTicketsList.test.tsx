@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/shared/components/ui/Toast';
 import { UnitTicketsList } from './UnitTicketsList';
@@ -150,6 +150,31 @@ describe('UnitTicketsList', () => {
     const links = screen.getAllByRole('link', { name: /Ver reclamo/ });
     links.forEach((link) => {
       expect(link.className).toContain('focus:ring-2');
+    });
+  });
+
+  it('creates tickets without sending a portal context override', async () => {
+    const createTicketSpy = jest.mocked(ticketsApi.createTicket);
+    createTicketSpy.mockResolvedValue(mockTicket1);
+
+    renderWithProviders(<UnitTicketsList tenantId="tenant-1" buildingId="b1" unitId="u1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Crear solicitud/i }));
+
+    fireEvent.change(screen.getByPlaceholderText('Por ejemplo: Cerradura de puerta rota'), { target: { value: 'Nueva solicitud' } });
+    fireEvent.change(screen.getByPlaceholderText('Describe el problema en detalle...'), { target: { value: 'Descripción válida' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /Crear solicitud/i })[1]);
+
+    await waitFor(() => {
+      expect(createTicketSpy).toHaveBeenCalledWith(
+        'b1',
+        expect.objectContaining({
+          title: 'Nueva solicitud',
+          description: 'Descripción válida',
+          unitId: 'u1',
+        }),
+      );
+      expect(createTicketSpy.mock.calls[0]?.[2]).toBeUndefined();
     });
   });
 });

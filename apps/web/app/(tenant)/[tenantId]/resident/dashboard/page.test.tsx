@@ -14,6 +14,7 @@ import { useResidentLedger } from '@/features/resident/hooks/useResidentLedger';
 import { useResidentCommunications } from '@/features/resident/hooks/useResidentCommunications';
 import { useContextOptions } from '@/features/context/useContextOptions';
 import { useTenants } from '@/features/tenants/tenants.hooks';
+import { residentTicketDetailPath } from '@/shared/lib/routes';
 
 jest.mock('next/navigation', () => ({
   useParams: jest.fn(),
@@ -234,5 +235,36 @@ describe('ResidentDashboardPage', () => {
     });
 
     expect(screen.queryByText(/Hola,/)).toBeNull();
+  });
+
+  it('uses the resident portal ticket detail route for dashboard tickets', async () => {
+    mockedUseQuery.mockReturnValue({
+      data: [
+        {
+          id: 'ticket-1',
+          title: 'Fuga de agua',
+          description: 'Detalle',
+          status: 'OPEN',
+          priority: 'MEDIUM',
+          category: 'MAINTENANCE',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-01T00:00:00.000Z',
+          closedAt: null,
+          createdBy: { id: 'resident-1', name: 'Resident' },
+          assignedTo: null,
+          building: { id: 'building-1', name: 'Torre Horizonte' },
+          unit: { id: 'unit-1', label: 'A-101', code: 'A101' },
+          comments: [],
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as never);
+
+    render(<ResidentDashboardPage />);
+
+    const link = screen.getByRole('link', { name: /fuga de agua/i });
+    expect(link.getAttribute('href')).toBe(residentTicketDetailPath('tenant-1', 'ticket-1'));
   });
 });
