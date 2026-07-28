@@ -94,6 +94,7 @@ export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop"
 
         {isResident ? (
           <>
+            {navItem(`/${tenantId}/resident/profile`, t("navigation.myProfile"))}
             {navItem(`/${tenantId}/resident/payments`, t("navigation.payments"))}
             {navItem(`/${tenantId}/resident/announcements`, t("navigation.communications"))}
             {navItem(`/${tenantId}/resident/tickets`, t("navigation.tickets"))}
