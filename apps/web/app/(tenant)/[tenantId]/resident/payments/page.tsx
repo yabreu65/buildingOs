@@ -34,6 +34,7 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
 const CIVIL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const CIVIL_DATE_OR_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/;
 const MONTH_SHORT_LABELS = ['ene.', 'feb.', 'mar.', 'abr.', 'may.', 'jun.', 'jul.', 'ago.', 'sep.', 'oct.', 'nov.', 'dic.'] as const;
 const MONTH_SHORT_UPPER_LABELS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'] as const;
 
@@ -69,10 +70,20 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-function parseCivilDateParts(dateValue: string | undefined | null): { readonly year: number; readonly monthIndex: number; readonly day: number } | null {
-  if (!dateValue || !CIVIL_DATE_PATTERN.test(dateValue)) return null;
+function normalizeCivilDateValue(dateValue: string | undefined | null): string | null {
+  if (!dateValue) return null;
 
-  const [yearPart, monthPart, dayPart] = dateValue.split('-');
+  const normalizedMatch = CIVIL_DATE_OR_TIMESTAMP_PATTERN.exec(dateValue);
+  if (!normalizedMatch) return null;
+
+  return normalizedMatch[1];
+}
+
+function parseCivilDateParts(dateValue: string | undefined | null): { readonly year: number; readonly monthIndex: number; readonly day: number } | null {
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  if (!normalizedDateValue || !CIVIL_DATE_PATTERN.test(normalizedDateValue)) return null;
+
+  const [yearPart, monthPart, dayPart] = normalizedDateValue.split('-');
   const year = Number(yearPart);
   const monthIndex = Number(monthPart);
   const day = Number(dayPart);
@@ -129,9 +140,10 @@ function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
 }
 
 function formatCivilDate(dateValue: string | undefined | null): string {
-  if (!dateValue || !CIVIL_DATE_PATTERN.test(dateValue)) return '—';
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  if (!normalizedDateValue) return '—';
 
-  const [year, month, day] = dateValue.split('-');
+  const [year, month, day] = normalizedDateValue.split('-');
   if (!year || !month || !day) return '—';
 
   return `${day}/${month}/${year}`;
@@ -153,8 +165,9 @@ function formatLocalTimestampDate(dateValue: string | undefined | null): string 
 function formatPaymentDisplayDate(dateValue: string | undefined | null): string {
   if (!dateValue) return '—';
 
-  return CIVIL_DATE_PATTERN.test(dateValue)
-    ? formatCivilDate(dateValue)
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  return normalizedDateValue
+    ? formatCivilDate(normalizedDateValue)
     : formatLocalTimestampDate(dateValue);
 }
 
@@ -201,6 +214,13 @@ function getMobileChargeStatusLabel(charge: {
   }
 
   return { label: 'Pendiente', variant: 'muted' };
+}
+
+function getRecentPaymentsLabel(count: number): string | null {
+  if (count === 0) return null;
+  if (count === 1) return '1 pago registrado';
+  if (count >= 20) return 'Mostrando los últimos 20 pagos';
+  return `${count} pagos registrados`;
 }
 
 function paymentStatusLabel(status: string): string {
@@ -523,11 +543,16 @@ export const ResidentPaymentsPage = () => {
   const [isPaymentPanelOpen, setIsPaymentPanelOpen] = useState(false);
   const activeDownloadObjectUrlsRef = useRef<string[]>([]);
   const activeDownloadTimersRef = useRef<number[]>([]);
+  const submitSuccessTimerRef = useRef<number | null>(null);
   const paymentPanelRef = useRef<HTMLDivElement | null>(null);
   const paymentPanelLastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     return () => {
+      if (submitSuccessTimerRef.current !== null) {
+        window.clearTimeout(submitSuccessTimerRef.current);
+        submitSuccessTimerRef.current = null;
+      }
       activeDownloadTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
       activeDownloadTimersRef.current = [];
       activeDownloadObjectUrlsRef.current.forEach((objectUrl) => window.URL.revokeObjectURL(objectUrl));
@@ -658,6 +683,10 @@ export const ResidentPaymentsPage = () => {
   }, []);
 
   const closePaymentPanel = useCallback((restoreFocus = true) => {
+    if (submitSuccessTimerRef.current !== null) {
+      window.clearTimeout(submitSuccessTimerRef.current);
+      submitSuccessTimerRef.current = null;
+    }
     if (!restoreFocus) {
       paymentPanelLastFocusedRef.current = null;
       setIsPaymentPanelOpen(false);
@@ -801,12 +830,19 @@ export const ResidentPaymentsPage = () => {
       resetForm();
       setIsConfirmOpen(false);
       setPaymentToConfirm(null);
-      closePaymentPanel();
       refetchLedger();
       refetchPayments();
-      setTimeout(() => {
-        setShowForm(false);
+      if (submitSuccessTimerRef.current !== null) {
+        window.clearTimeout(submitSuccessTimerRef.current);
+      }
+      submitSuccessTimerRef.current = window.setTimeout(() => {
+        if (isMobileViewport) {
+          closePaymentPanel();
+        } else {
+          setShowForm(false);
+        }
         setSubmitSuccess(false);
+        submitSuccessTimerRef.current = null;
       }, 2000);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Error al enviar pago');
@@ -941,13 +977,13 @@ export const ResidentPaymentsPage = () => {
 
           {submitError && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-              <p className="text-sm text-red-600" aria-live="polite">{submitError}</p>
+              <p className="text-sm text-red-600" aria-live="polite" role="alert">{submitError}</p>
             </div>
           )}
 
           {submitSuccess && (
-            <div className="rounded-lg border border-green-200 bg-green-50 p-3">
-              <p className="text-sm text-green-600" aria-live="polite">✓ Pago enviado exitosamente</p>
+            <div className="rounded-lg border border-green-200 bg-green-50 p-3" role="status" aria-live="polite">
+              <p className="text-sm text-green-600">✓ Pago enviado exitosamente</p>
             </div>
           )}
         </div>
@@ -956,7 +992,7 @@ export const ResidentPaymentsPage = () => {
           <div className={isMobilePanel ? 'flex flex-col-reverse gap-3 sm:flex-row sm:justify-end' : 'flex gap-2'}>
             <Button
               type="submit"
-              disabled={submitting || !canSubmit}
+              disabled={submitting || submitSuccess || !canSubmit}
               className={isMobilePanel ? 'min-h-12 flex-1 gap-2 sm:flex-none' : 'gap-2'}
               id="resident-payment-submit-trigger"
             >
@@ -1121,6 +1157,7 @@ export const ResidentPaymentsPage = () => {
 
   const mobilePendingPreview = sortedPendingCharges.slice(0, 3);
   const mobileRecentPaymentsPreview = sortedRecentPayments.slice(0, 2);
+  const recentPaymentsLabel = getRecentPaymentsLabel(sortedRecentPayments.length);
 
   if (isMobileViewport) {
     const todayCivilDate = getCurrentCivilDateInputValue();
@@ -1301,12 +1338,12 @@ export const ResidentPaymentsPage = () => {
             </Card>
 
             {lastPayment ? (
-              <Card className="p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Historial reciente</p>
-                    <h2 className="text-lg font-semibold text-foreground">Tu último movimiento</h2>
-                  </div>
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Historial reciente</p>
+                  <h2 className="text-lg font-semibold text-foreground">Tu último movimiento</h2>
+                </div>
                   {payments.length > 0 ? (
                     <Button
                       type="button"
@@ -1318,10 +1355,13 @@ export const ResidentPaymentsPage = () => {
                       Ver historial
                     </Button>
                   ) : null}
-                </div>
-                <div className="mt-4 space-y-3">
-                  {mobileRecentPaymentsPreview.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Todavía no tenés pagos registrados.</p>
+              </div>
+              {recentPaymentsLabel ? (
+                <p className="mt-1 text-sm text-muted-foreground">{recentPaymentsLabel}</p>
+              ) : null}
+              <div className="mt-4 space-y-3">
+                {mobileRecentPaymentsPreview.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Todavía no tenés pagos registrados.</p>
                   ) : (
                     mobileRecentPaymentsPreview.map((payment) => {
                       const proofDocumentId = payment.proofDocumentId;
@@ -1495,7 +1535,9 @@ export const ResidentPaymentsPage = () => {
           <div id="resident-payments-mobile-history" role="tabpanel" aria-labelledby="resident-payments-mobile-history-tab" className="space-y-3">
             <div>
               <h2 className="text-lg font-semibold text-foreground">Historial de pagos</h2>
-              <p className="text-sm text-muted-foreground">{sortedRecentPayments.length} pagos registrados</p>
+              {recentPaymentsLabel ? (
+                <p className="text-sm text-muted-foreground">{recentPaymentsLabel}</p>
+              ) : null}
             </div>
 
             {paymentsError ? (
@@ -1514,7 +1556,7 @@ export const ResidentPaymentsPage = () => {
               </Card>
             ) : paymentsLoading ? (
               <Skeleton className="h-32" />
-            ) : sortedRecentPayments.length === 0 ? (
+                    ) : sortedRecentPayments.length === 0 ? (
               <Card className="p-4">
                 <p className="text-sm text-muted-foreground">Todavía no tenés pagos registrados.</p>
               </Card>

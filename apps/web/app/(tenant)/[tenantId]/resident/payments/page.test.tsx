@@ -525,7 +525,9 @@ describe('ResidentPaymentsPage', () => {
     const fileInput = screen.getByLabelText(/comprobante de pago/i);
     const file = new File([new Uint8Array(11 * 1024 * 1024)], 'proof.pdf', { type: 'application/pdf' });
 
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
 
     expect(await screen.findByText(/El archivo no puede superar 10MB/)).toBeTruthy();
     expect(mockedPresignUpload).not.toHaveBeenCalled();
@@ -541,7 +543,9 @@ describe('ResidentPaymentsPage', () => {
     const fileInput = screen.getByLabelText(/comprobante de pago/i);
     const file = new File([new Uint8Array([1, 2, 3])], 'notes.txt', { type: 'text/plain' });
 
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
 
     expect(await screen.findByText('El comprobante debe ser PDF, JPG o PNG')).toBeTruthy();
     expect(mockedPresignUpload).not.toHaveBeenCalled();
@@ -555,10 +559,12 @@ describe('ResidentPaymentsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
     expect((screen.getByLabelText(/cargo pendiente/i) as HTMLSelectElement).value).toBe('charge-1');
-    fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
-      target: {
-        files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
-      },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
     });
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
@@ -620,15 +626,18 @@ describe('ResidentPaymentsPage', () => {
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
-    fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
-      target: {
-        files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
-      },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
     });
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Enviar pago' }));
+    const submitButton = await screen.findByRole('button', { name: 'Enviar pago' });
+    fireEvent.click(submitButton);
 
     const dialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     expect(dialog.textContent).toContain('99,98');
@@ -689,10 +698,12 @@ describe('ResidentPaymentsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /reportar pago/i }));
     fireEvent.change(screen.getByLabelText(/fecha de pago/i), { target: { value: '2026-07-24' } });
-    fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
-      target: {
-        files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
-      },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
     });
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
@@ -710,26 +721,27 @@ describe('ResidentPaymentsPage', () => {
     expect((screen.getByLabelText(/fecha de pago/i) as HTMLInputElement).value).toBe('2026-07-24');
   });
 
-  it('keeps civil dates exact and formats timestamps in local time in the history list', async () => {
+  it('formats civil and ISO timestamps without shifting the day in the mobile history list', async () => {
+    mockMatchMedia(true);
     mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [] }));
     mockedListPayments.mockResolvedValueOnce([
       makePayment({
         id: 'payment-civil',
-        paidAt: '2026-07-24',
-        createdAt: '2026-07-24',
+        paidAt: '2026-07-29',
+        createdAt: '2026-07-29',
         reference: 'CIVIL',
       }),
       makePayment({
-        id: 'payment-timestamp',
-        paidAt: '2026-07-26T01:00:00.000Z',
-        createdAt: '2026-07-26T01:00:00.000Z',
-        reference: 'TIMESTAMP',
+        id: 'payment-iso-utc',
+        paidAt: '2026-07-29T00:00:00.000Z',
+        createdAt: '2026-07-29T00:00:00.000Z',
+        reference: 'ISO UTC',
       }),
       makePayment({
-        id: 'payment-fallback',
-        paidAt: undefined,
-        createdAt: '2026-07-26T01:00:00.000Z',
-        reference: 'FALLBACK',
+        id: 'payment-iso-hour',
+        paidAt: '2026-07-29T03:00:00.000Z',
+        createdAt: '2026-07-29T03:00:00.000Z',
+        reference: 'ISO HOUR',
       }),
       makePayment({
         id: 'payment-invalid',
@@ -737,29 +749,187 @@ describe('ResidentPaymentsPage', () => {
         createdAt: 'invalid-date',
         reference: 'INVALID',
       }),
+      makePayment({
+        id: 'payment-absent',
+        paidAt: undefined as never,
+        createdAt: undefined as never,
+        reference: 'ABSENT',
+      }),
     ]);
-
-    const expectedTimestampDate = new Intl.DateTimeFormat('es-AR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    }).format(new Date('2026-07-26T01:00:00.000Z'));
 
     const Wrapper = createWrapper();
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
-    await screen.findByText('Historial de pagos');
+    fireEvent.click(await screen.findByRole('tab', { name: 'Historial' }));
 
-    expect(
-      screen.getByText((_, element) => element?.tagName === 'P' && element.textContent?.includes('24/07/2026') === true),
-    ).toBeTruthy();
-    expect(
-      screen.getAllByText(
-        (_, element) => element?.tagName === 'P' && element.textContent?.includes(expectedTimestampDate) === true,
+    expect(screen.getByText('5 pagos registrados')).toBeTruthy();
+    const mobileHistory = document.getElementById('resident-payments-mobile-history');
+    expect(mobileHistory).toBeTruthy();
+    if (!mobileHistory) {
+      throw new Error('Expected the mobile history section to be rendered');
+    }
+    const mobileHistoryTexts = Array.from(mobileHistory.querySelectorAll('p.text-sm.text-muted-foreground'))
+      .map((element) => element.textContent?.replace(/\s+/g, ' ').trim());
+    expect(mobileHistoryTexts).toContain('29 jul. 2026 · TRANSFER · CIVIL');
+    expect(mobileHistoryTexts).toContain('29 jul. 2026 · TRANSFER · ISO UTC');
+    expect(mobileHistoryTexts).toContain('29 jul. 2026 · TRANSFER · ISO HOUR');
+    expect(mobileHistoryTexts).toContain('— · TRANSFER · INVALID');
+    expect(mobileHistoryTexts).toContain('— · TRANSFER · ABSENT');
+    expect(screen.queryByText('28 jul. 2026')).toBeNull();
+    expect(screen.queryByText('29/07/2026')).toBeNull();
+  });
+
+  it('keeps the mobile success visible before closing and restores focus to the trigger', async () => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [makeCharge()] }));
+    mockedListPayments.mockResolvedValueOnce([]);
+    const deferred = createDeferred<Payment>();
+    mockedSubmitPayment.mockImplementation(async () => deferred.promise);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    const openButton = await screen.findByRole('button', { name: 'Reportar pago' });
+    openButton.focus();
+    fireEvent.click(openButton);
+    const panelIntro = await screen.findByText(
+      /Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i,
+    );
+    const mobileDialog = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
+    expect(mobileDialog).toBeTruthy();
+    if (!mobileDialog) {
+      throw new Error('Expected the mobile payment panel to be rendered');
+    }
+    const mobileDialogQueries = within(mobileDialog);
+
+    await act(async () => {
+      fireEvent.change(mobileDialogQueries.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
+    });
+
+    await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
+    expect(await mobileDialogQueries.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
+    const submitButtonLabel = mobileDialogQueries.getByText('Enviar pago');
+    const submitButton = submitButtonLabel.closest('button');
+    expect(submitButton).toBeTruthy();
+    if (!submitButton) {
+      throw new Error('Expected the mobile payment submit button to be rendered');
+    }
+    fireEvent.click(submitButton);
+
+    const confirmDialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Confirmar pago' }));
+
+    await waitFor(() => expect(mockedSubmitPayment).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      deferred.resolve(makePayment({ id: 'payment-success', status: PaymentStatus.SUBMITTED }));
+    });
+
+    await waitFor(() => expect(mobileDialog.textContent).toContain('Pago enviado exitosamente'));
+    expect(mobileDialog.isConnected).toBe(true);
+    expect(mockedSubmitPayment).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /reportar pago/i })).toBeNull());
+    expect(document.activeElement).toBe(openButton);
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+  });
+
+  it('keeps the mobile payment panel open when the submission fails', async () => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [makeCharge()] }));
+    mockedListPayments.mockResolvedValueOnce([]);
+    mockedSubmitPayment.mockRejectedValueOnce(new Error('No se pudo registrar el pago'));
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    const openButton = await screen.findByRole('button', { name: 'Reportar pago' });
+    fireEvent.click(openButton);
+    const panelIntro = await screen.findByText(
+      /Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i,
+    );
+    const mobileDialog = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
+    expect(mobileDialog).toBeTruthy();
+    if (!mobileDialog) {
+      throw new Error('Expected the mobile payment panel to be rendered');
+    }
+    const mobileDialogQueries = within(mobileDialog);
+
+    await act(async () => {
+      fireEvent.change(mobileDialogQueries.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
+    });
+
+    await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
+    expect(await mobileDialogQueries.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
+    const submitButtonLabel = mobileDialogQueries.getByText('Enviar pago');
+    const submitButton = submitButtonLabel.closest('button');
+    expect(submitButton).toBeTruthy();
+    if (!submitButton) {
+      throw new Error('Expected the mobile payment submit button to be rendered');
+    }
+    fireEvent.click(submitButton);
+
+    const confirmDialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Confirmar pago' }));
+
+    await waitFor(() => expect(mockedSubmitPayment).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mobileDialog.textContent).toContain('No se pudo registrar el pago'));
+    expect(mobileDialog.isConnected).toBe(true);
+    expect(mockedSubmitPayment).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(openButton);
+  });
+
+  it.each([
+    { count: 1, expectedLabel: '1 pago registrado' },
+    { count: 8, expectedLabel: '8 pagos registrados' },
+    { count: 20, expectedLabel: 'Mostrando los últimos 20 pagos' },
+  ])('labels mobile history as recent records when showing $count results', async ({ count, expectedLabel }) => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [] }));
+    mockedListPayments.mockResolvedValueOnce(
+      Array.from({ length: count }, (_, index) =>
+        makePayment({
+          id: `payment-${index + 1}`,
+          reference: `PAY-${index + 1}`,
+          paidAt: `2026-07-${String(Math.min(count - index, 28)).padStart(2, '0')}`,
+          createdAt: `2026-07-${String(Math.min(count - index, 28)).padStart(2, '0')}`,
+        }),
       ),
-    ).toHaveLength(3);
-    expect(screen.queryByText('23/07/2026')).toBeNull();
-    expect(screen.queryByText('invalid-date')).toBeNull();
+    );
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Historial' }));
+
+    expect(screen.getByText(expectedLabel)).toBeTruthy();
+    expect(screen.queryByText('20 pagos registrados')).toBeNull();
+  });
+
+  it('shows an empty-state message when no mobile payment history exists', async () => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [] }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Historial' }));
+
+    expect(screen.getByText('Todavía no tenés pagos registrados.')).toBeTruthy();
+    expect(screen.queryByText('Mostrando los últimos 20 pagos')).toBeNull();
   });
 
   it('lets the resident switch pending charges and always shows the selected full balance', async () => {
@@ -796,10 +966,12 @@ describe('ResidentPaymentsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
     fireEvent.change(screen.getByLabelText(/cargo pendiente/i), { target: { value: 'charge-2' } });
-    fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
-      target: {
-        files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
-      },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
     });
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
@@ -822,10 +994,12 @@ describe('ResidentPaymentsPage', () => {
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
-    fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
-      target: {
-        files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
-      },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
     });
 
     expect(await screen.findByText(/Error al subir el comprobante/)).toBeTruthy();
