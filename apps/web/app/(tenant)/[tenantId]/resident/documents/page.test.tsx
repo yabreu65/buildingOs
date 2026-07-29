@@ -54,6 +54,22 @@ const mockedUseQuery = jest.mocked(reactQuery.useQuery);
 const mockedListDocuments = jest.mocked(listDocuments);
 const mockedDownloadProtectedDocumentContent = jest.mocked(downloadProtectedDocumentContent);
 
+function setMatchMedia(matches: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches: query === '(max-width: 767px)' ? matches : !matches,
+      media: query,
+      onchange: null,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
+}
+
 function makeDocument(overrides: Partial<Document> = {}): Document {
   return {
     id: 'document-1',
@@ -79,7 +95,7 @@ function makeDocument(overrides: Partial<Document> = {}): Document {
   };
 }
 
-function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
+function makeReceiptDocument(overrides: Partial<Document> = {}, paymentId = 'pay-1'): Document {
   return makeDocument({
     id: 'doc-receipt',
     title: 'Comprobante pago - transfer.pdf',
@@ -87,7 +103,7 @@ function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
     functionalType: 'PAYMENT_RECEIPT',
     origin: 'GENERATED',
     payment: {
-      id: 'pay-1',
+      id: paymentId,
       amount: 500000,
       currency: 'UYU',
       status: 'APPROVED',
@@ -99,7 +115,7 @@ function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
   });
 }
 
-function makeProofDocument(overrides: Partial<Document> = {}): Document {
+function makeProofDocument(overrides: Partial<Document> = {}, paymentId = 'pay-2'): Document {
   return makeDocument({
     id: 'doc-proof',
     title: 'Comprobante pago - BBVA.pdf',
@@ -107,7 +123,7 @@ function makeProofDocument(overrides: Partial<Document> = {}): Document {
     functionalType: 'PAYMENT_PROOF',
     origin: 'UPLOADED',
     payment: {
-      id: 'pay-2',
+      id: paymentId,
       amount: 350000,
       currency: 'UYU',
       status: 'SUBMITTED',
@@ -127,6 +143,7 @@ describe('ResidentDocumentsPage', () => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     appendSpy = null;
+    setMatchMedia(false);
 
     mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
     mockedUseResidentContext.mockReturnValue({
@@ -351,6 +368,352 @@ describe('ResidentDocumentsPage', () => {
     expect(source).not.toContain('bucket');
     expect(source).not.toContain('objectKey');
     expect(source).not.toContain('minio');
+  });
+
+  it('keeps the context loading guard ahead of the desktop empty state', () => {
+    setMatchMedia(false);
+    mockedUseResidentContext.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+    mockedUseQuery.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+
+    render(<ResidentDocumentsPage />);
+
+    expect(screen.queryByText('No hay documentos disponibles para tu unidad.')).toBeNull();
+    expect(screen.queryByText('Sin unidad asignada')).toBeNull();
+    expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+    const lastQueryOptions = mockedUseQuery.mock.calls[mockedUseQuery.mock.calls.length - 1]?.[0] as {
+      enabled?: boolean;
+    };
+    expect(lastQueryOptions?.enabled).toBe(false);
+  });
+
+  it('keeps the missing unit guard ahead of the desktop empty state', () => {
+    setMatchMedia(false);
+    mockedUseResidentContext.mockReturnValue({
+      data: {
+        activeBuildingId: 'building-1',
+        activeUnitId: null,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+    mockedUseQuery.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+
+    render(<ResidentDocumentsPage />);
+
+    expect(screen.getByText('Sin unidad asignada')).toBeTruthy();
+    expect(screen.queryByText('No hay documentos disponibles para tu unidad.')).toBeNull();
+    const lastQueryOptions = mockedUseQuery.mock.calls[mockedUseQuery.mock.calls.length - 1]?.[0] as {
+      enabled?: boolean;
+    };
+    expect(lastQueryOptions?.enabled).toBe(false);
+  });
+
+  describe('Mobile layout', () => {
+    beforeEach(() => {
+      setMatchMedia(true);
+    });
+
+    it('keeps the context loading guard ahead of the mobile empty state', () => {
+      mockedUseResidentContext.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+      mockedUseQuery.mockReturnValue({
+        data: [],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.queryByText('No hay documentos disponibles para tu unidad.')).toBeNull();
+      expect(screen.queryByText('Sin unidad asignada')).toBeNull();
+      expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+      const lastQueryOptions = mockedUseQuery.mock.calls[mockedUseQuery.mock.calls.length - 1]?.[0] as {
+        enabled?: boolean;
+      };
+      expect(lastQueryOptions?.enabled).toBe(false);
+    });
+
+    it('keeps the missing unit guard before the mobile empty state', () => {
+      mockedUseResidentContext.mockReturnValue({
+        data: {
+          activeBuildingId: 'building-1',
+          activeUnitId: null,
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+      mockedUseQuery.mockReturnValue({
+        data: [],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getByText('Sin unidad asignada')).toBeTruthy();
+      expect(screen.queryByText('No hay documentos disponibles para tu unidad.')).toBeNull();
+      const lastQueryOptions = mockedUseQuery.mock.calls[mockedUseQuery.mock.calls.length - 1]?.[0] as {
+        enabled?: boolean;
+      };
+      expect(lastQueryOptions?.enabled).toBe(false);
+    });
+
+    it('does not render a second mobile context block', () => {
+      mockedUseTenants.mockReturnValue({
+        data: undefined,
+      } as never);
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument()],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getByText('Documentos')).toBeTruthy();
+      expect(screen.getByText(/Consulta comprobantes, recibos y archivos de tu unidad\./i)).toBeTruthy();
+      expect(screen.queryByText('Contexto activo')).toBeNull();
+      expect(screen.queryByText('tenant-1')).toBeNull();
+      expect(screen.getByPlaceholderText(/Buscar por título/)).toBeTruthy();
+    });
+
+    it('keeps the filter bar horizontal and uses pressed toggles', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeProofDocument(), makeDocument()],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const filterBar = screen.getByLabelText('Filtrar documentos');
+      expect(filterBar.className).toContain('overflow-x-auto');
+      expect(screen.getByRole('button', { name: /Todos.*\(3\)/ }).getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByRole('button', { name: /Recibos de pago.*\(1\)/ }).getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('groups receipt and proof documents only when they share the same payment id across months', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeReceiptDocument(
+            {
+              createdAt: '2026-07-31T23:30:00.000Z',
+              payment: { ...makeReceiptDocument().payment!, id: 'shared-payment', period: null },
+            },
+            'shared-payment',
+          ),
+          makeProofDocument(
+            {
+              createdAt: '2026-08-01T00:05:00.000Z',
+              payment: { ...makeProofDocument().payment!, id: 'shared-payment', period: null },
+            },
+            'shared-payment',
+          ),
+          makeDocument({ id: 'document-2', title: 'Reglamento' }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getAllByText(/2 documentos/i)).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /ver comprobante/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /ver recibo/i })).toBeTruthy();
+      expect(screen.getByText('Reglamento')).toBeTruthy();
+    });
+
+    it('keeps unrelated payment documents separate when their payment ids differ', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeProofDocument()],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.queryByText(/2 documentos/i)).toBeNull();
+      expect(screen.getAllByRole('button', { name: /ver comprobante/i })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /ver recibo/i })).toHaveLength(1);
+    });
+
+    it('keeps documents without payment ids independent even when they share the same month', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeDocument({ id: 'free-doc-1', title: 'Reglamento', createdAt: '2026-07-01T00:00:00.000Z' }),
+          makeDocument({ id: 'free-doc-2', title: 'Acta', createdAt: '2026-07-02T00:00:00.000Z' }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.queryByText(/2 documentos/i)).toBeNull();
+      expect(screen.getByText('Reglamento')).toBeTruthy();
+      expect(screen.getByText('Acta')).toBeTruthy();
+    });
+
+    it('orders payment periods descending and keeps general documents under Otros documentos', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeReceiptDocument(
+            {
+              id: 'doc-july',
+              title: 'Pago julio',
+              createdAt: '2026-07-31T23:30:00.000Z',
+              payment: { ...makeReceiptDocument().payment!, id: 'pay-july', period: '2026-07', reference: 'Julio' },
+            },
+            'pay-july',
+          ),
+          makeProofDocument(
+            {
+              id: 'doc-june',
+              title: 'Pago junio',
+              createdAt: '2026-06-15T12:00:00.000Z',
+              payment: { ...makeProofDocument().payment!, id: 'pay-june', period: '2026-06', reference: 'Junio' },
+            },
+            'pay-june',
+          ),
+          makeReceiptDocument(
+            {
+              id: 'doc-may',
+              title: 'Pago mayo',
+              createdAt: '2026-05-20T12:00:00.000Z',
+              payment: { ...makeReceiptDocument().payment!, id: 'pay-may', period: null, reference: null },
+            },
+            'pay-may',
+          ),
+          makeDocument({
+            id: 'free-doc-1',
+            title: 'Reglamento de convivencia',
+            createdAt: '2026-08-01T09:00:00.000Z',
+          }),
+          makeDocument({
+            id: 'free-doc-2',
+            title: 'Acta',
+            createdAt: '2026-04-01T09:00:00.000Z',
+          }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const sectionHeadings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+      expect(sectionHeadings).toEqual([
+        'Julio de 2026',
+        'Junio de 2026',
+        'Mayo de 2026',
+        'Otros documentos',
+      ]);
+
+      const otherSection = screen.getByRole('heading', { name: 'Otros documentos' }).closest('section');
+      expect(otherSection).toBeTruthy();
+      const otherSectionTexts = otherSection
+        ? Array.from(otherSection.querySelectorAll('h3, p')).map((node) => node.textContent?.trim()).filter(Boolean)
+        : [];
+      expect(otherSectionTexts).toContain('Reglamento de convivencia');
+      expect(otherSectionTexts).toContain('Acta');
+      expect(otherSectionTexts.indexOf('Reglamento de convivencia')).toBeLessThan(otherSectionTexts.indexOf('Acta'));
+    });
+
+    it('supports search and clear in the compact mobile view', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeDocument({ title: 'Reglamento de convivencia' })],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const input = screen.getByLabelText('Buscar documentos');
+      fireEvent.change(input, { target: { value: 'Reglamento' } });
+
+      expect(screen.queryByText('Comprobante pago - transfer.pdf')).toBeNull();
+      expect(screen.getByText('Reglamento de convivencia')).toBeTruthy();
+
+      fireEvent.click(screen.getByLabelText('Limpiar búsqueda'));
+      expect((screen.getByLabelText('Buscar documentos') as HTMLInputElement).value).toBe('');
+    });
+
+    it('keeps civil dates stable for ISO and date-only inputs', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeDocument({ id: 'date-only', title: 'Fecha civil', createdAt: '2026-07-24' }),
+          makeDocument({ id: 'iso-ts', title: 'Timestamp ISO', createdAt: '2026-07-24T00:00:00.000Z' }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getAllByText(/24 de jul de 2026/i).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText(/Fecha desconocida/i)).toBeNull();
+    });
+
+    it('shows a safe fallback for invalid dates', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeDocument({ id: 'invalid-date', title: 'Sin fecha', createdAt: 'not-a-date' })],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getByText(/Fecha desconocida/i)).toBeTruthy();
+    });
   });
 
   describe('Filter bar', () => {
