@@ -54,6 +54,22 @@ const mockedUseQuery = jest.mocked(reactQuery.useQuery);
 const mockedListDocuments = jest.mocked(listDocuments);
 const mockedDownloadProtectedDocumentContent = jest.mocked(downloadProtectedDocumentContent);
 
+function setMatchMedia(matches: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches: query === '(max-width: 767px)' ? matches : !matches,
+      media: query,
+      onchange: null,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
+}
+
 function makeDocument(overrides: Partial<Document> = {}): Document {
   return {
     id: 'document-1',
@@ -79,7 +95,7 @@ function makeDocument(overrides: Partial<Document> = {}): Document {
   };
 }
 
-function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
+function makeReceiptDocument(overrides: Partial<Document> = {}, paymentId = 'pay-1'): Document {
   return makeDocument({
     id: 'doc-receipt',
     title: 'Comprobante pago - transfer.pdf',
@@ -87,7 +103,7 @@ function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
     functionalType: 'PAYMENT_RECEIPT',
     origin: 'GENERATED',
     payment: {
-      id: 'pay-1',
+      id: paymentId,
       amount: 500000,
       currency: 'UYU',
       status: 'APPROVED',
@@ -99,7 +115,7 @@ function makeReceiptDocument(overrides: Partial<Document> = {}): Document {
   });
 }
 
-function makeProofDocument(overrides: Partial<Document> = {}): Document {
+function makeProofDocument(overrides: Partial<Document> = {}, paymentId = 'pay-2'): Document {
   return makeDocument({
     id: 'doc-proof',
     title: 'Comprobante pago - BBVA.pdf',
@@ -107,7 +123,7 @@ function makeProofDocument(overrides: Partial<Document> = {}): Document {
     functionalType: 'PAYMENT_PROOF',
     origin: 'UPLOADED',
     payment: {
-      id: 'pay-2',
+      id: paymentId,
       amount: 350000,
       currency: 'UYU',
       status: 'SUBMITTED',
@@ -127,6 +143,7 @@ describe('ResidentDocumentsPage', () => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     appendSpy = null;
+    setMatchMedia(false);
 
     mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
     mockedUseResidentContext.mockReturnValue({
@@ -351,6 +368,145 @@ describe('ResidentDocumentsPage', () => {
     expect(source).not.toContain('bucket');
     expect(source).not.toContain('objectKey');
     expect(source).not.toContain('minio');
+  });
+
+  describe('Mobile layout', () => {
+    beforeEach(() => {
+      setMatchMedia(true);
+    });
+
+    it('renders compact context without leaking the tenantId fallback', () => {
+      mockedUseTenants.mockReturnValue({
+        data: undefined,
+      } as never);
+      mockedUseQuery.mockReturnValue({
+        data: [],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getByText('Administración actual')).toBeTruthy();
+      expect(screen.queryByText('tenant-1')).toBeNull();
+      expect(screen.getByText('Documentos')).toBeTruthy();
+      expect(screen.getByText(/Consulta comprobantes, recibos y archivos de tu unidad\./i)).toBeTruthy();
+    });
+
+    it('keeps the filter bar horizontal and uses pressed toggles', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeProofDocument(), makeDocument()],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const filterBar = screen.getByLabelText('Filtrar documentos');
+      expect(filterBar.className).toContain('overflow-x-auto');
+      expect(screen.getByRole('button', { name: /Todos.*\(3\)/ }).getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByRole('button', { name: /Recibos de pago.*\(1\)/ }).getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('groups receipt and proof documents only when they share the same payment id', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeReceiptDocument(
+            { payment: { ...makeReceiptDocument().payment!, id: 'shared-payment', period: '2025-07' } },
+            'shared-payment',
+          ),
+          makeProofDocument(
+            { payment: { ...makeProofDocument().payment!, id: 'shared-payment', period: '2025-07' } },
+            'shared-payment',
+          ),
+          makeDocument({ id: 'document-2', title: 'Reglamento' }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getAllByText(/2 documentos/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByRole('button', { name: /ver comprobante/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /ver recibo/i })).toBeTruthy();
+      expect(screen.getByText('Reglamento')).toBeTruthy();
+    });
+
+    it('keeps unrelated payment documents separate when their payment ids differ', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeProofDocument()],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.queryByText(/2 documentos/i)).toBeNull();
+      expect(screen.getAllByRole('button', { name: /ver comprobante/i })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /ver recibo/i })).toHaveLength(1);
+    });
+
+    it('supports search and clear in the compact mobile view', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeReceiptDocument(), makeDocument({ title: 'Reglamento de convivencia' })],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const input = screen.getByLabelText('Buscar documentos');
+      fireEvent.change(input, { target: { value: 'Reglamento' } });
+
+      expect(screen.queryByText('Comprobante pago - transfer.pdf')).toBeNull();
+      expect(screen.getByText('Reglamento de convivencia')).toBeTruthy();
+
+      fireEvent.click(screen.getByLabelText('Limpiar búsqueda'));
+      expect((screen.getByLabelText('Buscar documentos') as HTMLInputElement).value).toBe('');
+    });
+
+    it('keeps civil dates stable for ISO and date-only inputs', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeDocument({ id: 'date-only', title: 'Fecha civil', createdAt: '2026-07-24' }),
+          makeDocument({ id: 'iso-ts', title: 'Timestamp ISO', createdAt: '2026-07-24T00:00:00.000Z' }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getAllByText(/24 de jul de 2026/i).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText(/Fecha desconocida/i)).toBeNull();
+    });
+
+    it('shows a safe fallback for invalid dates', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [makeDocument({ id: 'invalid-date', title: 'Sin fecha', createdAt: 'not-a-date' })],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      expect(screen.getByText(/Fecha desconocida/i)).toBeTruthy();
+    });
   });
 
   describe('Filter bar', () => {

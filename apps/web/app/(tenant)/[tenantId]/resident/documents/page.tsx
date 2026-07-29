@@ -65,11 +65,220 @@ const PAYMENT_STATUS_VARIANTS: Record<string, BadgeVariant> = {
 };
 
 function formatDate(dateValue: string): string {
+  const civilDate = parseCivilDate(dateValue);
+  if (!civilDate) {
+    return 'Fecha desconocida';
+  }
+
   return new Intl.DateTimeFormat('es-AR', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
-  }).format(new Date(dateValue));
+    timeZone: 'UTC',
+  }).format(civilDate);
+}
+
+function parseCivilDate(dateValue: string | null | undefined): Date | null {
+  if (!dateValue || dateValue.trim() === '') return null;
+
+  const trimmed = dateValue.trim();
+  const civilDateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (civilDateMatch) {
+    const [, year, month, day] = civilDateMatch;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatMonthLabel(monthValue: string): string {
+  const normalized = monthValue.trim();
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(normalized);
+  if (monthMatch) {
+    const [, year, month] = monthMatch;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, 1));
+    const label = new Intl.DateTimeFormat('es-AR', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).format(date);
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
+  const date = parseCivilDate(normalized);
+  if (!date) return normalized;
+  const label = new Intl.DateTimeFormat('es-AR', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function useIsMobileViewport(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return () => {};
+      }
+
+      const mediaQueryList = window.matchMedia('(max-width: 767px)');
+      const handleChange = () => onStoreChange();
+
+      if (typeof mediaQueryList.addEventListener === 'function') {
+        mediaQueryList.addEventListener('change', handleChange);
+        return () => mediaQueryList.removeEventListener('change', handleChange);
+      }
+
+      mediaQueryList.addListener(handleChange);
+      return () => mediaQueryList.removeListener(handleChange);
+    },
+    () => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return false;
+      }
+      return window.matchMedia('(max-width: 767px)').matches;
+    },
+    () => false,
+  );
+}
+
+type MobileDocumentItem =
+  | {
+      kind: 'bundle';
+      key: string;
+      paymentId: string;
+      title: string;
+      payment: NonNullable<Document['payment']>;
+      documents: Document[];
+      primaryDocument: Document;
+      sectionLabel: string;
+    }
+  | {
+      kind: 'document';
+      key: string;
+      document: Document;
+      sectionLabel: string;
+    };
+
+interface MobileDocumentSection {
+  key: string;
+  label: string;
+  items: MobileDocumentItem[];
+}
+
+function getDocumentSectionKey(document: Document): string {
+  if (document.payment?.period && /^\d{4}-\d{2}$/.test(document.payment.period.trim())) {
+    return `payment:${document.payment.period.trim()}`;
+  }
+
+  const parsedDate = parseCivilDate(document.createdAt);
+  if (!parsedDate) {
+    return 'unknown';
+  }
+
+  return `date:${parsedDate.getUTCFullYear()}-${String(parsedDate.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function getDocumentSectionLabel(document: Document): string {
+  if (document.payment?.period && /^\d{4}-\d{2}$/.test(document.payment.period.trim())) {
+    return formatMonthLabel(document.payment.period.trim());
+  }
+
+  return parseCivilDate(document.createdAt) ? formatMonthLabel(document.createdAt) : 'Documentos';
+}
+
+function getPaymentBundleTitle(payment: NonNullable<Document['payment']>, fallbackTitle: string): string {
+  if (payment.period && /^\d{4}-\d{2}$/.test(payment.period.trim())) {
+    return `Pago ${formatMonthLabel(payment.period.trim())}`;
+  }
+
+  if (payment.reference && payment.reference.trim() !== '') {
+    return payment.reference.trim();
+  }
+
+  return fallbackTitle;
+}
+
+function buildMobileDocumentSections(documents: Document[]): MobileDocumentSection[] {
+  const sectionMap = new Map<string, { label: string; items: MobileDocumentItem[]; bundleIndex: Map<string, number> }>();
+  const order: string[] = [];
+
+  for (const document of documents) {
+    const sectionKey = getDocumentSectionKey(document);
+    const sectionLabel = getDocumentSectionLabel(document);
+    let section = sectionMap.get(sectionKey);
+
+    if (!section) {
+      section = {
+        label: sectionLabel,
+        items: [],
+        bundleIndex: new Map<string, number>(),
+      };
+      sectionMap.set(sectionKey, section);
+      order.push(sectionKey);
+    }
+
+    if (document.functionalType && document.payment?.id) {
+      const bundleKey = document.payment.id;
+      const existingIndex = section.bundleIndex.get(bundleKey);
+
+      if (typeof existingIndex === 'number') {
+        const item = section.items[existingIndex];
+        if (item.kind === 'bundle') {
+          item.documents.push(document);
+          if (document.functionalType === 'PAYMENT_RECEIPT' && item.primaryDocument.functionalType !== 'PAYMENT_RECEIPT') {
+            item.primaryDocument = document;
+            item.title = getPaymentBundleTitle(document.payment, getSafeFileName(document));
+          }
+        }
+        continue;
+      }
+
+      const bundleItem: MobileDocumentItem = {
+        kind: 'bundle',
+        key: `bundle:${sectionKey}:${bundleKey}`,
+        paymentId: bundleKey,
+        title: getPaymentBundleTitle(document.payment, getSafeFileName(document)),
+        payment: document.payment,
+        documents: [document],
+        primaryDocument: document,
+        sectionLabel,
+      };
+      section.bundleIndex.set(bundleKey, section.items.length);
+      section.items.push(bundleItem);
+      continue;
+    }
+
+    section.items.push({
+      kind: 'document',
+      key: `document:${document.id}`,
+      document,
+      sectionLabel,
+    });
+  }
+
+  return order.map((key) => {
+    const section = sectionMap.get(key);
+    if (!section) return { key, label: 'Documentos', items: [] };
+    return {
+      key,
+      label: section.label,
+      items: section.items,
+    };
+  });
+}
+
+function getBundleActionLabel(document: Document): string {
+  if (document.functionalType === 'PAYMENT_RECEIPT') {
+    return 'Ver recibo';
+  }
+  if (document.functionalType === 'PAYMENT_PROOF') {
+    return 'Ver comprobante';
+  }
+  return 'Ver documento';
 }
 
 function formatFileSize(bytes?: number): string {
@@ -195,14 +404,23 @@ export default function ResidentDocumentsPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const { data: tenants } = useTenants();
-  const tenantName = tenants?.find((tenant) => tenant.id === tenantId)?.name ?? tenantId;
+  const tenantName = tenants?.find((tenant) => tenant.id === tenantId)?.name ?? 'Administración actual';
 
   const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
 
   const { data: contextOptions } = useContextOptions(tenantId ?? null);
+  const unitsForBuilding = buildingId ? contextOptions?.unitsByBuilding?.[buildingId] ?? [] : [];
   const buildingName = contextOptions?.buildings.find((building) => building.id === buildingId)?.name ?? null;
+  const unitName = buildingId && unitId
+    ? unitsForBuilding.find((unit) => unit.id === unitId)?.label ??
+      unitsForBuilding.find((unit) => unit.id === unitId)?.code ??
+      null
+    : null;
+  const isMobileViewport = useIsMobileViewport();
+  const mobileContextPrimaryLabel = [buildingName, unitName].filter(Boolean).join(' · ') || tenantName;
+  const mobileContextSecondaryLabel = mobileContextPrimaryLabel !== tenantName ? tenantName : null;
 
   useEffect(() => {
     return () => {
@@ -246,6 +464,8 @@ export default function ResidentDocumentsPage() {
     }
     return counts;
   }, [documents]);
+
+  const mobileSections = useMemo(() => buildMobileDocumentSections(filteredDocuments), [filteredDocuments]);
 
   const listErrorMessage = useMemo(() => {
     if (!docsError) return null;
@@ -408,6 +628,377 @@ export default function ResidentDocumentsPage() {
     );
     registerObjectUrl(objectUrl, DOWNLOAD_URL_REVOKE_DELAY_MS);
   };
+
+  const renderMobileDocumentCard = (document: Document) => {
+    const fileName = getSafeFileName(document);
+    const typeLabel = getDocumentTypeLabel(document);
+    const mimeType = getSafeMimeType(document);
+    const scopeLabel = getDocumentScopeLabel(document.buildingId ?? null, document.unitId ?? null);
+    const dateLabel = formatDate(document.createdAt);
+    const sizeLabel = getSafeSize(document);
+
+    return (
+      <Card key={document.id} className="overflow-hidden border-border/70 bg-background">
+        <button
+          type="button"
+          onClick={(e) => {
+            triggerButtonRef.current = e.currentTarget as HTMLButtonElement;
+            void handleViewDocument(document);
+          }}
+          aria-label={`Ver documento ${document.title}`}
+          className="flex w-full items-start gap-3 p-3 text-left transition hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+        >
+          <span className="text-xl" aria-hidden="true">
+            {getFileIcon(mimeType)}
+          </span>
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="truncate text-[15px] font-medium text-foreground" title={document.title}>
+              {document.title}
+            </p>
+            <p className="truncate text-xs text-muted-foreground" title={fileName}>
+              {typeLabel || document.category}
+              {' · '}
+              {scopeLabel}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {dateLabel}
+              {' · '}
+              {sizeLabel}
+            </p>
+          </div>
+          <span className="shrink-0 pt-0.5 text-sm font-medium text-blue-700 dark:text-blue-300">
+            Ver documento
+          </span>
+        </button>
+      </Card>
+    );
+  };
+
+  const renderMobileBundleCard = (_sectionLabel: string, bundle: MobileDocumentItem & { kind: 'bundle' }) => {
+    const payment = bundle.payment;
+    const actionDocs = Array.from(
+      new Map(
+        bundle.documents.map((document) => [getBundleActionLabel(document), document] as const),
+      ).entries(),
+    );
+    const paymentStatusLabel = payment.status ? PAYMENT_STATUS_LABELS[payment.status] ?? payment.status : null;
+    const amountLabel = formatCurrency(payment.amount, payment.currency);
+    const referenceLabel = payment.reference?.trim() || null;
+
+    return (
+      <Card key={bundle.key} className="overflow-hidden border-border/70 bg-background">
+        <div className="space-y-3 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{amountLabel}</p>
+              <p className="truncate text-sm font-medium text-foreground" title={bundle.title}>
+                {bundle.title}
+              </p>
+            </div>
+            {paymentStatusLabel && (
+              <Badge variant={PAYMENT_STATUS_VARIANTS[payment.status] ?? 'muted'}>
+                {paymentStatusLabel}
+              </Badge>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {referenceLabel && <span>Ref {referenceLabel}</span>}
+            <span>{bundle.documents.length} {bundle.documents.length === 1 ? 'documento' : 'documentos'}</span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {actionDocs.map(([actionLabel, document]) => (
+              <button
+                key={document.id}
+                type="button"
+                onClick={(e) => {
+                  triggerButtonRef.current = e.currentTarget as HTMLButtonElement;
+                  void handleViewDocument(document);
+                }}
+                aria-label={`${actionLabel} ${document.title}`}
+                className="inline-flex min-h-11 items-center justify-center rounded-full border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200"
+              >
+                {actionLabel}
+              </button>
+            ))}
+          </div>
+        </div>
+      </Card>
+    );
+  };
+
+  const previewDialog = previewDocument && (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Vista de ${previewDocument.title}`}
+    >
+      <div
+        ref={dialogRef}
+        className="relative flex max-h-[min(92dvh,92svh)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-slate-900 sm:max-h-[90vh]"
+      >
+        <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-lg font-medium" data-testid="modal-title">
+              {previewDocument.title}
+            </h2>
+            <p className="truncate text-sm text-muted-foreground">
+              {getSafeFileName(previewDocument)}
+              {previewDocument.payment?.period && ` — Período ${previewDocument.payment.period}`}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleDownloadFromPreview()}
+              disabled={!previewContent}
+              className="inline-flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-sm text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Download className="h-4 w-4" />
+              Descargar
+            </button>
+            <button
+              type="button"
+              onClick={handleClosePreview}
+              className="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+              aria-label="Cerrar"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4">
+          {previewLoading && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <Loader2 className="mb-4 h-8 w-8 animate-spin text-blue-600" />
+              <p className="text-sm text-muted-foreground">Cargando documento...</p>
+            </div>
+          )}
+
+          {previewError && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <AlertCircle className="mb-4 h-8 w-8 text-red-500" />
+              <p className="text-sm text-red-600">{previewError}</p>
+              <button
+                type="button"
+                onClick={handleClosePreview}
+                className="mt-4 text-sm font-medium text-blue-600 hover:underline"
+              >
+                Cerrar
+              </button>
+            </div>
+          )}
+
+          {previewObjectUrl && previewDocument && (
+            <>
+              {previewDocument.file?.mimeType?.toLowerCase().startsWith('image/') ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previewObjectUrl}
+                  alt={previewDocument.title}
+                  className="mx-auto max-h-[70vh] object-contain"
+                />
+              ) : previewDocument.file?.mimeType?.toLowerCase() === 'application/pdf' ? (
+                <iframe
+                  src={previewObjectUrl}
+                  title={previewDocument.title}
+                  className="h-[70vh] w-full border-0"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <FileText className="mb-4 h-12 w-12 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">
+                    No se puede previsualizar este tipo de archivo.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadFromPreview()}
+                    className="mt-4 text-sm font-medium text-blue-600 hover:underline"
+                  >
+                    Descargar archivo
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (isMobileViewport) {
+    return (
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <FileText className="h-6 w-6" />
+            Documentos
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Consulta comprobantes, recibos y archivos de tu unidad.
+          </p>
+        </div>
+
+        <Card className="border-border/70 bg-muted/30 p-3 dark:bg-muted/20">
+          <div className="min-w-0 space-y-1">
+            <p className="text-sm font-semibold text-foreground">Contexto activo</p>
+            <p className="truncate text-sm font-medium text-foreground" title={mobileContextPrimaryLabel}>
+              {mobileContextPrimaryLabel}
+            </p>
+            {mobileContextSecondaryLabel && (
+              <p className="truncate text-xs text-muted-foreground" title={mobileContextSecondaryLabel}>
+                {mobileContextSecondaryLabel}
+              </p>
+            )}
+          </div>
+        </Card>
+
+        {listErrorMessage && (
+          <Card className="border-red-200 bg-red-50 p-3 dark:border-red-900/60 dark:bg-red-950/40">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 shrink-0 text-red-600 dark:text-red-400" size={18} />
+              <div className="space-y-1">
+                <p className="font-medium text-red-800 dark:text-red-200">No pudimos cargar los documentos</p>
+                <p className="text-sm text-red-700 dark:text-red-300">{listErrorMessage}</p>
+                <button
+                  type="button"
+                  onClick={() => void refetch()}
+                  className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
+                >
+                  Reintentar
+                </button>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {openError && (
+          <Card className="border-red-200 bg-red-50 p-3 dark:border-red-900/60 dark:bg-red-950/40">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 shrink-0 text-red-600 dark:text-red-400" size={18} />
+              <div className="space-y-1">
+                <p className="font-medium text-red-800 dark:text-red-200">
+                  {openErrorDocumentTitle
+                    ? `No pudimos abrir "${openErrorDocumentTitle}"`
+                    : 'No pudimos abrir el documento'}
+                </p>
+                <p className="text-sm text-red-700 dark:text-red-300">{openError}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenError(null);
+                    setOpenErrorDocumentTitle(null);
+                  }}
+                  className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {!docsLoading && documents.length > 0 && (
+          <div className="space-y-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                aria-label="Buscar documentos"
+                placeholder="Buscar por título, referencia, recibo..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-11 w-full rounded-xl border bg-white py-2 pl-9 pr-10 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            <div
+              className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              aria-label="Filtrar documentos"
+            >
+              {FUNCTIONAL_TYPE_FILTER_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setTypeFilter(option.value)}
+                  aria-pressed={typeFilter === option.value}
+                  className={`inline-flex min-h-11 flex-none items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
+                    typeFilter === option.value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <span>{option.label}</span>
+                  <span className="text-xs opacity-75">({documentCounts[option.value]})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {docsLoading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((index) => (
+              <Skeleton key={index} className="h-20 rounded-2xl" />
+            ))}
+          </div>
+        ) : documents.length === 0 ? (
+          <Card className="p-6 text-center">
+            <Folder className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No hay documentos disponibles para tu unidad.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Cuando la administración comparta documentos con tu unidad o edificio, los vas a ver acá.
+            </p>
+          </Card>
+        ) : filteredDocuments.length === 0 ? (
+          <Card className="p-6 text-center">
+            <Search className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No se encontraron documentos con los filtros aplicados.</p>
+            <button
+              type="button"
+              onClick={() => {
+                setTypeFilter('ALL');
+                setSearchQuery('');
+              }}
+              className="mt-2 text-sm font-medium text-blue-600 hover:underline"
+            >
+              Limpiar filtros
+            </button>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            {mobileSections.map((section) => (
+              <section key={section.key} className="space-y-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{section.label}</h2>
+                <div className="space-y-2">
+                  {section.items.map((item) => (
+                    item.kind === 'bundle'
+                      ? renderMobileBundleCard(section.label, item)
+                      : renderMobileDocumentCard(item.document)
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
+        {previewDialog}
+      </div>
+    );
+  }
 
   if (contextLoading) {
     return (
@@ -699,103 +1290,7 @@ export default function ResidentDocumentsPage() {
         </div>
       )}
 
-      {previewDocument && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Vista de ${previewDocument.title}`}
-        >
-          <div ref={dialogRef} className="relative mx-4 flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <h2 className="truncate text-lg font-medium" data-testid="modal-title">
-                  {previewDocument.title}
-                </h2>
-                <p className="truncate text-sm text-muted-foreground">
-                  {getSafeFileName(previewDocument)}
-                  {previewDocument.payment?.period && ` — Período ${previewDocument.payment.period}`}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadFromPreview()}
-                  disabled={!previewContent}
-                  className="inline-flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-sm text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Download className="h-4 w-4" />
-                  Descargar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleClosePreview}
-                  className="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
-                  aria-label="Cerrar"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-auto p-4">
-              {previewLoading && (
-                <div className="flex flex-col items-center justify-center py-16">
-                  <Loader2 className="mb-4 h-8 w-8 animate-spin text-blue-600" />
-                  <p className="text-sm text-muted-foreground">Cargando documento...</p>
-                </div>
-              )}
-
-              {previewError && (
-                <div className="flex flex-col items-center justify-center py-16">
-                  <AlertCircle className="mb-4 h-8 w-8 text-red-500" />
-                  <p className="text-sm text-red-600">{previewError}</p>
-                  <button
-                    type="button"
-                    onClick={handleClosePreview}
-                    className="mt-4 text-sm font-medium text-blue-600 hover:underline"
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              )}
-
-              {previewObjectUrl && previewDocument && (
-                <>
-                  {previewDocument.file?.mimeType?.toLowerCase().startsWith('image/') ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={previewObjectUrl}
-                      alt={previewDocument.title}
-                      className="mx-auto max-h-[70vh] object-contain"
-                    />
-                  ) : previewDocument.file?.mimeType?.toLowerCase() === 'application/pdf' ? (
-                    <iframe
-                      src={previewObjectUrl}
-                      title={previewDocument.title}
-                      className="h-[70vh] w-full border-0"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-16">
-                      <FileText className="mb-4 h-12 w-12 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">
-                        No se puede previsualizar este tipo de archivo.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => void handleDownloadFromPreview()}
-                        className="mt-4 text-sm font-medium text-blue-600 hover:underline"
-                      >
-                        Descargar archivo
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {previewDialog}
     </div>
   );
 }
