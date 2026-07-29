@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
+import { publicUserSelect, toPublicUser } from '../common/public-user';
 
 type OccupantNotificationUnit = {
   id: string;
@@ -18,6 +19,18 @@ type OccupantNotificationUnit = {
 
 type OccupantWithRelations = UnitOccupant & {
   unit?: OccupantNotificationUnit | null;
+};
+
+type OccupantUserWithPublicFields = {
+  id: string;
+  email: string;
+  name: string;
+};
+
+type OccupantWithPublicMemberUser = UnitOccupant & {
+  member?: {
+    user?: OccupantUserWithPublicFields | null;
+  } | null;
 };
 
 @Injectable()
@@ -142,13 +155,17 @@ export class OccupantsService {
 
     return await this.prisma.unitOccupant.findMany({
       where: { unitId },
-      include: { 
+      include: {
         member: {
-          include: { user: true }
-        } 
+          include: {
+            user: {
+              select: publicUserSelect,
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
-    });
+    }).then((occupants) => occupants.map((occupant) => this.sanitizeOccupantUser(occupant)));
   }
 
   /**
@@ -262,5 +279,19 @@ export class OccupantsService {
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  private sanitizeOccupantUser(occupant: OccupantWithPublicMemberUser): UnitOccupant {
+    if (!occupant.member) {
+      return occupant;
+    }
+
+    return {
+      ...occupant,
+      member: {
+        ...occupant.member,
+        user: toPublicUser(occupant.member.user) ?? null,
+      },
+    } as unknown as UnitOccupant;
   }
 }
