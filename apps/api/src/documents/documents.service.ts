@@ -7,7 +7,7 @@ import {
   PayloadTooLargeException,
   Logger,
 } from '@nestjs/common';
-import { Document, AuditAction } from '@prisma/client';
+import { AuditAction } from '@prisma/client';
 import { posix as pathPosix } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,23 +21,35 @@ import { UpdateDocumentDto } from './dto/update-document.dto';
 import { DocumentUploadPurpose } from './dto/presign-upload.dto';
 import {
   PresignedUrlResponse,
-  DocumentResponseDto,
   DocumentWithFileResponseDto,
   DownloadUrlResponseDto,
   DocumentPaymentMetadataDto,
 } from './dto';
 import { DocumentCategory, DocumentVisibility, Role, Prisma } from '@prisma/client';
+import { publicUserSelect, toPublicUser } from '../common/public-user';
 
 type DocumentNotificationTarget = Prisma.DocumentGetPayload<{
   include: {
     file: true;
     createdByMembership: {
       include: {
-        user: true;
+        user: {
+          select: typeof publicUserSelect;
+        };
       };
     };
   };
 }>;
+
+type DocumentWithPublicMembershipUser = {
+  createdByMembership?: {
+    user?: {
+      id: string;
+      email: string;
+      name: string;
+    } | null;
+  } | null;
+};
 
 type UnitOccupantNotificationRecipient = Prisma.UnitOccupantGetPayload<{
   include: {
@@ -276,7 +288,11 @@ export class DocumentsService {
           include: {
             file: true,
             createdByMembership: {
-              include: { user: true },
+              include: {
+                user: {
+                  select: publicUserSelect,
+                },
+              },
             },
           },
         });
@@ -312,7 +328,7 @@ export class DocumentsService {
       },
     });
 
-    return document as unknown as DocumentWithFileResponseDto;
+    return this.sanitizeDocumentResponse(document);
   }
 
   /**
@@ -395,7 +411,11 @@ export class DocumentsService {
       include: {
         file: true,
         createdByMembership: {
-          include: { user: true },
+          include: {
+            user: {
+              select: publicUserSelect,
+            },
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -427,7 +447,9 @@ export class DocumentsService {
     // Enrich documents with payment metadata (batch, no N+1)
     const enriched = await this.enrichDocumentsWithPaymentMetadata(tenantId, documents);
 
-    return enriched as unknown as DocumentWithFileResponseDto[];
+    return enriched.map((document) =>
+      this.sanitizeDocumentResponse(document as DocumentWithPublicMembershipUser & Record<string, unknown>),
+    );
   }
 
   /**
@@ -447,7 +469,11 @@ export class DocumentsService {
       include: {
         file: true,
         createdByMembership: {
-          include: { user: true },
+          include: {
+            user: {
+              select: publicUserSelect,
+            },
+          },
         },
       },
     });
@@ -486,7 +512,7 @@ export class DocumentsService {
       );
     }
 
-    return document as unknown as DocumentWithFileResponseDto;
+    return this.sanitizeDocumentResponse(document);
   }
 
   /**
@@ -545,12 +571,16 @@ export class DocumentsService {
       include: {
         file: true,
         createdByMembership: {
-          include: { user: true },
+          include: {
+            user: {
+              select: publicUserSelect,
+            },
+          },
         },
       },
     });
 
-    return updated as unknown as DocumentWithFileResponseDto;
+    return this.sanitizeDocumentResponse(updated);
   }
 
   /**
@@ -1158,6 +1188,22 @@ export class DocumentsService {
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  private sanitizeDocumentResponse(
+    document: DocumentWithPublicMembershipUser & Record<string, unknown>,
+  ): DocumentWithFileResponseDto {
+    if (!document.createdByMembership) {
+      return document as unknown as DocumentWithFileResponseDto;
+    }
+
+    return {
+      ...document,
+      createdByMembership: {
+        ...document.createdByMembership,
+        user: toPublicUser(document.createdByMembership.user) ?? undefined,
+      },
+    } as unknown as DocumentWithFileResponseDto;
   }
 
 }

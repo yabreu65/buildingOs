@@ -23,6 +23,25 @@ function createPrismaKnownRequestError(code: string): Prisma.PrismaClientKnownRe
   return error as Prisma.PrismaClientKnownRequestError;
 }
 
+function expectNoPasswordHashDeep(value: unknown): void {
+  const seen = new Set<unknown>();
+  const visit = (current: unknown): void => {
+    if (current == null || typeof current !== 'object' || seen.has(current)) {
+      return;
+    }
+
+    seen.add(current);
+    expect(Object.prototype.hasOwnProperty.call(current, 'passwordHash')).toBe(false);
+
+    for (const nested of Object.values(current as Record<string, unknown>)) {
+      visit(nested);
+    }
+  };
+
+  visit(value);
+  expect(JSON.stringify(value)).not.toContain('passwordHash');
+}
+
 describe('DocumentsService', () => {
   const prisma = {
     $transaction: jest.fn(),
@@ -231,7 +250,235 @@ describe('DocumentsService', () => {
     expect(result.file.objectKey).toContain('expensas..julio.pdf');
   });
 
-  it('notifies admins instead of the uploading resident for payment proofs', async () => {
+  it('sanitizes createdByMembership.user in createDocument responses', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-create' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-create',
+      tenantId: 'tenant-1',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+        user: {
+          id: 'user-1',
+          email: 'resident@example.com',
+          name: 'Resident One',
+          passwordHash: 'secret-create-hash',
+        },
+      },
+      file: { bucket: DEFAULT_BUCKET, objectKey: uploadFile.objectKey },
+    } as never);
+
+    const result = await service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'RESIDENTS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    expect(prisma.document.create).toHaveBeenCalledWith(expect.objectContaining({
+      include: {
+        file: true,
+        createdByMembership: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    }));
+    expect(result.createdByMembership?.user).toEqual({
+      id: 'user-1',
+      email: 'resident@example.com',
+      name: 'Resident One',
+    });
+    expectNoPasswordHashDeep(result);
+  });
+
+  it('sanitizes createdByMembership.user in listDocuments responses', async () => {
+    prisma.document.findMany.mockResolvedValueOnce([
+      {
+        id: 'document-list',
+        tenantId: 'tenant-1',
+        fileId: 'file-1',
+        title: 'Reglamento',
+        category: 'OTHER',
+        visibility: 'RESIDENTS',
+        buildingId: 'building-1',
+        unitId: 'unit-1',
+        createdByMembership: {
+          id: 'membership-1',
+          userId: 'user-1',
+          user: {
+            id: 'user-1',
+            email: 'resident@example.com',
+            name: 'Resident One',
+            passwordHash: 'secret-list-hash',
+          },
+        },
+        file: { bucket: DEFAULT_BUCKET, objectKey: 'tenant-tenant-1/documents/reglamento.pdf', originalName: 'reglamento.pdf', mimeType: 'application/pdf' },
+      },
+    ] as never);
+    prisma.payment.findMany.mockResolvedValueOnce([]);
+
+    const result = await service.listDocuments('tenant-1', 'resident-1', ['RESIDENT'], false);
+
+    expect(prisma.document.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: {
+        file: true,
+        createdByMembership: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    }));
+    expect(result[0].createdByMembership?.user).toEqual({
+      id: 'user-1',
+      email: 'resident@example.com',
+      name: 'Resident One',
+    });
+    expectNoPasswordHashDeep(result);
+  });
+
+  it('sanitizes createdByMembership.user in getDocument responses', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-detail',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+        user: {
+          id: 'user-1',
+          email: 'resident@example.com',
+          name: 'Resident One',
+          passwordHash: 'secret-detail-hash',
+        },
+      },
+      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+
+    const result = await service.getDocument('tenant-1', 'document-1', 'resident-1', ['RESIDENT'], false);
+
+    expect(prisma.document.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      include: {
+        file: true,
+        createdByMembership: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    }));
+    expect(result.createdByMembership?.user).toEqual({
+      id: 'user-1',
+      email: 'resident@example.com',
+      name: 'Resident One',
+    });
+    expectNoPasswordHashDeep(result);
+  });
+
+  it('sanitizes createdByMembership.user in updateDocument responses', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-update',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+        user: {
+          id: 'user-1',
+          email: 'resident@example.com',
+          name: 'Resident One',
+          passwordHash: 'secret-update-hash',
+        },
+      },
+      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+    prisma.document.update.mockResolvedValueOnce({
+      id: 'document-update',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Updated title',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+        user: {
+          id: 'user-1',
+          email: 'resident@example.com',
+          name: 'Resident One',
+          passwordHash: 'secret-update-hash',
+        },
+      },
+      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+
+    const result = await service.updateDocument('tenant-1', 'document-1', 'user-1', ['RESIDENT'], {
+      title: 'Updated title',
+    });
+
+    expect(prisma.document.update).toHaveBeenCalledWith(expect.objectContaining({
+      include: {
+        file: true,
+        createdByMembership: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    }));
+    expect(result.createdByMembership?.user).toEqual({
+      id: 'user-1',
+      email: 'resident@example.com',
+      name: 'Resident One',
+    });
+    expectNoPasswordHashDeep(result);
+  });
+
+  it('does not notify anyone for payment proofs', async () => {
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: 1024 } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-proof' } as never);
