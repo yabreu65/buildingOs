@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CreditCard,
   AlertCircle,
@@ -34,11 +34,116 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
 
 const CIVIL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const CIVIL_DATE_OR_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/;
+const MONTH_SHORT_LABELS = ['ene.', 'feb.', 'mar.', 'abr.', 'may.', 'jun.', 'jul.', 'ago.', 'sep.', 'oct.', 'nov.', 'dic.'] as const;
+const MONTH_SHORT_UPPER_LABELS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'] as const;
+
+function useMediaQuery(query: string): boolean {
+  const getInitialMatch = () => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia(query).matches;
+  };
+
+  const [matches, setMatches] = useState(getInitialMatch);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+
+    const mediaQuery = window.matchMedia(query);
+    const updateMatches = () => setMatches(mediaQuery.matches);
+
+    updateMatches();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateMatches);
+      return () => mediaQuery.removeEventListener('change', updateMatches);
+    }
+
+    if (typeof mediaQuery.addListener === 'function') {
+      mediaQuery.addListener(updateMatches);
+      return () => mediaQuery.removeListener(updateMatches);
+    }
+
+    return undefined;
+  }, [query]);
+
+  return matches;
+}
+
+function normalizeCivilDateValue(dateValue: string | undefined | null): string | null {
+  if (!dateValue) return null;
+
+  const normalizedMatch = CIVIL_DATE_OR_TIMESTAMP_PATTERN.exec(dateValue);
+  if (!normalizedMatch) return null;
+
+  return normalizedMatch[1];
+}
+
+function parseCivilDateParts(dateValue: string | undefined | null): { readonly year: number; readonly monthIndex: number; readonly day: number } | null {
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  if (!normalizedDateValue || !CIVIL_DATE_PATTERN.test(normalizedDateValue)) return null;
+
+  const [yearPart, monthPart, dayPart] = normalizedDateValue.split('-');
+  const year = Number(yearPart);
+  const monthIndex = Number(monthPart);
+  const day = Number(dayPart);
+
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || !Number.isInteger(day)) return null;
+  if (monthIndex < 1 || monthIndex > 12) return null;
+  if (day < 1 || day > 31) return null;
+
+  return { year, monthIndex, day };
+}
+
+function formatCompactCivilDayMonth(dateValue: string | undefined | null): string {
+  const parts = parseCivilDateParts(dateValue);
+  if (!parts) return '—';
+
+  return `${String(parts.day).padStart(2, '0')} ${MONTH_SHORT_LABELS[parts.monthIndex - 1]}`;
+}
+
+function formatCompactCivilDayMonthYear(dateValue: string | undefined | null): string {
+  const parts = parseCivilDateParts(dateValue);
+  if (!parts) return '—';
+
+  return `${String(parts.day).padStart(2, '0')} ${MONTH_SHORT_LABELS[parts.monthIndex - 1]} ${parts.year}`;
+}
+
+function formatCompactPeriodLabel(period: string | undefined | null): string {
+  if (!period || !CIVIL_DATE_PATTERN.test(`${period}-01`)) return '—';
+
+  const [yearPart, monthPart] = period.split('-');
+  const year = Number(yearPart);
+  const monthIndex = Number(monthPart);
+
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 1 || monthIndex > 12) return '—';
+
+  return `${MONTH_SHORT_UPPER_LABELS[monthIndex - 1]} ${year}`;
+}
+
+function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
+  if (!container) return [];
+
+  const focusableSelectors = [
+    'button:not([disabled])',
+    'a[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(',');
+
+  return Array.from(container.querySelectorAll<HTMLElement>(focusableSelectors)).filter((element) => {
+    const hidden = element.getAttribute('aria-hidden') === 'true';
+    return !hidden && !element.hasAttribute('disabled');
+  });
+}
 
 function formatCivilDate(dateValue: string | undefined | null): string {
-  if (!dateValue || !CIVIL_DATE_PATTERN.test(dateValue)) return '—';
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  if (!normalizedDateValue) return '—';
 
-  const [year, month, day] = dateValue.split('-');
+  const [year, month, day] = normalizedDateValue.split('-');
   if (!year || !month || !day) return '—';
 
   return `${day}/${month}/${year}`;
@@ -60,8 +165,9 @@ function formatLocalTimestampDate(dateValue: string | undefined | null): string 
 function formatPaymentDisplayDate(dateValue: string | undefined | null): string {
   if (!dateValue) return '—';
 
-  return CIVIL_DATE_PATTERN.test(dateValue)
-    ? formatCivilDate(dateValue)
+  const normalizedDateValue = normalizeCivilDateValue(dateValue);
+  return normalizedDateValue
+    ? formatCivilDate(normalizedDateValue)
     : formatLocalTimestampDate(dateValue);
 }
 
@@ -80,6 +186,41 @@ function getChargeStatusFromDebt(amount: number, allocated: number | undefined, 
   if (debt <= 0) return 'Pagado';
   if (allocated && allocated > 0 && allocated < amount) return 'Parcial';
   return 'Pendiente';
+}
+
+function getMobileChargeStatusLabel(charge: {
+  readonly amount: number;
+  readonly allocated?: number;
+  readonly status: ChargeStatus;
+  readonly dueDate: string;
+}, todayCivilDate: string): { readonly label: string; readonly variant: BadgeVariant } {
+  const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+  const isOverdue = charge.dueDate < todayCivilDate;
+
+  if (charge.status === ChargeStatus.CANCELED) {
+    return { label: 'Cancelado', variant: 'muted' };
+  }
+
+  if (outstandingMinor <= 0) {
+    return { label: 'Pagado', variant: 'success' };
+  }
+
+  if (charge.allocated && charge.allocated > 0 && charge.allocated < charge.amount) {
+    return { label: 'Parcial', variant: 'info' };
+  }
+
+  if (isOverdue) {
+    return { label: 'Vencido', variant: 'warning' };
+  }
+
+  return { label: 'Pendiente', variant: 'muted' };
+}
+
+function getRecentPaymentsLabel(count: number): string | null {
+  if (count === 0) return null;
+  if (count === 1) return '1 pago registrado';
+  if (count >= 20) return 'Mostrando los últimos 20 pagos';
+  return `${count} pagos registrados`;
 }
 
 function paymentStatusLabel(status: string): string {
@@ -320,9 +461,10 @@ export const ResidentPaymentsPage = () => {
   const tenantId = params.tenantId;
   const session = useAuthSession();
   const userId = session?.user.id ?? null;
+  const isMobileViewport = useMediaQuery('(max-width: 767px)');
 
   const { data: tenants } = useTenants();
-  const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
+  const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? 'Administración actual';
 
   const {
     data: context,
@@ -397,17 +539,50 @@ export const ResidentPaymentsPage = () => {
   const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(null);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [paymentToConfirm, setPaymentToConfirm] = useState<PaymentConfirmationData | null>(null);
+  const [mobileTab, setMobileTab] = useState<'summary' | 'pending' | 'history'>('summary');
+  const [isPaymentPanelOpen, setIsPaymentPanelOpen] = useState(false);
   const activeDownloadObjectUrlsRef = useRef<string[]>([]);
   const activeDownloadTimersRef = useRef<number[]>([]);
+  const submitSuccessTimerRef = useRef<number | null>(null);
+  const paymentPanelRef = useRef<HTMLDivElement | null>(null);
+  const paymentPanelLastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     return () => {
+      if (submitSuccessTimerRef.current !== null) {
+        window.clearTimeout(submitSuccessTimerRef.current);
+        submitSuccessTimerRef.current = null;
+      }
       activeDownloadTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
       activeDownloadTimersRef.current = [];
       activeDownloadObjectUrlsRef.current.forEach((objectUrl) => window.URL.revokeObjectURL(objectUrl));
       activeDownloadObjectUrlsRef.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    if (!isPaymentPanelOpen || !isMobileViewport) {
+      if (paymentPanelLastFocusedRef.current) {
+        paymentPanelLastFocusedRef.current.focus();
+        paymentPanelLastFocusedRef.current = null;
+      }
+      return undefined;
+    }
+
+    paymentPanelLastFocusedRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    const originalBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const focusables = getFocusableElements(paymentPanelRef.current);
+    focusables[0]?.focus();
+
+    return () => {
+      document.body.style.overflow = originalBodyOverflow;
+    };
+  }, [isMobileViewport, isPaymentPanelOpen]);
 
   const handleOpenDocument = async (documentId: string) => {
     if (downloadingDocumentId) {
@@ -496,9 +671,71 @@ export const ResidentPaymentsPage = () => {
     setProofFileId(null);
   };
 
-  const pendingCharges = ledger?.charges?.filter(
-    (c) => (c.amount - (c.allocated ?? 0)) > 0
-  ) ?? [];
+  const openPaymentPanel = useCallback(() => {
+    paymentPanelLastFocusedRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setShowForm(false);
+    setMobileTab('summary');
+    setIsPaymentPanelOpen(true);
+    setSubmitError(null);
+    setSubmitSuccess(false);
+  }, []);
+
+  const closePaymentPanel = useCallback((restoreFocus = true) => {
+    if (submitSuccessTimerRef.current !== null) {
+      window.clearTimeout(submitSuccessTimerRef.current);
+      submitSuccessTimerRef.current = null;
+    }
+    if (!restoreFocus) {
+      paymentPanelLastFocusedRef.current = null;
+      setIsPaymentPanelOpen(false);
+      return;
+    }
+
+    paymentPanelLastFocusedRef.current?.focus();
+    paymentPanelLastFocusedRef.current = null;
+    setIsPaymentPanelOpen(false);
+  }, []);
+
+  const handlePaymentPanelKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (!submitting) {
+        closePaymentPanel();
+      }
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    const focusables = getFocusableElements(paymentPanelRef.current);
+    if (focusables.length === 0) return;
+
+    const activeElement = document.activeElement as HTMLElement | null;
+    const currentIndex = activeElement ? focusables.indexOf(activeElement) : -1;
+    const nextIndex = event.shiftKey
+      ? (currentIndex <= 0 ? focusables.length - 1 : currentIndex - 1)
+      : (currentIndex === focusables.length - 1 ? 0 : currentIndex + 1);
+
+    event.preventDefault();
+    focusables[nextIndex]?.focus();
+  }, [closePaymentPanel, submitting]);
+
+  const handleMobileTabChange = useCallback((tab: 'summary' | 'pending' | 'history') => {
+    setMobileTab(tab);
+  }, []);
+
+  const handleMobilePaymentFormCancel = useCallback(() => {
+    if (!submitting) {
+      setIsPaymentPanelOpen(false);
+    }
+  }, [submitting]);
+
+  const pendingCharges = useMemo(
+    () => ledger?.charges?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0) ?? [],
+    [ledger?.charges],
+  );
   const selectedChargeId = pendingCharges.some((charge) => charge.id === formData.selectedChargeId)
     ? formData.selectedChargeId
     : pendingCharges[0]?.id ?? '';
@@ -507,6 +744,18 @@ export const ResidentPaymentsPage = () => {
 
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
+  const sortedPendingCharges = useMemo(
+    () => pendingCharges
+      .slice()
+      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()),
+    [pendingCharges],
+  );
+  const sortedRecentPayments = useMemo(
+    () => payments
+      .slice()
+      .sort((a, b) => new Date(b.paidAt ?? b.createdAt).getTime() - new Date(a.paidAt ?? a.createdAt).getTime()),
+    [payments],
+  );
 
   const canSubmit = !!proofFileId && !!selectedCharge && selectedChargeOutstandingMinor > 0;
   const paymentDateId = 'resident-payment-date';
@@ -515,13 +764,9 @@ export const ResidentPaymentsPage = () => {
   const paymentProofId = 'resident-payment-proof';
 
   // Next due charge: use real outstanding, not legacy status
-  const nextDueCharge = ledger?.charges
-    ?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0)
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+  const nextDueCharge = sortedPendingCharges[0];
 
-  const lastPayment = ledger?.payments
-    ?.slice()
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  const lastPayment = sortedRecentPayments[0];
 
   const handleSubmitPayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -587,9 +832,17 @@ export const ResidentPaymentsPage = () => {
       setPaymentToConfirm(null);
       refetchLedger();
       refetchPayments();
-      setTimeout(() => {
-        setShowForm(false);
+      if (submitSuccessTimerRef.current !== null) {
+        window.clearTimeout(submitSuccessTimerRef.current);
+      }
+      submitSuccessTimerRef.current = window.setTimeout(() => {
+        if (isMobileViewport) {
+          closePaymentPanel();
+        } else {
+          setShowForm(false);
+        }
         setSubmitSuccess(false);
+        submitSuccessTimerRef.current = null;
       }, 2000);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Error al enviar pago');
@@ -598,6 +851,183 @@ export const ResidentPaymentsPage = () => {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const renderPaymentFormSection = (mode: 'desktop' | 'mobile', onCancel: () => void) => {
+    const isMobilePanel = mode === 'mobile';
+    const formBody = (
+      <form
+        onSubmit={handleSubmitPayment}
+        className={isMobilePanel ? 'flex min-h-0 flex-1 flex-col' : 'space-y-4'}
+      >
+        <div className={isMobilePanel ? 'min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4' : 'space-y-4'}>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor="resident-payment-charge" className="mb-1 block text-sm font-medium">
+                Cargo pendiente
+              </label>
+              <Select
+                id="resident-payment-charge"
+                value={selectedChargeId}
+                onChange={(e) => setFormData((current) => ({ ...current, selectedChargeId: e.target.value }))}
+                disabled={pendingCharges.length === 0}
+              >
+                {pendingCharges.length === 0 ? (
+                  <option value="">No tenés cargos pendientes</option>
+                ) : (
+                  pendingCharges.map((charge) => {
+                    const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+                    return (
+                      <option key={charge.id} value={charge.id}>
+                        {charge.concept} • Período {charge.period} • {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
+                      </option>
+                    );
+                  })
+                )}
+              </Select>
+              {selectedCharge ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Los pagos informados por residentes deben cubrir el saldo completo del período.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  No hay cargos pendientes disponibles para reportar.
+                </p>
+              )}
+              {selectedCharge ? (
+                <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Monto a reportar</p>
+                  <p className="text-lg font-semibold">
+                    {formatCurrency(selectedChargeOutstandingMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency))}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium" htmlFor={paymentMethodId}>Método de pago</label>
+              <Select id={paymentMethodId} value={PaymentMethod.TRANSFER} disabled>
+                <option value={PaymentMethod.TRANSFER}>Transferencia bancaria</option>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Por ahora BuildingOS solo acepta reportes de pago por transferencia.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor={paymentDateId} className="mb-1 block text-sm font-medium">Fecha de pago</label>
+              <Input
+                id={paymentDateId}
+                type="date"
+                value={formData.paidAt}
+                onChange={(e) => setFormData({ ...formData, paidAt: e.target.value })}
+              />
+            </div>
+            <div>
+              <label htmlFor={paymentReferenceId} className="mb-1 block text-sm font-medium">Referencia (opcional)</label>
+              <Input
+                id={paymentReferenceId}
+                type="text"
+                value={formData.reference}
+                onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                placeholder="Ej: Transferencia #12345"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor={paymentProofId} className="mb-1 block text-sm font-medium">
+              Comprobante de pago {formData.method === PaymentMethod.TRANSFER && <span className="text-red-500">*</span>}
+            </label>
+            {formData.method === PaymentMethod.TRANSFER && !proofFile && (
+              <p className="mb-2 text-xs text-amber-600">Los pagos por transferencia requieren comprobante</p>
+            )}
+            <input
+              id={paymentProofId}
+              type="file"
+              accept=".pdf,image/jpeg,image/png"
+              onChange={handleFileChange}
+              className="block w-full text-sm text-muted-foreground
+                file:mr-4 file:rounded-md file:border-0 file:bg-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-blue-700
+                hover:file:bg-blue-100"
+            />
+            {proofFile && (
+              <p className="mt-1 flex items-center gap-2 text-sm text-green-600">
+                ✓ {proofFile.name} subido correctamente
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProofFile(null);
+                    setProofFileId(null);
+                  }}
+                  className="font-medium text-red-500 hover:text-red-700"
+                >
+                  (Quitar)
+                </button>
+              </p>
+            )}
+            {uploadingProof && (
+              <p className="mt-1 flex items-center gap-2 text-sm text-blue-600">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Subiendo comprobante...
+              </p>
+            )}
+          </div>
+
+          {submitError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <p className="text-sm text-red-600" aria-live="polite" role="alert">{submitError}</p>
+            </div>
+          )}
+
+          {submitSuccess && (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-3" role="status" aria-live="polite">
+              <p className="text-sm text-green-600">✓ Pago enviado exitosamente</p>
+            </div>
+          )}
+        </div>
+
+        <div className={isMobilePanel ? 'shrink-0 border-t border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))]' : 'flex gap-2'}>
+          <div className={isMobilePanel ? 'flex flex-col-reverse gap-3 sm:flex-row sm:justify-end' : 'flex gap-2'}>
+            <Button
+              type="submit"
+              disabled={submitting || submitSuccess || !canSubmit}
+              className={isMobilePanel ? 'min-h-12 flex-1 gap-2 sm:flex-none' : 'gap-2'}
+              id="resident-payment-submit-trigger"
+            >
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {submitting
+                ? 'Enviando...'
+                : !selectedCharge
+                  ? 'Seleccioná un cargo'
+                  : !proofFile
+                    ? 'Subí el comprobante'
+                    : 'Enviar pago'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onCancel}
+              className={isMobilePanel ? 'min-h-11 flex-1 sm:flex-none' : undefined}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      </form>
+    );
+
+    if (isMobilePanel) {
+      return formBody;
+    }
+
+    return (
+      <Card className="p-4">
+        <h3 className="mb-4 text-lg font-semibold">Reportar nuevo pago</h3>
+        {formBody}
+      </Card>
+    );
   };
 
   if (contextLoading || ledgerLoading) {
@@ -724,6 +1154,581 @@ export const ResidentPaymentsPage = () => {
       </div>
     </Card>
   ) : null;
+
+  const mobilePendingPreview = sortedPendingCharges.slice(0, 3);
+  const mobileRecentPaymentsPreview = sortedRecentPayments.slice(0, 2);
+  const recentPaymentsLabel = getRecentPaymentsLabel(sortedRecentPayments.length);
+
+  if (isMobileViewport) {
+    const todayCivilDate = getCurrentCivilDateInputValue();
+    const mobileSections = [
+      { id: 'summary', label: 'Resumen' },
+      { id: 'pending', label: 'Pendientes' },
+      { id: 'history', label: 'Historial' },
+    ] as const;
+
+    return (
+      <div className="space-y-5 overflow-x-hidden px-4 pb-6">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold leading-tight text-foreground">Pagos</h1>
+          <p className="line-clamp-2 text-sm text-muted-foreground">
+            {tenantName}
+            {buildingName && ` • ${buildingName}`}
+            {unitLabel && ` • Unidad ${unitLabel}`}
+          </p>
+        </div>
+
+        {downloadError && (
+          <Card className="p-3 border-red-200 bg-red-50">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="text-red-600 mt-0.5" size={18} />
+              <div className="space-y-1">
+                <p className="font-medium text-red-800">No pudimos abrir el documento.</p>
+                <p className="text-sm text-red-700">{downloadError}</p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {contextOptionsWarning ? <div className="text-sm">{contextOptionsWarning}</div> : null}
+
+        <div role="tablist" aria-label="Secciones de pagos" className="grid grid-cols-3 gap-2 rounded-2xl border border-border bg-muted/40 p-1">
+          {mobileSections.map((section) => {
+            const isSelected = mobileTab === section.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                role="tab"
+                id={`resident-payments-mobile-${section.id}-tab`}
+                aria-selected={isSelected}
+                aria-controls={`resident-payments-mobile-${section.id}`}
+                onClick={() => handleMobileTabChange(section.id)}
+                className={[
+                  'flex min-h-11 items-center justify-center rounded-xl px-3 text-sm font-medium transition',
+                  isSelected
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-background/80 hover:text-foreground',
+                ].join(' ')}
+              >
+                {section.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {mobileTab === 'summary' && (
+          <div id="resident-payments-mobile-summary" role="tabpanel" aria-labelledby="resident-payments-mobile-summary-tab" className="space-y-4">
+            <Card className="p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Saldo pendiente</p>
+                  <p className="text-[clamp(1.75rem,8vw,2rem)] font-bold leading-none tabular-nums text-foreground">
+                    {formatCurrency(balance, currency, getLocaleForCurrency(currency))}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {pendingCharges.length} cargos pendientes
+                  </p>
+                </div>
+                {balance > 0 ? (
+                  <AlertCircle className="mt-1 text-orange-500" size={24} />
+                ) : (
+                  <CheckCircle className="mt-1 text-green-500" size={24} />
+                )}
+              </div>
+              <div className="mt-4">
+                <Button
+                  type="button"
+                  onClick={openPaymentPanel}
+                  className="w-full min-h-12 gap-2"
+                  aria-controls="resident-payments-mobile-panel"
+                  aria-expanded={isPaymentPanelOpen}
+                >
+                  <Upload size={16} />
+                  Reportar pago
+                </Button>
+              </div>
+            </Card>
+
+            <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2">
+              <Card className="p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Próximo vencimiento</p>
+                <p className="mt-2 text-lg font-semibold tabular-nums text-foreground">
+                  {nextDueCharge ? formatCompactCivilDayMonth(nextDueCharge.dueDate) : '—'}
+                </p>
+                {nextDueCharge ? (
+                  <p className="text-sm text-muted-foreground">
+                    {formatCurrency(nextDueCharge.amount, currency, getLocaleForCurrency(currency))}
+                  </p>
+                ) : null}
+              </Card>
+              <Card className="p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Último pago</p>
+                <p className="mt-2 text-lg font-semibold tabular-nums text-foreground">
+                  {lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency, getLocaleForCurrency(lastPayment.currency)) : '—'}
+                </p>
+                {lastPayment ? (
+                  <p className="text-sm text-muted-foreground">
+                    {formatCompactCivilDayMonthYear(lastPayment.paidAt ?? lastPayment.createdAt)}
+                  </p>
+                ) : null}
+              </Card>
+            </div>
+
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Cargos próximos</p>
+                  <h2 className="text-lg font-semibold text-foreground">Lo que tenés por resolver</h2>
+                </div>
+                {pendingCharges.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-11 px-3"
+                    onClick={() => handleMobileTabChange('pending')}
+                  >
+                    Ver todos
+                  </Button>
+                ) : null}
+              </div>
+
+              {mobilePendingPreview.length === 0 ? (
+                <p className="mt-4 text-sm text-muted-foreground">No tenés cargos pendientes por ahora.</p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {mobilePendingPreview.map((charge) => {
+                    const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+                    const statusInfo = getMobileChargeStatusLabel(charge, todayCivilDate);
+                    const isOverdue = statusInfo.label === 'Vencido';
+
+                    return (
+                      <div
+                        key={charge.id}
+                        className={[
+                          'rounded-2xl border bg-card p-4',
+                          isOverdue ? 'border-amber-300 dark:border-amber-900/60' : 'border-border',
+                        ].join(' ')}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              {formatCompactPeriodLabel(charge.period)}
+                            </p>
+                            <p className="line-clamp-2 text-sm font-medium text-foreground">{charge.concept}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Vence {formatCompactCivilDayMonth(charge.dueDate)}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-base font-semibold tabular-nums text-foreground">
+                              {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
+                            </p>
+                            <div className="mt-2 flex justify-end">
+                              <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            {lastPayment ? (
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Historial reciente</p>
+                  <h2 className="text-lg font-semibold text-foreground">Tu último movimiento</h2>
+                </div>
+                  {payments.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-11 px-3"
+                      onClick={() => handleMobileTabChange('history')}
+                    >
+                      Ver historial
+                    </Button>
+                  ) : null}
+              </div>
+              {recentPaymentsLabel ? (
+                <p className="mt-1 text-sm text-muted-foreground">{recentPaymentsLabel}</p>
+              ) : null}
+              <div className="mt-4 space-y-3">
+                {mobileRecentPaymentsPreview.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Todavía no tenés pagos registrados.</p>
+                  ) : (
+                    mobileRecentPaymentsPreview.map((payment) => {
+                      const proofDocumentId = payment.proofDocumentId;
+                      const receiptDocumentId = payment.receiptDocumentId;
+                      const rejectionReasonLabel = getPaymentRejectionReasonLabel(payment.rejectionReason);
+                      const hasReceipt = !!receiptDocumentId;
+                      const hasProof = !!proofDocumentId;
+                      const isReceiptTrackingPayment =
+                        payment.status === PaymentStatus.APPROVED ||
+                        payment.status === PaymentStatus.RECONCILED;
+                      const showReceiptGenerationState =
+                        isReceiptTrackingPayment &&
+                        !hasReceipt &&
+                        payment.receiptStatus === 'PENDING';
+                      const showReceiptErrorState =
+                        isReceiptTrackingPayment &&
+                        !hasReceipt &&
+                        payment.receiptStatus === 'FAILED';
+                      const downloadDisabled = downloadingDocumentId !== null;
+                      const paymentDate = formatCompactCivilDayMonthYear(payment.paidAt ?? payment.createdAt);
+                      const statusLabel = paymentStatusLabel(payment.status);
+
+                      return (
+                        <div key={payment.id} className="rounded-2xl border border-border bg-card p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <p className="text-base font-semibold tabular-nums text-foreground">
+                                {formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {paymentDate} · {payment.method}
+                                {payment.reference ? ` · ${payment.reference}` : ''}
+                              </p>
+                              {payment.status === 'REJECTED' && (rejectionReasonLabel || payment.rejectionComment) && (
+                                <p className="line-clamp-2 text-sm text-red-700 dark:text-red-300">
+                                  {rejectionReasonLabel && <span className="font-medium">Motivo: {rejectionReasonLabel}</span>}
+                                  {rejectionReasonLabel && payment.rejectionComment ? ' — ' : null}
+                                  {payment.rejectionComment}
+                                </p>
+                              )}
+                              {showReceiptGenerationState && (
+                                <p className="text-sm text-muted-foreground">Recibo en generación</p>
+                              )}
+                              {showReceiptErrorState && (
+                                <p className="text-sm text-red-700 dark:text-red-300">
+                                  {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
+                                </p>
+                              )}
+                            </div>
+                            <Badge variant={paymentStatusVariant(payment.status)} className="shrink-0 whitespace-nowrap">
+                              {statusLabel}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {hasProof ? (
+                              <button
+                                onClick={() => handleOpenDocument(proofDocumentId)}
+                                disabled={downloadDisabled}
+                                type="button"
+                                aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                                className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-border px-3 text-sm text-blue-600 hover:bg-blue-50 hover:text-blue-800 disabled:opacity-50"
+                              >
+                                {downloadingDocumentId === proofDocumentId ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <FileText className="h-4 w-4" />
+                                )}
+                                Ver comprobante
+                              </button>
+                            ) : payment.proofFileId ? (
+                              <span className="inline-flex min-h-11 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs text-amber-700">
+                                Comprobante en procesamiento
+                              </span>
+                            ) : null}
+                            {hasReceipt ? (
+                              <button
+                                onClick={() => handleOpenDocument(receiptDocumentId)}
+                                disabled={downloadDisabled}
+                                type="button"
+                                aria-label={`Ver recibo del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                                className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-border px-3 text-sm text-emerald-600 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-50"
+                              >
+                                {downloadingDocumentId === receiptDocumentId ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <FileText className="h-4 w-4" />
+                                )}
+                                Ver recibo
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </Card>
+            ) : null}
+          </div>
+        )}
+
+        {mobileTab === 'pending' && (
+          <div id="resident-payments-mobile-pending" role="tabpanel" aria-labelledby="resident-payments-mobile-pending-tab" className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Cargos pendientes</h2>
+                <p className="text-sm text-muted-foreground">{sortedPendingCharges.length} cargos con saldo pendiente</p>
+              </div>
+              <Button
+                type="button"
+                onClick={openPaymentPanel}
+                className="min-h-11 gap-2"
+                aria-controls="resident-payments-mobile-panel"
+                aria-expanded={isPaymentPanelOpen}
+              >
+                <Upload size={16} />
+                Reportar pago
+              </Button>
+            </div>
+
+            {sortedPendingCharges.length === 0 ? (
+              <Card className="p-4">
+                <p className="text-sm text-muted-foreground">No tenés cargos pendientes por ahora.</p>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {sortedPendingCharges.map((charge) => {
+                  const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+                  const statusInfo = getMobileChargeStatusLabel(charge, todayCivilDate);
+                  const isOverdue = statusInfo.label === 'Vencido';
+
+                  return (
+                    <Card
+                      key={charge.id}
+                      className={[
+                        'p-4',
+                        isOverdue ? 'border-amber-300 dark:border-amber-900/60' : '',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              {formatCompactPeriodLabel(charge.period)}
+                            </p>
+                            <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>
+                          </div>
+                          <p className="line-clamp-2 text-sm font-medium text-foreground">{charge.concept}</p>
+                          <p className="text-sm text-muted-foreground">
+                            Vence {formatCompactCivilDayMonth(charge.dueDate)}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-lg font-semibold tabular-nums text-foreground">
+                            {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Saldo pendiente
+                          </p>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {mobileTab === 'history' && (
+          <div id="resident-payments-mobile-history" role="tabpanel" aria-labelledby="resident-payments-mobile-history-tab" className="space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Historial de pagos</h2>
+              {recentPaymentsLabel ? (
+                <p className="text-sm text-muted-foreground">{recentPaymentsLabel}</p>
+              ) : null}
+            </div>
+
+            {paymentsError ? (
+              <Card className="border-red-200 bg-red-50 p-4">
+                <p className="font-medium text-red-800">No pudimos cargar tu historial de pagos.</p>
+                <p className="mt-1 text-sm text-red-700">
+                  {paymentsErrorValue instanceof Error ? paymentsErrorValue.message : 'Intentá nuevamente en unos segundos.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => refetchPayments()}
+                  className="mt-3 text-sm font-medium text-red-700 hover:underline"
+                >
+                  Reintentar
+                </button>
+              </Card>
+            ) : paymentsLoading ? (
+              <Skeleton className="h-32" />
+                    ) : sortedRecentPayments.length === 0 ? (
+              <Card className="p-4">
+                <p className="text-sm text-muted-foreground">Todavía no tenés pagos registrados.</p>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {sortedRecentPayments.map((payment) => {
+                  const proofDocumentId = payment.proofDocumentId;
+                  const receiptDocumentId = payment.receiptDocumentId;
+                  const rejectionReasonLabel = getPaymentRejectionReasonLabel(payment.rejectionReason);
+                  const hasReceipt = !!receiptDocumentId;
+                  const hasProof = !!proofDocumentId;
+                  const isReceiptTrackingPayment =
+                    payment.status === PaymentStatus.APPROVED ||
+                    payment.status === PaymentStatus.RECONCILED;
+                  const showReceiptGenerationState =
+                    isReceiptTrackingPayment &&
+                    !hasReceipt &&
+                    payment.receiptStatus === 'PENDING';
+                  const showReceiptErrorState =
+                    isReceiptTrackingPayment &&
+                    !hasReceipt &&
+                    payment.receiptStatus === 'FAILED';
+                  const downloadDisabled = downloadingDocumentId !== null;
+                  const paymentDate = formatCompactCivilDayMonthYear(payment.paidAt ?? payment.createdAt);
+                  const statusLabel = paymentStatusLabel(payment.status);
+
+                  return (
+                    <Card key={payment.id} className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p className="text-base font-semibold tabular-nums text-foreground">
+                            {formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {paymentDate} · {payment.method}
+                            {payment.reference ? ` · ${payment.reference}` : ''}
+                          </p>
+                          {payment.status === 'REJECTED' && (rejectionReasonLabel || payment.rejectionComment) && (
+                            <p className="line-clamp-2 text-sm text-red-700 dark:text-red-300">
+                              {rejectionReasonLabel && <span className="font-medium">Motivo: {rejectionReasonLabel}</span>}
+                              {rejectionReasonLabel && payment.rejectionComment ? ' — ' : null}
+                              {payment.rejectionComment}
+                            </p>
+                          )}
+                          {showReceiptGenerationState && (
+                            <p className="text-sm text-muted-foreground">Recibo en generación</p>
+                          )}
+                          {showReceiptErrorState && (
+                            <p className="text-sm text-red-700 dark:text-red-300">
+                              {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
+                            </p>
+                          )}
+                        </div>
+                        <Badge variant={paymentStatusVariant(payment.status)} className="shrink-0 whitespace-nowrap">
+                          {statusLabel}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {hasProof ? (
+                          <button
+                            onClick={() => handleOpenDocument(proofDocumentId)}
+                            disabled={downloadDisabled}
+                            type="button"
+                            aria-label={`Ver comprobante del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                            className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-border px-3 text-sm text-blue-600 hover:bg-blue-50 hover:text-blue-800 disabled:opacity-50"
+                          >
+                            {downloadingDocumentId === proofDocumentId ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            Ver comprobante
+                          </button>
+                        ) : payment.proofFileId ? (
+                          <span className="inline-flex min-h-11 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs text-amber-700">
+                            Comprobante en procesamiento
+                          </span>
+                        ) : null}
+                        {hasReceipt ? (
+                          <button
+                            onClick={() => handleOpenDocument(receiptDocumentId)}
+                            disabled={downloadDisabled}
+                            type="button"
+                            aria-label={`Ver recibo del pago de ${formatCurrency(payment.amount, payment.currency, getLocaleForCurrency(payment.currency))}`}
+                            className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-border px-3 text-sm text-emerald-600 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-50"
+                          >
+                            {downloadingDocumentId === receiptDocumentId ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            Ver recibo
+                          </button>
+                        ) : null}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isPaymentPanelOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={() => {
+              if (!submitting) {
+                closePaymentPanel();
+              }
+            }}
+            aria-hidden="true"
+          >
+            <div className="flex h-full items-end justify-center">
+              <div
+                id="resident-payments-mobile-panel"
+                ref={paymentPanelRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="resident-payments-mobile-panel-title"
+                className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card text-card-foreground shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={handlePaymentPanelKeyDown}
+              >
+                <div className="shrink-0 border-b border-border px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p id="resident-payments-mobile-panel-title" className="text-lg font-semibold text-foreground">
+                        Reportar pago
+                      </p>
+                      <p className="line-clamp-2 text-sm text-muted-foreground">
+                        Cargá el comprobante y completá los datos del pago para enviarlo a revisión.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!submitting) {
+                          closePaymentPanel();
+                        }
+                      }}
+                      className="inline-flex size-11 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      aria-label="Cerrar reporte de pago"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+
+                {renderPaymentFormSection('mobile', handleMobilePaymentFormCancel)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <PaymentConfirmDialog
+          isOpen={isConfirmOpen}
+          data={paymentToConfirm}
+          errorMessage={submitError}
+          isLoading={submitting}
+          onCancel={() => {
+            setIsConfirmOpen(false);
+            setPaymentToConfirm(null);
+            window.setTimeout(() => {
+              document.getElementById('resident-payment-submit-trigger')?.focus();
+            }, 0);
+          }}
+          onConfirm={handleConfirmPayment}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -955,161 +1960,7 @@ export const ResidentPaymentsPage = () => {
       </Card>
 
       {/* Submit Payment Form */}
-      {showForm && (
-        <Card className="p-4">
-          <h3 className="font-semibold text-lg mb-4">Reportar nuevo pago</h3>
-          <form onSubmit={handleSubmitPayment} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="resident-payment-charge" className="block text-sm font-medium mb-1">
-                  Cargo pendiente
-                </label>
-                <Select
-                  id="resident-payment-charge"
-                  value={selectedChargeId}
-                  onChange={(e) => setFormData((current) => ({ ...current, selectedChargeId: e.target.value }))}
-                  disabled={pendingCharges.length === 0}
-                >
-                  {pendingCharges.length === 0 ? (
-                    <option value="">No tenés cargos pendientes</option>
-                  ) : (
-                    pendingCharges.map((charge) => {
-                      const outstandingMinor = charge.amount - (charge.allocated ?? 0);
-                      return (
-                        <option key={charge.id} value={charge.id}>
-                          {charge.concept} • Período {charge.period} • {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
-                        </option>
-                      );
-                    })
-                  )}
-                </Select>
-                {selectedCharge ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Los pagos informados por residentes deben cubrir el saldo completo del período.
-                  </p>
-                ) : (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    No hay cargos pendientes disponibles para reportar.
-                  </p>
-                )}
-                {selectedCharge ? (
-                  <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Monto a reportar</p>
-                    <p className="text-lg font-semibold">
-                      {formatCurrency(selectedChargeOutstandingMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency))}
-                    </p>
-                  </div>
-                ) : null}
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1" htmlFor={paymentMethodId}>Método de pago</label>
-                <Select id={paymentMethodId} value={PaymentMethod.TRANSFER} disabled>
-                  <option value={PaymentMethod.TRANSFER}>Transferencia bancaria</option>
-                </Select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Por ahora BuildingOS solo acepta reportes de pago por transferencia.
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor={paymentDateId} className="block text-sm font-medium mb-1">Fecha de pago</label>
-                <Input
-                  id={paymentDateId}
-                  type="date"
-                  value={formData.paidAt}
-                  onChange={(e) => setFormData({ ...formData, paidAt: e.target.value })}
-                />
-              </div>
-              <div>
-                <label htmlFor={paymentReferenceId} className="block text-sm font-medium mb-1">Referencia (opcional)</label>
-                <Input
-                  id={paymentReferenceId}
-                  type="text"
-                  value={formData.reference}
-                  onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
-                  placeholder="Ej: Transferencia #12345"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor={paymentProofId} className="block text-sm font-medium mb-1">
-                Comprobante de pago {formData.method === PaymentMethod.TRANSFER && <span className="text-red-500">*</span>}
-              </label>
-              {formData.method === PaymentMethod.TRANSFER && !proofFile && (
-                <p className="text-xs text-amber-600 mb-2">Los pagos por transferencia requieren comprobante</p>
-              )}
-              <input
-                id={paymentProofId}
-                type="file"
-                accept=".pdf,image/jpeg,image/png"
-                onChange={handleFileChange}
-                className="block w-full text-sm text-muted-foreground
-                  file:mr-4 file:py-2 file:px-4
-                  file:rounded-md file:border-0
-                  file:text-sm file:font-medium
-                  file:bg-blue-50 file:text-blue-700
-                  hover:file:bg-blue-100"
-              />
-              {proofFile && (
-                <p className="text-sm text-green-600 mt-1 flex items-center gap-2">
-                  ✓ {proofFile.name} subido correctamente
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProofFile(null);
-                      setProofFileId(null);
-                    }}
-                    className="text-red-500 hover:text-red-700 font-medium"
-                  >
-                    (Quitar)
-                  </button>
-                </p>
-              )}
-              {uploadingProof && (
-                <p className="text-sm text-blue-600 mt-1 flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Subiendo comprobante...
-                </p>
-              )}
-            </div>
-
-            {submitError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm text-red-600" aria-live="polite">{submitError}</p>
-              </div>
-            )}
-
-            {submitSuccess && (
-              <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-sm text-green-600" aria-live="polite">✓ Pago enviado exitosamente</p>
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <Button 
-                type="submit" 
-                disabled={submitting || !canSubmit} 
-                className="gap-2"
-                id="resident-payment-submit-trigger"
-              >
-                {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                {submitting
-                  ? 'Enviando...'
-                  : !selectedCharge
-                    ? 'Seleccioná un cargo'
-                    : !proofFile
-                      ? 'Subí el comprobante'
-                      : 'Enviar pago'}
-              </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
-                Cancelar
-              </Button>
-            </div>
-          </form>
-        </Card>
-      )}
+      {showForm && renderPaymentFormSection('desktop', () => setShowForm(false))}
 
       <PaymentConfirmDialog
         isOpen={isConfirmOpen}
