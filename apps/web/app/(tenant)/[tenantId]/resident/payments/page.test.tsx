@@ -107,6 +107,23 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function mockMatchMedia(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
+}
+
 function makeLedger(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     unitId: 'unit-1',
@@ -228,6 +245,7 @@ describe('ResidentPaymentsPage', () => {
       id: 'document-1',
       file: { id: 'file-1' },
     } as never);
+    mockMatchMedia(false);
     (window.URL as typeof window.URL & {
       createObjectURL: jest.Mock;
       revokeObjectURL: jest.Mock;
@@ -739,7 +757,7 @@ describe('ResidentPaymentsPage', () => {
       screen.getAllByText(
         (_, element) => element?.tagName === 'P' && element.textContent?.includes(expectedTimestampDate) === true,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(screen.queryByText('23/07/2026')).toBeNull();
     expect(screen.queryByText('invalid-date')).toBeNull();
   });
@@ -882,5 +900,158 @@ describe('ResidentPaymentsPage', () => {
     const reconciledBadge = screen.getByText('Conciliado');
     expect(reconciledBadge.className).toContain('bg-blue-100');
     expect(reconciledBadge.className).toContain('dark:bg-blue-950/40');
+  });
+
+  it('renders the mobile summary, locks focus inside the payment panel, and restores focus on close', async () => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(
+      makeLedger({
+        charges: [
+          makeCharge({
+            id: 'charge-1',
+            concept: 'Condominio ordinario',
+            period: '2026-03',
+            amount: 46350,
+            allocated: 0,
+            dueDate: '2026-03-09',
+          }),
+          makeCharge({
+            id: 'charge-2',
+            concept: 'Fondo de reserva',
+            period: '2026-04',
+            amount: 18500,
+            allocated: 0,
+            dueDate: '2026-04-12',
+          }),
+          makeCharge({
+            id: 'charge-3',
+            concept: 'Multa administrativa',
+            period: '2026-05',
+            amount: 3200,
+            allocated: 0,
+            dueDate: '2026-05-05',
+          }),
+        ],
+        totals: {
+          balance: 68750,
+          currency: 'ARS',
+          totalCharges: 68750,
+          totalPaid: 0,
+          totalAllocated: 0,
+        },
+      }),
+    );
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'payment-recent',
+        amount: 49500,
+        paidAt: '2026-07-23',
+        createdAt: '2026-07-23',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.APPROVED,
+        proofDocumentId: 'proof-doc-1',
+        receiptDocumentId: 'receipt-doc-1',
+      }),
+    ]);
+
+    const Wrapper = createWrapper();
+    const { container } = render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(container.querySelector('.overflow-x-hidden')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Resumen' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByRole('button', { name: 'Reportar pago' }).className).toContain('min-h-12');
+
+    const openMobilePanelButton = screen.getByRole('button', { name: 'Reportar pago' });
+    openMobilePanelButton.focus();
+    fireEvent.click(openMobilePanelButton);
+
+    const panelIntro = await screen.findByText(/Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i);
+    const panel = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
+    expect(panel).toBeTruthy();
+    if (!panel) {
+      throw new Error('Expected the mobile payment panel to be rendered');
+    }
+    const closeButton = screen.getByLabelText('Cerrar reporte de pago');
+    const cancelButton = screen.getByText('Cancelar');
+
+    expect(document.activeElement).toBe(closeButton);
+
+    fireEvent.keyDown(panel, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(cancelButton);
+
+    fireEvent.keyDown(panel, { key: 'Tab' });
+    expect(document.activeElement).toBe(closeButton);
+
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.keyDown(panel, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Reportar pago' })).toBeNull());
+    await waitFor(() => expect(document.body.style.overflow).toBe(''));
+    expect(document.activeElement).toBe(openMobilePanelButton);
+  });
+
+  it('switches mobile tabs and shows compact pending and history cards', async () => {
+    mockMatchMedia(true);
+    mockedGetResidentLedger.mockResolvedValueOnce(
+      makeLedger({
+        charges: [
+          makeCharge({
+            id: 'charge-1',
+            concept: 'Condominio ordinario',
+            period: '2026-03',
+            amount: 46350,
+            allocated: 0,
+            dueDate: '2026-03-09',
+          }),
+          makeCharge({
+            id: 'charge-2',
+            concept: 'Fondo de reserva',
+            period: '2026-04',
+            amount: 18500,
+            allocated: 0,
+            dueDate: '2026-04-12',
+          }),
+        ],
+        totals: {
+          balance: 64850,
+          currency: 'ARS',
+          totalCharges: 64850,
+          totalPaid: 0,
+          totalAllocated: 0,
+        },
+      }),
+    );
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'payment-recent',
+        amount: 49500,
+        paidAt: '2026-07-23',
+        createdAt: '2026-07-23',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.APPROVED,
+        proofDocumentId: 'proof-doc-1',
+        receiptDocumentId: 'receipt-doc-1',
+      }),
+    ]);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ver todos' }));
+
+    expect(screen.getByRole('tab', { name: 'Pendientes' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('MAR 2026')).toBeTruthy();
+    expect(screen.getAllByText('Vencido')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Resumen' }));
+    expect(screen.getByRole('tab', { name: 'Resumen' }).getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver historial' }));
+
+    expect(screen.getByRole('tab', { name: 'Historial' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('Historial de pagos')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /ver comprobante del pago de/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /ver recibo del pago de/i })).toBeTruthy();
   });
 });
