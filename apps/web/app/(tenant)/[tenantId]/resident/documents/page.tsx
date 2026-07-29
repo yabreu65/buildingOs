@@ -169,86 +169,156 @@ interface MobileDocumentSection {
   items: MobileDocumentItem[];
 }
 
-function getDocumentSectionKey(document: Document): string {
-  if (document.payment?.period && /^\d{4}-\d{2}$/.test(document.payment.period.trim())) {
-    return `payment:${document.payment.period.trim()}`;
-  }
+interface MobilePaymentBundle {
+  paymentId: string;
+  payment: NonNullable<Document['payment']>;
+  documents: Document[];
+  primaryDocument: Document;
+}
 
-  const parsedDate = parseCivilDate(document.createdAt);
-  if (!parsedDate) {
+function isPaymentDocument(document: Document): document is Document & {
+  functionalType: NonNullable<Document['functionalType']>;
+  payment: NonNullable<Document['payment']>;
+} {
+  return Boolean(document.functionalType && document.payment?.id);
+}
+
+function getDocumentSectionKey(document: Document): string {
+  const sectionDate = parseCivilDate(document.createdAt);
+  if (!sectionDate) {
     return 'unknown';
   }
 
-  return `date:${parsedDate.getUTCFullYear()}-${String(parsedDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `date:${sectionDate.getUTCFullYear()}-${String(sectionDate.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 function getDocumentSectionLabel(document: Document): string {
-  if (document.payment?.period && /^\d{4}-\d{2}$/.test(document.payment.period.trim())) {
-    return formatMonthLabel(document.payment.period.trim());
-  }
-
   return parseCivilDate(document.createdAt) ? formatMonthLabel(document.createdAt) : 'Documentos';
 }
 
-function getPaymentBundleTitle(payment: NonNullable<Document['payment']>, fallbackTitle: string): string {
-  if (payment.period && /^\d{4}-\d{2}$/.test(payment.period.trim())) {
-    return `Pago ${formatMonthLabel(payment.period.trim())}`;
+function getBundleSectionKey(bundle: MobilePaymentBundle): string {
+  const explicitPeriod = bundle.documents
+    .map((document) => document.payment?.period?.trim())
+    .find((period): period is string => Boolean(period && /^\d{4}-\d{2}$/.test(period)));
+
+  if (explicitPeriod) {
+    return `payment:${explicitPeriod}`;
   }
 
-  if (payment.reference && payment.reference.trim() !== '') {
-    return payment.reference.trim();
+  const latestDocument = bundle.documents.reduce((latest, current) => {
+    const latestDate = parseCivilDate(latest.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const currentDate = parseCivilDate(current.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    return currentDate >= latestDate ? current : latest;
+  });
+
+  return getDocumentSectionKey(latestDocument);
+}
+
+function getBundleSectionLabel(bundle: MobilePaymentBundle): string {
+  const explicitPeriod = bundle.documents
+    .map((document) => document.payment?.period?.trim())
+    .find((period): period is string => Boolean(period && /^\d{4}-\d{2}$/.test(period)));
+
+  if (explicitPeriod) {
+    return formatMonthLabel(explicitPeriod);
   }
 
-  return fallbackTitle;
+  const latestDocument = bundle.documents.reduce((latest, current) => {
+    const latestDate = parseCivilDate(latest.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const currentDate = parseCivilDate(current.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    return currentDate >= latestDate ? current : latest;
+  });
+
+  return getDocumentSectionLabel(latestDocument);
+}
+
+function getPaymentBundleTitle(bundle: MobilePaymentBundle): string {
+  const explicitPeriod = bundle.documents
+    .map((document) => document.payment?.period?.trim())
+    .find((period): period is string => Boolean(period && /^\d{4}-\d{2}$/.test(period)));
+
+  if (explicitPeriod) {
+    return `Pago ${formatMonthLabel(explicitPeriod)}`;
+  }
+
+  if (bundle.payment.reference && bundle.payment.reference.trim() !== '') {
+    return bundle.payment.reference.trim();
+  }
+
+  return getSafeFileName(bundle.primaryDocument);
 }
 
 function buildMobileDocumentSections(documents: Document[]): MobileDocumentSection[] {
-  const sectionMap = new Map<string, { label: string; items: MobileDocumentItem[]; bundleIndex: Map<string, number> }>();
+  const paymentBundles = new Map<string, MobilePaymentBundle>();
+
+  for (const document of documents) {
+    if (!isPaymentDocument(document)) continue;
+
+    const paymentId = document.payment.id;
+    const existingBundle = paymentBundles.get(paymentId);
+    if (!existingBundle) {
+      paymentBundles.set(paymentId, {
+        paymentId,
+        payment: document.payment,
+        documents: [document],
+        primaryDocument: document,
+      });
+      continue;
+    }
+
+    existingBundle.documents.push(document);
+
+    if (!existingBundle.payment.period && document.payment.period) {
+      existingBundle.payment = document.payment;
+    }
+
+    if (
+      document.functionalType === 'PAYMENT_RECEIPT' &&
+      existingBundle.primaryDocument.functionalType !== 'PAYMENT_RECEIPT'
+    ) {
+      existingBundle.primaryDocument = document;
+    }
+  }
+
+  const sectionMap = new Map<string, { label: string; items: MobileDocumentItem[] }>();
   const order: string[] = [];
 
   for (const document of documents) {
-    const sectionKey = getDocumentSectionKey(document);
-    const sectionLabel = getDocumentSectionLabel(document);
+    const sectionKey = isPaymentDocument(document)
+      ? getBundleSectionKey(paymentBundles.get(document.payment.id)!)
+      : getDocumentSectionKey(document);
+    const sectionLabel = isPaymentDocument(document)
+      ? getBundleSectionLabel(paymentBundles.get(document.payment.id)!)
+      : getDocumentSectionLabel(document);
     let section = sectionMap.get(sectionKey);
 
     if (!section) {
       section = {
         label: sectionLabel,
         items: [],
-        bundleIndex: new Map<string, number>(),
       };
       sectionMap.set(sectionKey, section);
       order.push(sectionKey);
     }
 
-    if (document.functionalType && document.payment?.id) {
-      const bundleKey = document.payment.id;
-      const existingIndex = section.bundleIndex.get(bundleKey);
+    if (isPaymentDocument(document)) {
+      const bundle = paymentBundles.get(document.payment.id);
+      if (!bundle) continue;
 
-      if (typeof existingIndex === 'number') {
-        const item = section.items[existingIndex];
-        if (item.kind === 'bundle') {
-          item.documents.push(document);
-          if (document.functionalType === 'PAYMENT_RECEIPT' && item.primaryDocument.functionalType !== 'PAYMENT_RECEIPT') {
-            item.primaryDocument = document;
-            item.title = getPaymentBundleTitle(document.payment, getSafeFileName(document));
-          }
-        }
+      if (section.items.some((item) => item.kind === 'bundle' && item.paymentId === bundle.paymentId)) {
         continue;
       }
 
-      const bundleItem: MobileDocumentItem = {
+      section.items.push({
         kind: 'bundle',
-        key: `bundle:${sectionKey}:${bundleKey}`,
-        paymentId: bundleKey,
-        title: getPaymentBundleTitle(document.payment, getSafeFileName(document)),
-        payment: document.payment,
-        documents: [document],
-        primaryDocument: document,
+        key: `bundle:${bundle.paymentId}`,
+        paymentId: bundle.paymentId,
+        title: getPaymentBundleTitle(bundle),
+        payment: bundle.payment,
+        documents: bundle.documents,
+        primaryDocument: bundle.primaryDocument,
         sectionLabel,
-      };
-      section.bundleIndex.set(bundleKey, section.items.length);
-      section.items.push(bundleItem);
+      });
       continue;
     }
 
@@ -829,6 +899,41 @@ export default function ResidentDocumentsPage() {
     </div>
   );
 
+  if (contextLoading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-8 w-48" />
+        <div className="grid gap-4">
+          {[1, 2, 3].map((index) => (
+            <Skeleton key={index} className="h-24" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!buildingId || !unitId) {
+    return (
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          <FileText className="h-6 w-6" />
+          Documentos
+        </h1>
+        <p className="mt-1 text-muted-foreground">{tenantName}</p>
+
+        <Card className="mt-6 border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-900/60 dark:bg-yellow-950/40">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
+            <div>
+              <p className="font-medium text-yellow-800 dark:text-yellow-200">Sin unidad asignada</p>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   if (isMobileViewport) {
     return (
       <div className="space-y-5">
@@ -996,41 +1101,6 @@ export default function ResidentDocumentsPage() {
         )}
 
         {previewDialog}
-      </div>
-    );
-  }
-
-  if (contextLoading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <div className="grid gap-4">
-          {[1, 2, 3].map((index) => (
-            <Skeleton key={index} className="h-24" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (!buildingId || !unitId) {
-    return (
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
-          <FileText className="h-6 w-6" />
-          Documentos
-        </h1>
-        <p className="mt-1 text-muted-foreground">{tenantName}</p>
-
-        <Card className="mt-6 border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-900/60 dark:bg-yellow-950/40">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
-            <div>
-              <p className="font-medium text-yellow-800 dark:text-yellow-200">Sin unidad asignada</p>
-              <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
-            </div>
-          </div>
-        </Card>
       </div>
     );
   }
