@@ -489,12 +489,12 @@ describe('ResidentDocumentsPage', () => {
       expect(lastQueryOptions?.enabled).toBe(false);
     });
 
-    it('renders compact context without leaking the tenantId fallback', () => {
+    it('does not render a second mobile context block', () => {
       mockedUseTenants.mockReturnValue({
         data: undefined,
       } as never);
       mockedUseQuery.mockReturnValue({
-        data: [],
+        data: [makeReceiptDocument()],
         isLoading: false,
         isError: false,
         error: null,
@@ -503,10 +503,11 @@ describe('ResidentDocumentsPage', () => {
 
       render(<ResidentDocumentsPage />);
 
-      expect(screen.getByText('Administración actual')).toBeTruthy();
-      expect(screen.queryByText('tenant-1')).toBeNull();
       expect(screen.getByText('Documentos')).toBeTruthy();
       expect(screen.getByText(/Consulta comprobantes, recibos y archivos de tu unidad\./i)).toBeTruthy();
+      expect(screen.queryByText('Contexto activo')).toBeNull();
+      expect(screen.queryByText('tenant-1')).toBeNull();
+      expect(screen.getByPlaceholderText(/Buscar por título/)).toBeTruthy();
     });
 
     it('keeps the filter bar horizontal and uses pressed toggles', () => {
@@ -592,6 +593,73 @@ describe('ResidentDocumentsPage', () => {
       expect(screen.queryByText(/2 documentos/i)).toBeNull();
       expect(screen.getByText('Reglamento')).toBeTruthy();
       expect(screen.getByText('Acta')).toBeTruthy();
+    });
+
+    it('orders payment periods descending and keeps general documents under Otros documentos', () => {
+      mockedUseQuery.mockReturnValue({
+        data: [
+          makeReceiptDocument(
+            {
+              id: 'doc-july',
+              title: 'Pago julio',
+              createdAt: '2026-07-31T23:30:00.000Z',
+              payment: { ...makeReceiptDocument().payment!, id: 'pay-july', period: '2026-07', reference: 'Julio' },
+            },
+            'pay-july',
+          ),
+          makeProofDocument(
+            {
+              id: 'doc-june',
+              title: 'Pago junio',
+              createdAt: '2026-06-15T12:00:00.000Z',
+              payment: { ...makeProofDocument().payment!, id: 'pay-june', period: '2026-06', reference: 'Junio' },
+            },
+            'pay-june',
+          ),
+          makeReceiptDocument(
+            {
+              id: 'doc-may',
+              title: 'Pago mayo',
+              createdAt: '2026-05-20T12:00:00.000Z',
+              payment: { ...makeReceiptDocument().payment!, id: 'pay-may', period: null, reference: null },
+            },
+            'pay-may',
+          ),
+          makeDocument({
+            id: 'free-doc-1',
+            title: 'Reglamento de convivencia',
+            createdAt: '2026-08-01T09:00:00.000Z',
+          }),
+          makeDocument({
+            id: 'free-doc-2',
+            title: 'Acta',
+            createdAt: '2026-04-01T09:00:00.000Z',
+          }),
+        ],
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      } as never);
+
+      render(<ResidentDocumentsPage />);
+
+      const sectionHeadings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+      expect(sectionHeadings).toEqual([
+        'Julio de 2026',
+        'Junio de 2026',
+        'Mayo de 2026',
+        'Otros documentos',
+      ]);
+
+      const otherSection = screen.getByRole('heading', { name: 'Otros documentos' }).closest('section');
+      expect(otherSection).toBeTruthy();
+      const otherSectionTexts = otherSection
+        ? Array.from(otherSection.querySelectorAll('h3, p')).map((node) => node.textContent?.trim()).filter(Boolean)
+        : [];
+      expect(otherSectionTexts).toContain('Reglamento de convivencia');
+      expect(otherSectionTexts).toContain('Acta');
+      expect(otherSectionTexts.indexOf('Reglamento de convivencia')).toBeLessThan(otherSectionTexts.indexOf('Acta'));
     });
 
     it('supports search and clear in the compact mobile view', () => {

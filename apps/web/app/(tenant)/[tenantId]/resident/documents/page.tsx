@@ -174,6 +174,9 @@ interface MobilePaymentBundle {
   payment: NonNullable<Document['payment']>;
   documents: Document[];
   primaryDocument: Document;
+  sectionKey: string;
+  sectionLabel: string;
+  sortKey: number;
 }
 
 function isPaymentDocument(document: Document): document is Document & {
@@ -183,26 +186,36 @@ function isPaymentDocument(document: Document): document is Document & {
   return Boolean(document.functionalType && document.payment?.id);
 }
 
-function getDocumentSectionKey(document: Document): string {
-  const sectionDate = parseCivilDate(document.createdAt);
-  if (!sectionDate) {
-    return 'unknown';
-  }
-
-  return `date:${sectionDate.getUTCFullYear()}-${String(sectionDate.getUTCMonth() + 1).padStart(2, '0')}`;
+function getYearMonthFromPeriod(periodValue: string | null | undefined): { year: number; month: number } | null {
+  if (!periodValue) return null;
+  const normalized = periodValue.trim();
+  const match = /^(\d{4})-(\d{2})$/.exec(normalized);
+  if (!match) return null;
+  const [, year, month] = match;
+  return {
+    year: Number(year),
+    month: Number(month),
+  };
 }
 
-function getDocumentSectionLabel(document: Document): string {
-  return parseCivilDate(document.createdAt) ? formatMonthLabel(document.createdAt) : 'Documentos';
+function getMonthOrderKey(year: number, month: number): number {
+  return year * 12 + month;
 }
 
-function getBundleSectionKey(bundle: MobilePaymentBundle): string {
+function getBundleSectionInfo(bundle: MobilePaymentBundle): { key: string; label: string; sortKey: number } {
   const explicitPeriod = bundle.documents
     .map((document) => document.payment?.period?.trim())
     .find((period): period is string => Boolean(period && /^\d{4}-\d{2}$/.test(period)));
 
   if (explicitPeriod) {
-    return `payment:${explicitPeriod}`;
+    const yearMonth = getYearMonthFromPeriod(explicitPeriod);
+    if (yearMonth) {
+      return {
+        key: `payment:${explicitPeriod}`,
+        label: formatMonthLabel(explicitPeriod),
+        sortKey: getMonthOrderKey(yearMonth.year, yearMonth.month),
+      };
+    }
   }
 
   const latestDocument = bundle.documents.reduce((latest, current) => {
@@ -211,25 +224,20 @@ function getBundleSectionKey(bundle: MobilePaymentBundle): string {
     return currentDate >= latestDate ? current : latest;
   });
 
-  return getDocumentSectionKey(latestDocument);
-}
-
-function getBundleSectionLabel(bundle: MobilePaymentBundle): string {
-  const explicitPeriod = bundle.documents
-    .map((document) => document.payment?.period?.trim())
-    .find((period): period is string => Boolean(period && /^\d{4}-\d{2}$/.test(period)));
-
-  if (explicitPeriod) {
-    return formatMonthLabel(explicitPeriod);
+  const latestDate = parseCivilDate(latestDocument.createdAt);
+  if (!latestDate) {
+    return {
+      key: 'payment:unknown',
+      label: 'Documentos',
+      sortKey: Number.NEGATIVE_INFINITY,
+    };
   }
 
-  const latestDocument = bundle.documents.reduce((latest, current) => {
-    const latestDate = parseCivilDate(latest.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
-    const currentDate = parseCivilDate(current.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
-    return currentDate >= latestDate ? current : latest;
-  });
-
-  return getDocumentSectionLabel(latestDocument);
+  return {
+    key: `payment:${latestDate.getUTCFullYear()}-${String(latestDate.getUTCMonth() + 1).padStart(2, '0')}`,
+    label: formatMonthLabel(latestDocument.createdAt),
+    sortKey: getMonthOrderKey(latestDate.getUTCFullYear(), latestDate.getUTCMonth() + 1),
+  };
 }
 
 function getPaymentBundleTitle(bundle: MobilePaymentBundle): string {
@@ -262,6 +270,9 @@ function buildMobileDocumentSections(documents: Document[]): MobileDocumentSecti
         payment: document.payment,
         documents: [document],
         primaryDocument: document,
+        sectionKey: '',
+        sectionLabel: '',
+        sortKey: Number.NEGATIVE_INFINITY,
       });
       continue;
     }
@@ -280,30 +291,29 @@ function buildMobileDocumentSections(documents: Document[]): MobileDocumentSecti
     }
   }
 
-  const sectionMap = new Map<string, { label: string; items: MobileDocumentItem[] }>();
-  const order: string[] = [];
+  const paymentSectionMap = new Map<string, { key: string; label: string; sortKey: number; items: MobileDocumentItem[] }>();
+  const otherDocuments: Document[] = [];
 
   for (const document of documents) {
-    const sectionKey = isPaymentDocument(document)
-      ? getBundleSectionKey(paymentBundles.get(document.payment.id)!)
-      : getDocumentSectionKey(document);
-    const sectionLabel = isPaymentDocument(document)
-      ? getBundleSectionLabel(paymentBundles.get(document.payment.id)!)
-      : getDocumentSectionLabel(document);
-    let section = sectionMap.get(sectionKey);
-
-    if (!section) {
-      section = {
-        label: sectionLabel,
-        items: [],
-      };
-      sectionMap.set(sectionKey, section);
-      order.push(sectionKey);
-    }
-
     if (isPaymentDocument(document)) {
       const bundle = paymentBundles.get(document.payment.id);
       if (!bundle) continue;
+
+      const sectionInfo = getBundleSectionInfo(bundle);
+      bundle.sectionKey = sectionInfo.key;
+      bundle.sectionLabel = sectionInfo.label;
+      bundle.sortKey = sectionInfo.sortKey;
+      let section = paymentSectionMap.get(sectionInfo.key);
+
+      if (!section) {
+        section = {
+          key: sectionInfo.key,
+          label: sectionInfo.label,
+          sortKey: sectionInfo.sortKey,
+          items: [],
+        };
+        paymentSectionMap.set(sectionInfo.key, section);
+      }
 
       if (section.items.some((item) => item.kind === 'bundle' && item.paymentId === bundle.paymentId)) {
         continue;
@@ -317,28 +327,69 @@ function buildMobileDocumentSections(documents: Document[]): MobileDocumentSecti
         payment: bundle.payment,
         documents: bundle.documents,
         primaryDocument: bundle.primaryDocument,
-        sectionLabel,
+        sectionLabel: section.label,
       });
       continue;
     }
 
-    section.items.push({
+    otherDocuments.push(document);
+  }
+
+  const paymentSections = Array.from(paymentSectionMap.values())
+    .sort((left, right) => {
+      if (right.sortKey !== left.sortKey) {
+        return right.sortKey - left.sortKey;
+      }
+      return left.label.localeCompare(right.label, 'es-AR');
+    })
+    .map((section) => ({
+      key: section.key,
+      label: section.label,
+      items: section.items.sort((left, right) => {
+        const leftTime =
+          (left.kind === 'bundle' ? parseCivilDate(left.primaryDocument.createdAt) : parseCivilDate(left.document.createdAt))?.getTime() ??
+          Number.NEGATIVE_INFINITY;
+        const rightTime =
+          (right.kind === 'bundle' ? parseCivilDate(right.primaryDocument.createdAt) : parseCivilDate(right.document.createdAt))?.getTime() ??
+          Number.NEGATIVE_INFINITY;
+
+        if (rightTime !== leftTime) {
+          return rightTime - leftTime;
+        }
+
+        const leftTitle = left.kind === 'bundle' ? left.title : left.document.title;
+        const rightTitle = right.kind === 'bundle' ? right.title : right.document.title;
+        return leftTitle.localeCompare(rightTitle, 'es-AR');
+      }),
+    }));
+
+  const otherSectionItems = otherDocuments
+    .sort((left, right) => {
+      const leftTime = parseCivilDate(left.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+      const rightTime = parseCivilDate(right.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY;
+      if (rightTime !== leftTime) {
+        return rightTime - leftTime;
+      }
+      return left.title.localeCompare(right.title, 'es-AR');
+    })
+    .map<MobileDocumentItem>((document) => ({
       kind: 'document',
       key: `document:${document.id}`,
       document,
-      sectionLabel,
+      sectionLabel: 'Otros documentos',
+    }));
+
+  const sections: MobileDocumentSection[] = [...paymentSections];
+
+  if (otherSectionItems.length > 0) {
+    sections.push({
+      key: 'other-documents',
+      label: 'Otros documentos',
+      items: otherSectionItems,
     });
   }
 
-  return order.map((key) => {
-    const section = sectionMap.get(key);
-    if (!section) return { key, label: 'Documentos', items: [] };
-    return {
-      key,
-      label: section.label,
-      items: section.items,
-    };
-  });
+  return sections;
 }
 
 function getBundleActionLabel(document: Document): string {
@@ -481,16 +532,8 @@ export default function ResidentDocumentsPage() {
   const unitId = context?.activeUnitId;
 
   const { data: contextOptions } = useContextOptions(tenantId ?? null);
-  const unitsForBuilding = buildingId ? contextOptions?.unitsByBuilding?.[buildingId] ?? [] : [];
   const buildingName = contextOptions?.buildings.find((building) => building.id === buildingId)?.name ?? null;
-  const unitName = buildingId && unitId
-    ? unitsForBuilding.find((unit) => unit.id === unitId)?.label ??
-      unitsForBuilding.find((unit) => unit.id === unitId)?.code ??
-      null
-    : null;
   const isMobileViewport = useIsMobileViewport();
-  const mobileContextPrimaryLabel = [buildingName, unitName].filter(Boolean).join(' · ') || tenantName;
-  const mobileContextSecondaryLabel = mobileContextPrimaryLabel !== tenantName ? tenantName : null;
 
   useEffect(() => {
     return () => {
@@ -946,20 +989,6 @@ export default function ResidentDocumentsPage() {
             Consulta comprobantes, recibos y archivos de tu unidad.
           </p>
         </div>
-
-        <Card className="border-border/70 bg-muted/30 p-3 dark:bg-muted/20">
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm font-semibold text-foreground">Contexto activo</p>
-            <p className="truncate text-sm font-medium text-foreground" title={mobileContextPrimaryLabel}>
-              {mobileContextPrimaryLabel}
-            </p>
-            {mobileContextSecondaryLabel && (
-              <p className="truncate text-xs text-muted-foreground" title={mobileContextSecondaryLabel}>
-                {mobileContextSecondaryLabel}
-              </p>
-            )}
-          </div>
-        </Card>
 
         {listErrorMessage && (
           <Card className="border-red-200 bg-red-50 p-3 dark:border-red-900/60 dark:bg-red-950/40">
