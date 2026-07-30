@@ -310,15 +310,20 @@ export async function publishCommunication(
 export interface GetInboxFilters {
   status?: CommunicationStatus;
   buildingId?: string;
+  unitId?: string;
 }
 
 /**
  * Get user's inbox communications
  */
-export async function getInbox(filters?: GetInboxFilters): Promise<InboxCommunication[]> {
+export async function getInbox(
+  tenantId: string,
+  filters?: GetInboxFilters,
+): Promise<InboxCommunication[]> {
   const params = new URLSearchParams();
   if (filters?.status) params.append('status', filters.status);
   if (filters?.buildingId) params.append('buildingId', filters.buildingId);
+  if (filters?.unitId) params.append('unitId', filters.unitId);
 
   const endpoint = `/me/communications${params.toString() ? '?' + params.toString() : ''}`;
   logRequest('GET', endpoint);
@@ -327,6 +332,10 @@ export async function getInbox(filters?: GetInboxFilters): Promise<InboxCommunic
     return await apiClient<InboxCommunication[]>({
       path: endpoint,
       method: 'GET',
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to get inbox: ${(error as Error).message}`;
@@ -338,7 +347,10 @@ export async function getInbox(filters?: GetInboxFilters): Promise<InboxCommunic
 /**
  * Mark a communication as read
  */
-export async function markAsRead(communicationId: string): Promise<void> {
+export async function markAsRead(
+  tenantId: string,
+  communicationId: string,
+): Promise<void> {
   const endpoint = `/me/communications/${communicationId}/read`;
   logRequest('POST', endpoint);
 
@@ -346,6 +358,10 @@ export async function markAsRead(communicationId: string): Promise<void> {
     await apiClient<void>({
       path: endpoint,
       method: 'POST',
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to mark as read: ${(error as Error).message}`;
@@ -408,7 +424,10 @@ export async function getResidentCommunications(
     return await apiClient<ResidentCommunicationsResponse>({
       path: endpoint,
       method: 'GET',
-      headers: { 'X-Tenant-Id': tenantId },
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to get resident communications: ${(error as Error).message}`;
@@ -428,7 +447,10 @@ export async function markResidentAsRead(
     return await apiClient<{ readAt: string | null }>({
       path: endpoint,
       method: 'POST',
-      headers: { 'X-Tenant-Id': tenantId },
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to mark as read: ${(error as Error).message}`;
