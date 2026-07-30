@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { t } from '@/i18n';
 import Card from '@/shared/components/ui/Card';
 import ErrorState from '@/shared/components/ui/ErrorState';
 import EmptyState from '@/shared/components/ui/EmptyState';
@@ -12,13 +11,15 @@ import { Bell, Mail } from 'lucide-react';
 import type { InboxCommunication } from '../services/communications.api';
 
 interface InboxListProps {
+  tenantId: string;
   buildingId: string;
+  unitId: string;
 }
 
 /**
  * InboxList: Resident view of communications inbox
  */
-export function InboxList({ buildingId }: InboxListProps) {
+export function InboxList({ tenantId, buildingId, unitId }: InboxListProps) {
   const [selectedComm, setSelectedComm] = useState<InboxCommunication | null>(null);
   const {
     inbox,
@@ -27,7 +28,7 @@ export function InboxList({ buildingId }: InboxListProps) {
     markAsRead,
     unreadCount,
     refetch,
-  } = useCommunicationsInbox({ buildingId });
+  } = useCommunicationsInbox({ tenantId, buildingId, unitId });
 
   if (error && inbox.length === 0) {
     return <ErrorState message={error} onRetry={refetch} />;
@@ -111,7 +112,9 @@ export function InboxList({ buildingId }: InboxListProps) {
       {selectedComm && (
         <InboxDetail
           communication={selectedComm}
-          onMarkAsRead={() => markAsRead(selectedComm.id)}
+          onMarkAsRead={async () => {
+            await markAsRead(selectedComm.id);
+          }}
           onClose={() => setSelectedComm(null)}
         />
       )}

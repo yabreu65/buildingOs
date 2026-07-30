@@ -6,6 +6,7 @@ import {
 import { CommunicationsService } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
+import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 
 const tenantId = 'tenant-1';
@@ -24,13 +25,14 @@ function buildReq(
       memberships: [{ tenantId, roles: ['RESIDENT'] }],
       ...overrides.user,
     },
-  } as unknown as AuthenticatedRequest;
+  } as AuthenticatedRequest;
 }
 
 describe('ResidentCommunicationsController', () => {
   let service: { findForResidentV2: jest.Mock; markAsReadForResident: jest.Mock };
   let validators: { validateCommunicationBelongsToTenant: jest.Mock };
   let residentAccess: { assertUnitAccess: jest.Mock };
+  let prisma: { tenantMember: { findFirst: jest.Mock } };
   let controller: ResidentCommunicationsController;
 
   beforeEach(() => {
@@ -40,10 +42,16 @@ describe('ResidentCommunicationsController', () => {
     };
     validators = { validateCommunicationBelongsToTenant: jest.fn().mockResolvedValue(undefined) };
     residentAccess = { assertUnitAccess: jest.fn().mockResolvedValue(undefined) };
+    prisma = {
+      tenantMember: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'tenant-member-1' }),
+      },
+    };
     controller = new ResidentCommunicationsController(
-      service as unknown as CommunicationsService,
-      validators as unknown as CommunicationsValidators,
-      residentAccess as unknown as ResidentAccessService,
+      service as CommunicationsService,
+      validators as CommunicationsValidators,
+      residentAccess as ResidentAccessService,
+      prisma as PrismaService,
     );
   });
 
@@ -72,6 +80,14 @@ describe('ResidentCommunicationsController', () => {
         10,
         undefined,
       );
+      expect(prisma.tenantMember.findFirst).toHaveBeenCalledWith({
+        where: {
+          tenantId,
+          userId,
+          disabledAt: null,
+        },
+        select: { id: true },
+      });
     });
 
     it('validates active occupancy via assertUnitAccess', async () => {
@@ -147,11 +163,22 @@ describe('ResidentCommunicationsController', () => {
 
       expect(service.findForResidentV2).not.toHaveBeenCalled();
     });
+
+    it('rejects a disabled membership before calling the service', async () => {
+      prisma.tenantMember.findFirst.mockResolvedValueOnce(null);
+      const req = buildReq();
+
+      await expect(
+        controller.getResidentCommunications({ buildingId, unitId, limit: 10 }, req),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(service.findForResidentV2).not.toHaveBeenCalled();
+    });
   });
 
   describe('markResidentAsRead', () => {
     it('requires X-Tenant-Id header', async () => {
-      const req = buildReq({ headers: { 'x-tenant-id': undefined as unknown as string } });
+      const req = buildReq({ headers: { 'x-tenant-id': undefined } });
 
       await expect(
         controller.markResidentAsRead(communicationId, req),
@@ -205,14 +232,14 @@ describe('ResidentCommunicationsController', () => {
 
       await expect(
         controller.markResidentAsRead(communicationId, req),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(ForbiddenException);
 
       expect(validators.validateCommunicationBelongsToTenant).not.toHaveBeenCalled();
       expect(service.markAsReadForResident).not.toHaveBeenCalled();
     });
 
     it('does not call service when header is missing', async () => {
-      const req = buildReq({ headers: { 'x-tenant-id': undefined as unknown as string } });
+      const req = buildReq({ headers: { 'x-tenant-id': undefined } });
 
       await expect(
         controller.markResidentAsRead(communicationId, req),
@@ -228,9 +255,11 @@ describe('CommunicationsInboxController', () => {
   let service: { findForUser: jest.Mock; findOne: jest.Mock; markAsRead: jest.Mock };
   let validators: {
     validateBuildingBelongsToTenant: jest.Mock;
+    validateUnitBelongsToTenant: jest.Mock;
     validateCommunicationBelongsToTenant: jest.Mock;
     canUserReadCommunication: jest.Mock;
   };
+  let prisma: { tenantMember: { findFirst: jest.Mock } };
   let controller: CommunicationsInboxController;
 
   beforeEach(() => {
@@ -241,12 +270,19 @@ describe('CommunicationsInboxController', () => {
     };
     validators = {
       validateBuildingBelongsToTenant: jest.fn().mockResolvedValue(undefined),
+      validateUnitBelongsToTenant: jest.fn().mockResolvedValue(undefined),
       validateCommunicationBelongsToTenant: jest.fn().mockResolvedValue(undefined),
       canUserReadCommunication: jest.fn().mockResolvedValue(true),
     };
+    prisma = {
+      tenantMember: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'tenant-member-1' }),
+      },
+    };
     controller = new CommunicationsInboxController(
-      service as unknown as CommunicationsService,
-      validators as unknown as CommunicationsValidators,
+      service as CommunicationsService,
+      validators as CommunicationsValidators,
+      prisma as PrismaService,
     );
   });
 
@@ -275,6 +311,28 @@ describe('CommunicationsInboxController', () => {
         }),
       );
       expect(validators.validateBuildingBelongsToTenant).toHaveBeenCalledWith(tenantId, buildingId);
+      expect(prisma.tenantMember.findFirst).toHaveBeenCalledWith({
+        where: {
+          tenantId,
+          userId,
+          disabledAt: null,
+        },
+        select: { id: true },
+      });
+    });
+
+    it('rejects a unit that does not belong to the tenant', async () => {
+      validators.validateUnitBelongsToTenant.mockRejectedValueOnce(
+        new BadRequestException('Unit not found or does not belong to this tenant'),
+      );
+
+      const req = buildReq();
+
+      await expect(
+        controller.getInbox(req, buildingId, unitId, 'false'),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(service.findForUser).not.toHaveBeenCalled();
     });
 
     it('rejects a missing tenant header before calling the service', async () => {
@@ -298,17 +356,8 @@ describe('CommunicationsInboxController', () => {
     });
 
     it('rejects a disabled membership', async () => {
+      prisma.tenantMember.findFirst.mockResolvedValueOnce(null);
       const req = buildReq({
-        user: {
-          id: userId,
-          memberships: [
-            {
-              tenantId,
-              roles: ['RESIDENT'],
-              disabledAt: new Date().toISOString(),
-            },
-          ],
-        },
       });
 
       await expect(controller.getInbox(req)).rejects.toThrow(ForbiddenException);

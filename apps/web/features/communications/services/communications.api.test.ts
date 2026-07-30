@@ -1,6 +1,8 @@
 import { apiClient } from '@/shared/lib/http/client';
 import {
+  getInbox,
   getResidentCommunications,
+  markAsRead,
   markResidentAsRead,
 } from './communications.api';
 
@@ -37,6 +39,42 @@ describe('communications.api resident helpers', () => {
 
     expect(mockedApiClient).toHaveBeenCalledWith({
       path: '/resident/communications/comm-1/read',
+      method: 'POST',
+      headers: {
+        'X-Tenant-Id': 'tenant-1',
+        'X-Portal-Context': 'resident',
+      },
+    });
+  });
+});
+
+describe('communications.api legacy inbox helpers', () => {
+  beforeEach(() => {
+    mockedApiClient.mockReset();
+  });
+
+  it('sends the active tenant and resident portal context when loading the legacy inbox', async () => {
+    mockedApiClient.mockResolvedValue([]);
+
+    await getInbox('tenant-1', { buildingId: 'building-1', unitId: 'unit-1' });
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/me/communications?buildingId=building-1&unitId=unit-1',
+      method: 'GET',
+      headers: {
+        'X-Tenant-Id': 'tenant-1',
+        'X-Portal-Context': 'resident',
+      },
+    });
+  });
+
+  it('sends the active tenant and resident portal context when marking legacy inbox communications as read', async () => {
+    mockedApiClient.mockResolvedValue(undefined);
+
+    await markAsRead('tenant-1', 'comm-1');
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/me/communications/comm-1/read',
       method: 'POST',
       headers: {
         'X-Tenant-Id': 'tenant-1',

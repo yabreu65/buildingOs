@@ -14,8 +14,7 @@ import { useBuildings } from '@/features/buildings/hooks';
 import { useUnits } from '@/features/buildings/hooks/useUnits';
 import { useOccupants } from '@/features/buildings/hooks/useOccupants';
 import { useAuth } from '@/features/auth/useAuth';
-import { routes } from '@/shared/lib/routes';
-import { BuildingBreadcrumb, BuildingSubnav } from '@/features/buildings/components';
+import { BuildingBreadcrumb } from '@/features/buildings/components';
 import { UnitTicketsList } from '@/features/tickets';
 import { InboxList } from '@/features/communications';
 import { t } from '@/i18n';
@@ -25,7 +24,6 @@ import { UnitFinanceTab } from '@/features/finance/components/UnitFinanceTab';
 import { useUnitLedger } from '@/features/finance/hooks/useUnitLedger';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock, AlertCircle, CheckCircle2 } from 'lucide-react';
-import type { Unit } from '@/features/units/units.types';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { AssignResidentModal } from './AssignResidentModal';
 
@@ -34,6 +32,12 @@ interface UnitParams {
   buildingId: string;
   unitId: string;
   [key: string]: string | string[];
+}
+
+interface UnitDashboardContentProps {
+  tenantId: string;
+  buildingId: string;
+  unitId: string;
 }
 
 /**
@@ -46,6 +50,25 @@ const UnitDashboardPage = () => {
   const tenantId = params?.tenantId;
   const buildingId = params?.buildingId;
   const unitId = params?.unitId;
+
+  if (!tenantId || !buildingId || !unitId) {
+    return <div>{t('common.invalidParameters')}</div>;
+  }
+
+  return (
+    <UnitDashboardContent
+      tenantId={tenantId}
+      buildingId={buildingId}
+      unitId={unitId}
+    />
+  );
+};
+
+const UnitDashboardContent = ({
+  tenantId,
+  buildingId,
+  unitId,
+}: UnitDashboardContentProps) => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -84,14 +107,10 @@ const UnitDashboardPage = () => {
   const isAdmin = currentUser?.roles?.some((r) => ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR'].includes(r));
 
   // Check if current user is occupant of this unit
-  const isOccupantOfUnit = occupants.some((o) => o.user?.id === currentUser?.id);
+  const isOccupantOfUnit = !occupantsLoading && occupants.some((o) => o.user?.id === currentUser?.id);
 
   // Access control: residents can only see their own unit
   const hasAccess = isAdmin || isOccupantOfUnit;
-
-  if (!tenantId || !buildingId || !unitId) {
-    return <div>{t('common.invalidParameters')}</div>;
-  }
 
   if (buildingsError || unitsError) {
     return (
@@ -108,6 +127,21 @@ const UnitDashboardPage = () => {
         <Skeleton width="300px" height="32px" />
         <Card>
           <div className="h-40 animate-pulse bg-muted rounded" />
+        </Card>
+      </div>
+    );
+  }
+
+  if (occupantsLoading && !isAdmin) {
+    return (
+      <div className="space-y-6">
+        <BuildingBreadcrumb tenantId={tenantId} buildingName={unit?.label || t('common.loading')} buildingId={buildingId} />
+        <Card>
+          <div className="space-y-3">
+            <Skeleton width="220px" height="32px" />
+            <Skeleton width="100%" height="180px" />
+            <Skeleton width="100%" height="220px" />
+          </div>
         </Card>
       </div>
     );
@@ -457,7 +491,12 @@ const UnitDashboardPage = () => {
         {/* Messages Tab */}
         {activeTab === 'messages' && (
           <div>
-            <InboxList buildingId={buildingId} />
+            <InboxList
+              key={`${tenantId}:${buildingId}:${unitId}`}
+              tenantId={tenantId}
+              buildingId={buildingId}
+              unitId={unitId}
+            />
           </div>
         )}
 

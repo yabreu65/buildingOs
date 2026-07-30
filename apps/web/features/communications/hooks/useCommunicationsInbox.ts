@@ -1,9 +1,8 @@
-/**
- * useCommunicationsInbox Hook
- * Manages user inbox communications + mark as read
- */
+'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import {
   getInbox,
   markAsRead as markAsReadAPI,
@@ -12,83 +11,110 @@ import {
 
 interface UseCommunicationsInboxOptions {
   buildingId?: string;
+  unitId?: string;
+  tenantId?: string | null;
 }
 
+const COMMUNICATIONS_INBOX_QUERY_KEY = 'communicationsInbox';
+
 export function useCommunicationsInbox(options: UseCommunicationsInboxOptions) {
-  const { buildingId } = options;
+  const { buildingId, unitId, tenantId } = options;
+  const session = useAuthSession();
+  const queryClient = useQueryClient();
+  const userId = session?.user.id ?? null;
+  const activeTenantId = session?.activeTenantId ?? null;
+  const requestedTenantId = tenantId?.trim() ?? null;
+  const canFetch = !!requestedTenantId && !!userId && requestedTenantId === activeTenantId;
 
-  const [inbox, setInbox] = useState<InboxCommunication[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Fetch inbox communications
-  const fetchInbox = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getInbox({ buildingId });
-      setInbox(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to fetch inbox';
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildingId]);
-
-  // Auto-fetch on mount and dependency changes
-  useEffect(() => {
-    fetchInbox();
-  }, [fetchInbox]);
-
-  // Mark a communication as read
-  const markAsRead = useCallback(
-    async (communicationId: string): Promise<void> => {
-      try {
-        await markAsReadAPI(communicationId);
-        // Update local state: set readAt timestamp on the receipt
-        setInbox((prev) =>
-          prev.map((c) => {
-            if (c.id === communicationId) {
-              return {
-                ...c,
-                receipts: c.receipts.map((r) => ({
-                  ...r,
-                  readAt: r.readAt || new Date().toISOString(),
-                })),
-              };
-            }
-            return c;
-          })
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to mark as read';
-        setError(message);
-        throw err;
+  const inboxQuery = useQuery<InboxCommunication[]>({
+    queryKey: [
+      COMMUNICATIONS_INBOX_QUERY_KEY,
+      requestedTenantId,
+      activeTenantId,
+      buildingId,
+      unitId,
+      userId,
+    ],
+    queryFn: () => {
+      if (!requestedTenantId) {
+        throw new Error('Missing tenantId for inbox query');
       }
-    },
-    []
-  );
 
-  // Calculate unread count
+      return getInbox(
+        requestedTenantId,
+        buildingId || unitId ? { buildingId, unitId } : undefined,
+      );
+    },
+    enabled: canFetch,
+    staleTime: 2 * 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+
+  const inbox = useMemo(() => {
+    return canFetch ? inboxQuery.data ?? [] : [];
+  }, [canFetch, inboxQuery.data]);
+
+  const markAsReadMutation = useMutation({
+    mutationFn: async (communicationId: string) => {
+      if (!requestedTenantId) {
+        throw new Error('Missing tenantId for inbox mutation');
+      }
+
+      await markAsReadAPI(requestedTenantId, communicationId);
+      return communicationId;
+    },
+    onSuccess: async (communicationId) => {
+      if (!requestedTenantId) {
+        return;
+      }
+
+      const queryKey = [
+        COMMUNICATIONS_INBOX_QUERY_KEY,
+        requestedTenantId,
+        activeTenantId,
+        buildingId,
+        unitId,
+        userId,
+      ];
+      const now = new Date().toISOString();
+
+      queryClient.setQueryData<InboxCommunication[]>(queryKey, (current) =>
+        current?.map((communication) => {
+          if (communication.id !== communicationId) {
+            return communication;
+          }
+
+          return {
+            ...communication,
+            receipts: communication.receipts.map((receipt) => ({
+              ...receipt,
+              readAt: receipt.readAt ?? now,
+            })),
+          };
+        }) ?? current,
+      );
+
+      await queryClient.invalidateQueries({
+        queryKey: [COMMUNICATIONS_INBOX_QUERY_KEY, requestedTenantId, activeTenantId],
+        exact: false,
+      });
+    },
+  });
+
   const unreadCount = useMemo(() => {
-    return inbox.filter((c) => {
-      const receipt = c.receipts?.[0];
+    return inbox.filter((communication) => {
+      const receipt = communication.receipts?.[0];
       return !receipt?.readAt;
     }).length;
   }, [inbox]);
 
-  // Refetch inbox
-  const refetch = useCallback(() => {
-    fetchInbox();
-  }, [fetchInbox]);
-
   return {
     inbox,
-    loading,
-    error,
-    markAsRead,
+    loading: canFetch ? inboxQuery.isLoading : false,
+    error: inboxQuery.error instanceof Error ? inboxQuery.error.message : null,
+    markAsRead: markAsReadMutation.mutateAsync,
     unreadCount,
-    refetch,
+    refetch: inboxQuery.refetch,
   };
 }
