@@ -23,6 +23,46 @@ describe('Tenant permission controller metadata', () => {
     },
     {
       controller: MembershipsController.prototype,
+      methodName: 'getAssignableResidents',
+      permission: 'members.manage',
+    },
+    {
+      controller: MembershipsController.prototype,
+      methodName: 'getAssignableTicketMembers',
+      permission: 'tickets.manage',
+    },
+    {
+      controller: MembershipsController.prototype,
+      methodName: 'getRoles',
+      permission: 'members.manage',
+    },
+    {
+      controller: InvitationsAdminController.prototype,
+      methodName: 'listMembers',
+      permission: 'members.manage',
+    },
+    {
+      controller: InvitationsAdminController.prototype,
+      methodName: 'listInvitations',
+      permission: 'members.manage',
+    },
+    {
+      controller: TenantMembersController.prototype,
+      methodName: 'getAssignableResidents',
+      permission: 'members.manage',
+    },
+    {
+      controller: TenantMembersController.prototype,
+      methodName: 'getMember',
+      permission: 'members.manage',
+    },
+    {
+      controller: TenantMembersController.prototype,
+      methodName: 'listMembers',
+      permission: 'members.manage',
+    },
+    {
+      controller: MembershipsController.prototype,
       methodName: 'removeRole',
       permission: 'members.manage',
     },

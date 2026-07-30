@@ -1,4 +1,5 @@
-import { IsString, IsEmail, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsEnum, IsBoolean } from 'class-validator';
+import { MemberStatus, Role } from '@prisma/client';
 
 export class CreateTenantMemberDto {
   @IsString()
@@ -11,8 +12,8 @@ export class CreateTenantMemberDto {
   phone!: string;
 
   @IsOptional()
-  @IsIn(['RESIDENT', 'OPERATOR', 'TENANT_ADMIN', 'TENANT_OWNER'])
-  role?: string;
+  @IsEnum(Role)
+  role?: Role;
 
   @IsOptional()
   @IsString()
@@ -39,7 +40,20 @@ export class UpdateTenantMemberDto {
 
 export class InviteTenantMemberDto {
   @IsOptional()
+  @IsBoolean()
   force?: boolean;
+}
+
+export class ListTenantMembersQueryDto {
+  @IsOptional()
+  @IsEnum(MemberStatus)
+  status?: MemberStatus;
+}
+
+export class AssignableResidentsQueryDto {
+  @IsOptional()
+  @IsString()
+  unitId?: string;
 }
 
 export class AcceptInvitationDto {

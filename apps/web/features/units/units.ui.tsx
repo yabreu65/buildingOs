@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { Table, THead, TR, TH, TBody, TD } from '../../shared/components/ui/Table';
 import Badge from '../../shared/components/ui/Badge';
 import Button from '../../shared/components/ui/Button';
+import { useActiveTenantId } from '../auth/useAuthSession';
 import { useCan } from '../rbac/rbac.hooks';
 import type { Unit } from './units.api';
 import { useUnits } from './useUnits';
@@ -13,20 +14,16 @@ import { useBuildings } from '../buildings/hooks';
 import { assignOccupant, removeOccupant, type CreateUnitInput } from './units.api';
 import { tenantMembersApi, type AssignableResident } from '../tenant-members/api/tenant-members.api';
 
-// Building interface from storage
-interface Building {
-  id: string;
-  tenantId: string;
-  name: string;
-  address: string;
-  createdAt: string;
-}
-
 export const UnitsUI = () => {
   const params = useParams();
-  const tenantId = params?.tenantId as string | undefined;
+  const routeTenantId = typeof params?.tenantId === 'string' && params.tenantId.length > 0
+    ? params.tenantId
+    : undefined;
+  const activeTenantId = useActiveTenantId();
+  const tenantId = activeTenantId ?? routeTenantId;
 
   const canWrite = useCan('units.write');
+  const canManageMembers = useCan('members.manage');
 
   // State for building tabs
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
@@ -52,7 +49,7 @@ export const UnitsUI = () => {
       : allUnits.filter(unit => unit.buildingId === selectedBuildingId);
 
   // Fetch buildings from API (real buildings, not mock storage)
-  const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
+  const { buildings } = useBuildings(tenantId);
 
 // Group all units by building (for button counts)
   const unitsByBuilding = React.useMemo(() => {
@@ -91,17 +88,27 @@ export const UnitsUI = () => {
     unitLabel: string;
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const residentModalUnitId = residentModal?.unitId ?? null;
 
   // Load assignable residents when modal opens
   React.useEffect(() => {
-    if (!residentModal || !tenantId) return;
+    if (!residentModalUnitId || !tenantId) return;
+    if (!canManageMembers) {
+      setResidentModal(null);
+      setSelectedResident('');
+      setFeedback({
+        type: 'error',
+        message: 'No tenés permiso para asignar residentes.',
+      });
+      return;
+    }
     setIsLoadingResidents(true);
     tenantMembersApi
-      .getAssignableResidents(tenantId, residentModal.unitId)
+      .getAssignableResidents(tenantId, residentModalUnitId)
       .then(setAssignableResidents)
       .catch(() => setAssignableResidents([]))
       .finally(() => setIsLoadingResidents(false));
-  }, [residentModal?.unitId, tenantId]);
+  }, [residentModalUnitId, tenantId, canManageMembers]);
 
   // Handler para crear unidad (delegado al componente unificado)
   const handleCreateUnitSuccess = (unit: Unit) => {
@@ -177,17 +184,9 @@ export const UnitsUI = () => {
     return building?.name || buildingId;
   };
 
-  // Get status badge
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'VACANT':
-        return <Badge className="bg-blue-100 text-blue-800">Vacío</Badge>;
-      case 'OCCUPIED':
-        return <Badge className="bg-green-100 text-green-800">Ocupado</Badge>;
-      default:
-        return <span className="text-sm text-muted-foreground">—</span>;
-    }
-  };
+  if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
+    return <div className="text-sm text-muted-foreground">Contexto de tenant incorrecto</div>;
+  }
 
   if (!tenantId) {
     return <div className="text-sm text-muted-foreground">Tenant no disponible</div>;
@@ -321,6 +320,13 @@ export const UnitsUI = () => {
                        variant="ghost"
                        size="sm"
                        onClick={() => {
+                         if (!canManageMembers) {
+                           setFeedback({
+                             type: 'error',
+                             message: 'No tenés permiso para asignar residentes.',
+                           });
+                           return;
+                         }
                          const currentOccupants = (u.unitOccupants ?? []).map((o) => ({
                            id: o.id,
                            memberId: o.memberId,
@@ -359,7 +365,7 @@ export const UnitsUI = () => {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold mb-4">
-              Asignar residente a "{residentModal.unitLabel}"
+              Asignar residente a &quot;{residentModal.unitLabel}&quot;
             </h3>
 
             <div className="space-y-4">
@@ -415,7 +421,7 @@ export const UnitsUI = () => {
               ¿Eliminar unidad?
             </h3>
             <p className="text-sm text-muted-foreground mb-4">
-              Estás a punto de eliminar la unidad "<strong>{deleteModal.unitLabel}</strong>". Esta acción no se puede deshacer.
+              Estás a punto de eliminar la unidad &quot;<strong>{deleteModal.unitLabel}</strong>&quot;. Esta acción no se puede deshacer.
             </p>
 
             <div className="flex gap-2 justify-end pt-2">

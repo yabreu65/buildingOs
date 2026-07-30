@@ -8,6 +8,8 @@ import {
   Param,
   Query,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
@@ -20,8 +22,9 @@ import {
   CreateTenantMemberDto,
   UpdateTenantMemberDto,
   InviteTenantMemberDto,
+  ListTenantMembersQueryDto,
+  AssignableResidentsQueryDto,
 } from './dto';
-import { MemberStatus } from '@prisma/client';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -107,17 +110,19 @@ export class TenantMembersController {
    * Includes occupancy metadata (assigned unit count, primary assignments)
    */
   @Get('assignable')
+  @RequireTenantPermission('members.manage')
   getAssignableResidents(
     @TenantParam() tenantId: string,
-    @Query('unitId') unitId?: string,
+    @Query() query: AssignableResidentsQueryDto,
   ) {
-    return this.tenantMembersService.getAssignableResidents(tenantId, unitId);
+    return this.tenantMembersService.getAssignableResidents(tenantId, query.unitId);
   }
 
   /**
    * Get single member by ID
    */
   @Get(':memberId')
+  @RequireTenantPermission('members.manage')
   getMember(
     @TenantParam() tenantId: string,
     @Param('memberId') memberId: string,
@@ -129,10 +134,18 @@ export class TenantMembersController {
    * List all members in tenant with optional status filter
    */
   @Get()
+  @RequireTenantPermission('members.manage')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
   listMembers(
     @TenantParam() tenantId: string,
-    @Query('status') status?: MemberStatus,
+    @Query() query: ListTenantMembersQueryDto,
   ) {
-    return this.tenantMembersService.listMembers(tenantId, status);
+    return this.tenantMembersService.listMembers(tenantId, query.status);
   }
 }
