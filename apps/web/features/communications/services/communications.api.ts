@@ -408,7 +408,10 @@ export async function getResidentCommunications(
     return await apiClient<ResidentCommunicationsResponse>({
       path: endpoint,
       method: 'GET',
-      headers: { 'X-Tenant-Id': tenantId },
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to get resident communications: ${(error as Error).message}`;
@@ -428,7 +431,10 @@ export async function markResidentAsRead(
     return await apiClient<{ readAt: string | null }>({
       path: endpoint,
       method: 'POST',
-      headers: { 'X-Tenant-Id': tenantId },
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'X-Portal-Context': 'resident',
+      },
     });
   } catch (error) {
     const message = `Failed to mark as read: ${(error as Error).message}`;

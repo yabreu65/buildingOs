@@ -11,6 +11,18 @@ import type { Ticket } from '../../tickets/services/tickets.api';
 
 export type { UnitLedger, InboxCommunication, Ticket };
 
+function buildResidentHeaders(tenantId: string): Record<string, string> {
+  const normalizedTenantId = tenantId.trim();
+  if (normalizedTenantId.length === 0) {
+    throw new Error('[resident] Missing tenantId for resident-scoped API call');
+  }
+
+  return {
+    'X-Tenant-Id': normalizedTenantId,
+    'X-Portal-Context': 'resident',
+  };
+}
+
 export interface ResidentContext {
   tenantId: string;
   activeBuildingId: string | null;
@@ -48,10 +60,14 @@ export async function getResidentLedger(
  * Get inbox communications (last N for the resident).
  * @param limit - Max items to return (default 3)
  */
-export async function getResidentCommunications(limit = 3): Promise<InboxCommunication[]> {
+export async function getResidentCommunications(
+  tenantId: string,
+  limit = 3,
+): Promise<InboxCommunication[]> {
   return apiClient<InboxCommunication[]>({
     path: `/me/communications?limit=${limit}`,
     method: 'GET',
+    headers: buildResidentHeaders(tenantId),
   });
 }
 
