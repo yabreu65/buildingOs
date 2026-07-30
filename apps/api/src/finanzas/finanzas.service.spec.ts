@@ -2921,6 +2921,222 @@ describe('FinanzasService', () => {
     });
   });
 
+  describe('getUnitLedger access control', () => {
+    const tenantId = 'tenant-1';
+    const buildingId = 'building-1';
+    const otherBuildingId = 'building-2';
+    const unitId = 'unit-1';
+    const otherUnitId = 'unit-2';
+
+    const mockLedgerBase = (ledgerUnitBuildingId = buildingId) => {
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({
+        currency: 'ARS',
+      } as never);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: unitId,
+        building: { id: ledgerUnitBuildingId },
+      } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([] as never);
+    };
+
+    it('allows a tenant-scoped admin membership for the requested tenant', async () => {
+      mockLedgerBase();
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          unitId,
+          undefined,
+          undefined,
+          ['TENANT_ADMIN'],
+          'user-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: ['TENANT_ADMIN'],
+            scopedRoles: [],
+          } as never,
+        ),
+      ).resolves.toEqual(expect.objectContaining({
+        totals: expect.objectContaining({
+          currency: 'ARS',
+          balance: 0,
+        }),
+      }));
+
+      expect(validators.validateResidentUnitAccess).not.toHaveBeenCalled();
+    });
+
+    it('allows a building-scoped role only for the exact building', async () => {
+      mockLedgerBase();
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          unitId,
+          undefined,
+          undefined,
+          [],
+          'user-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: [],
+            scopedRoles: [
+              {
+                id: 'scope-1',
+                role: 'TENANT_ADMIN',
+                scopeType: ScopeType.BUILDING,
+                scopeBuildingId: buildingId,
+                scopeUnitId: null,
+              },
+            ],
+          } as never,
+        ),
+      ).resolves.toEqual(expect.objectContaining({
+        totals: expect.objectContaining({
+          balance: 0,
+        }),
+      }));
+
+      expect(prismaService.charge.findMany).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a building-scoped role when the building does not match', async () => {
+      mockLedgerBase(otherBuildingId);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([] as never);
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          unitId,
+          undefined,
+          undefined,
+          [],
+          'user-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: [],
+            scopedRoles: [
+              {
+                id: 'scope-1',
+                role: 'TENANT_ADMIN',
+                scopeType: ScopeType.BUILDING,
+                scopeBuildingId: buildingId,
+                scopeUnitId: null,
+              },
+            ],
+          } as never,
+        ),
+      ).rejects.toThrow('No tiene acceso al ledger de esta unidad');
+
+      expect(prismaService.charge.findMany).not.toHaveBeenCalled();
+      expect(prismaService.payment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('allows a unit-scoped role only for the exact unit', async () => {
+      mockLedgerBase();
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          unitId,
+          undefined,
+          undefined,
+          [],
+          'user-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: [],
+            scopedRoles: [
+              {
+                id: 'scope-1',
+                role: 'OPERATOR',
+                scopeType: ScopeType.UNIT,
+                scopeBuildingId: null,
+                scopeUnitId: unitId,
+              },
+            ],
+          } as never,
+        ),
+      ).resolves.toEqual(expect.objectContaining({
+        totals: expect.objectContaining({
+          balance: 0,
+        }),
+      }));
+    });
+
+    it('rejects a unit-scoped role when the unit does not match', async () => {
+      mockLedgerBase();
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          otherUnitId,
+          undefined,
+          undefined,
+          [],
+          'user-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: [],
+            scopedRoles: [
+              {
+                id: 'scope-1',
+                role: 'OPERATOR',
+                scopeType: ScopeType.UNIT,
+                scopeBuildingId: null,
+                scopeUnitId: unitId,
+              },
+            ],
+          } as never,
+        ),
+      ).rejects.toThrow('No tiene acceso al ledger de esta unidad');
+
+      expect(prismaService.charge.findMany).not.toHaveBeenCalled();
+      expect(prismaService.payment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('enforces resident access against the exact unit and building', async () => {
+      mockLedgerBase();
+      jest.spyOn(validators, 'validateResidentUnitAccess').mockResolvedValue();
+
+      await expect(
+        service.getUnitLedger(
+          tenantId,
+          unitId,
+          undefined,
+          undefined,
+          ['RESIDENT'],
+          'resident-1',
+          {
+            id: 'membership-1',
+            tenantId,
+            roles: ['RESIDENT'],
+            scopedRoles: [],
+          } as never,
+        ),
+      ).resolves.toEqual(expect.objectContaining({
+        totals: expect.objectContaining({
+          balance: 0,
+        }),
+      }));
+
+      expect(validators.validateResidentUnitAccess).toHaveBeenCalledWith(
+        tenantId,
+        'resident-1',
+        unitId,
+        buildingId,
+      );
+    });
+  });
+
   describe('listPendingPayments', () => {
     it('never grants a resident access through payment creator identity', async () => {
       jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);

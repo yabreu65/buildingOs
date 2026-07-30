@@ -5,9 +5,14 @@ import {
   Query,
   UseGuards,
   Request,
+  BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AuthenticatedRequest } from '../common/types/request.types';
+import {
+  AuthenticatedMembership,
+  AuthenticatedRequest,
+} from '../common/types/request.types';
 import { FinanzasService } from './finanzas.service';
 
 /**
@@ -35,6 +40,34 @@ export class FinanzasUnitsController {
     return Array.isArray(tenantHeader) ? tenantHeader[0] : undefined;
   }
 
+  private resolveTenantMembership(
+    req: AuthenticatedRequest,
+  ): AuthenticatedMembership {
+    const tenantId =
+      req.tenantId ?? this.getTenantIdFromHeader(req) ?? req.user.tenantId;
+
+    if (!tenantId) {
+      throw new BadRequestException('Tenant ID not found in user context');
+    }
+
+    const membership = req.user.memberships?.find(
+      (item) => item.tenantId === tenantId,
+    );
+
+    if (!membership) {
+      throw new ForbiddenException(`No tiene acceso al tenant ${tenantId}`);
+    }
+
+    req.tenantId = tenantId;
+    req.user.tenantId = tenantId;
+    req.user.membershipId = membership.id;
+    req.user.roles = membership.roles;
+    req.user.role = membership.roles[0];
+    req.user.effectiveMembership = membership;
+
+    return membership;
+  }
+
   /**
    * GET /units/:unitId/ledger?periodFrom=&periodTo=
    * Get unit financial ledger
@@ -54,17 +87,10 @@ export class FinanzasUnitsController {
     @Query('periodTo') periodTo: string = '',
     @Request() req: AuthenticatedRequest,
   ) {
-    const tenantIdFromHeader = req.tenantId ?? this.getTenantIdFromHeader(req);
-    const tenantId =
-      (typeof tenantIdFromHeader === 'string' && tenantIdFromHeader) ||
-      req.user.tenantId ||
-      req.user.memberships?.[0]?.tenantId;
+    const membership = this.resolveTenantMembership(req);
+    const tenantId = membership.tenantId;
     const userId = req.user.id;
-    const userRoles = req.user.roles || [];
-
-    if (!tenantId) {
-      throw new Error('Tenant ID not found in user context');
-    }
+    const userRoles = membership.roles || [];
 
     return this.finanzasService.getUnitLedger(
       tenantId,
@@ -73,6 +99,7 @@ export class FinanzasUnitsController {
       periodTo || undefined,
       userRoles,
       userId,
+      membership,
     );
   }
 }
