@@ -98,12 +98,10 @@ export class TenantFinanceController {
   async listTenantCharges(
     @Query() query: ListTenantChargesQueryDto,
     @Request() req: AuthenticatedRequest,
-    @Headers('x-portal-context') portalContext?: string,
   ) {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
-    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.listTenantCharges(
       tenantId,
       userRoles,

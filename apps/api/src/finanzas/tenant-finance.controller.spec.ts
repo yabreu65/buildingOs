@@ -63,9 +63,6 @@ describe('TenantFinanceController administrative portal access', () => {
       controller.getTenantFinancialSummary({}, stubReq([])),
     ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
-      controller.listTenantCharges({}, stubReq(['MANAGER'])),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(
       controller.listPendingPayments({}, stubReq(['RESIDENT']), 'resident'),
     ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
@@ -96,6 +93,25 @@ describe('TenantFinanceController administrative portal access', () => {
     expect(service.approvePaymentTenant).not.toHaveBeenCalled();
     expect(service.rejectPaymentTenant).not.toHaveBeenCalled();
     expect(service.retryReceiptGeneration).not.toHaveBeenCalled();
+  });
+
+  it('allows resident access to tenant-scoped charge listings while preserving admin restrictions elsewhere', async () => {
+    const charges = [{ id: 'charge-1', tenantId: 'tenant-1' }];
+    service.listTenantCharges.mockResolvedValue(charges);
+
+    await expect(
+      controller.listTenantCharges(
+        { status: 'OPEN' },
+        stubReq(['RESIDENT']),
+      ),
+    ).resolves.toBe(charges);
+
+    expect(service.listTenantCharges).toHaveBeenCalledWith(
+      'tenant-1',
+      ['RESIDENT'],
+      'user-1',
+      { status: 'OPEN' },
+    );
   });
 
   it('allows administrative roles with canonical admin context and preserves the no-header compatible path', async () => {
@@ -155,7 +171,6 @@ describe('TenantFinanceController administrative portal access', () => {
       controller.listTenantCharges(
         {},
         stubReq(['SUPER_ADMIN'], { headers: { 'x-portal-context': 'admin' } }),
-        'admin',
       ),
     ).resolves.toBe(charges);
 

@@ -104,10 +104,7 @@ export class FinanzasController {
     userRoles: readonly string[],
     portalContext?: string,
   ): void {
-    if (!hasAdministrativePortalAccess(
-      userRoles,
-      normalizePortalContextHeader(portalContext),
-    )) {
+    if (!hasAdministrativePortalAccess(userRoles, portalContext)) {
       throw new ForbiddenException('Solo administradores pueden consultar esta información');
     }
   }
