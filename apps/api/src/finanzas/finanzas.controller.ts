@@ -20,7 +20,10 @@ import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { FinanzasService } from './finanzas.service';
 import { ExpenseImportService } from './expense-import.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
-import { normalizePortalContextHeader } from '../common/portal-context';
+import {
+  hasAdministrativePortalAccess,
+  normalizePortalContextHeader,
+} from '../common/portal-context';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -86,6 +89,7 @@ import {
 @UseGuards(JwtAuthGuard, BuildingAccessGuard)
 export class FinanzasController {
   private readonly adminRoles: readonly Role[] = [
+    'SUPER_ADMIN',
     'TENANT_ADMIN',
     'TENANT_OWNER',
     'OPERATOR',
@@ -95,6 +99,18 @@ export class FinanzasController {
     private finanzasService: FinanzasService,
     private expenseImportService: ExpenseImportService,
   ) {}
+
+  private assertAdministrativePortalAccess(
+    userRoles: readonly string[],
+    portalContext?: string,
+  ): void {
+    if (!hasAdministrativePortalAccess(
+      userRoles,
+      normalizePortalContextHeader(portalContext),
+    )) {
+      throw new ForbiddenException('Solo administradores pueden consultar esta información');
+    }
+  }
 
   // ============================================================================
   // CHARGES ENDPOINTS
@@ -547,8 +563,10 @@ export class FinanzasController {
     @Param() params: FinancialSummaryParamDto,
     @Query() query: FinancialSummaryQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<FinancialSummaryDto> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.getBuildingFinancialSummary(
       tenantId,
       params.buildingId,
@@ -565,11 +583,10 @@ export class FinanzasController {
     @Param() params: FinancialSummaryParamDto,
     @Query() query: BuildingDelinquencyQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<BuildingDelinquencyResponseDto> {
     const userRoles = req.user.roles || [];
-    if (!this.adminRoles.some((role) => userRoles.includes(role))) {
-      throw new ForbiddenException('Solo administradores pueden consultar la morosidad completa');
-    }
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
 
     return this.finanzasService.getBuildingDelinquency(
       req.tenantId!,
@@ -587,8 +604,10 @@ export class FinanzasController {
     @Param() params: FinancialSummaryParamDto,
     @Query() query: FinanceTrendQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<MonthlyTrendDto[]> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.getFinanceTrend(
       tenantId,
       params.buildingId,

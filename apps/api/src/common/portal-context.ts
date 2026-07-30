@@ -29,3 +29,27 @@ export function resolveNotificationPortalContext(
 
   return portalContext === 'resident' ? 'resident' : 'admin';
 }
+
+export function hasAdministrativePortalAccess(
+  userRoles: readonly string[],
+  portalContext?: string,
+): boolean {
+  const normalizedPortalContext = normalizePortalContextHeader(portalContext);
+  if (portalContext !== undefined && normalizedPortalContext === undefined) {
+    return false;
+  }
+
+  const hasPrivilegedRole = userRoles.some((role) =>
+    PRIVILEGED_ROLES.includes(role as typeof PRIVILEGED_ROLES[number]),
+  );
+
+  if (!hasPrivilegedRole) {
+    return false;
+  }
+
+  if (normalizedPortalContext === 'resident') {
+    return false;
+  }
+
+  return true;
+}

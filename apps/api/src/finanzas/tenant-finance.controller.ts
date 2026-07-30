@@ -1,8 +1,21 @@
-import { Controller, Get, Patch, Post, Param, Query, UseGuards, Request, Body, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Param,
+  Query,
+  UseGuards,
+  Request,
+  Body,
+  Headers,
+  ForbiddenException,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { FinanzasService } from './finanzas.service';
 import { AuthenticatedRequest } from '../common/types/request.types';
+import { hasAdministrativePortalAccess } from '../common/portal-context';
 import {
   FinancialSummaryQueryDto,
   FinancialSummaryDto,
@@ -35,6 +48,15 @@ interface GetPaymentAuditLogQuery { limit?: number }
 export class TenantFinanceController {
   constructor(private finanzasService: FinanzasService) {}
 
+  private assertAdministrativePortalAccess(
+    userRoles: readonly string[],
+    portalContext?: string,
+  ): void {
+    if (!hasAdministrativePortalAccess(userRoles, portalContext)) {
+      throw new ForbiddenException('Solo administradores pueden consultar esta información');
+    }
+  }
+
   /**
    * GET /finance/summary
    * Get aggregated financial summary for entire tenant (all buildings)
@@ -54,8 +76,10 @@ export class TenantFinanceController {
   async getTenantFinancialSummary(
     @Query() query: FinancialSummaryQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<FinancialSummaryDto> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.getTenantFinancialSummary(
       tenantId,
       query.period || undefined,
@@ -74,10 +98,12 @@ export class TenantFinanceController {
   async listTenantCharges(
     @Query() query: ListTenantChargesQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ) {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.listTenantCharges(
       tenantId,
       userRoles,
@@ -95,10 +121,12 @@ export class TenantFinanceController {
   async listPendingPayments(
     @Query() query: ListPendingPaymentsQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<Payment[]> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.listPendingPayments(
       tenantId,
       userRoles,
@@ -116,10 +144,12 @@ export class TenantFinanceController {
     @Param('paymentId') paymentId: string,
     @Body() dto: ApprovePaymentDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<Payment> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     const membershipId = req.user.membershipId || '';
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.approvePaymentTenant(
       tenantId,
       paymentId,
@@ -138,10 +168,12 @@ export class TenantFinanceController {
     @Param('paymentId') paymentId: string,
     @Body() dto: RejectPaymentDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<Payment> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     const membershipId = req.user.membershipId || '';
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.rejectPaymentTenant(
       tenantId,
       paymentId,
@@ -159,8 +191,10 @@ export class TenantFinanceController {
   async getPaymentMetrics(
     @Query() query: PaymentMetricsQueryDto,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<PaymentMetricsDto> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.getPaymentMetrics(tenantId, query);
   }
 
@@ -173,8 +207,10 @@ export class TenantFinanceController {
     @Param('paymentId') paymentId: string,
     @Query() query: GetPaymentAuditLogQuery,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<PaymentAuditLogDto[]> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.getPaymentAuditLog(tenantId, paymentId, query);
   }
 
@@ -186,8 +222,10 @@ export class TenantFinanceController {
   async checkPaymentDuplicate(
     @Param('paymentId') paymentId: string,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<PaymentDuplicateCheckResultDto> {
     const tenantId = req.tenantId!;
+    this.assertAdministrativePortalAccess(req.user.roles || [], portalContext);
     return this.finanzasService.checkPaymentDuplicate(tenantId, paymentId);
   }
 
@@ -199,9 +237,11 @@ export class TenantFinanceController {
   async retryReceiptGeneration(
     @Param('paymentId') paymentId: string,
     @Request() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
   ) {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
+    this.assertAdministrativePortalAccess(userRoles, portalContext);
     return this.finanzasService.retryReceiptGeneration(tenantId, paymentId, userRoles, req.user.id);
   }
 }
