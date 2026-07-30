@@ -84,6 +84,11 @@ describe('FinanzasUnitsController', () => {
       '2026-02',
       ['TENANT_ADMIN'],
       'user-1',
+      expect.objectContaining({
+        id: 'membership-b',
+        tenantId: 'tenant-b',
+        roles: ['TENANT_ADMIN'],
+      }),
     );
     expect(request.tenantId).toBe('tenant-b');
     expect(request.user.tenantId).toBe('tenant-b');

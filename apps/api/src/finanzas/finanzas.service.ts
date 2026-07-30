@@ -1,13 +1,14 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
-import type { PortalContext } from '../common/types/request.types';
+import type { AuthenticatedMembership, PortalContext } from '../common/types/request.types';
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
+import type { Role, ScopedRole } from '@buildingos/contracts';
 import {
   CreateChargeDto,
   UpdateChargeDto,
@@ -93,6 +94,12 @@ type PaymentWithAllocations = Prisma.PaymentGetPayload<{
 
 const RESIDENT_DIRECTED_PAYMENT_PREFIX = 'resident-charge-selection-requires-resubmission';
 const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
+const TENANT_LEDGER_ROLES = new Set<string>([
+  'SUPER_ADMIN',
+  'TENANT_OWNER',
+  'TENANT_ADMIN',
+  'OPERATOR',
+]);
 
 @Injectable()
 export class FinanzasService {
@@ -1868,6 +1875,7 @@ export class FinanzasService {
     periodTo?: string,
     userRoles?: string[],
     userId?: string,
+    membership?: AuthenticatedMembership,
   ): Promise<UnitLedgerDto> {
     // Load tenant to get currency
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
@@ -1892,10 +1900,15 @@ export class FinanzasService {
       );
     }
 
-    // 2. For RESIDENT: validate unit access
-    if (userRoles && userId && this.validators.isResidentOrOwner(userRoles)) {
-      await this.validators.validateResidentUnitAccess(tenantId, userId, unitId);
-    }
+    // 2. Enforce exact tenant membership and scoped roles before loading ledger data
+    await this.assertUnitLedgerAccess({
+      tenantId,
+      unitId,
+      buildingId: unit.building.id,
+      userId,
+      userRoles,
+      membership,
+    });
 
     // 3. Build charge filters
     // IMPORTANT: debt must be calculated from approved/reconciled allocations,
@@ -2006,6 +2019,91 @@ export class FinanzasService {
         currency: tenant.currency,
       },
     };
+  }
+
+  private async assertUnitLedgerAccess(params: {
+    tenantId: string;
+    unitId: string;
+    buildingId: string;
+    userRoles?: readonly string[];
+    userId?: string;
+    membership?: AuthenticatedMembership;
+  }): Promise<void> {
+    const membership = this.resolveLedgerMembership(params);
+
+    if (membership.tenantId !== params.tenantId) {
+      throw new ForbiddenException(`No tiene acceso al tenant ${params.tenantId}`);
+    }
+
+    const tenantRoles = membership.roles ?? [];
+
+    if (tenantRoles.some((role) => this.isTenantLedgerRole(role))) {
+      return;
+    }
+
+    if (this.hasScopedLedgerAccess(membership.scopedRoles ?? [], params)) {
+      return;
+    }
+
+    if (tenantRoles.includes('RESIDENT')) {
+      if (!params.userId) {
+        throw new ForbiddenException('No tiene acceso al ledger de esta unidad');
+      }
+
+      await this.validators.validateResidentUnitAccess(
+        params.tenantId,
+        params.userId,
+        params.unitId,
+        params.buildingId,
+      );
+      return;
+    }
+
+    throw new ForbiddenException('No tiene acceso al ledger de esta unidad');
+  }
+
+  private resolveLedgerMembership(params: {
+    tenantId: string;
+    userRoles?: readonly string[];
+    membership?: AuthenticatedMembership;
+  }): AuthenticatedMembership {
+    if (params.membership) {
+      return params.membership;
+    }
+
+    return {
+      tenantId: params.tenantId,
+      roles: [...(params.userRoles ?? [])] as Role[],
+      scopedRoles: [],
+    };
+  }
+
+  private hasScopedLedgerAccess(
+    scopedRoles: readonly ScopedRole[],
+    params: {
+      buildingId: string;
+      unitId: string;
+    },
+  ): boolean {
+    return scopedRoles.some((role) => {
+      if (!this.isTenantLedgerRole(role.role)) {
+        return false;
+      }
+
+      if (role.scopeType === ScopeType.BUILDING) {
+        return role.scopeBuildingId === params.buildingId;
+      }
+
+      if (role.scopeType === ScopeType.UNIT) {
+        return role.scopeUnitId === params.unitId;
+      }
+
+      return false;
+    });
+  }
+
+  private isTenantLedgerRole(role: string): boolean {
+    return TENANT_LEDGER_ROLES.has(role);
   }
 
   /**

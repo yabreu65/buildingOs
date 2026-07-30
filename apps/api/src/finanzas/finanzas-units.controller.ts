@@ -99,6 +99,7 @@ export class FinanzasUnitsController {
       periodTo || undefined,
       userRoles,
       userId,
+      membership,
     );
   }
 }
