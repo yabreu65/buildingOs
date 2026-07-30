@@ -2,29 +2,98 @@ import {
   Controller,
   Get,
   Post,
-  Patch,
   Param,
   UseGuards,
   Request,
   Query,
   Body,
   BadRequestException,
+  ForbiddenException,
   HttpCode,
-  UnprocessableEntityException,
+  NotFoundException,
 } from '@nestjs/common';
+import { z } from 'zod';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
 import type { FindAllFilters, FindForUserFilters } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
-import { CommunicationStatus } from '@prisma/client';
+import type { CommunicationStatus } from '@prisma/client';
 import {
   ResidentCommunicationListResponse,
   CreateCommunicationRequestSchema,
   PublishCommunicationRequestSchema,
   ResidentCommunicationsQuerySchema,
 } from '@buildingos/contracts';
-import type { AuthenticatedRequest } from '../common/types/request.types';
+import type {
+  AuthenticatedMembership,
+  AuthenticatedRequest,
+} from '../common/types/request.types';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
+import { PrismaService } from '../prisma/prisma.service';
+
+const CommunicationStatusValues = ['DRAFT', 'SCHEDULED', 'SENT'] as const satisfies readonly CommunicationStatus[];
+const CommunicationStatusQuerySchema = z.enum(CommunicationStatusValues);
+
+const ResidentInboxQuerySchema = z.object({
+  buildingId: z.string().trim().min(1).optional(),
+  unitId: z.string().trim().min(1).optional(),
+  readOnly: z.enum(['true', 'false']).optional(),
+});
+
+interface TenantMembershipContext {
+  readonly tenantId: string;
+  readonly membership: AuthenticatedMembership;
+}
+
+async function resolveRequestedTenantMembership(
+  req: AuthenticatedRequest,
+  prisma: PrismaService,
+): Promise<TenantMembershipContext> {
+  const tenantHeader = req.headers['x-tenant-id'];
+  const tenantId = Array.isArray(tenantHeader)
+    ? tenantHeader[0]
+    : tenantHeader;
+
+  if (!tenantId || tenantId.trim().length === 0) {
+    throw new BadRequestException('X-Tenant-Id header is required');
+  }
+
+  const normalizedTenantId = tenantId.trim();
+  const membership = req.user?.memberships?.find(
+    (candidate) => candidate.tenantId === normalizedTenantId,
+  );
+
+  if (!membership) {
+    throw new ForbiddenException(
+      'User does not have membership in the specified tenant',
+    );
+  }
+
+  const userId = req.user?.id;
+  if (!userId) {
+    throw new ForbiddenException('User is not authenticated');
+  }
+
+  const activeTenantMember = await prisma.tenantMember.findFirst({
+    where: {
+      tenantId: normalizedTenantId,
+      userId,
+      disabledAt: null,
+    },
+    select: { id: true },
+  });
+
+  if (!activeTenantMember) {
+    throw new ForbiddenException(
+      'User does not have an active membership in the specified tenant',
+    );
+  }
+
+  return {
+    tenantId: normalizedTenantId,
+    membership,
+  };
+}
 
 /**
  * CommunicationsUserController: Tenant-level and user-level Communications endpoints
@@ -37,7 +106,7 @@ import { ResidentAccessService } from '../resident-access/resident-access.servic
  *
  * Security:
  * 1. JwtAuthGuard: Requires valid JWT token
- * 2. X-Tenant-Id header: Required for admin routes, auto-extracted for /me
+ * 2. X-Tenant-Id header: Required for all routes and validated against memberships
  * 3. Service validates scope (communication belongs to tenant)
  * 4. /me routes: User can only access their own communications
  *
@@ -51,6 +120,7 @@ export class CommunicationsUserController {
   constructor(
     private communicationsService: CommunicationsService,
     private validators: CommunicationsValidators,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -78,27 +148,12 @@ export class CommunicationsUserController {
   async listCommunications(
     @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
-    @Query('status') status?: CommunicationStatus,
+    @Query('status') status?: string,
   ) {
-    // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    // Get user's memberships to find matching tenant
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userRoles = membership.roles || [];
     if (!this.isAdminRole(userRoles)) {
-      throw new BadRequestException('Only administrators can list communications');
+      throw new ForbiddenException('Only administrators can list communications');
     }
 
     const filters: FindAllFilters = {};
@@ -110,7 +165,14 @@ export class CommunicationsUserController {
       );
       filters.buildingId = buildingId;
     }
-    if (status) filters.status = status;
+    if (status) {
+      const parsedStatus = CommunicationStatusQuerySchema.safeParse(status);
+      if (!parsedStatus.success) {
+        throw new BadRequestException('Invalid communication status');
+      }
+
+      filters.status = parsedStatus.data;
+    }
 
     return await this.communicationsService.findAll(tenantId, filters);
   }
@@ -130,25 +192,10 @@ export class CommunicationsUserController {
     @Param('communicationId') communicationId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    // Extract X-Tenant-Id from request headers
-    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    // Get user's memberships to find matching tenant
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userRoles = membership.roles || [];
     if (!this.isAdminRole(userRoles)) {
-      throw new BadRequestException('Only administrators can view communications');
+      throw new ForbiddenException('Only administrators can view communications');
     }
 
     // Validate scope
@@ -182,23 +229,10 @@ export class CommunicationsUserController {
     @Body() rawBody: unknown,
     @Request() req: AuthenticatedRequest,
   ) {
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userRoles = membership.roles || [];
     if (!this.isAdminRole(userRoles)) {
-      throw new BadRequestException('Only administrators can create communications');
+      throw new ForbiddenException('Only administrators can create communications');
     }
 
     const parsed = CreateCommunicationRequestSchema.safeParse(rawBody);
@@ -213,7 +247,7 @@ export class CommunicationsUserController {
     const userId = req.user.id;
 
     return await this.communicationsService.createV2(
-      tenantId as string,
+      tenantId,
       userId,
       {
         title: input.title,
@@ -245,28 +279,16 @@ export class CommunicationsUserController {
    * Requires: admin role + X-Tenant-Id header
    */
   @Post(':communicationId/publish')
+  @HttpCode(200)
   async publishCommunication(
     @Param('communicationId') communicationId: string,
     @Body() rawBody: unknown,
     @Request() req: AuthenticatedRequest,
   ) {
-    const xTenantId = req.headers['x-tenant-id'];
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m: { tenantId: string }) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userRoles = membership.roles || [];
     if (!this.isAdminRole(userRoles)) {
-      throw new BadRequestException('Only administrators can publish communications');
+      throw new ForbiddenException('Only administrators can publish communications');
     }
 
     const parsed = PublishCommunicationRequestSchema.safeParse(rawBody);
@@ -280,7 +302,7 @@ export class CommunicationsUserController {
     const { sendWebPush } = parsed.data;
 
     return await this.communicationsService.publishV2(
-      tenantId as string,
+      tenantId,
       communicationId,
       sendWebPush,
     );
@@ -292,11 +314,10 @@ export class CommunicationsUserController {
  *
  * Routes:
  * - GET /me/communications - List communications for current user
- * - POST /me/communications/:communicationId/read - Mark communication as read
  *
  * Security:
  * 1. JwtAuthGuard: Requires valid JWT
- * 2. No X-Tenant-Id header needed (uses user's tenant from JWT)
+ * 2. X-Tenant-Id header is required and validated against the active JWT memberships
  * 3. User can only see/interact with communications targeted to them
  *
  * RESIDENT Workflow:
@@ -310,6 +331,7 @@ export class CommunicationsInboxController {
   constructor(
     private communicationsService: CommunicationsService,
     private validators: CommunicationsValidators,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -330,19 +352,18 @@ export class CommunicationsInboxController {
   @Get()
   async getInbox(
     @Request() req: AuthenticatedRequest,
-    @Query('buildingId') buildingId?: string,
-    @Query('unitId') unitId?: string,
-    @Query('readOnly') readOnly?: string,
+    @Query() query: Record<string, unknown>,
   ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
+    const userId = req.user.id;
+    const userRoles = membership.roles || [];
+
+    const parsedQuery = ResidentInboxQuerySchema.safeParse(query);
+    if (!parsedQuery.success) {
+      throw new BadRequestException('Invalid inbox query parameters');
     }
 
-    const tenantId = userMemberships[0]!.tenantId;
-    const userId = req.user.id;
-    const userRoles = userMemberships[0]!.roles || [];
+    const { buildingId, unitId, readOnly } = parsedQuery.data;
 
     // Validate building if provided
     const filters: FindForUserFilters & { unitId?: string } = {};
@@ -354,9 +375,8 @@ export class CommunicationsInboxController {
       filters.buildingId = buildingId;
     }
 
-    // For now, unitId filter is accepted but not validated (UX feature)
-    // In production, validate unit belongs to tenant if needed
     if (unitId) {
+      await this.validators.validateUnitBelongsToTenant(tenantId, unitId);
       filters.unitId = unitId;
     }
 
@@ -391,15 +411,9 @@ export class CommunicationsInboxController {
     @Param('communicationId') communicationId: string,
     @Request() req: AuthenticatedRequest,
   ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0]!.tenantId;
+    const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userId = req.user.id;
-    const userRoles = userMemberships[0]!.roles || [];
+    const userRoles = membership.roles || [];
 
     // Validate communication belongs to tenant
     await this.validators.validateCommunicationBelongsToTenant(
@@ -416,116 +430,16 @@ export class CommunicationsInboxController {
     );
 
     if (!canRead) {
-      throw new BadRequestException(
-        'Communication not found or you do not have access to it',
-      );
+      throw new NotFoundException('Communication not found');
     }
 
     return await this.communicationsService.findOne(tenantId, communicationId);
   }
 
-  /**
-   * POST /me/communications/:communicationId/read
-   * Mark communication as read
-   *
-   * Updates receipt.readAt = now
-   * Idempotent: if already read, no change
-   *
-   * Returns: { success: true, readAt: timestamp }
-   *
-   * Throws 404 if:
-   * - Communication doesn't exist
-   * - User didn't receive it (no receipt)
-   *
-   * No permission required (authenticated users only)
-   */
-  @Post(':communicationId/read')
-  @HttpCode(200)
-  async markAsRead(
-    @Param('communicationId') communicationId: string,
-    @Request() req: AuthenticatedRequest,
-  ) {
-    // Get user's primary tenant membership
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0]!.tenantId;
-    const userId = req.user.id;
-    const userRoles = userMemberships[0]!.roles || [];
-
-    // Validate communication belongs to tenant
-    await this.validators.validateCommunicationBelongsToTenant(
-      tenantId,
-      communicationId,
-    );
-
-    // Check if user can read this communication (has receipt)
-    const canRead = await this.validators.canUserReadCommunication(
-      tenantId,
-      userId,
-      communicationId,
-      userRoles,
-    );
-
-    if (!canRead) {
-      throw new BadRequestException(
-        'Communication not found or you do not have access to it',
-      );
-    }
-
-    // Mark as read
-    await this.communicationsService.markAsRead(
-      tenantId,
-      userId,
-      communicationId,
-    );
-
-    return {
-      success: true,
-      communicationId,
-      readAt: new Date(),
-    };
-  }
-
-  /**
-   * POST /resident/communications/:communicationId/read
-   * Mark communication as read (idempotent)
-   *
-   * Returns: { readAt: Date | null }
-   *
-   * No permission required (authenticated users only)
-   */
-  @Post('resident/communications/:communicationId/read')
-  async markResidentAsRead(
-    @Param('communicationId') communicationId: string,
-    @Request() req: AuthenticatedRequest,
-  ): Promise<{ readAt: Date | null }> {
-    const userMemberships = req.user?.memberships || [];
-    if (userMemberships.length === 0) {
-      throw new BadRequestException('User does not have a tenant membership');
-    }
-
-    const tenantId = userMemberships[0]!.tenantId;
-    const userId = req.user.id;
-
-    // Validate communication belongs to tenant
-    await this.validators.validateCommunicationBelongsToTenant(
-      tenantId,
-      communicationId,
-    );
-
-    return await this.communicationsService.markAsReadForResident(
-      tenantId,
-      userId,
-      communicationId,
-    );
-  }
 }
 
 /**
- * ResidentCommunicationsController: Public resident endpoints (/resident/communications)
+ * ResidentCommunicationsController: Protected resident endpoints (/resident/communications)
  *
  * Routes:
  * - GET /resident/communications - List communications for resident (inbox)
@@ -542,6 +456,7 @@ export class ResidentCommunicationsController {
     private communicationsService: CommunicationsService,
     private validators: CommunicationsValidators,
     private residentAccessService: ResidentAccessService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -568,18 +483,7 @@ export class ResidentCommunicationsController {
     @Query() rawQuery: Record<string, unknown>,
     @Request() req: AuthenticatedRequest,
   ): Promise<ResidentCommunicationListResponse> {
-    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
+    const { tenantId } = await resolveRequestedTenantMembership(req, this.prisma);
 
     const parsedQuery = ResidentCommunicationsQuerySchema.safeParse(rawQuery);
     if (!parsedQuery.success) {
@@ -590,7 +494,6 @@ export class ResidentCommunicationsController {
     }
 
     const { buildingId, unitId, limit, cursor } = parsedQuery.data;
-    const tenantId = xTenantId;
     const userId = req.user.id;
 
     await this.residentAccessService.assertUnitAccess(
@@ -619,26 +522,14 @@ export class ResidentCommunicationsController {
    * Security:
    * 1. JwtAuthGuard: Requires valid JWT token
    * 2. X-Tenant-Id header: Required, validated against user memberships
-   */
+  */
   @Post('communications/:communicationId/read')
+  @HttpCode(200)
   async markResidentAsRead(
     @Param('communicationId') communicationId: string,
     @Request() req: AuthenticatedRequest,
   ): Promise<{ readAt: Date | null }> {
-    const xTenantId = req.headers['x-tenant-id'] as string | undefined;
-    if (!xTenantId) {
-      throw new BadRequestException('X-Tenant-Id header is required');
-    }
-
-    const userMemberships = req.user?.memberships || [];
-    const membership = userMemberships.find((m) => m.tenantId === xTenantId);
-    if (!membership) {
-      throw new BadRequestException(
-        'User does not have membership in the specified tenant',
-      );
-    }
-
-    const tenantId = xTenantId;
+    const { tenantId } = await resolveRequestedTenantMembership(req, this.prisma);
     const userId = req.user.id;
 
     await this.validators.validateCommunicationBelongsToTenant(
