@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Patch,
   Param,
   UseGuards,
   Request,
@@ -11,14 +10,14 @@ import {
   BadRequestException,
   ForbiddenException,
   HttpCode,
-  UnprocessableEntityException,
+  NotFoundException,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
 import type { FindAllFilters, FindForUserFilters } from './communications.service';
 import { CommunicationsValidators } from './communications.validators';
-import { CommunicationStatus } from '@prisma/client';
+import type { CommunicationStatus } from '@prisma/client';
 import {
   ResidentCommunicationListResponse,
   CreateCommunicationRequestSchema,
@@ -32,7 +31,14 @@ import type {
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 
-const CommunicationStatusQuerySchema = z.enum(['DRAFT', 'SCHEDULED', 'SENT']);
+const CommunicationStatusValues = ['DRAFT', 'SCHEDULED', 'SENT'] as const satisfies readonly CommunicationStatus[];
+const CommunicationStatusQuerySchema = z.enum(CommunicationStatusValues);
+
+const ResidentInboxQuerySchema = z.object({
+  buildingId: z.string().trim().min(1).optional(),
+  unitId: z.string().trim().min(1).optional(),
+  readOnly: z.enum(['true', 'false']).optional(),
+});
 
 interface TenantMembershipContext {
   readonly tenantId: string;
@@ -42,7 +48,7 @@ interface TenantMembershipContext {
 async function resolveRequestedTenantMembership(
   req: AuthenticatedRequest,
   prisma: PrismaService,
-): TenantMembershipContext {
+): Promise<TenantMembershipContext> {
   const tenantHeader = req.headers['x-tenant-id'];
   const tenantId = Array.isArray(tenantHeader)
     ? tenantHeader[0]
@@ -165,7 +171,7 @@ export class CommunicationsUserController {
         throw new BadRequestException('Invalid communication status');
       }
 
-      filters.status = parsedStatus.data as CommunicationStatus;
+      filters.status = parsedStatus.data;
     }
 
     return await this.communicationsService.findAll(tenantId, filters);
@@ -273,6 +279,7 @@ export class CommunicationsUserController {
    * Requires: admin role + X-Tenant-Id header
    */
   @Post(':communicationId/publish')
+  @HttpCode(200)
   async publishCommunication(
     @Param('communicationId') communicationId: string,
     @Body() rawBody: unknown,
@@ -307,11 +314,10 @@ export class CommunicationsUserController {
  *
  * Routes:
  * - GET /me/communications - List communications for current user
- * - POST /me/communications/:communicationId/read - Mark communication as read
  *
  * Security:
  * 1. JwtAuthGuard: Requires valid JWT
-   * 2. X-Tenant-Id header is required and validated against the active JWT memberships
+ * 2. X-Tenant-Id header is required and validated against the active JWT memberships
  * 3. User can only see/interact with communications targeted to them
  *
  * RESIDENT Workflow:
@@ -346,13 +352,18 @@ export class CommunicationsInboxController {
   @Get()
   async getInbox(
     @Request() req: AuthenticatedRequest,
-    @Query('buildingId') buildingId?: string,
-    @Query('unitId') unitId?: string,
-    @Query('readOnly') readOnly?: string,
+    @Query() query: Record<string, unknown>,
   ) {
     const { tenantId, membership } = await resolveRequestedTenantMembership(req, this.prisma);
     const userId = req.user.id;
     const userRoles = membership.roles || [];
+
+    const parsedQuery = ResidentInboxQuerySchema.safeParse(query);
+    if (!parsedQuery.success) {
+      throw new BadRequestException('Invalid inbox query parameters');
+    }
+
+    const { buildingId, unitId, readOnly } = parsedQuery.data;
 
     // Validate building if provided
     const filters: FindForUserFilters & { unitId?: string } = {};
@@ -419,9 +430,7 @@ export class CommunicationsInboxController {
     );
 
     if (!canRead) {
-      throw new ForbiddenException(
-        'Communication not found or you do not have access to it',
-      );
+      throw new NotFoundException('Communication not found');
     }
 
     return await this.communicationsService.findOne(tenantId, communicationId);
@@ -430,7 +439,7 @@ export class CommunicationsInboxController {
 }
 
 /**
- * ResidentCommunicationsController: Public resident endpoints (/resident/communications)
+ * ResidentCommunicationsController: Protected resident endpoints (/resident/communications)
  *
  * Routes:
  * - GET /resident/communications - List communications for resident (inbox)
@@ -513,8 +522,9 @@ export class ResidentCommunicationsController {
    * Security:
    * 1. JwtAuthGuard: Requires valid JWT token
    * 2. X-Tenant-Id header: Required, validated against user memberships
-   */
+  */
   @Post('communications/:communicationId/read')
+  @HttpCode(200)
   async markResidentAsRead(
     @Param('communicationId') communicationId: string,
     @Request() req: AuthenticatedRequest,
