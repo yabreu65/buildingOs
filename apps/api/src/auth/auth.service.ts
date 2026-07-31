@@ -9,24 +9,26 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
 import { AuditService } from '../audit/audit.service';
 import { SignupDto, TenantTypeEnum } from './dto/signup.dto';
-import { AuditAction, AuthSession } from '@prisma/client';
+import { AuditAction, AuthSession, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-
-interface UserWithMemberships {
-  id: string;
-  email: string;
-  name: string;
-  memberships: Array<{
-    tenantId: string;
-    roles: Array<{ role: string }>;
-  }>;
-}
 
 interface TenantMembershipForLogin {
   tenantId: string;
   roles: string[];
 }
+
+type UserWithMemberships = Prisma.UserGetPayload<{
+  include: {
+    memberships: {
+      include: {
+        roles: true;
+      };
+    };
+  };
+}>;
+
+type ValidatedUser = Omit<UserWithMemberships, 'passwordHash'>;
 
 export interface AuthResponse {
   accessToken: string;
@@ -45,6 +47,16 @@ export interface AuthResponse {
 
 interface IssueAuthResult extends AuthResponse {
   session: AuthSession;
+}
+
+interface LogoutCredentials {
+  refreshToken?: string | null;
+  accessToken?: string | null;
+}
+
+interface VerifiedAccessToken {
+  sub: string;
+  sid: string;
 }
 
 @Injectable()
@@ -143,7 +155,7 @@ export class AuthService {
     });
   }
 
-  async validateUser(email: string, pass: string): Promise<UserWithMemberships | null> {
+  async validateUser(email: string, pass: string): Promise<ValidatedUser | null> {
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: {
@@ -156,17 +168,17 @@ export class AuthService {
     });
 
     if (user && (await bcrypt.compare(pass, user.passwordHash))) {
-      const { passwordHash, ...result } = user;
-      return result as UserWithMemberships;
+      const { passwordHash: _passwordHash, ...result } = user;
+      return result;
     }
     return null;
   }
 
   async login(
-    user: UserWithMemberships,
+    user: ValidatedUser,
     selectedTenantId?: string | null,
   ): Promise<AuthResponse> {
-    const memberships = (await this.tenancyService.getMembershipsForUser(user.id)) as TenantMembershipForLogin[];
+    const memberships = await this.tenancyService.getMembershipsForUser(user.id);
     const isSuperAdmin = memberships.some((m) =>
       m.roles.includes('SUPER_ADMIN'),
     );
@@ -241,8 +253,36 @@ export class AuthService {
     );
 
     const nextRefreshToken = crypto.randomBytes(32).toString('hex');
+    const nextRefreshTokenHash = this.hashToken(nextRefreshToken);
+    const now = new Date();
+    const expiresAt = this.getSessionExpiresAt();
 
-    return this.createAuthResponse({
+    const rotation = await this.prisma.authSession.updateMany({
+      where: {
+        id: session.id,
+        refreshTokenHash: tokenHash,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: {
+        refreshTokenHash: nextRefreshTokenHash,
+        expiresAt,
+        lastUsedAt: now,
+      },
+    });
+
+    if (rotation.count === 0) {
+      throw new UnauthorizedException('Sesión expirada. Vuelve a iniciar sesión.');
+    }
+
+    const rotatedSession: AuthSession = {
+      ...session,
+      refreshTokenHash: nextRefreshTokenHash,
+      expiresAt,
+      lastUsedAt: now,
+    };
+
+    return this.issueAuthResponse({
       user: {
         id: user.id,
         email: user.email,
@@ -250,13 +290,30 @@ export class AuthService {
       },
       memberships,
       isSuperAdmin,
-      sessionContext: {
-        userAgent: null,
-        ipAddress: null,
-      },
-      existingSessionId: session.id,
-      existingRefreshToken: nextRefreshToken,
+      refreshToken: nextRefreshToken,
+      session: rotatedSession,
     });
+  }
+
+  async logoutCurrentSession(credentials: LogoutCredentials): Promise<void> {
+    const refreshToken = credentials.refreshToken?.trim();
+
+    if (refreshToken) {
+      const revokedByRefresh = await this.revokeSessionByRefreshToken(refreshToken);
+      if (revokedByRefresh) {
+        return;
+      }
+    }
+
+    const accessToken = credentials.accessToken?.trim();
+    if (!accessToken) {
+      return;
+    }
+
+    const revokedByAccess = await this.revokeSessionByAccessToken(accessToken);
+    if (revokedByAccess) {
+      return;
+    }
   }
 
   async logoutSession(sessionId: string): Promise<void> {
@@ -319,54 +376,115 @@ export class AuthService {
       userAgent: string | null;
       ipAddress: string | null;
     };
-    existingSessionId?: string;
-    existingRefreshToken?: string;
+  }): Promise<IssueAuthResult> {
+    const refreshToken = crypto.randomBytes(32).toString('hex');
+    const session = await this.prisma.authSession.create({
+      data: {
+        id: this.createSessionId(),
+        userId: params.user.id,
+        refreshTokenHash: this.hashToken(refreshToken),
+        expiresAt: this.getSessionExpiresAt(),
+        userAgent: params.sessionContext.userAgent,
+        ipAddress: params.sessionContext.ipAddress,
+      },
+    });
+
+    return this.issueAuthResponse({
+      user: params.user,
+      memberships: params.memberships,
+      isSuperAdmin: params.isSuperAdmin,
+      refreshToken,
+      session,
+    });
+  }
+
+  private async issueAuthResponse(params: {
+    user: {
+      id: string;
+      email: string;
+      name: string;
+    };
+    memberships: Array<{
+      tenantId: string;
+      roles: string[];
+    }>;
+    isSuperAdmin: boolean;
+    refreshToken: string;
+    session: AuthSession;
   }): Promise<IssueAuthResult> {
     const roles = params.memberships[0]?.roles ?? [];
-    const sessionId = params.existingSessionId ?? this.createSessionId();
-    const refreshToken =
-      params.existingRefreshToken ?? crypto.randomBytes(32).toString('hex');
-    const refreshTokenHash = this.hashToken(refreshToken);
-
-    const session = params.existingSessionId
-      ? await this.prisma.authSession.update({
-          where: { id: sessionId },
-          data: {
-            refreshTokenHash,
-            expiresAt: this.getSessionExpiresAt(),
-            lastUsedAt: new Date(),
-            userAgent: params.sessionContext.userAgent,
-            ipAddress: params.sessionContext.ipAddress,
-            revokedAt: null,
-          },
-        })
-      : await this.prisma.authSession.create({
-          data: {
-            id: sessionId,
-            userId: params.user.id,
-            refreshTokenHash,
-            expiresAt: this.getSessionExpiresAt(),
-            userAgent: params.sessionContext.userAgent,
-            ipAddress: params.sessionContext.ipAddress,
-          },
-        });
-
     const accessToken = this.jwtService.sign({
       email: params.user.email,
       sub: params.user.id,
       isSuperAdmin: params.isSuperAdmin,
       roles,
-      sid: session.id,
+      sid: params.session.id,
     });
 
     return {
       accessToken,
-      refreshToken,
-      sessionId: session.id,
+      refreshToken: params.refreshToken,
+      sessionId: params.session.id,
       user: params.user,
       memberships: params.memberships,
-      session,
+      session: params.session,
     };
+  }
+
+  private async revokeSessionByRefreshToken(refreshToken: string): Promise<boolean> {
+    const refreshTokenHash = this.hashToken(refreshToken);
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        refreshTokenHash,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+
+    return result.count > 0;
+  }
+
+  private async revokeSessionByAccessToken(accessToken: string): Promise<boolean> {
+    const payload = await this.verifyAccessToken(accessToken);
+    if (!payload) {
+      return false;
+    }
+
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        id: payload.sid,
+        userId: payload.sub,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+
+    return result.count > 0;
+  }
+
+  private async verifyAccessToken(accessToken: string): Promise<VerifiedAccessToken | null> {
+    try {
+      const payload = await this.jwtService.verifyAsync<Partial<VerifiedAccessToken>>(accessToken);
+      if (
+        typeof payload?.sub === 'string' &&
+        payload.sub.length > 0 &&
+        typeof payload?.sid === 'string' &&
+        payload.sid.length > 0
+      ) {
+        return {
+          sub: payload.sub,
+          sid: payload.sid,
+        };
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
   }
 
   private hashToken(token: string): string {

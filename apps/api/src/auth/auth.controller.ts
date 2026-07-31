@@ -17,6 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
+  ACCESS_TOKEN_COOKIE,
   clearAuthCookies,
   getCookie,
   REFRESH_TOKEN_COOKIE,
@@ -45,6 +46,10 @@ interface RequestWithUser extends ExpressRequest {
   };
 }
 
+type LogoutRequest = ExpressRequest & {
+  user?: RequestWithUser['user'];
+};
+
 interface PublicAuthResponse {
   user: AuthResponse['user'];
   memberships: AuthResponse['memberships'];
@@ -65,6 +70,10 @@ export class AuthController {
     };
   }
 
+  /**
+   * POST /auth/signup
+   * Create a new user, tenant, membership, and authenticated session.
+   */
   @Post('signup')
   async signup(
     @Body() signupDto: SignupDto,
@@ -79,6 +88,10 @@ export class AuthController {
     return this.buildResponse(response);
   }
 
+  /**
+   * POST /auth/login
+   * Validate credentials and issue fresh auth cookies for the selected tenant.
+   */
   @Post('login')
   async login(
     @Body() loginDto: LoginDto,
@@ -103,6 +116,10 @@ export class AuthController {
     return this.buildResponse(response);
   }
 
+  /**
+   * POST /auth/refresh
+   * Rotate the current refresh token and return new auth cookies.
+   */
   @Post('refresh')
   async refresh(
     @Request() req: ExpressRequest,
@@ -118,20 +135,35 @@ export class AuthController {
     return this.buildResponse(response);
   }
 
-  @UseGuards(JwtAuthGuard)
+  /**
+   * POST /auth/logout
+   * Revoke the current session if possible, then always clear auth cookies.
+   */
   @Post('logout')
   async logout(
-    @Request() req: RequestWithUser,
+    @Request() req: LogoutRequest,
+    @Headers('authorization') authorization: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ ok: true }> {
-    if (req.user.sessionId) {
-      await this.authService.logoutSession(req.user.sessionId);
-    }
+    const refreshToken = getCookie(req, REFRESH_TOKEN_COOKIE);
+    const cookieAccessToken = getCookie(req, ACCESS_TOKEN_COOKIE);
+    const accessToken = this.extractAccessToken(authorization, cookieAccessToken);
 
-    clearAuthCookies(res);
-    return { ok: true };
+    try {
+      await this.authService.logoutCurrentSession({
+        refreshToken,
+        accessToken,
+      });
+      return { ok: true };
+    } finally {
+      clearAuthCookies(res);
+    }
   }
 
+  /**
+   * POST /auth/logout-all
+   * Revoke every active session for the current authenticated user.
+   */
   @UseGuards(JwtAuthGuard)
   @Post('logout-all')
   async logoutAll(
@@ -143,6 +175,10 @@ export class AuthController {
     return { ok: true };
   }
 
+  /**
+   * GET /auth/me
+   * Return the authenticated user's public profile and memberships.
+   */
   @UseGuards(JwtAuthGuard)
   @Get('me')
   async getProfile(
@@ -185,5 +221,17 @@ export class AuthController {
       },
       features,
     };
+  }
+
+  private extractAccessToken(
+    authorization: string | undefined,
+    cookieAccessToken: string | null,
+  ): string | null {
+    if (!authorization) {
+      return cookieAccessToken;
+    }
+
+    const bearerMatch = authorization.trim().match(/^Bearer\s+(\S+)$/i);
+    return bearerMatch?.[1] ?? cookieAccessToken;
   }
 }
