@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   ConflictException,
   BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService, AuthResponse } from './auth.service';
@@ -57,6 +58,7 @@ describe('AuthService', () => {
           provide: JwtService,
           useValue: {
             sign: jest.fn(),
+            verifyAsync: jest.fn(),
           },
         },
         {
@@ -766,11 +768,7 @@ describe('AuthService', () => {
       };
 
       jest.spyOn(prismaService.authSession, 'findUnique').mockResolvedValue(session as any);
-      jest.spyOn(prismaService.authSession, 'update').mockResolvedValue({
-        ...session,
-        refreshTokenHash: 'next-refresh-hash',
-        lastUsedAt: new Date(),
-      } as any);
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 1 } as any);
       jest.spyOn(prismaService.user, 'findUnique').mockResolvedValue({
         id: 'user-123',
         email: 'user@example.com',
@@ -786,14 +784,22 @@ describe('AuthService', () => {
       expect(prismaService.authSession.findUnique).toHaveBeenCalledWith({
         where: { refreshTokenHash },
       });
-      expect(prismaService.authSession.update).toHaveBeenCalledWith({
-        where: { id: 'session-refresh-123' },
+      expect(prismaService.authSession.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'session-refresh-123',
+          refreshTokenHash,
+          revokedAt: null,
+          expiresAt: { gt: expect.any(Date) },
+        },
         data: expect.objectContaining({
           refreshTokenHash: expect.any(String),
           expiresAt: expect.any(Date),
           lastUsedAt: expect.any(Date),
         }),
       });
+      expect(
+        jest.mocked(prismaService.authSession.updateMany).mock.calls[0][0].data,
+      ).not.toHaveProperty('revokedAt');
       expect(result.sessionId).toBe('session-refresh-123');
       expect(result.refreshToken).toEqual(expect.any(String));
       expect(jwtService.sign).toHaveBeenCalledWith(
@@ -801,6 +807,39 @@ describe('AuthService', () => {
           sid: 'session-refresh-123',
         }),
       );
+    });
+
+    it('should reject refresh if the session is revoked before rotation', async () => {
+      const refreshToken = 'refresh-token-raw';
+      const refreshTokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+
+      jest.spyOn(prismaService.authSession, 'findUnique').mockResolvedValue({
+        id: 'session-refresh-123',
+        userId: 'user-123',
+        refreshTokenHash,
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+        userAgent: null,
+        ipAddress: null,
+      } as any);
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 0 } as any);
+      jest.spyOn(prismaService.user, 'findUnique').mockResolvedValue({
+        id: 'user-123',
+        email: 'user@example.com',
+        name: 'User Name',
+      } as any);
+      jest.spyOn(tenancyService, 'getMembershipsForUser').mockResolvedValue([
+        { tenantId: 'tenant-123', roles: ['TENANT_OWNER'] },
+      ] as any);
+
+      await expect(service.refreshSession(refreshToken)).rejects.toThrow(UnauthorizedException);
+      expect(jwtService.sign).not.toHaveBeenCalled();
     });
   });
 
@@ -826,6 +865,94 @@ describe('AuthService', () => {
         where: { userId: 'user-123', revokedAt: null },
         data: { revokedAt: expect.any(Date) },
       });
+    });
+  });
+
+  describe('logoutCurrentSession', () => {
+    it('revokes exactly one session using the refresh token hash', async () => {
+      const refreshToken = 'refresh-token-raw';
+      const refreshTokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 1 } as any);
+
+      await service.logoutCurrentSession({ refreshToken });
+
+      expect(prismaService.authSession.updateMany).toHaveBeenCalledWith({
+        where: {
+          refreshTokenHash,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: expect.any(Date),
+        },
+      });
+      expect(jwtService.verifyAsync).not.toHaveBeenCalled();
+    });
+
+    it('returns quietly when the refresh token does not match an active session', async () => {
+      const refreshToken = 'missing-refresh-token';
+      const refreshTokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+
+      jest.spyOn(prismaService.authSession, 'updateMany').mockResolvedValue({ count: 0 } as any);
+
+      await expect(service.logoutCurrentSession({ refreshToken })).resolves.toBeUndefined();
+
+      expect(prismaService.authSession.updateMany).toHaveBeenCalledWith({
+        where: {
+          refreshTokenHash,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('falls back to a verified access token when the refresh token does not revoke anything', async () => {
+      const accessToken = 'access-token-raw';
+
+      jest.spyOn(prismaService.authSession, 'updateMany')
+        .mockResolvedValueOnce({ count: 0 } as any)
+        .mockResolvedValueOnce({ count: 1 } as any);
+      jest.spyOn(jwtService, 'verifyAsync').mockResolvedValue({
+        sub: 'user-123',
+        sid: 'session-123',
+      } as never);
+
+      await service.logoutCurrentSession({
+        refreshToken: 'stale-refresh-token',
+        accessToken,
+      });
+
+      expect(jwtService.verifyAsync).toHaveBeenCalledWith(accessToken);
+      expect(prismaService.authSession.updateMany).toHaveBeenNthCalledWith(2, {
+        where: {
+          id: 'session-123',
+          userId: 'user-123',
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('returns quietly when the access token cannot be verified', async () => {
+      jest.spyOn(jwtService, 'verifyAsync').mockRejectedValue(new Error('invalid token'));
+
+      await expect(
+        service.logoutCurrentSession({
+          accessToken: 'invalid-access',
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(prismaService.authSession.updateMany).not.toHaveBeenCalled();
     });
   });
 

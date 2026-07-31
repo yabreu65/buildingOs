@@ -1,8 +1,8 @@
 'use client';
 
 import { useRouter, useParams, usePathname } from 'next/navigation';
-import { getSession, setSession, setLastTenant, clearAuth } from '../../../features/auth/session.storage';
-import { clearAllImpersonationData } from '@/features/impersonation/impersonation.storage';
+import { getSession, setSession, setLastTenant } from '../../../features/auth/session.storage';
+import { logout } from '@/features/auth/login.actions';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
@@ -385,7 +385,8 @@ export default function Topbar({
 }: TopbarProps) {
   const router = useRouter();
   const params = useParams();
-  const urlTenantId = params?.tenantId as string | undefined;
+  const urlTenantId = typeof params?.tenantId === 'string' ? params.tenantId : undefined;
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const session = getSession();
   const { data: tenants, isLoading, error } = useTenants();
@@ -429,10 +430,18 @@ export default function Topbar({
     router.replace(`/${nextTenantId}/dashboard`);
   };
 
-  const handleLogout = () => {
-    clearAllImpersonationData();
-    clearAuth();
-    router.replace('/login');
+  const handleLogout = async () => {
+    if (isLoggingOut) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setIsLoggingOut(false);
+      router.replace('/login');
+    }
   };
 
   // Si no hay sesión, mostrar estado vacío
@@ -514,8 +523,10 @@ export default function Topbar({
         <button
           className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
           onClick={handleLogout}
+          disabled={isLoggingOut}
+          aria-busy={isLoggingOut}
         >
-          Cerrar sesión
+          {isLoggingOut ? 'Saliendo...' : 'Cerrar sesión'}
         </button>
         </div>
       </div>

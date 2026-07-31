@@ -8,8 +8,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as notificationsApi from '@/features/notifications/notifications.api';
 import * as financeApi from '@/features/finance/services/finance.api';
 import * as sessionModule from '@/features/auth/session.storage';
+import { logout as sharedLogout } from '@/features/auth/login.actions';
 
 let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTION' }> = [];
+const mockPush = jest.fn();
+const mockReplace = jest.fn();
 
 jest.mock('@/features/notifications/notifications.api', () => ({
   listNotifications: jest.fn(),
@@ -35,6 +38,10 @@ jest.mock('@/features/impersonation/impersonation.storage', () => ({
   clearAllImpersonationData: jest.fn(),
 }));
 
+jest.mock('@/features/auth/login.actions', () => ({
+  logout: jest.fn(),
+}));
+
 jest.mock('@/features/tenants/tenants.hooks', () => ({
   useTenants: () => ({ data: mockTenantData, isLoading: false, error: null }),
 }));
@@ -44,7 +51,7 @@ jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
 }));
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
   useParams: () => ({ tenantId: 'tenant-1' }),
   usePathname: () => '/tenant-1/dashboard',
 }));
@@ -57,6 +64,7 @@ const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
 const mockSetSession = jest.mocked(sessionModule.setSession);
 const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
+const mockedSharedLogout = jest.mocked(sharedLogout);
 
 const TENANT_ID = 'tenant-1';
 
@@ -87,9 +95,31 @@ function renderBell(tenantId = TENANT_ID) {
   };
 }
 
+function renderTopbar() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <Topbar />
+    </QueryClientProvider>,
+  );
+}
+
 describe('PaymentNotificationBell', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPush.mockReset();
+    mockReplace.mockReset();
+    mockedSharedLogout.mockReset();
     mockGetSession.mockReturnValue({
       user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
@@ -137,6 +167,35 @@ describe('PaymentNotificationBell', () => {
       expect(mockGetUnreadCount).toHaveBeenCalled();
     });
     expect(screen.queryByText('0')).toBeNull();
+  });
+
+  it('calls the shared logout helper and redirects after it completes', async () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+    let resolveLogout!: () => void;
+    const logoutPromise = new Promise<void>((resolve) => {
+      resolveLogout = resolve;
+    });
+    mockedSharedLogout.mockReturnValue(logoutPromise);
+
+    renderTopbar();
+
+    fireEvent.click(screen.getByRole('button', { name: /cerrar sesión/i }));
+
+    expect(mockedSharedLogout).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /saliendo/i })).toHaveProperty('disabled', true);
+
+    fireEvent.click(screen.getByRole('button', { name: /saliendo/i }));
+    expect(mockedSharedLogout).toHaveBeenCalledTimes(1);
+
+    resolveLogout();
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/login');
+    });
   });
 
   it('opens dropdown on click and shows notifications', async () => {

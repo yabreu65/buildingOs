@@ -118,7 +118,21 @@ export async function login(page: Page, user: TestUser): Promise<string> {
  */
 export async function logout(page: Page): Promise<void> {
   const logoutButton = page.locator('button:has-text("Cerrar sesión"), button:has-text("Logout")').first();
+  const logoutUrl = new URL('/auth/logout', API_ORIGIN).toString();
+  const waitForLogoutResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && response.url() === logoutUrl,
+    { timeout: 20000 },
+  );
+
   await logoutButton.click();
+  const logoutResponse = await waitForLogoutResponse;
+
+  if (!logoutResponse.ok()) {
+    const message = await getResponseMessage(logoutResponse);
+    throw new Error(`AUTH_LOGOUT_FAILED status=${logoutResponse.status()} endpoint=/auth/logout message=${message}`);
+  }
+
   await page.waitForURL('/login', { timeout: 10000 });
   await expect(page).toHaveURL(/.*login/);
 }
