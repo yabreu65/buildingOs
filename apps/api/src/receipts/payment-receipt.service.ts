@@ -3,6 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DocumentCategory, DocumentVisibility, Prisma, ReceiptStatus } from '@prisma/client';
+import {
+  acquirePaymentLinkedDocumentLock,
+  acquirePaymentReceiptLock,
+} from '../common/payment-linked-document-lock';
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -13,6 +17,7 @@ export interface ReceiptData {
   receiptNumber: string;
   documentId: string;
   fileKey: string;
+  bucket: string;
   url: string;
 }
 
@@ -107,148 +112,171 @@ export class PaymentReceiptService {
    * If generation fails, sets receiptStatus = FAILED with error message.
    */
   async ensureReceiptForPayment(paymentId: string, excludeUserId?: string): Promise<ReceiptData | null> {
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: paymentId },
-      include: {
-        unit: true,
-        building: true,
-        createdByUser: true,
-        paymentAllocations: {
+    try {
+      const receipt = await this.prisma.$transaction(async (tx) => {
+        await acquirePaymentReceiptLock(tx, paymentId);
+
+        const payment = await tx.payment.findUnique({
+          where: { id: paymentId },
           include: {
-            charge: {
+            unit: true,
+            building: true,
+            createdByUser: true,
+            paymentAllocations: {
               include: {
-                expensePeriod: true,
+                charge: {
+                  include: {
+                    expensePeriod: true,
+                  },
+                },
               },
             },
           },
-        },
-      },
-    });
+        });
 
-    // Get approvedByUser separately
-    let approvedByUserName = 'Administración';
-    if (payment?.approvedByUserId) {
-      const approvedByUser = await this.prisma.user.findUnique({
-        where: { id: payment.approvedByUserId },
-        select: { name: true },
-      });
-      approvedByUserName = approvedByUser?.name || 'Administración';
-    }
+        if (!payment) {
+          this.logger.error(`Payment ${paymentId} not found`);
+          return null;
+        }
 
-    if (!payment) {
-      this.logger.error(`Payment ${paymentId} not found`);
-      return null;
-    }
+        // Idempotency: if receipt already exists, return it
+        if (payment.receiptDocumentId && payment.receiptNumber) {
+          this.logger.log(`Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`);
+          const document = await tx.document.findUnique({
+            where: { id: payment.receiptDocumentId },
+            include: { file: true },
+          });
 
-    // Idempotency: if receipt already exists, return it
-    if (payment.receiptDocumentId && payment.receiptNumber) {
-      this.logger.log(`Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`);
-      const document = await this.prisma.document.findUnique({
-        where: { id: payment.receiptDocumentId },
-        include: { file: true },
-      });
+          if (document?.file) {
+            return {
+              payment,
+              receiptNumber: payment.receiptNumber,
+              documentId: payment.receiptDocumentId,
+              fileKey: document.file.objectKey,
+              bucket: document.file.bucket,
+              wasGenerated: false,
+              approvedByUserName: 'Administración',
+            };
+          }
+        }
 
-      if (document?.file) {
-        const url = await this.minio.presignDownload(document.file.bucket, document.file.objectKey, 3600);
+        let approvedByUserName = 'Administración';
+        if (payment.approvedByUserId) {
+          const approvedByUser = await tx.user.findUnique({
+            where: { id: payment.approvedByUserId },
+            select: { name: true },
+          });
+          approvedByUserName = approvedByUser?.name || 'Administración';
+        }
+
+        const receiptNumber = await this.reserveReceiptNumberInTransaction(tx, payment.tenantId);
+        const tenant = await tx.tenant.findUnique({
+          where: { id: payment.tenantId },
+          select: { name: true, brandName: true },
+        });
+        const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
+
+        const pdfContent = await this.generateReceiptPDF(
+          payment,
+          receiptNumber,
+          approvedByUserName,
+          tenantDisplayName,
+        );
+
+        const objectKey = `tenant/${payment.tenantId}/payments/${paymentId}/receipt_${receiptNumber}.pdf`;
+        await this.minio.uploadBuffer(this.bucket, objectKey, pdfContent, 'application/pdf');
+
+        const file = await tx.file.create({
+          data: {
+            tenantId: payment.tenantId,
+            bucket: this.bucket,
+            objectKey,
+            originalName: `receipt_${receiptNumber}.pdf`,
+            mimeType: 'application/pdf',
+            size: pdfContent.length,
+          },
+        });
+
+        const document = await tx.document.create({
+          data: {
+            tenantId: payment.tenantId,
+            fileId: file.id,
+            title: `Recibo de pago ${receiptNumber}`,
+            category: DocumentCategory.RECEIPT,
+            visibility: DocumentVisibility.RESIDENTS,
+            buildingId: payment.buildingId,
+            unitId: payment.unitId,
+          },
+        });
+
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            receiptDocumentId: document.id,
+            receiptNumber,
+            receiptStatus: ReceiptStatus.READY,
+            receiptGeneratedAt: new Date(),
+            receiptError: null,
+          },
+        });
+
+        await tx.paymentAuditLog.create({
+          data: {
+            tenantId: payment.tenantId,
+            paymentId,
+            action: 'RECEIPT_GENERATED',
+            metadata: {
+              receiptNumber,
+              documentId: document.id,
+              objectKey,
+            },
+          },
+        });
+
         return {
-          receiptNumber: payment.receiptNumber,
-          documentId: payment.receiptDocumentId,
-          fileKey: document.file.objectKey,
+          payment,
+          receiptNumber,
+          documentId: document.id,
+          fileKey: objectKey,
+          bucket: this.bucket,
+          wasGenerated: true,
+          approvedByUserName,
+          tenantDisplayName,
+        };
+      });
+
+      if (!receipt) {
+        return null;
+      }
+
+      const url = await this.minio.presignDownload(receipt.bucket, receipt.fileKey, 3600);
+
+      if (!receipt.wasGenerated) {
+        return {
+          receiptNumber: receipt.receiptNumber,
+          documentId: receipt.documentId,
+          fileKey: receipt.fileKey,
+          bucket: this.bucket,
           url,
         };
       }
-    }
-
-    try {
-      // Generate receipt number
-      const receiptNumber = await this.reserveReceiptNumber(payment.tenantId);
-
-      // Generate PDF content (for now, simple text - can be upgraded to proper PDF later)
-      const pdfContent = await this.generateReceiptPDF(
-        payment,
-        receiptNumber,
-        approvedByUserName,
-      );
-
-      // Save to storage
-      const objectKey = `tenant/${payment.tenantId}/payments/${paymentId}/receipt_${receiptNumber}.pdf`;
-      await this.minio.uploadBuffer(this.bucket, objectKey, pdfContent, 'application/pdf');
-
-      // Create File record
-      const file = await this.prisma.file.create({
-        data: {
-          tenantId: payment.tenantId,
-          bucket: this.bucket,
-          objectKey,
-          originalName: `receipt_${receiptNumber}.pdf`,
-          mimeType: 'application/pdf',
-          size: pdfContent.length,
-        },
-      });
-
-      // Get tenant info
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: payment.tenantId },
-        select: { name: true, brandName: true },
-      });
-      const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
-
-      // Create Document record (RECEIPT category, RESIDENTS visibility for admin+resident access)
-      const document = await this.prisma.document.create({
-        data: {
-          tenantId: payment.tenantId,
-          fileId: file.id,
-          title: `Recibo de pago ${receiptNumber}`,
-          category: DocumentCategory.RECEIPT,
-          visibility: DocumentVisibility.RESIDENTS,
-          buildingId: payment.buildingId,
-          unitId: payment.unitId,
-        },
-      });
-
-      // Update payment with receipt info
-      await this.prisma.payment.update({
-        where: { id: paymentId },
-        data: {
-          receiptDocumentId: document.id,
-          receiptNumber,
-          receiptStatus: ReceiptStatus.READY,
-          receiptGeneratedAt: new Date(),
-          receiptError: null,
-        },
-      });
-
-      // Audit log
-      await this.prisma.paymentAuditLog.create({
-        data: {
-          tenantId: payment.tenantId,
-          paymentId,
-          action: 'RECEIPT_GENERATED',
-          metadata: {
-            receiptNumber,
-            documentId: document.id,
-            objectKey,
-          },
-        },
-      });
-
-      const url = await this.minio.presignDownload(this.bucket, objectKey, 3600);
 
       // Notify resident
       await this.notifyResidentReceiptReady(
-        payment,
-        receiptNumber,
+        receipt.payment,
+        receipt.receiptNumber,
         url,
-        approvedByUserName,
+        receipt.approvedByUserName,
         excludeUserId,
       );
 
-      this.logger.log(`Receipt ${receiptNumber} generated for payment ${paymentId}`);
+      this.logger.log(`Receipt ${receipt.receiptNumber} generated for payment ${paymentId}`);
 
       return {
-        receiptNumber,
-        documentId: document.id,
-        fileKey: objectKey,
+        receiptNumber: receipt.receiptNumber,
+        documentId: receipt.documentId,
+        fileKey: receipt.fileKey,
+        bucket: this.bucket,
         url,
       };
     } catch (error) {
@@ -272,11 +300,14 @@ export class PaymentReceiptService {
    * Reserve a sequential receipt number for the tenant/year.
    * Uses transaction to ensure atomic increment.
    */
-  private async reserveReceiptNumber(tenantId: string): Promise<string> {
+  private async reserveReceiptNumberInTransaction(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+  ): Promise<string> {
     const year = new Date().getFullYear();
 
     // Get tenant for slug
-    const tenant = await this.prisma.tenant.findUnique({
+    const tenant = await tx.tenant.findUnique({
       where: { id: tenantId },
       select: { name: true },
     });
@@ -285,38 +316,33 @@ export class PaymentReceiptService {
       .replace(/[^a-z0-9]/g, '')
       .substring(0, 6) || tenantId.substring(0, 6);
 
-    // Atomic increment using transaction
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Try to find existing sequence
-      let sequence = await tx.receiptSequence.findUnique({
-        where: {
-          tenantId_year: { tenantId, year },
+    // Try to find existing sequence
+    let sequence = await tx.receiptSequence.findUnique({
+      where: {
+        tenantId_year: { tenantId, year },
+      },
+    });
+
+    if (!sequence) {
+      // Create new sequence
+      sequence = await tx.receiptSequence.create({
+        data: {
+          tenantId,
+          year,
+          lastNumber: 0,
         },
       });
+    }
 
-      if (!sequence) {
-        // Create new sequence
-        sequence = await tx.receiptSequence.create({
-          data: {
-            tenantId,
-            year,
-            lastNumber: 0,
-          },
-        });
-      }
-
-      // Increment
-      const newNumber = sequence.lastNumber + 1;
-      await tx.receiptSequence.update({
-        where: { id: sequence.id },
-        data: { lastNumber: newNumber, updatedAt: new Date() },
-      });
-
-      return newNumber;
+    // Increment
+    const newNumber = sequence.lastNumber + 1;
+    await tx.receiptSequence.update({
+      where: { id: sequence.id },
+      data: { lastNumber: newNumber, updatedAt: new Date() },
     });
 
     // Format: R-{TENANT}-{YYYY}-{000001}
-    const paddedNumber = result.toString().padStart(6, '0');
+    const paddedNumber = newNumber.toString().padStart(6, '0');
     return `R-${tenantSlug.toUpperCase()}-${year}-${paddedNumber}`;
   }
 
@@ -327,13 +353,8 @@ export class PaymentReceiptService {
     payment: PaymentReceiptPayment,
     receiptNumber: string,
     approvedByUserName: string,
+    tenantDisplayName: string,
   ): Promise<Buffer> {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: payment.tenantId },
-      select: { name: true, brandName: true },
-    });
-    const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
-
     const approvedAt = this.formatReceiptDate(payment.approvedAt ?? new Date());
     const unitLabel = payment.unit?.label || payment.unitId || 'N/A';
     const buildingName = payment.building?.name || 'Edificio';

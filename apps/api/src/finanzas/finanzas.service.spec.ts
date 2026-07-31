@@ -591,6 +591,7 @@ describe('FinanzasService', () => {
           amount: 10000,
         },
       });
+      expect(prismaService.$queryRaw).toHaveBeenCalledTimes(1);
     });
 
     it('should accept an overdue resident charge as long as it still has outstanding balance', async () => {

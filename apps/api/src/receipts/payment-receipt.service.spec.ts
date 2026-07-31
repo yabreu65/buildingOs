@@ -6,6 +6,7 @@ import { writeFileSync } from 'node:fs';
 describe('PaymentReceiptService', () => {
   const DEFAULT_BUCKET = 'buildingos-test';
   const RECEIPT_MAX_TEXT_WIDTH = 595 - 72 - 72;
+  let transactionQueryRawMock: jest.Mock;
   const WIN_ANSI_DECODE_MAP: Record<number, string> = {
     0x80: '€',
     0x82: '‚',
@@ -199,9 +200,17 @@ describe('PaymentReceiptService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
+    transactionQueryRawMock = jest.fn().mockResolvedValue([]);
     prisma.$transaction.mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       const tx = {
+        file: prisma.file,
+        document: prisma.document,
+        payment: prisma.payment,
+        paymentAuditLog: prisma.paymentAuditLog,
+        tenant: prisma.tenant,
+        user: prisma.user,
         receiptSequence: prisma.receiptSequence,
+        $queryRaw: transactionQueryRawMock,
       } as never;
       return callback(tx);
     });
@@ -291,12 +300,15 @@ describe('PaymentReceiptService', () => {
         size: uploadedBuffer.length,
       }),
     }));
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         receiptStatus: ReceiptStatus.READY,
         receiptError: null,
       }),
     }));
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(minio.presignDownload).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
       expect.stringContaining('/receipt_R-'),
@@ -442,6 +454,7 @@ describe('PaymentReceiptService', () => {
       receiptNumber: 'R-HZ-2026-000001',
       documentId: 'document-1',
       fileKey: 'receipt.pdf',
+      bucket: DEFAULT_BUCKET,
       url: 'https://download.example/receipt.pdf',
     });
   });

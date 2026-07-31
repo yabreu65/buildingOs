@@ -16,6 +16,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
+import { throwIfPaymentLinkedDocumentIsMutable } from '../common/payment-linked-document-lock';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { DocumentUploadPurpose } from './dto/presign-upload.dto';
@@ -561,23 +562,47 @@ export class DocumentsService {
     }
 
     // Update
-    const updated = await this.prisma.document.update({
-      where: { id: documentId },
-      data: {
-        ...(dto.title && { title: dto.title }),
-        ...(dto.category && { category: dto.category }),
-        ...(dto.visibility && { visibility: dto.visibility }),
-      },
-      include: {
-        file: true,
-        createdByMembership: {
-          include: {
-            user: {
-              select: publicUserSelect,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await throwIfPaymentLinkedDocumentIsMutable(tx, tenantId, documentId, document.fileId);
+
+      const lockedDocument = await tx.document.findFirst({
+        where: { id: documentId, tenantId },
+        include: {
+          file: true,
+          createdByMembership: {
+            include: {
+              user: {
+                select: publicUserSelect,
+              },
             },
           },
         },
-      },
+      });
+
+      if (!lockedDocument) {
+        throw new NotFoundException('Document not found');
+      }
+
+      const updatedDocument = await tx.document.update({
+        where: { id: documentId },
+        data: {
+          ...(dto.title && { title: dto.title }),
+          ...(dto.category && { category: dto.category }),
+          ...(dto.visibility && { visibility: dto.visibility }),
+        },
+        include: {
+          file: true,
+          createdByMembership: {
+            include: {
+              user: {
+                select: publicUserSelect,
+              },
+            },
+          },
+        },
+      });
+
+      return updatedDocument;
     });
 
     return this.sanitizeDocumentResponse(updated);
@@ -633,9 +658,25 @@ export class DocumentsService {
     // Get file info before delete (for MinIO cleanup)
     const fileInfo = document.file;
 
-    // Delete Document (cascades to File)
-    await this.prisma.document.delete({
-      where: { id: documentId },
+    await this.prisma.$transaction(async (tx) => {
+      await throwIfPaymentLinkedDocumentIsMutable(tx, tenantId, documentId, document.fileId);
+
+      const lockedDocument = await tx.document.findFirst({
+        where: { id: documentId, tenantId },
+        include: {
+          file: true,
+          createdByMembership: true,
+        },
+      });
+
+      if (!lockedDocument) {
+        throw new NotFoundException('Document not found');
+      }
+
+      // Delete Document (cascades to File)
+      await tx.document.delete({
+        where: { id: documentId },
+      });
     });
 
     // [PHASE 2 QUICK #7] Audit: DOCUMENT_DELETE
@@ -653,14 +694,14 @@ export class DocumentsService {
 
     // Delete file from MinIO asynchronously (fire-and-forget)
     // Don't await or throw if it fails - document is already deleted
-    this.minio
-      .deleteObject(fileInfo.bucket, fileInfo.objectKey)
-      .catch((error) => {
-        this.logger.error(
-          `Failed to delete file from MinIO: ${fileInfo.bucket}/${fileInfo.objectKey}`,
-          error,
-        );
-      });
+    void Promise.resolve(
+      this.minio.deleteObject(fileInfo.bucket, fileInfo.objectKey),
+    ).catch((error) => {
+      this.logger.error(
+        `Failed to delete file from MinIO: ${fileInfo.bucket}/${fileInfo.objectKey}`,
+        error,
+      );
+    });
   }
 
   /**
