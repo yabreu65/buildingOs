@@ -133,7 +133,7 @@ export class CommunicationsService {
    * Creates:
    * - Communication with DRAFT status
    * - CommunicationTarget entries
-   * - CommunicationReceipt entries (one per recipient)
+   * - CommunicationReceipt entries only when the communication is truly sent/published
    *
    * @throws NotFoundException if building/target doesn't belong to tenant
    * @throws BadRequestException if input is invalid
@@ -183,7 +183,7 @@ export class CommunicationsService {
     // Strict validation: if scheduledFor is provided but is in the past, reject with clear error
     if (scheduledFor && scheduledFor <= new Date()) {
       throw new BadRequestException(
-        'La fecha de programación debe ser futura. No se puede programar en el pasado.',
+        'The scheduled date must be in the future. You cannot schedule a communication in the past.',
       );
     }
     
@@ -215,23 +215,6 @@ export class CommunicationsService {
         targets: true,
       },
     });
-
-    // 4. Resolve recipients and create receipts
-    const recipientIds = await this.validators.resolveRecipients(
-      tenantId,
-      communication.id,
-    );
-
-    if (recipientIds.length > 0) {
-      await this.prisma.communicationReceipt.createMany({
-        data: recipientIds.map((recipientUserId) => ({
-          tenantId,
-          communicationId: communication.id,
-          userId: recipientUserId,
-        })),
-        skipDuplicates: true, // If user is in multiple targets
-      });
-    }
 
     return this.findOne(tenantId, communication.id);
   }
@@ -409,14 +392,49 @@ export class CommunicationsService {
       communicationId,
     );
 
-    return await this.prisma.communication.update({
+    const communication = await this.prisma.communication.findUnique({
       where: { id: communicationId },
-      data: {
-        status: 'SENT',
-        sentAt: new Date(),
-        updatedAt: new Date(),
-      },
-      include: COMMUNICATION_INCLUDE,
+      select: { status: true },
+    });
+
+    if (!communication) {
+      throw new NotFoundException('Communication not found');
+    }
+
+    if (communication.status === 'SENT') {
+      return await this.prisma.communication.update({
+        where: { id: communicationId },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          updatedAt: new Date(),
+        },
+        include: COMMUNICATION_INCLUDE,
+      });
+    }
+
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.communication.update({
+        where: { id: communicationId },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+
+      await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
+
+      const sent = await tx.communication.findUnique({
+        where: { id: communicationId },
+        include: COMMUNICATION_INCLUDE,
+      });
+
+      if (!sent) {
+        throw new NotFoundException('Communication not found');
+      }
+
+      return sent;
     });
   }
 
@@ -460,16 +478,42 @@ export class CommunicationsService {
       });
     }
 
-    // Mark as published (SENT in current schema)
-    const published = await this.prisma.communication.update({
-      where: { id: communicationId },
-      data: {
-        status: 'SENT',
-        sentAt: new Date(),
-        updatedAt: new Date(),
-      },
-      include: COMMUNICATION_INCLUDE,
-    });
+    let published: CommunicationWithDetails;
+    if (communication.status === 'SENT') {
+      published = await this.prisma.communication.update({
+        where: { id: communicationId },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          updatedAt: new Date(),
+        },
+        include: COMMUNICATION_INCLUDE,
+      });
+    } else {
+      published = await this.prisma.$transaction(async (tx) => {
+        await tx.communication.update({
+          where: { id: communicationId },
+          data: {
+            status: 'SENT',
+            sentAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
+
+        const sent = await tx.communication.findUnique({
+          where: { id: communicationId },
+          include: COMMUNICATION_INCLUDE,
+        });
+
+        if (!sent) {
+          throw new NotFoundException('Communication not found');
+        }
+
+        return sent;
+      });
+    }
 
     if (sendWebPush) {
       await this.dispatchWebPushNotifications(tenantId, published);
@@ -804,8 +848,8 @@ export class CommunicationsService {
    * Create a new communication V2 (with scopeType pattern)
    *
    * If status=PUBLISHED:
-   * - Sets publishedAt=now() (mapped to sentAt internally)
-   * - Creates communication_deliveries with UNREAD status
+   * - Persists the communication as SENT immediately
+   * - Materializes the final recipient receipts immediately
    * - sendWebPush defaults to false (no push from this endpoint)
    *
    * @throws NotFoundException if building/target doesn't belong to tenant
@@ -859,6 +903,49 @@ export class CommunicationsService {
 
     const shouldPublish = input.status === 'PUBLISHED';
 
+    if (shouldPublish) {
+      return await this.prisma.$transaction(async (tx) => {
+        const communication = await tx.communication.create({
+          data: {
+            tenantId,
+            buildingId: input.scopeType === 'BUILDING' ? input.buildingId || null : null,
+            title: input.title,
+            body: input.body,
+            channel: 'IN_APP',
+            status: 'SENT',
+            priority: input.priority || 'NORMAL',
+            sentAt: new Date(),
+            createdByMembershipId,
+            targets: {
+              createMany: {
+                data: targets.map((t) => ({
+                  tenantId,
+                  targetType: t.targetType,
+                  targetId: t.targetId || null,
+                })),
+              },
+            },
+          },
+          include: {
+            targets: true,
+          },
+        });
+
+        await this.refreshCommunicationReceipts(tx, tenantId, communication.id);
+
+        const published = await tx.communication.findUnique({
+          where: { id: communication.id },
+          include: COMMUNICATION_INCLUDE,
+        });
+
+        if (!published) {
+          throw new NotFoundException('Communication not found');
+        }
+
+        return published;
+      });
+    }
+
     const communication = await this.prisma.communication.create({
       data: {
         tenantId,
@@ -866,9 +953,9 @@ export class CommunicationsService {
         title: input.title,
         body: input.body,
         channel: 'IN_APP',
-        status: shouldPublish ? 'SENT' as const : 'DRAFT' as const,
+        status: 'DRAFT',
         priority: input.priority || 'NORMAL',
-        sentAt: shouldPublish ? new Date() : null,
+        sentAt: null,
         createdByMembershipId,
         targets: {
           createMany: {
@@ -884,22 +971,6 @@ export class CommunicationsService {
         targets: true,
       },
     });
-
-    const recipientIds = await this.validators.resolveRecipients(
-      tenantId,
-      communication.id,
-    );
-
-    if (recipientIds.length > 0) {
-      await this.prisma.communicationReceipt.createMany({
-        data: recipientIds.map((recipientUserId) => ({
-          tenantId,
-          communicationId: communication.id,
-          userId: recipientUserId,
-        })),
-        skipDuplicates: true,
-      });
-    }
 
     return this.findOne(tenantId, communication.id);
   }
@@ -946,15 +1017,42 @@ export class CommunicationsService {
       });
     }
 
-    const published = await this.prisma.communication.update({
-      where: { id: communicationId },
-      data: {
-        status: 'SENT',
-        sentAt: new Date(),
-        updatedAt: new Date(),
-      },
-      include: COMMUNICATION_INCLUDE,
-    });
+    let published: CommunicationWithDetails;
+    if (communication.status === 'SENT') {
+      published = await this.prisma.communication.update({
+        where: { id: communicationId },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          updatedAt: new Date(),
+        },
+        include: COMMUNICATION_INCLUDE,
+      });
+    } else {
+      published = await this.prisma.$transaction(async (tx) => {
+        await tx.communication.update({
+          where: { id: communicationId },
+          data: {
+            status: 'SENT',
+            sentAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
+
+        const sent = await tx.communication.findUnique({
+          where: { id: communicationId },
+          include: COMMUNICATION_INCLUDE,
+        });
+
+        if (!sent) {
+          throw new NotFoundException('Communication not found');
+        }
+
+        return sent;
+      });
+    }
 
     if (sendWebPush) {
       await this.dispatchWebPushNotifications(tenantId, published);
@@ -1014,6 +1112,38 @@ export class CommunicationsService {
         this.sendCommunicationPush(tenantId, subscription, payload),
       ),
     );
+  }
+
+  private async refreshCommunicationReceipts(
+    prismaClient: Prisma.TransactionClient,
+    tenantId: string,
+    communicationId: string,
+  ): Promise<string[]> {
+    const recipientIds = await this.validators.resolveRecipients(
+      tenantId,
+      communicationId,
+      prismaClient,
+    );
+
+    await prismaClient.communicationReceipt.deleteMany({
+      where: {
+        tenantId,
+        communicationId,
+      },
+    });
+
+    if (recipientIds.length > 0) {
+      await prismaClient.communicationReceipt.createMany({
+        data: recipientIds.map((recipientUserId) => ({
+          tenantId,
+          communicationId,
+          userId: recipientUserId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return recipientIds;
   }
 
   private async sendCommunicationPush(

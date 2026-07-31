@@ -12,8 +12,31 @@ import { CommunicationsService, type CommunicationWithDetails } from './communic
 import { CommunicationsValidators } from './communications.validators';
 
 interface CommunicationDelegateMock {
+  readonly create?: jest.Mock;
+  readonly findFirst?: jest.Mock;
   readonly findUnique: jest.Mock;
   readonly update: jest.Mock;
+}
+
+interface CommunicationReceiptDelegateMock {
+  readonly createMany: jest.Mock;
+  readonly deleteMany: jest.Mock;
+}
+
+interface CommunicationTargetDelegateMock {
+  readonly findMany: jest.Mock;
+}
+
+interface MembershipDelegateMock {
+  readonly findFirst: jest.Mock;
+}
+
+interface UserDelegateMock {
+  readonly findMany: jest.Mock;
+}
+
+interface UnitOccupantDelegateMock {
+  readonly findMany: jest.Mock;
 }
 
 interface PushSubscriptionDelegateMock {
@@ -22,7 +45,16 @@ interface PushSubscriptionDelegateMock {
 }
 
 interface PrismaMock {
+  readonly $transaction?: jest.Mock;
   readonly communication: CommunicationDelegateMock;
+  readonly communicationReceipt?: CommunicationReceiptDelegateMock;
+  readonly communicationTarget?: CommunicationTargetDelegateMock;
+  readonly building?: {
+    readonly findFirst: jest.Mock;
+  };
+  readonly membership?: MembershipDelegateMock;
+  readonly user?: UserDelegateMock;
+  readonly unitOccupant?: UnitOccupantDelegateMock;
   readonly pushSubscription: PushSubscriptionDelegateMock;
 }
 
@@ -60,7 +92,7 @@ describe('CommunicationsService web push fanout', () => {
       communication: {
         findUnique: jest.fn().mockResolvedValue({
           priority: 'URGENT' satisfies CommunicationPriority,
-          status: 'DRAFT',
+          status: 'SENT',
         }),
         update: jest.fn().mockResolvedValue(buildPublishedCommunication()),
       },
@@ -522,3 +554,205 @@ describe('CommunicationsService findForResidentV2 scope filtering', () => {
     expect(unitConditions[0]).toEqual({ targetType: 'UNIT', targetId: unitId });
   });
 });
+
+describe('CommunicationsService receipt synchronization on publication', () => {
+  let prisma: PrismaMock & {
+    readonly $transaction: jest.Mock;
+    readonly communicationReceipt: CommunicationReceiptDelegateMock;
+    readonly communicationTarget: CommunicationTargetDelegateMock;
+    readonly membership: MembershipDelegateMock;
+    readonly user: UserDelegateMock;
+    readonly unitOccupant: UnitOccupantDelegateMock;
+  };
+  let validators: CommunicationsValidators;
+  let configService: ConfigServiceMock;
+  let pushDeliveryService: PushDeliveryServiceMock;
+  let service: CommunicationsService;
+
+  beforeEach(() => {
+    const communication = {
+      create: jest.fn().mockResolvedValue({ id: communicationId }),
+      findFirst: jest.fn().mockResolvedValue({ id: communicationId }),
+      findUnique: jest.fn(),
+      update: jest.fn().mockResolvedValue(buildPublishedCommunication()),
+    };
+    const communicationReceipt = {
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+    };
+    const communicationTarget = {
+      findMany: jest.fn(),
+    };
+    const membership = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'membership-1' }),
+    };
+    const user = {
+      findMany: jest.fn(),
+    };
+    const unitOccupant = {
+      findMany: jest.fn(),
+    };
+    const building = {
+      findFirst: jest.fn().mockResolvedValue({ id: buildingId }),
+    };
+    const transactionClient = {
+      communication,
+      communicationReceipt,
+      communicationTarget,
+      building,
+      membership,
+      user,
+      unitOccupant,
+    };
+
+    prisma = {
+      $transaction: jest.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback(transactionClient),
+      ),
+      communication,
+      communicationReceipt,
+      communicationTarget,
+      building,
+      membership,
+      user,
+      unitOccupant,
+      pushSubscription: {
+        findMany: jest.fn(),
+        updateMany: jest.fn(),
+      },
+    };
+
+    validators = new CommunicationsValidators(prisma as unknown as PrismaService);
+    configService = {
+      isFeatureEnabled: jest.fn().mockReturnValue(false),
+    };
+    pushDeliveryService = {
+      sendToSubscription: jest.fn().mockResolvedValue(buildDeliveryResult('sent')),
+    };
+
+    service = new CommunicationsService(
+      prisma as unknown as PrismaService,
+      validators as unknown as CommunicationsValidators,
+      configService as unknown as ConfigService,
+      pushDeliveryService as unknown as PushDeliveryService,
+    );
+  });
+
+  it('does not create receipts when creating a draft communication', async () => {
+    prisma.communication.create.mockResolvedValueOnce({ id: 'draft-communication' });
+    prisma.communication.findUnique.mockResolvedValueOnce(buildCommunicationWithReceipts([]));
+
+    await service.create(tenantId, userOneId, {
+      title: 'Draft notice',
+      body: 'Body',
+      channel: 'IN_APP',
+      targets: [{ targetType: 'ALL_TENANT' }],
+    });
+
+    expect(prisma.communicationReceipt.createMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('materializes only currently active recipients when creating a published communication', async () => {
+    prisma.communicationTarget.findMany.mockResolvedValue([
+      { targetType: 'BUILDING', targetId: buildingId },
+    ]);
+    prisma.unitOccupant.findMany.mockResolvedValue([
+      { member: { userId: userOneId } },
+    ]);
+    prisma.communication.findUnique
+      .mockResolvedValueOnce(buildCommunicationWithReceipts([userOneId]))
+      .mockResolvedValueOnce(buildCommunicationWithReceipts([userOneId]));
+
+    await service.createV2(
+      tenantId,
+      userOneId,
+      {
+        title: 'Published notice',
+        body: 'Body',
+        status: 'PUBLISHED',
+        priority: 'NORMAL',
+        scopeType: 'BUILDING',
+        buildingId,
+      },
+      false,
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.communicationReceipt.deleteMany).toHaveBeenCalledWith({
+      where: {
+        tenantId,
+        communicationId,
+      },
+    });
+    expect(prisma.communicationReceipt.createMany).toHaveBeenCalledWith({
+      data: [{ tenantId, communicationId, userId: userOneId }],
+      skipDuplicates: true,
+    });
+    expect(prisma.unitOccupant.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId,
+          endDate: null,
+          member: expect.objectContaining({
+            tenantId,
+            disabledAt: null,
+            status: 'ACTIVE',
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('replaces stale draft receipts and sends web push only to the final recipients', async () => {
+    prisma.communication.findUnique
+      .mockResolvedValueOnce({
+        priority: 'URGENT',
+        status: 'DRAFT',
+      })
+      .mockResolvedValueOnce(buildCommunicationWithReceipts([userOneId]));
+    prisma.communicationTarget.findMany.mockResolvedValue([
+      { targetType: 'ALL_TENANT', targetId: null },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: userOneId },
+    ]);
+    prisma.pushSubscription.findMany.mockResolvedValue([
+      buildSubscription(userOneId),
+    ]);
+
+    await service.publishV2(tenantId, communicationId, true);
+
+    expect(prisma.communicationReceipt.deleteMany).toHaveBeenCalledWith({
+      where: {
+        tenantId,
+        communicationId,
+      },
+    });
+    expect(prisma.communicationReceipt.createMany).toHaveBeenCalledWith({
+      data: [{ tenantId, communicationId, userId: userOneId }],
+      skipDuplicates: true,
+    });
+    expect(prisma.pushSubscription.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId,
+        userId: { in: [userOneId] },
+        revokedAt: null,
+      },
+      select: {
+        userId: true,
+        endpoint: true,
+        p256dh: true,
+        auth: true,
+      },
+    });
+    expect(pushDeliveryService.sendToSubscription).toHaveBeenCalledTimes(1);
+  });
+});
+
+function buildCommunicationWithReceipts(receiptUserIds: string[]): CommunicationWithDetails {
+  return {
+    ...buildPublishedCommunication(),
+    receipts: receiptUserIds.map((userId) => buildReceipt(userId)),
+  } as CommunicationWithDetails;
+}
