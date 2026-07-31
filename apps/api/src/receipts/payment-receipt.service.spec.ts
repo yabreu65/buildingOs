@@ -7,6 +7,7 @@ describe('PaymentReceiptService', () => {
   const DEFAULT_BUCKET = 'buildingos-test';
   const RECEIPT_MAX_TEXT_WIDTH = 595 - 72 - 72;
   let transactionQueryRawMock: jest.Mock;
+  let insideTransaction = false;
   const WIN_ANSI_DECODE_MAP: Record<number, string> = {
     0x80: '€',
     0x82: '‚',
@@ -40,6 +41,7 @@ describe('PaymentReceiptService', () => {
   const prisma = {
     payment: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       update: jest.fn(),
     },
     document: {
@@ -48,6 +50,7 @@ describe('PaymentReceiptService', () => {
     },
     file: {
       create: jest.fn(),
+      findFirst: jest.fn(),
     },
     tenant: {
       findUnique: jest.fn(),
@@ -69,6 +72,7 @@ describe('PaymentReceiptService', () => {
     getDefaultBucket: jest.fn(() => DEFAULT_BUCKET),
     uploadBuffer: jest.fn(),
     presignDownload: jest.fn(),
+    deleteObject: jest.fn(),
   };
   const notificationsService = {
     createNotification: jest.fn(),
@@ -199,7 +203,19 @@ describe('PaymentReceiptService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    insideTransaction = false;
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
+    minio.uploadBuffer.mockImplementation(async () => {
+      expect(insideTransaction).toBe(false);
+    });
+    minio.presignDownload.mockImplementation(async () => {
+      expect(insideTransaction).toBe(false);
+      return 'https://download.example/receipt.pdf';
+    });
+    notificationsService.createNotification.mockImplementation(async () => {
+      expect(insideTransaction).toBe(false);
+      return {};
+    });
     transactionQueryRawMock = jest.fn().mockResolvedValue([]);
     prisma.$transaction.mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       const tx = {
@@ -212,7 +228,12 @@ describe('PaymentReceiptService', () => {
         receiptSequence: prisma.receiptSequence,
         $queryRaw: transactionQueryRawMock,
       } as never;
-      return callback(tx);
+      insideTransaction = true;
+      try {
+        return await callback(tx);
+      } finally {
+        insideTransaction = false;
+      }
     });
     prisma.payment.findUnique.mockResolvedValue({
       id: 'payment-1',
@@ -240,12 +261,16 @@ describe('PaymentReceiptService', () => {
       receiptDocumentId: null,
       receiptNumber: null,
     } as never);
+    prisma.payment.findFirst.mockImplementation((...args: unknown[]) =>
+      prisma.payment.findUnique(...(args as Parameters<typeof prisma.payment.findUnique>)),
+    );
     prisma.tenant.findUnique.mockResolvedValue({ name: 'Complejo Horizonte', brandName: null } as never);
     prisma.user.findUnique.mockResolvedValue({ name: 'Admin' } as never);
     prisma.receiptSequence.findUnique.mockResolvedValue(null);
     prisma.receiptSequence.create.mockResolvedValue({ id: 'sequence-1', lastNumber: 0 } as never);
     prisma.receiptSequence.update.mockResolvedValue({ id: 'sequence-1' } as never);
     prisma.file.create.mockResolvedValue({ id: 'file-1' } as never);
+    prisma.file.findFirst.mockResolvedValue(null);
     prisma.document.create.mockResolvedValue({ id: 'document-1', file: { bucket: DEFAULT_BUCKET, objectKey: 'object-1' } } as never);
     prisma.payment.update.mockResolvedValue({} as never);
     prisma.paymentAuditLog.create.mockResolvedValue({} as never);
@@ -254,13 +279,13 @@ describe('PaymentReceiptService', () => {
   });
 
   it('uses the configured bucket when generating a new receipt', async () => {
-    const result = await service.ensureReceiptForPayment('payment-1');
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const tmpReceiptPath = '/tmp/buildingos-payment-receipt-test.pdf';
 
     expect(minio.uploadBuffer).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
-      expect.stringContaining('/receipt_R-'),
+      expect.stringContaining('/receipts/R-'),
       expect.any(Buffer),
       'application/pdf',
     );
@@ -300,21 +325,97 @@ describe('PaymentReceiptService', () => {
         size: uploadedBuffer.length,
       }),
     }));
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(2);
     expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         receiptStatus: ReceiptStatus.READY,
         receiptError: null,
       }),
     }));
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(minio.presignDownload).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
-      expect.stringContaining('/receipt_R-'),
+      expect.stringContaining('/receipts/R-'),
       3600,
     );
-    expect(result?.fileKey).toContain('/receipt_R-');
+    expect(result?.fileKey).toContain('/receipts/R-');
+  });
+
+  it('reuses the reserved receipt number after an upload failure', async () => {
+    let paymentState = {
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: 'TRX-001',
+      paymentAllocations: [{
+        chargeId: 'charge-1',
+        amount: 4050000,
+        charge: {
+          period: '2025-10',
+          concept: 'Condominio ordinario 2025-10',
+          expensePeriod: { year: 2025, month: 10 },
+        },
+      }],
+      unit: { label: 'TN-01-01' },
+      building: { name: 'Complejo Horizonte' },
+      receiptDocumentId: null,
+      receiptNumber: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptError: null,
+    } as never;
+
+    prisma.payment.findUnique.mockImplementation(async () => paymentState as never);
+    prisma.payment.update.mockImplementation(async ({ data }) => {
+      paymentState = {
+        ...paymentState,
+        ...data,
+      } as never;
+      return paymentState as never;
+    });
+    minio.uploadBuffer.mockRejectedValueOnce(new Error('upload failed'));
+
+    await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
+    expect(paymentState.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(paymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
+    expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
+    expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
+
+    minio.uploadBuffer.mockResolvedValueOnce(undefined);
+
+    const retryResult = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(retryResult?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
+    expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        receiptStatus: ReceiptStatus.READY,
+      }),
+    }));
+  });
+
+  it('keeps an uploaded receipt object when finalization already confirmed the same key', async () => {
+    prisma.document.create.mockRejectedValueOnce(new Error('database unavailable'));
+    prisma.file.findFirst.mockResolvedValueOnce({
+      document: { id: 'document-1' },
+    } as never);
+
+    await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
+
+    expect(minio.uploadBuffer).toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        receiptStatus: ReceiptStatus.FAILED,
+      }),
+    }));
   });
 
   it('does not notify the receipt owner when excluded from the approval flow', async () => {
@@ -368,7 +469,7 @@ describe('PaymentReceiptService', () => {
       receiptNumber: null,
     } as never);
 
-    await service.ensureReceiptForPayment('payment-1');
+    await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const decodedPdfText = extractDecodedPdfTextLines(uploadedBuffer).join('\n');
@@ -411,7 +512,7 @@ describe('PaymentReceiptService', () => {
       receiptNumber: null,
     } as never);
 
-    await service.ensureReceiptForPayment('payment-1');
+    await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const pdfText = uploadedBuffer.toString('latin1');
@@ -445,7 +546,7 @@ describe('PaymentReceiptService', () => {
       file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf' },
     } as never);
 
-    const result = await service.ensureReceiptForPayment('payment-1');
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     expect(minio.presignDownload).toHaveBeenCalledWith('tenant-legacy-bucket', 'receipt.pdf', 3600);
     expect(minio.uploadBuffer).not.toHaveBeenCalled();
@@ -454,7 +555,7 @@ describe('PaymentReceiptService', () => {
       receiptNumber: 'R-HZ-2026-000001',
       documentId: 'document-1',
       fileKey: 'receipt.pdf',
-      bucket: DEFAULT_BUCKET,
+      bucket: 'tenant-legacy-bucket',
       url: 'https://download.example/receipt.pdf',
     });
   });
@@ -487,7 +588,7 @@ describe('PaymentReceiptService', () => {
       receiptNumber: null,
     } as never);
 
-    await service.ensureReceiptForPayment('payment-1');
+    await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const pdfText = uploadedBuffer.toString('latin1');
@@ -545,7 +646,7 @@ describe('PaymentReceiptService', () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ name: longTenantName, brandName: null } as never);
     prisma.user.findUnique.mockResolvedValueOnce({ name: 'Admin' } as never);
 
-    const result = await service.ensureReceiptForPayment('payment-1');
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
     expect(result?.documentId).toBe('document-1');
 
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;

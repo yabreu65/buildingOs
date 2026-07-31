@@ -989,7 +989,7 @@ export class FinanzasService {
     void this.sendPaymentReceivedNotification(tenantId, result, actorUserId ?? undefined);
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
+    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
@@ -3009,7 +3009,7 @@ export class FinanzasService {
       void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId ?? undefined);
       
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
+      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
         this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
       });
     }
@@ -3818,7 +3818,7 @@ export class FinanzasService {
     });
 
     // Try to generate receipt
-    const result = await this.receiptService.ensureReceiptForPayment(paymentId, excludeUserId);
+    const result = await this.receiptService.ensureReceiptForPayment(tenantId, paymentId, excludeUserId);
 
     if (result) {
       return {

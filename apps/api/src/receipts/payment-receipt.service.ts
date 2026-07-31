@@ -3,10 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DocumentCategory, DocumentVisibility, Prisma, ReceiptStatus } from '@prisma/client';
-import {
-  acquirePaymentLinkedDocumentLock,
-  acquirePaymentReceiptLock,
-} from '../common/payment-linked-document-lock';
+import { acquirePaymentReceiptLock } from '../common/payment-linked-document-lock';
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -51,6 +48,17 @@ type ChargeWithAllocations = Prisma.ChargeGetPayload<{
     };
   };
 }>;
+
+interface PreparedReceiptGeneration {
+  payment: PaymentReceiptPayment;
+  receiptNumber: string;
+  fileKey: string;
+  bucket: string;
+  approvedByUserName: string;
+  tenantDisplayName: string;
+  reuseExisting: boolean;
+  documentId?: string;
+}
 
 interface ReceiptPdfLine {
   text: string;
@@ -109,191 +117,355 @@ export class PaymentReceiptService {
   /**
    * Ensure a receipt exists for the given payment.
    * Idempotent: if receipt already exists, return it.
-   * If generation fails, sets receiptStatus = FAILED with error message.
+   * If generation fails before confirmation, sets receiptStatus = FAILED with error message.
    */
-  async ensureReceiptForPayment(paymentId: string, excludeUserId?: string): Promise<ReceiptData | null> {
+  async ensureReceiptForPayment(tenantId: string, paymentId: string, excludeUserId?: string): Promise<ReceiptData | null> {
+    let preparedReceipt: PreparedReceiptGeneration | null = null;
+    let uploadedReceiptObject = false;
+    let receiptFinalized = false;
+
     try {
-      const receipt = await this.prisma.$transaction(async (tx) => {
-        await acquirePaymentReceiptLock(tx, paymentId);
+      preparedReceipt = await this.prepareReceiptGeneration(tenantId, paymentId);
 
-        const payment = await tx.payment.findUnique({
-          where: { id: paymentId },
-          include: {
-            unit: true,
-            building: true,
-            createdByUser: true,
-            paymentAllocations: {
-              include: {
-                charge: {
-                  include: {
-                    expensePeriod: true,
-                  },
-                },
-              },
-            },
-          },
-        });
-
-        if (!payment) {
-          this.logger.error(`Payment ${paymentId} not found`);
-          return null;
-        }
-
-        // Idempotency: if receipt already exists, return it
-        if (payment.receiptDocumentId && payment.receiptNumber) {
-          this.logger.log(`Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`);
-          const document = await tx.document.findUnique({
-            where: { id: payment.receiptDocumentId },
-            include: { file: true },
-          });
-
-          if (document?.file) {
-            return {
-              payment,
-              receiptNumber: payment.receiptNumber,
-              documentId: payment.receiptDocumentId,
-              fileKey: document.file.objectKey,
-              bucket: document.file.bucket,
-              wasGenerated: false,
-              approvedByUserName: 'Administración',
-            };
-          }
-        }
-
-        let approvedByUserName = 'Administración';
-        if (payment.approvedByUserId) {
-          const approvedByUser = await tx.user.findUnique({
-            where: { id: payment.approvedByUserId },
-            select: { name: true },
-          });
-          approvedByUserName = approvedByUser?.name || 'Administración';
-        }
-
-        const receiptNumber = await this.reserveReceiptNumberInTransaction(tx, payment.tenantId);
-        const tenant = await tx.tenant.findUnique({
-          where: { id: payment.tenantId },
-          select: { name: true, brandName: true },
-        });
-        const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
-
-        const pdfContent = await this.generateReceiptPDF(
-          payment,
-          receiptNumber,
-          approvedByUserName,
-          tenantDisplayName,
-        );
-
-        const objectKey = `tenant/${payment.tenantId}/payments/${paymentId}/receipt_${receiptNumber}.pdf`;
-        await this.minio.uploadBuffer(this.bucket, objectKey, pdfContent, 'application/pdf');
-
-        const file = await tx.file.create({
-          data: {
-            tenantId: payment.tenantId,
-            bucket: this.bucket,
-            objectKey,
-            originalName: `receipt_${receiptNumber}.pdf`,
-            mimeType: 'application/pdf',
-            size: pdfContent.length,
-          },
-        });
-
-        const document = await tx.document.create({
-          data: {
-            tenantId: payment.tenantId,
-            fileId: file.id,
-            title: `Recibo de pago ${receiptNumber}`,
-            category: DocumentCategory.RECEIPT,
-            visibility: DocumentVisibility.RESIDENTS,
-            buildingId: payment.buildingId,
-            unitId: payment.unitId,
-          },
-        });
-
-        await tx.payment.update({
-          where: { id: paymentId },
-          data: {
-            receiptDocumentId: document.id,
-            receiptNumber,
-            receiptStatus: ReceiptStatus.READY,
-            receiptGeneratedAt: new Date(),
-            receiptError: null,
-          },
-        });
-
-        await tx.paymentAuditLog.create({
-          data: {
-            tenantId: payment.tenantId,
-            paymentId,
-            action: 'RECEIPT_GENERATED',
-            metadata: {
-              receiptNumber,
-              documentId: document.id,
-              objectKey,
-            },
-          },
-        });
-
-        return {
-          payment,
-          receiptNumber,
-          documentId: document.id,
-          fileKey: objectKey,
-          bucket: this.bucket,
-          wasGenerated: true,
-          approvedByUserName,
-          tenantDisplayName,
-        };
-      });
-
-      if (!receipt) {
+      if (!preparedReceipt) {
         return null;
       }
 
-      const url = await this.minio.presignDownload(receipt.bucket, receipt.fileKey, 3600);
+      if (preparedReceipt.reuseExisting) {
+        const url = await this.minio.presignDownload(preparedReceipt.bucket, preparedReceipt.fileKey, 3600);
 
-      if (!receipt.wasGenerated) {
         return {
-          receiptNumber: receipt.receiptNumber,
-          documentId: receipt.documentId,
-          fileKey: receipt.fileKey,
-          bucket: this.bucket,
+          receiptNumber: preparedReceipt.receiptNumber,
+          documentId: preparedReceipt.documentId!,
+          fileKey: preparedReceipt.fileKey,
+          bucket: preparedReceipt.bucket,
           url,
         };
       }
 
-      // Notify resident
+      const pdfContent = await this.generateReceiptPDF(
+        preparedReceipt.payment,
+        preparedReceipt.receiptNumber,
+        preparedReceipt.approvedByUserName,
+        preparedReceipt.tenantDisplayName,
+      );
+
+      await this.minio.uploadBuffer(preparedReceipt.bucket, preparedReceipt.fileKey, pdfContent, 'application/pdf');
+      uploadedReceiptObject = true;
+
+      const finalizedReceipt = await this.finalizeReceiptGeneration(tenantId, preparedReceipt, pdfContent.length);
+      receiptFinalized = true;
+
+      const url = await this.minio.presignDownload(finalizedReceipt.bucket, finalizedReceipt.fileKey, 3600);
+
+      if (!finalizedReceipt.wasGenerated) {
+        return {
+          receiptNumber: finalizedReceipt.receiptNumber,
+          documentId: finalizedReceipt.documentId,
+          fileKey: finalizedReceipt.fileKey,
+          bucket: finalizedReceipt.bucket,
+          url,
+        };
+      }
+
+      // Notify resident outside the transaction.
       await this.notifyResidentReceiptReady(
-        receipt.payment,
-        receipt.receiptNumber,
+        finalizedReceipt.payment,
+        finalizedReceipt.receiptNumber,
         url,
-        receipt.approvedByUserName,
+        finalizedReceipt.approvedByUserName,
         excludeUserId,
       );
 
-      this.logger.log(`Receipt ${receipt.receiptNumber} generated for payment ${paymentId}`);
+      this.logger.log(`Receipt ${finalizedReceipt.receiptNumber} generated for payment ${paymentId}`);
 
       return {
-        receiptNumber: receipt.receiptNumber,
-        documentId: receipt.documentId,
-        fileKey: receipt.fileKey,
-        bucket: this.bucket,
+        receiptNumber: finalizedReceipt.receiptNumber,
+        documentId: finalizedReceipt.documentId,
+        fileKey: finalizedReceipt.fileKey,
+        bucket: finalizedReceipt.bucket,
         url,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${errorMessage}`);
 
-      // Mark as failed
-      await this.prisma.payment.update({
-        where: { id: paymentId },
-        data: {
-          receiptStatus: ReceiptStatus.FAILED,
-          receiptError: errorMessage,
-        },
-      });
+      if (uploadedReceiptObject && preparedReceipt && !preparedReceipt.reuseExisting && !receiptFinalized) {
+        await this.cleanupUploadedReceiptObjectIfSafe(tenantId, preparedReceipt);
+      }
+
+      await this.markReceiptGenerationFailedIfNeeded(tenantId, paymentId, errorMessage);
 
       return null;
     }
+  }
+
+  private async prepareReceiptGeneration(tenantId: string, paymentId: string): Promise<PreparedReceiptGeneration | null> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
+
+      const payment = await this.loadPaymentForReceipt(tx, tenantId, paymentId);
+
+      if (!payment) {
+        this.logger.error(`Payment ${paymentId} not found`);
+        return null;
+      }
+
+      if (payment.receiptDocumentId && payment.receiptNumber) {
+        this.logger.log(`Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`);
+
+        const existingDocument = await tx.document.findUnique({
+          where: { id: payment.receiptDocumentId },
+          include: { file: true },
+        });
+
+        if (!existingDocument?.file) {
+          throw new Error(`Receipt document ${payment.receiptDocumentId} not found for payment ${paymentId}`);
+        }
+
+        const tenant = await tx.tenant.findUnique({
+          where: { id: payment.tenantId },
+          select: { name: true, brandName: true },
+        });
+
+        return {
+          payment,
+          receiptNumber: payment.receiptNumber,
+          fileKey: existingDocument.file.objectKey,
+          bucket: existingDocument.file.bucket,
+          approvedByUserName: 'Administración',
+          tenantDisplayName: tenant?.brandName || tenant?.name || 'Consorcio',
+          reuseExisting: true,
+          documentId: existingDocument.id,
+        };
+      }
+
+      let approvedByUserName = 'Administración';
+      if (payment.approvedByUserId) {
+        const approvedByUser = await tx.user.findUnique({
+          where: { id: payment.approvedByUserId },
+          select: { name: true },
+        });
+        approvedByUserName = approvedByUser?.name || 'Administración';
+      }
+
+      const receiptNumber = payment.receiptNumber || await this.reserveReceiptNumberInTransaction(tx, payment.tenantId);
+      const tenant = await tx.tenant.findUnique({
+        where: { id: payment.tenantId },
+        select: { name: true, brandName: true },
+      });
+      const tenantDisplayName = tenant?.brandName || tenant?.name || 'Consorcio';
+      const fileKey = this.buildReceiptObjectKey(payment.tenantId, paymentId, receiptNumber);
+
+      await tx.payment.update({
+        where: { id: paymentId, tenantId },
+        data: {
+          receiptNumber,
+          receiptStatus: ReceiptStatus.PENDING,
+          receiptGeneratedAt: null,
+          receiptError: null,
+        },
+      });
+
+      return {
+        payment,
+        receiptNumber,
+        fileKey,
+        bucket: this.bucket,
+        approvedByUserName,
+        tenantDisplayName,
+        reuseExisting: false,
+      };
+    });
+  }
+
+  private async finalizeReceiptGeneration(
+    tenantId: string,
+    preparedReceipt: PreparedReceiptGeneration,
+    pdfSize: number,
+  ): Promise<PreparedReceiptGeneration & { documentId: string; wasGenerated: boolean }> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, preparedReceipt.payment.id);
+
+      const currentPayment = await this.loadPaymentForReceipt(tx, tenantId, preparedReceipt.payment.id);
+
+      if (!currentPayment) {
+        throw new Error(`Payment ${preparedReceipt.payment.id} not found while finalizing receipt`);
+      }
+
+      if (currentPayment.receiptDocumentId && currentPayment.receiptNumber) {
+        const existingDocument = await tx.document.findUnique({
+          where: { id: currentPayment.receiptDocumentId },
+          include: { file: true },
+        });
+
+        if (!existingDocument?.file) {
+          throw new Error(`Receipt document ${currentPayment.receiptDocumentId} not found for payment ${preparedReceipt.payment.id}`);
+        }
+
+        this.logger.log(`Receipt already finalized for payment ${preparedReceipt.payment.id}, reusing ${currentPayment.receiptNumber}`);
+
+        return {
+          ...preparedReceipt,
+          payment: currentPayment,
+          receiptNumber: currentPayment.receiptNumber,
+          fileKey: existingDocument.file.objectKey,
+          bucket: existingDocument.file.bucket,
+          documentId: existingDocument.id,
+          wasGenerated: false,
+        };
+      }
+
+      const file = await tx.file.create({
+        data: {
+          tenantId: preparedReceipt.payment.tenantId,
+          bucket: preparedReceipt.bucket,
+          objectKey: preparedReceipt.fileKey,
+          originalName: `receipt_${preparedReceipt.receiptNumber}.pdf`,
+          mimeType: 'application/pdf',
+          size: pdfSize,
+        },
+      });
+
+      const document = await tx.document.create({
+        data: {
+          tenantId: preparedReceipt.payment.tenantId,
+          fileId: file.id,
+          title: `Recibo de pago ${preparedReceipt.receiptNumber}`,
+          category: DocumentCategory.RECEIPT,
+          visibility: DocumentVisibility.RESIDENTS,
+          buildingId: preparedReceipt.payment.buildingId,
+          unitId: preparedReceipt.payment.unitId,
+        },
+      });
+
+      await tx.payment.update({
+        where: { id: preparedReceipt.payment.id, tenantId },
+        data: {
+          receiptDocumentId: document.id,
+          receiptNumber: preparedReceipt.receiptNumber,
+          receiptStatus: ReceiptStatus.READY,
+          receiptGeneratedAt: new Date(),
+          receiptError: null,
+        },
+      });
+
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId: preparedReceipt.payment.tenantId,
+          paymentId: preparedReceipt.payment.id,
+          action: 'RECEIPT_GENERATED',
+          metadata: {
+            receiptNumber: preparedReceipt.receiptNumber,
+            documentId: document.id,
+            objectKey: preparedReceipt.fileKey,
+          },
+        },
+      });
+
+      return {
+        ...preparedReceipt,
+        payment: currentPayment,
+        documentId: document.id,
+        wasGenerated: true,
+      };
+    });
+  }
+
+  private async cleanupUploadedReceiptObjectIfSafe(tenantId: string, preparedReceipt: PreparedReceiptGeneration): Promise<void> {
+    try {
+      const payment = await this.prisma.payment.findUnique({
+        where: { id: preparedReceipt.payment.id, tenantId },
+        select: {
+          receiptDocumentId: true,
+          receiptNumber: true,
+        },
+      });
+
+      if (payment?.receiptDocumentId && payment.receiptNumber === preparedReceipt.receiptNumber) {
+        this.logger.warn(
+          `Skipping cleanup for ${preparedReceipt.bucket}/${preparedReceipt.fileKey} because payment ${preparedReceipt.payment.id} is already confirmed`,
+        );
+        return;
+      }
+
+      const file = await this.prisma.file.findFirst({
+        where: {
+          tenantId: preparedReceipt.payment.tenantId,
+          bucket: preparedReceipt.bucket,
+          objectKey: preparedReceipt.fileKey,
+        },
+        include: {
+          document: {
+            select: { id: true },
+          },
+        },
+      });
+
+      if (file?.document) {
+        this.logger.warn(
+          `Skipping cleanup for ${preparedReceipt.bucket}/${preparedReceipt.fileKey} because the receipt file is already confirmed`,
+        );
+        return;
+      }
+
+      await this.minio.deleteObject(preparedReceipt.bucket, preparedReceipt.fileKey);
+    } catch (cleanupError) {
+      const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      this.logger.warn(
+        `Failed to clean up orphaned receipt object ${preparedReceipt.bucket}/${preparedReceipt.fileKey}: ${errorMessage}`,
+      );
+    }
+  }
+
+  private async markReceiptGenerationFailedIfNeeded(tenantId: string, paymentId: string, errorMessage: string): Promise<void> {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+      select: {
+        receiptStatus: true,
+        receiptDocumentId: true,
+      },
+    });
+
+    if (!payment || payment.receiptStatus === ReceiptStatus.READY || payment.receiptDocumentId) {
+      return;
+    }
+
+    await this.prisma.payment.update({
+      where: { id: paymentId, tenantId },
+      data: {
+        receiptStatus: ReceiptStatus.FAILED,
+        receiptError: errorMessage,
+      },
+    });
+  }
+
+  private async loadPaymentForReceipt(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    paymentId: string,
+  ): Promise<PaymentReceiptPayment | null> {
+    return tx.payment.findFirst({
+      where: { id: paymentId, tenantId },
+      include: {
+        unit: true,
+        building: true,
+        createdByUser: true,
+        paymentAllocations: {
+          include: {
+            charge: {
+              include: {
+                expensePeriod: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private buildReceiptObjectKey(tenantId: string, paymentId: string, receiptNumber: string): string {
+    return `tenant/${tenantId}/payments/${paymentId}/receipts/${receiptNumber}.pdf`;
   }
 
   /**
