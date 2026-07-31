@@ -16,6 +16,9 @@ export interface AuthenticatedUser {
   email: string;
   name?: string;
   isSuperAdmin?: boolean;
+  isImpersonating?: boolean;
+  impersonatedTenantId?: string;
+  actorSuperAdminUserId?: string;
   role?: Role;
   roles?: Role[];
   membershipId?: string;
