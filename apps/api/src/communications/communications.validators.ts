@@ -249,10 +249,20 @@ export class CommunicationsValidators {
               },
             },
             tenantMembers: {
-              some: {
+              none: {
                 tenantId,
-                disabledAt: null,
-                status: MemberStatus.ACTIVE,
+                OR: [
+                  {
+                    disabledAt: {
+                      not: null,
+                    },
+                  },
+                  {
+                    status: {
+                      not: MemberStatus.ACTIVE,
+                    },
+                  },
+                ],
               },
             },
           },
@@ -328,10 +338,20 @@ export class CommunicationsValidators {
               },
             },
             tenantMembers: {
-              some: {
+              none: {
                 tenantId,
-                disabledAt: null,
-                status: MemberStatus.ACTIVE,
+                OR: [
+                  {
+                    disabledAt: {
+                      not: null,
+                    },
+                  },
+                  {
+                    status: {
+                      not: MemberStatus.ACTIVE,
+                    },
+                  },
+                ],
               },
             },
           },

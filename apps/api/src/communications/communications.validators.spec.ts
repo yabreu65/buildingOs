@@ -14,6 +14,24 @@ const communicationId = 'communication-1';
 const buildingId = 'building-1';
 const unitId = 'unit-1';
 
+const activeTenantMemberEligibility = {
+  none: {
+    tenantId,
+    OR: [
+      {
+        disabledAt: {
+          not: null,
+        },
+      },
+      {
+        status: {
+          not: MemberStatus.ACTIVE,
+        },
+      },
+    ],
+  },
+} as const;
+
 describe('CommunicationsValidators recipient eligibility', () => {
   let prisma: PrismaMock;
   let validators: CommunicationsValidators;
@@ -28,7 +46,7 @@ describe('CommunicationsValidators recipient eligibility', () => {
     validators = new CommunicationsValidators(prisma as unknown as PrismaService);
   });
 
-  it('filters ALL_TENANT recipients to active tenant members only', async () => {
+  it('includes membership-only signup owners in ALL_TENANT recipients', async () => {
     prisma.communicationTarget.findMany.mockResolvedValue([
       { targetType: 'ALL_TENANT', targetId: null },
     ]);
@@ -45,13 +63,7 @@ describe('CommunicationsValidators recipient eligibility', () => {
             tenantId,
           },
         },
-        tenantMembers: {
-          some: {
-            tenantId,
-            disabledAt: null,
-            status: MemberStatus.ACTIVE,
-          },
-        },
+        tenantMembers: activeTenantMemberEligibility,
       },
       select: { id: true },
     });
@@ -123,7 +135,7 @@ describe('CommunicationsValidators recipient eligibility', () => {
     });
   });
 
-  it('filters ROLE recipients to active tenant members only and deduplicates overlapping targets', async () => {
+  it('includes membership-only signup owners in ROLE recipients and deduplicates overlapping targets', async () => {
     prisma.communicationTarget.findMany.mockResolvedValue([
       { targetType: 'ALL_TENANT', targetId: null },
       { targetType: 'ROLE', targetId: 'RESIDENT' },
@@ -148,13 +160,50 @@ describe('CommunicationsValidators recipient eligibility', () => {
             },
           },
         },
-        tenantMembers: {
+        tenantMembers: activeTenantMemberEligibility,
+      },
+      select: { id: true },
+    });
+  });
+
+  it('excludes users with inactive tenant members from ALL_TENANT and ROLE queries', async () => {
+    prisma.communicationTarget.findMany.mockResolvedValue([
+      { targetType: 'ALL_TENANT', targetId: null },
+      { targetType: 'ROLE', targetId: 'TENANT_OWNER' },
+    ]);
+    prisma.user.findMany
+      .mockResolvedValueOnce([{ id: 'user-1' }])
+      .mockResolvedValueOnce([{ id: 'user-2' }]);
+
+    await expect(
+      validators.resolveRecipients(tenantId, communicationId, prisma as unknown as Prisma.TransactionClient),
+    ).resolves.toEqual(['user-1', 'user-2']);
+
+    expect(prisma.user.findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        memberships: {
           some: {
             tenantId,
-            disabledAt: null,
-            status: MemberStatus.ACTIVE,
           },
         },
+        tenantMembers: activeTenantMemberEligibility,
+      },
+      select: { id: true },
+    });
+
+    expect(prisma.user.findMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        memberships: {
+          some: {
+            tenantId,
+            roles: {
+              some: {
+                role: 'TENANT_OWNER',
+              },
+            },
+          },
+        },
+        tenantMembers: activeTenantMemberEligibility,
       },
       select: { id: true },
     });
