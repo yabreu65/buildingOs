@@ -8,6 +8,7 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import type { AuthenticatedMembership, PortalContext } from '../common/types/request.types';
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
+import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import type { Role, ScopedRole } from '@buildingos/contracts';
 import {
   CreateChargeDto,
@@ -542,10 +543,11 @@ export class FinanzasService {
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );
     }
-    await this.validatePaymentProofFile(tenantId, dto.proofFileId);
-
     if (isResidentPayment) {
       const payment = await this.prisma.$transaction(async (tx) => {
+        await acquirePaymentLinkedDocumentLock(tx, tenantId, dto.proofFileId!);
+        await this.validatePaymentProofFileInTransaction(tx, tenantId, dto.proofFileId!);
+
         const charge = await tx.charge.findFirst({
           where: {
             id: dto.chargeId,
@@ -627,20 +629,24 @@ export class FinanzasService {
       return this.sanitizePaymentForResponse(payment);
     }
 
-    // 8. Create payment with SUBMITTED status
-    const payment = await this.prisma.payment.create({
-      data: {
-        tenantId,
-        buildingId,
-        unitId: dto.unitId || null,
-        amount: dto.amount,
-        currency: dto.currency || 'ARS',
-        method: dto.method,
-        status: PaymentStatus.SUBMITTED,
-        reference: dto.reference,
-        proofFileId: dto.proofFileId || null,
-        createdByUserId: userId,
-      },
+    const payment = await this.prisma.$transaction(async (tx) => {
+      await acquirePaymentLinkedDocumentLock(tx, tenantId, dto.proofFileId!);
+      await this.validatePaymentProofFileInTransaction(tx, tenantId, dto.proofFileId!);
+
+      return tx.payment.create({
+        data: {
+          tenantId,
+          buildingId,
+          unitId: dto.unitId || null,
+          amount: dto.amount,
+          currency: dto.currency || 'ARS',
+          method: dto.method,
+          status: PaymentStatus.SUBMITTED,
+          reference: dto.reference,
+          proofFileId: dto.proofFileId || null,
+          createdByUserId: userId,
+        },
+      });
     });
 
     // 9. Notify admins about new payment submitted
@@ -983,7 +989,7 @@ export class FinanzasService {
     void this.sendPaymentReceivedNotification(tenantId, result, actorUserId ?? undefined);
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
+    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
@@ -1387,11 +1393,12 @@ export class FinanzasService {
     return allocations;
   }
 
-  private async validatePaymentProofFile(
+  private async validatePaymentProofFileInTransaction(
+    tx: Prisma.TransactionClient,
     tenantId: string,
     proofFileId: string,
   ): Promise<void> {
-    const proofFile = await this.prisma.file.findFirst({
+    const proofFile = await tx.file.findFirst({
       where: { id: proofFileId, tenantId },
       select: { id: true, size: true },
     });
@@ -3002,7 +3009,7 @@ export class FinanzasService {
       void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId ?? undefined);
       
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(paymentId, actorUserId ?? undefined).catch((err) => {
+      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
         this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
       });
     }
@@ -3811,7 +3818,7 @@ export class FinanzasService {
     });
 
     // Try to generate receipt
-    const result = await this.receiptService.ensureReceiptForPayment(paymentId, excludeUserId);
+    const result = await this.receiptService.ensureReceiptForPayment(tenantId, paymentId, excludeUserId);
 
     if (result) {
       return {

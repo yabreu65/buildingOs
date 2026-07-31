@@ -11,6 +11,7 @@ import { DocumentUploadPurpose } from './dto/presign-upload.dto';
 import { DocumentsValidators } from './documents.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { Prisma } from '@prisma/client';
+import { PAYMENT_LINKED_DOCUMENT_CONFLICT_MESSAGE } from '../common/payment-linked-document-lock';
 
 const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
 const GENERAL_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
@@ -43,6 +44,7 @@ function expectNoPasswordHashDeep(value: unknown): void {
 }
 
 describe('DocumentsService', () => {
+  let transactionQueryRawMock: jest.Mock;
   const prisma = {
     $transaction: jest.fn(),
     document: {
@@ -58,6 +60,7 @@ describe('DocumentsService', () => {
       create: jest.fn(),
     },
     payment: {
+      findFirst: jest.fn(),
       findMany: jest.fn(),
     },
     tenant: {
@@ -113,10 +116,13 @@ describe('DocumentsService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
+    transactionQueryRawMock = jest.fn().mockResolvedValue([]);
     prisma.$transaction.mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       const tx = {
         file: prisma.file,
         document: prisma.document,
+        payment: prisma.payment,
+        $queryRaw: transactionQueryRawMock,
       } as never;
 
       return callback(tx);
@@ -411,6 +417,7 @@ describe('DocumentsService', () => {
   it('sanitizes createdByMembership.user in updateDocument responses', async () => {
     prisma.document.findFirst.mockResolvedValueOnce({
       id: 'document-update',
+      fileId: 'file-update',
       tenantId: 'tenant-1',
       buildingId: 'building-1',
       unitId: 'unit-1',
@@ -476,6 +483,43 @@ describe('DocumentsService', () => {
       name: 'Resident One',
     });
     expectNoPasswordHashDeep(result);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks document updates when the file is linked to a payment proof or receipt', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-linked',
+      fileId: 'file-linked',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+      },
+      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+    prisma.payment.findFirst.mockResolvedValueOnce({ id: 'payment-linked' } as never);
+
+    await expect(service.updateDocument('tenant-1', 'document-linked', 'user-1', ['TENANT_ADMIN'], {
+      title: 'Updated title',
+    })).rejects.toThrow('El comprobante está asociado a un pago y no puede modificarse.');
+
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 'tenant-1',
+        OR: [
+          { receiptDocumentId: 'document-linked' },
+          { proofFileId: 'file-linked' },
+        ],
+      },
+      select: { id: true },
+    }));
+    expect(prisma.document.update).not.toHaveBeenCalled();
   });
 
   it('does not notify anyone for payment proofs', async () => {
@@ -507,6 +551,66 @@ describe('DocumentsService', () => {
 
     expect(prisma.unitOccupant.findMany).not.toHaveBeenCalled();
     expect(notifications.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('deletes unlinked documents normally', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-delete',
+      fileId: 'file-delete',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+      },
+      file: { bucket: 'tenant-delete-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+    prisma.document.delete.mockResolvedValueOnce({} as never);
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
+
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+    expect(prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'document-delete' } });
+    expect(minio.deleteObject).toHaveBeenCalledWith('tenant-delete-bucket', 'receipt.pdf');
+  });
+
+  it('blocks document deletes when the file is linked to a payment proof or receipt', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-linked-delete',
+      fileId: 'file-linked-delete',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: {
+        id: 'membership-1',
+        userId: 'user-1',
+      },
+      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+    } as never);
+    prisma.payment.findFirst.mockResolvedValueOnce({ id: 'payment-linked-delete' } as never);
+
+    await expect(service.deleteDocument('tenant-1', 'document-linked-delete', 'user-1', ['TENANT_ADMIN'])).rejects.toThrow('El comprobante está asociado a un pago y no puede modificarse.');
+
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 'tenant-1',
+        OR: [
+          { receiptDocumentId: 'document-linked-delete' },
+          { proofFileId: 'file-linked-delete' },
+        ],
+      },
+      select: { id: true },
+    }));
+    expect(prisma.document.delete).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
   it('excludes the uploading resident from general resident document notifications', async () => {
@@ -1110,6 +1214,102 @@ describe('DocumentsService', () => {
       ['RESIDENT'],
     )).rejects.toThrow('Document not found or does not belong to you');
 
+    expect(prisma.document.delete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      scenario: 'payment proof',
+      payment: {
+        id: 'payment-proof-1',
+        tenantId: 'tenant-1',
+        proofFileId: 'file-1',
+        receiptDocumentId: null,
+      },
+    },
+    {
+      scenario: 'payment receipt',
+      payment: {
+        id: 'payment-receipt-1',
+        tenantId: 'tenant-1',
+        proofFileId: null,
+        receiptDocumentId: 'document-1',
+      },
+    },
+  ])('blocks update when the document is linked through %s', async ({ payment }) => {
+    prisma.document.findFirst.mockResolvedValue({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: { userId: 'admin-1' },
+      file: {
+        id: 'file-1',
+        bucket: 'tenant-legacy-bucket',
+        objectKey: 'receipt.pdf',
+        originalName: 'receipt.pdf',
+        mimeType: 'application/pdf',
+      },
+    } as never);
+    prisma.payment.findFirst.mockResolvedValue(payment as never);
+
+    await expect(
+      service.updateDocument('tenant-1', 'document-1', 'admin-1', ['TENANT_ADMIN'], {
+        title: 'Updated title',
+      }),
+    ).rejects.toThrow(PAYMENT_LINKED_DOCUMENT_CONFLICT_MESSAGE);
+
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
+    expect(prisma.document.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      scenario: 'payment proof',
+      payment: {
+        id: 'payment-proof-1',
+        tenantId: 'tenant-1',
+        proofFileId: 'file-1',
+        receiptDocumentId: null,
+      },
+    },
+    {
+      scenario: 'payment receipt',
+      payment: {
+        id: 'payment-receipt-1',
+        tenantId: 'tenant-1',
+        proofFileId: null,
+        receiptDocumentId: 'document-1',
+      },
+    },
+  ])('blocks delete when the document is linked through %s', async ({ payment }) => {
+    prisma.document.findFirst.mockResolvedValue({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: { userId: 'admin-1' },
+      file: {
+        id: 'file-1',
+        bucket: 'tenant-legacy-bucket',
+        objectKey: 'receipt.pdf',
+        originalName: 'receipt.pdf',
+        mimeType: 'application/pdf',
+      },
+    } as never);
+    prisma.payment.findFirst.mockResolvedValue(payment as never);
+
+    await expect(
+      service.deleteDocument('tenant-1', 'document-1', 'admin-1', ['TENANT_ADMIN']),
+    ).rejects.toThrow(PAYMENT_LINKED_DOCUMENT_CONFLICT_MESSAGE);
+
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(prisma.document.delete).not.toHaveBeenCalled();
   });
 
