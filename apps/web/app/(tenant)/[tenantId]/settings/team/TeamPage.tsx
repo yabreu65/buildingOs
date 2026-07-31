@@ -16,18 +16,15 @@ import { useToast } from '@/shared/components/ui/Toast';
 
 const operationalInviteRoles: readonly Role[] = ['TENANT_ADMIN', 'OPERATOR'];
 
-export const TeamPage = () => {
-  const params = useParams();
-  const routeTenantId = typeof params.tenantId === 'string' && params.tenantId.length > 0
-    ? params.tenantId
-    : null;
-  const router = useRouter();
-  const activeTenantId = useActiveTenantId();
-  const isResident = useHasRole('RESIDENT');
-  const canManageMembers = useCan('members.manage');
+interface TeamPageContentProps {
+  tenantId: string;
+}
+
+const TeamPageContent = ({ tenantId }: TeamPageContentProps) => {
   const { toast } = useToast();
+  const canManageMembers = useCan('members.manage');
+  const isResident = useHasRole('RESIDENT');
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const tenantId = activeTenantId ?? routeTenantId;
   const {
     pendingInvitations,
     loading: invitationsLoading,
@@ -35,36 +32,22 @@ export const TeamPage = () => {
     createInvitation,
     revokeInvitation,
     resendInvitation,
-  } = useInvitations();
+  } = useInvitations(tenantId);
 
   useEffect(() => {
-    if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
-      router.replace(`/${activeTenantId}/settings/team`);
-      return;
+    if (!isResident && canManageMembers) {
+      void fetchInvitations();
     }
-
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
-    }
-  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
-
-  useEffect(() => {
-    if (tenantId && !isResident && canManageMembers) {
-      void fetchInvitations(tenantId);
-    }
-  }, [tenantId, isResident, canManageMembers, fetchInvitations]);
+  }, [canManageMembers, fetchInvitations, isResident]);
 
   const handleInvite = async (dto: CreateInvitationRequest) => {
-    if (!tenantId) {
-      return;
-    }
-    await createInvitation(tenantId, dto);
+    await createInvitation(dto);
     toast('Invitación enviada', 'success');
     setShowInviteModal(false);
   };
 
-  if (!tenantId || isResident) {
-    return <div className="container mx-auto max-w-4xl py-8" />;
+  if (isResident) {
+    return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
   }
 
   if (!canManageMembers) {
@@ -104,11 +87,11 @@ export const TeamPage = () => {
           invitations={pendingInvitations}
           loading={invitationsLoading}
           onRevoke={async (invitationId) => {
-            await revokeInvitation(tenantId, invitationId);
+            await revokeInvitation(invitationId);
             toast('Invitación revocada', 'success');
           }}
           onResend={async (invitationId) => {
-            await resendInvitation(tenantId, invitationId);
+            await resendInvitation(invitationId);
             toast('Invitación reenviada', 'success');
           }}
         />
@@ -125,4 +108,47 @@ export const TeamPage = () => {
       />
     </div>
   );
+};
+
+export const TeamPage = () => {
+  const params = useParams();
+  const routeTenantId = typeof params.tenantId === 'string' && params.tenantId.length > 0
+    ? params.tenantId
+    : null;
+  const router = useRouter();
+  const activeTenantId = useActiveTenantId();
+  const isResident = useHasRole('RESIDENT');
+  const canManageMembers = useCan('members.manage');
+  const hasMatchingTenant =
+    activeTenantId !== null &&
+    routeTenantId !== null &&
+    activeTenantId === routeTenantId;
+  const tenantId = hasMatchingTenant ? activeTenantId : null;
+
+  useEffect(() => {
+    if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
+      router.replace(`/${activeTenantId}/settings/team`);
+      return;
+    }
+
+    if (isResident && tenantId) {
+      router.replace(`/${tenantId}/dashboard`);
+    }
+  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
+
+  if (!tenantId || isResident) {
+    return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
+  }
+
+  if (!canManageMembers) {
+    return (
+      <div className="container mx-auto max-w-4xl py-8">
+        <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/30 p-6 text-sm text-muted-foreground">
+          No tenés permiso para ver el equipo operativo ni las invitaciones.
+        </div>
+      </div>
+    );
+  }
+
+  return <TeamPageContent key={tenantId} tenantId={tenantId} />;
 };

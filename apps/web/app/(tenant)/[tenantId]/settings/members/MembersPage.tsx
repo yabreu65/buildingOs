@@ -8,32 +8,13 @@ import { MembersList } from '@/features/tenant-members/components/MembersList';
 import { CreateMemberModal } from '@/features/tenant-members/components/CreateMemberModal';
 import { PeopleModuleSwitcher } from '@/features/memberships/components/PeopleModuleSwitcher';
 
-export const MembersPage = () => {
-  const params = useParams();
-  const routeTenantId = typeof params.tenantId === 'string' && params.tenantId.length > 0
-    ? params.tenantId
-    : null;
-  const router = useRouter();
-  const activeTenantId = useActiveTenantId();
-  const isResident = useHasRole('RESIDENT');
+interface MembersPageContentProps {
+  tenantId: string;
+}
+
+const MembersPageContent = ({ tenantId }: MembersPageContentProps) => {
   const canManageMembers = useCan('members.manage');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const tenantId = activeTenantId ?? routeTenantId;
-
-  useEffect(() => {
-    if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
-      router.replace(`/${activeTenantId}/settings/members`);
-      return;
-    }
-
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
-    }
-  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
-
-  if (!tenantId || isResident) {
-    return <div className="container mx-auto max-w-4xl py-8" />;
-  }
 
   return (
     <div className="container max-w-4xl mx-auto py-8">
@@ -66,4 +47,36 @@ export const MembersPage = () => {
       )}
     </div>
   );
+};
+
+export const MembersPage = () => {
+  const params = useParams();
+  const routeTenantId = typeof params.tenantId === 'string' && params.tenantId.length > 0
+    ? params.tenantId
+    : null;
+  const router = useRouter();
+  const activeTenantId = useActiveTenantId();
+  const isResident = useHasRole('RESIDENT');
+  const hasMatchingTenant =
+    activeTenantId !== null &&
+    routeTenantId !== null &&
+    activeTenantId === routeTenantId;
+  const tenantId = hasMatchingTenant ? activeTenantId : null;
+
+  useEffect(() => {
+    if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
+      router.replace(`/${activeTenantId}/settings/members`);
+      return;
+    }
+
+    if (isResident && tenantId) {
+      router.replace(`/${tenantId}/dashboard`);
+    }
+  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
+
+  if (!tenantId || isResident) {
+    return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
+  }
+
+  return <MembersPageContent key={tenantId} tenantId={tenantId} />;
 };

@@ -109,7 +109,7 @@ export class InvitationsService {
     });
 
     // Log: MEMBERSHIP_INVITE_SENT
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       tenantId,
       actorMembershipId: invitation.invitedByMembershipId,
       action: AuditAction.MEMBERSHIP_INVITE_SENT,
@@ -315,7 +315,7 @@ export class InvitationsService {
     );
 
     // Log: MEMBERSHIP_INVITE_ACCEPTED
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       tenantId,
       actorUserId: result.user.id,
       actorMembershipId: result.membership.id,
@@ -380,7 +380,7 @@ export class InvitationsService {
     });
 
     // Log: MEMBERSHIP_INVITE_REVOKED
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       tenantId,
       actorMembershipId,
       action: AuditAction.MEMBERSHIP_INVITE_REVOKED,
@@ -502,7 +502,7 @@ export class InvitationsService {
     });
 
     // Log: MEMBERSHIP_INVITE_RESENT
-    await this.auditService.createLog({
+    void this.auditService.createLog({
       tenantId,
       actorMembershipId,
       action: AuditAction.MEMBERSHIP_INVITE_RESENT,
@@ -578,7 +578,7 @@ export class InvitationsService {
 
     // Log each expiration (fire-and-forget)
     for (const inv of expiredInvitations) {
-      await this.auditService.createLog({
+      void this.auditService.createLog({
         tenantId: inv.tenantId,
         action: AuditAction.MEMBERSHIP_INVITE_EXPIRED,
         entityType: 'Invitation',

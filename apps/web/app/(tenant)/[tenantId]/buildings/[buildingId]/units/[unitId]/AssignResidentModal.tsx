@@ -27,7 +27,11 @@ export const AssignResidentModal = ({
 }: AssignResidentModalProps) => {
   const { toast } = useToast();
   const canManageMembers = useCan('members.manage');
-  const { data: residents = [], isLoading } = useAssignableResidents(tenantId, unitId);
+  const { data: residents = [], isLoading } = useAssignableResidents(
+    tenantId,
+    unitId,
+    canManageMembers,
+  );
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [role, setRole] = useState<'OWNER' | 'RESIDENT'>('RESIDENT');
   const [error, setError] = useState<string | null>(null);

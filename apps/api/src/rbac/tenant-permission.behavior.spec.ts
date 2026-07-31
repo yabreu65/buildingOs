@@ -21,6 +21,36 @@ import { TenantMembersService } from '../tenant-members/tenant-members.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantPermissionGuard } from './tenant-permission.guard';
 
+jest.mock('@buildingos/contracts', () => ({
+  Role: {
+    SUPER_ADMIN: 'SUPER_ADMIN',
+    TENANT_OWNER: 'TENANT_OWNER',
+    TENANT_ADMIN: 'TENANT_ADMIN',
+    OPERATOR: 'OPERATOR',
+    RESIDENT: 'RESIDENT',
+  },
+}));
+
+jest.mock('../buildings/buildings.service', () => ({
+  BuildingsService: class BuildingsService {},
+}));
+
+jest.mock('../invitations/invitations.service', () => ({
+  InvitationsService: class InvitationsService {},
+}));
+
+jest.mock('../memberships/memberships.service', () => ({
+  MembershipsService: class MembershipsService {},
+}));
+
+jest.mock('../tenant-members/tenant-members.service', () => ({
+  TenantMembersService: class TenantMembersService {},
+}));
+
+jest.mock('../prisma/prisma.service', () => ({
+  PrismaService: class PrismaService {},
+}));
+
 interface ProtectedRouteCase {
   readonly label: string;
   readonly method: 'get' | 'post';
@@ -64,18 +94,33 @@ describe('Tenant permission protected routes', () => {
   >;
 
   const invitationsService = {
+    createInvitation: jest.fn(),
     listMembers: jest.fn(),
     listInvitations: jest.fn(),
-  } satisfies Pick<InvitationsService, 'listMembers' | 'listInvitations'>;
+    revokeInvitation: jest.fn(),
+    resendInvitation: jest.fn(),
+  } satisfies Pick<
+    InvitationsService,
+    'createInvitation' | 'listMembers' | 'listInvitations' | 'revokeInvitation' | 'resendInvitation'
+  >;
 
   const tenantMembersService = {
     createMember: jest.fn(),
+    deleteMember: jest.fn(),
+    inviteMember: jest.fn(),
     listMembers: jest.fn(),
     getMember: jest.fn(),
     getAssignableResidents: jest.fn(),
+    updateMember: jest.fn(),
   } satisfies Pick<
     TenantMembersService,
-    'createMember' | 'listMembers' | 'getMember' | 'getAssignableResidents'
+    | 'createMember'
+    | 'deleteMember'
+    | 'inviteMember'
+    | 'listMembers'
+    | 'getMember'
+    | 'getAssignableResidents'
+    | 'updateMember'
   >;
 
   const prismaService = {
@@ -181,6 +226,36 @@ describe('Tenant permission protected routes', () => {
       deniedRoles: ['OPERATOR', 'RESIDENT'],
     },
     {
+      label: 'tenant member update',
+      method: 'patch',
+      path: '/tenants/tenant-a/members/member-1',
+      body: {
+        name: 'Resident One Updated',
+      },
+      service: tenantMembersService.updateMember,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
+      label: 'tenant member invite',
+      method: 'post',
+      path: '/tenants/tenant-a/members/member-1/invite',
+      body: {
+        force: 'true',
+      },
+      service: tenantMembersService.inviteMember,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
+      label: 'tenant member delete',
+      method: 'delete',
+      path: '/tenants/tenant-a/members/member-1',
+      service: tenantMembersService.deleteMember,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
       label: 'tenant member detail',
       method: 'get',
       path: '/tenants/tenant-a/members/member-1',
@@ -237,6 +312,34 @@ describe('Tenant permission protected routes', () => {
       deniedRoles: ['OPERATOR', 'RESIDENT'],
     },
     {
+      label: 'tenant invitation create',
+      method: 'post',
+      path: '/tenants/tenant-a/memberships/invitations',
+      body: {
+        email: 'resident@example.com',
+        roles: ['RESIDENT'],
+      },
+      service: invitationsService.createInvitation,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
+      label: 'tenant invitation revoke',
+      method: 'delete',
+      path: '/tenants/tenant-a/memberships/invitations/invite-1',
+      service: invitationsService.revokeInvitation,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
+      label: 'tenant invitation resend',
+      method: 'post',
+      path: '/tenants/tenant-a/memberships/invitations/invite-1/resend',
+      service: invitationsService.resendInvitation,
+      allowedRoles: ['TENANT_OWNER', 'TENANT_ADMIN'],
+      deniedRoles: ['OPERATOR', 'RESIDENT'],
+    },
+    {
       label: 'members.manage endpoint',
       method: 'post',
       path: '/tenants/tenant-a/members',
@@ -272,7 +375,7 @@ describe('Tenant permission protected routes', () => {
         if (body) {
           req.send(body);
         }
-        await req.expect(method === 'get' ? 200 : 201);
+        await req.expect(method === 'post' ? 201 : 200);
       }
 
       expect(service).toHaveBeenCalledTimes(allowedRoles.length);

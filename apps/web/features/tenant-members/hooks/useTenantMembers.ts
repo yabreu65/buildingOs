@@ -3,11 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   tenantMembersApi,
-  TenantMember,
-  AssignableResident,
   CreateMemberInput,
   UpdateMemberInput,
-  TenantInvitation,
 } from '../api/tenant-members.api';
 
 // Query keys
@@ -82,11 +79,15 @@ export function useInviteTenantMember(tenantId: string, memberId: string) {
 /**
  * Hook to get members assignable to units
  */
-export function useAssignableResidents(tenantId: string, unitId?: string) {
+export function useAssignableResidents(
+  tenantId: string,
+  unitId?: string,
+  enabled: boolean = true,
+) {
   return useQuery({
     queryKey: tenantMembersKeys.assignable(tenantId, unitId),
     queryFn: () => tenantMembersApi.getAssignableResidents(tenantId, unitId),
-    enabled: !!tenantId,
+    enabled: !!tenantId && enabled,
   });
 }
 
@@ -94,9 +95,11 @@ export function useAssignableResidents(tenantId: string, unitId?: string) {
  * Hook to get a single member by ID
  */
 export function useTenantMember(tenantId: string, memberId: string | null | undefined) {
+  const resolvedMemberId = memberId ?? '';
+
   return useQuery({
-    queryKey: tenantMembersKeys.member(tenantId, memberId || ''),
-    queryFn: () => tenantMembersApi.getMember(tenantId, memberId!),
+    queryKey: tenantMembersKeys.member(tenantId, resolvedMemberId),
+    queryFn: () => tenantMembersApi.getMember(tenantId, resolvedMemberId),
     enabled: !!tenantId && !!memberId,
   });
 }

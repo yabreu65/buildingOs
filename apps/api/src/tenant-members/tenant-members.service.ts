@@ -93,7 +93,7 @@ export class TenantMembersService {
     }
 
     // Audit
-    await this.audit.createLog({
+    void this.audit.createLog({
       tenantId,
       actorUserId: actorId,
       action: AuditAction.TENANT_MEMBER_CREATE,
@@ -176,7 +176,7 @@ export class TenantMembersService {
     }
 
     // Audit
-    await this.audit.createLog({
+    void this.audit.createLog({
       tenantId,
       actorUserId: actorId,
       action: AuditAction.TENANT_MEMBER_UPDATE,
@@ -285,7 +285,7 @@ export class TenantMembersService {
     });
 
     // Audit
-    await this.audit.createLog({
+    void this.audit.createLog({
       tenantId,
       actorMembershipId: actorMembership.id,
       action: AuditAction.TENANT_MEMBER_INVITED,
@@ -295,7 +295,7 @@ export class TenantMembersService {
     });
 
     // Send invitation email (fire-and-forget)
-    await this.sendInvitationEmail(memberEmail, member.name, token, tenantId);
+    void this.sendInvitationEmail(memberEmail, member.name, token, tenantId);
 
     return { id: invitation.id, token, expiresAt };
   }
@@ -466,7 +466,7 @@ export class TenantMembersService {
     }
 
     // Audit
-    await this.audit.createLog({
+    void this.audit.createLog({
       tenantId,
       actorUserId: actorId,
       action: AuditAction.TENANT_MEMBER_DELETE,

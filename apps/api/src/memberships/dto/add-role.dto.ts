@@ -1,5 +1,13 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
-import { Role } from '@prisma/client';
+import { IsEmpty, IsIn, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
+import type { Role } from '@prisma/client';
+
+const ROLE_VALUES: readonly Role[] = [
+  'SUPER_ADMIN',
+  'TENANT_OWNER',
+  'TENANT_ADMIN',
+  'OPERATOR',
+  'RESIDENT',
+];
 
 export enum ScopeTypeDto {
   TENANT = 'TENANT',
@@ -8,17 +16,23 @@ export enum ScopeTypeDto {
 }
 
 export class AddRoleDto {
-  @IsEnum(Role)
+  @IsIn(ROLE_VALUES)
   role!: Role;
 
-  @IsEnum(ScopeTypeDto)
+  @IsIn(Object.values(ScopeTypeDto))
   scopeType!: ScopeTypeDto;
 
-  @IsOptional()
+  @ValidateIf((dto: AddRoleDto) => dto.scopeType === ScopeTypeDto.BUILDING)
   @IsString()
+  @IsNotEmpty()
+  @ValidateIf((dto: AddRoleDto) => dto.scopeType !== ScopeTypeDto.BUILDING)
+  @IsEmpty()
   scopeBuildingId?: string;
 
-  @IsOptional()
+  @ValidateIf((dto: AddRoleDto) => dto.scopeType === ScopeTypeDto.UNIT)
   @IsString()
+  @IsNotEmpty()
+  @ValidateIf((dto: AddRoleDto) => dto.scopeType !== ScopeTypeDto.UNIT)
+  @IsEmpty()
   scopeUnitId?: string;
 }
