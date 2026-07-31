@@ -7,23 +7,24 @@ import {
   Param,
   Query,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   Request,
   BadRequestException,
-  ForbiddenException,
   Res,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request as ExpressRequest, Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { TenantParam } from '../tenancy/tenant-param.decorator';
 import { RequireTenantPermission } from '../rbac/tenant-permission.guard';
-import { PrismaService } from '../prisma/prisma.service';
 import { InvitationsService } from './invitations.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import { ValidateInvitationQueryDto } from './dto/validate-invitation-query.dto';
 import { setAuthCookies } from '../auth/auth.cookies';
 
-export interface RequestWithUser extends Request {
+export interface RequestWithUser extends ExpressRequest {
   user: {
     id: string;
     email: string;
@@ -45,11 +46,15 @@ export class InvitationsPublicController {
    * Public endpoint to validate invitation token
    */
   @Get('validate')
-  async validateToken(@Query('token') token: string) {
-    if (!token) {
-      throw new BadRequestException('Token requerido');
-    }
-    return this.invitationsService.validateToken(token);
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async validateToken(@Query() query: ValidateInvitationQueryDto) {
+    return this.invitationsService.validateToken(query.token);
   }
 
   /**
@@ -79,16 +84,14 @@ export class InvitationsPublicController {
 @Controller('tenants/:tenantId/memberships')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class InvitationsAdminController {
-  constructor(
-    private readonly invitationsService: InvitationsService,
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly invitationsService: InvitationsService) {}
 
   /**
    * GET /tenants/:tenantId/memberships
    * List active members in tenant
    */
   @Get()
+  @RequireTenantPermission('members.manage')
   async listMembers(@TenantParam() tenantId: string) {
     return this.invitationsService.listMembers(tenantId);
   }
@@ -98,6 +101,7 @@ export class InvitationsAdminController {
    * List pending invitations in tenant
    */
   @Get('invitations')
+  @RequireTenantPermission('members.manage')
   async listInvitations(@TenantParam() tenantId: string) {
     return this.invitationsService.listInvitations(tenantId);
   }
@@ -113,20 +117,7 @@ export class InvitationsAdminController {
     @Body() dto: CreateInvitationDto,
     @Request() req: RequestWithUser,
   ) {
-    // Get the user's membership in this tenant to pass actorMembershipId
-    const membership = await this.prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: req.user.id, tenantId } },
-    });
-
-    if (!membership) {
-      throw new ForbiddenException('Você não é membro deste tenant');
-    }
-
-    return this.invitationsService.createInvitation(
-      tenantId,
-      dto,
-      membership.id,
-    );
+    return this.invitationsService.createInvitation(tenantId, dto, req.user.id);
   }
 
   /**
@@ -140,20 +131,7 @@ export class InvitationsAdminController {
     @Param('id') invitationId: string,
     @Request() req: RequestWithUser,
   ) {
-    // Get actor membership
-    const membership = await this.prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: req.user.id, tenantId } },
-    });
-
-    if (!membership) {
-      throw new ForbiddenException('Você não é membro deste tenant');
-    }
-
-    await this.invitationsService.revokeInvitation(
-      tenantId,
-      invitationId,
-      membership.id,
-    );
+    await this.invitationsService.revokeInvitation(tenantId, invitationId, req.user.id);
 
     return { success: true };
   }
@@ -169,19 +147,6 @@ export class InvitationsAdminController {
     @Param('id') invitationId: string,
     @Request() req: RequestWithUser,
   ) {
-    // Get actor membership
-    const membership = await this.prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: req.user.id, tenantId } },
-    });
-
-    if (!membership) {
-      throw new ForbiddenException('Você não é membro deste tenant');
-    }
-
-    return this.invitationsService.resendInvitation(
-      tenantId,
-      invitationId,
-      membership.id,
-    );
+    return this.invitationsService.resendInvitation(tenantId, invitationId, req.user.id);
   }
 }

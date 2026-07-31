@@ -8,7 +8,12 @@ import {
   Param,
   Query,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   Req,
+  BadRequestException,
+  PipeTransform,
+  ArgumentMetadata,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -20,8 +25,9 @@ import {
   CreateTenantMemberDto,
   UpdateTenantMemberDto,
   InviteTenantMemberDto,
+  ListTenantMembersQueryDto,
+  AssignableResidentsQueryDto,
 } from './dto';
-import { MemberStatus } from '@prisma/client';
 
 export interface RequestWithUser extends Request {
   user: {
@@ -29,6 +35,18 @@ export interface RequestWithUser extends Request {
     email: string;
     name: string;
   };
+}
+
+const MEMBER_ID_PATTERN = /^[a-z][a-z0-9-]*$/i;
+
+class ParseMemberIdPipe implements PipeTransform<string, string> {
+  transform(value: string, _metadata: ArgumentMetadata): string {
+    if (typeof value !== 'string' || !MEMBER_ID_PATTERN.test(value)) {
+      throw new BadRequestException('memberId must be a valid identifier');
+    }
+
+    return value;
+  }
 }
 
 @Controller('tenants/:tenantId/members')
@@ -57,7 +75,7 @@ export class TenantMembersController {
   @RequireTenantPermission('members.manage')
   update(
     @TenantParam() tenantId: string,
-    @Param('memberId') memberId: string,
+    @Param('memberId', ParseMemberIdPipe) memberId: string,
     @Body() dto: UpdateTenantMemberDto,
     @Req() req: RequestWithUser,
   ) {
@@ -77,7 +95,7 @@ export class TenantMembersController {
   @RequireTenantPermission('members.manage')
   invite(
     @TenantParam() tenantId: string,
-    @Param('memberId') memberId: string,
+    @Param('memberId', ParseMemberIdPipe) memberId: string,
     @Body() dto: InviteTenantMemberDto,
     @Req() req: RequestWithUser,
   ) {
@@ -96,7 +114,7 @@ export class TenantMembersController {
   @RequireTenantPermission('members.manage')
   delete(
     @TenantParam() tenantId: string,
-    @Param('memberId') memberId: string,
+    @Param('memberId', ParseMemberIdPipe) memberId: string,
     @Req() req: RequestWithUser,
   ) {
     return this.tenantMembersService.deleteMember(tenantId, memberId, req.user.id);
@@ -107,20 +125,29 @@ export class TenantMembersController {
    * Includes occupancy metadata (assigned unit count, primary assignments)
    */
   @Get('assignable')
+  @RequireTenantPermission('members.manage')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
   getAssignableResidents(
     @TenantParam() tenantId: string,
-    @Query('unitId') unitId?: string,
+    @Query() query: AssignableResidentsQueryDto,
   ) {
-    return this.tenantMembersService.getAssignableResidents(tenantId, unitId);
+    return this.tenantMembersService.getAssignableResidents(tenantId, query.unitId);
   }
 
   /**
    * Get single member by ID
    */
   @Get(':memberId')
+  @RequireTenantPermission('members.manage')
   getMember(
     @TenantParam() tenantId: string,
-    @Param('memberId') memberId: string,
+    @Param('memberId', ParseMemberIdPipe) memberId: string,
   ) {
     return this.tenantMembersService.getMember(tenantId, memberId);
   }
@@ -129,10 +156,18 @@ export class TenantMembersController {
    * List all members in tenant with optional status filter
    */
   @Get()
+  @RequireTenantPermission('members.manage')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
   listMembers(
     @TenantParam() tenantId: string,
-    @Query('status') status?: MemberStatus,
+    @Query() query: ListTenantMembersQueryDto,
   ) {
-    return this.tenantMembersService.listMembers(tenantId, status);
+    return this.tenantMembersService.listMembers(tenantId, query.status);
   }
 }

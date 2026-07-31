@@ -7,6 +7,7 @@ import {
   Body,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
   Req,
 } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../common/types/request.types';
@@ -31,6 +32,7 @@ export class MembershipsController {
    * List members who can be assigned as residents (non-admin users)
    */
   @Get('assignable-residents')
+  @RequireTenantPermission('members.manage')
   async getAssignableResidents(
     @Param('tenantId') tenantId: string,
   ): Promise<AssignableResidentResponse[]> {
@@ -42,6 +44,7 @@ export class MembershipsController {
    * List active members eligible to be assigned to tickets
    */
   @Get('assignable-tickets')
+  @RequireTenantPermission('tickets.manage')
   async getAssignableTicketMembers(
     @Param('tenantId') tenantId: string,
   ): Promise<AssignableTicketMemberResponse[]> {
@@ -53,6 +56,7 @@ export class MembershipsController {
    * List all roles for a membership with scope information
    */
   @Get(':membershipId/roles')
+  @RequireTenantPermission('members.manage')
   async getRoles(
     @Param('tenantId') tenantId: string,
     @Param('membershipId') membershipId: string,
@@ -78,7 +82,7 @@ export class MembershipsController {
     // Get actor membership (current user's membership in this tenant)
     const actorMembership = memberships.find((membership) => membership.tenantId === tenantId);
     if (!actorMembership) {
-      throw new BadRequestException('User not a member of this tenant');
+      throw new ForbiddenException('User not a member of this tenant');
     }
     if (!actorMembership.id) {
       throw new BadRequestException('User membership is invalid');
@@ -110,7 +114,7 @@ export class MembershipsController {
     // Get actor membership (current user's membership in this tenant)
     const actorMembership = memberships.find((membership) => membership.tenantId === tenantId);
     if (!actorMembership) {
-      throw new BadRequestException('User not a member of this tenant');
+      throw new ForbiddenException('User not a member of this tenant');
     }
     if (!actorMembership.id) {
       throw new BadRequestException('User membership is invalid');

@@ -6,6 +6,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { apiClient } from '@/shared/lib/http/client';
 import { useAssignableResidents, CreateMemberModal } from '@/features/tenant-members';
+import { useCan } from '@/features/rbac/rbac.hooks';
 import { useToast } from '@/shared/components/ui/Toast';
 import { t } from '@/i18n';
 
@@ -25,12 +26,37 @@ export const AssignResidentModal = ({
   onSuccess,
 }: AssignResidentModalProps) => {
   const { toast } = useToast();
-  const { data: residents = [], isLoading } = useAssignableResidents(tenantId, unitId);
+  const canManageMembers = useCan('members.manage');
+  const { data: residents = [], isLoading } = useAssignableResidents(
+    tenantId,
+    unitId,
+    canManageMembers,
+  );
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [role, setRole] = useState<'OWNER' | 'RESIDENT'>('RESIDENT');
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [showCreateMember, setShowCreateMember] = useState(false);
+
+  if (!canManageMembers) {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <Card className="max-w-lg w-full border-red-200 bg-red-50">
+          <div className="space-y-3">
+            <h2 className="text-lg font-semibold text-red-700">Sin permiso</h2>
+            <p className="text-sm text-red-600">
+              No tenés permiso para asignar residentes.
+            </p>
+            <div className="flex justify-end">
+              <Button onClick={onClose} variant="secondary">
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const handleAssign = async () => {
     if (!selectedMemberId) {

@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -13,9 +14,25 @@ import { AuthService, AuthResponse as SessionAuthResponse } from '../auth/auth.s
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
-import { AuditAction, InvitationStatus, Role } from '@prisma/client';
+import { AuditAction, InvitationStatus, Role, Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
+
+function normalizeInvitationRoles(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((role): role is string => typeof role === 'string');
+}
+
+function isInvitationRole(value: string): value is Role {
+  return (
+    value === Role.TENANT_ADMIN ||
+    value === Role.OPERATOR ||
+    value === Role.RESIDENT
+  );
+}
 
 @Injectable()
 export class InvitationsService {
@@ -37,7 +54,7 @@ export class InvitationsService {
   async createInvitation(
     tenantId: string,
     dto: CreateInvitationDto,
-    actorMembershipId: string,
+    actorUserId: string,
   ): Promise<{ id: string; email: string; expiresAt: Date }> {
     // Validate plan limits for users
     await this.planEntitlements.assertLimit(tenantId, 'users');
@@ -51,42 +68,50 @@ export class InvitationsService {
       );
     }
 
-    // Check if already has PENDING invitation
-    const existingPending = await this.prisma.invitation.findFirst({
-      where: {
-        tenantId,
-        email: dto.email,
-        status: InvitationStatus.PENDING,
-      },
-    });
-
-    if (existingPending) {
-      throw new ConflictException('Ya hay una invitación pendiente para este email');
-    }
-
     // Generate secure token (64 char hex)
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
     // Expiry: 7 days
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      const actorMembership = await tx.membership.findUnique({
+        where: { userId_tenantId: { userId: actorUserId, tenantId } },
+        select: { id: true },
+      });
 
-    // Create invitation
-    const invitation = await this.prisma.invitation.create({
-      data: {
-        tenantId,
-        email: dto.email,
-        tokenHash,
-        roles: dto.roles,
-        invitedByMembershipId: actorMembershipId,
-        expiresAt,
-      },
+      if (!actorMembership) {
+        throw new NotFoundException('Membership not found');
+      }
+
+      try {
+        return await tx.invitation.create({
+          data: {
+            tenantId,
+            email: dto.email,
+            tokenHash,
+            roles: dto.roles,
+            invitedByMembershipId: actorMembership.id,
+            expiresAt,
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          throw new ConflictException(
+            'Ya hay una invitación pendiente para este email',
+          );
+        }
+        throw error;
+      }
     });
 
     // Log: MEMBERSHIP_INVITE_SENT
     void this.auditService.createLog({
       tenantId,
-      actorMembershipId,
+      actorMembershipId: invitation.invitedByMembershipId,
       action: AuditAction.MEMBERSHIP_INVITE_SENT,
       entityType: 'Invitation',
       entityId: invitation.id,
@@ -151,7 +176,7 @@ export class InvitationsService {
       tenantId: invitation.tenantId,
       tenantName: invitation.tenant.name,
       email: invitation.email,
-      roles: invitation.roles as string[],
+      roles: normalizeInvitationRoles(invitation.roles),
       expiresAt: invitation.expiresAt,
     };
   }
@@ -181,7 +206,7 @@ export class InvitationsService {
     }
 
     const { tenantId, email } = invitation;
-    const roles = invitation.roles as string[];
+    const roles = normalizeInvitationRoles(invitation.roles);
 
     // Transaction: find or create user + membership + roles
     const result = await this.prisma.$transaction(async (tx) => {
@@ -190,7 +215,7 @@ export class InvitationsService {
         where: { email },
       });
 
-      let userExisted = !!user;
+      const userExisted = !!user;
 
       if (!user) {
         // New user: require name and password
@@ -227,7 +252,7 @@ export class InvitationsService {
         where: { userId_tenantId: { userId: user.id, tenantId } },
       });
 
-      let membershipExisted = !!membership;
+      const membershipExisted = !!membership;
 
       if (!membership) {
         // Create new membership
@@ -240,11 +265,14 @@ export class InvitationsService {
 
         // Create roles (only for new membership)
         for (const role of roles) {
+          if (!isInvitationRole(role)) {
+            throw new BadRequestException(`Invalid role in invitation: ${role}`);
+          }
           await tx.membershipRole.create({
             data: {
               tenantId,
               membershipId: membership.id,
-              role: role as Role,
+              role,
             },
           });
         }
@@ -327,8 +355,13 @@ export class InvitationsService {
   async revokeInvitation(
     tenantId: string,
     invitationId: string,
-    actorMembershipId: string,
+    actorUserId: string,
   ): Promise<void> {
+    const actorMembershipId = await this.getActorMembershipId(
+      tenantId,
+      actorUserId,
+    );
+
     const invitation = await this.prisma.invitation.findFirst({
       where: {
         id: invitationId,
@@ -374,7 +407,13 @@ export class InvitationsService {
     const memberships = await this.prisma.membership.findMany({
       where: { tenantId },
       include: {
-        user: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
         roles: true,
       },
     });
@@ -410,7 +449,7 @@ export class InvitationsService {
     return invitations.map((inv) => ({
       id: inv.id,
       email: inv.email,
-      roles: inv.roles as string[],
+      roles: normalizeInvitationRoles(inv.roles),
       expiresAt: inv.expiresAt,
       createdAt: inv.createdAt,
     }));
@@ -424,8 +463,13 @@ export class InvitationsService {
   async resendInvitation(
     tenantId: string,
     invitationId: string,
-    actorMembershipId: string,
+    actorUserId: string,
   ): Promise<{ id: string; email: string; expiresAt: Date }> {
+    const actorMembershipId = await this.getActorMembershipId(
+      tenantId,
+      actorUserId,
+    );
+
     // Fetch existing invitation
     const invitation = await this.prisma.invitation.findFirst({
       where: {
@@ -478,6 +522,22 @@ export class InvitationsService {
       email: updated.email,
       expiresAt: updated.expiresAt,
     };
+  }
+
+  private async getActorMembershipId(
+    tenantId: string,
+    userId: string,
+  ): Promise<string> {
+    const membership = await this.prisma.membership.findUnique({
+      where: { userId_tenantId: { userId, tenantId } },
+      select: { id: true },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('Você não é membro deste tenant');
+    }
+
+    return membership.id;
   }
 
   /**

@@ -3,6 +3,8 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -10,7 +12,7 @@ import { EmailService } from '../email/email.service';
 import { ConfigService } from '../config/config.service';
 import { EmailType } from '../email/email.types';
 import { CreateTenantMemberDto, UpdateTenantMemberDto, InviteTenantMemberDto } from './dto';
-import { AuditAction, MemberStatus, Role, TenantMember } from '@prisma/client';
+import { AuditAction, MemberStatus, Role, Prisma, InvitationStatus } from '@prisma/client';
 import * as crypto from 'crypto';
 
 export interface AssignableResidentDto {
@@ -22,6 +24,34 @@ export interface AssignableResidentDto {
   status: MemberStatus;
   assignedUnits: number;
   isPrimaryIn: string[];
+}
+
+const tenantMemberDirectorySelect = Prisma.validator<Prisma.TenantMemberSelect>()({
+  id: true,
+  tenantId: true,
+  name: true,
+  email: true,
+  phone: true,
+  role: true,
+  status: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true,
+  disabledAt: true,
+});
+
+type TenantMemberDirectoryEntry = Prisma.TenantMemberGetPayload<{
+  select: typeof tenantMemberDirectorySelect;
+}>;
+
+function isTenantMemberRole(value: string | undefined): value is Role {
+  return (
+    value !== undefined &&
+    (value === Role.RESIDENT ||
+      value === Role.OPERATOR ||
+      value === Role.TENANT_ADMIN ||
+      value === Role.TENANT_OWNER)
+  );
 }
 
 @Injectable()
@@ -40,38 +70,27 @@ export class TenantMembersService {
     tenantId: string,
     dto: CreateTenantMemberDto,
     actorId: string,
-  ) {
-    // Validate unique email
-    if (dto.email) {
-      const existing = await this.prisma.tenantMember.findUnique({
-        where: { tenantId_email: { tenantId, email: dto.email } },
+  ): Promise<TenantMemberDirectoryEntry> {
+    let member: TenantMemberDirectoryEntry;
+    try {
+      member = await this.prisma.tenantMember.create({
+        data: {
+          tenantId,
+          name: dto.name,
+          email: dto.email,
+          phone: dto.phone,
+          role: isTenantMemberRole(dto.role) ? dto.role : Role.RESIDENT,
+          status: MemberStatus.DRAFT,
+          notes: dto.notes,
+        },
+        select: tenantMemberDirectorySelect,
       });
-      if (existing) {
-        throw new ConflictException('Email already in use in this tenant');
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Email or phone already in use in this tenant');
       }
+      throw error;
     }
-
-    // Validate unique phone
-    if (dto.phone) {
-      const existing = await this.prisma.tenantMember.findUnique({
-        where: { tenantId_phone: { tenantId, phone: dto.phone } },
-      });
-      if (existing) {
-        throw new ConflictException('Phone already in use in this tenant');
-      }
-    }
-
-    const member = await this.prisma.tenantMember.create({
-      data: {
-        tenantId,
-        name: dto.name,
-        email: dto.email,
-        phone: dto.phone,
-        role: dto.role as Role || Role.RESIDENT,
-        status: MemberStatus.DRAFT,
-        notes: dto.notes,
-      },
-    });
 
     // Audit
     void this.audit.createLog({
@@ -99,33 +118,20 @@ export class TenantMembersService {
     memberId: string,
     dto: UpdateTenantMemberDto,
     actorId: string,
-  ) {
-    const member = await this.prisma.tenantMember.findUnique({
-      where: { id: memberId },
+  ): Promise<TenantMemberDirectoryEntry> {
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { id: memberId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        status: true,
+        email: true,
+        phone: true,
+      },
     });
 
-    if (!member || member.tenantId !== tenantId) {
+    if (!member) {
       throw new NotFoundException('Member not found');
-    }
-
-    // Validate unique email (if changing)
-    if (dto.email && dto.email !== member.email) {
-      const existing = await this.prisma.tenantMember.findUnique({
-        where: { tenantId_email: { tenantId, email: dto.email } },
-      });
-      if (existing) {
-        throw new ConflictException('Email already in use in this tenant');
-      }
-    }
-
-    // Validate unique phone (if changing)
-    if (dto.phone && dto.phone !== member.phone) {
-      const existing = await this.prisma.tenantMember.findUnique({
-        where: { tenantId_phone: { tenantId, phone: dto.phone } },
-      });
-      if (existing) {
-        throw new ConflictException('Phone already in use in this tenant');
-      }
     }
 
     // Logic: if adding email/phone to DRAFT → PENDING_INVITE
@@ -137,16 +143,37 @@ export class TenantMembersService {
       }
     }
 
-    const updated = await this.prisma.tenantMember.update({
-      where: { id: memberId },
-      data: {
-        name: dto.name ?? undefined,
-        email: dto.email ?? undefined,
-        phone: dto.phone ?? undefined,
-        notes: dto.notes ?? undefined,
-        status: newStatus,
-      },
-    });
+    let updated: TenantMemberDirectoryEntry;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        await tx.tenantMember.updateMany({
+          where: { id: memberId, tenantId },
+          data: {
+            name: dto.name ?? undefined,
+            email: dto.email ?? undefined,
+            phone: dto.phone ?? undefined,
+            notes: dto.notes ?? undefined,
+            status: newStatus,
+          },
+        });
+
+        const refreshed = await tx.tenantMember.findFirst({
+          where: { id: memberId, tenantId },
+          select: tenantMemberDirectorySelect,
+        });
+
+        if (!refreshed) {
+          throw new NotFoundException('Member not found');
+        }
+
+        return refreshed;
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Email or phone already in use in this tenant');
+      }
+      throw error;
+    }
 
     // Audit
     void this.audit.createLog({
@@ -170,11 +197,19 @@ export class TenantMembersService {
     dto: InviteTenantMemberDto,
     actorId: string,
   ) {
-    const member = await this.prisma.tenantMember.findUnique({
-      where: { id: memberId },
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { id: memberId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        email: true,
+        phone: true,
+        status: true,
+      },
     });
 
-    if (!member || member.tenantId !== tenantId) {
+    if (!member) {
       throw new NotFoundException('Member not found');
     }
 
@@ -188,63 +223,71 @@ export class TenantMembersService {
       throw new BadRequestException('Member is already active');
     }
 
-    if (!member.email) {
+    const memberEmail = member.email;
+    if (!memberEmail) {
       throw new BadRequestException('Member must have email to send invitation');
     }
 
-    // Check attempt limit using Invitation table
-    const recentInvites = await this.prisma.invitation.count({
-      where: {
-        tenantId,
-        email: member.email,
-        createdAt: {
-          gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days
-        },
-      },
-    });
-
-    if (recentInvites >= 3 && !dto.force) {
-      throw new BadRequestException('Too many invitations. Require admin force.');
-    }
-
-    // Delete all previous invitations for this email in this tenant (avoid unique constraint)
-    await this.prisma.invitation.deleteMany({
-      where: { tenantId, email: member.email },
-    });
-
-    // Look up actor's membership for audit
     const actorMembership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId: actorId, tenantId } },
     });
+
+    if (!actorMembership) {
+      throw new ForbiddenException('User is not a member of this tenant');
+    }
 
     // Generate token
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-    // Create invitation in the standard Invitation table (reuses validate/accept flow)
-    const invitation = await this.prisma.invitation.create({
-      data: {
-        tenantId,
-        email: member.email,
-        tokenHash,
-        roles: ['RESIDENT'],
-        invitedByMembershipId: actorMembership?.id ?? actorId,
-        expiresAt,
-        status: 'PENDING',
-      },
-    });
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      // Check attempt limit using Invitation table
+      const recentInvites = await tx.invitation.count({
+        where: {
+          tenantId,
+          email: memberEmail,
+          createdAt: {
+            gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days
+          },
+        },
+      });
 
-    // Update TenantMember status to PENDING_INVITE
-    await this.prisma.tenantMember.update({
-      where: { id: memberId },
-      data: { status: MemberStatus.PENDING_INVITE },
+      if (recentInvites >= 3 && !dto.force) {
+        throw new BadRequestException('Too many invitations. Require admin force.');
+      }
+
+      // Delete all previous invitations for this email in this tenant (avoid unique constraint)
+      await tx.invitation.deleteMany({
+        where: { tenantId, email: memberEmail },
+      });
+
+      // Create invitation in the standard Invitation table (reuses validate/accept flow)
+      const createdInvitation = await tx.invitation.create({
+        data: {
+          tenantId,
+          email: memberEmail,
+          tokenHash,
+          roles: ['RESIDENT'],
+          invitedByMembershipId: actorMembership.id,
+          expiresAt,
+          status: InvitationStatus.PENDING,
+        },
+      });
+
+      // Update TenantMember status to PENDING_INVITE
+      await tx.tenantMember.updateMany({
+        where: { id: memberId, tenantId },
+        data: { status: MemberStatus.PENDING_INVITE },
+      });
+
+      return createdInvitation;
     });
 
     // Audit
     void this.audit.createLog({
       tenantId,
-      actorMembershipId: actorMembership?.id ?? actorId,
+      actorMembershipId: actorMembership.id,
       action: AuditAction.TENANT_MEMBER_INVITED,
       entityType: 'Invitation',
       entityId: invitation.id,
@@ -252,7 +295,7 @@ export class TenantMembersService {
     });
 
     // Send invitation email (fire-and-forget)
-    void this.sendInvitationEmail(member.email, member.name, token, tenantId);
+    void this.sendInvitationEmail(memberEmail, member.name, token, tenantId);
 
     return { id: invitation.id, token, expiresAt };
   }
@@ -266,7 +309,12 @@ export class TenantMembersService {
     token: string,
     tenantId: string,
   ): Promise<void> {
-    const appBaseUrl = this.configService.getValue('appBaseUrl') as string;
+    const appBaseUrl = this.configService.getValue('appBaseUrl');
+    if (typeof appBaseUrl !== 'string' || appBaseUrl.trim().length === 0) {
+      throw new InternalServerErrorException(
+        'appBaseUrl is required to send invitations',
+      );
+    }
     const inviteLink = `${appBaseUrl}/invite?token=${token}`;
 
     const tenant = await this.prisma.tenant.findUnique({
@@ -274,12 +322,19 @@ export class TenantMembersService {
       select: { name: true, brandName: true },
     });
     const tenantName = tenant?.brandName || tenant?.name || 'BuildingOS';
+    const escapeHtml = (value: string): string =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 
     const htmlBody = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <h2 style="color: #2563eb;">Has sido invitado a ${tenantName}</h2>
-        <p>Hola <strong>${name}</strong>,</p>
-        <p>Fuiste invitado a unirte como residente en <strong>${tenantName}</strong>.</p>
+        <h2 style="color: #2563eb;">Has sido invitado a ${escapeHtml(tenantName)}</h2>
+        <p>Hola <strong>${escapeHtml(name)}</strong>,</p>
+        <p>Fuiste invitado a unirte como residente en <strong>${escapeHtml(tenantName)}</strong>.</p>
         <p>Hacé click en el botón para aceptar tu invitación y crear tu cuenta:</p>
         <p>
           <a href="${inviteLink}" style="background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block;">
@@ -307,8 +362,19 @@ export class TenantMembersService {
    */
   async getAssignableResidents(
     tenantId: string,
-    unitId?: string,
+    _unitId?: string,
   ): Promise<AssignableResidentDto[]> {
+    if (_unitId) {
+      const unit = await this.prisma.unit.findFirst({
+        where: { id: _unitId, tenantId },
+        select: { id: true },
+      });
+
+      if (!unit) {
+        throw new NotFoundException('Unit not found');
+      }
+    }
+
     const members = await this.prisma.tenantMember.findMany({
       where: {
         tenantId,
@@ -344,12 +410,13 @@ export class TenantMembersService {
   /**
    * Get member by ID
    */
-  async getMember(tenantId: string, memberId: string) {
-    const member = await this.prisma.tenantMember.findUnique({
-      where: { id: memberId },
+  async getMember(tenantId: string, memberId: string): Promise<TenantMemberDirectoryEntry> {
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { id: memberId, tenantId },
+      select: tenantMemberDirectorySelect,
     });
 
-    if (!member || member.tenantId !== tenantId) {
+    if (!member) {
       throw new NotFoundException('Member not found');
     }
 
@@ -359,12 +426,13 @@ export class TenantMembersService {
   /**
    * List members in tenant
    */
-  async listMembers(tenantId: string, status?: MemberStatus) {
+  async listMembers(tenantId: string, status?: MemberStatus): Promise<TenantMemberDirectoryEntry[]> {
     return this.prisma.tenantMember.findMany({
       where: {
         tenantId,
         status: status ? status : undefined,
       },
+      select: tenantMemberDirectorySelect,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -372,12 +440,13 @@ export class TenantMembersService {
   /**
    * Delete a tenant member (only DRAFT or PENDING_INVITE)
    */
-  async deleteMember(tenantId: string, memberId: string, actorId?: string): Promise<TenantMember> {
-    const member = await this.prisma.tenantMember.findUnique({
-      where: { id: memberId },
+  async deleteMember(tenantId: string, memberId: string, actorId?: string): Promise<TenantMemberDirectoryEntry> {
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { id: memberId, tenantId },
+      select: tenantMemberDirectorySelect,
     });
 
-    if (!member || member.tenantId !== tenantId) {
+    if (!member) {
       throw new NotFoundException('Member not found');
     }
 
@@ -388,9 +457,13 @@ export class TenantMembersService {
       );
     }
 
-    const deleted = await this.prisma.tenantMember.delete({
-      where: { id: memberId },
+    const deletedResult = await this.prisma.tenantMember.deleteMany({
+      where: { id: memberId, tenantId },
     });
+
+    if (deletedResult.count === 0) {
+      throw new NotFoundException('Member not found');
+    }
 
     // Audit
     void this.audit.createLog({
@@ -406,6 +479,6 @@ export class TenantMembersService {
       },
     });
 
-    return deleted;
+    return member;
   }
 }
