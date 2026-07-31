@@ -9,7 +9,6 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
-  UnprocessableEntityException,
   Logger,
 } from '@nestjs/common';
 import {
@@ -51,6 +50,18 @@ const COMMUNICATION_INCLUDE = {
 
 export type CommunicationWithDetails = Prisma.CommunicationGetPayload<{
   include: typeof COMMUNICATION_INCLUDE;
+}>;
+
+type CommunicationReceiptWithCommunication = Prisma.CommunicationReceiptGetPayload<{
+  include: {
+    communication: {
+      include: {
+        targets: {
+          select: { targetId: true; targetType: true };
+        };
+      };
+    };
+  };
 }>;
 
 export interface FindAllFilters {
@@ -179,16 +190,22 @@ export class CommunicationsService {
 
     // 3. Create communication in transaction
     const scheduledFor = input.scheduledFor ? new Date(input.scheduledFor) : null;
-    
+
+    if (scheduledFor && Number.isNaN(scheduledFor.getTime())) {
+      throw new BadRequestException(
+        'scheduledFor must be a valid ISO date',
+      );
+    }
+
     // Strict validation: if scheduledFor is provided but is in the past, reject with clear error
     if (scheduledFor && scheduledFor <= new Date()) {
       throw new BadRequestException(
         'The scheduled date must be in the future. You cannot schedule a communication in the past.',
       );
     }
-    
+
     const isScheduled = scheduledFor && scheduledFor > new Date();
-    
+
     const communication = await this.prisma.communication.create({
       data: {
         tenantId,
@@ -402,40 +419,23 @@ export class CommunicationsService {
     }
 
     if (communication.status === 'SENT') {
-      return await this.prisma.communication.update({
-        where: { id: communicationId },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-          updatedAt: new Date(),
-        },
-        include: COMMUNICATION_INCLUDE,
-      });
-    }
-
-    return await this.prisma.$transaction(async (tx) => {
-      await tx.communication.update({
-        where: { id: communicationId },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-          updatedAt: new Date(),
-        },
-      });
-
-      await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
-
-      const sent = await tx.communication.findUnique({
+      const current = await this.prisma.communication.findUnique({
         where: { id: communicationId },
         include: COMMUNICATION_INCLUDE,
       });
 
-      if (!sent) {
+      if (!current) {
         throw new NotFoundException('Communication not found');
       }
 
-      return sent;
-    });
+      return current;
+    }
+
+    const result = await this.prisma.$transaction(async (tx) =>
+      this.transitionCommunicationToSent(tx, tenantId, communicationId),
+    );
+
+    return result.communication;
   }
 
   /**
@@ -479,43 +479,29 @@ export class CommunicationsService {
     }
 
     let published: CommunicationWithDetails;
+    let transitionedToSent: boolean;
     if (communication.status === 'SENT') {
-      published = await this.prisma.communication.update({
+      const current = await this.prisma.communication.findUnique({
         where: { id: communicationId },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-          updatedAt: new Date(),
-        },
         include: COMMUNICATION_INCLUDE,
       });
+
+      if (!current) {
+        throw new NotFoundException('Communication not found');
+      }
+
+      published = current;
+      transitionedToSent = false;
     } else {
-      published = await this.prisma.$transaction(async (tx) => {
-        await tx.communication.update({
-          where: { id: communicationId },
-          data: {
-            status: 'SENT',
-            sentAt: new Date(),
-            updatedAt: new Date(),
-          },
-        });
+      const result = await this.prisma.$transaction(async (tx) =>
+        this.transitionCommunicationToSent(tx, tenantId, communicationId),
+      );
 
-        await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
-
-        const sent = await tx.communication.findUnique({
-          where: { id: communicationId },
-          include: COMMUNICATION_INCLUDE,
-        });
-
-        if (!sent) {
-          throw new NotFoundException('Communication not found');
-        }
-
-        return sent;
-      });
+      published = result.communication;
+      transitionedToSent = result.transitionedToSent;
     }
 
-    if (sendWebPush) {
+    if (sendWebPush && transitionedToSent) {
       await this.dispatchWebPushNotifications(tenantId, published);
     }
 
@@ -582,7 +568,8 @@ export class CommunicationsService {
       );
     }
 
-    const isAdmin = userRoles.some((r) => ADMIN_ROLES.includes(r as typeof ADMIN_ROLES[number]));
+    const adminRoleSet = new Set<string>(ADMIN_ROLES);
+    const isAdmin = userRoles.some((r) => adminRoleSet.has(r));
 
     if (isAdmin) {
       // Admin sees all communications
@@ -712,7 +699,7 @@ export class CommunicationsService {
     };
 
     // Apply cursor if provided
-    let receipts;
+    let receipts: CommunicationReceiptWithCommunication[];
     if (cursorDate && cursorId) {
       receipts = await this.prisma.communicationReceipt.findMany({
         where: {
@@ -765,19 +752,20 @@ export class CommunicationsService {
       const buildingIds = comm.targets
         .filter((t) => t.targetType === 'BUILDING' && t.targetId)
         .map((t) => t.targetId!);
-      const scopeType: string =
+      const scopeType =
         buildingIds.length === 0
           ? 'TENANT_ALL'
           : buildingIds.length === 1
             ? 'BUILDING'
             : 'MULTI_BUILDING';
+      const priority = comm.priority === 'URGENT' ? 'URGENT' : 'NORMAL';
 
       return {
         id: comm.id,
         title: comm.title,
         body: comm.body,
-        priority: (comm.priority || 'NORMAL') as 'NORMAL' | 'URGENT',
-        scopeType: scopeType as 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL',
+        priority,
+        scopeType,
         buildingIds,
         createdAt: comm.createdAt.toISOString(),
         publishedAt: comm.sentAt?.toISOString() ?? null,
@@ -811,12 +799,11 @@ export class CommunicationsService {
     communicationId: string,
   ): Promise<{ readAt: Date | null }> {
     // First check if there's a receipt
-    const receipt = await this.prisma.communicationReceipt.findUnique({
+    const receipt = await this.prisma.communicationReceipt.findFirst({
       where: {
-        communicationId_userId: {
-          communicationId,
-          userId,
-        },
+        tenantId,
+        communicationId,
+        userId,
       },
       select: { readAt: true },
     });
@@ -831,17 +818,18 @@ export class CommunicationsService {
     }
 
     // Mark as read
-    await this.prisma.communicationReceipt.update({
+    const readAt = new Date();
+
+    await this.prisma.communicationReceipt.updateMany({
       where: {
-        communicationId_userId: {
-          communicationId,
-          userId,
-        },
+        tenantId,
+        communicationId,
+        userId,
       },
-      data: { readAt: new Date() },
+      data: { readAt },
     });
 
-    return { readAt: new Date() };
+    return { readAt };
   }
 
   /**
@@ -895,7 +883,7 @@ export class CommunicationsService {
           await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
         }
         targets = input.buildingIds.map((buildingId) => ({
-          targetType: 'BUILDING' as CommunicationTargetType,
+          targetType: 'BUILDING',
           targetId: buildingId,
         }));
         break;
@@ -981,14 +969,14 @@ export class CommunicationsService {
    * Anti-spam rule:
    * - If sendWebPush=true and feature flag enforceUrgentForWebPush is enabled (default true),
    *   only allows priority=URGENT
-   * - Returns 422 with code WEB_PUSH_REQUIRES_URGENT if violated
+   * - Returns 400 with code WEB_PUSH_REQUIRES_URGENT if violated
    *
    * If sendWebPush=true:
    * - Sends WEB_PUSH only to users with active PushSubscription
    * - If no subscriptions, does NOT fail (silent no-op)
    *
    * @throws NotFoundException if communication doesn't belong to tenant
-   * @throws UnprocessableEntityException if sendWebPush=true but priority!=URGENT (when flag enabled)
+   * @throws BadRequestException if sendWebPush=true but priority!=URGENT (when flag enabled)
    */
   async publishV2(
     tenantId: string,
@@ -1011,50 +999,36 @@ export class CommunicationsService {
 
     const enforceUrgent = this.configService.isFeatureEnabled('enforceUrgentForWebPush');
     if (sendWebPush && enforceUrgent && communication.priority !== 'URGENT') {
-      throw new UnprocessableEntityException({
+      throw new BadRequestException({
         code: 'WEB_PUSH_REQUIRES_URGENT',
         message: 'Web push can only be sent for URGENT communications',
       });
     }
 
     let published: CommunicationWithDetails;
+    let transitionedToSent: boolean;
     if (communication.status === 'SENT') {
-      published = await this.prisma.communication.update({
+      const current = await this.prisma.communication.findUnique({
         where: { id: communicationId },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-          updatedAt: new Date(),
-        },
         include: COMMUNICATION_INCLUDE,
       });
+
+      if (!current) {
+        throw new NotFoundException('Communication not found');
+      }
+
+      published = current;
+      transitionedToSent = false;
     } else {
-      published = await this.prisma.$transaction(async (tx) => {
-        await tx.communication.update({
-          where: { id: communicationId },
-          data: {
-            status: 'SENT',
-            sentAt: new Date(),
-            updatedAt: new Date(),
-          },
-        });
+      const result = await this.prisma.$transaction(async (tx) =>
+        this.transitionCommunicationToSent(tx, tenantId, communicationId),
+      );
 
-        await this.refreshCommunicationReceipts(tx, tenantId, communicationId);
-
-        const sent = await tx.communication.findUnique({
-          where: { id: communicationId },
-          include: COMMUNICATION_INCLUDE,
-        });
-
-        if (!sent) {
-          throw new NotFoundException('Communication not found');
-        }
-
-        return sent;
-      });
+      published = result.communication;
+      transitionedToSent = result.transitionedToSent;
     }
 
-    if (sendWebPush) {
+    if (sendWebPush && transitionedToSent) {
       await this.dispatchWebPushNotifications(tenantId, published);
     }
 
@@ -1146,6 +1120,47 @@ export class CommunicationsService {
     return recipientIds;
   }
 
+  private async transitionCommunicationToSent(
+    prismaClient: Prisma.TransactionClient,
+    tenantId: string,
+    communicationId: string,
+  ): Promise<{
+    communication: CommunicationWithDetails;
+    transitionedToSent: boolean;
+  }> {
+    const now = new Date();
+    const result = await prismaClient.communication.updateMany({
+      where: {
+        id: communicationId,
+        tenantId,
+        status: { not: 'SENT' },
+      },
+      data: {
+        status: 'SENT',
+        sentAt: now,
+        updatedAt: now,
+      },
+    });
+
+    if (result.count === 1) {
+      await this.refreshCommunicationReceipts(prismaClient, tenantId, communicationId);
+    }
+
+    const communication = await prismaClient.communication.findUnique({
+      where: { id: communicationId },
+      include: COMMUNICATION_INCLUDE,
+    });
+
+    if (!communication) {
+      throw new NotFoundException('Communication not found');
+    }
+
+    return {
+      communication,
+      transitionedToSent: result.count === 1,
+    };
+  }
+
   private async sendCommunicationPush(
     tenantId: string,
     subscription: CommunicationPushSubscription,
@@ -1175,11 +1190,9 @@ export class CommunicationsService {
         });
       }
     } catch (error) {
-      this.logger.warn('[CommunicationsService] Failed to send web push', {
-        tenantId,
-        userId: subscription.userId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.logger.warn(
+        `[CommunicationsService] Failed to send web push tenantId=${tenantId} userId=${subscription.userId} error=${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -1206,6 +1219,9 @@ export class CommunicationsService {
     limit: number = 20,
     cursor?: string,
   ): Promise<ResidentCommunicationListResponse> {
+    await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
+    await this.validators.validateUnitBelongsToTenant(tenantId, unitId);
+
     let cursorDate: Date | undefined;
     let cursorId: string | undefined;
     if (cursor) {
@@ -1237,7 +1253,7 @@ export class CommunicationsService {
       },
     };
 
-    let receipts;
+    let receipts: CommunicationReceiptWithCommunication[];
     if (cursorDate && cursorId) {
       receipts = await this.prisma.communicationReceipt.findMany({
         where: {
@@ -1299,12 +1315,16 @@ export class CommunicationsService {
       readAt: string | null;
     } => {
       const comm = receipt.communication;
+      const hasUnitTarget = comm.targets.some((t) => t.targetType === 'UNIT');
       const buildingIds = comm.targets
         .filter((t) => t.targetType === 'BUILDING' && t.targetId)
         .map((t) => t.targetId!);
+      if (buildingIds.length === 0 && hasUnitTarget && comm.buildingId) {
+        buildingIds.push(comm.buildingId);
+      }
       const scopeType: 'BUILDING' | 'MULTI_BUILDING' | 'TENANT_ALL' =
         buildingIds.length === 0
-          ? 'TENANT_ALL'
+          ? (hasUnitTarget ? 'BUILDING' : 'TENANT_ALL')
           : buildingIds.length === 1
             ? 'BUILDING'
             : 'MULTI_BUILDING';
@@ -1313,7 +1333,7 @@ export class CommunicationsService {
         id: comm.id,
         title: comm.title,
         body: comm.body,
-        priority: (comm.priority || 'NORMAL') as 'NORMAL' | 'URGENT',
+        priority: comm.priority === 'URGENT' ? 'URGENT' : 'NORMAL',
         scopeType,
         buildingIds,
         createdAt: comm.createdAt.toISOString(),
