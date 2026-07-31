@@ -14,7 +14,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CommunicationTargetType, Role } from '@prisma/client';
+import { CommunicationTargetType, MemberStatus, Prisma, Role } from '@prisma/client';
 
 @Injectable()
 export class CommunicationsValidators {
@@ -194,9 +194,10 @@ export class CommunicationsValidators {
   async resolveRecipients(
     tenantId: string,
     communicationId: string,
+    prismaClient: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<string[]> {
     // Get all targets for this communication
-    const targets = await this.prisma.communicationTarget.findMany({
+    const targets = await prismaClient.communicationTarget.findMany({
       where: {
         communicationId,
         tenantId,
@@ -214,7 +215,12 @@ export class CommunicationsValidators {
     const recipientIds = new Set<string>();
 
     for (const target of targets) {
-      const userIds = await this.resolveTarget(tenantId, target.targetType, target.targetId);
+      const userIds = await this.resolveTarget(
+        tenantId,
+        target.targetType,
+        target.targetId,
+        prismaClient,
+      );
       userIds.forEach((id) => recipientIds.add(id));
     }
 
@@ -230,15 +236,33 @@ export class CommunicationsValidators {
     tenantId: string,
     targetType: CommunicationTargetType,
     targetId: string | null,
+    prismaClient: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<string[]> {
     switch (targetType) {
       case 'ALL_TENANT': {
-        // All users in the tenant
-        const tenantUsers = await this.prisma.user.findMany({
+        // All active users in the tenant
+        const tenantUsers = await prismaClient.user.findMany({
           where: {
             memberships: {
               some: {
                 tenantId,
+              },
+            },
+            tenantMembers: {
+              none: {
+                tenantId,
+                OR: [
+                  {
+                    disabledAt: {
+                      not: null,
+                    },
+                  },
+                  {
+                    status: {
+                      not: MemberStatus.ACTIVE,
+                    },
+                  },
+                ],
               },
             },
           },
@@ -248,14 +272,22 @@ export class CommunicationsValidators {
       }
 
       case 'BUILDING': {
-        // All unit occupants in this building
-        const buildingOccupants = await this.prisma.unitOccupant.findMany({
+        // All active unit occupants in this building
+        const buildingOccupants = await prismaClient.unitOccupant.findMany({
           where: {
+            tenantId,
+            endDate: null,
             unit: {
               building: {
                 id: targetId as string,
                 tenantId,
               },
+            },
+            member: {
+              tenantId,
+              disabledAt: null,
+              status: MemberStatus.ACTIVE,
+              userId: { not: null },
             },
           },
           include: { member: { select: { userId: true } } },
@@ -267,12 +299,20 @@ export class CommunicationsValidators {
       }
 
       case 'UNIT': {
-        // All unit occupants in this unit
-        const unitOccupants = await this.prisma.unitOccupant.findMany({
+        // All active unit occupants in this unit
+        const unitOccupants = await prismaClient.unitOccupant.findMany({
           where: {
+            tenantId,
+            endDate: null,
             unitId: targetId as string,
             unit: {
               building: { tenantId },
+            },
+            member: {
+              tenantId,
+              disabledAt: null,
+              status: MemberStatus.ACTIVE,
+              userId: { not: null },
             },
           },
           include: { member: { select: { userId: true } } },
@@ -284,8 +324,8 @@ export class CommunicationsValidators {
       }
 
       case 'ROLE':
-        // All users with this role in the tenant
-        const roleUsers = await this.prisma.user.findMany({
+        // All active users with this role in the tenant
+        const roleUsers = await prismaClient.user.findMany({
           where: {
             memberships: {
               some: {
@@ -295,6 +335,23 @@ export class CommunicationsValidators {
                     role: targetId as Role,
                   },
                 },
+              },
+            },
+            tenantMembers: {
+              none: {
+                tenantId,
+                OR: [
+                  {
+                    disabledAt: {
+                      not: null,
+                    },
+                  },
+                  {
+                    status: {
+                      not: MemberStatus.ACTIVE,
+                    },
+                  },
+                ],
               },
             },
           },
@@ -317,7 +374,7 @@ export class CommunicationsValidators {
    * @returns true if user can read, false otherwise
    */
   async canUserReadCommunication(
-    _tenantId: string,
+    tenantId: string,
     userId: string,
     communicationId: string,
     userRoles: string[],
@@ -330,12 +387,11 @@ export class CommunicationsValidators {
 
     // RESIDENT can only read if they have a receipt
     // (i.e., they were in the targets)
-    const receipt = await this.prisma.communicationReceipt.findUnique({
+    const receipt = await this.prisma.communicationReceipt.findFirst({
       where: {
-        communicationId_userId: {
-          communicationId,
-          userId,
-        },
+        tenantId,
+        communicationId,
+        userId,
       },
       select: { id: true },
     });
