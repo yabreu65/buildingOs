@@ -78,6 +78,7 @@ describe('useCommunicationsInbox', () => {
     mockedGetInbox.mockResolvedValue([
       {
         id: 'comm-1',
+        tenantId: 'tenant-1',
         title: 'Tenant 1 notice',
         body: 'Hello tenant 1',
         channel: 'IN_APP',
