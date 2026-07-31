@@ -214,8 +214,11 @@ export class PaymentReceiptService {
       if (payment.receiptDocumentId && payment.receiptNumber) {
         this.logger.log(`Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`);
 
-        const existingDocument = await tx.document.findUnique({
-          where: { id: payment.receiptDocumentId },
+        const existingDocument = await tx.document.findFirst({
+          where: {
+            id: payment.receiptDocumentId,
+            tenantId,
+          },
           include: { file: true },
         });
 
@@ -294,8 +297,11 @@ export class PaymentReceiptService {
       }
 
       if (currentPayment.receiptDocumentId && currentPayment.receiptNumber) {
-        const existingDocument = await tx.document.findUnique({
-          where: { id: currentPayment.receiptDocumentId },
+        const existingDocument = await tx.document.findFirst({
+          where: {
+            id: currentPayment.receiptDocumentId,
+            tenantId,
+          },
           include: { file: true },
         });
 
@@ -374,69 +380,56 @@ export class PaymentReceiptService {
 
   private async cleanupUploadedReceiptObjectIfSafe(tenantId: string, preparedReceipt: PreparedReceiptGeneration): Promise<void> {
     try {
-      const payment = await this.prisma.payment.findUnique({
+      const payment = await this.prisma.payment.findFirst({
         where: { id: preparedReceipt.payment.id, tenantId },
         select: {
           receiptDocumentId: true,
           receiptNumber: true,
+          receiptStatus: true,
         },
       });
 
-      if (payment?.receiptDocumentId && payment.receiptNumber === preparedReceipt.receiptNumber) {
+      if (payment?.receiptDocumentId || payment?.receiptStatus === ReceiptStatus.READY) {
         this.logger.warn(
-          `Skipping cleanup for ${preparedReceipt.bucket}/${preparedReceipt.fileKey} because payment ${preparedReceipt.payment.id} is already confirmed`,
+          `Leaving reusable unconfirmed receipt object ${preparedReceipt.bucket}/${preparedReceipt.fileKey} untouched because payment ${preparedReceipt.payment.id} is already confirmed`,
         );
         return;
       }
 
-      const file = await this.prisma.file.findFirst({
-        where: {
-          tenantId: preparedReceipt.payment.tenantId,
-          bucket: preparedReceipt.bucket,
-          objectKey: preparedReceipt.fileKey,
-        },
-        include: {
-          document: {
-            select: { id: true },
-          },
-        },
-      });
-
-      if (file?.document) {
-        this.logger.warn(
-          `Skipping cleanup for ${preparedReceipt.bucket}/${preparedReceipt.fileKey} because the receipt file is already confirmed`,
-        );
-        return;
-      }
-
-      await this.minio.deleteObject(preparedReceipt.bucket, preparedReceipt.fileKey);
+      this.logger.warn(
+        `Leaving reusable unconfirmed receipt object ${preparedReceipt.bucket}/${preparedReceipt.fileKey} after failed finalization for payment ${preparedReceipt.payment.id}`,
+      );
     } catch (cleanupError) {
       const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
       this.logger.warn(
-        `Failed to clean up orphaned receipt object ${preparedReceipt.bucket}/${preparedReceipt.fileKey}: ${errorMessage}`,
+        `Failed to inspect reusable receipt object ${preparedReceipt.bucket}/${preparedReceipt.fileKey}: ${errorMessage}`,
       );
     }
   }
 
   private async markReceiptGenerationFailedIfNeeded(tenantId: string, paymentId: string, errorMessage: string): Promise<void> {
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId },
-      select: {
-        receiptStatus: true,
-        receiptDocumentId: true,
-      },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
 
-    if (!payment || payment.receiptStatus === ReceiptStatus.READY || payment.receiptDocumentId) {
-      return;
-    }
+      const payment = await tx.payment.findFirst({
+        where: { id: paymentId, tenantId },
+        select: {
+          receiptStatus: true,
+          receiptDocumentId: true,
+        },
+      });
 
-    await this.prisma.payment.update({
-      where: { id: paymentId, tenantId },
-      data: {
-        receiptStatus: ReceiptStatus.FAILED,
-        receiptError: errorMessage,
-      },
+      if (!payment || payment.receiptStatus === ReceiptStatus.READY || payment.receiptDocumentId) {
+        return;
+      }
+
+      await tx.payment.update({
+        where: { id: paymentId, tenantId },
+        data: {
+          receiptStatus: ReceiptStatus.FAILED,
+          receiptError: errorMessage,
+        },
+      });
     });
   }
 
