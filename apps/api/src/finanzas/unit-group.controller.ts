@@ -65,7 +65,7 @@ export class UnitGroupController {
 
   private resolveTenantContext(req: AuthenticatedRequest): {
     tenantId: string;
-    membershipId: string;
+    membershipId?: string;
     roles: string[];
   } {
     const routeTenantId = req.params.tenantId?.trim();
@@ -82,7 +82,7 @@ export class UnitGroupController {
       (entry) => entry.tenantId === routeTenantId,
     );
 
-    if (!membership?.id) {
+    if (!membership) {
       throw new ForbiddenException(
         `User does not have access to tenant ${routeTenantId}`,
       );
@@ -90,8 +90,34 @@ export class UnitGroupController {
 
     return {
       tenantId: routeTenantId,
-      membershipId: membership.id,
+      membershipId: membership.id?.trim() || undefined,
       roles: membership.roles ?? [],
+    };
+  }
+
+  private resolveWriteTenantContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    membershipId: string;
+    roles: string[];
+  } {
+    if (req.user?.isImpersonating) {
+      throw new ForbiddenException(
+        'Impersonated tenant writes are not allowed',
+      );
+    }
+
+    const context = this.resolveTenantContext(req);
+
+    if (!context.membershipId) {
+      throw new ForbiddenException(
+        `User does not have a writable membership for tenant ${context.tenantId}`,
+      );
+    }
+
+    return {
+      tenantId: context.tenantId,
+      membershipId: context.membershipId,
+      roles: context.roles,
     };
   }
 
@@ -106,7 +132,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Body() dto: CreateUnitGroupDto,
   ) {
-    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
+    const { tenantId, membershipId, roles } = this.resolveWriteTenantContext(req);
 
     return this.unitGroupService.createUnitGroup(
       tenantId,
@@ -164,7 +190,7 @@ export class UnitGroupController {
     @Param('groupId') groupId: string,
     @Body() dto: AddMemberDto,
   ) {
-    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
+    const { tenantId, membershipId, roles } = this.resolveWriteTenantContext(req);
 
     await this.unitGroupService.addMember(
       tenantId,
@@ -189,7 +215,7 @@ export class UnitGroupController {
     @Param('groupId') groupId: string,
     @Param('unitId') unitId: string,
   ) {
-    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
+    const { tenantId, membershipId, roles } = this.resolveWriteTenantContext(req);
 
     await this.unitGroupService.removeMember(
       tenantId,
@@ -213,7 +239,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Param('groupId') groupId: string,
   ) {
-    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
+    const { tenantId, membershipId, roles } = this.resolveWriteTenantContext(req);
 
     await this.unitGroupService.deleteUnitGroup(
       tenantId,

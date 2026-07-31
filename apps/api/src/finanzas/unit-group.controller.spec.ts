@@ -2,8 +2,15 @@ import type { CanActivate, ExecutionContext, INestApplication } from '@nestjs/co
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import type { AuthenticatedRequest } from '../common/types/request.types';
 import { UnitGroupController } from './unit-group.controller';
 import { UnitGroupService } from './unit-group.service';
+
+type TestUser = NonNullable<AuthenticatedRequest['user']> & {
+  isImpersonating?: boolean;
+  impersonatedTenantId?: string;
+  actorSuperAdminUserId?: string;
+};
 
 describe('UnitGroupController tenant context validation', () => {
   let app: INestApplication;
@@ -27,21 +34,28 @@ describe('UnitGroupController tenant context validation', () => {
     >,
   };
 
+  const createUser = (overrides: Partial<TestUser> = {}): TestUser => ({
+    id: 'user-1',
+    email: 'admin@example.com',
+    name: 'Admin',
+    roles: ['TENANT_ADMIN'],
+    membershipId: 'membership-a',
+    memberships: [
+      {
+        id: 'membership-a',
+        tenantId: 'tenant-a',
+        roles: ['TENANT_ADMIN'],
+      },
+    ],
+    ...overrides,
+  });
+
+  let currentUser: TestUser;
+
   const jwtGuard: CanActivate = {
     canActivate: (context: ExecutionContext): boolean => {
-      const req = context.switchToHttp().getRequest();
-      req.user = {
-        id: 'user-1',
-        email: 'admin@example.com',
-        name: 'Admin',
-        memberships: [
-          {
-            id: 'membership-a',
-            tenantId: 'tenant-a',
-            roles: ['TENANT_ADMIN'],
-          },
-        ],
-      };
+      const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
+      req.user = currentUser;
       return true;
     },
   };
@@ -49,9 +63,7 @@ describe('UnitGroupController tenant context validation', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [UnitGroupController],
-      providers: [
-        { provide: UnitGroupService, useValue: unitGroupService },
-      ],
+      providers: [{ provide: UnitGroupService, useValue: unitGroupService }],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue(jwtGuard)
@@ -63,6 +75,8 @@ describe('UnitGroupController tenant context validation', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    currentUser = createUser();
+
     unitGroupService.createUnitGroup.mockResolvedValue({
       id: 'group-1',
       tenantId: 'tenant-a',
@@ -91,10 +105,9 @@ describe('UnitGroupController tenant context validation', () => {
     await app?.close();
   });
 
-  it('accepts the matching tenant context for read operations', async () => {
+  it('accepts matching tenant context for read operations without a tenant header', async () => {
     await request(app.getHttpServer())
       .get('/tenants/tenant-a/unit-groups')
-      .set('X-Tenant-Id', 'tenant-a')
       .expect(200);
 
     expect(unitGroupService.listUnitGroups).toHaveBeenCalledWith(
@@ -104,7 +117,22 @@ describe('UnitGroupController tenant context validation', () => {
     );
   });
 
-  it('accepts the matching tenant context for write operations', async () => {
+  it('accepts the matching tenant context for write operations and selects the matching membership', async () => {
+    currentUser = createUser({
+      memberships: [
+        {
+          id: 'membership-b',
+          tenantId: 'tenant-b',
+          roles: ['TENANT_ADMIN'],
+        },
+        {
+          id: 'membership-a',
+          tenantId: 'tenant-a',
+          roles: ['TENANT_ADMIN'],
+        },
+      ],
+    });
+
     await request(app.getHttpServer())
       .post('/tenants/tenant-a/unit-groups')
       .set('X-Tenant-Id', 'tenant-a')
@@ -126,10 +154,29 @@ describe('UnitGroupController tenant context validation', () => {
     );
   });
 
+  it('rejects contradictory tenant headers before reaching the service', async () => {
+    await request(app.getHttpServer())
+      .get('/tenants/tenant-a/unit-groups')
+      .set('X-Tenant-Id', 'tenant-a')
+      .set('Tenant-Id', 'tenant-b')
+      .expect(403);
+
+    expect(unitGroupService.listUnitGroups).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mismatched tenant header even when the route tenant is authorized', async () => {
+    await request(app.getHttpServer())
+      .get('/tenants/tenant-a/unit-groups')
+      .set('X-Tenant-Id', 'tenant-b')
+      .expect(403);
+
+    expect(unitGroupService.listUnitGroups).not.toHaveBeenCalled();
+  });
+
   it('rejects a mismatched route tenant before reaching the service', async () => {
     await request(app.getHttpServer())
       .get('/tenants/tenant-b/unit-groups')
-      .set('X-Tenant-Id', 'tenant-a')
+      .set('X-Tenant-Id', 'tenant-b')
       .expect(403);
 
     expect(unitGroupService.listUnitGroups).not.toHaveBeenCalled();
@@ -142,6 +189,61 @@ describe('UnitGroupController tenant context validation', () => {
       .send({
         buildingId: 'building-1',
         name: 'Grupo B',
+        unitIds: ['unit-1'],
+      })
+      .expect(403);
+
+    expect(unitGroupService.createUnitGroup).not.toHaveBeenCalled();
+  });
+
+  it('accepts impersonated read access without a membership id', async () => {
+    currentUser = createUser({
+      membershipId: '',
+      isImpersonating: true,
+      impersonatedTenantId: 'tenant-a',
+      actorSuperAdminUserId: 'super-admin-1',
+      roles: ['TENANT_ADMIN'],
+      memberships: [
+        {
+          tenantId: 'tenant-a',
+          roles: ['TENANT_ADMIN'],
+        },
+      ],
+    });
+
+    await request(app.getHttpServer())
+      .get('/tenants/tenant-a/unit-groups')
+      .set('X-Tenant-Id', 'tenant-a')
+      .expect(200);
+
+    expect(unitGroupService.listUnitGroups).toHaveBeenCalledWith(
+      'tenant-a',
+      undefined,
+      ['TENANT_ADMIN'],
+    );
+  });
+
+  it('rejects impersonated writes explicitly', async () => {
+    currentUser = createUser({
+      membershipId: '',
+      isImpersonating: true,
+      impersonatedTenantId: 'tenant-a',
+      actorSuperAdminUserId: 'super-admin-1',
+      roles: ['TENANT_ADMIN'],
+      memberships: [
+        {
+          tenantId: 'tenant-a',
+          roles: ['TENANT_ADMIN'],
+        },
+      ],
+    });
+
+    await request(app.getHttpServer())
+      .post('/tenants/tenant-a/unit-groups')
+      .set('X-Tenant-Id', 'tenant-a')
+      .send({
+        buildingId: 'building-1',
+        name: 'Grupo A',
         unitIds: ['unit-1'],
       })
       .expect(403);
