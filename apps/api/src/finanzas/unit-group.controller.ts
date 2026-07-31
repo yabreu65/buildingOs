@@ -9,7 +9,7 @@ import {
   UseGuards,
   Request,
   BadRequestException,
-  UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { IsString, IsArray, IsOptional, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -43,6 +43,58 @@ export class AddMemberDto {
 export class UnitGroupController {
   constructor(private readonly unitGroupService: UnitGroupService) {}
 
+  private getTenantHeader(req: AuthenticatedRequest): string | undefined {
+    const rawHeaders = [req.headers['x-tenant-id'], req.headers['tenant-id']];
+    const normalizedHeaders = rawHeaders
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    if (normalizedHeaders.length === 0) {
+      return undefined;
+    }
+
+    const distinctHeaders = [...new Set(normalizedHeaders)];
+    if (distinctHeaders.length > 1) {
+      throw new ForbiddenException('Tenant context does not match the request');
+    }
+
+    return distinctHeaders[0];
+  }
+
+  private resolveTenantContext(req: AuthenticatedRequest): {
+    tenantId: string;
+    membershipId: string;
+    roles: string[];
+  } {
+    const routeTenantId = req.params.tenantId?.trim();
+    if (!routeTenantId) {
+      throw new BadRequestException('tenantId is required');
+    }
+
+    const headerTenantId = this.getTenantHeader(req);
+    if (headerTenantId && headerTenantId !== routeTenantId) {
+      throw new ForbiddenException('Tenant context does not match the request');
+    }
+
+    const membership = req.user?.memberships?.find(
+      (entry) => entry.tenantId === routeTenantId,
+    );
+
+    if (!membership?.id) {
+      throw new ForbiddenException(
+        `User does not have access to tenant ${routeTenantId}`,
+      );
+    }
+
+    return {
+      tenantId: routeTenantId,
+      membershipId: membership.id,
+      roles: membership.roles ?? [],
+    };
+  }
+
   /**
    * Create a new unit group within a building
    * @param req Authenticated request with tenantId and membershipId
@@ -54,13 +106,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Body() dto: CreateUnitGroupDto,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId || !membershipId) {
-      throw new UnauthorizedException('Missing tenantId or membershipId in request');
-    }
+    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
 
     return this.unitGroupService.createUnitGroup(
       tenantId,
@@ -84,12 +130,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Param('groupId') groupId: string,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId) {
-      throw new UnauthorizedException('Missing tenantId in request');
-    }
+    const { tenantId, roles } = this.resolveTenantContext(req);
 
     return this.unitGroupService.getUnitGroup(tenantId, groupId, roles);
   }
@@ -105,12 +146,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Query('buildingId') buildingId?: string,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId) {
-      throw new UnauthorizedException('Missing tenantId in request');
-    }
+    const { tenantId, roles } = this.resolveTenantContext(req);
 
     return this.unitGroupService.listUnitGroups(tenantId, buildingId, roles);
   }
@@ -128,13 +164,7 @@ export class UnitGroupController {
     @Param('groupId') groupId: string,
     @Body() dto: AddMemberDto,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId || !membershipId) {
-      throw new UnauthorizedException('Missing tenantId or membershipId in request');
-    }
+    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
 
     await this.unitGroupService.addMember(
       tenantId,
@@ -159,13 +189,7 @@ export class UnitGroupController {
     @Param('groupId') groupId: string,
     @Param('unitId') unitId: string,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId || !membershipId) {
-      throw new UnauthorizedException('Missing tenantId or membershipId in request');
-    }
+    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
 
     await this.unitGroupService.removeMember(
       tenantId,
@@ -189,13 +213,7 @@ export class UnitGroupController {
     @Request() req: AuthenticatedRequest,
     @Param('groupId') groupId: string,
   ) {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    const membershipId = req.user?.membershipId;
-    const roles = req.user?.roles ?? [];
-
-    if (!tenantId || !membershipId) {
-      throw new UnauthorizedException('Missing tenantId or membershipId in request');
-    }
+    const { tenantId, membershipId, roles } = this.resolveTenantContext(req);
 
     await this.unitGroupService.deleteUnitGroup(
       tenantId,
