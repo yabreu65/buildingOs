@@ -186,6 +186,21 @@ describe('landing-route', () => {
     ).toBe('resident');
   });
 
+  it('uses the matching tenant membership instead of memberships[0] for portal resolution', () => {
+    const session = buildSession([
+      { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+      { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+    ]);
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-2',
+        pathname: '/tenant-2/buildings',
+      }),
+    ).toBe('admin');
+  });
+
   it('returns null when tenantId is missing or does not belong to the session', () => {
     const session = buildSession([
       { tenantId: 'tenant-1', roles: ['RESIDENT'] },

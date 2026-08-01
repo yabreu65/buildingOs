@@ -32,3 +32,4 @@ export {
   resolveAuthorizedPortalContext,
   resolvePortalFromPathname,
 } from './landing-route';
+export { useAuthorizedPortalContext } from './useAuthorizedPortalContext';

@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import { useParams, useRouter } from 'next/navigation';
 import { useActiveTenantId, useHasRole } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useCan } from '@/features/rbac/rbac.hooks';
 import { useInvitations } from '@/features/invitations/hooks/useInvitations';
 import TeamPage from './page';
@@ -18,6 +19,10 @@ jest.mock('next/navigation', () => ({
 jest.mock('@/features/auth/useAuthSession', () => ({
   useActiveTenantId: jest.fn(),
   useHasRole: jest.fn(),
+}));
+
+jest.mock('@/features/auth/useAuthorizedPortalContext', () => ({
+  useAuthorizedPortalContext: jest.fn(),
 }));
 
 jest.mock('@/features/rbac/rbac.hooks', () => ({
@@ -60,6 +65,7 @@ const mockedUseParams = jest.mocked(useParams);
 const mockedUseRouter = jest.mocked(useRouter);
 const mockedUseActiveTenantId = jest.mocked(useActiveTenantId);
 const mockedUseHasRole = jest.mocked(useHasRole);
+const mockedUseAuthorizedPortalContext = jest.mocked(useAuthorizedPortalContext);
 const mockedUseCan = jest.mocked(useCan);
 const mockedUseInvitations = jest.mocked(useInvitations);
 
@@ -72,6 +78,7 @@ describe('TeamPage', () => {
     mockedUseRouter.mockReturnValue({ replace } as never);
     mockedUseHasRole.mockReturnValue(false);
     mockedUseCan.mockReturnValue(true);
+    mockedUseAuthorizedPortalContext.mockReturnValue(null);
     mockedUseInvitations.mockReturnValue({
       members: [],
       pendingInvitations: [],

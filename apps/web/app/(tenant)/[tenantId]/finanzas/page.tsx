@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { TenantFinanceDashboard } from '@/features/finance/components';
-import { useHasRole } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 
 interface Params {
   tenantId: string;
@@ -19,16 +19,20 @@ const TenantFinanzasPage = () => {
   const params = useParams<Params>();
   const tenantId = params?.tenantId;
   const router = useRouter();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(tenantId);
 
   useEffect(() => {
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [isResident, tenantId, router]);
+  }, [portalContext, tenantId, router]);
 
   if (!tenantId) {
     return <div>Invalid parameters</div>;
+  }
+
+  if (portalContext !== 'admin') {
+    return <div aria-busy="true" />;
   }
 
   return (
