@@ -118,16 +118,68 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByRole('heading', { name: /hola, test resident/i })).toBeVisible();
   });
 
-  test('keeps the resident portal available for a mixed RESIDENT + ADMIN user', async ({ page }) => {
-    const tenantId = await login(page, TEST_USERS.residentMixed);
+  test('keeps the resident route tenant when activeTenantId points to a different admin tenant', async ({ page }) => {
+    const tenantBId = await login(page, TEST_USERS.tenantAdminB);
+    await logout(page);
 
-    await page.goto(residentDashboardPath(tenantId));
-    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/dashboard$`));
+    const tenantAId = await login(page, TEST_USERS.residentMixed);
+
+    await page.route('**/auth/me', async (route) => {
+      const upstreamResponse = await route.fetch();
+      const body = (await upstreamResponse.json()) as {
+        user: { id: string; email: string; name: string };
+        memberships: Array<{ tenantId: string; roles: string[]; scopedRoles?: unknown }>;
+      };
+
+      const memberships = body.memberships.some((membership) => membership.tenantId === tenantBId)
+        ? body.memberships
+        : [...body.memberships, { tenantId: tenantBId, roles: ['TENANT_ADMIN'] }];
+
+      await route.fulfill({
+        response: upstreamResponse,
+        json: {
+          ...body,
+          memberships,
+        },
+      });
+    });
+
+    await page.evaluate((tenantId) => {
+      localStorage.setItem('bo_last_tenant', tenantId);
+      localStorage.removeItem('bo_session');
+    }, tenantBId);
+
+    await page.goto(residentDashboardPath(tenantAId), { waitUntil: 'domcontentloaded' });
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantAId}/resident/dashboard$`));
+    await expect(page).not.toHaveURL(new RegExp(`/${tenantAId}/dashboard$`));
     await expect(page.getByRole('heading', { name: /hola, test resident admin/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /panel/i })).toHaveAttribute(
+      'href',
+      `/${tenantAId}/resident/dashboard`,
+    );
+    await expect(page.getByRole('link', { name: /mi perfil/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /pagos/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /comunicados/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /solicitudes/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /mi unidad/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /documentos/i })).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantAId}/buildings"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantAId}/units"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantAId}/finanzas"]`)).toHaveCount(0);
 
-    await page.goto(residentUnitPath(tenantId));
-    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/unit$`));
-    await expect(page.getByRole('heading', { name: /mi unidad/i })).toBeVisible();
+    const authSession = await page.evaluate(() => {
+      const raw = localStorage.getItem('bo_session');
+      return raw ? JSON.parse(raw) : null;
+    });
+
+    expect(authSession?.activeTenantId).toBe(tenantBId);
+    expect(authSession?.memberships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tenantId: tenantAId }),
+        expect.objectContaining({ tenantId: tenantBId }),
+      ]),
+    );
   });
 
   test('keeps the mixed portal sidebar aligned with the active context', async ({ page }) => {

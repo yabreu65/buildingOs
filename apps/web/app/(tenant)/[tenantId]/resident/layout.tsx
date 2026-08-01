@@ -3,7 +3,8 @@
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
 import { useParams, useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { useHasRole, useAuthSession } from '../../../../features/auth/useAuthSession';
+import { useAuthSession } from '../../../../features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '../../../../features/auth/useAuthorizedPortalContext';
 import { getSession } from '../../../../features/auth/session.storage';
 import { useBoStorageTick } from '../../../../shared/lib/storage/useBoStorage';
 import { ResidentContextSwitcher } from '../../../../features/resident/components/ResidentContextSwitcher';
@@ -19,15 +20,15 @@ const ResidentLayout = ({ children }: ResidentLayoutProps) => {
   const params = useParams<TenantParams>();
   const tenantId = params?.tenantId ?? '';
   const session = useAuthSession();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(tenantId);
   const storageTick = useBoStorageTick();
 
   useEffect(() => {
     if (!session) return;
-    if (!isResident) {
+    if (portalContext !== 'resident') {
       router.replace(`/${tenantId}/dashboard`);
     }
-  }, [session, isResident, tenantId, router, storageTick]);
+  }, [session, portalContext, tenantId, router, storageTick]);
 
   useEffect(() => {
     if (session) {
@@ -46,7 +47,7 @@ const ResidentLayout = ({ children }: ResidentLayoutProps) => {
 
   return (
     <div className="space-y-6">
-      {session && isResident && (
+      {session && portalContext === 'resident' && (
         <ResidentContextSwitcher tenantId={tenantId} />
       )}
       {children}

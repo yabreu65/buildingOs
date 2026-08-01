@@ -131,6 +131,38 @@ describe('useAuthorizedPortalContext', () => {
     expect(screen.getByTestId('portal-context').textContent).toBe('null');
   });
 
+  it('resolves the portal from the route tenant even when activeTenantId points elsewhere', () => {
+    mockSession = buildSession(
+      [
+        { tenantId: 'tenant-1', roles: ['RESIDENT' as Role] },
+        { tenantId: 'tenant-2', roles: ['TENANT_ADMIN' as Role] },
+      ],
+      'tenant-2',
+    );
+    mockedUseAuthSession.mockReturnValue(mockSession);
+    mockPathname = '/tenant-1/resident/dashboard';
+    mockedUsePathname.mockReturnValue(mockPathname);
+
+    renderProbe('tenant-1');
+
+    expect(screen.getByTestId('portal-context').textContent).toBe('resident');
+  });
+
+  it('keeps the result stable regardless of membership order', () => {
+    const memberships = [
+      { tenantId: 'tenant-2', roles: ['TENANT_ADMIN' as Role] },
+      { tenantId: 'tenant-1', roles: ['RESIDENT' as Role] },
+    ];
+    mockSession = buildSession(memberships, 'tenant-2');
+    mockedUseAuthSession.mockReturnValue(mockSession);
+    mockPathname = '/tenant-1/resident/payments';
+    mockedUsePathname.mockReturnValue(mockPathname);
+
+    renderProbe('tenant-1');
+
+    expect(screen.getByTestId('portal-context').textContent).toBe('resident');
+  });
+
   it('does not fall back to memberships[0] when resolving the active tenant portal', () => {
     mockSession = buildSession([
       { tenantId: 'tenant-1', roles: ['RESIDENT' as Role] },

@@ -6,7 +6,7 @@ import {
   getSession,
   setSession,
   setLastTenant,
-  clearAuth,
+  clearSession,
   getLastTenant,
 } from './session.storage';
 import { apiMe } from './auth.service';
@@ -53,6 +53,11 @@ export const AuthBootstrap = () => {
     }
     didBootstrap.current = true;
 
+    const clearStaleBootstrapAuthState = () => {
+      clearAllImpersonationData();
+      clearSession();
+    };
+
     const performBootstrap = async () => {
       try {
         const response = await apiMe();
@@ -82,13 +87,14 @@ export const AuthBootstrap = () => {
 
         toast(getBootstrapErrorMessage(new Error('Invalid session bootstrap payload')), 'error', 5000);
 
-        clearAllImpersonationData();
-        clearAuth();
+        clearStaleBootstrapAuthState();
         redirectToLoginIfPrivate();
       } catch (error) {
         const is401 = error instanceof HttpError && error.status === 401;
 
         if (is401) {
+          clearStaleBootstrapAuthState();
+          redirectToLoginIfPrivate();
           return;
         }
 
