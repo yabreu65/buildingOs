@@ -136,7 +136,8 @@ test.describe('Resident critical journeys', () => {
     await page.goto(residentAnnouncementsPath(tenantId));
 
     const unitSelectId = `#context-unit-select-${tenantId}`;
-    const [unit102Id, unit103Id] = await page.locator(unitSelectId).evaluate((select) => {
+    const [unit102Id, unit103Id] = await page.locator(unitSelectId).evaluate((element) => {
+      const select = element as HTMLSelectElement;
       const options = Array.from(select.options).map((option) => option.value);
       return [options[0] ?? '', options[1] ?? ''] as const;
     });
