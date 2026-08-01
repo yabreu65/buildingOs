@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useHasRole, useAuthSession } from '../../../../features/auth/useAuthSession';
 import { getSession } from '../../../../features/auth/session.storage';
 import { useBoStorageTick } from '../../../../shared/lib/storage/useBoStorage';
@@ -14,6 +14,8 @@ interface ResidentLayoutProps { children: ReactNode }
 
 const ResidentLayout = ({ children }: ResidentLayoutProps) => {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const params = useParams<TenantParams>();
   const tenantId = params?.tenantId ?? '';
   const session = useAuthSession();
@@ -34,12 +36,13 @@ const ResidentLayout = ({ children }: ResidentLayoutProps) => {
 
     const timer = window.setTimeout(() => {
       if (!getSession()) {
-        router.replace('/login');
+        const next = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+        router.replace(`/login?next=${encodeURIComponent(next)}`);
       }
     }, 2500);
 
     return () => window.clearTimeout(timer);
-  }, [session, router, storageTick]);
+  }, [pathname, router, searchParams, session, storageTick]);
 
   return (
     <div className="space-y-6">

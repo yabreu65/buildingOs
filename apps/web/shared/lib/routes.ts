@@ -17,6 +17,13 @@ export function tenantDashboard(tenantId: string): string {
 }
 
 /**
+ * Resident dashboard route for tenant
+ */
+export function residentDashboard(tenantId: string): string {
+  return `/${tenantId}/resident/dashboard`;
+}
+
+/**
  * Buildings list for tenant
  */
 export function buildingsList(tenantId: string): string {
@@ -144,6 +151,7 @@ export function superAdminDashboard(): string {
  */
 export const routes = {
   tenantDashboard,
+  residentDashboard,
   buildingsList,
   buildingOverview,
   buildingUnits,

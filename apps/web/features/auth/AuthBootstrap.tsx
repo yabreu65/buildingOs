@@ -1,14 +1,21 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { setSession, setLastTenant, clearAuth } from './session.storage';
+import {
+  getSession,
+  setSession,
+  setLastTenant,
+  clearAuth,
+  getLastTenant,
+} from './session.storage';
 import { apiMe } from './auth.service';
 import { clearAllImpersonationData } from '../impersonation/impersonation.storage';
 import { subscribeAuthUnauthorized } from '@/shared/lib/auth/events';
 import { HttpError } from '@/shared/lib/http/client';
 import { useToast } from '@/shared/components/ui/Toast';
 import { reportFrontendError } from '@/shared/lib/observability/frontend-observability';
+import { resolveActiveTenantId } from './landing-route';
 
 const PUBLIC_PATHS = ['/', '/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact', '/invite'];
 
@@ -32,6 +39,14 @@ export const AuthBootstrap = () => {
   const didBootstrap = useRef(false);
   const isPublicPath = PUBLIC_PATHS.includes(pathname);
 
+  const getCurrentPathWithSearch = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return pathname;
+    }
+
+    return `${window.location.pathname}${window.location.search}`;
+  }, [pathname]);
+
   useEffect(() => {
     if (didBootstrap.current) {
       return;
@@ -44,7 +59,10 @@ export const AuthBootstrap = () => {
 
         if (response.user && response.memberships && response.memberships.length > 0) {
           const { user, memberships } = response;
-          const activeTenantId = memberships[0].tenantId;
+          const activeTenantId = resolveActiveTenantId(memberships, [
+            getLastTenant(),
+            getSession()?.activeTenantId,
+          ]);
 
           clearAllImpersonationData();
           setSession({
@@ -88,22 +106,24 @@ export const AuthBootstrap = () => {
 
     const redirectToLoginIfPrivate = () => {
       if (!isPublicPath) {
-        router.replace('/login');
+        const next = getCurrentPathWithSearch();
+        router.replace(`/login?next=${encodeURIComponent(next)}`);
       }
     };
 
     performBootstrap();
-  }, [pathname, router, toast]);
+  }, [getCurrentPathWithSearch, isPublicPath, pathname, router, toast]);
 
   useEffect(() => {
     const unsubscribe = subscribeAuthUnauthorized(() => {
       if (!isPublicPath) {
-        router.replace('/login');
+        const next = getCurrentPathWithSearch();
+        router.replace(`/login?next=${encodeURIComponent(next)}`);
       }
     });
 
     return unsubscribe;
-  }, [pathname, router]);
+  }, [getCurrentPathWithSearch, isPublicPath, pathname, router]);
 
   return null;
 };

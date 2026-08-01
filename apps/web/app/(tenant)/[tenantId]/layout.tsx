@@ -1,8 +1,8 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, useRouter, usePathname, useSearchParams } from 'next/navigation';
 import AppShell from '../../../shared/components/layout/AppShell';
 import { getSession, setLastTenant } from '../../../features/auth/session.storage';
 import { useIsSuperAdmin } from '../../../features/auth/useAuthSession';
@@ -32,6 +32,8 @@ export default function TenantLayout({
   children: ReactNode;
 }>) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const params = useParams<TenantParams>();
   const tenantId = params?.tenantId;
   const isSuperAdmin = useIsSuperAdmin();
@@ -40,39 +42,7 @@ export default function TenantLayout({
 
   const [authState, setAuthState] = useState<AuthState>('loading');
 
-  // Redirigir SUPER_ADMIN a /super-admin (but NOT if impersonating)
-  useEffect(() => {
-    if (isSuperAdmin && !isImpersonating) {
-      router.replace('/super-admin');
-    }
-  }, [isSuperAdmin, isImpersonating, router]);
-
-  // Validar acceso tan pronto como se hidrata
-  useEffect(() => {
-    // Si es SUPER_ADMIN y NO está impersonando, no validar acceso de tenant (ya se está redirigiendo)
-    if (isSuperAdmin && !isImpersonating) {
-      return;
-    }
-
-    validateAccess();
-  }, [isSuperAdmin, isImpersonating, tenantId, storageTick]);
-
-  useEffect(() => {
-    if (authState !== 'loading') {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      const session = getSession();
-      if (!session) {
-        setAuthState('unauthorized');
-      }
-    }, 2500);
-
-    return () => window.clearTimeout(timer);
-  }, [authState, tenantId, storageTick]);
-
-  const validateAccess = () => {
+  const validateAccess = useCallback(() => {
     // 1. Validar que tenemos tenantId
     if (typeof tenantId !== 'string' || tenantId.length === 0) {
       // No hay tenantId en la URL: mostrar loader (no redirigir, App Router resolverá)
@@ -99,14 +69,49 @@ export default function TenantLayout({
     // 4. OK: autorizado
     setLastTenant(tenantId);
     setAuthState('authorized');
-  };
+  }, [tenantId]);
+
+  // Redirigir SUPER_ADMIN a /super-admin (but NOT if impersonating)
+  useEffect(() => {
+    if (isSuperAdmin && !isImpersonating) {
+      router.replace('/super-admin');
+    }
+  }, [isSuperAdmin, isImpersonating, router]);
+
+  // Validar acceso tan pronto como se hidrata
+  useEffect(() => {
+    queueMicrotask(() => {
+      // Si es SUPER_ADMIN y NO está impersonando, no validar acceso de tenant (ya se está redirigiendo)
+      if (isSuperAdmin && !isImpersonating) {
+        return;
+      }
+
+      validateAccess();
+    });
+  }, [isSuperAdmin, isImpersonating, storageTick, validateAccess]);
+
+  useEffect(() => {
+    if (authState !== 'loading') {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const session = getSession();
+      if (!session) {
+        setAuthState('unauthorized');
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [authState, tenantId, storageTick]);
 
   // Si no autorizado: redirigir a login (pero esperar a que se haya validado)
   useEffect(() => {
     if (authState === 'unauthorized') {
-      router.replace('/login');
+      const next = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+      router.replace(`/login?next=${encodeURIComponent(next)}`);
     }
-  }, [authState, router]);
+  }, [authState, pathname, router, searchParams]);
 
   // Render: nunca null
   // ✅ While auth is loading, show neutral loader (no tenant UI)

@@ -27,7 +27,7 @@ test.describe('Auth - Session and Landing Flow', () => {
 
     await logout(page);
 
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.getByText(/inicia sesión con tu cuenta/i)).toBeVisible();
   });
 

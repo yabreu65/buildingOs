@@ -34,6 +34,7 @@ export async function apiMe(): Promise<LoginResponse> {
   return apiClient<LoginResponse>({
     path: '/auth/me',
     method: 'GET',
+    skipRefreshOnUnauthorized: true,
   });
 }
 

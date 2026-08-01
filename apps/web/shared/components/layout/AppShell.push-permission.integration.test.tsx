@@ -85,6 +85,7 @@ jest.mock('@/features/auth/session.storage', () => ({
   getSession: jest.fn(),
   setSession: jest.fn(),
   setLastTenant: jest.fn(),
+  setLastPortal: jest.fn(),
   clearAuth: jest.fn(),
 }));
 

@@ -1,7 +1,12 @@
 'use client';
 
 import { useRouter, useParams, usePathname } from 'next/navigation';
-import { getSession, setSession, setLastTenant } from '../../../features/auth/session.storage';
+import {
+  getSession,
+  setSession,
+  setLastTenant,
+  setLastPortal,
+} from '../../../features/auth/session.storage';
 import { logout } from '@/features/auth/login.actions';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
@@ -16,6 +21,7 @@ import { listPendingPayments, PaymentStatus } from '@/features/finance/services/
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
 import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import { getNotificationCategory } from '@/shared/lib/notification-types';
+import { resolveAuthLandingRoute, resolvePortalFromPathname } from '@/features/auth/landing-route';
 
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 
@@ -385,11 +391,20 @@ export default function Topbar({
 }: TopbarProps) {
   const router = useRouter();
   const params = useParams();
+  const pathname = usePathname();
   const urlTenantId = typeof params?.tenantId === 'string' ? params.tenantId : undefined;
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const session = getSession();
   const { data: tenants, isLoading, error } = useTenants();
+  const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
+
+  useEffect(() => {
+    const portal = resolvePortalFromPathname(pathname, currentSearch);
+    if (portal) {
+      setLastPortal(portal);
+    }
+  }, [currentSearch, pathname]);
 
   // Determinar tenant activo: URL > session.activeTenantId > memberships[0]
   const activeTenantId =
@@ -401,7 +416,13 @@ export default function Topbar({
 
   // Obtener rol del usuario en el tenant activo
   const activeMembership = session?.memberships.find((m) => m.tenantId === activeTenantId);
-  const role = activeMembership?.roles[0] || 'Guest';
+  const currentPortal = resolvePortalFromPathname(pathname, currentSearch);
+  const role =
+    currentPortal === 'resident' && activeMembership?.roles.includes('RESIDENT')
+      ? 'RESIDENT'
+      : activeMembership?.roles.find((candidateRole) => ADMIN_ROLES.has(candidateRole)) ||
+        activeMembership?.roles[0] ||
+        'Guest';
 
   const roleLabelMap: Record<string, string> = {
     TENANT_ADMIN: 'Administrador',
@@ -416,18 +437,25 @@ export default function Topbar({
 
   const handleTenantChange = (nextTenantId: string) => {
     if (!session) return;
-
-    // Actualizar sesión con nuevo tenant activo
-    setSession({
+    const nextSession = {
       ...session,
       activeTenantId: nextTenantId,
-    });
+    };
+
+    // Actualizar sesión con nuevo tenant activo
+    setSession(nextSession);
 
     // Persistir último tenant
     setLastTenant(nextTenantId);
 
-    // Navegar al dashboard del nuevo tenant
-    router.replace(`/${nextTenantId}/dashboard`);
+    // Navegar al portal equivalente del nuevo tenant si existe
+    router.replace(
+      resolveAuthLandingRoute({
+        session: nextSession,
+        preferredTenantId: nextTenantId,
+        preferredPortal: currentPortal,
+      }),
+    );
   };
 
   const handleLogout = async () => {

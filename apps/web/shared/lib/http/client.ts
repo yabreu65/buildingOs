@@ -10,6 +10,7 @@ export interface HttpRequestConfig<TReq = never> {
   body?: TReq;
   headers?: Record<string, string>;
   responseType?: 'json' | 'blob' | 'text' | 'arrayBuffer';
+  skipRefreshOnUnauthorized?: boolean;
 }
 
 export interface HttpResponse<TRes> {
@@ -159,7 +160,7 @@ async function executeRequest<TRes, TReq = never>(
 
   let response = await performRequest(path, init, method);
 
-  if (!response.ok && response.status === 401) {
+  if (!response.ok && response.status === 401 && !config.skipRefreshOnUnauthorized) {
     const hasImpersonationToken = !!getCurrentImpersonationToken();
 
     if (!hasImpersonationToken && !isAuthRoute(path)) {

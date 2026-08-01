@@ -6,8 +6,13 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { getSession, getLastTenant } from '../../../features/auth/session.storage';
+import {
+  getSession,
+  getLastTenant,
+  getLastPortal,
+} from '../../../features/auth/session.storage';
 import { useSignup } from '../../../features/auth/auth.hooks';
+import { resolveAuthLandingRoute } from '../../../features/auth/landing-route';
 import Card from '../../../shared/components/ui/Card';
 import Button from '../../../shared/components/ui/Button';
 
@@ -51,14 +56,21 @@ export default function SignupPage() {
   useEffect(() => {
     const s = getSession();
     const last = getLastTenant();
-    if (s && last) {
-      router.replace(`/${last}/dashboard`);
+    if (s) {
+      router.replace(
+        resolveAuthLandingRoute({
+          session: s,
+          preferredTenantId: last,
+          preferredPortal: getLastPortal(),
+        }),
+      );
     }
   }, [router]);
 
   const onSubmit = async (data: SignupFormData) => {
     try {
       const { confirmPassword, ...payload } = data;
+      void confirmPassword;
       await signupMutation.mutateAsync({
         ...payload,
         name: payload.name.trim(),

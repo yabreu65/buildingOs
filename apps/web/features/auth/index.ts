@@ -17,7 +17,13 @@ export {
   clearAuth,
   getLastTenant,
   setLastTenant,
+  getLastPortal,
+  setLastPortal,
+  clearLastPortal,
 } from './session.storage';
 
 // Bootstrap
 export { AuthBootstrap } from './AuthBootstrap';
+
+// Landing route resolution
+export { resolveActiveTenantId, resolveAuthLandingRoute, resolvePortalFromPathname } from './landing-route';

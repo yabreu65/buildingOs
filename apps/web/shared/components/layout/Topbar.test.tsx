@@ -31,6 +31,7 @@ jest.mock('@/features/auth/session.storage', () => ({
   getSession: jest.fn(),
   setSession: jest.fn(),
   setLastTenant: jest.fn(),
+  setLastPortal: jest.fn(),
   clearAuth: jest.fn(),
 }));
 
@@ -1118,7 +1119,7 @@ describe('Topbar responsive tenant selector', () => {
     await waitFor(() => {
       expect(mockSetSession).toHaveBeenCalledWith({ ...session, activeTenantId: 'tenant-2' });
       expect(mockSetLastTenant).toHaveBeenCalledWith('tenant-2');
-      expect(replace).toHaveBeenCalledWith('/tenant-2/dashboard');
+      expect(replace).toHaveBeenCalledWith('/tenant-2/resident/dashboard');
     });
   });
 

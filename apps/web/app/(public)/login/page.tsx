@@ -6,8 +6,13 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { getSession, getLastTenant } from '../../../features/auth/session.storage';
+import {
+  getSession,
+  getLastTenant,
+  getLastPortal,
+} from '../../../features/auth/session.storage';
 import { useLogin } from '../../../features/auth/auth.hooks';
+import { resolveAuthLandingRoute } from '../../../features/auth/landing-route';
 import Card from '../../../shared/components/ui/Card';
 import Button from '../../../shared/components/ui/Button';
 
@@ -42,7 +47,8 @@ const LoginPageFallback = () => {
 const LoginPageContent = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const loginMutation = useLogin();
+  const requestedPath = searchParams.get('next');
+  const loginMutation = useLogin({ requestedPath });
   const showDemoHelp = searchParams.get('demo') === 'true';
   const {
     register,
@@ -55,10 +61,17 @@ const LoginPageContent = () => {
   useEffect(() => {
     const s = getSession();
     const last = getLastTenant();
-    if (!showDemoHelp && s && last) {
-      router.replace(`/${last}/dashboard`);
+    if (!showDemoHelp && s) {
+      router.replace(
+        resolveAuthLandingRoute({
+          session: s,
+          requestedPath,
+          preferredTenantId: last,
+          preferredPortal: getLastPortal(),
+        }),
+      );
     }
-  }, [router, showDemoHelp]);
+  }, [requestedPath, router, showDemoHelp]);
 
   const onSubmit = async (data: LoginFormData) => {
     try {

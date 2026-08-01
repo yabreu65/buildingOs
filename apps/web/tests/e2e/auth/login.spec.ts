@@ -41,4 +41,46 @@ test.describe.serial('Auth - Login Flow', () => {
     await page.waitForTimeout(3000);
     expect(page.url()).not.toContain('/login');
   });
+
+  test('should restore a mixed user to the last resident portal', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.removeItem('bo_session');
+      localStorage.removeItem('bo_last_tenant');
+      localStorage.setItem('bo_last_portal', 'resident');
+    });
+
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/dashboard$`));
+  });
+
+  test('should restore a mixed user to the last admin portal', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.removeItem('bo_session');
+      localStorage.removeItem('bo_last_tenant');
+      localStorage.setItem('bo_last_portal', 'admin');
+    });
+
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
+  });
+
+  test('should not leak an admin portal preference to a resident-only user after logout', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.removeItem('bo_session');
+      localStorage.removeItem('bo_last_tenant');
+      localStorage.setItem('bo_last_portal', 'admin');
+    });
+
+    await login(page, TEST_USERS.tenantAdminA);
+    await logout(page);
+
+    const tenantId = await login(page, TEST_USERS.resident);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/dashboard$`));
+  });
 });

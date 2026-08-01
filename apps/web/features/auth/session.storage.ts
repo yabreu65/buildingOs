@@ -1,8 +1,10 @@
 import { emitBoStorageChange } from '@/shared/lib/storage/events';
 import type { AuthSession } from './auth.types';
+import type { PortalContext } from './landing-route';
 
 const KEY_SESSION = 'bo_session';
 const KEY_LAST_TENANT = 'bo_last_tenant';
+const KEY_LAST_PORTAL = 'bo_last_portal';
 
 /**
  * Stores the authenticated session in localStorage and emits a storage change event.
@@ -84,13 +86,47 @@ export function clearLastTenant(): void {
 }
 
 /**
+ * Stores the last active portal context for quick resumption within the current browser.
+ * This preference is intentionally browser-scoped and is cleared on logout.
+ * @param portal - The portal context to remember as the last active one
+ */
+export function setLastPortal(portal: PortalContext): void {
+  const currentPortal = localStorage.getItem(KEY_LAST_PORTAL);
+  if (currentPortal === portal) {
+    return;
+  }
+
+  localStorage.setItem(KEY_LAST_PORTAL, portal);
+  emitBoStorageChange();
+}
+
+/**
+ * Retrieves the last active portal context from localStorage.
+ * @returns The stored portal context or null
+ */
+export function getLastPortal(): PortalContext | null {
+  if (typeof window === 'undefined') return null;
+
+  const value = localStorage.getItem(KEY_LAST_PORTAL);
+  return value === 'resident' || value === 'admin' ? value : null;
+}
+
+/**
+ * Removes the last active portal context and emits a storage change event.
+ */
+export function clearLastPortal(): void {
+  localStorage.removeItem(KEY_LAST_PORTAL);
+  emitBoStorageChange();
+}
+
+/**
  * Completely clears all BuildingOS authentication and app data from localStorage.
  * Removes auth keys and all bo_* prefixed keys.
  * Prevents data leakage when multiple users access the same browser.
  * Emits a storage change event for UI updates.
  */
 export function clearAuth(): void {
-  const keysToRemove: string[] = [KEY_SESSION, KEY_LAST_TENANT];
+  const keysToRemove: string[] = [KEY_SESSION, KEY_LAST_TENANT, KEY_LAST_PORTAL];
 
   try {
     for (let i = 0; i < localStorage.length; i++) {

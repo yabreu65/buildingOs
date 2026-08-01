@@ -2,13 +2,23 @@
 
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { apiLogin, apiSignup, type LoginPayload, type SignupPayload } from './auth.service';
-import { setSession, setLastTenant } from './session.storage';
+import { apiLogin, apiSignup } from './auth.service';
+import {
+  getLastPortal,
+  getLastTenant,
+  setSession,
+  setLastTenant,
+} from './session.storage';
 import { logout as performLogout } from './login.actions';
 import { clearAllImpersonationData } from '../impersonation/impersonation.storage';
 import type { AuthSession } from './auth.types';
+import { resolveActiveTenantId, resolveAuthLandingRoute } from './landing-route';
 
-export const useLogin = () => {
+interface AuthNavigationOptions {
+  readonly requestedPath?: string | null;
+}
+
+export const useLogin = (options: AuthNavigationOptions = {}) => {
   const router = useRouter();
 
   return useMutation({
@@ -20,7 +30,7 @@ export const useLogin = () => {
         throw new Error('No tienes membresías válidas');
       }
 
-      const activeTenantId = memberships[0].tenantId;
+      const activeTenantId = resolveActiveTenantId(memberships, [getLastTenant()]);
       const session: AuthSession = {
         user,
         memberships,
@@ -31,19 +41,19 @@ export const useLogin = () => {
       setSession(session);
       setLastTenant(activeTenantId);
 
-      const isResident =
-        memberships[0].roles.length === 1 &&
-        memberships[0].roles.includes('RESIDENT');
       router.push(
-        isResident
-          ? `/${activeTenantId}/resident/dashboard`
-          : `/${activeTenantId}/dashboard`,
+        resolveAuthLandingRoute({
+          session,
+          requestedPath: options.requestedPath ?? null,
+          preferredTenantId: activeTenantId,
+          preferredPortal: getLastPortal(),
+        }),
       );
     },
   });
 };
 
-export const useSignup = () => {
+export const useSignup = (options: AuthNavigationOptions = {}) => {
   const router = useRouter();
 
   return useMutation({
@@ -55,7 +65,7 @@ export const useSignup = () => {
         throw new Error('Error creando membresía');
       }
 
-      const activeTenantId = memberships[0].tenantId;
+      const activeTenantId = resolveActiveTenantId(memberships, [getLastTenant()]);
       const session: AuthSession = {
         user,
         memberships,
@@ -66,13 +76,13 @@ export const useSignup = () => {
       setSession(session);
       setLastTenant(activeTenantId);
 
-      const isResident =
-        memberships[0].roles.length === 1 &&
-        memberships[0].roles.includes('RESIDENT');
       router.push(
-        isResident
-          ? `/${activeTenantId}/resident/dashboard`
-          : `/${activeTenantId}/dashboard`,
+        resolveAuthLandingRoute({
+          session,
+          requestedPath: options.requestedPath ?? null,
+          preferredTenantId: activeTenantId,
+          preferredPortal: getLastPortal(),
+        }),
       );
     },
   });
