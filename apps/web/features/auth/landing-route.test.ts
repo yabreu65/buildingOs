@@ -1,6 +1,7 @@
 import {
   resolveActiveTenantId,
   resolveAuthLandingRoute,
+  resolveAuthorizedPortalContext,
   resolvePortalFromPathname,
 } from './landing-route';
 import { residentDashboard, tenantDashboard } from '@/shared/lib/routes';
@@ -161,5 +162,70 @@ describe('landing-route', () => {
     expect(resolvePortalFromPathname('/tenant-1/dashboard')).toBe('admin');
     expect(resolvePortalFromPathname('/tenant-1/tickets/ticket-1', 'portal=resident')).toBe('resident');
     expect(resolvePortalFromPathname('/login')).toBeNull();
+  });
+
+  it('resolves the authorized portal context for mixed-role users from the active route', () => {
+    const session = buildSession([
+      { tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] },
+    ]);
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/dashboard',
+      }),
+    ).toBe('admin');
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/resident/payments',
+      }),
+    ).toBe('resident');
+  });
+
+  it('returns null when tenantId is missing or does not belong to the session', () => {
+    const session = buildSession([
+      { tenantId: 'tenant-1', roles: ['RESIDENT'] },
+      { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+    ]);
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        pathname: '/tenant-1/dashboard',
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-2',
+        pathname: '/tenant-1/dashboard',
+      }),
+    ).toBeNull();
+  });
+
+  it('falls back to the only portal a single-role user can access', () => {
+    const residentSession = buildSession([{ tenantId: 'tenant-1', roles: ['RESIDENT'] }]);
+    const adminSession = buildSession([{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }]);
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session: residentSession,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/dashboard',
+      }),
+    ).toBe('resident');
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session: adminSession,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/resident/dashboard',
+      }),
+    ).toBe('admin');
   });
 });

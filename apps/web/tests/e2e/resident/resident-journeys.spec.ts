@@ -130,6 +130,36 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByRole('heading', { name: /mi unidad/i })).toBeVisible();
   });
 
+  test('keeps the mixed portal sidebar aligned with the active context', async ({ page }) => {
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await page.goto(`/${tenantId}/dashboard`);
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
+    await expect(page.getByRole('heading', { name: /panel de administración/i })).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/buildings"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/units"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/finanzas"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/payments"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/unit"]`)).toHaveCount(0);
+
+    await page.goto(`/${tenantId}/resident/dashboard`);
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/dashboard$`));
+    await expect(page.getByRole('heading', { name: /hola, test resident admin/i })).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/payments"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/unit"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/buildings"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantId}/units"]`)).toHaveCount(0);
+    await expect(page.locator(`aside nav a[href="/${tenantId}/finanzas"]`)).toHaveCount(0);
+
+    await page.goto(`/${tenantId}/dashboard`);
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
+    await expect(page.getByRole('heading', { name: /panel de administración/i })).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/buildings"]`)).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toHaveCount(0);
+  });
+
   test('switches the active resident unit and refreshes scoped content', async ({ page }) => {
     const tenantId = await login(page, TEST_USERS.residentMulti);
 

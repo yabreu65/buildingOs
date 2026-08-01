@@ -1,8 +1,7 @@
 'use client';
 
-import { useRouter, useParams, usePathname } from 'next/navigation';
+import { useRouter, useParams, usePathname, useSearchParams } from 'next/navigation';
 import {
-  getSession,
   setSession,
   setLastTenant,
   setLastPortal,
@@ -21,7 +20,11 @@ import { listPendingPayments, PaymentStatus } from '@/features/finance/services/
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
 import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import { getNotificationCategory } from '@/shared/lib/notification-types';
-import { resolveAuthLandingRoute, resolvePortalFromPathname } from '@/features/auth/landing-route';
+import {
+  resolveAuthLandingRoute,
+  resolveAuthorizedPortalContext,
+} from '@/features/auth/landing-route';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 
@@ -29,23 +32,31 @@ const POLL_INTERVAL = 30_000;
 
 export function PaymentNotificationBell({
   tenantId,
+  currentSearch,
   isMobileMenuOpen = false,
 }: {
   readonly tenantId: string;
+  readonly currentSearch: string;
   readonly isMobileMenuOpen?: boolean;
 }) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
+  const session = useAuthSession();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const session = getSession();
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
   const isResident = activeMembership?.roles?.includes('RESIDENT') ?? false;
-  const portalContext: 'resident' | 'admin' = pathname?.includes('/resident/') ? 'resident' : 'admin';
+  const portalContext =
+    resolveAuthorizedPortalContext({
+      session,
+      tenantId,
+      pathname,
+      searchParamsString: currentSearch,
+    }) ?? 'admin';
   const roleContext = {
     isAdmin,
     isResident,
@@ -392,19 +403,24 @@ export default function Topbar({
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentSearch = searchParams.toString();
   const urlTenantId = typeof params?.tenantId === 'string' ? params.tenantId : undefined;
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-
-  const session = getSession();
+  const session = useAuthSession();
   const { data: tenants, isLoading, error } = useTenants();
-  const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
 
   useEffect(() => {
-    const portal = resolvePortalFromPathname(pathname, currentSearch);
+    const portal = resolveAuthorizedPortalContext({
+      session,
+      tenantId: urlTenantId,
+      pathname,
+      searchParamsString: currentSearch,
+    });
     if (portal) {
       setLastPortal(portal);
     }
-  }, [currentSearch, pathname]);
+  }, [currentSearch, pathname, session, urlTenantId]);
 
   // Determinar tenant activo: URL > session.activeTenantId > memberships[0]
   const activeTenantId =
@@ -416,9 +432,14 @@ export default function Topbar({
 
   // Obtener rol del usuario en el tenant activo
   const activeMembership = session?.memberships.find((m) => m.tenantId === activeTenantId);
-  const currentPortal = resolvePortalFromPathname(pathname, currentSearch);
+  const activePortal = resolveAuthorizedPortalContext({
+    session,
+    tenantId: activeTenantId,
+    pathname,
+    searchParamsString: currentSearch,
+  });
   const role =
-    currentPortal === 'resident' && activeMembership?.roles.includes('RESIDENT')
+    activePortal === 'resident' && activeMembership?.roles.includes('RESIDENT')
       ? 'RESIDENT'
       : activeMembership?.roles.find((candidateRole) => ADMIN_ROLES.has(candidateRole)) ||
         activeMembership?.roles[0] ||
@@ -453,7 +474,7 @@ export default function Topbar({
       resolveAuthLandingRoute({
         session: nextSession,
         preferredTenantId: nextTenantId,
-        preferredPortal: currentPortal,
+        preferredPortal: activePortal,
       }),
     );
   };
@@ -543,7 +564,13 @@ export default function Topbar({
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-3">
         {urlTenantId && <div className="hidden lg:block"><PushPermissionControl /></div>}
-        {urlTenantId && <PaymentNotificationBell tenantId={urlTenantId} isMobileMenuOpen={isMobileMenuOpen} />}
+        {urlTenantId && (
+          <PaymentNotificationBell
+            tenantId={urlTenantId}
+            currentSearch={currentSearch}
+            isMobileMenuOpen={isMobileMenuOpen}
+          />
+        )}
         <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
           {roleLabel}
         </span>

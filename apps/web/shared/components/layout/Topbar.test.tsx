@@ -13,6 +13,7 @@ import { logout as sharedLogout } from '@/features/auth/login.actions';
 let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTION' }> = [];
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
+let currentSearch = '';
 
 jest.mock('@/features/notifications/notifications.api', () => ({
   listNotifications: jest.fn(),
@@ -55,6 +56,7 @@ jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush, replace: mockReplace }),
   useParams: () => ({ tenantId: 'tenant-1' }),
   usePathname: () => '/tenant-1/dashboard',
+  useSearchParams: () => new URLSearchParams(currentSearch),
 }));
 
 const mockGetUnreadCount = jest.mocked(notificationsApi.getUnreadCount);
@@ -65,11 +67,12 @@ const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
 const mockSetSession = jest.mocked(sessionModule.setSession);
 const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
+const mockSetLastPortal = jest.mocked(sessionModule.setLastPortal);
 const mockedSharedLogout = jest.mocked(sharedLogout);
 
 const TENANT_ID = 'tenant-1';
 
-let PaymentNotificationBell: React.ComponentType<{ tenantId: string }>;
+let PaymentNotificationBell: React.ComponentType<{ tenantId: string; currentSearch: string }>;
 let Topbar: React.ComponentType<{
   isMobileMenuOpen?: boolean;
   menuButtonRef?: React.RefObject<HTMLButtonElement | null>;
@@ -89,7 +92,7 @@ function renderBell(tenantId = TENANT_ID) {
   return {
     ...render(
       <QueryClientProvider client={queryClient}>
-        <PaymentNotificationBell tenantId={tenantId} />
+        <PaymentNotificationBell tenantId={tenantId} currentSearch={currentSearch} />
       </QueryClientProvider>,
     ),
     queryClient,
@@ -121,6 +124,7 @@ describe('PaymentNotificationBell', () => {
     mockPush.mockReset();
     mockReplace.mockReset();
     mockedSharedLogout.mockReset();
+    currentSearch = '';
     mockGetSession.mockReturnValue({
       user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
@@ -290,7 +294,7 @@ describe('PaymentNotificationBell', () => {
 
     await waitFor(() => {
       expect(mockMarkAsRead).toHaveBeenCalledWith(TENANT_ID, 'n1');
-      expect(mockPush).toHaveBeenCalledWith('/tenant-1/tickets/ticket-1');
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/tickets/ticket-1?portal=resident');
     });
   });
 
@@ -1060,6 +1064,7 @@ describe('Topbar responsive tenant selector', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockTenantData = [];
+    currentSearch = '';
     jest.requireMock('next/navigation').useRouter = () => ({ push: jest.fn(), replace: jest.fn() });
   });
 
@@ -1138,6 +1143,51 @@ describe('Topbar responsive tenant selector', () => {
   });
 });
 
+describe('Topbar portal persistence', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTenantData = [];
+    currentSearch = '';
+    mockGetSession.mockReturnValue({
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] },
+      ],
+      activeTenantId: 'tenant-1',
+    });
+  });
+
+  it('persists the resident portal when the active route is resident', async () => {
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(mockSetLastPortal).toHaveBeenCalledWith('resident');
+    });
+  });
+
+  it('persists the admin portal when the active route is administrative', async () => {
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/dashboard';
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Topbar />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(mockSetLastPortal).toHaveBeenCalledWith('admin');
+    });
+  });
+});
+
 
 function MobileMenuHarness() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -1154,6 +1204,7 @@ describe('PaymentNotificationBell drawer coordination', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockTenantData = [];
+    currentSearch = '';
     mockGetSession.mockReturnValue({
       user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
