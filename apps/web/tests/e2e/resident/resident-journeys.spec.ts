@@ -76,8 +76,9 @@ async function ensureResidentDocumentFixture(
   tenantId: string,
   buildingId: string,
   unitId: string,
+  projectName: string,
 ): Promise<DocumentListItem> {
-  const documentTitle = 'Directiva de la unidad A1-102';
+  const documentTitle = `Directiva de la unidad A1-102 - ${projectName}`;
   const fixtureName = 'buildingos-directiva-condominios.pdf';
   const fixtureMimeType = 'application/pdf';
   const fixtureBytes = readFileSync(DOCUMENT_FIXTURE_PATH);
@@ -233,7 +234,7 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByText(tenantId)).toHaveCount(0);
   });
 
-  test('shows the resident documents preview for the route tenant', async ({ page }) => {
+  test('shows the resident documents preview for the route tenant', async ({ page }, testInfo) => {
     const residentTenantId = await login(page, TEST_USERS.resident);
     const residentContext = await getResidentContext(page, residentTenantId);
 
@@ -250,6 +251,7 @@ test.describe('Resident critical journeys', () => {
       tenantId,
       residentContext.activeBuildingId!,
       residentContext.activeUnitId!,
+      testInfo.project.name,
     );
 
     await logout(page);
