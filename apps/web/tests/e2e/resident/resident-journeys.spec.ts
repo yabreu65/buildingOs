@@ -1,4 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { residentTicketDetailPath } from '../../../shared/lib/routes';
 import { login, logout, TEST_USERS } from '../helpers/auth';
 
@@ -22,6 +24,129 @@ function residentAnnouncementsPath(tenantId: string): string {
 
 function residentTicketsPath(tenantId: string): string {
   return `/${tenantId}/resident/tickets`;
+}
+
+function residentDocumentsPath(tenantId: string): string {
+  return `/${tenantId}/resident/documents`;
+}
+
+interface ResidentContextResponse {
+  activeBuildingId: string | null;
+  activeUnitId: string | null;
+}
+
+interface DocumentListItem {
+  id: string;
+  title: string;
+  file: {
+    id: string;
+    bucket: string;
+    objectKey: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+  };
+}
+
+interface PresignUploadResponse {
+  url: string;
+  bucket: string;
+  objectKey: string;
+}
+
+const DOCUMENT_FIXTURE_PATH = resolve(
+  process.cwd(),
+  '../../docs/BUILDINGOS_VALOR_DIRECTIVA_CONDOMINIOS.pdf',
+);
+
+async function getResidentContext(page: Page, tenantId: string): Promise<ResidentContextResponse> {
+  const response = await page.request.get(`${API_ORIGIN}/me/context`, {
+    headers: {
+      'X-Tenant-Id': tenantId,
+      Accept: 'application/json',
+    },
+  });
+
+  expect(response.ok()).toBe(true);
+  return (await response.json()) as ResidentContextResponse;
+}
+
+async function ensureResidentDocumentFixture(
+  page: Page,
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+): Promise<DocumentListItem> {
+  const documentTitle = 'Directiva de la unidad A1-102';
+  const fixtureName = 'buildingos-directiva-condominios.pdf';
+  const fixtureMimeType = 'application/pdf';
+  const fixtureBytes = readFileSync(DOCUMENT_FIXTURE_PATH);
+
+  const listResponse = await page.request.get(
+    `${API_ORIGIN}/tenants/${tenantId}/documents?buildingId=${buildingId}&unitId=${unitId}&visibility=RESIDENTS`,
+    {
+      headers: {
+        'X-Tenant-Id': tenantId,
+        Accept: 'application/json',
+      },
+    },
+  );
+
+  expect(listResponse.ok()).toBe(true);
+  const existingDocuments = (await listResponse.json()) as DocumentListItem[];
+  const existingDocument = existingDocuments.find((document) => document.title === documentTitle);
+  if (existingDocument) {
+    return existingDocument;
+  }
+
+  const presignResponse = await page.request.post(`${API_ORIGIN}/tenants/${tenantId}/documents/presign`, {
+    headers: {
+      'X-Tenant-Id': tenantId,
+      Accept: 'application/json',
+    },
+    data: {
+      originalName: fixtureName,
+      mimeType: fixtureMimeType,
+      size: fixtureBytes.length,
+      purpose: 'GENERAL_DOCUMENT',
+    },
+  });
+
+  expect(presignResponse.ok()).toBe(true);
+  const presign = (await presignResponse.json()) as PresignUploadResponse;
+
+  const uploadResponse = await page.request.put(presign.url, {
+    data: fixtureBytes,
+    headers: {
+      'Content-Type': fixtureMimeType,
+    },
+  });
+
+  expect(uploadResponse.ok()).toBe(true);
+
+  const createResponse = await page.request.post(`${API_ORIGIN}/tenants/${tenantId}/documents`, {
+    headers: {
+      'X-Tenant-Id': tenantId,
+      Accept: 'application/json',
+    },
+    data: {
+      title: documentTitle,
+      category: 'RULES',
+      visibility: 'RESIDENTS',
+      file: {
+        bucket: presign.bucket,
+        objectKey: presign.objectKey,
+        originalName: fixtureName,
+        mimeType: fixtureMimeType,
+        size: fixtureBytes.length,
+      },
+      buildingId,
+      unitId,
+    },
+  });
+
+  expect(createResponse.ok()).toBe(true);
+  return (await createResponse.json()) as DocumentListItem;
 }
 
 test.describe('Resident critical journeys', () => {
@@ -64,6 +189,22 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByText('Test Resident', { exact: true }).first()).toBeVisible();
   });
 
+  test('shows the resident unit details for the route tenant without a false empty state', async ({ page }) => {
+    const tenantId = await login(page, TEST_USERS.resident);
+
+    await page.goto(residentUnitPath(tenantId));
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/unit$`));
+    await expect(page.getByRole('heading', { name: /mi unidad/i })).toBeVisible();
+    await expect(page.getByText('Torre A Test', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Unidad A1-102', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('A1-102', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Ocupada')).toBeVisible();
+    await expect(page.getByText('Residente', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('No hay ocupantes registrados')).toHaveCount(0);
+    await expect(page.getByText('Sin unidad asignada')).toHaveCount(0);
+  });
+
   test('shows the resident finance snapshot and seeded payment history', async ({ page }) => {
     const tenantId = await login(page, TEST_USERS.resident);
 
@@ -75,6 +216,59 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByText('Saldo pendiente')).toBeVisible();
     await expect(page.getByText('Próximo vencimiento')).toBeVisible();
     await expect(page.getByText('TEST-REF-001')).toBeVisible();
+  });
+
+  test('shows the resident profile for the route tenant with a readonly access email', async ({ page }) => {
+    const tenantId = await login(page, TEST_USERS.resident);
+
+    await page.goto(`/${tenantId}/resident/profile`);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/profile$`));
+    await expect(page.getByRole('heading', { name: /mi perfil/i })).toBeVisible();
+    await expect(page.getByLabel('Nombre')).toHaveValue('Test Resident');
+    const emailField = page.getByLabel('Correo de acceso');
+    await expect(emailField).toHaveValue('test-resident@buildingos.local');
+    await expect(emailField).toHaveAttribute('readonly', '');
+    await expect(page.getByText('user-1')).toHaveCount(0);
+    await expect(page.getByText(tenantId)).toHaveCount(0);
+  });
+
+  test('shows the resident documents preview for the route tenant', async ({ page }) => {
+    const residentTenantId = await login(page, TEST_USERS.resident);
+    const residentContext = await getResidentContext(page, residentTenantId);
+
+    expect(residentContext.activeBuildingId).toBeTruthy();
+    expect(residentContext.activeUnitId).toBeTruthy();
+
+    await logout(page);
+
+    const tenantId = await login(page, TEST_USERS.tenantAdminA);
+    expect(tenantId).toBe(residentTenantId);
+
+    const seededDocument = await ensureResidentDocumentFixture(
+      page,
+      tenantId,
+      residentContext.activeBuildingId!,
+      residentContext.activeUnitId!,
+    );
+
+    await logout(page);
+
+    const residentTenantIdAgain = await login(page, TEST_USERS.resident);
+    expect(residentTenantIdAgain).toBe(tenantId);
+
+    await page.goto(residentDocumentsPath(tenantId));
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/documents$`));
+    await expect(page.getByRole('heading', { name: /documentos/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: new RegExp(`ver documento ${seededDocument.title}`, 'i') })).toBeVisible();
+    await page.getByRole('button', { name: new RegExp(`ver documento ${seededDocument.title}`, 'i') }).click();
+
+    await expect(page.getByRole('dialog', { name: new RegExp(`vista de ${seededDocument.title}`, 'i') })).toBeVisible();
+    const iframe = page.locator('iframe');
+    await expect(iframe).toHaveCount(1);
+    await expect(iframe).toHaveAttribute('src', /blob:/);
+    await expect(page.getByRole('button', { name: /descargar/i })).toBeVisible();
   });
 
   test('shows the resident communications inbox for the authorized unit', async ({ page }) => {
@@ -219,7 +413,7 @@ test.describe('Resident critical journeys', () => {
     await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
 
     for (const route of ['buildings', 'units', 'finanzas'] as const) {
-      await page.locator(`aside nav a[href="/${tenantId}/${route}"]`).click();
+      await page.goto(`/${tenantId}/${route}`);
       await expect(page).toHaveURL(new RegExp(`/${tenantId}/${route}$`));
       await expect(page.locator(`aside nav a[href="/${tenantId}/buildings"]`)).toBeVisible();
       await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toHaveCount(0);

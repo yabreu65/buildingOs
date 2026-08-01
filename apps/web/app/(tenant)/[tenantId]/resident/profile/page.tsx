@@ -103,7 +103,10 @@ function ResidentProfileForm({
       return;
     }
 
-    const nextSnapshot = snapshotFromProfile(profile);
+    const nextSnapshot: ProfileSnapshot = {
+      name: profile.name ?? '',
+      phone: profile.phone ?? '',
+    };
     if (
       nextSnapshot.name === lastServerSnapshotRef.current.name &&
       nextSnapshot.phone === lastServerSnapshotRef.current.phone

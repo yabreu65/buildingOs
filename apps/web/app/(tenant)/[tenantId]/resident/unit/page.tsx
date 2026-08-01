@@ -2,6 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { useAuthSession } from '@/features/auth/useAuthSession';
 import {
   Home,
   User,
@@ -54,11 +55,19 @@ function roleLabel(role: 'OWNER' | 'RESIDENT'): string {
 export default function ResidentUnitPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
+  const session = useAuthSession();
+  const userId = session?.user.id ?? null;
 
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((t) => t.id === tenantId)?.name ?? tenantId;
 
-  const { data: context, isLoading: contextLoading } = useResidentContext(tenantId ?? null);
+  const {
+    data: context,
+    isLoading: contextLoading,
+    isError: contextError,
+    error: contextErrorValue,
+    refetch: refetchContext,
+  } = useResidentContext(tenantId ?? null);
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
 
@@ -69,10 +78,16 @@ export default function ResidentUnitPage() {
     ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null
     : null;
 
-  const { data: unit, isLoading: unitLoading } = useQuery<Unit>({
-    queryKey: ['unit', buildingId, unitId],
+  const {
+    data: unit,
+    isLoading: unitLoading,
+    isError: unitError,
+    error: unitErrorValue,
+    refetch: refetchUnit,
+  } = useQuery<Unit>({
+    queryKey: ['residentUnit', tenantId, userId, buildingId, unitId],
     queryFn: () => getUnit(tenantId!, buildingId!, unitId!),
-    enabled: !!buildingId && !!unitId && !!tenantId,
+    enabled: !!buildingId && !!unitId && !!tenantId && !!userId,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -85,6 +100,41 @@ export default function ResidentUnitPage() {
             <Skeleton key={i} className="h-40" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (contextError) {
+    return (
+      <div>
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
+          <Home className="w-6 h-6" />
+          Mi Unidad
+        </h1>
+        <p className="text-muted-foreground mt-1">{tenantName}</p>
+
+        <Card className="p-4 mt-6 border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/40">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800 dark:text-red-200">
+                No pudimos cargar tu contexto residente.
+              </p>
+              <p className="text-sm text-red-700 dark:text-red-300">
+                {contextErrorValue instanceof Error
+                  ? contextErrorValue.message
+                  : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => void refetchContext()}
+                className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
       </div>
     );
   }
@@ -123,6 +173,45 @@ export default function ResidentUnitPage() {
             <Skeleton key={i} className="h-40" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (unitError) {
+    return (
+      <div>
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
+          <Home className="w-6 h-6" />
+          Mi Unidad
+        </h1>
+        <p className="text-muted-foreground mt-1">
+          {tenantName}
+          {buildingName && ` • ${buildingName}`}
+          {unitLabel && ` • Unidad ${unitLabel}`}
+        </p>
+
+        <Card className="p-4 mt-6 border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/40">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <p className="font-medium text-red-800 dark:text-red-200">
+                No pudimos cargar la información de tu unidad.
+              </p>
+              <p className="text-sm text-red-700 dark:text-red-300">
+                {unitErrorValue instanceof Error
+                  ? unitErrorValue.message
+                  : 'Intentá nuevamente en unos segundos.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => void refetchUnit()}
+                className="text-sm font-medium text-red-700 hover:underline dark:text-red-300"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </Card>
       </div>
     );
   }
