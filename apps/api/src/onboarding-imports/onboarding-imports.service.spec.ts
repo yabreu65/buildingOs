@@ -528,6 +528,7 @@ describe('OnboardingImportsService', () => {
       summary: createSummary(),
       issues: [],
     });
+    const futureExpiresAt = new Date(Date.now() + 86_400_000);
 
     transactionCreate.mockResolvedValue({
       id: 'import-2',
@@ -538,7 +539,7 @@ describe('OnboardingImportsService', () => {
       schemaVersion: 'v1',
       status: ImportJobStatus.READY,
       canConfirm: true,
-      expiresAt: new Date('2026-08-01T00:00:00.000Z'),
+      expiresAt: futureExpiresAt,
       createdAt: new Date('2026-07-01T00:00:00.000Z'),
       updatedAt: new Date('2026-07-01T00:00:00.000Z'),
       summary: createSummary(),
