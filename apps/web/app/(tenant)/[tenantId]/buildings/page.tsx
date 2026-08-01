@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Button from '@/shared/components/ui/Button';
-import { useHasRole } from '@/features/auth/useAuthSession';
 import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import ErrorState from '@/shared/components/ui/ErrorState';
@@ -15,6 +14,7 @@ import { routes } from '@/shared/lib/routes';
 import { Loader2, Plus, Edit, Trash2, Building2 } from 'lucide-react';
 import Link from 'next/link';
 import { t } from '@/i18n';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 
 interface TenantParams {
   tenantId: string;
@@ -29,14 +29,14 @@ const BuildingsPage = () => {
   const params = useParams<TenantParams>();
   const tenantId = params?.tenantId;
   const router = useRouter();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(tenantId);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [isResident, tenantId, router]);
+  }, [portalContext, tenantId, router]);
 
   const { buildings, loading, error, create, delete: deleteBuilding, refetch } =
     useBuildings(tenantId);
@@ -96,6 +96,7 @@ const BuildingsPage = () => {
   };
 
   if (!tenantId) return <div>{t('common.loading')}</div>;
+  if (portalContext !== 'admin') return <div aria-busy="true" />;
 
   return (
     <div className="space-y-6">

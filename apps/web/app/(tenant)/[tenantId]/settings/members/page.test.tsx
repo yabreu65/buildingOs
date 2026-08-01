@@ -5,6 +5,7 @@
 import { render, screen } from '@testing-library/react';
 import { useParams, useRouter } from 'next/navigation';
 import { useActiveTenantId, useHasRole } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useCan } from '@/features/rbac/rbac.hooks';
 import MembersPage from './page';
 
@@ -16,6 +17,10 @@ jest.mock('next/navigation', () => ({
 jest.mock('@/features/auth/useAuthSession', () => ({
   useActiveTenantId: jest.fn(),
   useHasRole: jest.fn(),
+}));
+
+jest.mock('@/features/auth/useAuthorizedPortalContext', () => ({
+  useAuthorizedPortalContext: jest.fn(),
 }));
 
 jest.mock('@/features/rbac/rbac.hooks', () => ({
@@ -38,6 +43,7 @@ const mockedUseParams = jest.mocked(useParams);
 const mockedUseRouter = jest.mocked(useRouter);
 const mockedUseActiveTenantId = jest.mocked(useActiveTenantId);
 const mockedUseHasRole = jest.mocked(useHasRole);
+const mockedUseAuthorizedPortalContext = jest.mocked(useAuthorizedPortalContext);
 const mockedUseCan = jest.mocked(useCan);
 
 describe('MembersPage', () => {
@@ -49,6 +55,7 @@ describe('MembersPage', () => {
     mockedUseRouter.mockReturnValue({ replace } as never);
     mockedUseHasRole.mockReturnValue(false);
     mockedUseCan.mockReturnValue(true);
+    mockedUseAuthorizedPortalContext.mockReturnValue(null);
   });
 
   it('keeps the page gated when the session has no active tenant', () => {

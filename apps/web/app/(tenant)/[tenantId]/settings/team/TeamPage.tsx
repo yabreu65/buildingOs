@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import type { Role } from '@buildingos/contracts';
-import { useActiveTenantId, useHasRole } from '@/features/auth/useAuthSession';
+import { useActiveTenantId } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useCan } from '@/features/rbac/rbac.hooks';
 import { OperationalMembersList } from '@/features/memberships/components/OperationalMembersList';
 import { PeopleModuleSwitcher } from '@/features/memberships/components/PeopleModuleSwitcher';
@@ -23,7 +24,6 @@ interface TeamPageContentProps {
 const TeamPageContent = ({ tenantId }: TeamPageContentProps) => {
   const { toast } = useToast();
   const canManageMembers = useCan('members.manage');
-  const isResident = useHasRole('RESIDENT');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const {
     pendingInvitations,
@@ -35,20 +35,16 @@ const TeamPageContent = ({ tenantId }: TeamPageContentProps) => {
   } = useInvitations(tenantId);
 
   useEffect(() => {
-    if (!isResident && canManageMembers) {
+    if (canManageMembers) {
       void fetchInvitations();
     }
-  }, [canManageMembers, fetchInvitations, isResident]);
+  }, [canManageMembers, fetchInvitations]);
 
   const handleInvite = async (dto: CreateInvitationRequest) => {
     await createInvitation(dto);
     toast('Invitación enviada', 'success');
     setShowInviteModal(false);
   };
-
-  if (isResident) {
-    return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
-  }
 
   if (!canManageMembers) {
     return (
@@ -117,7 +113,7 @@ export const TeamPage = () => {
     : null;
   const router = useRouter();
   const activeTenantId = useActiveTenantId();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(routeTenantId);
   const canManageMembers = useCan('members.manage');
   const hasMatchingTenant =
     activeTenantId !== null &&
@@ -131,12 +127,12 @@ export const TeamPage = () => {
       return;
     }
 
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
+  }, [activeTenantId, portalContext, routeTenantId, router, tenantId]);
 
-  if (!tenantId || isResident) {
+  if (!tenantId || portalContext !== 'admin') {
     return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
   }
 

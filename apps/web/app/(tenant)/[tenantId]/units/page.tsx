@@ -2,20 +2,24 @@
 
 import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useHasRole } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { UnitsUI } from "../../../../features/units/units.ui";
 
 const UnitsPage = () => {
   const params = useParams();
   const tenantId = params?.tenantId as string;
   const router = useRouter();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(tenantId);
 
   useEffect(() => {
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [isResident, tenantId, router]);
+  }, [portalContext, tenantId, router]);
+
+  if (portalContext !== 'admin') {
+    return <div aria-busy="true" />;
+  }
 
   return <UnitsUI />;
 };

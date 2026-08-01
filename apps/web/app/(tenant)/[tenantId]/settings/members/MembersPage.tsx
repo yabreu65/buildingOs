@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useActiveTenantId, useHasRole } from '@/features/auth/useAuthSession';
+import { useActiveTenantId } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useCan } from '@/features/rbac/rbac.hooks';
 import { MembersList } from '@/features/tenant-members/components/MembersList';
 import { CreateMemberModal } from '@/features/tenant-members/components/CreateMemberModal';
@@ -56,7 +57,7 @@ export const MembersPage = () => {
     : null;
   const router = useRouter();
   const activeTenantId = useActiveTenantId();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(routeTenantId);
   const hasMatchingTenant =
     activeTenantId !== null &&
     routeTenantId !== null &&
@@ -69,12 +70,12 @@ export const MembersPage = () => {
       return;
     }
 
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [activeTenantId, isResident, routeTenantId, router, tenantId]);
+  }, [activeTenantId, portalContext, routeTenantId, router, tenantId]);
 
-  if (!tenantId || isResident) {
+  if (!tenantId || portalContext !== 'admin') {
     return <div className="container mx-auto max-w-4xl py-8" aria-busy="true" />;
   }
 

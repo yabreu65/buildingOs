@@ -160,6 +160,29 @@ test.describe('Resident critical journeys', () => {
     await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toHaveCount(0);
   });
 
+  test('allows mixed-role users to stay on admin routes and keeps resident-only users out', async ({ page }) => {
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await page.goto(`/${tenantId}/dashboard`);
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
+
+    for (const route of ['buildings', 'units', 'finanzas'] as const) {
+      await page.locator(`aside nav a[href="/${tenantId}/${route}"]`).click();
+      await expect(page).toHaveURL(new RegExp(`/${tenantId}/${route}$`));
+      await expect(page.locator(`aside nav a[href="/${tenantId}/buildings"]`)).toBeVisible();
+      await expect(page.locator(`aside nav a[href="/${tenantId}/resident/profile"]`)).toHaveCount(0);
+    }
+
+    await logout(page);
+
+    const residentTenantId = await login(page, TEST_USERS.resident);
+    await page.goto(`/${residentTenantId}/buildings`);
+
+    await expect(page).toHaveURL(new RegExp(`/${residentTenantId}/resident/dashboard$`));
+    await expect(page.getByRole('heading', { name: /hola, test resident/i })).toBeVisible();
+    await expect(page.locator(`aside nav a[href="/${residentTenantId}/buildings"]`)).toHaveCount(0);
+  });
+
   test('switches the active resident unit and refreshes scoped content', async ({ page }) => {
     const tenantId = await login(page, TEST_USERS.residentMulti);
 

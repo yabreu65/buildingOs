@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useHasRole } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useBuildings } from '@/features/buildings/hooks/useBuildings';
 import { useTicketsReport } from '@/features/reports/hooks/useTicketsReport';
 import { useFinanceReport } from '@/features/reports/hooks/useFinanceReport';
@@ -24,13 +24,13 @@ const ReportsPage = () => {
   const params = useParams();
   const tenantId = params.tenantId as string;
   const router = useRouter();
-  const isResident = useHasRole('RESIDENT');
+  const portalContext = useAuthorizedPortalContext(tenantId);
 
   useEffect(() => {
-    if (isResident && tenantId) {
-      router.replace(`/${tenantId}/dashboard`);
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(`/${tenantId}/resident/dashboard`);
     }
-  }, [isResident, tenantId, router]);
+  }, [portalContext, tenantId, router]);
 
   const [activeTab, setActiveTab] = useState<TabType>('tickets');
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | undefined>();
@@ -67,6 +67,10 @@ const ReportsPage = () => {
     activeTab === 'activity' ? tenantId : undefined,
     { buildingId: filters.buildingId, from: filters.from, to: filters.to }
   );
+
+  if (portalContext !== 'admin') {
+    return <div aria-busy="true" />;
+  }
 
   if (buildingsError) {
     return <ErrorState message={buildingsError} />;
