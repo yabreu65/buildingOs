@@ -5,7 +5,7 @@ test.describe('Auth - Route Guards', () => {
   test('should redirect anonymous visitors from private tenant routes to login', async ({ page }) => {
     await page.goto('/test-tenant/dashboard');
 
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.getByText(/inicia sesión con tu cuenta/i)).toBeVisible();
   });
 

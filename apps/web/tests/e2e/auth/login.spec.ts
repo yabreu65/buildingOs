@@ -41,4 +41,26 @@ test.describe.serial('Auth - Login Flow', () => {
     await page.waitForTimeout(3000);
     expect(page.url()).not.toContain('/login');
   });
+
+  test('should restore a mixed user to the last resident portal', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.clear();
+      localStorage.setItem('bo_last_portal', 'resident');
+    });
+
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/dashboard$`));
+  });
+
+  test('should restore a mixed user to the last admin portal', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.clear();
+      localStorage.setItem('bo_last_portal', 'admin');
+    });
+
+    const tenantId = await login(page, TEST_USERS.residentMixed);
+
+    await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`));
+  });
 });

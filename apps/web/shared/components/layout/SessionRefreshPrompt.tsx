@@ -13,7 +13,7 @@
  *   <SessionRefreshPrompt />
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRefreshSession } from '@/features/auth/useRefreshSession';
 import Card from '@/shared/components/ui/Card';
@@ -22,23 +22,16 @@ import Button from '@/shared/components/ui/Button';
 export default function SessionRefreshPrompt() {
   const router = useRouter();
   const { refresh, loading, error } = useRefreshSession();
-  const [showPrompt, setShowPrompt] = useState(false);
-
-  // Show prompt if user navigates to a 403 error
-  useEffect(() => {
-    // Check if there's an error from previous navigation
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('session_refresh_needed') === 'true') {
-      setShowPrompt(true);
-    }
-  }, []);
+  const [showPrompt, setShowPrompt] = useState(
+    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('session_refresh_needed') === 'true',
+  );
 
   const handleRefresh = async () => {
     const result = await refresh();
     if (result) {
       setShowPrompt(false);
-      // Redirect to dashboard with new tenant
-      router.push(`/${result.activeTenantId}/dashboard`);
+      // Redirect to the resolved landing route for the refreshed session
+      router.push(result.landingPath);
     }
   };
 

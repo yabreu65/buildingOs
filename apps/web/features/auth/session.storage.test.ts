@@ -1,5 +1,13 @@
 import { emitBoStorageChange } from '@/shared/lib/storage/events';
-import { clearLastTenant, getLastTenant, setLastTenant } from './session.storage';
+import {
+  clearAuth,
+  clearLastPortal,
+  clearLastTenant,
+  getLastPortal,
+  getLastTenant,
+  setLastPortal,
+  setLastTenant,
+} from './session.storage';
 
 jest.mock('@/shared/lib/storage/events', () => ({
   emitBoStorageChange: jest.fn(),
@@ -39,5 +47,24 @@ describe('session.storage', () => {
 
     expect(getLastTenant()).toBeNull();
     expect(mockedEmitBoStorageChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('stores, reads, and clears the last portal context', () => {
+    setLastPortal('resident');
+
+    expect(getLastPortal()).toBe('resident');
+    expect(mockedEmitBoStorageChange).toHaveBeenCalledTimes(1);
+
+    clearLastPortal();
+
+    expect(getLastPortal()).toBeNull();
+    expect(mockedEmitBoStorageChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes the portal key when clearing auth state', () => {
+    setLastPortal('admin');
+    clearAuth();
+
+    expect(getLastPortal()).toBeNull();
   });
 });

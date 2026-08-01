@@ -32,7 +32,7 @@ test.describe('Resident critical journeys', () => {
     await page.getByTestId('login-password').fill('WrongPass123!');
     await page.getByTestId('login-submit').click();
 
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.getByText(/credenciales inválidas/i)).toBeVisible();
 
     const cookies = await page.context().cookies([API_ORIGIN]);
@@ -178,10 +178,10 @@ test.describe('Resident critical journeys', () => {
     const tenantId = await login(page, TEST_USERS.resident);
 
     await logout(page);
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
 
     await page.goto(residentDashboardPath(tenantId));
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.getByText(/inicia sesión con tu cuenta/i)).toBeVisible();
 
     const cookies = await page.context().cookies([API_ORIGIN]);

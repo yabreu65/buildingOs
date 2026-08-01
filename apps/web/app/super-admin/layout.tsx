@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { usePathname } from 'next/navigation';
+import { useEffect } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { SuperAdminProvider } from '@/features/super-admin/super-admin-context';
 import { useAuth } from '@/features/auth/useAuth';
@@ -19,7 +18,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
   const { isLoading: authLoading } = useAuth();
   const session = useAuthSession();
   const isSuperAdmin = useIsSuperAdmin();
-  const [isAuthorized, setIsAuthorized] = useState(false);
+  const isAuthorized = !authLoading && Boolean(session) && isSuperAdmin;
 
   useEffect(() => {
     // Wait for auth to load
@@ -29,21 +28,21 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
 
     // Rule 1: No session → redirect to /login (unauthenticated)
     if (!session) {
-      router.replace('/login');
+      const next =
+        typeof window === 'undefined'
+          ? pathname
+          : `${window.location.pathname}${window.location.search}`;
+      router.replace(`/login?next=${encodeURIComponent(next)}`);
       return;
     }
 
     // Rule 2: Has session but NOT SUPER_ADMIN → redirect to tenant dashboard
     if (!isSuperAdmin) {
       const tenantId = session.activeTenantId;
-      router.replace(tenantId ? `/${tenantId}/dashboard` : '/login');
-      setIsAuthorized(false);
+      router.replace(tenantId ? `/${tenantId}/dashboard` : `/login?next=${encodeURIComponent(pathname)}`);
       return;
     }
-
-    // Rule 3: Has session AND is SUPER_ADMIN → allow access
-    setIsAuthorized(true);
-  }, [session, isSuperAdmin, authLoading, router]);
+  }, [authLoading, isSuperAdmin, pathname, router, session]);
 
   if (authLoading) {
     return <div className="flex items-center justify-center min-h-screen">Cargando...</div>;

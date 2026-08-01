@@ -17,11 +17,19 @@
 
 import { useState, useCallback } from 'react';
 import { apiClient } from '@/shared/lib/http/client';
-import { setSession } from './session.storage';
+import {
+  getLastPortal,
+  getLastTenant,
+  getSession,
+  setSession,
+  setLastTenant,
+} from './session.storage';
 import type { LoginResponse } from './auth.types';
+import { resolveActiveTenantId, resolveAuthLandingRoute } from './landing-route';
 
 interface RefreshSessionResult {
   activeTenantId: string;
+  landingPath: string;
   tenantCount: number;
 }
 
@@ -42,16 +50,28 @@ export function useRefreshSession() {
 
       // Update localStorage with fresh memberships
       if (response.memberships && response.memberships.length > 0) {
+        const currentSession = getSession();
+        const activeTenantId = resolveActiveTenantId(response.memberships, [
+          currentSession?.activeTenantId,
+          getLastTenant(),
+        ]);
+
         const newSession = {
           user: response.user,
           memberships: response.memberships,
-          activeTenantId: response.memberships[0].tenantId,
+          activeTenantId,
         };
 
         setSession(newSession);
+        setLastTenant(activeTenantId);
 
         return {
           activeTenantId: newSession.activeTenantId,
+          landingPath: resolveAuthLandingRoute({
+            session: newSession,
+            preferredTenantId: activeTenantId,
+            preferredPortal: getLastPortal(),
+          }),
           tenantCount: response.memberships.length,
         };
       }
