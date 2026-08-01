@@ -2,12 +2,13 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { routes } from "../../../shared/lib/routes";
 import { useTenantId } from "../../../features/tenancy/tenant.hooks";
-import { useIsSuperAdmin, useHasRole } from "../../../features/auth/useAuthSession";
+import { useAuthSession, useIsSuperAdmin } from "../../../features/auth/useAuthSession";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
 import { useTenants } from "../../../features/tenants/tenants.hooks";
+import { resolveAuthorizedPortalContext } from "../../../features/auth/landing-route";
 import { t } from "@/i18n";
 
 interface NavItemProps {
@@ -45,19 +46,33 @@ const NavItem = ({ href, label, isActive, onNavigate, variant }: NavItemProps) =
 export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop" }: SidebarProps) => {
   const tenantId = useTenantId();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentSearch = searchParams.toString();
+  const session = useAuthSession();
   const { data: tenants } = useTenants();
   const tenantName = tenants?.find((tenant) => tenant.id === tenantId)?.name;
   const isSuperAdmin = useIsSuperAdmin();
-  const isResident = useHasRole("RESIDENT");
   const { isImpersonating } = useImpersonation();
 
   if ((isSuperAdmin && !isImpersonating) || !tenantId) return null;
 
+  const activeTenantId = tenantId;
+  const portalContext = resolveAuthorizedPortalContext({
+    session,
+    tenantId: activeTenantId,
+    pathname,
+    searchParamsString: currentSearch,
+  });
+  const isResidentPortal = portalContext === "resident";
+  const dashboardHref = isResidentPortal
+    ? routes.residentDashboard(activeTenantId)
+    : routes.tenantDashboard(activeTenantId);
+
   const isActive = (href: string) =>
     pathname === href || (
-      isResident &&
-      href === `/${tenantId}/resident/tickets` &&
-      pathname.startsWith(`/${tenantId}/tickets/`)
+      isResidentPortal &&
+      href === `/${activeTenantId}/resident/tickets` &&
+      pathname.startsWith(`/${activeTenantId}/tickets/`)
     );
 
   const navItem = (href: string, label: string) => (
@@ -90,9 +105,9 @@ export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop"
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-4">
-        {navItem(routes.tenantDashboard(tenantId), t("navigation.dashboard"))}
+        {navItem(dashboardHref, t("navigation.dashboard"))}
 
-        {isResident ? (
+        {isResidentPortal ? (
           <>
             {navItem(`/${tenantId}/resident/profile`, t("navigation.myProfile"))}
             {navItem(`/${tenantId}/resident/payments`, t("navigation.payments"))}

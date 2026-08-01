@@ -10,6 +10,13 @@ export interface ResolveAuthLandingRouteParams {
   readonly preferredPortal?: PortalContext | null;
 }
 
+export interface ResolveAuthorizedPortalContextParams {
+  readonly session: AuthSession | null;
+  readonly pathname?: string | null;
+  readonly searchParamsString?: string | null;
+  readonly tenantId?: string | null;
+}
+
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 const PUBLIC_PATH_PREFIXES = ['/login', '/signup', '/health', '/demo', '/demo-guiada', '/contact', '/invite'];
 
@@ -117,6 +124,11 @@ function resolveAuthorizedRequestedPath(
     return null;
   }
 
+  const pathnameTenantId = pathname ? getTenantIdFromPathname(pathname) : null;
+  if (pathnameTenantId !== tenantId) {
+    return null;
+  }
+
   const membership = resolveMembershipForTenant(session.memberships, tenantId);
   if (!membership) {
     return null;
@@ -158,6 +170,65 @@ function resolveFallbackPortal(
   }
 
   return 'admin';
+}
+
+export function resolveAuthorizedPortalContext({
+  session,
+  pathname,
+  searchParamsString,
+  tenantId,
+}: ResolveAuthorizedPortalContextParams): PortalContext | null {
+  if (!session) {
+    return null;
+  }
+
+  if (!tenantId) {
+    return null;
+  }
+
+  const pathnameTenantId = pathname ? getTenantIdFromPathname(pathname) : null;
+  if (pathnameTenantId !== tenantId) {
+    return null;
+  }
+
+  const membership = resolveMembershipForTenant(session.memberships, tenantId);
+  if (!membership) {
+    return null;
+  }
+
+  const hasResidentAccess = hasResidentPortalAccess(membership.roles);
+  const hasAdminAccess = hasAdminPortalAccess(membership.roles);
+  const requestedPortal = resolvePortalFromPathname(pathname, searchParamsString);
+
+  if (requestedPortal === 'resident') {
+    if (hasResidentAccess) {
+      return 'resident';
+    }
+
+    if (hasAdminAccess) {
+      return 'admin';
+    }
+  }
+
+  if (requestedPortal === 'admin') {
+    if (hasAdminAccess) {
+      return 'admin';
+    }
+
+    if (hasResidentAccess) {
+      return 'resident';
+    }
+  }
+
+  if (hasResidentAccess && !hasAdminAccess) {
+    return 'resident';
+  }
+
+  if (hasAdminAccess) {
+    return 'admin';
+  }
+
+  return null;
 }
 
 export function resolveAuthLandingRoute({

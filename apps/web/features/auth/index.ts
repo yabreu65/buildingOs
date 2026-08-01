@@ -26,4 +26,9 @@ export {
 export { AuthBootstrap } from './AuthBootstrap';
 
 // Landing route resolution
-export { resolveActiveTenantId, resolveAuthLandingRoute, resolvePortalFromPathname } from './landing-route';
+export {
+  resolveActiveTenantId,
+  resolveAuthLandingRoute,
+  resolveAuthorizedPortalContext,
+  resolvePortalFromPathname,
+} from './landing-route';
