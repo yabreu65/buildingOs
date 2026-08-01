@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import AppShell from './AppShell';
+import type { AuthSession, Role } from '@/features/auth/auth.types';
 import * as notificationsApi from '@/features/notifications/notifications.api';
 import * as pushSubscriptionApi from '@/features/notifications/push-subscription.api';
 import * as financeApi from '@/features/finance/services/finance.api';
@@ -14,10 +15,17 @@ import * as sessionModule from '@/features/auth/session.storage';
 let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTION' }> = [];
 let mockTenantId = 'tenant-1';
 let mockPathname = '/tenant-1/dashboard';
+let mockSearchParams = '';
+let mockAuthSession: AuthSession = {
+  user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+  memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT' as Role] }],
+  activeTenantId: 'tenant-1',
+};
 
 jest.mock('next/navigation', () => ({
   useParams: () => ({ tenantId: mockTenantId }),
   usePathname: () => mockPathname,
+  useSearchParams: () => new URLSearchParams(mockSearchParams),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 
@@ -26,6 +34,7 @@ jest.mock('@/features/tenants/tenants.hooks', () => ({
 }));
 
 jest.mock('@/features/auth/useAuthSession', () => ({
+  useAuthSession: () => mockAuthSession,
   useIsSuperAdmin: () => false,
   useHasRole: (role: string) => role === 'RESIDENT',
 }));
@@ -122,13 +131,15 @@ describe('AppShell push permission integration', () => {
     mockTenantData = [{ id: 'tenant-1', name: 'Tenant 1', type: 'EDIFICIO_AUTOGESTION' }];
     mockTenantId = 'tenant-1';
     mockPathname = '/tenant-1/dashboard';
+    mockSearchParams = '';
+    mockAuthSession = {
+      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT' as Role] }],
+      activeTenantId: 'tenant-1',
+    };
     jest.clearAllMocks();
 
-    mockGetSession.mockReturnValue({
-      user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
-      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
-      activeTenantId: 'tenant-1',
-    });
+    mockGetSession.mockReturnValue(mockAuthSession);
     mockGetUnreadCount.mockResolvedValue(0);
     mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
     mockListPendingPayments.mockResolvedValue([]);
