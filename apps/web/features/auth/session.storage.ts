@@ -86,7 +86,8 @@ export function clearLastTenant(): void {
 }
 
 /**
- * Stores the last active portal context for quick resumption of user session.
+ * Stores the last active portal context for quick resumption within the current browser.
+ * This preference is intentionally browser-scoped and is cleared on logout.
  * @param portal - The portal context to remember as the last active one
  */
 export function setLastPortal(portal: PortalContext): void {

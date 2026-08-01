@@ -67,4 +67,10 @@ describe('session.storage', () => {
 
     expect(getLastPortal()).toBeNull();
   });
+
+  it('ignores malformed portal values in storage', () => {
+    localStorage.setItem('bo_last_portal', 'super-admin');
+
+    expect(getLastPortal()).toBeNull();
+  });
 });

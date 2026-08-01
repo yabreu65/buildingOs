@@ -99,6 +99,30 @@ describe('landing-route', () => {
     ).toBe('/tenant-1/tickets/ticket-1?portal=resident');
   });
 
+  it.each([
+    'https://example.com',
+    'http://example.com',
+    '//example.com',
+    '\\\\example.com',
+    'javascript:alert(1)',
+    '/%2F%2Fexample.com',
+    '/tenant-2/dashboard',
+    '',
+    '   ',
+  ])('rejects unsafe next values: %s', (requestedPath) => {
+    const session = buildSession([
+      { tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] },
+    ]);
+
+    expect(
+      resolveAuthLandingRoute({
+        session,
+        requestedPath,
+        preferredPortal: 'resident',
+      }),
+    ).toBe(residentDashboard('tenant-1'));
+  });
+
   it('falls back deterministically when the explicit route is not allowed', () => {
     const session = buildSession([
       { tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] },

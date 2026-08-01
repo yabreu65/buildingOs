@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useParams, usePathname, useSearchParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
 import {
   getSession,
   setSession,
@@ -392,19 +392,19 @@ export default function Topbar({
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const urlTenantId = typeof params?.tenantId === 'string' ? params.tenantId : undefined;
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const session = getSession();
   const { data: tenants, isLoading, error } = useTenants();
+  const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
 
   useEffect(() => {
-    const portal = resolvePortalFromPathname(pathname, searchParams.toString());
+    const portal = resolvePortalFromPathname(pathname, currentSearch);
     if (portal) {
       setLastPortal(portal);
     }
-  }, [pathname, searchParams]);
+  }, [currentSearch, pathname]);
 
   // Determinar tenant activo: URL > session.activeTenantId > memberships[0]
   const activeTenantId =
@@ -416,7 +416,7 @@ export default function Topbar({
 
   // Obtener rol del usuario en el tenant activo
   const activeMembership = session?.memberships.find((m) => m.tenantId === activeTenantId);
-  const currentPortal = resolvePortalFromPathname(pathname, searchParams.toString());
+  const currentPortal = resolvePortalFromPathname(pathname, currentSearch);
   const role =
     currentPortal === 'resident' && activeMembership?.roles.includes('RESIDENT')
       ? 'RESIDENT'

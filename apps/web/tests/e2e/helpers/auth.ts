@@ -41,6 +41,11 @@ export async function login(page: Page, user: TestUser): Promise<string> {
   const loginUrl = new URL(AUTH_LOGIN_ENDPOINT, API_ORIGIN).toString();
   const sessionUrl = new URL(AUTH_SESSION_ENDPOINT, API_ORIGIN).toString();
 
+  const context = page.context();
+  if ('clearCookies' in context && typeof context.clearCookies === 'function') {
+    await context.clearCookies();
+  }
+
   const waitForLoginResponse = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' && response.url() === loginUrl,
@@ -135,7 +140,7 @@ export async function logout(page: Page): Promise<void> {
     throw new Error(`AUTH_LOGOUT_FAILED status=${logoutResponse.status()} endpoint=/auth/logout message=${message}`);
   }
 
-  await page.waitForURL('/login', { timeout: 10000 });
+  await page.waitForURL(/\/login(?:\?.*)?$/, { timeout: 10000 });
   await expect(page).toHaveURL(/.*login/);
 }
 
