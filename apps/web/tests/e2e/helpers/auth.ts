@@ -28,6 +28,8 @@ export const TEST_USERS = {
   operator: { email: 'test-operator@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Operator' },
   resident: { email: 'test-resident@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident' },
   residentB: { email: 'test-resident-b@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident B' },
+  residentMulti: { email: 'test-resident-multi@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident Multi' },
+  residentMixed: { email: 'test-resident-admin@buildingos.local', password: TEST_PASSWORD, fullName: 'Test Resident Admin' },
 } as const satisfies Record<string, TestUser>;
 
 /**

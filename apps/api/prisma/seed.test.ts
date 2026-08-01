@@ -1,4 +1,17 @@
-import { PrismaClient, Role, TenantType, BillingPlanId, ChargeStatus, PaymentStatus, PaymentMethod } from "@prisma/client";
+import {
+  PrismaClient,
+  Role,
+  TenantType,
+  BillingPlanId,
+  ChargeStatus,
+  PaymentStatus,
+  PaymentMethod,
+  CommunicationChannel,
+  CommunicationPriority,
+  CommunicationTargetType,
+  TicketCategory,
+  TicketStatus,
+} from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { buildSeedExpenseSnapshotItem, ensureSeedPublishedLiquidation } from "./lib/seed-liquidation-workflow";
 
@@ -119,6 +132,24 @@ async function main() {
       create: {
         email: "test-resident-b@buildingos.local",
         name: "Test Resident B",
+        passwordHash: testPassword,
+      },
+    }),
+    residentMulti: await prisma.user.upsert({
+      where: { email: "test-resident-multi@buildingos.local" },
+      update: { name: "Test Resident Multi" },
+      create: {
+        email: "test-resident-multi@buildingos.local",
+        name: "Test Resident Multi",
+        passwordHash: testPassword,
+      },
+    }),
+    residentMixed: await prisma.user.upsert({
+      where: { email: "test-resident-admin@buildingos.local" },
+      update: { name: "Test Resident Admin" },
+      create: {
+        email: "test-resident-admin@buildingos.local",
+        name: "Test Resident Admin",
         passwordHash: testPassword,
       },
     }),
@@ -244,6 +275,32 @@ async function main() {
       status: "ACTIVE",
     },
   });
+
+  const residentMultiMemberA = await prisma.tenantMember.upsert({
+    where: { tenantId_email: { tenantId: tenantA.id, email: testUsers.residentMulti.email! } },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      userId: testUsers.residentMulti.id,
+      name: testUsers.residentMulti.name,
+      email: testUsers.residentMulti.email,
+      role: "RESIDENT",
+      status: "ACTIVE",
+    },
+  });
+
+  const residentMixedMemberA = await prisma.tenantMember.upsert({
+    where: { tenantId_email: { tenantId: tenantA.id, email: testUsers.residentMixed.email! } },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      userId: testUsers.residentMixed.id,
+      name: testUsers.residentMixed.name,
+      email: testUsers.residentMixed.email,
+      role: "RESIDENT",
+      status: "ACTIVE",
+    },
+  });
   console.log(`✅ Tenant members created`);
 
   // ============================================================================
@@ -269,6 +326,27 @@ async function main() {
   const adminMembershipA = await upsertMembership({ tenantId: tenantA.id, userId: testUsers.tenantAdminA.id, role: Role.TENANT_ADMIN });
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.operator.id, role: Role.OPERATOR });
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.resident.id, role: Role.RESIDENT });
+  await upsertMembership({ tenantId: tenantA.id, userId: testUsers.residentMulti.id, role: Role.RESIDENT });
+  const residentMixedMembershipA = await upsertMembership({ tenantId: tenantA.id, userId: testUsers.residentMixed.id, role: Role.RESIDENT });
+  const residentMixedAdminRole = await prisma.membershipRole.findFirst({
+    where: {
+      tenantId: tenantA.id,
+      membershipId: residentMixedMembershipA.id,
+      role: Role.TENANT_ADMIN,
+      scopeType: "TENANT",
+    },
+    select: { id: true },
+  });
+  if (!residentMixedAdminRole) {
+    await prisma.membershipRole.create({
+      data: {
+        tenantId: tenantA.id,
+        membershipId: residentMixedMembershipA.id,
+        role: Role.TENANT_ADMIN,
+        scopeType: "TENANT",
+      },
+    });
+  }
   await upsertMembership({ tenantId: tenantB.id, userId: testUsers.tenantAdminB.id, role: Role.TENANT_ADMIN });
   await upsertMembership({ tenantId: tenantB.id, userId: testUsers.residentB.id, role: Role.RESIDENT });
 
@@ -399,6 +477,21 @@ async function main() {
     create: { tenantId: tenantA.id, unitId: unitsA1[1]!, memberId: residentMemberA.id, role: "RESIDENT" },
   });
   await prisma.unitOccupant.upsert({
+    where: { unitId_memberId: { unitId: unitsA1[1]!, memberId: residentMultiMemberA.id } },
+    update: {},
+    create: { tenantId: tenantA.id, unitId: unitsA1[1]!, memberId: residentMultiMemberA.id, role: "RESIDENT" },
+  });
+  await prisma.unitOccupant.upsert({
+    where: { unitId_memberId: { unitId: unitsA1[2]!, memberId: residentMultiMemberA.id } },
+    update: {},
+    create: { tenantId: tenantA.id, unitId: unitsA1[2]!, memberId: residentMultiMemberA.id, role: "RESIDENT" },
+  });
+  await prisma.unitOccupant.upsert({
+    where: { unitId_memberId: { unitId: unitsA1[1]!, memberId: residentMixedMemberA.id } },
+    update: {},
+    create: { tenantId: tenantA.id, unitId: unitsA1[1]!, memberId: residentMixedMemberA.id, role: "RESIDENT" },
+  });
+  await prisma.unitOccupant.upsert({
     where: { unitId_memberId: { unitId: unitsA1[2]!, memberId: operatorMemberA.id } },
     update: {},
     create: { tenantId: tenantA.id, unitId: unitsA1[2]!, memberId: operatorMemberA.id, role: "OWNER" },
@@ -512,6 +605,162 @@ async function main() {
   console.log(`✅ Finances: Liquidation + ${unitsA1.length} charges + 1 payment created`);
 
   // ============================================================================
+  // RESIDENT COMMUNICATIONS & TICKETS
+  // ============================================================================
+  const communicationUnit102 = await prisma.communication.upsert({
+    where: { id: `seed-comm-unit-102` },
+    update: {},
+    create: {
+      id: `seed-comm-unit-102`,
+      tenantId: tenantA.id,
+      buildingId: buildingA1.id,
+      title: "Comunicado Unidad 102",
+      body: "Comunicación de prueba para la unidad 102 del edificio A.",
+      channel: CommunicationChannel.IN_APP,
+      status: "SENT",
+      priority: CommunicationPriority.NORMAL,
+      createdByMembershipId: adminMembershipA.id,
+      sentAt: new Date(),
+      targets: {
+        create: [
+          {
+            tenantId: tenantA.id,
+            targetType: CommunicationTargetType.UNIT,
+            targetId: unitsA1[1]!,
+          },
+        ],
+      },
+    },
+  });
+
+  const communicationUnit103 = await prisma.communication.upsert({
+    where: { id: `seed-comm-unit-103` },
+    update: {},
+    create: {
+      id: `seed-comm-unit-103`,
+      tenantId: tenantA.id,
+      buildingId: buildingA1.id,
+      title: "Comunicado Unidad 103",
+      body: "Comunicación de prueba para la unidad 103 del edificio A.",
+      channel: CommunicationChannel.IN_APP,
+      status: "SENT",
+      priority: CommunicationPriority.NORMAL,
+      createdByMembershipId: adminMembershipA.id,
+      sentAt: new Date(),
+      targets: {
+        create: [
+          {
+            tenantId: tenantA.id,
+            targetType: CommunicationTargetType.UNIT,
+            targetId: unitsA1[2]!,
+          },
+        ],
+      },
+    },
+  });
+
+  await prisma.communicationReceipt.upsert({
+    where: {
+      communicationId_userId: {
+        communicationId: communicationUnit102.id,
+        userId: testUsers.resident.id,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      communicationId: communicationUnit102.id,
+      userId: testUsers.resident.id,
+      deliveredAt: new Date(),
+    },
+  });
+
+  await prisma.communicationReceipt.upsert({
+    where: {
+      communicationId_userId: {
+        communicationId: communicationUnit102.id,
+        userId: testUsers.residentMulti.id,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      communicationId: communicationUnit102.id,
+      userId: testUsers.residentMulti.id,
+      deliveredAt: new Date(),
+    },
+  });
+
+  await prisma.communicationReceipt.upsert({
+    where: {
+      communicationId_userId: {
+        communicationId: communicationUnit103.id,
+        userId: testUsers.residentMulti.id,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      communicationId: communicationUnit103.id,
+      userId: testUsers.residentMulti.id,
+      deliveredAt: new Date(),
+    },
+  });
+
+  await prisma.communicationReceipt.upsert({
+    where: {
+      communicationId_userId: {
+        communicationId: communicationUnit102.id,
+        userId: testUsers.residentMixed.id,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      communicationId: communicationUnit102.id,
+      userId: testUsers.residentMixed.id,
+      deliveredAt: new Date(),
+    },
+  });
+
+  const ticketUnit102 = await prisma.ticket.upsert({
+    where: { id: `seed-ticket-unit-102` },
+    update: {},
+    create: {
+      id: `seed-ticket-unit-102`,
+      tenantId: tenantA.id,
+      buildingId: buildingA1.id,
+      unitId: unitsA1[1]!,
+      createdByUserId: testUsers.resident.id,
+      title: "Fuga en lavadero",
+      description: "La canilla del lavadero pierde agua de forma constante.",
+      category: TicketCategory.MAINTENANCE,
+      priority: "MEDIUM",
+      status: TicketStatus.OPEN,
+    },
+  });
+
+  const ticketUnit103 = await prisma.ticket.upsert({
+    where: { id: `seed-ticket-unit-103` },
+    update: {},
+    create: {
+      id: `seed-ticket-unit-103`,
+      tenantId: tenantA.id,
+      buildingId: buildingA1.id,
+      unitId: unitsA1[2]!,
+      createdByUserId: testUsers.residentMulti.id,
+      title: "Ruido nocturno",
+      description: "Se percibe ruido en el pasillo durante la noche.",
+      category: TicketCategory.COMPLAINT,
+      priority: "LOW",
+      status: TicketStatus.IN_PROGRESS,
+    },
+  });
+
+  console.log(`✅ Resident communications: ${communicationUnit102.id}, ${communicationUnit103.id}`);
+  console.log(`✅ Resident tickets: ${ticketUnit102.id}, ${ticketUnit103.id}`);
+
+  // ============================================================================
   // SUMMARY
   // ============================================================================
   console.log(`
@@ -526,6 +775,8 @@ async function main() {
    Operador:     test-operator@buildingos.local
    Residente A:  test-resident@buildingos.local
    Residente B:  test-resident-b@buildingos.local
+   Residente M:  test-resident-multi@buildingos.local
+   Residente X:  test-resident-admin@buildingos.local
 
 🏢 TENANTS:
    Tenant A: ${tenantA.id} (ADMINISTRADORA, PRO)
@@ -535,6 +786,14 @@ async function main() {
    Torre A Test:      ${buildingA1.id} (5 unidades)
    Torre B Test:      ${buildingA2.id} (3 unidades)
    Edificio Test B:   ${buildingB1.id} (3 unidades)
+
+💬 COMUNICADOS:
+   ${communicationUnit102.id} → Unidad 102
+   ${communicationUnit103.id} → Unidad 103
+
+🛠️ RECLAMOS:
+   ${ticketUnit102.id} → Fuga en lavadero
+   ${ticketUnit103.id} → Ruido nocturno
 
 💰 FINANZAS (Período: ${currentPeriod}):
    Liquidación: ${liquidationA1.id} (PUBLISHED)
