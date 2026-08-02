@@ -115,8 +115,9 @@ test.describe('Resident critical journeys', () => {
 
     await page.goto(residentDashboardPath(tenantBId));
 
-    await expect(page).toHaveURL(new RegExp(`/${tenantAId}/resident/dashboard$`));
-    await expect(page.getByRole('heading', { name: /hola, test resident/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/login(?:\?|$)/);
+    await expect(page.getByText(/inicia sesión con tu cuenta/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /hola, test resident/i })).toHaveCount(0);
   });
 
   test('keeps the resident portal available for a mixed RESIDENT + ADMIN user', async ({ page }) => {
