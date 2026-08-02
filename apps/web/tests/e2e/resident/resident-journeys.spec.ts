@@ -52,11 +52,12 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByText('Unidad A1-102', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('Saldo pendiente')).toBeVisible();
     await expect(page.getByText('Comunicado Unidad 102')).toBeVisible();
+    await expect(page.getByText('Comunicado Unidad 103')).toHaveCount(0);
     await expect(page.getByText('Fuga en lavadero')).toBeVisible();
     await expect(page.getByRole('link', { name: /ver comunicados/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /crear reclamo/i })).toBeVisible();
 
-    await page.goto(residentUnitPath(tenantId));
+    await page.goto(residentUnitPath(tenantId), { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: /mi unidad/i })).toBeVisible();
     await expect(
       page.getByText('Código', { exact: true }).locator('..').getByText('A1-102', { exact: true }),
@@ -90,7 +91,7 @@ test.describe('Resident critical journeys', () => {
   test('opens a resident ticket detail from the resident list', async ({ page }) => {
     const tenantId = await login(page, TEST_USERS.resident);
 
-    await page.goto(residentTicketsPath(tenantId));
+    await page.goto(residentTicketsPath(tenantId), { waitUntil: 'domcontentloaded' });
 
     await expect(page).toHaveURL(new RegExp(`/${tenantId}/resident/tickets$`));
     await expect(page.getByRole('heading', { name: /mis reclamos/i })).toBeVisible();

@@ -442,6 +442,31 @@ async function main() {
     unitsA2.push(unit.id);
   }
 
+  const vacantUnitA2 = await prisma.unit.upsert({
+    where: { buildingId_code: { buildingId: buildingA2.id, code: "A2-204" } },
+    update: {
+      occupancyStatus: "VACANT",
+      label: "Unidad A2-204",
+      unitType: "APARTMENT",
+      m2: 80,
+    },
+    create: {
+      tenantId: tenantA.id,
+      buildingId: buildingA2.id,
+      code: "A2-204",
+      label: "Unidad A2-204",
+      unitType: "APARTMENT",
+      occupancyStatus: "VACANT",
+      m2: 80,
+    },
+  });
+  const vacantUnitOccupantCount = await prisma.unitOccupant.count({
+    where: { unitId: vacantUnitA2.id },
+  });
+  if (vacantUnitOccupantCount !== 0) {
+    throw new Error(`Expected vacant unit ${vacantUnitA2.code} to have no occupants`);
+  }
+
   // Units for Building B1 (3 unidades)
   const unitsB1: string[] = [];
   for (let i = 1; i <= 3; i++) {
@@ -784,7 +809,7 @@ async function main() {
 
 🏠 EDIFICIOS:
    Torre A Test:      ${buildingA1.id} (5 unidades)
-   Torre B Test:      ${buildingA2.id} (3 unidades)
+   Torre B Test:      ${buildingA2.id} (4 unidades, 1 vacante)
    Edificio Test B:   ${buildingB1.id} (3 unidades)
 
 💬 COMUNICADOS:
