@@ -1,0 +1,218 @@
+name: Deploy release-staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Exact release branch to deploy
+        required: true
+        type: string
+      sha:
+        description: Exact 40-character commit SHA to deploy
+        required: true
+        type: string
+
+concurrency:
+  group: release-staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy release-staging exact SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release-staging
+    env:
+      RELEASE_BRANCH: ${{ inputs.branch }}
+      DEPLOY_SHA: ${{ inputs.sha }}
+      SSH_HOST: ${{ secrets.RELEASE_STAGING_SSH_HOST }}
+      SSH_USER: ${{ secrets.RELEASE_STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.RELEASE_STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.RELEASE_STAGING_SSH_KNOWN_HOSTS }}
+      SSH_PORT: ${{ vars.RELEASE_STAGING_SSH_PORT || '22' }}
+      REMOTE_DIR: ${{ vars.RELEASE_STAGING_REMOTE_DIR }}
+      COMPOSE_FILE: ${{ vars.RELEASE_STAGING_COMPOSE_FILE }}
+      COMPOSE_PROJECT: ${{ vars.RELEASE_STAGING_COMPOSE_PROJECT }}
+      ENV_FILE: ${{ vars.RELEASE_STAGING_ENV_FILE }}
+      API_HEALTH_URL: ${{ vars.RELEASE_STAGING_API_HEALTH_URL }}
+      API_READY_URL: ${{ vars.RELEASE_STAGING_API_READY_URL }}
+      API_READYZ_URL: ${{ vars.RELEASE_STAGING_API_READYZ_URL }}
+      WEB_LOCAL_URL: ${{ vars.RELEASE_STAGING_WEB_LOCAL_URL }}
+      API_PUBLIC_HEALTH_URL: ${{ vars.RELEASE_STAGING_API_PUBLIC_HEALTH_URL }}
+      WEB_PUBLIC_LOGIN_URL: ${{ vars.RELEASE_STAGING_WEB_PUBLIC_LOGIN_URL }}
+    steps:
+      - name: Validate trusted workflow source and inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          fail() {
+            printf 'ERROR: %s\n' "$1" >&2
+            exit 1
+          }
+
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || fail "This workflow can only run from refs/heads/main"
+          [[ -n "$RELEASE_BRANCH" ]] || fail "branch input is required"
+          [[ -n "$DEPLOY_SHA" ]] || fail "sha input is required"
+          [[ "$RELEASE_BRANCH" != main ]] || fail "main is not allowed"
+          [[ "$RELEASE_BRANCH" != staging ]] || fail "staging is not allowed"
+          [[ "$RELEASE_BRANCH" != develop ]] || fail "develop is not allowed"
+          [[ "$RELEASE_BRANCH" != master ]] || fail "master is not allowed"
+          [[ "$RELEASE_BRANCH" != feature/* ]] || fail "feature/* branches are not allowed"
+          [[ "$RELEASE_BRANCH" != fix/* ]] || fail "fix/* branches are not allowed"
+          [[ "$RELEASE_BRANCH" != chore/* ]] || fail "chore/* branches are not allowed"
+          [[ "$RELEASE_BRANCH" == release/prod-wave-* ]] || fail "Branch must start with release/prod-wave-"
+          [[ "$RELEASE_BRANCH" != */ ]] || fail "Branch must not end with /"
+          [[ "$RELEASE_BRANCH" != *"//"* ]] || fail "Branch must not contain //"
+          [[ "$RELEASE_BRANCH" != *".."* ]] || fail "Branch must not contain .."
+          [[ "$RELEASE_BRANCH" != *"~"* ]] || fail "Branch must not contain ~"
+          [[ "$RELEASE_BRANCH" != *"^"* ]] || fail "Branch must not contain ^"
+          [[ "$RELEASE_BRANCH" != *":"* ]] || fail "Branch must not contain :"
+          [[ "$RELEASE_BRANCH" != *"?"* ]] || fail "Branch must not contain ?"
+          [[ "$RELEASE_BRANCH" != *"*"* ]] || fail "Branch must not contain *"
+          [[ "$RELEASE_BRANCH" != *"["* ]] || fail "Branch must not contain ["
+          [[ "$RELEASE_BRANCH" != *"\\"* ]] || fail "Branch must not contain backslashes"
+          git check-ref-format --branch "$RELEASE_BRANCH" >/dev/null || fail "Branch contains invalid ref characters"
+          [[ "$RELEASE_BRANCH" =~ ^release/prod-wave-[0-9]+(-[a-z0-9][a-z0-9-]*)?$ ]] || fail "Branch does not match the authorized release pattern"
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "SHA must be exactly 40 lowercase hex characters"
+
+      - name: Checkout requested SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Validate ancestry and release-staging settings
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          fail() {
+            printf 'ERROR: %s\n' "$1" >&2
+            exit 1
+          }
+
+          require_exact() {
+            local label="$1"
+            local actual="$2"
+            local expected="$3"
+            [[ -n "$actual" ]] || fail "$label is required"
+            [[ "$actual" == "$expected" ]] || fail "$label must be exactly $expected"
+          }
+
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || fail "Trusted workflow source mismatch"
+          git cat-file -e "${DEPLOY_SHA}^{commit}"
+          git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          git show-ref --verify --quiet "refs/remotes/origin/${RELEASE_BRANCH}" || fail "Missing remote ref for ${RELEASE_BRANCH}"
+          git merge-base --is-ancestor "${DEPLOY_SHA}" "refs/remotes/origin/${RELEASE_BRANCH}"
+          test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
+
+          require_exact 'RELEASE_STAGING_REMOTE_DIR' "$REMOTE_DIR" '/opt/pawtech/apps/buildingos-release-staging/buildingos-app'
+          require_exact 'RELEASE_STAGING_COMPOSE_FILE' "$COMPOSE_FILE" 'infra/docker/docker-compose.release-staging.yml'
+          require_exact 'RELEASE_STAGING_COMPOSE_PROJECT' "$COMPOSE_PROJECT" 'buildingos-release-staging'
+          require_exact 'RELEASE_STAGING_ENV_FILE' "$ENV_FILE" '/opt/pawtech/env/buildingos-release-staging.env'
+
+          case "$REMOTE_DIR" in
+            ''|'/')
+              fail "Remote directory cannot be empty or /"
+              ;;
+            /opt/pawtech/apps/buildingos|/opt/pawtech/apps/buildingos/*)
+              fail "Production path is not allowed"
+              ;;
+            /opt/pawtech/apps/buildingos-staging|/opt/pawtech/apps/buildingos-staging/*)
+              fail "Staging path is not allowed"
+              ;;
+          esac
+
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || fail "SSH secrets are incomplete"
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || fail "SSH port must be numeric"
+          [[ -n "$API_HEALTH_URL" && -n "$API_READY_URL" && -n "$API_READYZ_URL" && -n "$WEB_LOCAL_URL" && -n "$API_PUBLIC_HEALTH_URL" && -n "$WEB_PUBLIC_LOGIN_URL" ]] || fail "Release-staging URLs are incomplete"
+
+      - name: Prepare SSH material and deploy release-staging
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          fail() {
+            printf 'ERROR: %s\n' "$1" >&2
+            exit 1
+          }
+
+          require_exact() {
+            local label="$1"
+            local actual="$2"
+            local expected="$3"
+            [[ -n "$actual" ]] || fail "$label is required"
+            [[ "$actual" == "$expected" ]] || fail "$label must be exactly $expected"
+          }
+
+          require_exact 'RELEASE_STAGING_REMOTE_DIR' "$REMOTE_DIR" '/opt/pawtech/apps/buildingos-release-staging/buildingos-app'
+          require_exact 'RELEASE_STAGING_COMPOSE_FILE' "$COMPOSE_FILE" 'infra/docker/docker-compose.release-staging.yml'
+          require_exact 'RELEASE_STAGING_COMPOSE_PROJECT' "$COMPOSE_PROJECT" 'buildingos-release-staging'
+          require_exact 'RELEASE_STAGING_ENV_FILE' "$ENV_FILE" '/opt/pawtech/env/buildingos-release-staging.env'
+
+          install -d -m 700 "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/release-staging-key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/release-staging-known-hosts.XXXXXX")"
+          cleanup() {
+            rm -f "$key_file" "$known_hosts_file"
+          }
+          trap cleanup EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(
+            -i "$key_file"
+            -o UserKnownHostsFile="$known_hosts_file"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -p "$SSH_PORT"
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+          )
+
+          remote_env=(
+            "RELEASE_STAGING_REMOTE_DIR=$REMOTE_DIR"
+            "RELEASE_STAGING_COMPOSE_FILE=$COMPOSE_FILE"
+            "RELEASE_STAGING_COMPOSE_PROJECT=$COMPOSE_PROJECT"
+            "RELEASE_STAGING_ENV_FILE=$ENV_FILE"
+          )
+
+          remote_args=()
+          for arg in "$RELEASE_BRANCH" "$DEPLOY_SHA"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+
+          deploy_output="$(
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "${remote_env[*]} bash -s -- ${remote_args[*]}" < scripts/deploy-release-staging.sh
+          )"
+          printf '%s\n' "$deploy_output"
+
+          remote_head="$(
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "cd \"$REMOTE_DIR\" && git rev-parse HEAD"
+          )"
+          remote_status="$(
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "cd \"$REMOTE_DIR\" && git status --porcelain --untracked-files=all"
+          )"
+
+          [[ "$remote_head" == "$DEPLOY_SHA" ]] || fail "Remote HEAD does not match the requested SHA"
+          [[ -z "$remote_status" ]] || fail "Remote working tree must be clean"
+
+          {
+            echo "### release-staging deployment"
+            echo "- branch: \`$RELEASE_BRANCH\`"
+            echo "- requested SHA: \`$DEPLOY_SHA\`"
+            echo "- validated SHA: \`$(git rev-parse HEAD)\`"
+            echo "- remote SHA after deploy: \`$remote_head\`"
+            echo "- remote working tree: clean"
+            echo "- compose project: \`$COMPOSE_PROJECT\`"
+            echo "- compose file: \`$COMPOSE_FILE\`"
+            echo "- env file: \`$ENV_FILE\`"
+            echo "- smoke: completed via scripts/deploy-release-staging.sh"
+            echo "- evidence id: \`run-${GITHUB_RUN_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
