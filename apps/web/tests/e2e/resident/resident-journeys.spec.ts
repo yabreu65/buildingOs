@@ -310,9 +310,13 @@ test.describe('Resident critical journeys', () => {
 
     await page.goto(residentDashboardPath(tenantBId));
 
-    await expect(page).toHaveURL(/\/login(?:\?|$)/);
-    await expect(page.getByText(/inicia sesión con tu cuenta/i)).toBeVisible();
-    await expect(page.getByRole('heading', { name: /hola, test resident/i })).toHaveCount(0);
+    await expect(page).toHaveURL(
+      new RegExp(`/${tenantAId}/resident/dashboard$`),
+      { timeout: 15000 },
+    );
+    await expect(page).not.toHaveURL(new RegExp(`/${tenantBId}/resident/`));
+    await expect(page).not.toHaveURL(/\/login(?:\?|$)/);
+    await expect(page.getByRole('heading', { name: /hola, test resident/i })).toBeVisible();
   });
 
   test('keeps the resident route tenant when activeTenantId points to a different admin tenant', async ({ page }) => {
