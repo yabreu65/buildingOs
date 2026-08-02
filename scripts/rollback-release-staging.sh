@@ -66,12 +66,15 @@ record_evidence() {
   local branch="$2"
   local previous_sha="$3"
   local target_sha="$4"
+  local compose_config_status="$5"
+  local phase="$6"
 
   install -d -m 700 "$EXPECTED_ROOT/deployments"
   local evidence_file="$EXPECTED_ROOT/deployments/rollback-$(date -u +%Y%m%dT%H%M%SZ)-${target_sha}.txt"
   umask 077
   {
     printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'phase=%s\n' "$phase"
     printf 'status=%s\n' "$status"
     printf 'branch=%s\n' "$branch"
     printf 'previous_sha=%s\n' "$previous_sha"
@@ -79,7 +82,7 @@ record_evidence() {
     printf 'compose_project=%s\n' "$EXPECTED_COMPOSE_PROJECT"
     printf 'compose_file=%s\n' "$EXPECTED_COMPOSE_FILE"
     printf 'env_file=%s\n' "$EXPECTED_ENV_FILE"
-    printf 'restore_db=manual_only\n'
+    printf 'compose_config=%s\n' "$compose_config_status"
   } > "$evidence_file"
   chmod 600 "$evidence_file"
   printf '%s\n' "$evidence_file"
@@ -94,6 +97,7 @@ main() {
   local compose_project
   local compose_file
   local env_file
+  local compose_config_output
 
   validate_branch "$branch"
   validate_sha "$target_sha"
@@ -148,13 +152,15 @@ main() {
   )
 
   "${compose_cmd[@]}" config --quiet
-  "${compose_cmd[@]}" up --detach
+  compose_config_output="$("${compose_cmd[@]}" config)"
 
-  local smoke_output
-  smoke_output="$(scripts/smoke-release-staging.sh "$target_sha" 2>&1)"
-  printf '%s\n' "$smoke_output"
+  if grep -qiE 'prisma[[:space:]]+migrate|migrate[[:space:]]+deploy|migrate[[:space:]]+dev|api-migrate' <<<"$compose_config_output"; then
+    fail "Wave 0 rollback must not include migrations"
+  fi
 
-  record_evidence "SUCCESS" "$branch" "$previous_sha" "$target_sha" >/dev/null
+  "${compose_cmd[@]}" up --detach --build
+
+  record_evidence "SUCCESS" "$branch" "$previous_sha" "$target_sha" "validated-no-migrations" "rollback" >/dev/null
   printf 'Rollback completed for %s to %s\n' "$branch" "$target_sha"
   printf 'Manual database restore is not performed automatically in Wave 0; keep restore separate if a future wave requires it.\n'
 }

@@ -66,14 +66,15 @@ record_evidence() {
   local branch="$2"
   local previous_sha="$3"
   local target_sha="$4"
-  local compose_output="$5"
-  local smoke_output="$6"
+  local compose_config_status="$5"
+  local phase="$6"
 
   install -d -m 700 "$EXPECTED_ROOT/deployments"
-  local evidence_file="$EXPECTED_ROOT/deployments/$(date -u +%Y%m%dT%H%M%SZ)-${target_sha}.txt"
+  local evidence_file="$EXPECTED_ROOT/deployments/deploy-$(date -u +%Y%m%dT%H%M%SZ)-${target_sha}.txt"
   umask 077
   {
     printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'phase=%s\n' "$phase"
     printf 'status=%s\n' "$status"
     printf 'branch=%s\n' "$branch"
     printf 'previous_sha=%s\n' "$previous_sha"
@@ -81,8 +82,7 @@ record_evidence() {
     printf 'compose_project=%s\n' "$EXPECTED_COMPOSE_PROJECT"
     printf 'compose_file=%s\n' "$EXPECTED_COMPOSE_FILE"
     printf 'env_file=%s\n' "$EXPECTED_ENV_FILE"
-    printf 'compose_config=%s\n' "$compose_output"
-    printf 'smoke=%s\n' "$smoke_output"
+    printf 'compose_config=%s\n' "$compose_config_status"
   } > "$evidence_file"
   chmod 600 "$evidence_file"
   printf '%s\n' "$evidence_file"
@@ -152,20 +152,16 @@ main() {
   )
 
   local compose_config_output
-  compose_config_output="$("${compose_cmd[@]}" config --quiet 2>&1 || true)"
   "${compose_cmd[@]}" config --quiet
+  compose_config_output="$("${compose_cmd[@]}" config)"
 
-  if grep -qiE 'migrate|api-migrate|prisma[[:space:]]+migrate' <<<"$compose_config_output"; then
+  if grep -qiE 'prisma[[:space:]]+migrate|migrate[[:space:]]+deploy|migrate[[:space:]]+dev|api-migrate' <<<"$compose_config_output"; then
     fail "Wave 0 deploy must not include migrations"
   fi
 
-  "${compose_cmd[@]}" up --detach
+  "${compose_cmd[@]}" up --detach --build
 
-  local smoke_output
-  smoke_output="$(scripts/smoke-release-staging.sh "$target_sha" 2>&1)"
-  printf '%s\n' "$smoke_output"
-
-  record_evidence "SUCCESS" "$branch" "$previous_sha" "$target_sha" "compose-config-ok" "smoke-ok" >/dev/null
+  record_evidence "SUCCESS" "$branch" "$previous_sha" "$target_sha" "validated-no-migrations" "deploy" >/dev/null
   printf 'Deployment completed for %s at %s\n' "$target_sha" "$branch"
 }
 

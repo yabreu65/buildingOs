@@ -28,6 +28,8 @@ jobs:
     env:
       RELEASE_BRANCH: ${{ inputs.branch }}
       DEPLOY_SHA: ${{ inputs.sha }}
+      TRUSTED_CONTROL_DIR: trusted-control
+      RELEASE_SOURCE_DIR: release-source
       SSH_HOST: ${{ secrets.RELEASE_STAGING_SSH_HOST }}
       SSH_USER: ${{ secrets.RELEASE_STAGING_SSH_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.RELEASE_STAGING_SSH_PRIVATE_KEY }}
@@ -44,7 +46,23 @@ jobs:
       API_PUBLIC_HEALTH_URL: ${{ vars.RELEASE_STAGING_API_PUBLIC_HEALTH_URL }}
       WEB_PUBLIC_LOGIN_URL: ${{ vars.RELEASE_STAGING_WEB_PUBLIC_LOGIN_URL }}
     steps:
-      - name: Validate trusted workflow source and inputs
+      - name: Checkout trusted control from github.sha
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-control
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout requested release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          path: release-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate trusted and release checkouts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -52,6 +70,14 @@ jobs:
           fail() {
             printf 'ERROR: %s\n' "$1" >&2
             exit 1
+          }
+
+          require_exact() {
+            local label="$1"
+            local actual="$2"
+            local expected="$3"
+            [[ -n "$actual" ]] || fail "$label is required"
+            [[ "$actual" == "$expected" ]] || fail "$label must be exactly $expected"
           }
 
           [[ "$GITHUB_REF" == "refs/heads/main" ]] || fail "This workflow can only run from refs/heads/main"
@@ -79,37 +105,15 @@ jobs:
           [[ "$RELEASE_BRANCH" =~ ^release/prod-wave-[0-9]+(-[a-z0-9][a-z0-9-]*)?$ ]] || fail "Branch does not match the authorized release pattern"
           [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "SHA must be exactly 40 lowercase hex characters"
 
-      - name: Checkout requested SHA
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.sha }}
-          fetch-depth: 0
-
-      - name: Validate ancestry and release-staging settings
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          fail() {
-            printf 'ERROR: %s\n' "$1" >&2
-            exit 1
-          }
-
-          require_exact() {
-            local label="$1"
-            local actual="$2"
-            local expected="$3"
-            [[ -n "$actual" ]] || fail "$label is required"
-            [[ "$actual" == "$expected" ]] || fail "$label must be exactly $expected"
-          }
-
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] || fail "Trusted workflow source mismatch"
-          git cat-file -e "${DEPLOY_SHA}^{commit}"
-          git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
-          git show-ref --verify --quiet "refs/remotes/origin/${RELEASE_BRANCH}" || fail "Missing remote ref for ${RELEASE_BRANCH}"
-          git merge-base --is-ancestor "${DEPLOY_SHA}" "refs/remotes/origin/${RELEASE_BRANCH}"
-          test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
-
+          require_exact 'trusted control HEAD' "$(git -C "$TRUSTED_CONTROL_DIR" rev-parse HEAD)" "$GITHUB_SHA"
+          require_exact 'release source HEAD' "$(git -C "$RELEASE_SOURCE_DIR" rev-parse HEAD)" "$DEPLOY_SHA"
+          git -C "$RELEASE_SOURCE_DIR" cat-file -e "${DEPLOY_SHA}^{commit}"
+          git -C "$RELEASE_SOURCE_DIR" fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          git -C "$RELEASE_SOURCE_DIR" show-ref --verify --quiet "refs/remotes/origin/${RELEASE_BRANCH}" || fail "Missing remote ref for ${RELEASE_BRANCH}"
+          git -C "$RELEASE_SOURCE_DIR" merge-base --is-ancestor "${DEPLOY_SHA}" "refs/remotes/origin/${RELEASE_BRANCH}"
+          test -x "$TRUSTED_CONTROL_DIR/scripts/deploy-release-staging.sh"
+          test -x "$TRUSTED_CONTROL_DIR/scripts/smoke-release-staging.sh"
+          test -x "$TRUSTED_CONTROL_DIR/scripts/rollback-release-staging.sh"
           require_exact 'RELEASE_STAGING_REMOTE_DIR' "$REMOTE_DIR" '/opt/pawtech/apps/buildingos-release-staging/buildingos-app'
           require_exact 'RELEASE_STAGING_COMPOSE_FILE' "$COMPOSE_FILE" 'infra/docker/docker-compose.release-staging.yml'
           require_exact 'RELEASE_STAGING_COMPOSE_PROJECT' "$COMPOSE_PROJECT" 'buildingos-release-staging'
@@ -131,7 +135,7 @@ jobs:
           [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || fail "SSH port must be numeric"
           [[ -n "$API_HEALTH_URL" && -n "$API_READY_URL" && -n "$API_READYZ_URL" && -n "$WEB_LOCAL_URL" && -n "$API_PUBLIC_HEALTH_URL" && -n "$WEB_PUBLIC_LOGIN_URL" ]] || fail "Release-staging URLs are incomplete"
 
-      - name: Prepare SSH material and deploy release-staging
+      - name: Prepare SSH material and run trusted deploy and smoke
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -182,16 +186,25 @@ jobs:
             "RELEASE_STAGING_ENV_FILE=$ENV_FILE"
           )
 
-          remote_args=()
+          remote_deploy_args=()
           for arg in "$RELEASE_BRANCH" "$DEPLOY_SHA"; do
             printf -v quoted '%q' "$arg"
-            remote_args+=("$quoted")
+            remote_deploy_args+=("$quoted")
           done
 
+          remote_smoke_args=()
+          printf -v quoted_smoke '%q' "$DEPLOY_SHA"
+          remote_smoke_args+=("$quoted_smoke")
+
           deploy_output="$(
-            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "${remote_env[*]} bash -s -- ${remote_args[*]}" < scripts/deploy-release-staging.sh
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "${remote_env[*]} bash -s -- ${remote_deploy_args[*]}" < "$TRUSTED_CONTROL_DIR/scripts/deploy-release-staging.sh"
           )"
           printf '%s\n' "$deploy_output"
+
+          smoke_output="$(
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "${remote_env[*]} bash -s -- ${remote_smoke_args[*]}" < "$TRUSTED_CONTROL_DIR/scripts/smoke-release-staging.sh"
+          )"
+          printf '%s\n' "$smoke_output"
 
           remote_head="$(
             ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "cd \"$REMOTE_DIR\" && git rev-parse HEAD"
@@ -207,12 +220,14 @@ jobs:
             echo "### release-staging deployment"
             echo "- branch: \`$RELEASE_BRANCH\`"
             echo "- requested SHA: \`$DEPLOY_SHA\`"
-            echo "- validated SHA: \`$(git rev-parse HEAD)\`"
+            echo "- trusted control SHA: \`$(git -C "$TRUSTED_CONTROL_DIR" rev-parse HEAD)\`"
+            echo "- release source SHA: \`$(git -C "$RELEASE_SOURCE_DIR" rev-parse HEAD)\`"
             echo "- remote SHA after deploy: \`$remote_head\`"
             echo "- remote working tree: clean"
             echo "- compose project: \`$COMPOSE_PROJECT\`"
             echo "- compose file: \`$COMPOSE_FILE\`"
             echo "- env file: \`$ENV_FILE\`"
-            echo "- smoke: completed via scripts/deploy-release-staging.sh"
+            echo "- deploy evidence: \`phase=deploy\`"
+            echo "- smoke evidence: \`phase=smoke\`"
             echo "- evidence id: \`run-${GITHUB_RUN_ID}\`"
           } >> "$GITHUB_STEP_SUMMARY"

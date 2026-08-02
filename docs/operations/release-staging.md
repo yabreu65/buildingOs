@@ -6,9 +6,9 @@ Release-staging is a temporary, isolated environment for validating production w
 
 1. Verify the branch follows the release-wave pattern and the SHA belongs to that branch.
 2. Open GitHub Actions and run the `Deploy release-staging` workflow from `main`.
-3. Confirm the Environment, deploy summary, smoke checks, and evidence.
+3. Confirm the Environment, deploy summary, trusted smoke checks, and evidence.
 4. If needed, rerun the exact same SHA to prove idempotency.
-5. Roll back with the rollback script only; do not restore data automatically.
+5. Roll back with the trusted rollback script and then run the trusted smoke script; do not restore data automatically.
 
 ## Architecture
 
@@ -28,6 +28,8 @@ Release-staging is a temporary, isolated environment for validating production w
 | PostgreSQL DB | `buildingos_release_staging_db` |
 | PostgreSQL user | `buildingos_release_staging` |
 | MinIO bucket | `buildingos-release-staging` |
+| MinIO server image | `minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` |
+| MinIO client image | `minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727` |
 
 ### Services
 
@@ -56,10 +58,10 @@ Release-staging is a temporary, isolated environment for validating production w
 |---|---|
 | `infra/docker/docker-compose.release-staging.yml` | Isolated Compose stack with release-staging-only names, ports, network, and routers. |
 | `infra/docker/.env.release-staging.example` | Placeholder env contract for the release-staging VPS. |
-| `scripts/deploy-release-staging.sh` | Remote deploy orchestration, detached checkout, Compose validation, smoke, and evidence. |
-| `scripts/smoke-release-staging.sh` | Local and public smoke verification for the release-staging deployment. |
-| `scripts/rollback-release-staging.sh` | Roll back to an earlier approved SHA without automatic database restore. |
-| `.github/workflows/deploy-release-staging.yml` | Manual GitHub Actions workflow that validates `main`, branch, SHA, SSH, and evidence. |
+| `scripts/deploy-release-staging.sh` | Remote deploy orchestration, detached checkout, Compose validation, rebuild, and deploy evidence. |
+| `scripts/smoke-release-staging.sh` | Trusted-control smoke verification for the release-staging deployment. |
+| `scripts/rollback-release-staging.sh` | Trusted rollback to an earlier approved SHA without automatic database restore. |
+| `.github/workflows/deploy-release-staging.yml` | Manual GitHub Actions workflow that validates `main`, branch, SHA, SSH, and trusted-control execution. |
 | `docs/operations/release-staging.md` | This runbook. |
 
 ## GitHub Environment
@@ -93,6 +95,8 @@ The exact Environment name is:
 | `RELEASE_STAGING_API_PUBLIC_HEALTH_URL` | Public API health URL used by the workflow. |
 | `RELEASE_STAGING_WEB_PUBLIC_LOGIN_URL` | Public web login URL used by the workflow. |
 
+The release-staging runtime env uses `LOG_LEVEL=log`, which is one of the API-accepted log levels.
+
 No secret values are stored in this repository.
 
 ## Preparing the VPS
@@ -114,6 +118,7 @@ The following checklist is future work. Mark every item as **pending** until the
 - [ ] Backups and metadata directories exist under `/opt/pawtech/apps/buildingos-release-staging`.
 - [ ] Evidence directories exist under `/opt/pawtech/apps/buildingos-release-staging/deployments`.
 - [ ] Log directories exist under `/opt/pawtech/apps/buildingos-release-staging/logs`.
+- [ ] MinIO server and client images are pinned to immutable identifiers.
 
 ## Creating a release branch
 
@@ -173,12 +178,13 @@ The deploy script is responsible for the following:
 4. Fetch the exact branch and verify the SHA belongs to it.
 5. Switch the remote checkout to detached HEAD at the requested SHA.
 6. Verify the working tree is clean.
-7. Render the release-staging Compose configuration.
-8. Start the release-staging services.
-9. Run the smoke checks.
-10. Record sanitized evidence.
+7. Render the release-staging Compose configuration and scan the rendered output for migration commands.
+8. Rebuild the API and Web images while starting the release-staging services.
+9. Run the trusted-control smoke checks after deploy.
+10. Record sanitized deploy evidence.
 
 Wave 0 does **not** run functional migrations.
+The deploy script never executes smoke from the release SHA checkout.
 
 ## Smoke
 
@@ -205,6 +211,8 @@ FAIL criteria:
 - The repository is not in detached HEAD.
 - The working tree is dirty.
 
+The smoke script must always come from `trusted-control/scripts/smoke-release-staging.sh`; the release-source checkout is never trusted for deployment control.
+
 ## Evidence
 
 The workflow and scripts should preserve sanitized evidence only. Record:
@@ -212,12 +220,16 @@ The workflow and scripts should preserve sanitized evidence only. Record:
 - requested branch
 - requested SHA
 - validated SHA
+- trusted control SHA
+- release source SHA
 - remote SHA after deploy
 - working tree status
 - Compose project
 - Compose file
 - env file
-- health and smoke results
+- deploy phase evidence
+- smoke phase evidence
+- rollback phase evidence
 - execution identifier
 
 Evidence is stored under the release-staging evidence directory on the host. Do not store secret values in evidence.
@@ -231,6 +243,7 @@ Expected results:
 - the remote HEAD stays on the same SHA;
 - the Compose project remains `buildingos-release-staging`;
 - the services stay healthy;
+- the images are rebuilt for the selected SHA;
 - no duplicate resources are created;
 - the smoke script still passes.
 
@@ -243,9 +256,9 @@ The rollback procedure:
 1. Select the earlier approved SHA.
 2. Validate the release branch and SHA.
 3. Switch the remote checkout to detached HEAD at the rollback SHA.
-4. Bring up the fixed Compose project.
-5. Run smoke checks again.
-6. Record sanitized rollback evidence.
+4. Rebuild the fixed Compose project.
+5. Record sanitized rollback evidence.
+6. Run the trusted smoke script separately from trusted control.
 
 Important:
 
@@ -325,7 +338,9 @@ Wave 1 may not start until all of the following are true:
 |---|---|
 | Keep release-staging separate from normal staging | It must validate release waves without replacing the always-on staging environment. |
 | Execute the workflow from `main` | This prevents a modified workflow from being run from an untrusted release branch. |
+| Keep deploy and smoke scripts on the trusted ref | Release branches must never be able to replace deployment control logic. |
 | Validate branch and SHA together | The branch proves provenance; the SHA proves the exact deployment target. |
+| Pin MinIO images to immutable digests | Reproducible deploys and rollbacks must not depend on mutable tags. |
 | Avoid functional migrations in Wave 0 | Wave 0 validates the deployment substrate, not schema changes. |
 
 ## References
