@@ -170,9 +170,13 @@ test.describe('Resident critical journeys', () => {
 
     await setResidentUnit(unit102Id);
     await expect(page.getByText(/contexto actual:.*unidad a1-102/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Comunicado Unidad 102')).toBeVisible();
+    await expect(page.getByText('Comunicado Unidad 103')).toHaveCount(0);
 
     await setResidentUnit(unit103Id);
     await expect(page.getByText(/contexto actual:.*unidad a1-103/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Comunicado Unidad 103')).toBeVisible();
+    await expect(page.getByText('Comunicado Unidad 102')).toHaveCount(0);
   });
 
   test('logs out and keeps protected resident routes inaccessible', async ({ page }) => {
