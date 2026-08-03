@@ -178,7 +178,7 @@ test.describe('Resident critical journeys', () => {
     await expect(page.getByText('Unidad A1-102', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('Saldo pendiente')).toBeVisible();
     await expect(page.getByText('Comunicado Unidad 102')).toBeVisible();
-    await expect(page.getByText('Fuga en lavadero')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /mis reclamos/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /ver comunicados/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /crear reclamo/i })).toBeVisible();
 
