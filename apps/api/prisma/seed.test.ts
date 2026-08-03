@@ -306,6 +306,46 @@ async function main() {
   // ============================================================================
   // MEMBERSHIPS & ROLES
   // ============================================================================
+  async function ensureMembershipRole(params: {
+    tenantId: string;
+    membershipId: string;
+    role: Role;
+    scopeType?: "TENANT" | "BUILDING" | "UNIT";
+    scopeBuildingId?: string | null;
+    scopeUnitId?: string | null;
+  }) {
+    const scopeType = params.scopeType ?? "TENANT";
+    const existingRole = await prisma.membershipRole.findFirst({
+      where: {
+        tenantId: params.tenantId,
+        membershipId: params.membershipId,
+        role: params.role,
+        scopeType,
+        ...(params.scopeBuildingId !== undefined ? { scopeBuildingId: params.scopeBuildingId } : {}),
+        ...(params.scopeUnitId !== undefined ? { scopeUnitId: params.scopeUnitId } : {}),
+      },
+      select: { id: true },
+    });
+
+    if (existingRole) {
+      return existingRole.id;
+    }
+
+    const createdRole = await prisma.membershipRole.create({
+      data: {
+        tenantId: params.tenantId,
+        membershipId: params.membershipId,
+        role: params.role,
+        scopeType,
+        ...(params.scopeBuildingId !== undefined ? { scopeBuildingId: params.scopeBuildingId } : {}),
+        ...(params.scopeUnitId !== undefined ? { scopeUnitId: params.scopeUnitId } : {}),
+      },
+      select: { id: true },
+    });
+
+    return createdRole.id;
+  }
+
   async function upsertMembership(params: { tenantId: string; userId: string; role: Role }) {
     const membership = await prisma.membership.upsert({
       where: { userId_tenantId: { userId: params.userId, tenantId: params.tenantId } },
@@ -313,13 +353,12 @@ async function main() {
       create: { tenantId: params.tenantId, userId: params.userId },
     });
 
-    try {
-      await prisma.membershipRole.create({
-        data: { tenantId: params.tenantId, membershipId: membership.id, role: params.role, scopeType: "TENANT" },
-      });
-    } catch (_e: unknown) {
-      if ((_e as { code?: string }).code !== "P2002") throw _e;
-    }
+    await ensureMembershipRole({
+      tenantId: params.tenantId,
+      membershipId: membership.id,
+      role: params.role,
+      scopeType: "TENANT",
+    });
     return membership;
   }
 
@@ -328,25 +367,12 @@ async function main() {
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.resident.id, role: Role.RESIDENT });
   await upsertMembership({ tenantId: tenantA.id, userId: testUsers.residentMulti.id, role: Role.RESIDENT });
   const residentMixedMembershipA = await upsertMembership({ tenantId: tenantA.id, userId: testUsers.residentMixed.id, role: Role.RESIDENT });
-  const residentMixedAdminRole = await prisma.membershipRole.findFirst({
-    where: {
-      tenantId: tenantA.id,
-      membershipId: residentMixedMembershipA.id,
-      role: Role.TENANT_ADMIN,
-      scopeType: "TENANT",
-    },
-    select: { id: true },
+  await ensureMembershipRole({
+    tenantId: tenantA.id,
+    membershipId: residentMixedMembershipA.id,
+    role: Role.TENANT_ADMIN,
+    scopeType: "TENANT",
   });
-  if (!residentMixedAdminRole) {
-    await prisma.membershipRole.create({
-      data: {
-        tenantId: tenantA.id,
-        membershipId: residentMixedMembershipA.id,
-        role: Role.TENANT_ADMIN,
-        scopeType: "TENANT",
-      },
-    });
-  }
   await upsertMembership({ tenantId: tenantB.id, userId: testUsers.tenantAdminB.id, role: Role.TENANT_ADMIN });
   await upsertMembership({ tenantId: tenantB.id, userId: testUsers.residentB.id, role: Role.RESIDENT });
 
@@ -356,11 +382,12 @@ async function main() {
     update: {},
     create: { tenantId: tenantA.id, userId: testUsers.superAdmin.id },
   });
-  try {
-    await prisma.membershipRole.create({
-      data: { tenantId: tenantA.id, membershipId: superAdminMembership.id, role: Role.SUPER_ADMIN, scopeType: "TENANT" },
-    });
-  } catch { /* ignore duplicate */ }
+  await ensureMembershipRole({
+    tenantId: tenantA.id,
+    membershipId: superAdminMembership.id,
+    role: Role.SUPER_ADMIN,
+    scopeType: "TENANT",
+  });
   console.log(`✅ Memberships & roles created`);
 
   // ============================================================================
