@@ -19,6 +19,19 @@ async function createResidentTicket(page: Page, tenantId: string, title: string,
   await expect(page.getByText(title, { exact: false })).toBeVisible({ timeout: POLL_TIMEOUT_MS });
 }
 
+async function loginRequiredFixture(
+  page: Page,
+  label: string,
+  user: (typeof TEST_USERS)[keyof typeof TEST_USERS],
+): Promise<string> {
+  try {
+    return await login(page, user);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`[fixture:${label}] ${message}`);
+  }
+}
+
 async function waitForNotificationTitle(page: Page, title: string): Promise<void> {
   const menuItem = page.getByRole('menuitem', { name: new RegExp(escapeRegExp(title), 'i') });
 
@@ -52,8 +65,8 @@ test.describe.serial('Administration global notification alerts', () => {
     const { residentContext, adminContext, residentPage, adminPage } = await createContexts(browser);
 
     try {
-      const residentTenantId = await login(residentPage, TEST_USERS.resident);
-      const adminTenantId = await login(adminPage, TEST_USERS.tenantAdminA);
+      const residentTenantId = await loginRequiredFixture(residentPage, 'resident', TEST_USERS.resident);
+      const adminTenantId = await loginRequiredFixture(adminPage, 'tenantAdminA', TEST_USERS.tenantAdminA);
 
       expect(adminTenantId).toBe(residentTenantId);
 
@@ -78,8 +91,8 @@ test.describe.serial('Administration global notification alerts', () => {
     const { residentContext, adminContext, residentPage, adminPage } = await createContexts(browser);
 
     try {
-      const residentTenantId = await login(residentPage, TEST_USERS.resident);
-      const adminTenantId = await login(adminPage, TEST_USERS.tenantAdminA);
+      const residentTenantId = await loginRequiredFixture(residentPage, 'resident', TEST_USERS.resident);
+      const adminTenantId = await loginRequiredFixture(adminPage, 'tenantAdminA', TEST_USERS.tenantAdminA);
 
       expect(adminTenantId).toBe(residentTenantId);
 
@@ -122,9 +135,17 @@ test.describe.serial('Administration global notification alerts', () => {
     const adminPage = await adminContext.newPage();
 
     try {
-      const residentCreatorTenantId = await login(residentCreatorPage, TEST_USERS.residentMulti);
-      const residentTenantId = await login(residentMixedPage, TEST_USERS.residentMixed);
-      const adminTenantId = await login(adminPage, TEST_USERS.tenantAdminA);
+      const residentCreatorTenantId = await loginRequiredFixture(
+        residentCreatorPage,
+        'residentMulti',
+        TEST_USERS.residentMulti,
+      );
+      const residentTenantId = await loginRequiredFixture(
+        residentMixedPage,
+        'residentMixed',
+        TEST_USERS.residentMixed,
+      );
+      const adminTenantId = await loginRequiredFixture(adminPage, 'tenantAdminA', TEST_USERS.tenantAdminA);
 
       expect(adminTenantId).toBe(residentCreatorTenantId);
       expect(residentTenantId).toBe(residentCreatorTenantId);
@@ -157,8 +178,8 @@ test.describe.serial('Administration global notification alerts', () => {
     const { residentContext, adminContext, residentPage, adminPage } = await createContexts(browser);
 
     try {
-      const tenantAId = await login(adminPage, TEST_USERS.tenantAdminA);
-      const residentTenantId = await login(residentPage, TEST_USERS.resident);
+      const tenantAId = await loginRequiredFixture(adminPage, 'tenantAdminA', TEST_USERS.tenantAdminA);
+      const residentTenantId = await loginRequiredFixture(residentPage, 'resident', TEST_USERS.resident);
       expect(tenantAId).toBe(residentTenantId);
 
       const ticketTitle = `Isolation ${Date.now().toString(36)}`;
@@ -174,7 +195,7 @@ test.describe.serial('Administration global notification alerts', () => {
       await expect(adminPage.getByRole('heading', { name: ticketTitle, exact: false })).toBeVisible();
 
       await logout(adminPage);
-      const tenantBAfterRelogin = await login(adminPage, TEST_USERS.tenantAdminB);
+      const tenantBAfterRelogin = await loginRequiredFixture(adminPage, 'tenantAdminB', TEST_USERS.tenantAdminB);
       expect(tenantBAfterRelogin).not.toBe(tenantAId);
 
       await adminPage.goto(`/${tenantBAfterRelogin}/dashboard`);

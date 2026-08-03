@@ -37,16 +37,16 @@ export const notificationQueryKeys = {
   scope(tenantId: string, userId: string): readonly ['notifications', string, string] {
     return ['notifications', tenantId, userId] as const;
   },
-  unreadCount(tenantId: string, userId: string): readonly ['notifications', 'unread-count', string, string] {
-    return ['notifications', 'unread-count', tenantId, userId] as const;
+  unreadCount(tenantId: string, userId: string): readonly ['notifications', string, string, 'unread-count'] {
+    return ['notifications', tenantId, userId, 'unread-count'] as const;
   },
   list(
     tenantId: string,
     userId: string,
     params?: ListNotificationsParams,
-  ): readonly ['notifications', 'list', string, string, boolean | null, string | null, number, number] {
+  ): readonly ['notifications', string, string, 'list', boolean | null, string | null, number, number] {
     const [isRead, type, skip, take] = normalizeListParams(params);
-    return ['notifications', 'list', tenantId, userId, isRead, type, skip, take] as const;
+    return ['notifications', tenantId, userId, 'list', isRead, type, skip, take] as const;
   },
 } as const;
 

@@ -5,6 +5,7 @@ import {
   setSession,
   setLastTenant,
   setLastPortal,
+  getLastPortal,
 } from '../../../features/auth/session.storage';
 import { logout } from '@/features/auth/login.actions';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
@@ -62,6 +63,7 @@ export const PaymentNotificationBell = ({
       tenantId,
       pathname,
       searchParamsString: currentSearch,
+      preferredPortal: getLastPortal(),
     }) ?? 'admin';
   const roleContext = {
     isAdmin,
@@ -424,6 +426,7 @@ export const Topbar = ({
       tenantId: urlTenantId,
       pathname,
       searchParamsString: currentSearch,
+      preferredPortal: getLastPortal(),
     });
     if (portal) {
       setLastPortal(portal);
@@ -445,6 +448,7 @@ export const Topbar = ({
     tenantId: activeTenantId,
     pathname,
     searchParamsString: currentSearch,
+    preferredPortal: getLastPortal(),
   });
   const role =
     activePortal === 'resident' && activeMembership?.roles.includes('RESIDENT')

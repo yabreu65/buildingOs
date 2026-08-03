@@ -155,4 +155,48 @@ describe('NotificationFeedAccessGuard', () => {
       'tenantId es requerido en los parámetros',
     );
   });
+
+  it('uses the impersonated tenant boundary instead of the actor membership lookup', async () => {
+    const request = buildRequest('tenant-a');
+    request.user.isImpersonating = true;
+    request.user.impersonatedTenantId = 'tenant-a';
+    request.user.membershipId = '';
+    request.user.roles = ['TENANT_ADMIN'];
+    request.user.memberships = [
+      {
+        tenantId: 'tenant-a',
+        roles: ['TENANT_ADMIN'],
+      },
+      {
+        tenantId: 'tenant-b',
+        roles: ['RESIDENT'],
+      },
+    ];
+
+    prisma.membership.findUnique.mockResolvedValue(null);
+
+    await expect(guard.canActivate(buildContext(request))).resolves.toBe(true);
+    expect(prisma.membership.findUnique).not.toHaveBeenCalled();
+    expect(request.tenantId).toBe('tenant-a');
+    expect(request.user.tenantId).toBe('tenant-a');
+    expect(request.user.membershipId).toBe('');
+    expect(request.user.roles).toEqual(['TENANT_ADMIN']);
+  });
+
+  it('rejects impersonation when the route tenant does not match the impersonated tenant', async () => {
+    const request = buildRequest('tenant-b');
+    request.user.isImpersonating = true;
+    request.user.impersonatedTenantId = 'tenant-a';
+    request.user.roles = ['TENANT_ADMIN'];
+    request.user.memberships = [
+      {
+        tenantId: 'tenant-a',
+        roles: ['TENANT_ADMIN'],
+      },
+    ];
+
+    await expect(guard.canActivate(buildContext(request))).rejects.toThrow(
+      'No tiene acceso al tenant tenant-b',
+    );
+  });
 });

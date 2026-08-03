@@ -161,6 +161,7 @@ describe('landing-route', () => {
     expect(resolvePortalFromPathname('/tenant-1/resident/dashboard')).toBe('resident');
     expect(resolvePortalFromPathname('/tenant-1/dashboard')).toBe('admin');
     expect(resolvePortalFromPathname('/tenant-1/tickets/ticket-1', 'portal=resident')).toBe('resident');
+    expect(resolvePortalFromPathname('/tenant-1/notifications')).toBeNull();
     expect(resolvePortalFromPathname('/login')).toBeNull();
   });
 
@@ -182,6 +183,14 @@ describe('landing-route', () => {
         session,
         tenantId: 'tenant-1',
         pathname: '/tenant-1/resident/payments',
+      }),
+    ).toBe('resident');
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/notifications',
       }),
     ).toBe('resident');
   });
@@ -242,5 +251,20 @@ describe('landing-route', () => {
         pathname: '/tenant-1/resident/dashboard',
       }),
     ).toBe('admin');
+  });
+
+  it('prefers the persisted resident portal for mixed users on neutral routes', () => {
+    const session = buildSession([
+      { tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] },
+    ]);
+
+    expect(
+      resolveAuthorizedPortalContext({
+        session,
+        tenantId: 'tenant-1',
+        pathname: '/tenant-1/notifications',
+        preferredPortal: 'resident',
+      }),
+    ).toBe('resident');
   });
 });

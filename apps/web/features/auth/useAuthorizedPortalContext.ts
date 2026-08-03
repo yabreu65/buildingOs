@@ -3,6 +3,7 @@
 import { usePathname, useSearchParams } from 'next/navigation';
 import { resolveAuthorizedPortalContext, type PortalContext } from './landing-route';
 import { useAuthSession } from './useAuthSession';
+import { getLastPortal } from './session.storage';
 
 export function useAuthorizedPortalContext(tenantId: string | null | undefined): PortalContext | null {
   const session = useAuthSession();
@@ -14,5 +15,6 @@ export function useAuthorizedPortalContext(tenantId: string | null | undefined):
     tenantId: typeof tenantId === 'string' && tenantId.trim().length > 0 ? tenantId.trim() : null,
     pathname,
     searchParamsString: searchParams.toString(),
+    preferredPortal: getLastPortal(),
   });
 }

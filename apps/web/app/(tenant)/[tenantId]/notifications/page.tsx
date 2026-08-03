@@ -16,6 +16,7 @@ import {
 import { Trash2, Check, CheckCheck } from 'lucide-react';
 import { t } from '@/i18n';
 import { useAuthSession } from '@/features/auth/useAuthSession';
+import { getLastPortal } from '@/features/auth/session.storage';
 import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import type { Notification } from '@/features/notifications/notifications.api';
 import { resolveAuthorizedPortalContext } from '@/features/auth/landing-route';
@@ -46,6 +47,7 @@ const NotificationsPage = () => {
       tenantId,
       pathname,
       searchParamsString: searchParams.toString(),
+      preferredPortal: getLastPortal(),
     }) ?? 'admin';
   const roleContext = useMemo(
     () => ({

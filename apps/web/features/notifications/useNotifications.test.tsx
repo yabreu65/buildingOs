@@ -67,10 +67,35 @@ describe('useNotifications', () => {
     const cacheKeys = queryClient.getQueryCache().getAll().map((query) => query.queryKey);
     expect(cacheKeys).toEqual(
       expect.arrayContaining([
-        ['notifications', 'unread-count', 'tenant-1', 'user-1'],
-        ['notifications', 'list', 'tenant-1', 'user-1', null, null, 0, 20],
+        ['notifications', 'tenant-1', 'user-1', 'unread-count'],
+        ['notifications', 'tenant-1', 'user-1', 'list', null, null, 0, 20],
       ]),
     );
+  });
+
+  it('keeps unread count and list requests independent for the same identity', async () => {
+    let resolveUnread!: (value: number) => void;
+    const unreadPromise = new Promise<number>((resolve) => {
+      resolveUnread = resolve;
+    });
+
+    mockedApi.getUnreadCount.mockReturnValue(unreadPromise);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useNotifications('tenant-1'), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      const fetchPromise = result.current.fetch({ take: 20 });
+      await Promise.resolve();
+      resolveUnread(4);
+      await fetchPromise;
+    });
+
+    await waitFor(() => {
+      expect(result.current.unreadCount).toBe(4);
+    });
   });
 
   it('drops the previous principal notification cache when the authenticated user changes', async () => {

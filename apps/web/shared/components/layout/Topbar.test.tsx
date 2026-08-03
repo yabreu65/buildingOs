@@ -34,6 +34,7 @@ jest.mock('@/features/finance/services/finance.api', () => ({
 
 jest.mock('@/features/auth/session.storage', () => ({
   getSession: jest.fn(),
+  getLastPortal: jest.fn(),
   setSession: jest.fn(),
   setLastTenant: jest.fn(),
   setLastPortal: jest.fn(),
@@ -69,6 +70,7 @@ const mockMarkAsRead = jest.mocked(notificationsApi.markAsRead);
 const mockMarkAllAsRead = jest.mocked(notificationsApi.markAllAsRead);
 const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
+const mockGetLastPortal = jest.mocked(sessionModule.getLastPortal);
 const mockSetSession = jest.mocked(sessionModule.setSession);
 const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
 const mockSetLastPortal = jest.mocked(sessionModule.setLastPortal);
@@ -142,6 +144,7 @@ describe('PaymentNotificationBell', () => {
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
       activeTenantId: TENANT_ID,
     });
+    mockGetLastPortal.mockReturnValue(null);
     mockGetUnreadCount.mockResolvedValue(0);
     mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
     mockListPendingPayments.mockResolvedValue([]);
@@ -758,6 +761,43 @@ describe('PaymentNotificationBell', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Comentario nuevo')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /ver notificaciones/i }));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/notifications?portal=resident');
+    });
+  });
+
+  it('keeps the resident portal context on neutral routes when it was persisted', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/notifications';
+    mockGetLastPortal.mockReturnValue('resident');
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-neutral',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'TICKET_COMMENT_ADDED',
+          title: 'Comentario neutral',
+          body: 'Hay una actualización',
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Comentario neutral')).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /ver notificaciones/i }));

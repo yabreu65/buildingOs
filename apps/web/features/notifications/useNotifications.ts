@@ -22,23 +22,27 @@ export function useNotifications(tenantId: string) {
     }),
     [tenantId, userId],
   );
+  const identityKey = useMemo(
+    () => (identity.tenantId && identity.userId ? `${identity.tenantId}::${identity.userId}` : ''),
+    [identity.tenantId, identity.userId],
+  );
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [total, setTotal] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const requestTokenRef = useRef(0);
+  const activeIdentityKeyRef = useRef('');
 
   useNotificationQueryCleanup(identity);
 
   useEffect(() => {
+    activeIdentityKeyRef.current = identityKey;
     setNotifications([]);
     setTotal(0);
     setUnreadCount(0);
     setLoading(false);
     setError(null);
-    requestTokenRef.current += 1;
-  }, [identity.tenantId, identity.userId]);
+  }, [identityKey]);
 
   const identityReady = Boolean(identity.tenantId && identity.userId);
   const resolvedTenantId = identity.tenantId;
@@ -47,31 +51,31 @@ export function useNotifications(tenantId: string) {
   const fetchUnreadCount = useCallback(async () => {
     if (!identityReady || !resolvedTenantId || !resolvedUserId) return 0;
 
-    const requestToken = ++requestTokenRef.current;
+    const requestIdentityKey = identityKey;
     try {
       const count = await queryClient.fetchQuery({
         queryKey: notificationQueryKeys.unreadCount(resolvedTenantId, resolvedUserId),
         queryFn: () => api.getUnreadCount(resolvedTenantId),
       });
 
-      if (requestTokenRef.current === requestToken) {
+      if (activeIdentityKeyRef.current === requestIdentityKey) {
         setUnreadCount(count);
       }
 
       return count;
     } catch (err) {
-      if (requestTokenRef.current === requestToken) {
+      if (activeIdentityKeyRef.current === requestIdentityKey) {
         setError(err instanceof Error ? err.message : 'Error al obtener notificaciones');
       }
       return 0;
     }
-  }, [identityReady, queryClient, resolvedTenantId, resolvedUserId]);
+  }, [identityKey, identityReady, queryClient, resolvedTenantId, resolvedUserId]);
 
   const fetchNotifications = useCallback(
     async (params?: ListNotificationsParams) => {
       if (!identityReady || !resolvedTenantId || !resolvedUserId) return undefined;
 
-      const requestToken = ++requestTokenRef.current;
+      const requestIdentityKey = identityKey;
       setLoading(true);
       setError(null);
 
@@ -81,24 +85,24 @@ export function useNotifications(tenantId: string) {
           queryFn: () => api.listNotifications(resolvedTenantId, params),
         });
 
-        if (requestTokenRef.current === requestToken) {
+        if (activeIdentityKeyRef.current === requestIdentityKey) {
           setNotifications(result.notifications);
           setTotal(result.total);
         }
 
         return result;
       } catch (err) {
-        if (requestTokenRef.current === requestToken) {
+        if (activeIdentityKeyRef.current === requestIdentityKey) {
           setError(err instanceof Error ? err.message : 'Error al obtener notificaciones');
         }
         return undefined;
       } finally {
-        if (requestTokenRef.current === requestToken) {
+        if (activeIdentityKeyRef.current === requestIdentityKey) {
           setLoading(false);
         }
       }
     },
-    [identityReady, queryClient, resolvedTenantId, resolvedUserId],
+    [identityKey, identityReady, queryClient, resolvedTenantId, resolvedUserId],
   );
 
   const invalidateCurrentNotificationQueries = useCallback(async () => {
