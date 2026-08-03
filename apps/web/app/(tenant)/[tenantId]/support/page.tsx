@@ -22,8 +22,8 @@ interface CreateTicketFormState {
 }
 
 const TenantSupportPage = () => {
-  const params = useParams();
-  const tenantId = params.tenantId as string;
+  const params = useParams<{ tenantId?: string }>();
+  const tenantId = typeof params?.tenantId === 'string' ? params.tenantId : '';
 
   const [status, setStatus] = useState<string>('');
   const [skip, setSkip] = useState(0);
@@ -133,7 +133,7 @@ const TenantSupportPage = () => {
           <h2 className="text-xl font-semibold mb-4">{t('tickets.create')}</h2>
           <form onSubmit={handleCreateTicket} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">{t('tickets.title')}</label>
+              <label className="block text-sm font-medium mb-2">{t('tickets.requestTitle')}</label>
               <input
                 type="text"
                 value={formData.title}

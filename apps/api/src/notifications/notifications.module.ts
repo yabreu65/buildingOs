@@ -5,6 +5,7 @@ import { AuditModule } from '../audit/audit.module';
 import { EmailModule } from '../email/email.module';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
+import { NotificationFeedAccessGuard } from './notification-feed.guard';
 
 /**
  * NotificationsModule: Global module for in-app + email notifications
@@ -15,7 +16,7 @@ import { NotificationsController } from './notifications.controller';
 @Global()
 @Module({
   imports: [AppConfigModule, PrismaModule, AuditModule, EmailModule],
-  providers: [NotificationsService],
+  providers: [NotificationsService, NotificationFeedAccessGuard],
   controllers: [NotificationsController],
   exports: [NotificationsService],
 })

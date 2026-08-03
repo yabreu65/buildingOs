@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
-import { useParams, usePathname } from 'next/navigation';
+import { useParams, usePathname, useSearchParams } from 'next/navigation';
 import { useRouter } from 'next/navigation';
 import { useNotifications } from '@/features/notifications/useNotifications';
 import {
@@ -16,14 +16,18 @@ import {
 import { Trash2, Check, CheckCheck } from 'lucide-react';
 import { t } from '@/i18n';
 import { useAuthSession } from '@/features/auth/useAuthSession';
+import { getLastPortal } from '@/features/auth/session.storage';
 import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import type { Notification } from '@/features/notifications/notifications.api';
+import { resolveAuthorizedPortalContext } from '@/features/auth/landing-route';
 
 const NotificationsPage = () => {
   const params = useParams();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const tenantId = params.tenantId as string;
+  const tenantIdParam = params.tenantId;
+  const tenantId = typeof tenantIdParam === 'string' && tenantIdParam.trim().length > 0 ? tenantIdParam.trim() : '';
   const session = useAuthSession();
   const [isRead, setIsRead] = useState<boolean | undefined>(undefined);
   const [skip, setSkip] = useState(0);
@@ -37,7 +41,14 @@ const NotificationsPage = () => {
     () => session?.memberships?.find((membership) => membership.tenantId === tenantId),
     [session, tenantId],
   );
-  const portalContext: 'resident' | 'admin' = pathname?.includes('/resident/') ? 'resident' : 'admin';
+  const portalContext =
+    resolveAuthorizedPortalContext({
+      session,
+      tenantId,
+      pathname,
+      searchParamsString: searchParams.toString(),
+      preferredPortal: getLastPortal(),
+    }) ?? 'admin';
   const roleContext = useMemo(
     () => ({
       isAdmin: activeMembership?.roles?.some((role) => ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR', 'SUPER_ADMIN'].includes(role)) ?? false,
@@ -51,6 +62,14 @@ const NotificationsPage = () => {
   useEffect(() => {
     fetch({ isRead, skip, take });
   }, [isRead, skip, fetch]);
+
+  if (!tenantId) {
+    return (
+      <div className="p-6">
+        <ErrorState message="El ID del tenant es obligatorio" />
+      </div>
+    );
+  }
 
   const handleMarkAsRead = async (id: string, currentRead: boolean) => {
     if (currentRead) return;
@@ -142,13 +161,15 @@ const NotificationsPage = () => {
         <div>
           <h1 className="text-3xl font-bold">{t('notifications.title')}</h1>
           <p className="text-gray-600 mt-2">
-            {unreadCount > 0 ? `${unreadCount} notification${unreadCount !== 1 ? 's' : ''} sin leer` : t('notifications.allRead')}
+            {unreadCount > 0
+              ? `${unreadCount} ${unreadCount === 1 ? 'notificación sin leer' : 'notificaciones sin leer'}`
+              : t('notifications.allRead')}
           </p>
         </div>
         {unreadCount > 0 && (
           <Button onClick={handleMarkAllAsRead} variant="secondary" size="sm">
             <CheckCheck size={16} className="mr-2" />
-            Mark All Read
+            Marcar todas como leídas
           </Button>
         )}
       </div>
@@ -157,7 +178,7 @@ const NotificationsPage = () => {
       <Card className="p-4">
         <div className="flex gap-4 items-end">
           <div className="flex-1">
-            <label className="block text-sm font-medium mb-2">Filter</label>
+            <label className="block text-sm font-medium mb-2">Filtrar</label>
             <select
               value={isRead === undefined ? '' : String(isRead)}
               onChange={(e) => {
@@ -167,9 +188,9 @@ const NotificationsPage = () => {
               }}
               className="w-full px-3 py-2 border rounded-md"
             >
-              <option value="">All Notifications</option>
-              <option value="false">Unread Only</option>
-              <option value="true">Read Only</option>
+              <option value="">Todas las notificaciones</option>
+              <option value="false">Solo no leídas</option>
+              <option value="true">Solo leídas</option>
             </select>
           </div>
         </div>
@@ -179,7 +200,7 @@ const NotificationsPage = () => {
       {notifications.length === 0 ? (
         <EmptyState
           title="Sin notificaciones"
-          description={isRead === false ? 'You have read all notifications' : 'No notifications to display'}
+          description={isRead === false ? 'Ya leíste todas las notificaciones' : 'No hay notificaciones para mostrar'}
         />
       ) : (
         <div className="space-y-3">
@@ -222,7 +243,7 @@ const NotificationsPage = () => {
                     onClick={() => handleMarkAsRead(notification.id, notification.isRead)}
                   >
                     <Check size={16} className="mr-1" />
-                    Mark as Read
+                    Marcar como leída
                   </Button>
                 )}
                 <Button
@@ -231,7 +252,7 @@ const NotificationsPage = () => {
                   onClick={() => handleDelete(notification.id)}
                 >
                   <Trash2 size={16} className="mr-1" />
-                  Delete
+                  Eliminar
                 </Button>
               </div>
             </Card>
@@ -242,7 +263,7 @@ const NotificationsPage = () => {
       {/* Pagination Info */}
       {notifications.length > 0 && (
         <div className="text-sm text-gray-600 text-center py-4">
-          Showing {skip + 1} to {Math.min(skip + take, total)} of {total} notifications
+          Mostrando {skip + 1} a {Math.min(skip + take, total)} de {total} notificaciones
         </div>
       )}
     </div>

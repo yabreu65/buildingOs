@@ -5,6 +5,7 @@ import {
   setSession,
   setLastTenant,
   setLastPortal,
+  getLastPortal,
 } from '../../../features/auth/session.storage';
 import { logout } from '@/features/auth/login.actions';
 import { useTenants } from '../../../features/tenants/tenants.hooks';
@@ -13,24 +14,29 @@ import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
 import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useState, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+import { useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { listPendingPayments, PaymentStatus } from '@/features/finance/services/finance.api';
 import { PushPermissionControl } from '@/features/notifications/components/PushPermissionControl';
-import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import { getNotificationCategory } from '@/shared/lib/notification-types';
+import { resolveNotificationPath } from '@/shared/lib/notification-routes';
 import {
   resolveAuthLandingRoute,
   resolveAuthorizedPortalContext,
 } from '@/features/auth/landing-route';
 import { useAuthSession } from '@/features/auth/useAuthSession';
+import {
+  notificationQueryKeys,
+  useNotificationQueryCleanup,
+} from '@/features/notifications/notification-queries';
+import { notificationsCenterPath } from '@/shared/lib/routes';
 
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 
 const POLL_INTERVAL = 30_000;
 
-export function PaymentNotificationBell({
+export const PaymentNotificationBell = ({
   tenantId,
   currentSearch,
   isMobileMenuOpen = false,
@@ -38,7 +44,7 @@ export function PaymentNotificationBell({
   readonly tenantId: string;
   readonly currentSearch: string;
   readonly isMobileMenuOpen?: boolean;
-}) {
+}) => {
   const queryClient = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
@@ -46,6 +52,7 @@ export function PaymentNotificationBell({
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const userId = session?.user.id ?? null;
 
   const activeMembership = session?.memberships?.find((membership: Membership) => membership.tenantId === tenantId);
   const isAdmin = activeMembership?.roles?.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
@@ -56,6 +63,7 @@ export function PaymentNotificationBell({
       tenantId,
       pathname,
       searchParamsString: currentSearch,
+      preferredPortal: getLastPortal(),
     }) ?? 'admin';
   const roleContext = {
     isAdmin,
@@ -63,12 +71,21 @@ export function PaymentNotificationBell({
     portalContext,
   };
   const hasSession = Boolean(session);
+  const notificationIdentity = useMemo(
+    () => ({
+      tenantId,
+      userId,
+    }),
+    [tenantId, userId],
+  );
+
+  useNotificationQueryCleanup(notificationIdentity);
 
   // 1. Always-polling unread count for the badge
   const { data: unreadCount = 0 } = useQuery({
-    queryKey: ['notificationUnreadCount', tenantId],
+    queryKey: notificationQueryKeys.unreadCount(tenantId, userId ?? ''),
     queryFn: () => getUnreadCount(tenantId),
-    enabled: hasSession && Boolean(tenantId),
+    enabled: hasSession && Boolean(tenantId) && Boolean(userId),
     refetchInterval: POLL_INTERVAL,
     refetchOnWindowFocus: true,
     staleTime: 10_000,
@@ -91,9 +108,9 @@ export function PaymentNotificationBell({
     isLoading: listLoading,
     error: listError,
   } = useQuery({
-    queryKey: ['notificationList', tenantId],
+    queryKey: notificationQueryKeys.list(tenantId, userId ?? '', { take: 20 }),
     queryFn: () => listNotifications(tenantId, { take: 20 }),
-    enabled: hasSession && Boolean(tenantId) && isOpen,
+    enabled: hasSession && Boolean(tenantId) && Boolean(userId) && isOpen,
     refetchInterval: isOpen ? POLL_INTERVAL : false,
     refetchOnWindowFocus: true,
   });
@@ -102,38 +119,20 @@ export function PaymentNotificationBell({
   const markReadMutation = useMutation({
     mutationFn: (notificationId: string) => markAsRead(tenantId, notificationId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['notificationList', tenantId] });
+      queryClient.invalidateQueries({ queryKey: notificationQueryKeys.scope(tenantId, userId ?? '') });
     },
   });
 
   const markAllReadMutation = useMutation({
     mutationFn: () => markAllAsRead(tenantId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['notificationList', tenantId] });
+      queryClient.invalidateQueries({ queryKey: notificationQueryKeys.scope(tenantId, userId ?? '') });
     },
   });
 
   // 5. Notifications for display
-  // Residents see ALL notifications returned by the backend.
-  // Admins filter to payment submissions and ticket types only.
   const allNotifs = notificationResult?.notifications ?? [];
-  const isSupportTicketCreatedWithTicketId = (notification: Notification): boolean =>
-    notification.type === 'SUPPORT_TICKET_CREATED' &&
-    typeof notification.data?.ticketId === 'string' &&
-    notification.data.ticketId.length > 0;
-  const isResidentPaymentSubmittedAlert = (notification: Notification): boolean =>
-    notification.type === 'BUILDING_ALERT' && notification.data?.event === 'PAYMENT_SUBMITTED';
-
-  const filteredNotifications: Notification[] = isAdmin
-    ? allNotifs.filter((n: Notification) =>
-        isResidentPaymentSubmittedAlert(n) ||
-        isSupportTicketCreatedWithTicketId(n) ||
-        Boolean(n.data?.paymentId) ||
-        getNotificationCategory(n.type) === 'ticket'
-      )
-    : allNotifs;
+  const filteredNotifications: Notification[] = allNotifs;
 
   // Badge: unread notifications only. Pending payments remain in the auxiliary card.
   const badgeCount = unreadCount;
@@ -206,6 +205,11 @@ export function PaymentNotificationBell({
 
   const handleMarkAllRead = () => {
     markAllReadMutation.mutate();
+  };
+
+  const handleOpenNotificationsCenter = () => {
+    router.push(notificationsCenterPath(tenantId, portalContext));
+    closeDropdown(false);
   };
 
   const getNotificationIcon = (notification: Notification) => {
@@ -381,13 +385,19 @@ export function PaymentNotificationBell({
               >
                 Ver pagos →
               </button>
+              <button
+                onClick={handleOpenNotificationsCenter}
+                className="mt-1 min-h-11 w-full text-xs text-muted-foreground hover:text-foreground"
+              >
+                Ver notificaciones →
+              </button>
             </div>
           )}
         </div>
       )}
     </div>
   );
-}
+};
 
 interface TopbarProps {
   readonly isMobileMenuOpen?: boolean;
@@ -395,11 +405,11 @@ interface TopbarProps {
   readonly onMobileMenuToggle?: () => void;
 }
 
-export default function Topbar({
+export const Topbar = ({
   isMobileMenuOpen = false,
   menuButtonRef,
   onMobileMenuToggle,
-}: TopbarProps) {
+}: TopbarProps) => {
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
@@ -416,6 +426,7 @@ export default function Topbar({
       tenantId: urlTenantId,
       pathname,
       searchParamsString: currentSearch,
+      preferredPortal: getLastPortal(),
     });
     if (portal) {
       setLastPortal(portal);
@@ -437,6 +448,7 @@ export default function Topbar({
     tenantId: activeTenantId,
     pathname,
     searchParamsString: currentSearch,
+    preferredPortal: getLastPortal(),
   });
   const role =
     activePortal === 'resident' && activeMembership?.roles.includes('RESIDENT')
@@ -613,4 +625,6 @@ export default function Topbar({
       )}
     </header>
   );
-}
+};
+
+export default Topbar;

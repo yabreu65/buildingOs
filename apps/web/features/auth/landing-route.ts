@@ -15,6 +15,7 @@ export interface ResolveAuthorizedPortalContextParams {
   readonly pathname?: string | null;
   readonly searchParamsString?: string | null;
   readonly tenantId?: string | null;
+  readonly preferredPortal?: PortalContext | null;
 }
 
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
@@ -56,6 +57,10 @@ function getTenantIdFromPathname(pathname: string): string | null {
 
 function isResidentPath(pathname: string): boolean {
   return pathname.includes('/resident/');
+}
+
+function isTenantDashboardPath(pathname: string, tenantId: string): boolean {
+  return pathname === `/${tenantId}/dashboard` || pathname.startsWith(`/${tenantId}/dashboard/`);
 }
 
 function resolveMembershipForTenant(memberships: Membership[], tenantId?: string | null): Membership | null {
@@ -105,7 +110,19 @@ export function resolvePortalFromPathname(
     return null;
   }
 
-  return isResidentPath(pathname) ? 'resident' : 'admin';
+  if (isResidentPath(pathname)) {
+    return 'resident';
+  }
+
+  if (pathname === `/${tenantId}/notifications` || pathname.startsWith(`/${tenantId}/notifications/`)) {
+    return null;
+  }
+
+  if (isTenantDashboardPath(pathname, tenantId)) {
+    return 'admin';
+  }
+
+  return 'admin';
 }
 
 function resolveAuthorizedRequestedPath(
@@ -177,6 +194,7 @@ export function resolveAuthorizedPortalContext({
   pathname,
   searchParamsString,
   tenantId,
+  preferredPortal,
 }: ResolveAuthorizedPortalContextParams): PortalContext | null {
   if (!session) {
     return null;
@@ -220,7 +238,23 @@ export function resolveAuthorizedPortalContext({
     }
   }
 
+  if (preferredPortal === 'resident' && hasResidentAccess) {
+    return 'resident';
+  }
+
+  if (preferredPortal === 'admin' && hasAdminAccess) {
+    return 'admin';
+  }
+
   if (hasResidentAccess && !hasAdminAccess) {
+    return 'resident';
+  }
+
+  if (hasAdminAccess && !hasResidentAccess) {
+    return 'admin';
+  }
+
+  if (hasResidentAccess) {
     return 'resident';
   }
 

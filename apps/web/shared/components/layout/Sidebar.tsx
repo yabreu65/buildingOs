@@ -6,6 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { routes } from "../../../shared/lib/routes";
 import { useTenantId } from "../../../features/tenancy/tenant.hooks";
 import { useAuthSession, useIsSuperAdmin } from "../../../features/auth/useAuthSession";
+import { getLastPortal } from "../../../features/auth/session.storage";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
 import { useTenants } from "../../../features/tenants/tenants.hooks";
 import { resolveAuthorizedPortalContext } from "../../../features/auth/landing-route";
@@ -62,6 +63,7 @@ export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop"
     tenantId: activeTenantId,
     pathname,
     searchParamsString: currentSearch,
+    preferredPortal: getLastPortal(),
   });
   const isResidentPortal = portalContext === "resident";
   const dashboardHref = isResidentPortal

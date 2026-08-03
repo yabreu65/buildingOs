@@ -92,6 +92,7 @@ jest.mock('@/features/finance/services/finance.api', () => ({
 
 jest.mock('@/features/auth/session.storage', () => ({
   getSession: jest.fn(),
+  getLastPortal: jest.fn(),
   setSession: jest.fn(),
   setLastTenant: jest.fn(),
   setLastPortal: jest.fn(),

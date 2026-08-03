@@ -1,5 +1,5 @@
 import { resolveNotificationPath, type NotificationRoleContext } from './notification-routes';
-import { ticketDetailPath, residentTicketDetailPath } from './routes';
+import { ticketDetailPath, residentTicketDetailPath, notificationsCenterPath } from './routes';
 import type { Notification } from '@/features/notifications/notifications.api';
 
 const TENANT_ID = 'tenant-1';
@@ -73,6 +73,20 @@ describe('resolveNotificationPath', () => {
         data: { ticketId: 'ticket-42' },
       });
       expect(resolveNotificationPath(n, TENANT_ID, residentContext)).toBeNull();
+    });
+  });
+
+  describe('notifications center route', () => {
+    it('preserves the resident portal context', () => {
+      expect(notificationsCenterPath(TENANT_ID, 'resident')).toBe(
+        `/${TENANT_ID}/notifications?portal=resident`,
+      );
+    });
+
+    it('preserves the admin portal context by default', () => {
+      expect(notificationsCenterPath(TENANT_ID)).toBe(
+        `/${TENANT_ID}/notifications?portal=admin`,
+      );
     });
   });
 

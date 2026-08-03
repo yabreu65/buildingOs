@@ -84,6 +84,16 @@ export function residentTicketDetailPath(tenantId: string, ticketId: string): st
 }
 
 /**
+ * Canonical notifications center route preserving the current portal context.
+ */
+export function notificationsCenterPath(
+  tenantId: string,
+  portal: 'resident' | 'admin' = 'admin',
+): string {
+  return `/${encodeURIComponent(tenantId)}/notifications?portal=${portal}`;
+}
+
+/**
  * Resident tickets list.
  */
 export function residentTicketsPath(tenantId: string): string {
@@ -168,6 +178,7 @@ export const routes = {
   buildingCategories,
   ticketDetailPath,
   residentTicketDetailPath,
+  notificationsCenterPath,
 };
 
 export default routes;

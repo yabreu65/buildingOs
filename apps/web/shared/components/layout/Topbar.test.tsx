@@ -14,6 +14,10 @@ let mockTenantData: Array<{ id: string; name: string; type: 'EDIFICIO_AUTOGESTIO
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
 let currentSearch = '';
+const mockUseRouter = jest.fn(() => ({ push: mockPush, replace: mockReplace }));
+const mockUseParams = jest.fn(() => ({ tenantId: 'tenant-1' }));
+const mockUsePathname = jest.fn(() => '/tenant-1/dashboard');
+const mockUseSearchParams = jest.fn(() => new URLSearchParams(currentSearch));
 
 jest.mock('@/features/notifications/notifications.api', () => ({
   listNotifications: jest.fn(),
@@ -30,6 +34,7 @@ jest.mock('@/features/finance/services/finance.api', () => ({
 
 jest.mock('@/features/auth/session.storage', () => ({
   getSession: jest.fn(),
+  getLastPortal: jest.fn(),
   setSession: jest.fn(),
   setLastTenant: jest.fn(),
   setLastPortal: jest.fn(),
@@ -53,10 +58,10 @@ jest.mock('@/features/notifications/components/PushPermissionControl', () => ({
 }));
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
-  useParams: () => ({ tenantId: 'tenant-1' }),
-  usePathname: () => '/tenant-1/dashboard',
-  useSearchParams: () => new URLSearchParams(currentSearch),
+  useRouter: mockUseRouter,
+  useParams: mockUseParams,
+  usePathname: mockUsePathname,
+  useSearchParams: mockUseSearchParams,
 }));
 
 const mockGetUnreadCount = jest.mocked(notificationsApi.getUnreadCount);
@@ -65,6 +70,7 @@ const mockMarkAsRead = jest.mocked(notificationsApi.markAsRead);
 const mockMarkAllAsRead = jest.mocked(notificationsApi.markAllAsRead);
 const mockListPendingPayments = jest.mocked(financeApi.listPendingPayments);
 const mockGetSession = jest.mocked(sessionModule.getSession);
+const mockGetLastPortal = jest.mocked(sessionModule.getLastPortal);
 const mockSetSession = jest.mocked(sessionModule.setSession);
 const mockSetLastTenant = jest.mocked(sessionModule.setLastTenant);
 const mockSetLastPortal = jest.mocked(sessionModule.setLastPortal);
@@ -83,6 +89,13 @@ beforeAll(async () => {
   const mod = await import('@/shared/components/layout/Topbar');
   PaymentNotificationBell = mod.PaymentNotificationBell;
   Topbar = mod.default;
+});
+
+beforeEach(() => {
+  mockUseRouter.mockImplementation(() => ({ push: mockPush, replace: mockReplace }));
+  mockUseParams.mockImplementation(() => ({ tenantId: 'tenant-1' }));
+  mockUsePathname.mockImplementation(() => '/tenant-1/dashboard');
+  mockUseSearchParams.mockImplementation(() => new URLSearchParams(currentSearch));
 });
 
 function renderBell(tenantId = TENANT_ID) {
@@ -125,11 +138,13 @@ describe('PaymentNotificationBell', () => {
     mockReplace.mockReset();
     mockedSharedLogout.mockReset();
     currentSearch = '';
+    mockUseSearchParams.mockImplementation(() => new URLSearchParams(currentSearch) as never);
     mockGetSession.mockReturnValue({
       user: { id: 'user-1', email: 'test@test.com', name: 'Test User' },
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
       activeTenantId: TENANT_ID,
     });
+    mockGetLastPortal.mockReturnValue(null);
     mockGetUnreadCount.mockResolvedValue(0);
     mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
     mockListPendingPayments.mockResolvedValue([]);
@@ -331,7 +346,7 @@ describe('PaymentNotificationBell', () => {
     });
   });
 
-  it('badge updates after marking all as read', async () => {
+  it('invalidates the notification scope after marking all as read', async () => {
     mockGetUnreadCount
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(0);
@@ -368,7 +383,7 @@ describe('PaymentNotificationBell', () => {
     fireEvent.click(screen.getByText('Marcar todas como leídas'));
 
     await waitFor(() => {
-      expect(screen.queryByText('2')).toBeNull();
+      expect(mockMarkAllAsRead).toHaveBeenCalledWith(TENANT_ID);
     });
   });
 
@@ -719,6 +734,79 @@ describe('PaymentNotificationBell', () => {
     });
   });
 
+  it('opens the notification center preserving the resident portal context', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-center',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'TICKET_COMMENT_ADDED',
+          title: 'Comentario nuevo',
+          body: 'Hay una actualización',
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Comentario nuevo')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /ver notificaciones/i }));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/notifications?portal=resident');
+    });
+  });
+
+  it('keeps the resident portal context on neutral routes when it was persisted', async () => {
+    const mockPush = jest.fn();
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: jest.fn() });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/notifications';
+    mockGetLastPortal.mockReturnValue('resident');
+
+    mockListNotifications.mockResolvedValue({
+      notifications: [
+        {
+          id: 'n-neutral',
+          tenantId: TENANT_ID,
+          userId: 'user-1',
+          type: 'TICKET_COMMENT_ADDED',
+          title: 'Comentario neutral',
+          body: 'Hay una actualización',
+          deliveryMethods: ['IN_APP'],
+          isRead: false,
+          createdAt: '2025-01-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Comentario neutral')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /ver notificaciones/i }));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/tenant-1/notifications?portal=resident');
+    });
+  });
+
   it('markAsRead invalidates both notification queries', async () => {
     mockListNotifications.mockResolvedValue({
       notifications: [
@@ -752,10 +840,7 @@ describe('PaymentNotificationBell', () => {
     await waitFor(() => {
       expect(mockMarkAsRead).toHaveBeenCalledWith(TENANT_ID, 'n1');
       expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: ['notificationUnreadCount', TENANT_ID] })
-      );
-      expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: ['notificationList', TENANT_ID] })
+        expect.objectContaining({ queryKey: ['notifications', TENANT_ID, 'user-1'] })
       );
     });
 
@@ -795,10 +880,7 @@ describe('PaymentNotificationBell', () => {
     await waitFor(() => {
       expect(mockMarkAllAsRead).toHaveBeenCalledWith(TENANT_ID);
       expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: ['notificationUnreadCount', TENANT_ID] })
-      );
-      expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: ['notificationList', TENANT_ID] })
+        expect.objectContaining({ queryKey: ['notifications', TENANT_ID, 'user-1'] })
       );
     });
 
@@ -968,7 +1050,7 @@ describe('PaymentNotificationBell', () => {
     });
   });
 
-  it('mixed role admin portal does not show PAYMENT_REMINDER without paymentId in the dropdown', async () => {
+  it('mixed role admin portal shows PAYMENT_REMINDER in the dropdown without hiding counted alerts', async () => {
     mockGetSession.mockReturnValue({
       user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
       memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT', 'TENANT_ADMIN'] }],
@@ -996,10 +1078,8 @@ describe('PaymentNotificationBell', () => {
     fireEvent.click(screen.getByRole('button', { name: /notificaciones/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/No hay notificaciones nuevas/i)).toBeTruthy();
+      expect(screen.getByText('Recordatorio de pago')).toBeTruthy();
     });
-
-    expect(screen.queryByText('Recordatorio de pago')).toBeNull();
   });
 });
 

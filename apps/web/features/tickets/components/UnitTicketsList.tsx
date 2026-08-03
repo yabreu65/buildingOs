@@ -29,7 +29,7 @@ interface UnitTicketsListProps {
  * - Can add comments
  * - Cannot assign or manage tickets (admin-only actions)
  */
-export function UnitTicketsList({ tenantId, buildingId, unitId }: UnitTicketsListProps) {
+export const UnitTicketsList = ({ tenantId, buildingId, unitId }: UnitTicketsListProps) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -168,14 +168,14 @@ export function UnitTicketsList({ tenantId, buildingId, unitId }: UnitTicketsLis
       </div>
     </ErrorBoundary>
   );
-}
+};
 
 /**
  * UnitTicketForm: Form for creating a maintenance request (resident view)
  * - Title, description, category
  * - unitId is pre-filled and not editable
  */
-function UnitTicketForm({
+const UnitTicketForm = ({
   buildingId,
   unitId,
   onSuccess,
@@ -185,7 +185,7 @@ function UnitTicketForm({
   unitId: string;
   onSuccess: (ticket: Ticket) => void;
   onCancel: () => void;
-}) {
+}) => {
   const { toast } = useToast();
 
   const [title, setTitle] = useState('');
@@ -217,13 +217,13 @@ function UnitTicketForm({
     }
 
     setSubmitting(true);
-      try {
-        const ticket = await createTicket(buildingId, {
-          title: title.trim(),
-          description: description.trim(),
-          category,
-          unitId, // Pre-filled from unit context
-        });
+    try {
+      const ticket = await createTicket(buildingId, {
+        title: title.trim(),
+        description: description.trim(),
+        category,
+        unitId, // Pre-filled from unit context
+      });
 
       if (ticket) {
         onSuccess(ticket);
@@ -246,7 +246,7 @@ function UnitTicketForm({
       )}
 
       <div>
-        <label className="block text-sm font-medium mb-1">{t('tickets.title')} *</label>
+        <label className="block text-sm font-medium mb-1">{t('tickets.requestTitle')} *</label>
         <input
           type="text"
           value={title}
@@ -304,7 +304,7 @@ function UnitTicketForm({
       </div>
     </form>
   );
-}
+};
 
 function getStatusColor(status: string): string {
   switch (status) {
