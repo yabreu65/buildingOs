@@ -78,6 +78,23 @@
     "myUnit": "My Unit"
   },
 
+  "notifications": {
+    "title": "Notifications",
+    "allRead": "All notifications are read",
+    "success": "Success",
+    "markReadError": "Could not mark the notification as read",
+    "markAllReadError": "Could not mark all notifications as read",
+    "deleteError": "Could not delete the notification"
+  },
+
+  "tickets": {
+    "titleRequired": "Title is required",
+    "createSuccess": "Ticket created successfully",
+    "createError": "Could not create the ticket",
+    "firstAbove": "Fill out the form above to create your first ticket.",
+    "none": "No tickets yet."
+  },
+
   "sidebar": {
     "menu": "Menu",
     "collapse": "Collapse",

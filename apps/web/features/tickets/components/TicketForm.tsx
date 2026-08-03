@@ -18,20 +18,23 @@ interface TicketFormProps {
   onCancel: () => void;
 }
 
-export default function TicketForm({
+const isTicketPriority = (value: string): value is TicketPriority =>
+  value === 'LOW' || value === 'MEDIUM' || value === 'HIGH' || value === 'URGENT';
+
+const TicketForm = ({
   buildingId,
   buildingName = 'Edificio',
   units = [],
   onSuccess,
   onCancel,
-}: TicketFormProps) {
+}: TicketFormProps) => {
   const { toast } = useToast();
   const { create } = useTickets({ buildingId });
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<TicketCategory>('MAINTENANCE');
-  const [priority, setPriority] = useState('MEDIUM');
+  const [priority, setPriority] = useState<TicketPriority>('MEDIUM');
   const [unitId, setUnitId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -63,7 +66,7 @@ export default function TicketForm({
         title: title.trim(),
         description: description.trim(),
         category,
-        priority: priority as TicketPriority,
+        priority,
         unitId: unitId || undefined,
       });
 
@@ -88,7 +91,7 @@ export default function TicketForm({
       )}
 
       <div>
-        <label className="block text-sm font-medium mb-1">{t('tickets.title')} *</label>
+        <label className="block text-sm font-medium mb-1">{t('tickets.requestTitle')} *</label>
         <input
           type="text"
           value={title}
@@ -132,7 +135,12 @@ export default function TicketForm({
           <label className="block text-sm font-medium mb-1">{t('tickets.priority')}</label>
           <select
             value={priority}
-            onChange={(e) => setPriority(e.target.value)}
+            onChange={(e) => {
+              const nextPriority = e.target.value;
+              if (isTicketPriority(nextPriority)) {
+                setPriority(nextPriority);
+              }
+            }}
             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={submitting}
           >
@@ -195,3 +203,5 @@ export default function TicketForm({
     </form>
   );
 }
+
+export default TicketForm;

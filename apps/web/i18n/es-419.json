@@ -115,6 +115,15 @@
     "myProfile": "Mi perfil"
   },
 
+  "notifications": {
+    "title": "Notificaciones",
+    "allRead": "Todas las notificaciones están leídas",
+    "success": "Éxito",
+    "markReadError": "No se pudo marcar la notificación como leída",
+    "markAllReadError": "No se pudieron marcar todas las notificaciones como leídas",
+    "deleteError": "No se pudo eliminar la notificación"
+  },
+
   "sidebar": {
     "menu": "Menú",
     "collapse": "Contraer",
@@ -128,9 +137,6 @@
   "superAdmin": {
     "title": "Control Administrativo",
     "overview": "Resumen",
-    "tenants": "Inquilinos",
-    "users": "Usuarios",
-    "leads": "Prospectos",
     "auditLogs": "Registro de auditoría",
     "aiAnalytics": "Analítica IA",
     "support": "Soporte",
@@ -248,7 +254,6 @@
     "noBuildings": "No hay edificios",
     "deleteConfirm": "¿Estás seguro de que deseas eliminar este edificio?",
     "settings": "Configuración del edificio",
-    "residents": "Residentes",
     "tickets": "Solicitudes",
     "payments": "Pagos",
     "documents": "Documentos"
@@ -338,8 +343,13 @@
     "myRequests": "Mis solicitudes de mantenimiento",
     "view": "Ver solicitud",
     "id": "ID",
-    "title": "Título",
+    "requestTitle": "Título",
     "titlePlaceholder": "Por ejemplo: Cerradura de puerta rota",
+    "titleRequired": "El título es obligatorio",
+    "createSuccess": "Solicitud creada exitosamente",
+    "createError": "No se pudo crear la solicitud",
+    "firstAbove": "Completa el formulario de arriba para crear tu primera solicitud.",
+    "none": "Aún no hay solicitudes.",
     "description": "Descripción",
     "descriptionPlaceholder": "Describe el problema en detalle...",
     "category": "Categoría",

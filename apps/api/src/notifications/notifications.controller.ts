@@ -9,28 +9,31 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
+import { Type } from 'class-transformer';
 import { NotificationType } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min, ValidateIf } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
-import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { NotificationFeedAccessGuard } from './notification-feed.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 
 class ListNotificationsQueryDto {
   @IsOptional()
-  @IsString()
-  isRead?: string;
+  @IsIn(['true', 'false'])
+  isRead?: 'true' | 'false';
 
   @IsOptional()
   @IsEnum(NotificationType)
   type?: NotificationType;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   skip?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
@@ -54,15 +57,15 @@ class NotificationParamDto {
  * Notifications Controller
  *
  * ENDPOINTS:
- * GET    /me/notifications                   → List user's notifications
- * GET    /me/notifications/unread-count      → Get unread count
- * PATCH  /me/notifications/:id/read          → Mark notification as read
- * PATCH  /me/notifications/read-all          → Mark all as read
- * DELETE /me/notifications/:id               → Delete notification
+ * GET    /tenants/:tenantId/notifications                   → List tenant notifications
+ * GET    /tenants/:tenantId/notifications/unread-count      → Get unread count
+ * PATCH  /tenants/:tenantId/notifications/:id/read          → Mark notification as read
+ * PATCH  /tenants/:tenantId/notifications/read-all          → Mark all as read
+ * DELETE /tenants/:tenantId/notifications/:id               → Delete notification
  */
 
 @Controller('tenants/:tenantId/notifications')
-@UseGuards(JwtAuthGuard, TenantAccessGuard)
+@UseGuards(JwtAuthGuard, NotificationFeedAccessGuard)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
@@ -79,7 +82,7 @@ export class NotificationsController {
 
   /**
    * List user's notifications with pagination
-   * GET /me/notifications?isRead=false&type=TICKET_STATUS_CHANGED&skip=0&take=50
+   * GET /tenants/:tenantId/notifications?isRead=false&type=TICKET_STATUS_CHANGED&skip=0&take=50
    */
   @Get()
   async listNotifications(
@@ -112,7 +115,7 @@ export class NotificationsController {
 
   /**
    * Get unread notification count
-   * GET /me/notifications/unread-count
+   * GET /tenants/:tenantId/notifications/unread-count
    */
   @Get('unread-count')
   async getUnreadCount(@Request() req: AuthenticatedRequest): Promise<UnreadCountResponseDto> {
@@ -138,7 +141,7 @@ export class NotificationsController {
 
   /**
    * Mark all notifications as read
-   * PATCH /me/notifications/read-all
+   * PATCH /tenants/:tenantId/notifications/read-all
    */
   @Patch('read-all')
   async markAllAsRead(@Request() req: AuthenticatedRequest): Promise<SuccessResponseDto> {

@@ -3,7 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { useParams, useRouter, usePathname } from 'next/navigation';
+import { useParams, useRouter, usePathname, useSearchParams } from 'next/navigation';
 import NotificationsPage from './page';
 import * as notificationsHook from '@/features/notifications/useNotifications';
 import * as authHook from '@/features/auth/useAuthSession';
@@ -20,6 +20,7 @@ jest.mock('next/navigation', () => ({
   useParams: jest.fn(),
   useRouter: jest.fn(),
   usePathname: jest.fn(),
+  useSearchParams: jest.fn(),
 }));
 
 jest.mock('@/features/notifications/useNotifications', () => ({
@@ -33,6 +34,7 @@ jest.mock('@/features/auth/useAuthSession', () => ({
 const mockedUseParams = jest.mocked(useParams);
 const mockedUseRouter = jest.mocked(useRouter);
 const mockedUsePathname = jest.mocked(usePathname);
+const mockedUseSearchParams = jest.mocked(useSearchParams);
 const mockedUseNotifications = jest.mocked(notificationsHook.useNotifications);
 const mockedUseAuthSession = jest.mocked(authHook.useAuthSession);
 
@@ -48,6 +50,7 @@ describe('NotificationsPage', () => {
     mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
     mockedUseRouter.mockReturnValue({ push, replace: jest.fn(), back: jest.fn(), prefetch: jest.fn(), refresh: jest.fn() } as never);
     mockedUsePathname.mockReturnValue('/tenant-1/notifications' as never);
+    mockedUseSearchParams.mockReturnValue(new URLSearchParams() as never);
     mockedUseAuthSession.mockReturnValue({
       activeTenantId: 'tenant-1',
       memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
@@ -174,7 +177,7 @@ describe('NotificationsPage', () => {
   it('delete notification calls the API correctly', async () => {
     render(<NotificationsPage />);
 
-    fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Eliminar/i }));
 
     await waitFor(() => {
       expect(deleteNotification).toHaveBeenCalledWith('n1');
@@ -184,7 +187,7 @@ describe('NotificationsPage', () => {
   it('markAllAsRead calls the API correctly', async () => {
     render(<NotificationsPage />);
 
-    fireEvent.click(screen.getByText(/Mark All Read/i));
+    fireEvent.click(screen.getByText(/Marcar todas como leídas/i));
 
     await waitFor(() => {
       expect(markAllAsRead).toHaveBeenCalled();
@@ -232,7 +235,8 @@ describe('NotificationsPage', () => {
   });
 
   it('detects resident portal context from pathname', async () => {
-    mockedUsePathname.mockReturnValue('/tenant-1/resident/notifications' as never);
+    mockedUsePathname.mockReturnValue('/tenant-1/notifications' as never);
+    mockedUseSearchParams.mockReturnValue(new URLSearchParams('portal=resident') as never);
     mockedUseAuthSession.mockReturnValue({
       activeTenantId: 'tenant-1',
       memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] }],
@@ -274,6 +278,7 @@ describe('NotificationsPage', () => {
 
   it('detects admin portal context from pathname', async () => {
     mockedUsePathname.mockReturnValue('/tenant-1/notifications' as never);
+    mockedUseSearchParams.mockReturnValue(new URLSearchParams('portal=admin') as never);
     mockedUseAuthSession.mockReturnValue({
       activeTenantId: 'tenant-1',
       memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] }],
@@ -314,7 +319,8 @@ describe('NotificationsPage', () => {
   });
 
   it('routes resident ticket notifications to the resident detail view with portal context', async () => {
-    mockedUsePathname.mockReturnValue('/tenant-1/resident/notifications' as never);
+    mockedUsePathname.mockReturnValue('/tenant-1/notifications' as never);
+    mockedUseSearchParams.mockReturnValue(new URLSearchParams('portal=resident') as never);
     mockedUseAuthSession.mockReturnValue({
       activeTenantId: 'tenant-1',
       memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
