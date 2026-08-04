@@ -23,6 +23,7 @@ import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { AiBudgetService, UsageData, UsageWithLimits } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
+import { TenantAiAccessGuard } from './tenant-ai-access.guard';
 import { UpdateAiBudgetDto } from './dto/update-ai-budget.dto';
 import { AuthenticatedRequest } from '../common/types/request.types';
 
@@ -53,6 +54,7 @@ export class AiBudgetController {
    * - blockedAt: When 100% was exceeded (if any)
    */
   @Get(':tenantId/ai/usage')
+  @UseGuards(TenantAiAccessGuard)
   async getAiUsage(
     @Param('tenantId') tenantId: string,
     @Query('month') month?: string,
@@ -70,6 +72,7 @@ export class AiBudgetController {
    * Tenant endpoint: usage + effective limits in one payload
    */
   @Get(':tenantId/assistant/usage-with-limits')
+  @UseGuards(TenantAiAccessGuard)
   async getUsageWithLimits(
     @Param('tenantId') tenantId: string,
     @Query('month') month?: string,
@@ -156,6 +159,7 @@ export class AiBudgetController {
    * Used for: Observability dashboards, cost monitoring, optimization tracking
    */
   @Get(':tenantId/ai/stats')
+  @UseGuards(TenantAiAccessGuard)
   async getAiStats(
     @Param('tenantId') tenantId: string,
   ): Promise<{
