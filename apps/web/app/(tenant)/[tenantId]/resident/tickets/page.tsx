@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,6 +24,20 @@ import Card from '../../../../../shared/components/ui/Card';
 import Badge, { type BadgeVariant } from '../../../../../shared/components/ui/Badge';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { residentTicketDetailPath } from '../../../../../shared/lib/routes';
+
+const RESIDENT_TICKET_CATEGORIES = [
+  'MAINTENANCE',
+  'REPAIR',
+  'CLEANING',
+  'COMPLAINT',
+  'SAFETY',
+  'BILLING',
+  'OTHER',
+] as const satisfies readonly Ticket['category'][];
+
+function isResidentTicketCategory(value: string): value is Ticket['category'] {
+  return RESIDENT_TICKET_CATEGORIES.includes(value as Ticket['category']);
+}
 
 function ticketStatusLabel(status: Ticket['status']): string {
   const labels: Record<Ticket['status'], string> = {
@@ -86,7 +100,7 @@ export default function ResidentTicketsPage() {
   const [newTicket, setNewTicket] = useState({
     title: '',
     description: '',
-    category: 'OTHER',
+    category: 'OTHER' as Ticket['category'],
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -118,13 +132,19 @@ export default function ResidentTicketsPage() {
     refetch,
   } = useQuery<Ticket[]>({
     queryKey: ['residentTickets', tenantId, userId, buildingId, unitId],
-    queryFn: () => getResidentTickets(buildingId!, unitId!, 50),
+    queryFn: () => {
+      if (!tenantId || !buildingId || !unitId) {
+        throw new Error('Tenant, building and unit context are required');
+      }
+
+      return getResidentTickets(tenantId, buildingId, unitId, 50);
+    },
     enabled: identityMatchesRoute && !!buildingId && !!unitId && !contextLoading,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!identityMatchesRoute || !buildingId || !unitId || contextLoading) return;
 
@@ -143,7 +163,7 @@ export default function ResidentTicketsPage() {
       await createTicket(buildingId, {
         title,
         description,
-        category: newTicket.category as Ticket['category'],
+        category: newTicket.category,
         unitId,
       }, 'resident');
       setSuccess('Reclamo creado correctamente');
@@ -263,7 +283,14 @@ export default function ResidentTicketsPage() {
                 <select
                   id="resident-ticket-category"
                   value={newTicket.category}
-                  onChange={(e) => setNewTicket({ ...newTicket, category: e.target.value })}
+                  onChange={(e) =>
+                    setNewTicket({
+                      ...newTicket,
+                      category: isResidentTicketCategory(e.target.value)
+                        ? e.target.value
+                        : 'OTHER',
+                    })
+                  }
                   className="w-full px-3 py-2 border rounded-md"
                 >
                   <option value="MAINTENANCE">Mantenimiento</option>

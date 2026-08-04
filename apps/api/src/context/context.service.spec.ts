@@ -21,11 +21,11 @@ describe('ContextService', () => {
       findFirst: jest.fn(),
       findMany: jest.fn(),
     },
-  } as unknown as PrismaService;
+  } as PrismaService;
 
   const authorize = {
     authorize: jest.fn(),
-  } as unknown as AuthorizeService;
+  } as AuthorizeService;
 
   const residentAccess = {
     shouldEnforce: jest.fn(),
@@ -34,7 +34,7 @@ describe('ContextService', () => {
     getActiveBuildingIds: jest.fn(),
     assertUnitAccess: jest.fn(),
     assertBuildingAccess: jest.fn(),
-  } as unknown as ResidentAccessService;
+  } as ResidentAccessService;
 
   const service = new ContextService(prisma, authorize, residentAccess);
 
@@ -52,7 +52,7 @@ describe('ContextService', () => {
         activeUnitId: 'unit-stale',
       },
       roles: [{ role: 'RESIDENT' }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(true);
     jest.spyOn(residentAccess, 'resolveActiveResidentOccupancy')
       .mockResolvedValueOnce(null)
@@ -72,7 +72,7 @@ describe('ContextService', () => {
       tenantId: 'tenant-1',
       activeBuildingId: 'building-1',
       activeUnitId: 'unit-1',
-    } as never);
+    });
 
     await expect(service.getContext('user-1', 'tenant-1')).resolves.toEqual({
       tenantId: 'tenant-1',
@@ -96,6 +96,65 @@ describe('ContextService', () => {
     });
   });
 
+  it('reconciles mixed-role resident context when the resident portal is explicit', async () => {
+    jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
+      id: 'membership-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      userContext: {
+        activeBuildingId: 'building-archived',
+        activeUnitId: 'unit-archived',
+      },
+      roles: [
+        { role: 'RESIDENT' },
+        { role: 'TENANT_ADMIN', scopeType: 'TENANT', scopeBuildingId: null },
+      ],
+    });
+    jest.spyOn(residentAccess, 'resolveActiveResidentOccupancy')
+      .mockResolvedValueOnce({
+        occupancyId: 'occupancy-1',
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        buildingName: 'Edificio A',
+        buildingAlias: 'A',
+        unitId: 'unit-1',
+        unitCode: 'A-01',
+        unitLabel: 'Unidad 1',
+        memberId: 'member-1',
+      });
+    jest.spyOn(prisma.userContext, 'upsert').mockResolvedValue({
+      tenantId: 'tenant-1',
+      activeBuildingId: 'building-1',
+      activeUnitId: 'unit-1',
+    });
+
+    await expect(service.getContext('user-1', 'tenant-1', 'resident')).resolves.toEqual({
+      tenantId: 'tenant-1',
+      activeBuildingId: 'building-1',
+      activeUnitId: 'unit-1',
+    });
+
+    expect(residentAccess.resolveActiveResidentOccupancy).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      unitId: 'unit-archived',
+    });
+    expect(prisma.userContext.upsert).toHaveBeenCalledWith({
+      where: { membershipId: 'membership-1' },
+      update: {
+        tenantId: 'tenant-1',
+        activeBuildingId: 'building-1',
+        activeUnitId: 'unit-1',
+      },
+      create: {
+        tenantId: 'tenant-1',
+        membershipId: 'membership-1',
+        activeBuildingId: 'building-1',
+        activeUnitId: 'unit-1',
+      },
+    });
+  });
+
   it('omits archived buildings and their units from tenant-scoped context options', async () => {
     jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
       id: 'membership-1',
@@ -103,14 +162,14 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT', scopeBuildingId: null }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
     jest.spyOn(prisma.building, 'findMany').mockResolvedValue([
       { id: 'building-active', name: 'Edificio Activo' },
-    ] as never);
+    ]);
     jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([
       { id: 'unit-1', code: 'A-01', label: 'Unidad 1' },
-    ] as never);
+    ]);
 
     await expect(service.getContextOptions('user-1', 'tenant-1')).resolves.toEqual({
       buildings: [
@@ -143,7 +202,7 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'RESIDENT' }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(true);
     jest.spyOn(residentAccess, 'resolveActiveResidentOccupancy').mockResolvedValue({
       occupancyId: 'occupancy-1',
@@ -160,12 +219,12 @@ describe('ContextService', () => {
       id: 'building-1',
       tenantId: 'tenant-1',
       name: 'Edificio A',
-    } as never);
+    });
     jest.spyOn(prisma.userContext, 'upsert').mockResolvedValue({
       tenantId: 'tenant-1',
       activeBuildingId: 'building-1',
       activeUnitId: 'unit-1',
-    } as never);
+    });
 
     await expect(service.setContext('user-1', 'tenant-1', 'building-1', null)).resolves.toEqual({
       tenantId: 'tenant-1',
@@ -187,7 +246,7 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'RESIDENT' }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(true);
     jest.spyOn(residentAccess, 'resolveActiveResidentOccupancy').mockResolvedValue(null);
 
@@ -203,7 +262,7 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'TENANT_ADMIN' }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
     jest.spyOn(prisma.building, 'findFirst').mockResolvedValue(null);
 
@@ -223,14 +282,14 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'RESIDENT' }],
-    } as never);
+    });
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(true);
     jest.spyOn(residentAccess, 'resolveActiveResidentOccupancy').mockResolvedValue(null);
     jest.spyOn(prisma.userContext, 'upsert').mockResolvedValue({
       tenantId: 'tenant-1',
       activeBuildingId: null,
       activeUnitId: null,
-    } as never);
+    });
 
     await expect(service.getContext('user-1', 'tenant-1')).resolves.toEqual({
       tenantId: 'tenant-1',
@@ -246,11 +305,11 @@ describe('ContextService', () => {
       userId: 'user-1',
       userContext: null,
       roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
-    } as never);
+    });
     jest.spyOn(prisma.building, 'findMany').mockResolvedValue([
       { id: 'building-active', name: 'Edificio Activo' },
-    ] as never);
-    jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([] as never);
+    ]);
+    jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([]);
     jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
 
     await expect(service.getContextOptions('user-1', 'tenant-1')).resolves.toEqual({

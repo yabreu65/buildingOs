@@ -1,11 +1,16 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useAuthSession } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { getContext, getContextOptions } from './context.api';
 import type { ContextOptions, UserContext } from './context.types';
 import { useContextManager } from './useContext';
 
 jest.mock('@/features/auth/useAuthSession', () => ({
   useAuthSession: jest.fn(),
+}));
+
+jest.mock('@/features/auth/useAuthorizedPortalContext', () => ({
+  useAuthorizedPortalContext: jest.fn(),
 }));
 
 jest.mock('./context.api', () => ({
@@ -15,6 +20,7 @@ jest.mock('./context.api', () => ({
 }));
 
 const mockedUseAuthSession = jest.mocked(useAuthSession);
+const mockedUseAuthorizedPortalContext = jest.mocked(useAuthorizedPortalContext);
 const mockedGetContext = jest.mocked(getContext);
 const mockedGetContextOptions = jest.mocked(getContextOptions);
 
@@ -30,6 +36,7 @@ function createDeferred<T>() {
 describe('useContextManager', () => {
   beforeEach(() => {
     mockedUseAuthSession.mockReset();
+    mockedUseAuthorizedPortalContext.mockReset();
     mockedGetContext.mockReset();
     mockedGetContextOptions.mockReset();
   });
@@ -45,6 +52,7 @@ describe('useContextManager', () => {
       memberships: [],
       activeTenantId: 'tenant-1',
     });
+    mockedUseAuthorizedPortalContext.mockReturnValue('resident');
     mockedGetContext.mockImplementationOnce(() => context1.promise);
     mockedGetContextOptions.mockImplementationOnce(() => options1.promise);
     mockedGetContext.mockImplementationOnce(() => context2.promise);
@@ -60,6 +68,9 @@ describe('useContextManager', () => {
       expect(mockedGetContextOptions).toHaveBeenCalledTimes(1);
     });
 
+    expect(mockedGetContext).toHaveBeenNthCalledWith(1, 'tenant-1', 'resident');
+    expect(mockedGetContextOptions).toHaveBeenNthCalledWith(1, 'tenant-1', 'resident');
+
     mockedUseAuthSession.mockReturnValue({
       user: { id: 'user-2', email: 'resident2@buildingos.test', name: 'Resident 2' },
       memberships: [],
@@ -72,6 +83,9 @@ describe('useContextManager', () => {
       expect(mockedGetContext).toHaveBeenCalledTimes(2);
       expect(mockedGetContextOptions).toHaveBeenCalledTimes(2);
     });
+
+    expect(mockedGetContext).toHaveBeenNthCalledWith(2, 'tenant-1', 'resident');
+    expect(mockedGetContextOptions).toHaveBeenNthCalledWith(2, 'tenant-1', 'resident');
 
     await act(async () => {
       context2.resolve({

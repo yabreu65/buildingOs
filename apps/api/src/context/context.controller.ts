@@ -1,10 +1,26 @@
-import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  Req,
+  Headers,
+  BadRequestException,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ContextService, UserContextData, ContextOptions } from './context.service';
 import type { AuthenticatedRequest } from '../common/types/request.types';
+import { normalizePortalContextHeader } from '../common/portal-context';
+import { IsOptional, IsString } from 'class-validator';
 
-export interface SetContextDto {
+export class SetContextDto {
+  @IsOptional()
+  @IsString()
   activeBuildingId?: string | null;
+
+  @IsOptional()
+  @IsString()
   activeUnitId?: string | null;
 }
 
@@ -25,7 +41,7 @@ export class ContextController {
     const tenantId = req.tenantId || req.headers['x-tenant-id'];
 
     if (!tenantId || typeof tenantId !== 'string') {
-      throw new Error('Tenant ID is required (X-Tenant-Id header)');
+      throw new BadRequestException('Tenant ID is required (X-Tenant-Id header)');
     }
 
     return tenantId;
@@ -36,11 +52,18 @@ export class ContextController {
    * Get current active building/unit for user in active tenant
    */
   @Get()
-  async getContext(@Req() req: AuthenticatedRequest): Promise<UserContextData> {
+  async getContext(
+    @Req() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
+  ): Promise<UserContextData> {
     const userId = req.user.id;
     const tenantId = this.getTenantId(req);
 
-    return this.contextService.getContext(userId, tenantId);
+    return this.contextService.getContext(
+      userId,
+      tenantId,
+      normalizePortalContextHeader(portalContext),
+    );
   }
 
   /**
@@ -57,6 +80,7 @@ export class ContextController {
   async setContext(
     @Req() req: AuthenticatedRequest,
     @Body() dto: SetContextDto,
+    @Headers('x-portal-context') portalContext?: string,
   ): Promise<UserContextData> {
     const userId = req.user.id;
     const tenantId = this.getTenantId(req);
@@ -66,6 +90,7 @@ export class ContextController {
       tenantId,
       dto.activeBuildingId,
       dto.activeUnitId,
+      normalizePortalContextHeader(portalContext),
     );
   }
 
@@ -80,10 +105,17 @@ export class ContextController {
    * }
    */
   @Get('options')
-  async getContextOptions(@Req() req: AuthenticatedRequest): Promise<ContextOptions> {
+  async getContextOptions(
+    @Req() req: AuthenticatedRequest,
+    @Headers('x-portal-context') portalContext?: string,
+  ): Promise<ContextOptions> {
     const userId = req.user.id;
     const tenantId = this.getTenantId(req);
 
-    return this.contextService.getContextOptions(userId, tenantId);
+    return this.contextService.getContextOptions(
+      userId,
+      tenantId,
+      normalizePortalContextHeader(portalContext),
+    );
   }
 }

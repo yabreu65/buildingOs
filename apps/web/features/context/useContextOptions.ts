@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useAuthSession } from '@/features/auth/useAuthSession';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { getContextOptions } from './context.api';
 import type { ContextOptions } from './context.types';
 
@@ -14,17 +15,19 @@ import type { ContextOptions } from './context.types';
 export function useContextOptions(tenantId: string | null) {
   const session = useAuthSession();
   const userId = session?.user.id ?? null;
+  const activeTenantId = session?.activeTenantId ?? null;
+  const portalContext = useAuthorizedPortalContext(tenantId);
 
   return useQuery<ContextOptions>({
-    queryKey: ['contextOptions', tenantId, userId],
+    queryKey: ['contextOptions', tenantId, activeTenantId, userId, portalContext],
     queryFn: () => {
-      if (!tenantId || !userId) {
+      if (!tenantId || !userId || activeTenantId !== tenantId) {
         throw new Error('Tenant and user context are required');
       }
 
-      return getContextOptions(tenantId);
+      return getContextOptions(tenantId, portalContext);
     },
-    enabled: !!tenantId && !!userId,
+    enabled: !!tenantId && !!userId && activeTenantId === tenantId,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
     retry: 1,
