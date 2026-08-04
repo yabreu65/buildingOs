@@ -9,6 +9,7 @@ import { useAuthSession, useIsSuperAdmin } from "../../../features/auth/useAuthS
 import { getLastPortal } from "../../../features/auth/session.storage";
 import { useImpersonation } from "../../../features/impersonation/useImpersonation";
 import { useTenants } from "../../../features/tenants/tenants.hooks";
+import { useCanAdministerTenant } from "../../../features/tenancy/hooks/useEffectiveRole";
 import { resolveAuthorizedPortalContext } from "../../../features/auth/landing-route";
 import { t } from "@/i18n";
 
@@ -54,6 +55,7 @@ export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop"
   const tenantName = tenants?.find((tenant) => tenant.id === tenantId)?.name;
   const isSuperAdmin = useIsSuperAdmin();
   const { isImpersonating } = useImpersonation();
+  const canAdministerTenant = useCanAdministerTenant(tenantId ?? undefined);
 
   if ((isSuperAdmin && !isImpersonating) || !tenantId) return null;
 
@@ -129,6 +131,7 @@ export const Sidebar = ({ className, footer, id, onNavigate, variant = "desktop"
               {t("navigation.settings")}
             </div>
             {navItem(`/${tenantId}/settings/general`, t("settings.general"))}
+            {canAdministerTenant && navItem(`/${tenantId}/settings/banking`, "Cuentas bancarias")}
             {navItem(routes.onboardingImport(tenantId), "Onboarding import")}
             {navItem(`/${tenantId}/settings/members`, t("navigation.residents"))}
             {navItem(`/${tenantId}/settings/team`, t("sidebar.team"))}
