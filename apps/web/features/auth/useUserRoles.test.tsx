@@ -5,12 +5,18 @@
 import { renderHook } from '@testing-library/react';
 import { useAuth } from './useAuth';
 import { useCanAccessAi, useUserRoles } from './useUserRoles';
+import { useAuthSession } from './useAuthSession';
 
 jest.mock('./useAuth', () => ({
   useAuth: jest.fn(),
 }));
 
+jest.mock('./useAuthSession', () => ({
+  useAuthSession: jest.fn(),
+}));
+
 const mockedUseAuth = jest.mocked(useAuth);
+const mockedUseAuthSession = jest.mocked(useAuthSession);
 
 describe('useUserRoles', () => {
   beforeEach(() => {
@@ -45,22 +51,49 @@ describe('useCanAccessAi', () => {
     ['TENANT_OWNER'],
     ['TENANT_ADMIN'],
     ['OPERATOR'],
-  ])('allows %s', (role) => {
-    mockedUseAuth.mockReturnValue({
-      currentUser: { roles: [role] },
+  ])('allows %s for the matching tenant membership', (role) => {
+    mockedUseAuthSession.mockReturnValue({
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: [role] }],
     } as never);
 
-    const { result } = renderHook(() => useCanAccessAi());
+    const { result } = renderHook(() => useCanAccessAi('tenant-1'));
 
     expect(result.current).toBe(true);
   });
 
-  it('denies residents', () => {
-    mockedUseAuth.mockReturnValue({
-      currentUser: { roles: ['RESIDENT'] },
+  it('denies residents for the matching tenant membership', () => {
+    mockedUseAuthSession.mockReturnValue({
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
     } as never);
 
-    const { result } = renderHook(() => useCanAccessAi());
+    const { result } = renderHook(() => useCanAccessAi('tenant-1'));
+
+    expect(result.current).toBe(false);
+  });
+
+  it('denies a different tenant even when the active tenant has admin access', () => {
+    mockedUseAuthSession.mockReturnValue({
+      activeTenantId: 'tenant-1',
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+    } as never);
+
+    const { result } = renderHook(() => useCanAccessAi('tenant-2'));
+
+    expect(result.current).toBe(false);
+  });
+
+  it('denies when no tenant is provided', () => {
+    mockedUseAuthSession.mockReturnValue({
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
+    } as never);
+
+    const { result } = renderHook(() => useCanAccessAi(undefined));
 
     expect(result.current).toBe(false);
   });

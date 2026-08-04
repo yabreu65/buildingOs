@@ -40,15 +40,18 @@ export class TenantAiAccessGuard implements CanActivate {
   ): string {
     const memberships = request.user?.memberships ?? [];
     const candidates = [
-      request.params?.tenantId,
+      this.readString(request.params?.tenantId),
       this.readStringHeader(request.headers?.['x-tenant-id']),
       this.readString(request.body?.tenantId),
-    ];
+    ].filter((candidate): candidate is string => Boolean(candidate));
 
-    for (const candidate of candidates) {
-      if (candidate) {
-        return candidate;
+    if (candidates.length > 0) {
+      const uniqueCandidates = new Set(candidates);
+      if (uniqueCandidates.size > 1) {
+        throw new BadRequestException('Conflicting tenantId sources');
       }
+
+      return candidates[0]!;
     }
 
     if (memberships.length === 1) {
@@ -62,6 +65,19 @@ export class TenantAiAccessGuard implements CanActivate {
     request: AuthenticatedRequest,
     tenantId: string,
   ): Role[] {
+    if (request.user?.isImpersonating) {
+      if (request.user.impersonatedTenantId !== tenantId) {
+        throw new ForbiddenException('Impersonation tenant mismatch');
+      }
+
+      const effectiveMembership = request.user.effectiveMembership;
+      if (effectiveMembership?.tenantId !== tenantId) {
+        throw new ForbiddenException('Impersonation membership mismatch');
+      }
+
+      return effectiveMembership.roles;
+    }
+
     const effectiveMembership = request.user?.effectiveMembership;
     if (effectiveMembership?.tenantId === tenantId) {
       return effectiveMembership.roles;

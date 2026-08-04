@@ -11,6 +11,7 @@ function buildContext(input: {
     memberships?: Array<{ tenantId: string; roles: string[] }>;
     effectiveMembership?: { tenantId: string; roles: string[] };
     isImpersonating?: boolean;
+    impersonatedTenantId?: string;
   };
 }): ExecutionContext {
   const request = {
@@ -103,6 +104,7 @@ describe('TenantAiAccessGuard', () => {
         params: { tenantId: 'tenant-1' },
         user: {
           isImpersonating: true,
+          impersonatedTenantId: 'tenant-1',
           memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
           effectiveMembership: { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
         },
@@ -110,6 +112,36 @@ describe('TenantAiAccessGuard', () => {
     );
 
     expect(allowed).toBe(true);
+  });
+
+  it('rejects impersonation when the requested tenant does not match the impersonated tenant', () => {
+    expect(() =>
+      guard.canActivate(
+        buildContext({
+          headers: { 'x-tenant-id': 'tenant-2' },
+          user: {
+            isImpersonating: true,
+            impersonatedTenantId: 'tenant-1',
+            memberships: [{ tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] }],
+            effectiveMembership: { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+          },
+        }),
+      ),
+    ).toThrow(ForbiddenException);
+  });
+
+  it('rejects conflicting tenant sources before evaluating roles', () => {
+    expect(() =>
+      guard.canActivate(
+        buildContext({
+          params: { tenantId: 'tenant-1' },
+          headers: { 'x-tenant-id': 'tenant-2' },
+          user: {
+            memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
+          },
+        }),
+      ),
+    ).toThrow(BadRequestException);
   });
 
   it('rejects missing tenant context', () => {

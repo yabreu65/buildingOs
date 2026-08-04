@@ -168,13 +168,13 @@ export function TenantAiAnalyticsPage() {
   const routeTenantId = useTenantId();
   const activeTenantId = useActiveTenantId();
   const portalContext = useAuthorizedPortalContext(routeTenantId);
-  const canAccessAi = useCanAccessAi();
 
   const hasMatchingTenant =
     activeTenantId !== null &&
     routeTenantId !== null &&
     activeTenantId === routeTenantId;
   const tenantId = hasMatchingTenant ? activeTenantId : null;
+  const canAccessAi = useCanAccessAi(tenantId ?? undefined);
 
   useEffect(() => {
     if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {

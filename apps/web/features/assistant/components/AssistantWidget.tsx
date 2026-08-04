@@ -12,13 +12,12 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAssistant } from '../hooks/useAssistant';
 import { SuggestedActionsList } from './SuggestedActionsList';
 import { useAiNudges } from '../hooks/useAiNudges';
 import { useCanAccessAi } from '@/features/auth/useUserRoles';
-import { feedbackApi, FeedbackRequest } from '../services/feedback.api';
+import { feedbackApi } from '../services/feedback.api';
 
 interface AssistantWidgetProps {
   tenantId: string;
@@ -161,12 +160,35 @@ export function AssistantWidget({
   isOpen = true,
   onClose,
 }: AssistantWidgetProps) {
-  const canAccessAi = useCanAccessAi();
+  const canAccessAi = useCanAccessAi(tenantId);
 
   // Hide AI widget from residents - only admins/operators can see it
   if (!canAccessAi) {
     return null;
   }
+
+  return (
+    <AssistantWidgetContent
+      tenantId={tenantId}
+      currentPage={currentPage}
+      buildingId={buildingId}
+      unitId={unitId}
+      permissions={permissions}
+      isOpen={isOpen}
+      onClose={onClose}
+    />
+  );
+}
+
+function AssistantWidgetContent({
+  tenantId,
+  currentPage,
+  buildingId,
+  unitId,
+  permissions = [],
+  isOpen = true,
+  onClose,
+}: AssistantWidgetProps) {
 
   const [message, setMessage] = useState('');
   const [expanded, setExpanded] = useState(isOpen);
@@ -182,7 +204,7 @@ export function AssistantWidget({
     return `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   };
   const [sessionId] = useState(getSessionId);
-  const lastMessageId = useRef<string>('');
+  const [lastMessageId, setLastMessageId] = useState('');
   const { loading, error, answer, suggestedActions, sendMessage, clearError, reset } =
     useAssistant(tenantId);
   const { nudges, submitting, requestUpgrade } = useAiNudges(tenantId);
@@ -203,7 +225,7 @@ export function AssistantWidget({
     setMessage('');
 
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    lastMessageId.current = messageId;
+    setLastMessageId(messageId);
 
     await sendMessage(msg, {
       page: currentPage,
@@ -297,7 +319,7 @@ export function AssistantWidget({
                   <p>{answer}</p>
                 </div>
                 <FeedbackControls
-                  messageId={lastMessageId.current}
+                  messageId={lastMessageId}
                   sessionId={sessionId}
                   tenantId={tenantId}
                 />

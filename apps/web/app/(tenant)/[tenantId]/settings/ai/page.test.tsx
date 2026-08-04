@@ -4,8 +4,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { useRouter } from 'next/navigation';
-import { useActiveTenantId } from '@/features/auth/useAuthSession';
-import { useCanAccessAi } from '@/features/auth/useUserRoles';
+import { useAuthSession, useActiveTenantId } from '@/features/auth/useAuthSession';
 import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
 import { useTenantId } from '@/features/tenancy/tenant.hooks';
 import { useAiAnalytics } from '@/features/assistant/hooks/useAiAnalytics';
@@ -18,11 +17,8 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('@/features/auth/useAuthSession', () => ({
+  useAuthSession: jest.fn(),
   useActiveTenantId: jest.fn(),
-}));
-
-jest.mock('@/features/auth/useUserRoles', () => ({
-  useCanAccessAi: jest.fn(),
 }));
 
 jest.mock('@/features/auth/useAuthorizedPortalContext', () => ({
@@ -70,8 +66,8 @@ jest.mock('@/shared/lib/routes', () => ({
 }));
 
 const mockedUseRouter = jest.mocked(useRouter);
+const mockedUseAuthSession = jest.mocked(useAuthSession);
 const mockedUseActiveTenantId = jest.mocked(useActiveTenantId);
-const mockedUseCanAccessAi = jest.mocked(useCanAccessAi);
 const mockedUseAuthorizedPortalContext = jest.mocked(useAuthorizedPortalContext);
 const mockedUseTenantId = jest.mocked(useTenantId);
 const mockedUseAiAnalytics = jest.mocked(useAiAnalytics);
@@ -88,12 +84,20 @@ describe('TenantAiAnalyticsPage', () => {
     refresh: jest.fn(),
     replace,
   };
+  let mockSession: {
+    activeTenantId: string | null;
+    memberships: Array<{ tenantId: string; roles: string[] }>;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
+    };
     mockedUseRouter.mockReturnValue(routerMock);
-    mockedUseActiveTenantId.mockReturnValue('tenant-1');
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockedUseAuthSession.mockImplementation(() => mockSession as never);
+    mockedUseActiveTenantId.mockImplementation(() => mockSession.activeTenantId);
     mockedUseAuthorizedPortalContext.mockReturnValue('admin');
     mockedUseTenantId.mockReturnValue('tenant-1');
     mockedUseAiAnalytics.mockReturnValue({
@@ -159,7 +163,10 @@ describe('TenantAiAnalyticsPage', () => {
   });
 
   it('renders the AI settings content for tenant owners', () => {
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_OWNER'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -170,7 +177,10 @@ describe('TenantAiAnalyticsPage', () => {
   });
 
   it('renders the AI settings content for tenant admins', () => {
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -178,7 +188,10 @@ describe('TenantAiAnalyticsPage', () => {
   });
 
   it('renders the AI settings content for operators', () => {
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['OPERATOR'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -186,7 +199,10 @@ describe('TenantAiAnalyticsPage', () => {
   });
 
   it('shows access denied for admin portal users without AI capability', () => {
-    mockedUseCanAccessAi.mockReturnValue(false);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -198,7 +214,10 @@ describe('TenantAiAnalyticsPage', () => {
 
   it('redirects mixed-role users when the portal resolves to resident', async () => {
     mockedUseAuthorizedPortalContext.mockReturnValue('resident');
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN', 'RESIDENT'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -211,7 +230,10 @@ describe('TenantAiAnalyticsPage', () => {
 
   it('renders mixed-role users when the portal resolves to admin and access is allowed', () => {
     mockedUseAuthorizedPortalContext.mockReturnValue('admin');
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['RESIDENT', 'TENANT_ADMIN'] }],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -222,7 +244,13 @@ describe('TenantAiAnalyticsPage', () => {
     mockedUseTenantId.mockReturnValue('tenant-route');
     mockedUseActiveTenantId.mockReturnValue('tenant-active');
     mockedUseAuthorizedPortalContext.mockReturnValue('admin');
-    mockedUseCanAccessAi.mockReturnValue(true);
+    mockSession = {
+      activeTenantId: 'tenant-active',
+      memberships: [
+        { tenantId: 'tenant-route', roles: ['TENANT_ADMIN'] },
+        { tenantId: 'tenant-active', roles: ['RESIDENT'] },
+      ],
+    };
 
     render(<TenantAiAnalyticsPage />);
 
@@ -235,18 +263,25 @@ describe('TenantAiAnalyticsPage', () => {
     expect(mockedUseAiNudges).not.toHaveBeenCalled();
   });
 
-  it('re-evaluates the tenant and remounts the content when the tenant changes', () => {
+  it('re-evaluates the tenant and blocks the stale admin content when the tenant changes to resident', () => {
     const { rerender } = render(<TenantAiAnalyticsPage />);
 
     expect(mockedUseAiAnalytics).toHaveBeenLastCalledWith('tenant-1');
 
     mockedUseTenantId.mockReturnValue('tenant-2');
-    mockedUseActiveTenantId.mockReturnValue('tenant-2');
+    mockSession = {
+      activeTenantId: 'tenant-2',
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
+        { tenantId: 'tenant-2', roles: ['RESIDENT'] },
+      ],
+    };
 
     rerender(<TenantAiAnalyticsPage />);
 
-    expect(mockedUseAiAnalytics).toHaveBeenLastCalledWith('tenant-2');
-    expect(mockedUseAiLimits).toHaveBeenLastCalledWith('tenant-2');
-    expect(mockedUseAiNudges).toHaveBeenLastCalledWith('tenant-2');
+    expect(screen.getByText('No tenés permiso para acceder a las métricas de IA del tenant.')).not.toBeNull();
+    expect(mockedUseAiAnalytics).not.toHaveBeenCalledWith('tenant-2');
+    expect(mockedUseAiLimits).not.toHaveBeenCalledWith('tenant-2');
+    expect(mockedUseAiNudges).not.toHaveBeenCalledWith('tenant-2');
   });
 });

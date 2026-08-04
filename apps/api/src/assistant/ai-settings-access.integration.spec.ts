@@ -181,6 +181,64 @@ describe('AI settings authorization integration', () => {
     expect(nudgesService.createRecommendedUpgradeRequest).not.toHaveBeenCalled();
   });
 
+  it('allows impersonating tenant admins when the impersonated tenant matches the requested tenant', async () => {
+    currentUser = {
+      id: 'impersonator-1',
+      email: 'impersonator@example.com',
+      name: 'Impersonator One',
+      isImpersonating: true,
+      impersonatedTenantId: 'tenant-1',
+      memberships: [{ tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] }],
+      effectiveMembership: { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
+    };
+
+    await request(app.getHttpServer())
+      .get('/me/ai/nudges')
+      .set('X-Tenant-Id', 'tenant-1')
+      .expect(200);
+
+    expect(nudgesService.getActiveNudges).toHaveBeenCalledWith(currentUser, 'tenant-1');
+  });
+
+  it('denies impersonation when the requested tenant does not match the impersonated tenant', async () => {
+    currentUser = {
+      id: 'impersonator-1',
+      email: 'impersonator@example.com',
+      name: 'Impersonator One',
+      isImpersonating: true,
+      impersonatedTenantId: 'tenant-1',
+      memberships: [
+        { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
+        { tenantId: 'tenant-2', roles: ['TENANT_ADMIN'] },
+      ],
+      effectiveMembership: { tenantId: 'tenant-1', roles: ['TENANT_ADMIN'] },
+    };
+
+    await request(app.getHttpServer())
+      .get('/me/ai/nudges')
+      .set('X-Tenant-Id', 'tenant-2')
+      .expect(403);
+
+    expect(nudgesService.getActiveNudges).not.toHaveBeenCalled();
+  });
+
+  it('rejects conflicting tenant sources on upgrade requests before any mutation runs', async () => {
+    currentUser = {
+      id: 'operator-1',
+      email: 'operator@example.com',
+      name: 'Operator One',
+      memberships: [{ tenantId: 'tenant-1', roles: ['OPERATOR'] }],
+    };
+
+    await request(app.getHttpServer())
+      .post('/me/ai/upgrade-request/recommended')
+      .set('X-Tenant-Id', 'tenant-1')
+      .send({ tenantId: 'tenant-2' })
+      .expect(400);
+
+    expect(nudgesService.createRecommendedUpgradeRequest).not.toHaveBeenCalled();
+  });
+
   it('allows operators to request an upgrade for their tenant', async () => {
     currentUser = {
       id: 'operator-1',
