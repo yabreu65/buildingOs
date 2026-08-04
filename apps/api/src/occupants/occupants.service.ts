@@ -27,7 +27,7 @@ interface OccupantUserWithPublicFields {
   name: string;
 }
 
-interface OccupantWithPublicMemberUser extends UnitOccupant {
+export interface OccupantWithPublicMemberUser extends UnitOccupant {
   member?: {
     user?: OccupantUserWithPublicFields | null;
   } | null;
