@@ -201,7 +201,7 @@ export class ContextService {
     // If unit is specified, derive/validate building
     if (effectiveUnitId) {
       const unit = await this.prisma.unit.findFirst({
-        where: { id: effectiveUnitId, tenantId },
+        where: { id: effectiveUnitId, tenantId, building: { deletedAt: null } },
         include: { building: true },
       });
 
@@ -251,7 +251,7 @@ export class ContextService {
     // Validate building if specified
     if (effectiveBuildingId) {
       const building = await this.prisma.building.findFirst({
-        where: { id: effectiveBuildingId, tenantId },
+        where: { id: effectiveBuildingId, tenantId, deletedAt: null },
       });
 
       if (!building) {
@@ -387,7 +387,7 @@ export class ContextService {
     const hasTenantScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'TENANT');
     if (hasTenantScope) {
       const buildings = await this.prisma.building.findMany({
-        where: { tenantId },
+        where: { tenantId, deletedAt: null },
         select: { id: true, name: true },
       });
       return buildings.sort((a, b) =>
@@ -403,7 +403,7 @@ export class ContextService {
 
     if (buildingIds.length > 0) {
       const buildings = await this.prisma.building.findMany({
-        where: { tenantId, id: { in: buildingIds } },
+        where: { tenantId, id: { in: buildingIds }, deletedAt: null },
         select: { id: true, name: true },
       });
       return buildings.sort((a, b) =>
@@ -438,7 +438,12 @@ export class ContextService {
       const unitIds = await this.residentAccess.getActiveUnitIds(_tenantId, userId, buildingId);
       if (unitIds.length === 0) return [];
       const units = await this.prisma.unit.findMany({
-        where: { tenantId: _tenantId, buildingId, id: { in: unitIds } },
+        where: {
+          tenantId: _tenantId,
+          buildingId,
+          building: { deletedAt: null },
+          id: { in: unitIds },
+        },
         select: { id: true, code: true, label: true },
       });
       return units.sort((a, b) =>
@@ -451,7 +456,11 @@ export class ContextService {
     // If TENANT or BUILDING scoped: return all units in building
     if (hasTenantScope || hasBuildingScope) {
       const units = await this.prisma.unit.findMany({
-        where: { tenantId: _tenantId, buildingId },
+        where: {
+          tenantId: _tenantId,
+          buildingId,
+          building: { deletedAt: null },
+        },
         select: { id: true, code: true, label: true },
       });
       return units.sort((a, b) =>
@@ -472,6 +481,7 @@ export class ContextService {
         where: {
           tenantId: _tenantId,
           buildingId,
+          building: { deletedAt: null },
           id: { in: unitIds },
         },
         select: { id: true, code: true, label: true },

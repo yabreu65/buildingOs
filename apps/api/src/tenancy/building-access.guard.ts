@@ -65,13 +65,15 @@ export class BuildingAccessGuard implements CanActivate {
     const paramTenantId = request.params.tenantId as string | undefined;
 
     // 3. Buscar el building en la BD
-    const building = await this.prisma.building.findUnique({
-      where: { id: buildingId },
-      select: { id: true, tenantId: true },
+    const building = await this.prisma.building.findFirst({
+      where: paramTenantId
+        ? { id: buildingId, tenantId: paramTenantId, deletedAt: null }
+        : { id: buildingId, deletedAt: null },
+      select: { id: true, tenantId: true, deletedAt: true },
     });
 
     // 4. Si el building no existe, responder 404 (no filtrar existencia)
-    if (!building) {
+    if (!building || building.deletedAt !== null) {
       throw new NotFoundException(
         `Building not found or does not belong to this tenant`,
       );
@@ -130,7 +132,14 @@ export class BuildingAccessGuard implements CanActivate {
     // Los controllers usan req.user.roles para validar permisos (RBAC)
     const tenantRoles = membership.roles
       .filter(r => r.scopeType === 'TENANT' || (r.scopeType === 'BUILDING' && r.scopeBuildingId === buildingId))
-      .map(r => r.role as Role);
+      .map((r) => r.role)
+      .filter((role): role is Role =>
+        role === 'SUPER_ADMIN' ||
+        role === 'TENANT_OWNER' ||
+        role === 'TENANT_ADMIN' ||
+        role === 'OPERATOR' ||
+        role === 'RESIDENT',
+      );
     request.user.roles = tenantRoles;
 
     return true;
