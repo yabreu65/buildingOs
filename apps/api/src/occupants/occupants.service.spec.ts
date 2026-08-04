@@ -108,7 +108,7 @@ describe('OccupantsService', () => {
 
     expect(prisma.unitOccupant.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { unitId: 'unit-1' },
+        where: { tenantId: 'tenant-1', unitId: 'unit-1' },
         include: {
           member: {
             include: {
@@ -137,7 +137,7 @@ describe('OccupantsService', () => {
 
     expect(result).toEqual([]);
     expect(prisma.unit.findFirst).toHaveBeenCalledWith({
-      where: { id: 'unit-1', building: { id: 'building-1', tenantId: 'tenant-1' } },
+      where: { id: 'unit-1', building: { id: 'building-1', tenantId: 'tenant-1', deletedAt: null } },
     });
     expectNoPasswordHashDeep(result);
   });
@@ -150,5 +150,30 @@ describe('OccupantsService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
 
     expect(prisma.unitOccupant.findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects assigning occupants to archived buildings', async () => {
+    authorizeService.authorize.mockResolvedValue(true);
+    planEntitlements.assertLimit.mockResolvedValue(undefined);
+    prisma.tenantMember.findFirst.mockResolvedValue({ id: 'member-1' } as never);
+    prisma.unit.findFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      service.assignOccupant(
+        'tenant-1',
+        'building-archived',
+        'unit-1',
+        { memberId: 'member-1', role: 'RESIDENT' } as never,
+        'user-1',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.unit.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'unit-1',
+        building: { id: 'building-archived', tenantId: 'tenant-1', deletedAt: null },
+      },
+    });
+    expect(prisma.unitOccupant.create).not.toHaveBeenCalled();
   });
 });

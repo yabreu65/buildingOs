@@ -8,30 +8,30 @@ import { AuthorizeService } from '../rbac/authorize.service';
 import { CreateOccupantDto } from './dto/create-occupant.dto';
 import { publicUserSelect, toPublicUser } from '../common/public-user';
 
-type OccupantNotificationUnit = {
+interface OccupantNotificationUnit {
   id: string;
   label: string | null;
   buildingId: string;
   building?: {
     name: string;
   } | null;
-};
+}
 
-type OccupantWithRelations = UnitOccupant & {
+interface OccupantWithRelations extends UnitOccupant {
   unit?: OccupantNotificationUnit | null;
-};
+}
 
-type OccupantUserWithPublicFields = {
+interface OccupantUserWithPublicFields {
   id: string;
   email: string;
   name: string;
-};
+}
 
-type OccupantWithPublicMemberUser = UnitOccupant & {
+interface OccupantWithPublicMemberUser extends UnitOccupant {
   member?: {
     user?: OccupantUserWithPublicFields | null;
   } | null;
-};
+}
 
 @Injectable()
 export class OccupantsService {
@@ -69,7 +69,7 @@ export class OccupantsService {
 
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
-      where: { id: unitId, building: { id: buildingId, tenantId } },
+      where: { id: unitId, building: { id: buildingId, tenantId, deletedAt: null } },
     });
 
     if (!unit) {
@@ -144,7 +144,7 @@ export class OccupantsService {
   async findOccupants(tenantId: string, buildingId: string, unitId: string): Promise<UnitOccupant[]> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
-      where: { id: unitId, building: { id: buildingId, tenantId } },
+      where: { id: unitId, building: { id: buildingId, tenantId, deletedAt: null } },
     });
 
     if (!unit) {
@@ -154,7 +154,7 @@ export class OccupantsService {
     }
 
     return await this.prisma.unitOccupant.findMany({
-      where: { unitId },
+      where: { tenantId, unitId },
       include: {
         member: {
           include: {
@@ -192,7 +192,7 @@ export class OccupantsService {
 
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
-      where: { id: unitId, building: { id: buildingId, tenantId } },
+      where: { id: unitId, building: { id: buildingId, tenantId, deletedAt: null } },
     });
 
     if (!unit) {
@@ -203,7 +203,7 @@ export class OccupantsService {
 
     // Verify occupant exists and belongs to this unit
     const occupant = await this.prisma.unitOccupant.findFirst({
-      where: { id: occupantId, unitId },
+      where: { id: occupantId, tenantId, unitId },
     });
 
     if (!occupant) {
@@ -212,8 +212,8 @@ export class OccupantsService {
       );
     }
 
-    const deleted = await this.prisma.unitOccupant.delete({
-      where: { id: occupantId },
+    await this.prisma.unitOccupant.deleteMany({
+      where: { id: occupantId, tenantId },
     });
 
     // Audit: OCCUPANT_REMOVE
@@ -232,7 +232,7 @@ export class OccupantsService {
       });
     }
 
-    return deleted;
+    return occupant;
   }
 
   /**
@@ -246,8 +246,8 @@ export class OccupantsService {
   ): Promise<void> {
     try {
       // Load fresh member data to get user ID
-      const member = await this.prisma.tenantMember.findUnique({
-        where: { id: occupant.memberId },
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { id: occupant.memberId, tenantId },
         include: { user: { select: { id: true } } },
       });
 
@@ -292,6 +292,6 @@ export class OccupantsService {
         ...occupant.member,
         user: toPublicUser(occupant.member.user) ?? null,
       },
-    } as unknown as UnitOccupant;
+    };
   }
 }

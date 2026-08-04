@@ -44,7 +44,11 @@ export class ResidentAccessService {
         tenantId,
         endDate: null,
         member: { tenantId, userId, disabledAt: null },
-        unit: { tenantId, ...(buildingId ? { buildingId } : {}) },
+        unit: {
+          tenantId,
+          ...(buildingId ? { buildingId } : {}),
+          building: { deletedAt: null },
+        },
       },
       select: {
         id: true,

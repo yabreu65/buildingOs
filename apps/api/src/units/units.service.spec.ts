@@ -35,8 +35,8 @@ describe('UnitsService', () => {
               create: jest.fn(),
               findMany: jest.fn(),
               findFirst: jest.fn(),
-              update: jest.fn(),
-              delete: jest.fn(),
+              updateMany: jest.fn(),
+              deleteMany: jest.fn(),
               count: jest.fn(),
             },
             charge: {
@@ -116,9 +116,9 @@ describe('UnitsService', () => {
         updatedAt: new Date(),
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.unit, 'create').mockResolvedValue(expectedUnit as any);
+      jest.spyOn(prismaService.unit, 'create').mockResolvedValue(expectedUnit as never);
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
@@ -164,9 +164,9 @@ describe('UnitsService', () => {
         updatedAt: new Date(),
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
-      jest.spyOn(prismaService.unit, 'create').mockResolvedValue(expectedUnit as any);
+      jest.spyOn(prismaService.unit, 'create').mockResolvedValue(expectedUnit as never);
 
       // ACT
       const result = await service.create(tenantId, buildingId, 'user-123', dto);
@@ -217,7 +217,7 @@ describe('UnitsService', () => {
         meta: { target: ['code'] },
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(planEntitlementsService, 'assertLimit').mockResolvedValue(undefined);
       jest.spyOn(prismaService.unit, 'create').mockRejectedValue(error);
 
@@ -248,7 +248,7 @@ describe('UnitsService', () => {
       };
       const limitError = new BadRequestException('Unit limit exceeded');
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(planEntitlementsService, 'assertLimit').mockRejectedValue(limitError);
 
       // ACT & ASSERT
@@ -290,7 +290,7 @@ describe('UnitsService', () => {
         },
       ];
 
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as any);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as never);
 
       // ACT
       const result = await service.findAllByTenant(tenantId);
@@ -324,7 +324,7 @@ describe('UnitsService', () => {
         },
       ];
 
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as any);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as never);
 
       // ACT
       const result = await service.findAllByTenant(tenantId, buildingId);
@@ -342,7 +342,7 @@ describe('UnitsService', () => {
     it('should return empty array when tenant has no units', async () => {
       // ARRANGE
       const tenantId = 'tenant-empty';
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([]);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([] as never);
 
       // ACT
       const result = await service.findAllByTenant(tenantId);
@@ -380,8 +380,8 @@ describe('UnitsService', () => {
         },
       ];
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
+      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue(expectedUnits as never);
 
       // ACT
       const result = await service.findAll(tenantId, buildingId);
@@ -455,8 +455,8 @@ describe('UnitsService', () => {
         ],
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
-      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(expectedUnit as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(expectedUnit as never);
 
       // ACT
       const result = await service.findOne(tenantId, buildingId, unitId);
@@ -500,7 +500,7 @@ describe('UnitsService', () => {
         updatedAt: new Date(),
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(null);
 
       // ACT & ASSERT
@@ -550,9 +550,9 @@ describe('UnitsService', () => {
         occupancyStatus: 'OCCUPIED',
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
-      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(existingUnit as any);
-      jest.spyOn(prismaService.unit, 'update').mockResolvedValue(updatedUnit as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
+      jest.spyOn(prismaService.unit, 'updateMany').mockResolvedValue({ count: 1 } as never);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(updatedUnit as never);
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
@@ -563,7 +563,17 @@ describe('UnitsService', () => {
         ...updatedUnit,
         displayCode: 'A01-NEW',
       });
-      expect(prismaService.unit.update).toHaveBeenCalled();
+      expect(prismaService.unit.updateMany).toHaveBeenCalledWith({
+        where: { id: unitId, tenantId, buildingId },
+        data: {
+          code: 'A01-NEW',
+          label: 'Updated Unit',
+          unitType: 'PENTHOUSE',
+          occupancyStatus: 'OCCUPIED',
+          m2: undefined,
+          unitCategoryId: undefined,
+        },
+      });
       expect(auditService.createLog).toHaveBeenCalled();
     });
 
@@ -602,9 +612,8 @@ describe('UnitsService', () => {
         meta: { target: ['code'] },
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
-      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(existingUnit as any);
-      jest.spyOn(prismaService.unit, 'update').mockRejectedValue(error);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
+      jest.spyOn(prismaService.unit, 'updateMany').mockRejectedValue(error);
 
       // ACT & ASSERT
       await expect(service.update(tenantId, buildingId, unitId, 'user-123', dto)).rejects.toThrow(
@@ -640,9 +649,9 @@ describe('UnitsService', () => {
         unitOccupants: [],
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
-      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(existingUnit as any);
-      jest.spyOn(prismaService.unit, 'delete').mockResolvedValue(existingUnit as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValueOnce(existingUnit as never).mockResolvedValueOnce(existingUnit as never);
+      jest.spyOn(prismaService.unit, 'deleteMany').mockResolvedValue({ count: 1 } as never);
       jest.spyOn(auditService, 'createLog').mockResolvedValue(undefined);
 
       // ACT
@@ -653,8 +662,8 @@ describe('UnitsService', () => {
         ...existingUnit,
         displayCode: 'A01',
       });
-      expect(prismaService.unit.delete).toHaveBeenCalledWith({
-        where: { id: unitId },
+      expect(prismaService.unit.deleteMany).toHaveBeenCalledWith({
+        where: { id: unitId, tenantId, buildingId },
       });
       expect(auditService.createLog).toHaveBeenCalledWith({
         tenantId,
@@ -684,7 +693,7 @@ describe('UnitsService', () => {
         updatedAt: new Date(),
       };
 
-      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as any);
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue(building as never);
       jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(null);
 
       // ACT & ASSERT

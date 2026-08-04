@@ -124,6 +124,7 @@ export class UnitsService {
   async findAllByTenant(tenantId: string, buildingId?: string, unitIds?: string[]): Promise<UnitWithDisplayCode[]> {
     const where: Prisma.UnitWhereInput = {
       tenantId,
+      building: { deletedAt: null },
     };
 
     if (buildingId) {
@@ -216,7 +217,7 @@ export class UnitsService {
     unitId: string,
     userId: string,
     dto: UpdateUnitDto,
-  ): Promise<Unit> {
+  ): Promise<UnitWithDisplayCode> {
     // RBAC: check permission
     const hasAccess = await this.authorizeService.authorize({
       userId,
@@ -229,12 +230,9 @@ export class UnitsService {
       throw new ForbiddenException('No tiene permiso para modificar unidades');
     }
 
-    // Verify building belongs to tenant and unit belongs to building
-    await this.findOne(tenantId, buildingId, unitId);
-
     try {
-      const updatedUnit = await this.prisma.unit.update({
-        where: { id: unitId },
+      const updatedUnit = await this.prisma.unit.updateMany({
+        where: { id: unitId, tenantId, buildingId },
         data: {
           code: dto.code,
           label: dto.label,
@@ -243,12 +241,15 @@ export class UnitsService {
           m2: dto.m2,
           unitCategoryId: dto.unitCategoryId,
         },
-        include: {
-          building: { select: { id: true, name: true, alias: true } },
-          unitCategory: { select: { id: true, name: true } },
-          unitOccupants: { include: { member: true } },
-        },
       });
+
+      if (updatedUnit.count === 0) {
+        throw new NotFoundException(
+          `Unit not found or does not belong to this building`,
+        );
+      }
+
+      const refreshedUnit = await this.findOne(tenantId, buildingId, unitId);
 
       // Audit: UNIT_UPDATE
       void this.auditService.createLog({
@@ -259,14 +260,14 @@ export class UnitsService {
         entityId: unitId,
         metadata: {
           buildingId,
-          code: updatedUnit.code,
-          label: updatedUnit.label,
-          unitType: updatedUnit.unitType,
-          occupancyStatus: updatedUnit.occupancyStatus,
+          code: refreshedUnit.code,
+          label: refreshedUnit.label,
+          unitType: refreshedUnit.unitType,
+          occupancyStatus: refreshedUnit.occupancyStatus,
         },
       });
 
-      return addDisplayCode(updatedUnit);
+      return refreshedUnit;
     } catch (error: unknown) {
       if (
         typeof error === 'object' &&
@@ -290,7 +291,7 @@ export class UnitsService {
     buildingId: string,
     unitId: string,
     userId: string,
-  ): Promise<Unit> {
+  ): Promise<UnitWithDisplayCode> {
     // RBAC: check permission
     const hasAccess = await this.authorizeService.authorize({
       userId,
@@ -352,23 +353,23 @@ export class UnitsService {
       );
     }
 
-    const deletedUnit = await this.prisma.unit.delete({
-      where: { id: unitId },
+    await this.prisma.unit.deleteMany({
+      where: { id: unitId, tenantId, buildingId },
     });
 
     // Audit: UNIT_DELETE
     void this.auditService.createLog({
       tenantId,
       actorUserId: userId,
-      action: AuditAction.UNIT_DELETE,
-      entityType: 'Unit',
-      entityId: unitId,
-      metadata: {
-        buildingId,
-        code: deletedUnit.code,
-        label: deletedUnit.label,
-      },
-    });
+        action: AuditAction.UNIT_DELETE,
+        entityType: 'Unit',
+        entityId: unitId,
+        metadata: {
+          buildingId,
+          code: unitToDelete.code,
+          label: unitToDelete.label,
+        },
+      });
 
     return addDisplayCode(unitToDelete);
   }

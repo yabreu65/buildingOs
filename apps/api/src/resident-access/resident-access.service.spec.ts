@@ -49,7 +49,13 @@ describe('ResidentAccessService', () => {
 
     await expect(service.getActiveUnitIds('tenant-1', 'user-1')).resolves.toEqual(['unit-1', 'unit-2']);
     expect(prisma.unitOccupant.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 'tenant-1', endDate: null }),
+      where: expect.objectContaining({
+        tenantId: 'tenant-1',
+        endDate: null,
+        unit: expect.objectContaining({
+          building: expect.objectContaining({ deletedAt: null }),
+        }),
+      }),
     }));
   });
 

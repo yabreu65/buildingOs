@@ -96,6 +96,46 @@ describe('ContextService', () => {
     });
   });
 
+  it('omits archived buildings and their units from tenant-scoped context options', async () => {
+    jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
+      id: 'membership-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      userContext: null,
+      roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT', scopeBuildingId: null }],
+    } as never);
+    jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
+    jest.spyOn(prisma.building, 'findMany').mockResolvedValue([
+      { id: 'building-active', name: 'Edificio Activo' },
+    ] as never);
+    jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([
+      { id: 'unit-1', code: 'A-01', label: 'Unidad 1' },
+    ] as never);
+
+    await expect(service.getContextOptions('user-1', 'tenant-1')).resolves.toEqual({
+      buildings: [
+        { id: 'building-active', name: 'Edificio Activo' },
+      ],
+      unitsByBuilding: {
+        'building-active': [
+          { id: 'unit-1', code: 'A-01', label: 'Unidad 1' },
+        ],
+      },
+    });
+
+    expect(prisma.building.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1', deletedAt: null },
+      select: { id: true, name: true },
+    });
+    expect(prisma.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 'tenant-1',
+        buildingId: 'building-active',
+        building: { deletedAt: null },
+      }),
+    }));
+  });
+
   it('normalizes a resident building-only selection to the first active unit in that building', async () => {
     jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
       id: 'membership-1',
@@ -156,6 +196,26 @@ describe('ContextService', () => {
     );
   });
 
+  it('rejects archived buildings when setting a tenant-scoped context', async () => {
+    jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
+      id: 'membership-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      userContext: null,
+      roles: [{ role: 'TENANT_ADMIN' }],
+    } as never);
+    jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
+    jest.spyOn(prisma.building, 'findFirst').mockResolvedValue(null);
+
+    await expect(
+      service.setContext('user-1', 'tenant-1', 'building-archived', null),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.building.findFirst).toHaveBeenCalledWith({
+      where: { id: 'building-archived', tenantId: 'tenant-1', deletedAt: null },
+    });
+  });
+
   it('keeps the resident context empty when there are no active occupancies', async () => {
     jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
       id: 'membership-1',
@@ -177,5 +237,33 @@ describe('ContextService', () => {
       activeBuildingId: null,
       activeUnitId: null,
     });
+  });
+
+  it('omits archived buildings from tenant-wide context options', async () => {
+    jest.spyOn(prisma.membership, 'findUnique').mockResolvedValue({
+      id: 'membership-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      userContext: null,
+      roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
+    } as never);
+    jest.spyOn(prisma.building, 'findMany').mockResolvedValue([
+      { id: 'building-active', name: 'Edificio Activo' },
+    ] as never);
+    jest.spyOn(prisma.unit, 'findMany').mockResolvedValue([] as never);
+    jest.spyOn(residentAccess, 'shouldEnforce').mockReturnValue(false);
+
+    await expect(service.getContextOptions('user-1', 'tenant-1')).resolves.toEqual({
+      buildings: [{ id: 'building-active', name: 'Edificio Activo' }],
+      unitsByBuilding: {
+        'building-active': [],
+      },
+    });
+
+    expect(prisma.building.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: 'tenant-1', deletedAt: null },
+      }),
+    );
   });
 });
