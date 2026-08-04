@@ -8,7 +8,6 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
-import { AuditAction } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { TenantAccessGuard } from './tenant-access.guard';
@@ -17,13 +16,13 @@ import {
   TenantStatsResponse,
   TenantBillingResponse,
   AuditLogsResultResponse,
-  AuditLogFilter,
 } from './tenancy-stats.service';
 import { BrandingService } from './branding.service';
 import {
   GetBrandingResponseDto,
   UpdateBrandingDto,
 } from './dto/branding.dto';
+import { TenantAuditLogQueryDto } from './dto/tenant-audit-log-query.dto';
 
 interface HealthResponse {
   ok: boolean;
@@ -120,21 +119,9 @@ export class TenancyController {
   @Get(':tenantId/audit-logs')
   async getTenantAuditLogs(
     @Param('tenantId') tenantId: string,
-    @Query('skip') skip?: string,
-    @Query('take') take?: string,
-    @Query('action') action?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
+    @Query() query: TenantAuditLogQueryDto,
   ): Promise<AuditLogsResultResponse> {
-    const filters: AuditLogFilter = {
-      skip: skip ? parseInt(skip, 10) : undefined,
-      take: take ? parseInt(take, 10) : undefined,
-      action: action ? (action as AuditAction) : undefined,
-      dateFrom: dateFrom ? new Date(dateFrom) : undefined,
-      dateTo: dateTo ? new Date(dateTo) : undefined,
-    };
-
-    return this.tenancyStatsService.getTenantAuditLogs(tenantId, filters);
+    return this.tenancyStatsService.getTenantAuditLogs(tenantId, query);
   }
 
   /**
@@ -171,6 +158,6 @@ export class TenancyController {
     @Body() dto: UpdateBrandingDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<GetBrandingResponseDto> {
-    return this.brandingService.updateBranding(tenantId, dto, req.user.id);
+    return this.brandingService.updateBranding(tenantId, dto, req.user);
   }
 }

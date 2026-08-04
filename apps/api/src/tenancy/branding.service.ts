@@ -7,7 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { UpdateBrandingDto, GetBrandingResponseDto } from './dto/branding.dto';
-import { AuditAction } from '@prisma/client';
+import type { AuthenticatedServiceActor } from '../common/types/request.types';
 
 /**
  * BrandingService: Manage tenant branding (logo, colors, name)
@@ -15,7 +15,7 @@ import { AuditAction } from '@prisma/client';
  * Ensures:
  * - logoFileId validates to same tenant
  * - Colors are valid hex
- * - Only tenant admins can update
+ * - Only tenant owners/admins can update
  */
 @Injectable()
 export class BrandingService {
@@ -52,13 +52,15 @@ export class BrandingService {
 
   /**
    * Update tenant's branding
-   * Only TENANT_ADMIN or TENANT_OWNER can update
+   * Only TENANT_OWNER or TENANT_ADMIN can update
    */
   async updateBranding(
     tenantId: string,
     dto: UpdateBrandingDto,
-    userId: string,
+    actor: AuthenticatedServiceActor,
   ): Promise<GetBrandingResponseDto> {
+    this.assertTenantAdmin(actor, tenantId);
+
     // Validate tenant exists
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -69,7 +71,7 @@ export class BrandingService {
     }
 
     // If logoFileId is being set, validate it belongs to this tenant
-    if (dto.logoFileId && dto.logoFileId !== tenant.logoFileId) {
+    if (dto.logoFileId !== undefined) {
       const file = await this.prisma.file.findFirst({
         where: { id: dto.logoFileId, tenantId },
       });
@@ -114,25 +116,27 @@ export class BrandingService {
     });
 
     // Audit: TENANT_BRANDING_UPDATED
-    void this.auditService.createLog({
+    await this.auditService.createLog({
       tenantId,
-      actorUserId: userId,
-      action: AuditAction.TENANT_BRANDING_UPDATED,
+      actorUserId: actor.id,
+      action: 'TENANT_BRANDING_UPDATED',
       entityType: 'Tenant',
       entityId: tenantId,
       metadata: {
-        changes: {
-          before: oldBranding,
-          after: {
-            brandName: updated.brandName,
-            logoFileId: updated.logoFileId,
-            primaryColor: updated.primaryColor,
-            secondaryColor: updated.secondaryColor,
-            theme: updated.theme,
-            emailFooter: updated.emailFooter,
+          changes: {
+            before: oldBranding,
+            after: {
+              brandName: updated.brandName,
+              logoFileId: updated.logoFileId,
+              primaryColor: updated.primaryColor,
+              secondaryColor: updated.secondaryColor,
+              theme: updated.theme,
+              emailFooter: updated.emailFooter,
+              currency: updated.currency,
+              locale: updated.locale,
+            },
           },
         },
-      },
     });
 
     return {
@@ -147,5 +151,28 @@ export class BrandingService {
       currency: updated.currency || undefined,
       locale: updated.locale || undefined,
     };
+  }
+
+  private assertTenantAdmin(
+    actor: AuthenticatedServiceActor,
+    tenantId: string,
+  ): void {
+    const membership = actor.memberships?.find(
+      (currentMembership) => currentMembership.tenantId === tenantId,
+    );
+
+    if (!membership) {
+      throw new ForbiddenException('No tenés acceso al tenant indicado');
+    }
+
+    const canEditBranding = membership.roles.some((role) =>
+      ['TENANT_OWNER', 'TENANT_ADMIN'].includes(role),
+    );
+
+    if (!canEditBranding) {
+      throw new ForbiddenException(
+        'Se requiere rol TENANT_OWNER o TENANT_ADMIN para modificar el branding del tenant',
+      );
+    }
   }
 }

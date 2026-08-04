@@ -1,4 +1,15 @@
-import { IsString, IsHexColor, IsOptional, IsIn, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsString,
+  IsHexColor,
+  IsOptional,
+  IsIn,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+const trimString = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' ? value.trim() : value;
 
 /**
  * Get tenant branding response
@@ -27,7 +38,9 @@ export class UpdateBrandingDto {
   brandName?: string;
 
   @IsOptional()
+  @Transform(trimString)
   @IsString()
+  @MinLength(1)
   logoFileId?: string; // Must belong to same tenant
 
   @IsOptional()

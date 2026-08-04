@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, AuditAction } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type { TenantAuditAction } from './dto/tenant-audit-log-query.dto';
 
 export interface TenantStatsResponse {
   totalBuildings: number;
@@ -41,7 +42,7 @@ export interface TenantBillingResponse {
 export interface AuditLogFilter {
   skip?: number;
   take?: number;
-  action?: AuditAction;
+  action?: TenantAuditAction;
   dateFrom?: Date;
   dateTo?: Date;
 }
@@ -60,6 +61,22 @@ export interface AuditLogResponse {
 export interface AuditLogsResultResponse {
   data: AuditLogResponse[];
   total: number;
+}
+
+function normalizeAuditMetadata(
+  metadata: unknown,
+): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    normalized[key] = value;
+  }
+
+  return normalized;
 }
 
 /**
@@ -277,7 +294,7 @@ export class TenancyStatsService {
       entityId: log.entityId,
       actorUserId: log.actorUserId,
       actorName: log.actor?.name ?? null,
-      metadata: log.metadata as Record<string, unknown> | null,
+      metadata: normalizeAuditMetadata(log.metadata),
       createdAt: log.createdAt,
     }));
 

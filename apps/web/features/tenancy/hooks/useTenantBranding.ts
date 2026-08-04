@@ -18,11 +18,23 @@ export interface TenantBranding {
   locale?: string; // es-AR, es-VE, en-US
 }
 
+export interface UpdateTenantBrandingPayload {
+  brandName?: string;
+  logoFileId?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  theme?: string;
+  emailFooter?: string;
+  currency?: string;
+  locale?: string;
+}
+
 /**
  * Fetch tenant branding configuration including currency and locale
  */
-export function useTenantBranding() {
-  const tenantId = useTenantId();
+export function useTenantBranding(tenantIdOverride?: string | null) {
+  const routeTenantId = useTenantId();
+  const tenantId = tenantIdOverride ?? routeTenantId;
 
   const { data, isLoading, error } = useQuery<TenantBranding>({
     queryKey: ['tenantBranding', tenantId],
@@ -68,9 +80,9 @@ export function useTenantCurrency() {
  */
 export async function updateTenantBranding(
   tenantId: string,
-  updates: Partial<TenantBranding>
+  updates: UpdateTenantBrandingPayload
 ): Promise<TenantBranding> {
-  return apiClient<TenantBranding, Partial<TenantBranding>>({
+  return apiClient<TenantBranding, UpdateTenantBrandingPayload>({
     path: `/tenants/${tenantId}/branding`,
     method: 'PATCH',
     body: updates,
