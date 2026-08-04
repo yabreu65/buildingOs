@@ -12,9 +12,10 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AiNudge, AiNudgesService } from './ai-nudges.service';
 import type { AuthenticatedRequest } from '../common/types/request.types';
+import { TenantAiAccessGuard } from './tenant-ai-access.guard';
 
 @Controller('me/ai')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAiAccessGuard)
 export class AiNudgesController {
   constructor(private readonly aiNudgesService: AiNudgesService) {}
 

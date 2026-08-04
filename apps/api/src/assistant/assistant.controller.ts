@@ -19,6 +19,7 @@ import { AiEntitlementsService } from '../billing/ai-entitlements.service';
 import { AssistantService, ChatRequest, ChatResponse } from './assistant.service';
 import { AiAnalyticsService, TenantAnalyticsResponse, TenantSummaryItem } from './analytics.service';
 import { AiActionEventsService, CreateActionEventDto } from './action-events.service';
+import { TenantAiAccessGuard } from './tenant-ai-access.guard';
 import { StructuredResponse } from './ai.types';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 
@@ -359,6 +360,7 @@ export class AssistantController {
    * Returns: TenantAnalyticsResponse with usage, efficiency, adoption, templates, actions
    */
   @Get('analytics')
+  @UseGuards(TenantAiAccessGuard)
   async getTenantAnalytics(
     @Param('tenantId') tenantId: string,
     @Query('month') month?: string,

@@ -1,6 +1,7 @@
 'use client';
 
 import { useAuth } from './useAuth';
+import { useHasAnyRoleInTenant } from '@/features/tenancy/hooks/useEffectiveRole';
 
 /**
  * Hook to get the current user's roles for the active tenant
@@ -25,12 +26,11 @@ export function useUserRoles(): string[] {
 }
 
 /**
- * Helper function to check if user has admin-level access
- * (can see all AI features, not just residents)
+ * Helper function to check if the current tenant membership can access AI settings.
+ *
+ * Only tenant-scoped roles are considered. Global or stale roles from another tenant
+ * are intentionally ignored.
  */
-export function useCanAccessAi(): boolean {
-  const roles = useUserRoles();
-  return roles.some((role) =>
-    ['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN'].includes(role)
-  );
+export function useCanAccessAi(tenantId?: string): boolean {
+  return useHasAnyRoleInTenant(tenantId, ['TENANT_OWNER', 'TENANT_ADMIN', 'OPERATOR']);
 }

@@ -1,6 +1,11 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useActiveTenantId } from '@/features/auth/useAuthSession';
+import { useCanAccessAi } from '@/features/auth/useUserRoles';
+import { useAuthorizedPortalContext } from '@/features/auth/useAuthorizedPortalContext';
+import { useTenantId } from '@/features/tenancy/tenant.hooks';
 import { useAiAnalytics } from '@/features/assistant/hooks/useAiAnalytics';
 import { useAiLimits } from '@/features/assistant/hooks/useAiLimits';
 import { useAiNudges } from '@/features/assistant/hooks/useAiNudges';
@@ -8,15 +13,13 @@ import { AiAnalyticsPanel } from '@/features/assistant/components/analytics/AiAn
 import { AiPlanLimitsCard } from '@/features/assistant/components/limits/AiPlanLimitsCard';
 import { AiLimitBanner } from '@/features/assistant/components/limits/AiLimitBanner';
 import { AiNudgesPanel } from '@/features/assistant/components/limits/AiNudgesPanel';
+import { routes } from '@/shared/lib/routes';
 
 /**
  * Phase 13: Tenant AI Settings Page
  * Display plan limits, usage, warnings, and analytics
  */
-export default function TenantAiAnalyticsPage() {
-  const params = useParams();
-  const tenantId = params.tenantId as string;
-
+function TenantAiAnalyticsContent({ tenantId }: { tenantId: string }) {
   const { analytics, loading, error, month, setMonth, refetch } =
     useAiAnalytics(tenantId);
 
@@ -26,6 +29,7 @@ export default function TenantAiAnalyticsPage() {
     nudges,
     loading: nudgesLoading,
     submitting: nudgesSubmitting,
+    error: nudgesError,
     dismiss,
     requestUpgrade,
   } = useAiNudges(tenantId);
@@ -40,6 +44,7 @@ export default function TenantAiAnalyticsPage() {
   const showCallsBlocked = limits.callsLimit > 0 && limits.callsLimit < 9999 && callsPercent >= 100;
 
   const upgradeUrl = `/${tenantId}/settings/billing`;
+  const limitsErrorMessage = limitsError;
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -72,6 +77,24 @@ export default function TenantAiAnalyticsPage() {
           onRequestUpgrade={requestUpgrade}
         />
       </div>
+
+      {limitsErrorMessage ? (
+        <div
+          className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+          role="alert"
+        >
+          {limitsErrorMessage}
+        </div>
+      ) : null}
+
+      {nudgesError ? (
+        <div
+          className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+          role="alert"
+        >
+          {nudgesError}
+        </div>
+      ) : null}
 
       {/* Warning Banners */}
       <div className="space-y-4 mb-8">
@@ -139,3 +162,44 @@ export default function TenantAiAnalyticsPage() {
     </div>
   );
 }
+
+export function TenantAiAnalyticsPage() {
+  const router = useRouter();
+  const routeTenantId = useTenantId();
+  const activeTenantId = useActiveTenantId();
+  const portalContext = useAuthorizedPortalContext(routeTenantId);
+
+  const hasMatchingTenant =
+    activeTenantId !== null &&
+    routeTenantId !== null &&
+    activeTenantId === routeTenantId;
+  const tenantId = hasMatchingTenant ? activeTenantId : null;
+  const canAccessAi = useCanAccessAi(tenantId ?? undefined);
+
+  useEffect(() => {
+    if (activeTenantId && routeTenantId && activeTenantId !== routeTenantId) {
+      router.replace(`/${activeTenantId}/settings/ai`);
+      return;
+    }
+
+    if (portalContext === 'resident' && tenantId) {
+      router.replace(routes.residentDashboard(tenantId));
+    }
+  }, [activeTenantId, portalContext, routeTenantId, router, tenantId]);
+
+  if (!tenantId || portalContext !== 'admin') {
+    return <div className="min-h-[240px]" aria-busy="true" />;
+  }
+
+  if (!canAccessAi) {
+    return (
+      <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/30 p-6 text-sm text-muted-foreground">
+        No tenés permiso para acceder a las métricas de IA del tenant.
+      </div>
+    );
+  }
+
+  return <TenantAiAnalyticsContent key={tenantId} tenantId={tenantId} />;
+}
+
+export default TenantAiAnalyticsPage;
