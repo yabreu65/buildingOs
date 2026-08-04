@@ -141,7 +141,7 @@ export class OccupantsService {
   /**
    * List all occupants for a unit
    */
-  async findOccupants(tenantId: string, buildingId: string, unitId: string): Promise<UnitOccupant[]> {
+  async findOccupants(tenantId: string, buildingId: string, unitId: string): Promise<OccupantWithPublicMemberUser[]> {
     // Verify unit exists and belongs to building/tenant
     const unit = await this.prisma.unit.findFirst({
       where: { id: unitId, building: { id: buildingId, tenantId, deletedAt: null } },
@@ -281,7 +281,7 @@ export class OccupantsService {
     }
   }
 
-  private sanitizeOccupantUser(occupant: OccupantWithPublicMemberUser): UnitOccupant {
+  private sanitizeOccupantUser(occupant: OccupantWithPublicMemberUser): OccupantWithPublicMemberUser {
     if (!occupant.member) {
       return occupant;
     }
