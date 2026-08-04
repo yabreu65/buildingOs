@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -8,8 +8,7 @@ import Card from "@/shared/components/ui/Card";
 import Button from "@/shared/components/ui/Button";
 import Input from "@/shared/components/ui/Input";
 import { Table } from "@/shared/components/ui/Table";
-import { useTenantId } from "@/features/tenancy/tenant.hooks";
-import { BankAccount } from "./banking.types";
+import { useBoStorageTick } from "@/shared/lib/storage/useBoStorage";
 import { listBankAccounts, addBankAccount, removeBankAccount } from "./banking.storage";
 
 const schema = z.object({
@@ -21,10 +20,14 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-export default function BankingUI() {
-  const tenantId = useTenantId();
-  const [accounts, setAccounts] = useState<BankAccount[]>([]);
+export interface BankingUIProps {
+  readonly tenantId: string;
+}
+
+export default function BankingUI({ tenantId }: BankingUIProps) {
   const [isCreating, setIsCreating] = useState(false);
+  useBoStorageTick();
+  const accounts = listBankAccounts(tenantId);
 
   const {
     register,
@@ -35,30 +38,15 @@ export default function BankingUI() {
     resolver: zodResolver(schema),
   });
 
-  const refresh = () => {
-    if (tenantId) {
-      setAccounts(listBankAccounts(tenantId));
-    }
-  };
-
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]);
-
   const onSubmit = (data: FormData) => {
-    if (!tenantId) return;
     addBankAccount(tenantId, data);
     reset();
     setIsCreating(false);
-    refresh();
   };
 
   const handleDelete = (id: string) => {
-    if (!tenantId) return;
     if (confirm("¿Estás seguro de eliminar esta cuenta?")) {
       removeBankAccount(tenantId, id);
-      refresh();
     }
   };
 
@@ -74,36 +62,36 @@ export default function BankingUI() {
       {isCreating && (
         <Card className="p-6">
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Banco
                 </label>
                 <Input {...register("bankName")} placeholder="Ej: Banco Nacional" />
                 {errors.bankName && (
-                  <p className="text-sm text-red-500 mt-1">{errors.bankName.message}</p>
+                  <p className="mt-1 text-sm text-red-500">{errors.bankName.message}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Titular
                 </label>
                 <Input {...register("accountHolder")} placeholder="Ej: Consorcio Torre A" />
                 {errors.accountHolder && (
-                  <p className="text-sm text-red-500 mt-1">{errors.accountHolder.message}</p>
+                  <p className="mt-1 text-sm text-red-500">{errors.accountHolder.message}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Número de Cuenta / CBU / IBAN
                 </label>
                 <Input {...register("accountNumber")} placeholder="0000..." />
                 {errors.accountNumber && (
-                  <p className="text-sm text-red-500 mt-1">{errors.accountNumber.message}</p>
+                  <p className="mt-1 text-sm text-red-500">{errors.accountNumber.message}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Notas (Opcional)
                 </label>
                 <Input {...register("notes")} placeholder="Cuenta principal..." />
@@ -145,9 +133,9 @@ export default function BankingUI() {
             <tbody>
               {accounts.map((acc) => (
                 <tr key={acc.id} className="border-b border-border last:border-0 hover:bg-muted/50">
-                  <td className="px-4 py-3 text-sm text-foreground font-medium">{acc.bankName}</td>
+                  <td className="px-4 py-3 text-sm font-medium text-foreground">{acc.bankName}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{acc.accountHolder}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground font-mono">{acc.accountNumber}</td>
+                  <td className="px-4 py-3 font-mono text-sm text-muted-foreground">{acc.accountNumber}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{acc.notes || "-"}</td>
                   <td className="px-4 py-3 text-right">
                     <Button
