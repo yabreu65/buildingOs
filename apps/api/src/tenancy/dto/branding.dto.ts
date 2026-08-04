@@ -18,7 +18,7 @@ export class GetBrandingResponseDto {
   tenantId!: string;
   tenantName!: string;
   brandName?: string;
-  logoFileId?: string; // File ID stored; frontend generates presigned URL on-demand
+  logoFileId?: string | null; // File ID stored; frontend generates presigned URL on-demand
   logoUrl?: string; // Deprecated: use logoFileId instead
   primaryColor?: string;
   secondaryColor?: string;
@@ -32,8 +32,10 @@ export class GetBrandingResponseDto {
  * Update tenant branding request
  */
 export class UpdateBrandingDto {
+  @Transform(trimString)
   @IsOptional()
   @IsString()
+  @MinLength(1)
   @MaxLength(100)
   brandName?: string;
 
@@ -41,7 +43,7 @@ export class UpdateBrandingDto {
   @Transform(trimString)
   @IsString()
   @MinLength(1)
-  logoFileId?: string; // Must belong to same tenant
+  logoFileId?: string | null; // null removes the logo, string must belong to same tenant
 
   @IsOptional()
   @IsHexColor()

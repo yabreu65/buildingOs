@@ -71,11 +71,23 @@ const mockedUseQueryClient = jest.mocked(useQueryClient);
 
 describe('GeneralSettingsPage', () => {
   const replace = jest.fn();
-  const invalidateQueries = jest.fn();
+  const { QueryClient: RealQueryClient } = jest.requireActual<
+    typeof import('@tanstack/react-query')
+  >('@tanstack/react-query');
+  const queryClient = new RealQueryClient();
+  const invalidateQueriesSpy = jest.spyOn(queryClient, 'invalidateQueries');
+  const routerMock = {
+    back: jest.fn(),
+    forward: jest.fn(),
+    prefetch: jest.fn().mockResolvedValue(undefined),
+    push: jest.fn(),
+    refresh: jest.fn(),
+    replace,
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockedUseRouter.mockReturnValue({ replace } as never);
+    mockedUseRouter.mockReturnValue(routerMock);
     mockedUseActiveTenantId.mockReturnValue('tenant-1');
     mockedUseAuthorizedPortalContext.mockReturnValue('admin');
     mockedUseTenantId.mockReturnValue('tenant-1');
@@ -91,7 +103,7 @@ describe('GeneralSettingsPage', () => {
       locale: 'es-AR',
     });
     mockedUseCanAdministerTenant.mockReturnValue(true);
-    mockedUseQueryClient.mockReturnValue({ invalidateQueries } as never);
+    mockedUseQueryClient.mockReturnValue(queryClient);
     mockedUpdateTenantBranding.mockResolvedValue({
       tenantId: 'tenant-1',
       tenantName: 'Tenant 1',
@@ -147,7 +159,7 @@ describe('GeneralSettingsPage', () => {
       expect(mockedUpdateTenantBranding).toHaveBeenCalledWith('tenant-1', { currency: 'USD' });
     });
 
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['tenantBranding', 'tenant-1'] });
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['tenantBranding', 'tenant-1'] });
   });
 
   it('does not treat a 403 API response as success', async () => {
@@ -162,7 +174,7 @@ describe('GeneralSettingsPage', () => {
       expect(screen.getByText('403 Forbidden')).not.toBeNull();
     });
 
-    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(invalidateQueriesSpy).not.toHaveBeenCalled();
   });
 
   it('shows an error when the branding query fails', () => {

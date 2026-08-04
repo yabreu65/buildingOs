@@ -1,7 +1,6 @@
 import { ForbiddenException, UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import type { Server } from 'http';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuditService } from '../audit/audit.service';
 import { TenantAccessGuard } from './tenant-access.guard';
@@ -25,32 +24,12 @@ interface ScenarioUser {
 }
 
 describe('TenancyController branding endpoint', () => {
-  let httpServer: Server;
+  let httpServer: ReturnType<INestApplication['getHttpServer']>;
   let app: INestApplication;
   const tenantId = 'tenant-1';
   const dto = { currency: 'USD' };
 
-  interface MockPrismaService {
-    tenant: {
-      findUnique: jest.Mock;
-      update: jest.Mock;
-    };
-    file: {
-      findFirst: jest.Mock;
-    };
-  }
-
-  interface MockAuditService {
-    createLog: jest.Mock;
-  }
-
-  interface MockTenancyStatsService {
-    getTenantStats: jest.Mock;
-    getTenantBilling: jest.Mock;
-    getTenantAuditLogs: jest.Mock;
-  }
-
-  const prisma: MockPrismaService = {
+  const prisma = {
     tenant: {
       findUnique: jest.fn(),
       update: jest.fn(),
@@ -58,17 +37,20 @@ describe('TenancyController branding endpoint', () => {
     file: {
       findFirst: jest.fn(),
     },
-  };
+  } satisfies Pick<PrismaService, 'tenant' | 'file'>;
 
-  const audit: MockAuditService = {
+  const audit = {
     createLog: jest.fn(),
-  };
+  } satisfies Pick<AuditService, 'createLog'>;
 
-  const tenancyStatsService: MockTenancyStatsService = {
+  const tenancyStatsService = {
     getTenantStats: jest.fn(),
     getTenantBilling: jest.fn(),
     getTenantAuditLogs: jest.fn(),
-  };
+  } satisfies Pick<
+    TenancyStatsService,
+    'getTenantStats' | 'getTenantBilling' | 'getTenantAuditLogs'
+  >;
 
   let scenario: { user?: ScenarioUser; throwUnauthorized?: boolean } = {
     user: undefined,
@@ -90,7 +72,7 @@ describe('TenancyController branding endpoint', () => {
   const tenantAccessGuard = {
     canActivate: jest.fn((context) => {
       const req = context.switchToHttp().getRequest();
-      const routeTenantId = req.params.tenantId as string | undefined;
+      const routeTenantId = req.params.tenantId;
 
       if (!req.user || !routeTenantId) {
         throw new ForbiddenException('No tiene acceso al tenant');
@@ -130,7 +112,7 @@ describe('TenancyController branding endpoint', () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
-    httpServer = app.getHttpServer() as Server;
+    httpServer = app.getHttpServer();
   });
 
   beforeEach(() => {

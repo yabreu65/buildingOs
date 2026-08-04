@@ -9,7 +9,7 @@ export interface TenantBranding {
   tenantId: string;
   tenantName: string;
   brandName?: string;
-  logoFileId?: string;
+  logoFileId?: string | null;
   primaryColor?: string;
   secondaryColor?: string;
   theme?: string;
@@ -20,7 +20,7 @@ export interface TenantBranding {
 
 export interface UpdateTenantBrandingPayload {
   brandName?: string;
-  logoFileId?: string;
+  logoFileId?: string | null;
   primaryColor?: string;
   secondaryColor?: string;
   theme?: string;

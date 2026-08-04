@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -19,6 +20,8 @@ import type { AuthenticatedServiceActor } from '../common/types/request.types';
  */
 @Injectable()
 export class BrandingService {
+  private readonly logger = new Logger(BrandingService.name);
+
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
@@ -40,7 +43,7 @@ export class BrandingService {
       tenantId: tenant.id,
       tenantName: tenant.name,
       brandName: tenant.brandName || undefined,
-      logoFileId: tenant.logoFileId || undefined,
+      logoFileId: tenant.logoFileId ?? null,
       primaryColor: tenant.primaryColor || undefined,
       secondaryColor: tenant.secondaryColor || undefined,
       theme: tenant.theme || undefined,
@@ -70,8 +73,8 @@ export class BrandingService {
       throw new NotFoundException('Tenant not found');
     }
 
-    // If logoFileId is being set, validate it belongs to this tenant
-    if (dto.logoFileId !== undefined) {
+    // If logoFileId is being set to a file id, validate it belongs to this tenant
+    if (dto.logoFileId !== undefined && dto.logoFileId !== null) {
       const file = await this.prisma.file.findFirst({
         where: { id: dto.logoFileId, tenantId },
       });
@@ -105,7 +108,8 @@ export class BrandingService {
       where: { id: tenantId },
       data: {
         brandName: dto.brandName ?? tenant.brandName,
-        logoFileId: dto.logoFileId ?? tenant.logoFileId,
+        logoFileId:
+          dto.logoFileId === undefined ? tenant.logoFileId : dto.logoFileId,
         primaryColor: dto.primaryColor ?? tenant.primaryColor,
         secondaryColor: dto.secondaryColor ?? tenant.secondaryColor,
         theme: dto.theme ?? tenant.theme,
@@ -116,34 +120,35 @@ export class BrandingService {
     });
 
     // Audit: TENANT_BRANDING_UPDATED
-    await this.auditService.createLog({
+    // Best-effort audit logging: branding updates should not fail if the audit sink is unavailable.
+    void this.auditService.createLog({
       tenantId,
       actorUserId: actor.id,
       action: 'TENANT_BRANDING_UPDATED',
       entityType: 'Tenant',
       entityId: tenantId,
       metadata: {
-          changes: {
-            before: oldBranding,
-            after: {
-              brandName: updated.brandName,
-              logoFileId: updated.logoFileId,
-              primaryColor: updated.primaryColor,
-              secondaryColor: updated.secondaryColor,
-              theme: updated.theme,
-              emailFooter: updated.emailFooter,
-              currency: updated.currency,
-              locale: updated.locale,
-            },
+        changes: {
+          before: oldBranding,
+          after: {
+            brandName: updated.brandName,
+            logoFileId: updated.logoFileId,
+            primaryColor: updated.primaryColor,
+            secondaryColor: updated.secondaryColor,
+            theme: updated.theme,
+            emailFooter: updated.emailFooter,
+            currency: updated.currency,
+            locale: updated.locale,
           },
         },
+      },
     });
 
     return {
       tenantId: updated.id,
       tenantName: updated.name,
       brandName: updated.brandName || undefined,
-      logoFileId: updated.logoFileId || undefined,
+      logoFileId: updated.logoFileId ?? null,
       primaryColor: updated.primaryColor || undefined,
       secondaryColor: updated.secondaryColor || undefined,
       theme: updated.theme || undefined,

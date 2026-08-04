@@ -27,7 +27,7 @@ const GeneralSettingsContent = ({ tenantId }: GeneralSettingsContentProps) => {
   const queryClient = useQueryClient();
   const { branding, isLoading, error, currency } = useTenantBranding(tenantId);
 
-  const [selectedCurrency, setSelectedCurrency] = useState('ARS');
+  const [selectedCurrency, setSelectedCurrency] = useState(currency);
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -184,6 +184,8 @@ export const GeneralSettingsPage = () => {
   return <GeneralSettingsContent key={tenantId} tenantId={tenantId} />;
 };
 
-export default function Page() {
+const Page = () => {
   return <GeneralSettingsPage />;
-}
+};
+
+export default Page;
