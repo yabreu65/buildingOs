@@ -7,6 +7,7 @@ import {
   Body,
   UseGuards,
   Request,
+  ValidationPipe,
 } from '@nestjs/common';
 import { AuditAction } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -168,9 +169,10 @@ export class TenancyController {
   @Patch(':tenantId/branding')
   async updateBranding(
     @Param('tenantId') tenantId: string,
-    @Body() dto: UpdateBrandingDto,
+    @Body(new ValidationPipe({ transform: true, whitelist: true }))
+    dto: UpdateBrandingDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<GetBrandingResponseDto> {
-    return this.brandingService.updateBranding(tenantId, dto, req.user.id);
+    return this.brandingService.updateBranding(tenantId, dto, req.user);
   }
 }

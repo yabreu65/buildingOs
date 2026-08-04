@@ -1,4 +1,15 @@
-import { IsString, IsHexColor, IsOptional, IsIn, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsString,
+  IsHexColor,
+  IsOptional,
+  IsIn,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+const trimString = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' ? value.trim() : value;
 
 /**
  * Get tenant branding response
@@ -7,7 +18,7 @@ export class GetBrandingResponseDto {
   tenantId!: string;
   tenantName!: string;
   brandName?: string;
-  logoFileId?: string; // File ID stored; frontend generates presigned URL on-demand
+  logoFileId?: string | null; // File ID stored; frontend generates presigned URL on-demand
   logoUrl?: string; // Deprecated: use logoFileId instead
   primaryColor?: string;
   secondaryColor?: string;
@@ -27,8 +38,10 @@ export class UpdateBrandingDto {
   brandName?: string;
 
   @IsOptional()
+  @Transform(trimString)
   @IsString()
-  logoFileId?: string; // Must belong to same tenant
+  @MinLength(1)
+  logoFileId?: string | null; // null removes the logo, string must belong to same tenant
 
   @IsOptional()
   @IsHexColor()
