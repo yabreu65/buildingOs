@@ -32,10 +32,8 @@ export class GetBrandingResponseDto {
  * Update tenant branding request
  */
 export class UpdateBrandingDto {
-  @Transform(trimString)
   @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(100)
   brandName?: string;
 

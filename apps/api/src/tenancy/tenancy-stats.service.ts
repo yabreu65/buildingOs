@@ -53,7 +53,7 @@ export interface AuditLogResponse {
   entityId: string;
   actorUserId: string | null;
   actorName: string | null;
-  metadata: Prisma.JsonValue | null;
+  metadata: Record<string, unknown> | null;
   createdAt: Date;
 }
 
@@ -277,7 +277,7 @@ export class TenancyStatsService {
       entityId: log.entityId,
       actorUserId: log.actorUserId,
       actorName: log.actor?.name ?? null,
-      metadata: log.metadata,
+      metadata: log.metadata as Record<string, unknown> | null,
       createdAt: log.createdAt,
     }));
 

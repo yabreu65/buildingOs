@@ -3,7 +3,6 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
-  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -20,8 +19,6 @@ import type { AuthenticatedServiceActor } from '../common/types/request.types';
  */
 @Injectable()
 export class BrandingService {
-  private readonly logger = new Logger(BrandingService.name);
-
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
@@ -120,8 +117,7 @@ export class BrandingService {
     });
 
     // Audit: TENANT_BRANDING_UPDATED
-    // Best-effort audit logging: branding updates should not fail if the audit sink is unavailable.
-    void this.auditService.createLog({
+    await this.auditService.createLog({
       tenantId,
       actorUserId: actor.id,
       action: 'TENANT_BRANDING_UPDATED',
