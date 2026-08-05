@@ -12,16 +12,16 @@ function buildPaymentReceiptLockKey(paymentId: string): string {
 }
 
 export async function acquirePaymentLinkedDocumentLock(
-  tx: Prisma.TransactionClient,
+  tx: AdvisoryLockTransactionClient,
   tenantId: string,
   fileId: string,
 ): Promise<void> {
   const lockKey = buildPaymentLinkedDocumentLockKey(tenantId, fileId);
-  await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+  await runAdvisoryLock(tx, lockKey);
 }
 
 export async function throwIfPaymentLinkedDocumentIsMutable(
-  tx: Prisma.TransactionClient,
+  tx: AdvisoryLockTransactionClient,
   tenantId: string,
   documentId: string,
   fileId: string,
@@ -45,9 +45,27 @@ export async function throwIfPaymentLinkedDocumentIsMutable(
 }
 
 export async function acquirePaymentReceiptLock(
-  tx: Prisma.TransactionClient,
+  tx: AdvisoryLockTransactionClient,
   paymentId: string,
 ): Promise<void> {
   const lockKey = buildPaymentReceiptLockKey(paymentId);
+  await runAdvisoryLock(tx, lockKey);
+}
+
+interface AdvisoryLockTransactionClient {
+  $queryRaw: Prisma.TransactionClient['$queryRaw'];
+  $executeRaw?: Prisma.TransactionClient['$executeRaw'];
+  payment: Pick<Prisma.TransactionClient['payment'], 'findFirst'>;
+}
+
+async function runAdvisoryLock(
+  tx: AdvisoryLockTransactionClient,
+  lockKey: string,
+): Promise<void> {
+  if (tx.$executeRaw) {
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+    return;
+  }
+
   await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
 }

@@ -108,6 +108,7 @@ export interface Payment {
   approvedAt?: string;
   rejectedByUserId?: string;
   rejectedAt?: string;
+  paymentAllocations?: PaymentAllocation[];
 }
 
 export interface PaymentAllocation {
@@ -336,6 +337,7 @@ export async function submitPayment(
   data: {
     unitId?: string;
     chargeId?: string;
+    chargeIds?: string[];
     amount: number;
     currency?: string;
     method: PaymentMethod;
