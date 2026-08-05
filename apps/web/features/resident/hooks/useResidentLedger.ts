@@ -14,10 +14,17 @@ export function useResidentLedger(
 ) {
   const session = useAuthSession();
   const userId = session?.user.id ?? null;
+  const activeTenantId = session?.activeTenantId ?? null;
 
   return useQuery<UnitLedger>({
-    queryKey: ['residentLedger', tenantId, userId, unitId],
-    queryFn: () => getResidentLedger(tenantId!, unitId!),
+    queryKey: ['residentLedger', tenantId, activeTenantId, userId, unitId],
+    queryFn: () => {
+      if (!tenantId || !unitId) {
+        throw new Error('Tenant and unit context are required');
+      }
+
+      return getResidentLedger(tenantId, unitId);
+    },
     enabled: !!tenantId && !!unitId && !!userId,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,

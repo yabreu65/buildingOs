@@ -37,7 +37,7 @@ export async function getResidentContext(tenantId: string): Promise<ResidentCont
   return apiClient<ResidentContext>({
     path: '/me/context',
     method: 'GET',
-    headers: { 'X-Tenant-Id': tenantId },
+    headers: buildResidentHeaders(tenantId),
   });
 }
 
@@ -52,7 +52,7 @@ export async function getResidentLedger(
   return apiClient<UnitLedger>({
     path: `/units/${unitId}/ledger`,
     method: 'GET',
-    headers: { 'X-Tenant-Id': tenantId },
+    headers: buildResidentHeaders(tenantId),
   });
 }
 
@@ -79,6 +79,7 @@ export async function getResidentCommunications(
  * @param limit - Max items to return
  */
 export async function getResidentTickets(
+  tenantId: string,
   buildingId: string,
   unitId: string,
   limit = 3,
@@ -87,6 +88,7 @@ export async function getResidentTickets(
   const response = await apiClient<{ tickets: Ticket[] }>({
     path: `/buildings/${buildingId}/tickets?${params.toString()}`,
     method: 'GET',
+    headers: buildResidentHeaders(tenantId),
   });
   return Array.isArray(response) ? response : response?.tickets ?? [];
 }

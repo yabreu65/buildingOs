@@ -5,6 +5,11 @@ import {
   ResidentAccessService,
   type ActiveResidentOccupancy,
 } from '../resident-access/resident-access.service';
+import {
+  normalizePortalContextHeader,
+  resolveNotificationPortalContext,
+} from '../common/portal-context';
+import type { PortalContext } from '../common/types/request.types';
 
 interface MembershipRoleShape {
   role: string;
@@ -12,6 +17,13 @@ interface MembershipRoleShape {
   scopeBuildingId: string | null;
   scopeUnitId?: string | null;
 }
+
+const membershipRoleSelect = {
+  role: true,
+  scopeType: true,
+  scopeBuildingId: true,
+  scopeUnitId: true,
+} as const;
 
 export interface UserContextData {
   tenantId: string;
@@ -38,6 +50,16 @@ export class ContextService {
     private readonly authorize: AuthorizeService,
     private readonly residentAccess: ResidentAccessService,
   ) {}
+
+  private resolvePortalContext(
+    userRoles: readonly string[],
+    portalContext?: string | null,
+  ): PortalContext {
+    return resolveNotificationPortalContext(
+      userRoles,
+      normalizePortalContextHeader(portalContext),
+    );
+  }
 
   private async persistContext(
     membershipId: string,
@@ -108,12 +130,16 @@ export class ContextService {
   /**
    * Get current context for user/tenant
    */
-  async getContext(userId: string, tenantId: string): Promise<UserContextData> {
+  async getContext(
+    userId: string,
+    tenantId: string,
+    portalContext?: string | null,
+  ): Promise<UserContextData> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
       include: {
         userContext: true,
-        roles: { where: { tenantId } },
+        roles: { where: { tenantId }, select: membershipRoleSelect },
       },
     });
 
@@ -122,9 +148,12 @@ export class ContextService {
     }
 
     const roles = membership.roles || [];
-    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
+    const isResidentPortal = this.resolvePortalContext(
+      roles.map((role) => role.role),
+      portalContext,
+    ) === 'resident';
 
-    if (isResident) {
+    if (isResidentPortal) {
       const resolvedOccupancy = await this.resolveResidentContextState(
         tenantId,
         userId,
@@ -159,7 +188,7 @@ export class ContextService {
     // Auto-initialize if no context exists OR if context is empty (both null — never properly initialized)
     const ctx = membership.userContext;
     if (!ctx || (!ctx.activeBuildingId && !ctx.activeUnitId)) {
-      return this.initializeContext(userId, tenantId);
+      return this.initializeContext(userId, tenantId, portalContext);
     }
 
     return {
@@ -183,11 +212,12 @@ export class ContextService {
     tenantId: string,
     activeBuildingId?: string | null,
     activeUnitId?: string | null,
+    portalContext?: string | null,
   ): Promise<UserContextData> {
     // Get membership
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { userContext: true, user: true, roles: { where: { tenantId } } },
+      include: { userContext: true, roles: { where: { tenantId }, select: membershipRoleSelect } },
     });
 
     if (!membership) {
@@ -215,9 +245,10 @@ export class ContextService {
 
     // Determine if user is RESIDENT (skip buildings.read check — they validate via UnitOccupant)
     const rolesForCheck = membership.roles || [];
-    const isResidentForBuildingCheck = this.residentAccess.shouldEnforce(rolesForCheck.map((role) => role.role));
+    const isResidentPortal =
+      this.resolvePortalContext(rolesForCheck.map((role) => role.role), portalContext) === 'resident';
 
-    if (isResidentForBuildingCheck) {
+    if (isResidentPortal) {
       if (effectiveUnitId) {
         const occupancy = await this.residentAccess.resolveActiveResidentOccupancy({
           tenantId,
@@ -258,11 +289,11 @@ export class ContextService {
         throw new NotFoundException('Building not found or does not belong to this tenant');
       }
 
-      if (isResidentForBuildingCheck && !effectiveUnitId) {
+      if (isResidentPortal && !effectiveUnitId) {
         await this.residentAccess.assertBuildingAccess(tenantId, userId, effectiveBuildingId);
       }
 
-      if (!isResidentForBuildingCheck) {
+      if (!isResidentPortal) {
         const hasAccess = await this.authorize.authorize({
           userId,
           tenantId,
@@ -280,7 +311,10 @@ export class ContextService {
     if (effectiveUnitId) {
       // Get user's roles to check if RESIDENT
       const roles = membership.roles || [];
-      const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
+      const isResident = this.resolvePortalContext(
+        roles.map((role) => role.role),
+        portalContext,
+      ) === 'resident';
 
       if (isResident) {
         await this.residentAccess.assertUnitAccess(
@@ -323,12 +357,12 @@ export class ContextService {
   async getContextOptions(
     userId: string,
     tenantId: string,
+    portalContext?: string | null,
   ): Promise<ContextOptions> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
       include: {
-        roles: true,
-        user: true,
+        roles: { where: { tenantId }, select: membershipRoleSelect },
       },
     });
 
@@ -336,11 +370,18 @@ export class ContextService {
       throw new NotFoundException('Membership not found');
     }
 
+    const isResidentPortal =
+      this.resolvePortalContext(
+        (membership.roles || []).map((role) => role.role),
+        portalContext,
+      ) === 'resident';
+
     // Get buildings user can access
     const buildings = await this.getAccessibleBuildings(
       membership.roles || [],
       userId,
       tenantId,
+      isResidentPortal,
     );
 
     // Get units per building
@@ -351,6 +392,7 @@ export class ContextService {
         userId,
         tenantId,
         building.id,
+        isResidentPortal,
       );
     }
 
@@ -367,10 +409,10 @@ export class ContextService {
     roles: MembershipRoleShape[],
     userId: string,
     tenantId: string,
+    isResidentPortal: boolean,
   ): Promise<ContextOption[]> {
     // RESIDENT always derives buildings from their UnitOccupant records (regardless of scopeType)
-    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
-    if (isResident) {
+    if (isResidentPortal) {
       const buildingIds = await this.residentAccess.getActiveBuildingIds(tenantId, userId);
       if (buildingIds.length === 0) return [];
       const buildings = await this.prisma.building.findMany({
@@ -412,6 +454,34 @@ export class ContextService {
       );
     }
 
+    const unitScopedRoles = roles.filter((r: MembershipRoleShape) => r.scopeType === 'UNIT');
+    const unitIds = unitScopedRoles
+      .map((r: MembershipRoleShape) => r.scopeUnitId)
+      .filter((id: string | null | undefined): id is string => typeof id === 'string' && id.length > 0);
+
+    if (unitIds.length > 0) {
+      const units = await this.prisma.unit.findMany({
+        where: {
+          tenantId,
+          id: { in: unitIds },
+          building: { deletedAt: null },
+        },
+        select: { buildingId: true },
+      });
+      const derivedBuildingIds = [...new Set(units.map((unit) => unit.buildingId))];
+
+      if (derivedBuildingIds.length > 0) {
+        const buildings = await this.prisma.building.findMany({
+          where: { tenantId, id: { in: derivedBuildingIds }, deletedAt: null },
+          select: { id: true, name: true },
+        });
+        return buildings.sort((a, b) =>
+          a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' }) ||
+          a.id.localeCompare(b.id, 'es', { numeric: true, sensitivity: 'base' }),
+        );
+      }
+    }
+
     return [];
   }
 
@@ -423,6 +493,7 @@ export class ContextService {
     userId: string,
     _tenantId: string,
     buildingId: string,
+    isResidentPortal: boolean,
   ): Promise<ContextOption[]> {
 
     // Check role scopes
@@ -433,8 +504,7 @@ export class ContextService {
     const hasUnitScope = roles.some((r: MembershipRoleShape) => r.scopeType === 'UNIT');
 
     // RESIDENT always sees only units where they are an occupant — regardless of scope
-    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
-    if (isResident) {
+    if (isResidentPortal) {
       const unitIds = await this.residentAccess.getActiveUnitIds(_tenantId, userId, buildingId);
       if (unitIds.length === 0) return [];
       const units = await this.prisma.unit.findMany({
@@ -500,10 +570,14 @@ export class ContextService {
    * Auto-initialize context for new user
    * Called after first login to set default active building/unit
    */
-  async initializeContext(userId: string, tenantId: string): Promise<UserContextData> {
+  async initializeContext(
+    userId: string,
+    tenantId: string,
+    portalContext?: string | null,
+  ): Promise<UserContextData> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { userContext: true, roles: { where: { tenantId } }, user: true },
+      include: { userContext: true, roles: { where: { tenantId }, select: membershipRoleSelect } },
     });
 
     if (!membership || membership.userContext) {
@@ -516,9 +590,12 @@ export class ContextService {
     }
 
     const roles = membership.roles || [];
-    const isResident = this.residentAccess.shouldEnforce(roles.map((role) => role.role));
+    const isResidentPortal = this.resolvePortalContext(
+      roles.map((role) => role.role),
+      portalContext,
+    ) === 'resident';
 
-    if (isResident) {
+    if (isResidentPortal) {
       const resolvedOccupancy = await this.resolveResidentContextState(tenantId, userId, null);
 
       return this.persistContext(
@@ -534,6 +611,7 @@ export class ContextService {
       membership.roles || [],
       userId,
       tenantId,
+      false,
     );
     if (buildings.length === 1) {
       // Auto-select this building
@@ -545,6 +623,7 @@ export class ContextService {
         userId,
         tenantId,
         building.id,
+        false,
       );
       if (units.length === 1) {
         return this.setContext(userId, tenantId, building.id, units[0]!.id);

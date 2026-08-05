@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
@@ -50,7 +51,7 @@ interface KPICardProps {
   value: string;
   subValue?: string;
   color: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   cta?: string;
   onClick?: () => void;
 }
@@ -83,6 +84,7 @@ const ResidentDashboardPage = () => {
   const session = useAuthSession();
   const userName = session?.user?.name?.trim() ?? '';
   const userId = session?.user?.id ?? null;
+  const activeTenantId = session?.activeTenantId ?? null;
   const { profileQuery: residentProfileQuery } = useResidentProfile(tenantId ?? null);
   const residentProfileName = residentProfileQuery.data?.name?.trim() ?? '';
   const greetingName = residentProfileName || userName;
@@ -130,8 +132,14 @@ const ResidentDashboardPage = () => {
     isError: ticketsError,
     error: ticketsErrorValue,
   } = useQuery<Ticket[]>({
-    queryKey: ['residentTickets', tenantId, userId, buildingId, unitId],
-    queryFn: () => getResidentTickets(buildingId!, unitId!, 3),
+    queryKey: ['residentTickets', tenantId, activeTenantId, userId, buildingId, unitId],
+    queryFn: () => {
+      if (!tenantId || !buildingId || !unitId) {
+        throw new Error('Tenant, building and unit context are required');
+      }
+
+      return getResidentTickets(tenantId, buildingId, unitId, 3);
+    },
     enabled: !!buildingId && !!unitId && !!userId,
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,

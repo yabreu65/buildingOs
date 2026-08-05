@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import { useAuthSession } from '@/features/auth/useAuthSession';
-import { getResidentLedger } from '../api/resident-context.api';
+import type { AuthSession } from '@/features/auth/auth.types';
+import { getResidentLedger, type UnitLedger } from '../api/resident-context.api';
 import { useResidentLedger } from './useResidentLedger';
 
-type MockSession = NonNullable<ReturnType<typeof useAuthSession>>;
+type MockSession = AuthSession;
 
 jest.mock('@/features/auth/useAuthSession', () => ({
   useAuthSession: jest.fn(),
@@ -31,7 +32,7 @@ function makeSession(userId = 'user-1'): MockSession {
       },
     ],
     activeTenantId: 'tenant-2',
-  } as MockSession;
+  };
 }
 
 function createWrapper() {
@@ -52,9 +53,11 @@ function createWrapper() {
   return { Wrapper, queryClient };
 }
 
-function ledger(balance: number) {
+function ledger(balance: number): UnitLedger {
   return {
+    unitId: 'unit-1',
     totals: {
+      totalCharges: balance,
       balance,
       currency: 'ARS',
     },
@@ -66,7 +69,7 @@ function ledger(balance: number) {
 describe('useResidentLedger', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockedUseAuthSession.mockReturnValue(makeSession() as never);
+    mockedUseAuthSession.mockReturnValue(makeSession());
   });
 
   it.each([
@@ -101,8 +104,8 @@ describe('useResidentLedger', () => {
     expect(mockedGetResidentLedger).not.toHaveBeenCalled();
   });
 
-  it('fetches the ledger using the route tenant and active unit', async () => {
-    mockedGetResidentLedger.mockResolvedValue(ledger(1250) as never);
+  it('fetches the ledger using the route tenant and active unit even when activeTenantId points elsewhere', async () => {
+    mockedGetResidentLedger.mockResolvedValue(ledger(1250));
 
     const { Wrapper, queryClient } = createWrapper();
 
@@ -124,6 +127,7 @@ describe('useResidentLedger', () => {
       queryClient.getQueryState([
         'residentLedger',
         'tenant-1',
+        'tenant-2',
         'user-1',
         'unit-1',
       ]),
@@ -132,8 +136,8 @@ describe('useResidentLedger', () => {
 
   it('uses separate cache entries when the authenticated user changes', async () => {
     mockedGetResidentLedger
-      .mockResolvedValueOnce(ledger(100) as never)
-      .mockResolvedValueOnce(ledger(200) as never);
+      .mockResolvedValueOnce(ledger(100))
+      .mockResolvedValueOnce(ledger(200));
 
     const { Wrapper, queryClient } = createWrapper();
 
@@ -146,7 +150,7 @@ describe('useResidentLedger', () => {
       expect(result.current.data?.totals.balance).toBe(100);
     });
 
-    mockedUseAuthSession.mockReturnValue(makeSession('user-2') as never);
+    mockedUseAuthSession.mockReturnValue(makeSession('user-2'));
     rerender();
 
     await waitFor(() => {
@@ -158,6 +162,7 @@ describe('useResidentLedger', () => {
       queryClient.getQueryState([
         'residentLedger',
         'tenant-1',
+        'tenant-2',
         'user-1',
         'unit-1',
       ]),
@@ -166,6 +171,7 @@ describe('useResidentLedger', () => {
       queryClient.getQueryState([
         'residentLedger',
         'tenant-1',
+        'tenant-2',
         'user-2',
         'unit-1',
       ]),
@@ -174,8 +180,8 @@ describe('useResidentLedger', () => {
 
   it('loads a separate ledger when the active unit changes', async () => {
     mockedGetResidentLedger
-      .mockResolvedValueOnce(ledger(300) as never)
-      .mockResolvedValueOnce(ledger(450) as never);
+      .mockResolvedValueOnce(ledger(300))
+      .mockResolvedValueOnce(ledger(450));
 
     const { Wrapper } = createWrapper();
 

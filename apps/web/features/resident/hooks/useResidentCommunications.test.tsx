@@ -55,19 +55,23 @@ describe('useResidentCommunications', () => {
     expect(mockedGetResidentCommunications).toHaveBeenCalledWith('tenant-1', 7);
   });
 
-  it('does not fetch when the route tenant differs from the active tenant', () => {
+  it('fetches communications for the resident route even when activeTenantId points elsewhere', async () => {
     mockedUseAuthSession.mockReturnValue({
       user: { id: 'user-1', email: 'resident@buildingos.test', name: 'Resident' },
       memberships: [],
       activeTenantId: 'tenant-current',
     });
+    mockedGetResidentCommunications.mockResolvedValue([]);
 
     const wrapper = createWrapper();
     const { result } = renderHook(() => useResidentCommunications('tenant-previous', 3), {
       wrapper,
     });
 
-    expect(result.current.fetchStatus).toBe('idle');
-    expect(mockedGetResidentCommunications).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(mockedGetResidentCommunications).toHaveBeenCalledWith('tenant-previous', 3);
   });
 });
