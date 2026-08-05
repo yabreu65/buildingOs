@@ -112,7 +112,7 @@ export default function ResidentTicketsPage() {
   const buildingId = context?.activeBuildingId;
   const unitId = context?.activeUnitId;
   const identityMatchesRoute = Boolean(
-    userId && tenantId && session?.activeTenantId === tenantId && context?.tenantId === tenantId,
+    userId && tenantId && context?.tenantId === tenantId,
   );
 
   useEffect(() => {
@@ -182,8 +182,8 @@ export default function ResidentTicketsPage() {
   };
 
   const statusFilter = 'all';
-  const filteredTickets = statusFilter === 'all' 
-    ? tickets 
+  const filteredTickets = statusFilter === 'all'
+    ? tickets
     : tickets.filter(t => t.status === statusFilter);
 
   if (contextLoading) {
@@ -207,8 +207,8 @@ export default function ResidentTicketsPage() {
           Mis reclamos
         </h1>
         <p className="text-muted-foreground mt-1">{tenantName}</p>
-        
-      <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50 dark:border-yellow-900/60 dark:bg-yellow-950/40">
+
+        <Card className="p-4 mt-6 border-yellow-300 bg-yellow-50 dark:border-yellow-900/60 dark:bg-yellow-950/40">
         <div className="flex items-center gap-2">
           <AlertCircle className="text-yellow-600 dark:text-yellow-400" size={20} />
           <div>
@@ -216,7 +216,7 @@ export default function ResidentTicketsPage() {
             <p className="text-sm text-yellow-700 dark:text-yellow-300">Comunicate con la administración para que te asignen una unidad.</p>
           </div>
         </div>
-      </Card>
+        </Card>
       </div>
     );
   }

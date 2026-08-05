@@ -14,11 +14,16 @@ export function useResidentContext(tenantId: string | null) {
 
   return useQuery<ResidentContext>({
     queryKey: ['residentContext', tenantId, userId],
-    queryFn: () => getResidentContext(tenantId!),
-    // A resident route must match the tenant selected by the authenticated
-    // session. This prevents a previous route/context from being reused while
-    // a different account or tenant is still settling.
-    enabled: !!tenantId && !!userId && session?.activeTenantId === tenantId,
+    queryFn: () => {
+      if (!tenantId) {
+        throw new Error('Tenant context is required');
+      }
+
+      return getResidentContext(tenantId);
+    },
+    // Resident routes are authorized by the layout and must keep working even
+    // when the session's active tenant points to a different admin context.
+    enabled: !!tenantId && !!userId,
     staleTime: 2 * 60 * 1000, // 2 minutes
     gcTime: 5 * 60 * 1000,
     retry: 1,

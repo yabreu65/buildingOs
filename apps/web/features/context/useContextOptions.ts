@@ -21,13 +21,13 @@ export function useContextOptions(tenantId: string | null) {
   return useQuery<ContextOptions>({
     queryKey: ['contextOptions', tenantId, activeTenantId, userId, portalContext],
     queryFn: () => {
-      if (!tenantId || !userId || activeTenantId !== tenantId) {
+      if (!tenantId || !userId || !portalContext) {
         throw new Error('Tenant and user context are required');
       }
 
       return getContextOptions(tenantId, portalContext);
     },
-    enabled: !!tenantId && !!userId && activeTenantId === tenantId,
+    enabled: !!tenantId && !!userId && !!portalContext,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
     retry: 1,

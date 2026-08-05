@@ -25,7 +25,7 @@ export function useResidentLedger(
 
       return getResidentLedger(tenantId, unitId);
     },
-    enabled: !!tenantId && !!unitId && !!userId && activeTenantId === tenantId,
+    enabled: !!tenantId && !!unitId && !!userId,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,
     retry: 1,

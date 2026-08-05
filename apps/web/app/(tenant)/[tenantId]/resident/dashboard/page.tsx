@@ -85,7 +85,6 @@ const ResidentDashboardPage = () => {
   const userName = session?.user?.name?.trim() ?? '';
   const userId = session?.user?.id ?? null;
   const activeTenantId = session?.activeTenantId ?? null;
-  const isActiveTenant = activeTenantId === tenantId;
   const { profileQuery: residentProfileQuery } = useResidentProfile(tenantId ?? null);
   const residentProfileName = residentProfileQuery.data?.name?.trim() ?? '';
   const greetingName = residentProfileName || userName;
@@ -141,7 +140,7 @@ const ResidentDashboardPage = () => {
 
       return getResidentTickets(tenantId, buildingId, unitId, 3);
     },
-    enabled: isActiveTenant && !!buildingId && !!unitId && !!userId,
+    enabled: !!buildingId && !!unitId && !!userId,
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 1,
@@ -163,22 +162,6 @@ const ResidentDashboardPage = () => {
     .sort((a, b) => new Date(String(a.dueDate)).getTime() - new Date(String(b.dueDate)).getTime())[0];
 
   const isLoading = contextLoading || ledgerLoading;
-
-  if (!isActiveTenant) {
-    return (
-      <Card className="border-yellow-200 bg-yellow-50 p-6 dark:border-yellow-900/50 dark:bg-yellow-950/30">
-        <div className="flex items-start gap-3">
-          <AlertCircle className="mt-0.5 text-yellow-600 dark:text-yellow-400" size={24} />
-          <div className="space-y-1">
-            <p className="font-medium text-yellow-800 dark:text-yellow-200">Seleccioná el tenant activo</p>
-            <p className="text-sm text-yellow-700 dark:text-yellow-300">
-              Este panel residente solo carga datos cuando coincide con el tenant activo de tu sesión.
-            </p>
-          </div>
-        </div>
-      </Card>
-    );
-  }
 
   if (isLoading || commsLoading || ticketsLoading) {
     return (
