@@ -13,7 +13,8 @@ import { useAuthSession } from '@/features/auth/useAuthSession';
 import { useTenants } from '@/features/tenants/tenants.hooks';
 import { getResidentLedger } from '@/features/resident/api/resident-context.api';
 import { listPayments, submitPayment, PaymentMethod, PaymentStatus, ChargeStatus, ChargeType, type Payment } from '@/features/finance/services/finance.api';
-import { createDocument, downloadDocumentContent, presignUpload, uploadFileToMinio } from '@/features/buildings/services/documents.api';
+import { createDocument, downloadDocumentContent, presignUpload, uploadFileToMinio, type Document, type DocumentFile } from '@/features/buildings/services/documents.api';
+import type { TenantSummary } from '@/features/tenants/tenants.service';
 
 jest.mock('next/navigation', () => ({
   useParams: jest.fn(),
@@ -82,7 +83,16 @@ const mockedPresignUpload = jest.mocked(presignUpload);
 const mockedUploadFileToMinio = jest.mocked(uploadFileToMinio);
 const mockedCreateDocument = jest.mocked(createDocument);
 
+type PaymentFixtureOverrides = Partial<Payment> & {
+  paidAt?: string | undefined;
+  createdAt?: string | undefined;
+};
+
 function createWrapper() {
+  return createWrapperWithClient().Wrapper;
+}
+
+function createWrapperWithClient() {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -91,9 +101,11 @@ function createWrapper() {
     },
   });
 
-  return function Wrapper({ children }: { children: React.ReactNode }) {
+  const Wrapper = ({ children }: { children: React.ReactNode }) => {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
+
+  return { Wrapper, queryClient };
 }
 
 function createDeferred<T>() {
@@ -106,6 +118,8 @@ function createDeferred<T>() {
 
   return { promise, resolve, reject };
 }
+
+const residentLedgerQueryKey = ['residentLedger', 'tenant-1', 'resident-user-1', 'unit-1'] as const;
 
 function mockMatchMedia(matches: boolean) {
   Object.defineProperty(window, 'matchMedia', {
@@ -143,7 +157,7 @@ function makeLedger(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function makePayment(overrides: Partial<Payment> = {}): Payment {
+function makePayment(overrides: PaymentFixtureOverrides = {}): Payment {
   return {
     id: 'payment-1',
     buildingId: 'building-1',
@@ -191,7 +205,7 @@ describe('ResidentPaymentsPage', () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-07-24T12:00:00.000Z'));
     jest.clearAllMocks();
-    mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' } as never);
+    mockedUseParams.mockReturnValue({ tenantId: 'tenant-1' });
     mockedUseAuthSession.mockReturnValue({
       user: {
         id: 'resident-user-1',
@@ -205,12 +219,13 @@ describe('ResidentPaymentsPage', () => {
         },
       ],
       activeTenantId: 'tenant-1',
-    } as never);
+    });
     mockedUseTenants.mockReturnValue({
-      data: [{ id: 'tenant-1', name: 'Complejo Horizonte' }],
-    } as never);
+      data: [{ id: 'tenant-1', name: 'Complejo Horizonte', type: 'EDIFICIO_AUTOGESTION' }] as TenantSummary[],
+    } as ReturnType<typeof useTenants>);
     mockedUseResidentContext.mockReturnValue({
       data: {
+        tenantId: 'tenant-1',
         activeBuildingId: 'building-1',
         activeUnitId: 'unit-1',
       },
@@ -218,7 +233,7 @@ describe('ResidentPaymentsPage', () => {
       isError: false,
       error: null,
       refetch: jest.fn(),
-    } as never);
+    } as unknown as ReturnType<typeof useResidentContext>);
     mockedUseContextOptions.mockReturnValue({
       data: {
         buildings: [{ id: 'building-1', name: 'Complejo Horizonte' }],
@@ -229,10 +244,10 @@ describe('ResidentPaymentsPage', () => {
       isError: false,
       error: null,
       refetch: jest.fn(),
-    } as never);
+    } as unknown as ReturnType<typeof useContextOptions>);
     mockedGetResidentLedger.mockResolvedValue(makeLedger());
     mockedListPayments.mockResolvedValue([]);
-    mockedSubmitPayment.mockResolvedValue(undefined as never);
+    mockedSubmitPayment.mockResolvedValue(makePayment());
     mockedDownloadDocumentContent.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
     mockedPresignUpload.mockResolvedValue({
       url: 'https://upload.example/proof.pdf',
@@ -243,8 +258,22 @@ describe('ResidentPaymentsPage', () => {
     mockedUploadFileToMinio.mockResolvedValue(undefined);
     mockedCreateDocument.mockResolvedValue({
       id: 'document-1',
-      file: { id: 'file-1' },
-    } as never);
+      tenantId: 'tenant-1',
+      title: 'Proof document',
+      category: 'OTHER',
+      visibility: 'PRIVATE',
+      file: {
+        id: 'file-1',
+        bucket: 'documents',
+        objectKey: 'tenant-1/documents/proof.pdf',
+        originalName: 'proof.pdf',
+        mimeType: 'application/pdf',
+        size: 3,
+        createdAt: '2026-07-24T00:00:00.000Z',
+      },
+      createdAt: '2026-07-24T00:00:00.000Z',
+      updatedAt: '2026-07-24T00:00:00.000Z',
+    } satisfies Document);
     mockMatchMedia(false);
     (window.URL as typeof window.URL & {
       createObjectURL: jest.Mock;
@@ -262,12 +291,12 @@ describe('ResidentPaymentsPage', () => {
 
   it('shows loading and error states before rendering the resident payment history', async () => {
     mockedUseResidentContext.mockReturnValue({
-      data: null,
+      data: undefined,
       isLoading: true,
       isError: false,
       error: null,
       refetch: jest.fn(),
-    } as never);
+    } as unknown as ReturnType<typeof useResidentContext>);
 
     const Wrapper = createWrapper();
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
@@ -276,6 +305,7 @@ describe('ResidentPaymentsPage', () => {
 
     mockedUseResidentContext.mockReturnValue({
       data: {
+        tenantId: 'tenant-1',
         activeBuildingId: 'building-1',
         activeUnitId: 'unit-1',
       },
@@ -283,7 +313,7 @@ describe('ResidentPaymentsPage', () => {
       isError: false,
       error: null,
       refetch: jest.fn(),
-    } as never);
+    } as unknown as ReturnType<typeof useResidentContext>);
     mockedGetResidentLedger.mockRejectedValueOnce(new Error('Sin conexión'));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -603,6 +633,335 @@ describe('ResidentPaymentsPage', () => {
     expect(mockedSubmitPayment).not.toHaveBeenCalled();
   });
 
+  it('keeps the exact prefix selection across a rerender when the ledger does not change', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({
+          id: 'charge-1',
+          concept: 'Expensas Junio 2026',
+          period: '2026-06',
+          amount: 4000,
+          dueDate: '2026-06-24',
+          createdAt: '2026-06-01T00:00:00.000Z',
+        }),
+        makeCharge({
+          id: 'charge-2',
+          concept: 'Expensas Julio 2026',
+          period: '2026-07',
+          amount: 5998,
+          dueDate: '2026-07-24',
+          createdAt: '2026-07-01T00:00:00.000Z',
+        }),
+      ],
+      totals: {
+        balance: 9998,
+        currency: 'ARS',
+        totalCharges: 9998,
+        totalPaid: 0,
+        totalAllocated: 0,
+      },
+    }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const { Wrapper } = createWrapperWithClient();
+    const { rerender } = render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 2 períodos/i }));
+
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(true);
+
+    rerender(<ResidentPaymentsPage />);
+
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('clears the selection when a new earlier obligation appears', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({
+          id: 'charge-1',
+          concept: 'Expensas Junio 2026',
+          period: '2026-06',
+          amount: 4000,
+          dueDate: '2026-06-24',
+          createdAt: '2026-06-01T00:00:00.000Z',
+        }),
+        makeCharge({
+          id: 'charge-2',
+          concept: 'Expensas Julio 2026',
+          period: '2026-07',
+          amount: 5998,
+          dueDate: '2026-07-24',
+          createdAt: '2026-07-01T00:00:00.000Z',
+        }),
+      ],
+      totals: {
+        balance: 9998,
+        currency: 'ARS',
+        totalCharges: 9998,
+        totalPaid: 0,
+        totalAllocated: 0,
+      },
+    }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 2 períodos/i }));
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(true);
+
+    await act(async () => {
+      queryClient.setQueryData(
+        residentLedgerQueryKey,
+        makeLedger({
+          charges: [
+            makeCharge({
+              id: 'charge-0',
+              concept: 'Expensas Mayo 2026',
+              period: '2026-05',
+              amount: 1000,
+              dueDate: '2026-05-24',
+              createdAt: '2026-05-01T00:00:00.000Z',
+            }),
+            makeCharge({
+              id: 'charge-1',
+              concept: 'Expensas Junio 2026',
+              period: '2026-06',
+              amount: 4000,
+              dueDate: '2026-06-24',
+              createdAt: '2026-06-01T00:00:00.000Z',
+            }),
+            makeCharge({
+              id: 'charge-2',
+              concept: 'Expensas Julio 2026',
+              period: '2026-07',
+              amount: 5998,
+              dueDate: '2026-07-24',
+              createdAt: '2026-07-01T00:00:00.000Z',
+            }),
+          ],
+          totals: {
+            balance: 10998,
+            currency: 'ARS',
+            totalCharges: 10998,
+            totalPaid: 0,
+            totalAllocated: 0,
+          },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('La deuda cambió. Seleccioná nuevamente los períodos antes de continuar.')).toBeTruthy();
+    });
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByRole('dialog', { name: /confirmar reporte de pago/i })).toBeNull();
+  });
+
+  it('clears the selection when the selected charge balance changes', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({
+          id: 'charge-1',
+          concept: 'Expensas Junio 2026',
+          period: '2026-06',
+          amount: 4000,
+          dueDate: '2026-06-24',
+          createdAt: '2026-06-01T00:00:00.000Z',
+        }),
+        makeCharge({
+          id: 'charge-2',
+          concept: 'Expensas Julio 2026',
+          period: '2026-07',
+          amount: 5998,
+          dueDate: '2026-07-24',
+          createdAt: '2026-07-01T00:00:00.000Z',
+        }),
+      ],
+      totals: {
+        balance: 9998,
+        currency: 'ARS',
+        totalCharges: 9998,
+        totalPaid: 0,
+        totalAllocated: 0,
+      },
+    }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 2 períodos/i }));
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(true);
+
+    await act(async () => {
+      queryClient.setQueryData(
+        residentLedgerQueryKey,
+        makeLedger({
+          charges: [
+            makeCharge({
+              id: 'charge-1',
+              concept: 'Expensas Junio 2026',
+              period: '2026-06',
+              amount: 4000,
+              dueDate: '2026-06-24',
+              createdAt: '2026-06-01T00:00:00.000Z',
+            }),
+            makeCharge({
+              id: 'charge-2',
+              concept: 'Expensas Julio 2026',
+              period: '2026-07',
+              amount: 5998,
+              allocated: 1,
+              dueDate: '2026-07-24',
+              createdAt: '2026-07-01T00:00:00.000Z',
+            }),
+          ],
+          totals: {
+            balance: 9997,
+            currency: 'ARS',
+            totalCharges: 9997,
+            totalPaid: 1,
+            totalAllocated: 1,
+          },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('La deuda cambió. Seleccioná nuevamente los períodos antes de continuar.')).toBeTruthy();
+    });
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('clears the selection when the canonical order changes and ignores a stale upload response from another unit', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({
+          id: 'charge-1',
+          concept: 'Expensas Junio 2026',
+          period: '2026-06',
+          amount: 4000,
+          dueDate: '2026-06-24',
+          createdAt: '2026-06-01T00:00:00.000Z',
+        }),
+        makeCharge({
+          id: 'charge-2',
+          concept: 'Expensas Julio 2026',
+          period: '2026-07',
+          amount: 5998,
+          dueDate: '2026-07-24',
+          createdAt: '2026-07-01T00:00:00.000Z',
+        }),
+      ],
+      totals: {
+        balance: 9998,
+        currency: 'ARS',
+        totalCharges: 9998,
+        totalPaid: 0,
+        totalAllocated: 0,
+      },
+    }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    const createDocumentDeferred = createDeferred<Document>();
+    mockedCreateDocument.mockReturnValueOnce(createDocumentDeferred.promise);
+
+    const { Wrapper } = createWrapperWithClient();
+    const { rerender } = render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 2 períodos/i }));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
+        target: {
+          files: [new File([new Uint8Array([1, 2, 3])], 'proof.pdf', { type: 'application/pdf' })],
+        },
+      });
+    });
+
+    await waitFor(() => expect(mockedCreateDocument).toHaveBeenCalled());
+
+    mockedUseResidentContext.mockReturnValue({
+      data: {
+        tenantId: 'tenant-2',
+        activeBuildingId: 'building-2',
+        activeUnitId: 'unit-2',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as unknown as ReturnType<typeof useResidentContext>);
+    mockedUseContextOptions.mockReturnValue({
+      data: {
+        buildings: [{ id: 'building-2', name: 'Complejo Horizonte Norte' }],
+        unitsByBuilding: {
+          'building-2': [{ id: 'unit-2', label: 'TN-02-01' }],
+        },
+      },
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    } as unknown as ReturnType<typeof useContextOptions>);
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      buildingId: 'building-2',
+      unitId: 'unit-2',
+      charges: [
+        makeCharge({
+          id: 'charge-9',
+          unitId: 'unit-2',
+          concept: 'Expensas Agosto 2026',
+          period: '2026-08',
+          amount: 7777,
+          dueDate: '2026-08-24',
+          createdAt: '2026-08-01T00:00:00.000Z',
+        }),
+      ],
+      totals: {
+        balance: 7777,
+        currency: 'ARS',
+        totalCharges: 7777,
+        totalPaid: 0,
+        totalAllocated: 0,
+      },
+    }));
+    mockedListPayments.mockResolvedValueOnce([]);
+
+    rerender(<ResidentPaymentsPage />);
+
+    await act(async () => {
+      createDocumentDeferred.resolve({
+        id: 'document-1',
+        tenantId: 'tenant-1',
+        title: 'Proof document',
+        category: 'OTHER',
+        visibility: 'PRIVATE',
+        file: {
+          id: 'file-1',
+          bucket: 'documents',
+          objectKey: 'tenant-1/documents/proof.pdf',
+          originalName: 'proof.pdf',
+          mimeType: 'application/pdf',
+          size: 3,
+          createdAt: '2026-07-24T00:00:00.000Z',
+        } satisfies DocumentFile,
+        createdAt: '2026-07-24T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/proof\.pdf subido correctamente/i)).toBeNull();
+    });
+    expect(screen.queryByRole('dialog', { name: /confirmar reporte de pago/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /reportar pago/i })).toBeTruthy();
+  });
+
   it('submits the selected charge at the full outstanding amount and refreshes the payment list after submission', async () => {
     const initialPayments: Payment[] = [
       makePayment({
@@ -767,8 +1126,8 @@ describe('ResidentPaymentsPage', () => {
       }),
       makePayment({
         id: 'payment-absent',
-        paidAt: undefined as never,
-        createdAt: undefined as never,
+        paidAt: undefined,
+        createdAt: undefined,
         reference: 'ABSENT',
       }),
     ]);

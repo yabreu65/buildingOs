@@ -261,7 +261,7 @@ function paymentStatusVariant(status: string): BadgeVariant {
 }
 
 interface PaymentFormData {
-  selectedPrefixLength: number;
+  selectedSelectionKey: string | null;
   method: PaymentMethod;
   reference: string;
   paidAt: string;
@@ -296,6 +296,24 @@ const PAYMENT_REJECTION_REASON_LABELS: Record<string, string> = {
   OTRO: 'Otro',
 };
 
+function buildResidentPaymentSelectionKey(option: {
+  chargeIds: string[];
+  charges: Array<{
+    id: string;
+    amount: number;
+    allocated?: number | null;
+  }>;
+  totalMinor: number;
+  currency: string;
+}): string {
+  return JSON.stringify({
+    chargeIds: option.chargeIds,
+    outstandingMinors: option.charges.map((charge) => charge.amount - (charge.allocated ?? 0)),
+    totalMinor: option.totalMinor,
+    currency: option.currency,
+  });
+}
+
 function getPaymentRejectionReasonLabel(reason?: string | null): string | null {
   if (!reason) return null;
   return PAYMENT_REJECTION_REASON_LABELS[reason] ?? reason;
@@ -310,14 +328,14 @@ interface PaymentConfirmDialogProps {
   onConfirm: () => void;
 }
 
-function PaymentConfirmDialog({
+const PaymentConfirmDialog = ({
   isOpen,
   data,
   errorMessage,
   isLoading,
   onCancel,
   onConfirm,
-}: PaymentConfirmDialogProps) {
+}: PaymentConfirmDialogProps) => {
   const dialogSurfaceRef = useRef<HTMLDivElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
 
@@ -474,7 +492,7 @@ function PaymentConfirmDialog({
       </div>
     </div>
   );
-}
+};
 
 /**
  * Resident payments page.
@@ -550,7 +568,7 @@ export const ResidentPaymentsPage = () => {
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState<PaymentFormData>({
-    selectedPrefixLength: 0,
+    selectedSelectionKey: null,
     method: PaymentMethod.TRANSFER,
     reference: '',
     paidAt: getCurrentCivilDateInputValue(),
@@ -572,7 +590,24 @@ export const ResidentPaymentsPage = () => {
   const submitSuccessTimerRef = useRef<number | null>(null);
   const paymentPanelRef = useRef<HTMLDivElement | null>(null);
   const paymentPanelLastFocusedRef = useRef<HTMLElement | null>(null);
+  const proofFileInputRef = useRef<HTMLInputElement | null>(null);
   const paymentContextKeyRef = useRef<string>('');
+  const clearProofSelection = useCallback(() => {
+    setProofFile(null);
+    setProofFileId(null);
+    if (proofFileInputRef.current) {
+      proofFileInputRef.current.value = '';
+    }
+  }, []);
+  const resetForm = useCallback(() => {
+    setFormData({
+      selectedSelectionKey: null,
+      method: PaymentMethod.TRANSFER,
+      reference: '',
+      paidAt: getCurrentCivilDateInputValue(),
+    });
+    clearProofSelection();
+  }, [clearProofSelection]);
 
   useEffect(() => {
     paymentContextKeyRef.current = `${tenantId ?? ''}:${buildingId ?? ''}:${unitId ?? ''}`;
@@ -585,7 +620,7 @@ export const ResidentPaymentsPage = () => {
     setSubmitting(false);
     setUploadingProof(false);
     resetForm();
-  }, [buildingId, tenantId, unitId]);
+  }, [buildingId, resetForm, tenantId, unitId]);
 
   useEffect(() => {
     return () => {
@@ -710,17 +745,6 @@ export const ResidentPaymentsPage = () => {
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      selectedPrefixLength: 0,
-      method: PaymentMethod.TRANSFER,
-      reference: '',
-      paidAt: getCurrentCivilDateInputValue(),
-    });
-    setProofFile(null);
-    setProofFileId(null);
-  };
-
   const openPaymentPanel = useCallback(() => {
     paymentPanelLastFocusedRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -818,6 +842,12 @@ export const ResidentPaymentsPage = () => {
 
       return {
         key: String(index + 1),
+        selectionKey: buildResidentPaymentSelectionKey({
+          chargeIds: charges.map((charge) => charge.id),
+          charges,
+          totalMinor,
+          currency: charges[0]?.currency ?? ledger?.totals?.currency ?? 'ARS',
+        }),
         chargeIds: charges.map((charge) => charge.id),
         charges,
         totalMinor,
@@ -825,13 +855,35 @@ export const ResidentPaymentsPage = () => {
       };
     })
   ), [ledger?.totals?.currency, selectableCharges]);
-  const selectedPrefixLength = paymentOptions.some((option) => option.chargeIds.length === formData.selectedPrefixLength)
-    ? formData.selectedPrefixLength
-    : 0;
-  const selectedPaymentOption = selectedPrefixLength > 0
-    ? paymentOptions[selectedPrefixLength - 1] ?? null
-    : null;
+  const selectedPaymentOption = useMemo(
+    () => paymentOptions.find((option) => option.selectionKey === formData.selectedSelectionKey) ?? null,
+    [formData.selectedSelectionKey, paymentOptions],
+  );
   const selectedChargeIds = selectedPaymentOption?.chargeIds ?? [];
+
+  useEffect(() => {
+    if (!formData.selectedSelectionKey) {
+      return;
+    }
+
+    if (selectedPaymentOption) {
+      return;
+    }
+
+    setFormData((current) => (
+      current.selectedSelectionKey === null
+        ? current
+        : {
+            ...current,
+            selectedSelectionKey: null,
+          }
+    ));
+    setIsConfirmOpen(false);
+    setPaymentToConfirm(null);
+    clearProofSelection();
+    setSubmitSuccess(false);
+    setSubmitError('La deuda cambió. Seleccioná nuevamente los períodos antes de continuar.');
+  }, [clearProofSelection, formData.selectedSelectionKey, selectedPaymentOption]);
 
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
@@ -842,7 +894,7 @@ export const ResidentPaymentsPage = () => {
     [payments],
   );
 
-  const canSubmit = !!proofFileId && selectedPrefixLength > 0 && !!selectedPaymentOption;
+  const canSubmit = !!proofFileId && !!selectedPaymentOption;
   const paymentDateId = 'resident-payment-date';
   const paymentReferenceId = 'resident-payment-reference';
   const paymentMethodId = 'resident-payment-method';
@@ -978,7 +1030,7 @@ export const ResidentPaymentsPage = () => {
             ) : (
               <div className="space-y-3" role="radiogroup" aria-label="Prefijos de obligaciones disponibles">
                 {paymentOptions.map((option) => {
-                  const isSelected = selectedPrefixLength === option.chargeIds.length;
+                  const isSelected = formData.selectedSelectionKey === option.selectionKey;
                   const optionId = `resident-payment-prefix-${option.chargeIds.length}`;
                   return (
                     <label
@@ -997,13 +1049,17 @@ export const ResidentPaymentsPage = () => {
                               id={optionId}
                               type="radio"
                               name="resident-payment-prefix"
-                              value={option.chargeIds.length}
+                              value={option.selectionKey}
                               checked={isSelected}
-                              onChange={(event) => {
+                              onChange={() => {
                                 setFormData((current) => ({
                                   ...current,
-                                  selectedPrefixLength: Number(event.target.value),
+                                  selectedSelectionKey: option.selectionKey,
                                 }));
+                                setSubmitError(null);
+                                setSubmitSuccess(false);
+                                setIsConfirmOpen(false);
+                                setPaymentToConfirm(null);
                               }}
                               className="h-4 w-4 text-blue-600 focus:ring-blue-500"
                             />
@@ -1085,6 +1141,7 @@ export const ResidentPaymentsPage = () => {
               <p className="mb-2 text-xs text-amber-600">Los pagos por transferencia requieren comprobante</p>
             )}
             <input
+              ref={proofFileInputRef}
               id={paymentProofId}
               type="file"
               accept=".pdf,image/jpeg,image/png"
@@ -1099,8 +1156,7 @@ export const ResidentPaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setProofFile(null);
-                    setProofFileId(null);
+                    clearProofSelection();
                   }}
                   className="font-medium text-red-500 hover:text-red-700"
                 >
