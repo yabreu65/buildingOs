@@ -558,7 +558,7 @@ describe('ResidentPaymentsPage', () => {
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
-    expect((screen.getByLabelText(/cargo pendiente/i) as HTMLSelectElement).value).toBe('charge-1');
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
         target: {
@@ -576,21 +576,29 @@ describe('ResidentPaymentsPage', () => {
       'PAYMENT_PROOF',
     );
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    expect(screen.getByText('Monto a reportar')).toBeTruthy();
+    expect(screen.getAllByText('Total exacto').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enviar pago' }));
+    const submitForm = screen.getByLabelText(/comprobante de pago/i).closest('form');
+    expect(submitForm).toBeTruthy();
+    const submitButton = submitForm?.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+    expect(submitButton).toBeTruthy();
+    await waitFor(() => expect(submitButton?.textContent).toContain('Enviar pago'));
+    fireEvent.click(submitButton!);
 
     const dialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     expect(dialog.textContent).toContain('99,98');
     expect(dialog.textContent).toContain('24/07/2026');
     expect(dialog.textContent).not.toContain('23/07/2026');
     expect(dialog.textContent).toContain('Expensas Julio 2026');
+    expect(dialog.textContent).toContain('Selección');
+    expect(dialog.textContent).toContain('1 período');
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /confirmar reporte de pago/i })).toBeNull());
     expect((screen.getByLabelText(/fecha de pago/i) as HTMLInputElement).value).toBe('2026-07-24');
-    expect((screen.getByLabelText(/cargo pendiente/i) as HTMLSelectElement).value).toBe('charge-1');
+    expect((screen.getByRole('radio', { name: /pagar 1 período/i }) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText(/comprobante de pago/i) as HTMLInputElement).files?.[0]?.name).toBe('proof.pdf');
     expect(mockedSubmitPayment).not.toHaveBeenCalled();
   });
@@ -626,6 +634,7 @@ describe('ResidentPaymentsPage', () => {
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
         target: {
@@ -636,13 +645,17 @@ describe('ResidentPaymentsPage', () => {
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    const submitButton = await screen.findByRole('button', { name: 'Enviar pago' });
-    fireEvent.click(submitButton);
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
+    const submitButton = document.getElementById('resident-payment-submit-trigger') as HTMLButtonElement | null;
+    expect(submitButton).toBeTruthy();
+    fireEvent.click(submitButton!);
 
     const dialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     expect(dialog.textContent).toContain('99,98');
     expect(dialog.textContent).toContain('Expensas Julio 2026');
     expect(dialog.textContent).toContain('24/07/2026');
+    expect(dialog.textContent).toContain('Selección');
+    expect(dialog.textContent).toContain('1 período');
 
     const confirmButton = screen.getByRole('button', { name: 'Confirmar pago' });
     expect(confirmButton.hasAttribute('disabled')).toBe(false);
@@ -655,7 +668,7 @@ describe('ResidentPaymentsPage', () => {
         'building-1',
         expect.objectContaining({
           unitId: 'unit-1',
-          chargeId: 'charge-1',
+          chargeIds: ['charge-1'],
           amount: 9998,
           currency: 'ARS',
           method: PaymentMethod.TRANSFER,
@@ -697,6 +710,7 @@ describe('ResidentPaymentsPage', () => {
     expect(screen.queryAllByText('23/07/2026')).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: /reportar pago/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
     fireEvent.change(screen.getByLabelText(/fecha de pago/i), { target: { value: '2026-07-24' } });
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
@@ -709,7 +723,9 @@ describe('ResidentPaymentsPage', () => {
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enviar pago' }));
+    const submitButton = document.getElementById('resident-payment-submit-trigger') as HTMLButtonElement | null;
+    expect(submitButton).toBeTruthy();
+    fireEvent.click(submitButton!);
 
     const dialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     expect(dialog.textContent).toContain('24/07/2026');
@@ -793,7 +809,7 @@ describe('ResidentPaymentsPage', () => {
     openButton.focus();
     fireEvent.click(openButton);
     const panelIntro = await screen.findByText(
-      /Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i,
+      /Seleccioná un prefijo válido/i,
     );
     const mobileDialog = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
     expect(mobileDialog).toBeTruthy();
@@ -812,13 +828,10 @@ describe('ResidentPaymentsPage', () => {
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await mobileDialogQueries.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    const submitButtonLabel = mobileDialogQueries.getByText('Enviar pago');
-    const submitButton = submitButtonLabel.closest('button');
+    fireEvent.click(mobileDialogQueries.getByLabelText(/pagar 1 período/i));
+    const submitButton = document.getElementById('resident-payment-submit-trigger') as HTMLButtonElement | null;
     expect(submitButton).toBeTruthy();
-    if (!submitButton) {
-      throw new Error('Expected the mobile payment submit button to be rendered');
-    }
-    fireEvent.click(submitButton);
+    fireEvent.click(submitButton!);
 
     const confirmDialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Confirmar pago' }));
@@ -854,7 +867,7 @@ describe('ResidentPaymentsPage', () => {
     const openButton = await screen.findByRole('button', { name: 'Reportar pago' });
     fireEvent.click(openButton);
     const panelIntro = await screen.findByText(
-      /Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i,
+      /Seleccioná un prefijo válido/i,
     );
     const mobileDialog = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
     expect(mobileDialog).toBeTruthy();
@@ -873,13 +886,10 @@ describe('ResidentPaymentsPage', () => {
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await mobileDialogQueries.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    const submitButtonLabel = mobileDialogQueries.getByText('Enviar pago');
-    const submitButton = submitButtonLabel.closest('button');
+    fireEvent.click(mobileDialogQueries.getByLabelText(/pagar 1 período/i));
+    const submitButton = document.getElementById('resident-payment-submit-trigger') as HTMLButtonElement | null;
     expect(submitButton).toBeTruthy();
-    if (!submitButton) {
-      throw new Error('Expected the mobile payment submit button to be rendered');
-    }
-    fireEvent.click(submitButton);
+    fireEvent.click(submitButton!);
 
     const confirmDialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
     fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Confirmar pago' }));
@@ -965,7 +975,8 @@ describe('ResidentPaymentsPage', () => {
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
     fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
-    fireEvent.change(screen.getByLabelText(/cargo pendiente/i), { target: { value: 'charge-2' } });
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 1 período/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /pagar 2 períodos/i }));
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/comprobante de pago/i), {
         target: {
@@ -976,13 +987,18 @@ describe('ResidentPaymentsPage', () => {
 
     await waitFor(() => expect(mockedPresignUpload).toHaveBeenCalled());
     expect(await screen.findByText(/proof\.pdf subido correctamente/i)).toBeTruthy();
-    expect(screen.getByText('Monto a reportar')).toBeTruthy();
-    expect((screen.getByLabelText(/cargo pendiente/i) as HTMLSelectElement).value).toBe('charge-2');
-    fireEvent.click(screen.getByRole('button', { name: 'Enviar pago' }));
+    expect(screen.getAllByText('Total exacto').length).toBeGreaterThan(0);
+    expect((screen.getByRole('radio', { name: /pagar 2 períodos/i }) as HTMLInputElement).checked).toBe(true);
+    const submitButton = document.getElementById('resident-payment-submit-trigger') as HTMLButtonElement | null;
+    expect(submitButton).toBeTruthy();
+    fireEvent.click(submitButton!);
 
     const dialog = await screen.findByRole('dialog', { name: /confirmar reporte de pago/i });
-    expect(dialog.textContent).toContain('25,00');
+    expect(dialog.textContent).toContain('124,98');
     expect(dialog.textContent).toContain('Expensas Agosto 2026');
+    expect(dialog.textContent).toContain('Expensas Julio 2026');
+    expect(dialog.textContent).toContain('Selección');
+    expect(dialog.textContent).toContain('2 períodos');
     expect(dialog.textContent).toContain('24/07/2026');
   });
 
@@ -1139,7 +1155,7 @@ describe('ResidentPaymentsPage', () => {
     openMobilePanelButton.focus();
     fireEvent.click(openMobilePanelButton);
 
-    const panelIntro = await screen.findByText(/Cargá el comprobante y completá los datos del pago para enviarlo a revisión\./i);
+    const panelIntro = await screen.findByText(/Seleccioná un prefijo válido/i);
     const panel = panelIntro.closest('[role="dialog"]') as HTMLElement | null;
     expect(panel).toBeTruthy();
     if (!panel) {

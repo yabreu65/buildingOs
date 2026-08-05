@@ -121,6 +121,23 @@ function formatCompactPeriodLabel(period: string | undefined | null): string {
   return `${MONTH_SHORT_UPPER_LABELS[monthIndex - 1]} ${year}`;
 }
 
+function compareChargeOrder(
+  a: { readonly dueDate?: string | null; readonly createdAt?: string | null; readonly id: string },
+  b: { readonly dueDate?: string | null; readonly createdAt?: string | null; readonly id: string },
+): number {
+  const dueDateA = new Date(a.dueDate ?? '').getTime();
+  const dueDateB = new Date(b.dueDate ?? '').getTime();
+  const dueDateDiff = (Number.isNaN(dueDateA) ? 0 : dueDateA) - (Number.isNaN(dueDateB) ? 0 : dueDateB);
+  if (dueDateDiff !== 0) return dueDateDiff;
+
+  const createdAtA = new Date(a.createdAt ?? '').getTime();
+  const createdAtB = new Date(b.createdAt ?? '').getTime();
+  const createdAtDiff = (Number.isNaN(createdAtA) ? 0 : createdAtA) - (Number.isNaN(createdAtB) ? 0 : createdAtB);
+  if (createdAtDiff !== 0) return createdAtDiff;
+
+  return a.id.localeCompare(b.id);
+}
+
 function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
   if (!container) return [];
 
@@ -244,18 +261,18 @@ function paymentStatusVariant(status: string): BadgeVariant {
 }
 
 interface PaymentFormData {
-  selectedChargeId: string;
+  selectedPrefixLength: number;
   method: PaymentMethod;
   reference: string;
   paidAt: string;
-  proofFileId?: string;
 }
 
 interface PaymentConfirmationData {
-  chargeId: string;
+  chargeIds: string[];
   amountMinor: number;
   amountLabel: string;
-  chargeLabel: string;
+  selectionLabel: string;
+  chargeLabels: string[];
   currency: string;
   paidAtLabel: string;
   referenceLabel?: string;
@@ -391,14 +408,14 @@ function PaymentConfirmDialog({
 
         <div id="payment-confirm-description" className="space-y-3">
           <div className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">
-            <span className="font-medium text-muted-foreground">Monto</span>
+            <span className="font-medium text-muted-foreground">Monto exacto</span>
             <span className="text-foreground">{data.amountLabel}</span>
 
             <span className="font-medium text-muted-foreground">Fecha de pago</span>
             <span className="text-foreground">{data.paidAtLabel}</span>
 
-            <span className="font-medium text-muted-foreground">Cargo / período</span>
-            <span className="text-foreground">{data.chargeLabel}</span>
+            <span className="font-medium text-muted-foreground">Selección</span>
+            <span className="text-foreground">{data.selectionLabel}</span>
 
             {data.referenceLabel ? (
               <>
@@ -406,6 +423,15 @@ function PaymentConfirmDialog({
                 <span className="text-foreground">{data.referenceLabel}</span>
               </>
             ) : null}
+
+            <span className="font-medium text-muted-foreground">Obligaciones</span>
+            <div className="text-foreground">
+              <ul className="space-y-1">
+                {data.chargeLabels.map((label, index) => (
+                  <li key={`${label}-${index}`}>{label}</li>
+                ))}
+              </ul>
+            </div>
 
             <span className="font-medium text-muted-foreground">Comprobante</span>
             <span className="text-foreground">{data.proofFileName}</span>
@@ -524,7 +550,7 @@ export const ResidentPaymentsPage = () => {
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState<PaymentFormData>({
-    selectedChargeId: '',
+    selectedPrefixLength: 0,
     method: PaymentMethod.TRANSFER,
     reference: '',
     paidAt: getCurrentCivilDateInputValue(),
@@ -546,6 +572,20 @@ export const ResidentPaymentsPage = () => {
   const submitSuccessTimerRef = useRef<number | null>(null);
   const paymentPanelRef = useRef<HTMLDivElement | null>(null);
   const paymentPanelLastFocusedRef = useRef<HTMLElement | null>(null);
+  const paymentContextKeyRef = useRef<string>('');
+
+  useEffect(() => {
+    paymentContextKeyRef.current = `${tenantId ?? ''}:${buildingId ?? ''}:${unitId ?? ''}`;
+    setShowForm(false);
+    setIsPaymentPanelOpen(false);
+    setIsConfirmOpen(false);
+    setPaymentToConfirm(null);
+    setSubmitError(null);
+    setSubmitSuccess(false);
+    setSubmitting(false);
+    setUploadingProof(false);
+    resetForm();
+  }, [buildingId, tenantId, unitId]);
 
   useEffect(() => {
     return () => {
@@ -612,6 +652,7 @@ export const ResidentPaymentsPage = () => {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !tenantId) return;
+    const contextKey = paymentContextKeyRef.current;
 
     if (file.size > MAX_PAYMENT_PROOF_SIZE_BYTES) {
       setSubmitError(`El archivo no puede superar ${Math.round(MAX_PAYMENT_PROOF_SIZE_BYTES / 1024 / 1024)}MB`);
@@ -650,19 +691,28 @@ export const ResidentPaymentsPage = () => {
         unitId: unitId ?? undefined,
       });
 
+      if (paymentContextKeyRef.current !== contextKey) {
+        return;
+      }
+
       setProofFile(file);
       setProofFileId(createdDocument.file.id);
     } catch (error: unknown) {
+      if (paymentContextKeyRef.current !== contextKey) {
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : '';
       setSubmitError(`Error al subir el comprobante: ${errorMessage || 'Intentalo de nuevo'}`);
     } finally {
-      setUploadingProof(false);
+      if (paymentContextKeyRef.current === contextKey) {
+        setUploadingProof(false);
+      }
     }
   };
 
   const resetForm = () => {
     setFormData({
-      selectedChargeId: '',
+      selectedPrefixLength: 0,
       method: PaymentMethod.TRANSFER,
       reference: '',
       paidAt: getCurrentCivilDateInputValue(),
@@ -733,23 +783,58 @@ export const ResidentPaymentsPage = () => {
   }, [submitting]);
 
   const pendingCharges = useMemo(
-    () => ledger?.charges?.filter((c) => (c.amount - (c.allocated ?? 0)) > 0) ?? [],
+    () => (ledger?.charges ?? [])
+      .filter((charge) => (charge.amount - (charge.allocated ?? 0)) > 0)
+      .slice()
+      .sort(compareChargeOrder),
     [ledger?.charges],
   );
-  const selectedChargeId = pendingCharges.some((charge) => charge.id === formData.selectedChargeId)
-    ? formData.selectedChargeId
-    : pendingCharges[0]?.id ?? '';
-  const selectedCharge = pendingCharges.find((charge) => charge.id === selectedChargeId) ?? null;
-  const selectedChargeOutstandingMinor = selectedCharge ? selectedCharge.amount - (selectedCharge.allocated ?? 0) : 0;
+  const activeSubmittedChargeIds = useMemo(() => {
+    const activePayments = payments.filter((payment) => payment.status === PaymentStatus.SUBMITTED);
+    return new Set(
+      activePayments.flatMap((payment) => (
+        payment.paymentAllocations?.map((allocation) => allocation.chargeId) ?? []
+      )),
+    );
+  }, [payments]);
+  const selectableCharges = useMemo(() => {
+    const charges: typeof pendingCharges = [];
+    for (const charge of pendingCharges) {
+      if (activeSubmittedChargeIds.has(charge.id)) {
+        break;
+      }
+      charges.push(charge);
+    }
+
+    return charges;
+  }, [activeSubmittedChargeIds, pendingCharges]);
+  const paymentOptions = useMemo(() => (
+    selectableCharges.map((_, index) => {
+      const charges = selectableCharges.slice(0, index + 1);
+      const totalMinor = charges.reduce(
+        (sum, charge) => sum + (charge.amount - (charge.allocated ?? 0)),
+        0,
+      );
+
+      return {
+        key: String(index + 1),
+        chargeIds: charges.map((charge) => charge.id),
+        charges,
+        totalMinor,
+        currency: charges[0]?.currency ?? ledger?.totals?.currency ?? 'ARS',
+      };
+    })
+  ), [ledger?.totals?.currency, selectableCharges]);
+  const selectedPrefixLength = paymentOptions.some((option) => option.chargeIds.length === formData.selectedPrefixLength)
+    ? formData.selectedPrefixLength
+    : 0;
+  const selectedPaymentOption = selectedPrefixLength > 0
+    ? paymentOptions[selectedPrefixLength - 1] ?? null
+    : null;
+  const selectedChargeIds = selectedPaymentOption?.chargeIds ?? [];
 
   const balance = ledger?.totals?.balance ?? 0;
   const currency = ledger?.totals?.currency ?? 'ARS';
-  const sortedPendingCharges = useMemo(
-    () => pendingCharges
-      .slice()
-      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()),
-    [pendingCharges],
-  );
   const sortedRecentPayments = useMemo(
     () => payments
       .slice()
@@ -757,14 +842,14 @@ export const ResidentPaymentsPage = () => {
     [payments],
   );
 
-  const canSubmit = !!proofFileId && !!selectedCharge && selectedChargeOutstandingMinor > 0;
+  const canSubmit = !!proofFileId && selectedPrefixLength > 0 && !!selectedPaymentOption;
   const paymentDateId = 'resident-payment-date';
   const paymentReferenceId = 'resident-payment-reference';
   const paymentMethodId = 'resident-payment-method';
   const paymentProofId = 'resident-payment-proof';
 
   // Next due charge: use real outstanding, not legacy status
-  const nextDueCharge = sortedPendingCharges[0];
+  const nextDueCharge = selectableCharges[0];
 
   const lastPayment = sortedRecentPayments[0];
 
@@ -772,21 +857,24 @@ export const ResidentPaymentsPage = () => {
     e.preventDefault();
     if (!buildingId || !unitId) return;
 
-    if (!selectedCharge) {
-      setSubmitError('Seleccioná un cargo pendiente para continuar.');
+    if (!selectedPaymentOption) {
+      setSubmitError('Seleccioná un prefijo válido de obligaciones para continuar.');
       return;
     }
 
-    const amountMinor = selectedChargeOutstandingMinor;
+    const amountMinor = selectedPaymentOption.totalMinor;
     if (amountMinor <= 0) {
-      setSubmitError('Ese cargo ya no tiene saldo pendiente. Actualizá la información.');
+      setSubmitError('Ese prefijo ya no tiene saldo pendiente. Actualizá la información.');
       refetchLedger();
       refetchPayments();
       return;
     }
 
-    const amountLabel = formatCurrency(amountMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency));
-    const chargeLabel = `${selectedCharge.concept} • Período ${selectedCharge.period}`;
+    const amountLabel = formatCurrency(amountMinor, selectedPaymentOption.currency, getLocaleForCurrency(selectedPaymentOption.currency));
+    const selectionLabel = `${selectedPaymentOption.charges.length} ${selectedPaymentOption.charges.length === 1 ? 'período' : 'períodos'}`;
+    const chargeLabels = selectedPaymentOption.charges.map((charge) => (
+      `${formatCompactPeriodLabel(charge.period)} · ${charge.concept} · ${formatCurrency(charge.amount - (charge.allocated ?? 0), charge.currency, getLocaleForCurrency(charge.currency))}`
+    ));
     if (!proofFileId || !proofFile) {
       setSubmitError('Subí un comprobante antes de continuar.');
       return;
@@ -795,11 +883,12 @@ export const ResidentPaymentsPage = () => {
     setSubmitError(null);
     setSubmitSuccess(false);
     setPaymentToConfirm({
-      chargeId: selectedCharge.id,
+      chargeIds: selectedChargeIds,
       amountMinor,
       amountLabel,
-      chargeLabel,
-      currency: selectedCharge.currency,
+      selectionLabel,
+      chargeLabels,
+      currency: selectedPaymentOption.currency,
       paidAtLabel: formatCivilDate(formData.paidAt),
       referenceLabel: formData.reference.trim() || undefined,
       proofFileName: proofFile.name,
@@ -810,6 +899,7 @@ export const ResidentPaymentsPage = () => {
   const handleConfirmPayment = async () => {
     if (!buildingId || !unitId || !paymentToConfirm || submitting) return;
 
+    const contextKey = paymentContextKeyRef.current;
     setSubmitting(true);
     setSubmitError(null);
     setSubmitSuccess(false);
@@ -817,7 +907,7 @@ export const ResidentPaymentsPage = () => {
     try {
       await submitPayment(buildingId, {
         unitId,
-        chargeId: paymentToConfirm.chargeId,
+        chargeIds: paymentToConfirm.chargeIds,
         amount: paymentToConfirm.amountMinor,
         currency: paymentToConfirm.currency,
         method: formData.method,
@@ -825,6 +915,10 @@ export const ResidentPaymentsPage = () => {
         paidAt: formData.paidAt || undefined,
         proofFileId: proofFileId || undefined,
       }, 'resident');
+
+      if (paymentContextKeyRef.current !== contextKey) {
+        return;
+      }
 
       setSubmitSuccess(true);
       resetForm();
@@ -845,11 +939,16 @@ export const ResidentPaymentsPage = () => {
         submitSuccessTimerRef.current = null;
       }, 2000);
     } catch (err) {
+      if (paymentContextKeyRef.current !== contextKey) {
+        return;
+      }
       setSubmitError(err instanceof Error ? err.message : 'Error al enviar pago');
       void refetchLedger();
       void refetchPayments();
     } finally {
-      setSubmitting(false);
+      if (paymentContextKeyRef.current === contextKey) {
+        setSubmitting(false);
+      }
     }
   };
 
@@ -861,48 +960,90 @@ export const ResidentPaymentsPage = () => {
         className={isMobilePanel ? 'flex min-h-0 flex-1 flex-col' : 'space-y-4'}
       >
         <div className={isMobilePanel ? 'min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4' : 'space-y-4'}>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <fieldset className="space-y-3">
             <div>
-              <label htmlFor="resident-payment-charge" className="mb-1 block text-sm font-medium">
-                Cargo pendiente
-              </label>
-              <Select
-                id="resident-payment-charge"
-                value={selectedChargeId}
-                onChange={(e) => setFormData((current) => ({ ...current, selectedChargeId: e.target.value }))}
-                disabled={pendingCharges.length === 0}
-              >
-                {pendingCharges.length === 0 ? (
-                  <option value="">No tenés cargos pendientes</option>
-                ) : (
-                  pendingCharges.map((charge) => {
-                    const outstandingMinor = charge.amount - (charge.allocated ?? 0);
-                    return (
-                      <option key={charge.id} value={charge.id}>
-                        {charge.concept} • Período {charge.period} • {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
-                      </option>
-                    );
-                  })
-                )}
-              </Select>
-              {selectedCharge ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Los pagos informados por residentes deben cubrir el saldo completo del período.
-                </p>
-              ) : (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  No hay cargos pendientes disponibles para reportar.
-                </p>
-              )}
-              {selectedCharge ? (
-                <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Monto a reportar</p>
-                  <p className="text-lg font-semibold">
-                    {formatCurrency(selectedChargeOutstandingMinor, selectedCharge.currency, getLocaleForCurrency(selectedCharge.currency))}
-                  </p>
-                </div>
-              ) : null}
+              <legend className="block text-sm font-medium text-foreground">
+                Seleccioná un prefijo válido
+              </legend>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Tu pago se aplicará a las obligaciones más antiguas. Cada período seleccionado debe pagarse completamente.
+              </p>
             </div>
+
+            {paymentOptions.length === 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+                No hay obligaciones elegibles para pagar ahora mismo.
+                {selectableCharges.length === 0 && pendingCharges.length > 0 ? ' Hay una obligación más antigua en proceso o ya cubierta.' : ''}
+              </div>
+            ) : (
+              <div className="space-y-3" role="radiogroup" aria-label="Prefijos de obligaciones disponibles">
+                {paymentOptions.map((option) => {
+                  const isSelected = selectedPrefixLength === option.chargeIds.length;
+                  const optionId = `resident-payment-prefix-${option.chargeIds.length}`;
+                  return (
+                    <label
+                      key={optionId}
+                      htmlFor={optionId}
+                      className={`block cursor-pointer rounded-xl border p-4 transition ${
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 dark:border-blue-400 dark:bg-blue-950/30'
+                          : 'border-border bg-card hover:bg-muted/40'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
+                            <input
+                              id={optionId}
+                              type="radio"
+                              name="resident-payment-prefix"
+                              value={option.chargeIds.length}
+                              checked={isSelected}
+                              onChange={(event) => {
+                                setFormData((current) => ({
+                                  ...current,
+                                  selectedPrefixLength: Number(event.target.value),
+                                }));
+                              }}
+                              className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="text-sm font-semibold text-foreground">
+                              Pagar {option.chargeIds.length} {option.chargeIds.length === 1 ? 'período' : 'períodos'}
+                            </span>
+                          </div>
+                          <ul className="mt-3 space-y-1 pl-7 text-sm text-muted-foreground">
+                            {option.charges.map((charge) => {
+                              const outstandingMinor = charge.amount - (charge.allocated ?? 0);
+                              return (
+                                <li key={charge.id}>
+                                  {formatCompactPeriodLabel(charge.period)} · {charge.concept} · {formatCurrency(outstandingMinor, charge.currency, getLocaleForCurrency(charge.currency))}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end text-right">
+                          <span className="text-xs uppercase tracking-wide text-muted-foreground">Total exacto</span>
+                          <span className="text-lg font-semibold text-foreground">
+                            {formatCurrency(option.totalMinor, option.currency, getLocaleForCurrency(option.currency))}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{option.currency}</span>
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
+            {selectedPaymentOption ? (
+              <p className="text-xs text-muted-foreground">
+                Se aplicará primero a la obligación más antigua y no se aceptarán saltos ni montos parciales.
+              </p>
+            ) : null}
+          </fieldset>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className="mb-1 block text-sm font-medium" htmlFor={paymentMethodId}>Método de pago</label>
               <Select id={paymentMethodId} value={PaymentMethod.TRANSFER} disabled>
@@ -999,8 +1140,8 @@ export const ResidentPaymentsPage = () => {
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {submitting
                 ? 'Enviando...'
-                : !selectedCharge
-                  ? 'Seleccioná un cargo'
+                : !selectedPaymentOption
+                  ? 'Seleccioná un prefijo'
                   : !proofFile
                     ? 'Subí el comprobante'
                     : 'Enviar pago'}
@@ -1155,7 +1296,7 @@ export const ResidentPaymentsPage = () => {
     </Card>
   ) : null;
 
-  const mobilePendingPreview = sortedPendingCharges.slice(0, 3);
+  const mobilePendingPreview = selectableCharges.slice(0, 3);
   const mobileRecentPaymentsPreview = sortedRecentPayments.slice(0, 2);
   const recentPaymentsLabel = getRecentPaymentsLabel(sortedRecentPayments.length);
 
@@ -1227,7 +1368,7 @@ export const ResidentPaymentsPage = () => {
                     {formatCurrency(balance, currency, getLocaleForCurrency(currency))}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {pendingCharges.length} cargos pendientes
+                  {selectableCharges.length} cargos elegibles
                   </p>
                 </div>
                 {balance > 0 ? (
@@ -1281,7 +1422,7 @@ export const ResidentPaymentsPage = () => {
                   <p className="text-sm font-medium text-muted-foreground">Cargos próximos</p>
                   <h2 className="text-lg font-semibold text-foreground">Lo que tenés por resolver</h2>
                 </div>
-                {pendingCharges.length > 0 ? (
+                {selectableCharges.length > 0 ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -1468,7 +1609,7 @@ export const ResidentPaymentsPage = () => {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-foreground">Cargos pendientes</h2>
-                <p className="text-sm text-muted-foreground">{sortedPendingCharges.length} cargos con saldo pendiente</p>
+                <p className="text-sm text-muted-foreground">{selectableCharges.length} cargos con saldo pendiente</p>
               </div>
               <Button
                 type="button"
@@ -1482,13 +1623,13 @@ export const ResidentPaymentsPage = () => {
               </Button>
             </div>
 
-            {sortedPendingCharges.length === 0 ? (
+            {selectableCharges.length === 0 ? (
               <Card className="p-4">
                 <p className="text-sm text-muted-foreground">No tenés cargos pendientes por ahora.</p>
               </Card>
             ) : (
               <div className="space-y-3">
-                {sortedPendingCharges.map((charge) => {
+                {selectableCharges.map((charge) => {
                   const outstandingMinor = charge.amount - (charge.allocated ?? 0);
                   const statusInfo = getMobileChargeStatusLabel(charge, todayCivilDate);
                   const isOverdue = statusInfo.label === 'Vencido';
@@ -1812,14 +1953,14 @@ export const ResidentPaymentsPage = () => {
       {/* Pending Charges */}
       <Card className="p-4">
         <h3 className="font-semibold text-lg mb-4">Cargos pendientes</h3>
-        {pendingCharges.length === 0 ? (
+        {selectableCharges.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6">
             <CheckCircle className="w-8 h-8 text-green-600 mb-2" />
             <p className="text-muted-foreground">No tenés cargos pendientes por ahora.</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {pendingCharges.map((charge) => (
+            {selectableCharges.map((charge) => (
               <div key={charge.id} className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
                 <div>
                   <p className="font-medium">{charge.concept}</p>
