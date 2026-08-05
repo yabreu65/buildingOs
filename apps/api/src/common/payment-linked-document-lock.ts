@@ -52,14 +52,20 @@ export async function acquirePaymentReceiptLock(
   await runAdvisoryLock(tx, lockKey);
 }
 
-interface AdvisoryLockTransactionClient extends Prisma.TransactionClient {
-  $executeRaw?: (query: Prisma.Sql) => Promise<unknown>;
+interface AdvisoryLockTransactionClient {
+  $queryRaw: Prisma.TransactionClient['$queryRaw'];
+  $executeRaw?: Prisma.TransactionClient['$executeRaw'];
+  payment: Pick<Prisma.TransactionClient['payment'], 'findFirst'>;
 }
 
 async function runAdvisoryLock(
   tx: AdvisoryLockTransactionClient,
   lockKey: string,
 ): Promise<void> {
-  const executor = tx.$executeRaw ?? tx.$queryRaw;
-  await executor(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+  if (tx.$executeRaw) {
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+    return;
+  }
+
+  await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
 }

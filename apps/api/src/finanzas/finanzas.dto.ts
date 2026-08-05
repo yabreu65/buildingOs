@@ -1,6 +1,21 @@
 import { Type } from 'class-transformer';
-import { IsString, IsOptional, IsInt, IsPositive, IsEnum, IsDateString, IsIn, Matches, MaxLength, Min, Max } from 'class-validator';
-import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  IsPositive,
+  IsEnum,
+  IsDateString,
+  IsIn,
+  Matches,
+  MaxLength,
+  Min,
+  Max,
+  IsArray,
+  ArrayNotEmpty,
+  ArrayUnique,
+} from 'class-validator';
+import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod, RejectionReason } from '@prisma/client';
 import {
   BuildingChargeParamDto,
   BuildingPaymentParamDto,
@@ -32,6 +47,7 @@ export class CreateChargeDto {
 
   @IsOptional()
   @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period?: string; // YYYY-MM format, default: current month
 
   @IsDateString()
@@ -84,6 +100,13 @@ export class SubmitPaymentDto {
   @IsString()
   chargeId?: string;
 
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsString({ each: true })
+  chargeIds?: string[];
+
   @IsInt()
   @IsPositive()
   amount!: number; // In cents
@@ -115,8 +138,8 @@ export class ApprovePaymentDto {
 }
 
 export class RejectPaymentDto {
-  @IsString()
-  reason!: string;
+  @IsEnum(RejectionReason)
+  reason!: RejectionReason;
 
   @IsOptional()
   @IsString()
@@ -213,12 +236,14 @@ export class ListPendingPaymentsQueryDto {
   unitId?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
   limit?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   offset?: number;
@@ -235,6 +260,7 @@ export class ListPendingPaymentsQueryDto {
 export class ListChargesQueryDto {
   @IsOptional()
   @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period?: string; // YYYY-MM format
 
   @IsOptional()
@@ -246,11 +272,15 @@ export class ListChargesQueryDto {
   unitId?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
+  @Min(0)
   limit?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
+  @Min(0)
   offset?: number;
 }
 
@@ -261,6 +291,7 @@ export class ListTenantChargesQueryDto {
 
   @IsOptional()
   @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period?: string; // YYYY-MM format
 
   @IsOptional()
@@ -268,12 +299,14 @@ export class ListTenantChargesQueryDto {
   status?: ChargeStatus;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(500)
   limit?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   offset?: number;
@@ -289,11 +322,15 @@ export class ListPaymentsQueryDto {
   unitId?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
+  @Min(0)
   limit?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
+  @Min(0)
   offset?: number;
 }
 
@@ -334,12 +371,12 @@ export interface PaymentDetailDto {
   building?: {
     id: string;
     name: string;
-  };
+  } | null;
   unitId: string | null;
   unit?: {
     id: string;
-    label: string;
-  };
+    label: string | null;
+  } | null;
   amount: number;
   currency: string;
   method: PaymentMethod;
@@ -443,6 +480,7 @@ export class FinancialSummaryParamDto extends BuildingParamDto {}
 export class FinancialSummaryQueryDto {
   @IsOptional()
   @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period?: string;
 }
 
@@ -538,6 +576,7 @@ export interface MonthlyTrendDto {
 }
 
 export class FinanceTrendQueryDto {
+  @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -555,6 +594,8 @@ export class PaymentAuditLogDto {
   paymentId!: string;
   action!: string;
   membershipId?: string;
+  userName?: string;
+  userEmail?: string;
   reason?: string;
   comment?: string;
   metadata?: Record<string, unknown>;
@@ -570,6 +611,7 @@ export class PaymentDuplicateCheckResultDto {
 }
 
 export class GetPaymentAuditLogQueryDto {
+  @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(1)

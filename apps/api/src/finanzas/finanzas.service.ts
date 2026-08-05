@@ -19,6 +19,7 @@ import {
   RejectPaymentDto,
   CreateAllocationDto,
   ListChargesQueryDto,
+  ListTenantChargesQueryDto,
   ListPaymentsQueryDto,
   ListPendingPaymentsQueryDto,
   FinancialSummaryDto,
@@ -38,12 +39,34 @@ import {
 
 export interface PendingPaymentListItem extends Payment {
   building?: { id: string; name: string } | null;
-  unit?: { id: string; label: string } | null;
+  unit?: { id: string; label: string | null } | null;
   createdByUser?: { id: string; name: string; email: string } | null;
   reviewedByMembership?: { id: string; user?: { name: string } | null } | null;
   proofFile?: { id: string } | null;
   proofDocumentId?: string | null;
 }
+
+type PaymentWithAllocationSummary = Prisma.PaymentGetPayload<{
+  include: {
+    paymentAllocations: {
+      include: {
+        charge: {
+          select: {
+            id: true;
+            concept: true;
+            amount: true;
+            status: true;
+            period: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
+type SanitizedPayment<T extends { notes?: string | null }> = Omit<T, 'notes'> & {
+  notes: string | null;
+};
 
 export interface BuildingFinancialSummaryPeriodFilter {
   period?: string;
@@ -75,6 +98,7 @@ type ChargeWithAllocations = Prisma.ChargeGetPayload<{
       include: {
         payment: {
           select: {
+            id: true;
             status: true;
           };
         };
@@ -93,6 +117,11 @@ type PaymentWithAllocations = Prisma.PaymentGetPayload<{
   };
 }>;
 
+interface ResidentChargeSelectionItem {
+  readonly charge: ChargeWithAllocations;
+  readonly approvedOutstanding: number;
+}
+
 const RESIDENT_DIRECTED_PAYMENT_PREFIX = 'resident-charge-selection-requires-resubmission';
 const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
 const TENANT_LEDGER_ROLES = new Set<string>([
@@ -101,6 +130,18 @@ const TENANT_LEDGER_ROLES = new Set<string>([
   'TENANT_ADMIN',
   'OPERATOR',
 ]);
+
+const KNOWN_ROLES = {
+  SUPER_ADMIN: true,
+  TENANT_OWNER: true,
+  TENANT_ADMIN: true,
+  OPERATOR: true,
+  RESIDENT: true,
+} as const satisfies Record<Role, true>;
+
+function isRole(value: string): value is Role {
+  return value in KNOWN_ROLES;
+}
 
 @Injectable()
 export class FinanzasService {
@@ -374,7 +415,7 @@ export class FinanzasService {
 
     // 4. Update
     return this.prisma.charge.update({
-      where: { id: chargeId },
+      where: { id: chargeId, tenantId },
       data: {
         ...dto,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
@@ -483,11 +524,6 @@ export class FinanzasService {
         userId,
         dto.unitId,
       );
-      if (!dto.chargeId) {
-        throw new BadRequestException(
-          'RESIDENT must specify chargeId when submitting a payment',
-        );
-      }
     }
 
     // 4. If unitId provided, validate it belongs to building
@@ -508,6 +544,12 @@ export class FinanzasService {
     }
 
     // 6. Duplicate detection: check for similar payments in last 48 hours
+    const requestedChargeIds = this.normalizeChargeSelection(dto);
+    const duplicateChargeIds = requestedChargeIds.length > 0
+      ? requestedChargeIds
+      : dto.chargeId
+        ? [dto.chargeId]
+        : [];
     const duplicateWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const duplicatePayment = await this.prisma.payment.findFirst({
       where: {
@@ -518,12 +560,12 @@ export class FinanzasService {
         reference: dto.reference,
         createdAt: { gte: duplicateWindow },
         status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED] },
-        ...(isResidentPayment
+        ...(duplicateChargeIds.length > 0
           ? {
               paymentAllocations: {
                 some: {
                   tenantId,
-                  chargeId: dto.chargeId!,
+                  chargeId: { in: duplicateChargeIds },
                 },
               },
             }
@@ -543,55 +585,69 @@ export class FinanzasService {
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );
     }
-    if (isResidentPayment) {
+    const usesExplicitChargeSelection = requestedChargeIds.length > 0;
+    if (usesExplicitChargeSelection || isResidentPayment) {
+      if (!dto.unitId) {
+        throw new BadRequestException(
+          'Debes indicar la unidad para validar la selección de cargos',
+        );
+      }
+      if (requestedChargeIds.length === 0) {
+        throw new BadRequestException(
+          'Debes seleccionar una o más obligaciones consecutivas para continuar.',
+        );
+      }
+
       const payment = await this.prisma.$transaction(async (tx) => {
         await acquirePaymentLinkedDocumentLock(tx, tenantId, dto.proofFileId!);
         await this.validatePaymentProofFileInTransaction(tx, tenantId, dto.proofFileId!);
 
-        const charge = await tx.charge.findFirst({
-          where: {
-            id: dto.chargeId,
+        if (isResidentPayment) {
+          await this.validators.validateResidentUnitAccess(
             tenantId,
-            buildingId,
-            unitId: dto.unitId,
-            canceledAt: null,
-          },
-          include: {
-            paymentAllocations: {
-              include: {
-                payment: {
-                  select: {
-                    status: true,
-                  },
-                },
-              },
-            },
-          },
-        });
-
-        if (!charge) {
-          throw new NotFoundException(
-            'Charge not found or does not belong to this unit/building/tenant',
+            userId,
+            dto.unitId!,
           );
         }
 
-        if (charge.status === ChargeStatus.CANCELED || charge.status === ChargeStatus.PAID) {
-          throw new ConflictException(
-            'El cargo seleccionado no admite pagos',
-          );
-        }
+        await this.validators.validateUnitBelongsToBuildingAndTenant(
+          tenantId,
+          buildingId,
+          dto.unitId!,
+        );
 
-        const paymentCurrency = dto.currency || charge.currency;
-        if (paymentCurrency !== charge.currency) {
+        await this.acquireResidentPaymentSelectionLock(
+          tx,
+          tenantId,
+          buildingId,
+          dto.unitId!,
+        );
+
+        const selectableCharges = await this.loadResidentChargeSelection(
+          tx,
+          tenantId,
+          buildingId,
+          dto.unitId!,
+        );
+        const canonicalSelection = this.validateCanonicalResidentChargeSelection(
+          selectableCharges,
+          requestedChargeIds,
+        );
+        const paymentCurrency = this.validateResidentChargeCurrencies(canonicalSelection);
+        if (dto.currency && dto.currency !== paymentCurrency) {
           throw new BadRequestException(
-            'La moneda del pago debe coincidir con la moneda del cargo',
+            'La moneda del pago debe coincidir con la moneda de las obligaciones seleccionadas',
           );
         }
 
-        const outstanding = this.calculateApprovedChargeOutstanding(charge);
-        if (dto.amount !== outstanding) {
+        const calculatedAmount = canonicalSelection.reduce(
+          (sum, item) => sum + item.approvedOutstanding,
+          0,
+        );
+
+        if (dto.amount !== calculatedAmount) {
           throw new ConflictException(
-            'El monto debe coincidir con el saldo pendiente completo del período.',
+            'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
           );
         }
 
@@ -600,7 +656,7 @@ export class FinanzasService {
             tenantId,
             buildingId,
             unitId: dto.unitId || null,
-            amount: dto.amount,
+            amount: calculatedAmount,
             currency: paymentCurrency,
             method: dto.method,
             status: PaymentStatus.SUBMITTED,
@@ -611,14 +667,16 @@ export class FinanzasService {
           },
         });
 
-        await tx.paymentAllocation.create({
-          data: {
-            tenantId,
-            paymentId: payment.id,
-            chargeId: charge.id,
-            amount: outstanding,
-          },
-        });
+        for (const selection of canonicalSelection) {
+          await tx.paymentAllocation.create({
+            data: {
+              tenantId,
+              paymentId: payment.id,
+              chargeId: selection.charge.id,
+              amount: selection.approvedOutstanding,
+            },
+          });
+        }
 
         return payment;
       });
@@ -670,7 +728,7 @@ export class FinanzasService {
     userRoles: string[],
     userId: string,
     query: ListPaymentsQueryDto,
-  ): Promise<Payment[]> {
+  ): Promise<PendingPaymentListItem[]> {
     // 1. Validate building
     await this.validators.validateBuildingBelongsToTenant(
       tenantId,
@@ -758,7 +816,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as Payment[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment));
   }
 
   /**
@@ -800,60 +858,12 @@ export class FinanzasService {
       }
 
       if (payment.paymentAllocations.length > 0) {
-        const totalAllocated = payment.paymentAllocations.reduce(
-          (sum, allocation) => sum + allocation.amount,
-          0,
+        await this.validateResidentPaymentAllocationsForApproval(
+          tx,
+          tenantId,
+          buildingId,
+          payment,
         );
-
-        if (totalAllocated !== payment.amount) {
-          throw new ConflictException(
-            'El monto debe coincidir con el saldo pendiente completo del período.',
-          );
-        }
-
-        for (const allocation of payment.paymentAllocations) {
-          await this.lockChargeForApproval(tx, allocation.chargeId);
-          const charge = await tx.charge.findFirst({
-            where: {
-              id: allocation.chargeId,
-              tenantId,
-              buildingId,
-              unitId: payment.unitId ?? undefined,
-              canceledAt: null,
-            },
-            include: {
-              paymentAllocations: {
-                include: {
-                  payment: {
-                    select: {
-                      status: true,
-                    },
-                  },
-                },
-              },
-            },
-          });
-
-          if (!charge) {
-            throw new NotFoundException(
-              'Charge not found or does not belong to this building/tenant',
-            );
-          }
-
-          if (charge.status === ChargeStatus.PAID || charge.status === ChargeStatus.CANCELED) {
-            throw new ConflictException(
-              'El cargo seleccionado no admite pagos',
-            );
-          }
-
-          const outstanding = this.calculateApprovedChargeOutstanding(charge);
-          if (allocation.amount !== outstanding) {
-            throw new ConflictException(
-              'El monto debe coincidir con el saldo pendiente completo del período.',
-            );
-          }
-        }
-
         const approvedPayment = await tx.payment.update({
           where: { id: payment.id },
           data: {
@@ -1044,7 +1054,7 @@ export class FinanzasService {
         data: {
           status: PaymentStatus.REJECTED,
           reviewedByMembershipId: membershipId,
-          rejectionReason: dto.reason as RejectionReason,
+          rejectionReason: dto.reason,
           rejectionComment: dto.comment || null,
           reviewedAt: new Date(),
           notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
@@ -1155,6 +1165,12 @@ export class FinanzasService {
       );
     }
 
+    if (!payment.unitId) {
+      throw new ConflictException(
+        'Payment must belong to a unit to create allocations in canonical order.',
+      );
+    }
+
     // 4. Validate total allocations don't exceed payment amount
     const totalAllocated = payment.paymentAllocations.reduce(
       (sum, a) => sum + a.amount,
@@ -1171,6 +1187,25 @@ export class FinanzasService {
     if (dto.amount > charge.amount) {
       throw new ConflictException(
         `Allocation amount (${dto.amount}) cannot exceed charge amount (${charge.amount})`,
+      );
+    }
+
+    const selectableCharges = await this.loadResidentChargeSelection(
+      this.prisma as Prisma.TransactionClient,
+      tenantId,
+      buildingId,
+      payment.unitId,
+    );
+    const expectedCharge = selectableCharges[0];
+    if (!expectedCharge || expectedCharge.charge.id !== charge.id) {
+      throw new ConflictException(
+        'Solo puedes asignar pagos completos siguiendo la obligación más antigua pendiente.',
+      );
+    }
+
+    if (dto.amount !== expectedCharge.approvedOutstanding) {
+      throw new ConflictException(
+        'Cada período debe pagarse completamente.',
       );
     }
 
@@ -1450,13 +1485,13 @@ export class FinanzasService {
     return publicNotes || null;
   }
 
-  private sanitizePaymentForResponse<T extends { notes?: string | null }>(payment: T): T {
+  private sanitizePaymentForResponse<T extends { notes?: string | null }>(
+    payment: T,
+  ): SanitizedPayment<T> {
     const publicNotes = this.stripInternalPaymentMarkers(payment.notes);
     const { notes: _internalNotes, ...publicPayment } = payment;
 
-    return (publicNotes === null
-      ? publicPayment
-      : { ...publicPayment, notes: publicNotes }) as T;
+    return { ...publicPayment, notes: publicNotes };
   }
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
@@ -1469,6 +1504,283 @@ export class FinanzasService {
     }, 0);
 
     return Math.max(0, charge.amount - approvedAllocated);
+  }
+
+  private calculatePendingReservationAmount(
+    charge: ChargeWithAllocations,
+    currentPaymentId?: string,
+  ): number {
+    return charge.paymentAllocations.reduce((sum, allocation) => {
+      if (allocation.payment?.id === currentPaymentId) {
+        return sum;
+      }
+
+      if (allocation.payment?.status === PaymentStatus.SUBMITTED) {
+        return sum + allocation.amount;
+      }
+
+      return sum;
+    }, 0);
+  }
+
+  private async loadResidentChargeSelection(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
+    unitId: string,
+    currentPaymentId?: string,
+  ): Promise<ResidentChargeSelectionItem[]> {
+    const charges = await tx.charge.findMany({
+      where: {
+        tenantId,
+        buildingId,
+        unitId,
+        canceledAt: null,
+      },
+      include: {
+        paymentAllocations: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                status: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { dueDate: 'asc' },
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    });
+
+    const selectablePrefix: ResidentChargeSelectionItem[] = [];
+
+    for (const charge of charges) {
+      const approvedOutstanding = this.calculateApprovedChargeOutstanding(charge);
+      if (approvedOutstanding <= 0) {
+        continue;
+      }
+
+      const pendingReservation = this.calculatePendingReservationAmount(
+        charge,
+        currentPaymentId,
+      );
+      if (pendingReservation > 0) {
+        break;
+      }
+
+      selectablePrefix.push({
+        charge,
+        approvedOutstanding,
+      });
+    }
+
+    return selectablePrefix;
+  }
+
+  private normalizeChargeSelection(dto: SubmitPaymentDto): string[] {
+    const selectedChargeIds = dto.chargeIds?.length
+      ? dto.chargeIds
+      : dto.chargeId
+        ? [dto.chargeId]
+        : [];
+
+    return selectedChargeIds
+      .map((chargeId) => chargeId.trim())
+      .filter((chargeId) => chargeId.length > 0);
+  }
+
+  private validateCanonicalResidentChargeSelection(
+    selectableCharges: ResidentChargeSelectionItem[],
+    requestedChargeIds: readonly string[],
+  ): ResidentChargeSelectionItem[] {
+    if (requestedChargeIds.length === 0) {
+      throw new BadRequestException(
+        'Debes seleccionar una o más obligaciones consecutivas para continuar.',
+      );
+    }
+
+    const requestedSet = new Set(requestedChargeIds);
+    if (requestedSet.size !== requestedChargeIds.length) {
+      throw new BadRequestException(
+        'La selección contiene IDs duplicados o inválidos.',
+      );
+    }
+
+    const selectedCharges = selectableCharges.filter(({ charge }) => requestedSet.has(charge.id));
+
+    if (selectedCharges.length !== requestedSet.size) {
+      throw new ConflictException(
+        'La selección ya no coincide con las obligaciones pendientes más antiguas. Actualiza la información e inténtalo nuevamente.',
+      );
+    }
+
+    const canonicalSelection = selectableCharges.slice(0, selectedCharges.length);
+    const canonicalSelectionIds = canonicalSelection.map(({ charge }) => charge.id);
+    const selectedIds = selectedCharges.map(({ charge }) => charge.id);
+
+    if (canonicalSelectionIds.length !== selectedIds.length) {
+      throw new ConflictException(
+        'La selección ya no coincide con las obligaciones pendientes más antiguas. Actualiza la información e inténtalo nuevamente.',
+      );
+    }
+
+    for (let index = 0; index < canonicalSelectionIds.length; index += 1) {
+      if (canonicalSelectionIds[index] !== selectedIds[index]) {
+        throw new ConflictException(
+          'Solo puedes pagar períodos consecutivos desde la deuda más antigua.',
+        );
+      }
+    }
+
+    return canonicalSelection;
+  }
+
+  private validateResidentChargeCurrencies(
+    selection: ResidentChargeSelectionItem[],
+  ): string {
+    const [firstSelection] = selection;
+    if (!firstSelection) {
+      throw new BadRequestException(
+        'No hay obligaciones elegibles para pagar en este momento.',
+      );
+    }
+
+    const currency = firstSelection.charge.currency;
+    if (selection.some(({ charge }) => charge.currency !== currency)) {
+      throw new BadRequestException(
+        'No se pueden mezclar monedas dentro del mismo pago.',
+      );
+    }
+
+    return currency;
+  }
+
+  private async acquireResidentPaymentSelectionLock(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
+    unitId: string,
+  ): Promise<void> {
+    const selectionLockKey = `resident-payment-selection:${tenantId}:${buildingId}:${unitId}`;
+    await tx.$executeRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${selectionLockKey}, 0))`,
+    );
+  }
+
+  private async validateResidentPaymentAllocationsForApproval(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
+    payment: PaymentWithAllocations,
+  ): Promise<ResidentChargeSelectionItem[]> {
+    const selectedChargeIds = payment.paymentAllocations.map((allocation) => allocation.chargeId);
+    if (selectedChargeIds.length === 0) {
+      throw new ConflictException(
+        'El pago no tiene cargos asociados para validar la selección.',
+      );
+    }
+
+    const selectedCharges = await tx.charge.findMany({
+      where: {
+        tenantId,
+        buildingId,
+        id: { in: selectedChargeIds },
+        canceledAt: null,
+      },
+      select: {
+        id: true,
+        unitId: true,
+        buildingId: true,
+      },
+      orderBy: [
+        { dueDate: 'asc' },
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    });
+
+    if (selectedCharges.length !== selectedChargeIds.length) {
+      throw new ConflictException(
+        'El pago contiene cargos fuera de la unidad o edificio permitidos.',
+      );
+    }
+
+    const selectedUnitId = payment.unitId ?? selectedCharges[0]?.unitId;
+    if (!selectedUnitId) {
+      throw new ConflictException(
+        'El pago no tiene una unidad asociada para validar la selección de cargos.',
+      );
+    }
+
+    if (selectedCharges.some((charge) => charge.unitId !== selectedUnitId || charge.buildingId !== buildingId)) {
+      throw new ConflictException(
+        'El pago contiene cargos fuera de la unidad o edificio permitidos.',
+      );
+    }
+
+    await this.acquireResidentPaymentSelectionLock(
+      tx,
+      tenantId,
+      buildingId,
+      selectedUnitId,
+    );
+
+    for (const chargeId of selectedChargeIds) {
+      await this.lockChargeForApproval(tx, chargeId);
+    }
+
+    const selectableCharges = await this.loadResidentChargeSelection(
+      tx,
+      tenantId,
+      buildingId,
+      selectedUnitId,
+      payment.id,
+    );
+    const canonicalSelection = this.validateCanonicalResidentChargeSelection(
+      selectableCharges,
+      selectedChargeIds,
+    );
+
+    const totalAllocated = payment.paymentAllocations.reduce(
+      (sum, allocation) => sum + allocation.amount,
+      0,
+    );
+    const totalOutstanding = canonicalSelection.reduce(
+      (sum, selection) => sum + selection.approvedOutstanding,
+      0,
+    );
+
+    if (totalAllocated !== totalOutstanding) {
+      throw new ConflictException(
+        'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
+      );
+    }
+
+    const allocationMap = new Map(
+      payment.paymentAllocations.map((allocation) => [allocation.chargeId, allocation.amount]),
+    );
+    const currency = this.validateResidentChargeCurrencies(canonicalSelection);
+
+    if (payment.currency !== currency) {
+      throw new ConflictException(
+        'La moneda del pago ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
+      );
+    }
+
+    for (const selection of canonicalSelection) {
+      const allocationAmount = allocationMap.get(selection.charge.id);
+      if (allocationAmount !== selection.approvedOutstanding) {
+        throw new ConflictException(
+          'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
+        );
+      }
+    }
+
+    return canonicalSelection;
   }
 
   private async lockChargeForApproval(
@@ -2032,7 +2344,7 @@ export class FinanzasService {
     tenantId: string;
     unitId: string;
     buildingId: string;
-    userRoles?: readonly string[];
+    userRoles?: string[];
     userId?: string;
     membership?: AuthenticatedMembership;
   }): Promise<void> {
@@ -2071,7 +2383,7 @@ export class FinanzasService {
 
   private resolveLedgerMembership(params: {
     tenantId: string;
-    userRoles?: readonly string[];
+    userRoles?: string[];
     membership?: AuthenticatedMembership;
   }): AuthenticatedMembership {
     if (params.membership) {
@@ -2080,7 +2392,7 @@ export class FinanzasService {
 
     return {
       tenantId: params.tenantId,
-      roles: [...(params.userRoles ?? [])] as Role[],
+      roles: (params.userRoles ?? []).filter(isRole),
       scopedRoles: [],
     };
   }
@@ -2248,7 +2560,7 @@ export class FinanzasService {
     paymentId: string,
     userRoles: string[],
     userId: string,
-  ): Promise<Payment & { paymentAllocations: PaymentAllocation[] }> {
+  ): Promise<PaymentWithAllocationSummary> {
     // 1. Find payment
     const payment = await this.prisma.payment.findFirst({
       where: { id: paymentId, tenantId, buildingId },
@@ -2292,7 +2604,7 @@ export class FinanzasService {
       );
     }
 
-    return this.sanitizePaymentForResponse(payment) as Payment & { paymentAllocations: PaymentAllocation[] };
+    return this.sanitizePaymentForResponse(payment);
   }
 
   /**
@@ -2518,13 +2830,7 @@ export class FinanzasService {
     tenantId: string,
     userRoles: string[],
     userId: string,
-    query: {
-      buildingId?: string;
-      period?: string;
-      status?: string;
-      limit?: number;
-      offset?: number;
-    },
+    query: ListTenantChargesQueryDto,
   ) {
     const where: Prisma.ChargeWhereInput = {
       tenantId,
@@ -2546,7 +2852,7 @@ export class FinanzasService {
       where.period = query.period;
     }
     if (query.status) {
-      where.status = query.status as ChargeStatus;
+      where.status = query.status;
     }
 
     const limit = Math.min(query.limit || 50, 500);
@@ -2758,7 +3064,7 @@ export class FinanzasService {
       }))
     );
 
-    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment)) as PendingPaymentListItem[];
+    return resolvedPayments.map((payment) => this.sanitizePaymentForResponse(payment));
   }
 
   /**
@@ -2793,58 +3099,12 @@ export class FinanzasService {
       }
 
       if (payment.paymentAllocations.length > 0) {
-        const totalAllocated = payment.paymentAllocations.reduce(
-          (sum, allocation) => sum + allocation.amount,
-          0,
+        await this.validateResidentPaymentAllocationsForApproval(
+          tx,
+          tenantId,
+          payment.buildingId,
+          payment,
         );
-
-        if (totalAllocated !== payment.amount) {
-          throw new ConflictException(
-            'El monto debe coincidir con el saldo pendiente completo del período.',
-          );
-        }
-
-        for (const allocation of payment.paymentAllocations) {
-          await this.lockChargeForApproval(tx, allocation.chargeId);
-          const charge = await tx.charge.findFirst({
-            where: {
-              id: allocation.chargeId,
-              tenantId,
-              buildingId: payment.buildingId,
-              unitId: payment.unitId ?? undefined,
-              canceledAt: null,
-            },
-            include: {
-              paymentAllocations: {
-                include: {
-                  payment: {
-                    select: {
-                      status: true,
-                    },
-                  },
-                },
-              },
-            },
-          });
-
-          if (!charge) {
-            throw new NotFoundException(
-              'Charge not found or does not belong to this building/tenant',
-            );
-          }
-
-          if (charge.status === ChargeStatus.PAID || charge.status === ChargeStatus.CANCELED) {
-            throw new ConflictException('El cargo seleccionado no admite pagos');
-          }
-
-          const outstanding = this.calculateApprovedChargeOutstanding(charge);
-          if (allocation.amount !== outstanding) {
-            throw new ConflictException(
-              'El monto debe coincidir con el saldo pendiente completo del período.',
-            );
-          }
-        }
-
         const approvedPayment = await tx.payment.update({
           where: { id: payment.id },
           data: {
@@ -3064,7 +3324,7 @@ export class FinanzasService {
         data: {
           status: PaymentStatus.REJECTED,
           reviewedByMembershipId: membershipId,
-          rejectionReason: dto.reason as RejectionReason,
+          rejectionReason: dto.reason,
           rejectionComment: dto.comment || null,
           reviewedAt: new Date(),
           notes: this.mergeResidentResubmissionMarker(payment.notes, dto.notes),
