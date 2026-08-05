@@ -825,27 +825,26 @@ describe('FinanzasService', () => {
       );
     });
 
-    it('should preserve legacy duplicate detection for admin payments', async () => {
-      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(false);
-      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
-        id: 'payment-legacy-duplicate',
-      } as any);
+    it.each([
+      { label: 'resident', roles: userRoles, resident: true },
+      { label: 'admin', roles: ['TENANT_ADMIN'], resident: false },
+      { label: 'operator', roles: ['TENANT_OPERATOR'], resident: false },
+    ])('rejects $label payments without a charge selection', async ({ roles, resident }) => {
+      jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(resident);
 
       await expect(
-        service.submitPayment(tenantId, buildingId, userId, ['TENANT_ADMIN'], {
+        service.submitPayment(tenantId, buildingId, userId, roles, {
           unitId,
           amount: 10000,
           method: PaymentMethod.TRANSFER,
-          reference: 'TRX-123',
+          reference: 'TRX-NO-SELECTION',
           proofFileId: 'file-123',
         }),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toThrow(BadRequestException);
 
-      expect(prismaService.payment.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.not.objectContaining({ paymentAllocations: expect.anything() }),
-        }),
-      );
+      expect(prismaService.payment.findFirst).not.toHaveBeenCalled();
+      expect(prismaService.payment.create).not.toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
     });
 
     it('should reject resident payments that do not cover the full outstanding balance', async () => {
@@ -1099,6 +1098,8 @@ describe('FinanzasService', () => {
         userId,
         ['TENANT_ADMIN'],
         {
+          unitId,
+          chargeId: 'charge-123',
           amount: 10000,
           method: PaymentMethod.TRANSFER,
           reference: 'TRX-ADMIN',
@@ -1242,7 +1243,7 @@ describe('FinanzasService', () => {
       );
     });
 
-    it('ignores submitted and rejected allocations when approving a legacy FIFO payment', async () => {
+    it('rejects approval when a payment has no explicit allocations', async () => {
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValueOnce({
         id: paymentId,
         tenantId,
@@ -1254,67 +1255,19 @@ describe('FinanzasService', () => {
         canceledAt: null,
         paymentAllocations: [],
       } as any);
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
-        {
-          id: 'charge-123',
+      await expect(
+        service.approvePayment(
           tenantId,
           buildingId,
-          unitId: 'unit-123',
-          amount: 10000,
-          currency: 'ARS',
-          status: ChargeStatus.PARTIAL,
-          paymentAllocations: [
-            {
-              amount: 5000,
-              payment: { status: PaymentStatus.SUBMITTED },
-            },
-            {
-              amount: 3000,
-              payment: { status: PaymentStatus.REJECTED },
-            },
-          ],
-        },
-      ] as any);
-      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValueOnce({
-        id: 'charge-123',
-        tenantId,
-        buildingId,
-        unitId: 'unit-123',
-        amount: 10000,
-        currency: 'ARS',
-        status: ChargeStatus.PARTIAL,
-        paymentAllocations: [
-          {
-            amount: 5000,
-            payment: { status: PaymentStatus.SUBMITTED },
-          },
-          {
-            amount: 3000,
-            payment: { status: PaymentStatus.REJECTED },
-          },
-        ],
-      } as any);
+          paymentId,
+          ['TENANT_ADMIN'],
+          membershipId,
+          {},
+        ),
+      ).rejects.toThrow(ConflictException);
 
-      const result = await service.approvePayment(
-        tenantId,
-        buildingId,
-        paymentId,
-        ['TENANT_ADMIN'],
-        membershipId,
-        {},
-      );
-
-      expect(result.status).toBe(PaymentStatus.APPROVED);
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            paymentId,
-            chargeId: 'charge-123',
-            amount: 10000,
-          }),
-        }),
-      );
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
+      expect(prismaService.payment.update).not.toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
     });
 
     it('rejects approval when the charge balance changed after submission', async () => {
@@ -1664,7 +1617,7 @@ describe('FinanzasService', () => {
       );
     });
 
-    it('keeps tenant-approved payments approved when the remaining balance is still open', async () => {
+    it('rejects tenant approval when a submitted payment has no explicit allocations', async () => {
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
         id: paymentId,
         tenantId,
@@ -1674,82 +1627,17 @@ describe('FinanzasService', () => {
         currency: 'ARS',
         status: PaymentStatus.SUBMITTED,
         canceledAt: null,
-        paymentAllocations: [
-          {
-            chargeId: 'charge-123',
-            amount: 5000,
-          },
-        ],
-      } as any);
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
-        {
-          id: 'charge-123',
-          tenantId,
-          buildingId,
-          unitId: 'unit-123',
-          period: '2026-07',
-          amount: 10000,
-          currency: 'ARS',
-          status: ChargeStatus.PARTIAL,
-          dueDate: new Date('2026-07-24T00:00:00.000Z'),
-          createdAt: new Date('2026-07-01T00:00:00.000Z'),
-          updatedAt: new Date('2026-07-01T00:00:00.000Z'),
-          canceledAt: null,
-          paymentAllocations: [
-            {
-              amount: 5000,
-              payment: { id: 'approved-payment-1', status: PaymentStatus.APPROVED },
-            },
-            {
-              amount: 5000,
-              payment: { id: paymentId, status: PaymentStatus.SUBMITTED },
-            },
-          ],
-        },
-      ] as never);
-      const paymentUpdateSpy = jest
-        .spyOn(prismaService.payment, 'update')
-        .mockResolvedValueOnce({
-          id: paymentId,
-          tenantId,
-          buildingId,
-          unitId: 'unit-123',
-          amount: 5000,
-          currency: 'ARS',
-          method: PaymentMethod.TRANSFER,
-          status: PaymentStatus.APPROVED,
-          paidAt: new Date('2026-07-24T12:00:00.000Z'),
-        } as any);
-      jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValueOnce({
-        id: paymentId,
-        tenantId,
-        buildingId,
-        unitId: 'unit-123',
-        amount: 5000,
-        currency: 'ARS',
-        method: PaymentMethod.TRANSFER,
-        status: PaymentStatus.APPROVED,
-        paidAt: new Date('2026-07-24T12:00:00.000Z'),
         paymentAllocations: [],
       } as any);
-
-      const result = await service.approvePaymentTenant(
+      await expect(service.approvePaymentTenant(
         tenantId,
         paymentId,
         ['TENANT_ADMIN'],
         membershipId,
         {},
-      );
-
-      expect(result.status).toBe(PaymentStatus.APPROVED);
-      expect(paymentUpdateSpy).toHaveBeenCalledTimes(1);
-      expect(prismaService.payment.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            status: PaymentStatus.APPROVED,
-          }),
-        }),
-      );
+      )).rejects.toThrow(ConflictException);
+      expect(prismaService.payment.update).not.toHaveBeenCalled();
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
     });
   });
 
@@ -1816,6 +1704,7 @@ describe('FinanzasService', () => {
         paymentAllocations: paymentState.paymentAllocations.map((allocation) => ({
           chargeId: allocation.chargeId,
           amount: allocation.amount,
+          paymentId: paymentState.id,
           payment: { status: paymentState.status },
         })),
       };
@@ -1834,6 +1723,7 @@ describe('FinanzasService', () => {
         status: chargeState.status,
         paymentAllocations: chargeState.paymentAllocations.map((allocation) => ({
           amount: allocation.amount,
+          paymentId: allocation.paymentId,
           payment: { status: allocation.paymentStatus },
         })),
       };
@@ -1888,7 +1778,12 @@ describe('FinanzasService', () => {
           currency: 'ARS',
           status: PaymentStatus.SUBMITTED,
           canceledAt: null,
-          paymentAllocations: [],
+          paymentAllocations: [
+            {
+              chargeId,
+              amount: 10000,
+            },
+          ],
         },
         [secondPaymentId]: {
           id: secondPaymentId,
@@ -1899,7 +1794,12 @@ describe('FinanzasService', () => {
           currency: 'ARS',
           status: PaymentStatus.SUBMITTED,
           canceledAt: null,
-          paymentAllocations: [],
+          paymentAllocations: [
+            {
+              chargeId: 'charge-lock-456',
+              amount: 5000,
+            },
+          ],
         },
       };
 
@@ -1970,6 +1870,22 @@ describe('FinanzasService', () => {
           canceledAt: data.canceledAt ?? paymentState.canceledAt,
         } as PaymentState;
 
+        for (const allocation of paymentState.paymentAllocations) {
+          const chargeState = chargeStates[allocation.chargeId];
+          if (!chargeState) {
+            continue;
+          }
+
+          chargeStates[allocation.chargeId] = {
+            ...chargeState,
+            paymentAllocations: chargeState.paymentAllocations.map((chargeAllocation) => ({
+              ...chargeAllocation,
+              paymentId: chargeAllocation.paymentId,
+              paymentStatus: paymentStates[where.id]!.status,
+            })),
+          };
+        }
+
         return toPaymentRecord(where.id);
       });
 
@@ -1978,7 +1894,8 @@ describe('FinanzasService', () => {
           (chargeState) =>
             chargeState.tenantId === where.tenantId &&
             chargeState.buildingId === where.buildingId &&
-            chargeState.unitId === where.unitId &&
+            (where.unitId ? chargeState.unitId === where.unitId : true) &&
+            (where.id?.in ? where.id.in.includes(chargeState.id) : true) &&
             chargeState.status !== ChargeStatus.PAID &&
             chargeState.status !== ChargeStatus.CANCELED,
         );
@@ -2027,26 +1944,27 @@ describe('FinanzasService', () => {
           throw new Error('Missing payment or charge state for allocation');
         }
 
-        paymentStates[data.paymentId] = {
-          ...paymentState,
-          paymentAllocations: [
-            ...paymentState.paymentAllocations,
-            {
-              chargeId: data.chargeId,
-              amount: data.amount,
-            },
-          ],
-        };
-        chargeStates[data.chargeId] = {
-          ...chargeState,
-          paymentAllocations: [
-            ...chargeState.paymentAllocations,
-            {
-              amount: data.amount,
-              paymentStatus: paymentStates[data.paymentId].status,
-            },
-          ],
-        };
+          paymentStates[data.paymentId] = {
+            ...paymentState,
+            paymentAllocations: [
+              ...paymentState.paymentAllocations,
+              {
+                chargeId: data.chargeId,
+                amount: data.amount,
+              },
+            ],
+          };
+          chargeStates[data.chargeId] = {
+            ...chargeState,
+            paymentAllocations: [
+              ...chargeState.paymentAllocations,
+              {
+                amount: data.amount,
+                paymentId: data.paymentId,
+                paymentStatus: paymentStates[data.paymentId].status,
+              },
+            ],
+          };
 
         return {
           id: `allocation-${paymentStates[data.paymentId].paymentAllocations.length}`,
@@ -2105,16 +2023,16 @@ describe('FinanzasService', () => {
         expect.objectContaining({
           status: 'rejected',
           reason: expect.objectContaining({
-            message: 'Cannot approve payment in status RECONCILED. Only SUBMITTED payments can be approved.',
+            message: 'Cannot approve payment in status APPROVED. Only SUBMITTED payments can be approved.',
           }),
         }),
       );
 
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
-      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(0);
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(0);
       expect(auditService.createLog).toHaveBeenCalledTimes(1);
       expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
-      expect(prismaService.payment.update).toHaveBeenCalledTimes(2);
+      expect(prismaService.payment.update).toHaveBeenCalledTimes(1);
     });
 
     it('serializes approvePaymentTenant so the same payment cannot be applied twice', async () => {
@@ -2145,7 +2063,7 @@ describe('FinanzasService', () => {
         expect.objectContaining({
           status: 'fulfilled',
           value: expect.objectContaining({
-            status: PaymentStatus.RECONCILED,
+            status: PaymentStatus.APPROVED,
           }),
         }),
       );
@@ -2153,16 +2071,16 @@ describe('FinanzasService', () => {
         expect.objectContaining({
           status: 'rejected',
           reason: expect.objectContaining({
-            message: 'Cannot approve payment in status RECONCILED. Only SUBMITTED payments can be approved.',
+            message: 'Cannot approve payment in status APPROVED. Only SUBMITTED payments can be approved.',
           }),
         }),
       );
 
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(1);
-      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(0);
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(0);
       expect(prismaService.paymentAuditLog.create).toHaveBeenCalledTimes(1);
       expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
-      expect(prismaService.payment.update).toHaveBeenCalledTimes(2);
+      expect(prismaService.payment.update).toHaveBeenCalledTimes(1);
     });
 
     it('allows two different payments to approve concurrently', async () => {
@@ -2204,7 +2122,7 @@ describe('FinanzasService', () => {
         }),
       );
 
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(2);
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(0);
       expect(auditService.createLog).toHaveBeenCalledTimes(2);
       expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(2);
     });
@@ -2261,10 +2179,6 @@ describe('FinanzasService', () => {
 
     it('keeps approved allocations intact when cancellation waits for an in-flight approval', async () => {
       installSharedApprovalState();
-      paymentStates[paymentId] = {
-        ...paymentStates[paymentId]!,
-        amount: 5000,
-      };
 
       let resolveApprovalLock!: () => void;
       const approvalLocked = new Promise<void>((resolve) => {
@@ -2364,14 +2278,14 @@ describe('FinanzasService', () => {
         expect.objectContaining({
           status: PaymentStatus.APPROVED,
           canceledAt: null,
-          paymentAllocations: [expect.objectContaining({ chargeId, amount: 5000 })],
+          paymentAllocations: [expect.objectContaining({ chargeId, amount: 10000 })],
         }),
       );
       expect(chargeStates[chargeId]).toEqual(
-        expect.objectContaining({ status: ChargeStatus.PARTIAL }),
+        expect.objectContaining({ status: ChargeStatus.PENDING }),
       );
       expect(prismaService.paymentAllocation.deleteMany).not.toHaveBeenCalled();
-      expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+      expect(prismaService.charge.update).toHaveBeenCalledTimes(0);
     });
   });
 

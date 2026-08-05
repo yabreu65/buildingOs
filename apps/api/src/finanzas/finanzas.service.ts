@@ -543,13 +543,21 @@ export class FinanzasService {
       );
     }
 
-    // 6. Duplicate detection: check for similar payments in last 48 hours
     const requestedChargeIds = this.normalizeChargeSelection(dto);
-    const duplicateChargeIds = requestedChargeIds.length > 0
-      ? requestedChargeIds
-      : dto.chargeId
-        ? [dto.chargeId]
-        : [];
+    if (requestedChargeIds.length === 0) {
+      throw new BadRequestException(
+        'Debes seleccionar una o más obligaciones consecutivas para continuar.',
+      );
+    }
+
+    if (!dto.unitId) {
+      throw new BadRequestException(
+        'Debes indicar la unidad para validar la selección de cargos',
+      );
+    }
+
+    // 6. Duplicate detection: check for similar payments in last 48 hours
+    const duplicateChargeIds = requestedChargeIds;
     const duplicateWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const duplicatePayment = await this.prisma.payment.findFirst({
       where: {
@@ -585,19 +593,7 @@ export class FinanzasService {
         'Los pagos por transferencia requieren subir el comprobante de pago',
       );
     }
-    const usesExplicitChargeSelection = requestedChargeIds.length > 0;
-    if (usesExplicitChargeSelection || isResidentPayment) {
-      if (!dto.unitId) {
-        throw new BadRequestException(
-          'Debes indicar la unidad para validar la selección de cargos',
-        );
-      }
-      if (requestedChargeIds.length === 0) {
-        throw new BadRequestException(
-          'Debes seleccionar una o más obligaciones consecutivas para continuar.',
-        );
-      }
-
+    {
       const payment = await this.prisma.$transaction(async (tx) => {
         await acquirePaymentLinkedDocumentLock(tx, tenantId, dto.proofFileId!);
         await this.validatePaymentProofFileInTransaction(tx, tenantId, dto.proofFileId!);
@@ -686,33 +682,6 @@ export class FinanzasService {
       }
       return this.sanitizePaymentForResponse(payment);
     }
-
-    const payment = await this.prisma.$transaction(async (tx) => {
-      await acquirePaymentLinkedDocumentLock(tx, tenantId, dto.proofFileId!);
-      await this.validatePaymentProofFileInTransaction(tx, tenantId, dto.proofFileId!);
-
-      return tx.payment.create({
-        data: {
-          tenantId,
-          buildingId,
-          unitId: dto.unitId || null,
-          amount: dto.amount,
-          currency: dto.currency || 'ARS',
-          method: dto.method,
-          status: PaymentStatus.SUBMITTED,
-          reference: dto.reference,
-          proofFileId: dto.proofFileId || null,
-          createdByUserId: userId,
-        },
-      });
-    });
-
-    // 9. Notify admins about new payment submitted
-    if (resolveNotificationPortalContext(userRoles, portalContext) === 'resident') {
-      void this.notifyAdminsOfPaymentSubmitted(tenantId, payment, userId);
-    }
-
-    return this.sanitizePaymentForResponse(payment);
   }
 
   /**
@@ -857,32 +826,18 @@ export class FinanzasService {
         throw new ConflictException('Cannot approve a canceled payment');
       }
 
-      if (payment.paymentAllocations.length > 0) {
-        await this.validateResidentPaymentAllocationsForApproval(
-          tx,
-          tenantId,
-          buildingId,
-          payment,
+      if (payment.paymentAllocations.length === 0) {
+        throw new ConflictException(
+          'El pago no tiene cargos asociados para validar la selección. Reenviá el pago con una selección válida.',
         );
-        const approvedPayment = await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            status: PaymentStatus.APPROVED,
-            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
-            reviewedByMembershipId: membershipId,
-            updatedAt: new Date(),
-          },
-        });
-
-        for (const allocation of payment.paymentAllocations) {
-          await this.recalculateChargeStatus(allocation.chargeId, tx);
-        }
-
-        await this.tryReconcilePayment(payment.id, tx);
-        return approvedPayment;
       }
 
-      // Legacy FIFO allocation for admin-submitted payments without an explicit charge selection
+      await this.validateResidentPaymentAllocationsForApproval(
+        tx,
+        tenantId,
+        buildingId,
+        payment,
+      );
       const approvedPayment = await tx.payment.update({
         where: { id: payment.id },
         data: {
@@ -892,89 +847,6 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
-
-      if (payment.unitId) {
-        const pendingCharges = await tx.charge.findMany({
-          where: {
-            tenantId,
-            buildingId,
-            unitId: payment.unitId,
-            status: { notIn: [ChargeStatus.PAID, ChargeStatus.CANCELED] },
-            canceledAt: null,
-          },
-          include: {
-            paymentAllocations: {
-              include: {
-                payment: {
-                  select: {
-                    status: true,
-                  },
-                },
-              },
-            },
-          },
-          orderBy: { dueDate: 'asc' },
-        });
-
-        let remainingAmount = payment.amount;
-
-        for (const pendingCharge of pendingCharges) {
-          if (remainingAmount <= 0) break;
-
-          await this.lockChargeForApproval(tx, pendingCharge.id);
-          const charge = await tx.charge.findFirst({
-            where: {
-              id: pendingCharge.id,
-              tenantId,
-              buildingId,
-              unitId: payment.unitId,
-              canceledAt: null,
-            },
-            include: {
-              paymentAllocations: {
-                include: {
-                  payment: {
-                    select: {
-                      status: true,
-                    },
-                  },
-                },
-              },
-            },
-          });
-
-          if (!charge) {
-            continue;
-          }
-
-          const alreadyAllocated = charge.paymentAllocations.reduce(
-            (sum, a) =>
-              sum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0),
-            0,
-          );
-          const outstanding = charge.amount - alreadyAllocated;
-          const toAllocate = Math.min(remainingAmount, outstanding);
-
-          if (toAllocate <= 0) continue;
-
-          const existingAllocation = await tx.paymentAllocation.findFirst({
-            where: { tenantId, paymentId, chargeId: charge.id },
-          });
-          if (existingAllocation) continue;
-
-          await tx.paymentAllocation.create({
-            data: {
-              tenantId,
-              paymentId,
-              chargeId: charge.id,
-              amount: toAllocate,
-            },
-          });
-
-          await this.recalculateChargeStatus(charge.id, tx);
-          remainingAmount -= toAllocate;
-        }
-      }
 
       await this.tryReconcilePayment(payment.id, tx);
       return approvedPayment;
@@ -3082,7 +2954,7 @@ export class FinanzasService {
       this.validators.throwForbidden('payments', 'approve');
     }
 
-    // Execute approval with either explicit resident allocation or legacy FIFO allocation
+    // Execute approval only when the submitted payment already carries explicit allocations
     let approvedPaymentResult: Payment | null = null;
 
     await this.prisma.$transaction(async (tx) => {
@@ -3098,148 +2970,41 @@ export class FinanzasService {
         throw new BadRequestException('Cannot approve a canceled payment');
       }
 
-      if (payment.paymentAllocations.length > 0) {
-        await this.validateResidentPaymentAllocationsForApproval(
-          tx,
-          tenantId,
-          payment.buildingId,
-          payment,
+      if (payment.paymentAllocations.length === 0) {
+        throw new ConflictException(
+          'El pago no tiene cargos asociados para validar la selección. Reenviá el pago con una selección válida.',
         );
-        const approvedPayment = await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            status: PaymentStatus.APPROVED,
-            reviewedByMembershipId: membershipId,
-            reviewedAt: new Date(),
-            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
-            updatedAt: new Date(),
-          },
-        });
+      }
 
-        approvedPaymentResult = approvedPayment;
+      await this.validateResidentPaymentAllocationsForApproval(
+        tx,
+        tenantId,
+        payment.buildingId,
+        payment,
+      );
+      const approvedPayment = await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: PaymentStatus.APPROVED,
+          reviewedByMembershipId: membershipId,
+          reviewedAt: new Date(),
+          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+          updatedAt: new Date(),
+        },
+      });
 
-        for (const allocation of payment.paymentAllocations) {
-          await this.recalculateChargeStatus(allocation.chargeId, tx);
-        }
+      approvedPaymentResult = approvedPayment;
 
-        await this.tryReconcilePayment(payment.id, tx);
-        const reconciledPayment = await tx.payment.findUnique({
-          where: { id: payment.id },
-        });
-        if (reconciledPayment) {
-          approvedPaymentResult = reconciledPayment;
-        }
-      } else {
-        const approvedPayment = await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            status: PaymentStatus.APPROVED,
-            reviewedByMembershipId: membershipId,
-            reviewedAt: new Date(),
-            paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
-            updatedAt: new Date(),
-          },
-        });
+      for (const allocation of payment.paymentAllocations) {
+        await this.recalculateChargeStatus(allocation.chargeId, tx);
+      }
 
-        approvedPaymentResult = approvedPayment;
-
-        if (payment.unitId) {
-          const pendingCharges = await tx.charge.findMany({
-            where: {
-              tenantId,
-              buildingId: payment.buildingId,
-              unitId: payment.unitId,
-              status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
-              canceledAt: null,
-            },
-            include: {
-              paymentAllocations: {
-                include: {
-                  payment: {
-                    select: {
-                      status: true,
-                    },
-                  },
-                },
-              },
-            },
-            orderBy: { dueDate: 'asc' },
-          });
-
-          let remainingAmount = payment.amount;
-
-          for (const pendingCharge of pendingCharges) {
-            if (remainingAmount <= 0) break;
-
-            await this.lockChargeForApproval(tx, pendingCharge.id);
-            const charge = await tx.charge.findFirst({
-              where: {
-                id: pendingCharge.id,
-                tenantId,
-                buildingId: payment.buildingId,
-                unitId: payment.unitId,
-                canceledAt: null,
-              },
-              include: {
-                paymentAllocations: {
-                  include: {
-                    payment: {
-                      select: {
-                        status: true,
-                      },
-                    },
-                  },
-                },
-              },
-            });
-
-            if (!charge) {
-              continue;
-            }
-
-            const allocatedAmount = Math.min(remainingAmount, charge.amount);
-            const alreadyAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-              if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
-                return sum + allocation.amount;
-              }
-
-              return sum;
-            }, 0);
-            const chargeRemaining = charge.amount - alreadyAllocated;
-
-            const allocationAmount = Math.min(allocatedAmount, chargeRemaining);
-
-            if (allocationAmount > 0) {
-              await tx.paymentAllocation.create({
-                data: {
-                  tenantId,
-                  paymentId: payment.id,
-                  chargeId: charge.id,
-                  amount: allocationAmount,
-                },
-              });
-
-              const newChargeAllocated = alreadyAllocated + allocationAmount;
-              const newChargeStatus =
-                newChargeAllocated >= charge.amount ? ChargeStatus.PAID : ChargeStatus.PARTIAL;
-
-              await tx.charge.update({
-                where: { id: charge.id },
-                data: { status: newChargeStatus, updatedAt: new Date() },
-              });
-
-              remainingAmount -= allocationAmount;
-            }
-          }
-        }
-
-        await this.tryReconcilePayment(payment.id, tx);
-        const reconciledPayment = await tx.payment.findUnique({
-          where: { id: payment.id },
-        });
-        if (reconciledPayment) {
-          approvedPaymentResult = reconciledPayment;
-        }
+      await this.tryReconcilePayment(payment.id, tx);
+      const reconciledPayment = await tx.payment.findUnique({
+        where: { id: payment.id },
+      });
+      if (reconciledPayment) {
+        approvedPaymentResult = reconciledPayment;
       }
 
       // Registrar auditoría de aprobación
