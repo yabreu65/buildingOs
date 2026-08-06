@@ -40,7 +40,7 @@ export function PaymentsReviewList({
   onRefresh,
 }: PaymentsReviewListProps) {
   const { toast } = useToast();
-  const approveMutation = useApprovePayment(buildingId, 'SUBMITTED');
+  const approveMutation = useApprovePayment(buildingId, 'SUBMITTED', tenantId);
   const rejectMutation = useRejectPayment(buildingId, 'SUBMITTED');
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);

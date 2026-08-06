@@ -48,7 +48,6 @@ const REJECTION_REASONS = [
 export const PaymentsReviewUI = () => {
   const params = useParams();
   const tenantId = params?.tenantId as string | undefined;
-
   const canReview = useCan('payments.review');
   const { format } = useTenantCurrency();
 

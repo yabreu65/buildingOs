@@ -90,6 +90,7 @@ export const TenantFinanceDashboard = () => {
     onSuccess: () => {
       setSelectedPaymentId(null);
       queryClient.invalidateQueries({ queryKey: ['tenantPayments', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['residentPayments', tenantId], exact: false });
     },
   });
 

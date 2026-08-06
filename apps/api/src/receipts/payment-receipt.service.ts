@@ -5,6 +5,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { DocumentCategory, DocumentVisibility, Prisma, ReceiptStatus } from '@prisma/client';
 import { acquirePaymentReceiptLock } from '../common/payment-linked-document-lock';
 
+const RECEIPT_GENERATION_SAFE_ERROR = 'No pudimos generar el comprobante. Intenta nuevamente más tarde.';
+
 export interface GenerateReceiptInput {
   paymentId: string;
   tenantId: string;
@@ -187,14 +189,14 @@ export class PaymentReceiptService {
         url,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${errorMessage}`);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${rawMessage}`);
 
       if (uploadedReceiptObject && preparedReceipt && !preparedReceipt.reuseExisting && !receiptFinalized) {
         await this.cleanupUploadedReceiptObjectIfSafe(tenantId, preparedReceipt);
       }
 
-      await this.markReceiptGenerationFailedIfNeeded(tenantId, paymentId, errorMessage);
+      await this.markReceiptGenerationFailedIfNeeded(tenantId, paymentId, RECEIPT_GENERATION_SAFE_ERROR);
 
       return null;
     }

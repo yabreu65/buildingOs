@@ -434,8 +434,8 @@ describe('ResidentPaymentsPage', () => {
     const Wrapper = createWrapper();
     render(<ResidentPaymentsPage />, { wrapper: Wrapper });
 
-    expect(await screen.findByText('Error al generar el recibo aprobado')).toBeTruthy();
-    expect(screen.getByText('Error al generar el recibo conciliado')).toBeTruthy();
+    const safeMessage = 'No pudimos generar el recibo. La administración ya fue notificada.';
+    expect(await screen.findAllByText(safeMessage)).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('button', { name: /ver recibo del pago de/i }));
 
