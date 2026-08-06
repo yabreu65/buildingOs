@@ -1,0 +1,2 @@
+-- Add RECEIPT_GENERATED to PaymentAuditAction enum
+ALTER TYPE "PaymentAuditAction" ADD VALUE IF NOT EXISTS 'RECEIPT_GENERATED';

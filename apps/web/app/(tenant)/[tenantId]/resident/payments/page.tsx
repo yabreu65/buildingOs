@@ -38,6 +38,15 @@ const CIVIL_DATE_OR_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/;
 const MONTH_SHORT_LABELS = ['ene.', 'feb.', 'mar.', 'abr.', 'may.', 'jun.', 'jul.', 'ago.', 'sep.', 'oct.', 'nov.', 'dic.'] as const;
 const MONTH_SHORT_UPPER_LABELS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'] as const;
 
+const SAFE_RECEIPT_ERROR = 'No pudimos generar el recibo. La administración ya fue notificada.';
+
+function safeReceiptError(error?: string | null): string {
+  if (!error) return SAFE_RECEIPT_ERROR;
+  if (error.includes('prisma') || error.includes('Prisma') || error.includes('Invalid')) return SAFE_RECEIPT_ERROR;
+  if (error.includes('CREATE') || error.includes('constraint') || error.includes('violates')) return SAFE_RECEIPT_ERROR;
+  return SAFE_RECEIPT_ERROR;
+}
+
 function useMediaQuery(query: string): boolean {
   const getInitialMatch = () => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
@@ -1604,7 +1613,7 @@ export const ResidentPaymentsPage = () => {
                               )}
                               {showReceiptErrorState && (
                                 <p className="text-sm text-red-700 dark:text-red-300">
-                                  {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
+                                  {safeReceiptError(payment.receiptError)}
                                 </p>
                               )}
                             </div>
@@ -1803,7 +1812,7 @@ export const ResidentPaymentsPage = () => {
                           )}
                           {showReceiptErrorState && (
                             <p className="text-sm text-red-700 dark:text-red-300">
-                              {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
+                              {safeReceiptError(payment.receiptError)}
                             </p>
                           )}
                         </div>
@@ -2106,7 +2115,7 @@ export const ResidentPaymentsPage = () => {
                     )}
                     {showReceiptErrorState && (
                       <p className="text-sm text-red-700">
-                        {payment.receiptError || 'No pudimos generar el recibo. La administración ya fue notificada.'}
+                        {safeReceiptError(payment.receiptError)}
                       </p>
                     )}
                   </div>

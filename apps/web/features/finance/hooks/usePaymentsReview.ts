@@ -21,9 +21,11 @@ export function usePaymentsReview(buildingId: string, status?: string) {
 /**
  * Hook to approve a payment
  * @param buildingId - Building ID
+ * @param status - Payment status filter
+ * @param tenantId - Optional tenant ID to invalidate resident payments query
  * @returns Mutation result with approve function
  */
-export function useApprovePayment(buildingId: string, status?: string) {
+export function useApprovePayment(buildingId: string, status?: string, tenantId?: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -31,6 +33,9 @@ export function useApprovePayment(buildingId: string, status?: string) {
       approvePayment(buildingId, params.paymentId, params.paidAt),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payments', buildingId, status] });
+      if (tenantId) {
+        queryClient.invalidateQueries({ queryKey: ['residentPayments', tenantId], exact: false });
+      }
     },
   });
 }

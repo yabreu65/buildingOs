@@ -559,6 +559,49 @@ describe('PaymentReceiptService', () => {
     }));
   });
 
+  it('stores a safe error message instead of raw error when receipt generation fails', async () => {
+    let paymentState = {
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 4050000,
+      currency: 'ARS',
+      method: 'TRANSFER',
+      createdByUserId: 'resident-1',
+      approvedByUserId: 'admin-1',
+      approvedAt: '2026-07-24T12:00:00.000Z',
+      reference: 'TRX-001',
+      paymentAllocations: [{
+        chargeId: 'charge-1',
+        amount: 4050000,
+        charge: {
+          period: '2025-10',
+          concept: 'Condominio ordinario 2025-10',
+          expensePeriod: { year: 2025, month: 10 },
+        },
+      }],
+      unit: { label: 'TN-01-01' },
+      building: { name: 'Complejo Horizonte' },
+      receiptDocumentId: null,
+      receiptNumber: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptError: null,
+    } as never;
+
+    prisma.payment.findUnique.mockImplementation(async () => paymentState as never);
+    prisma.payment.update.mockImplementation(async ({ data }) => {
+      paymentState = { ...paymentState, ...data } as never;
+      return paymentState as never;
+    });
+    minio.uploadBuffer.mockRejectedValueOnce(new Error('Invalid `prisma.paymentAuditLog.create()` invocation'));
+
+    await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(paymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
+    expect(paymentState.receiptError).toBe('No pudimos generar el comprobante. Intenta nuevamente más tarde.');
+  });
+
   it('does not notify the receipt owner when excluded from the approval flow', async () => {
     const notifyResidentReceiptReady = Reflect.get(service, 'notifyResidentReceiptReady') as (
       payment: { tenantId: string; createdByUserId: string; amount: number; currency: string; id: string },
