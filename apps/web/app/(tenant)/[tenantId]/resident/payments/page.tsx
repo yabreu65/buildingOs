@@ -573,6 +573,7 @@ export const ResidentPaymentsPage = () => {
     },
     enabled: !!tenantId && !!userId && !!buildingId && !!unitId,
     staleTime: 5 * 60 * 1000,
+    refetchInterval: 10_000,
   });
 
   const [showForm, setShowForm] = useState(false);
