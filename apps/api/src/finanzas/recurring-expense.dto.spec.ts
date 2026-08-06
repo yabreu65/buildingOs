@@ -210,10 +210,44 @@ describe('UpdateRecurringExpenseDto', () => {
   });
 
   describe('invalid payloads', () => {
-    it('rejects non-boolean isActive', async () => {
-      const dto = plainToInstance(UpdateRecurringExpenseDto, {
-        isActive: 'yes',
-      });
+    it('rejects 0 as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: 0 });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects 1 as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: 1 });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects "true" as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: 'true' });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects "false" as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: 'false' });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects "yes" as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: 'yes' });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects object as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: { a: 1 } });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
+    });
+
+    it('rejects array as isActive', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { isActive: [1] });
       const errors = await validate(dto);
       expect(errors.find((e) => e.property === 'isActive')).toBeDefined();
     });

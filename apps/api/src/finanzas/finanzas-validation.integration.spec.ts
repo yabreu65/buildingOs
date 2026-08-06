@@ -282,11 +282,74 @@ describe('Finance ValidationPipe integration', () => {
   describe('RecurringExpenseController — update', () => {
     const baseUrl = '/buildings/b-1/recurring-expenses/re-1';
 
-    it('coerces isActive via enableImplicitConversion (pipe is permissive for booleans)', async () => {
+    it('accepts true as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: true });
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts false as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: false });
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects 0 as isActive', async () => {
       const res = await request(app.getHttpServer())
         .patch(baseUrl)
         .send({ isActive: 0 });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects 1 as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 1 });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects "true" as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 'true' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects "false" as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 'false' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects "yes" as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 'yes' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects object as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: { invalid: true } });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects array as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: [1] });
+      expect(res.status).toBe(400);
+    });
+
+    it('does not call service when isActive validation fails', async () => {
+      await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 0 });
+      expect(mockRecurringExpenseService.updateRecurringExpense).not.toHaveBeenCalled();
     });
 
     it('rejects decimal amount', async () => {
