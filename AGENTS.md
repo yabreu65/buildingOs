@@ -12,6 +12,64 @@
 - Never say "listo" without validation, or clarify that validation was not performed.
 - GitHub Actions build, lint, test, and E2E jobs declared in `.github/workflows/` are preauthorized quality gates for CI alignment work. This does not authorize deploys, VPS access, staging, production, or remote migrations.
 
+## Regla obligatoria: desarrollo local antes de staging
+
+Todo desarrollo en BuildingOS se realiza localmente antes de cualquier interacción con staging.
+
+- **Reproducción**: todo bug o funcionalidad se reproduce primero en el entorno local.
+- **Implementación**: el código se escribe, ajusta y valida exclusivamente en local.
+- **Validación local obligatoria**: antes de cualquier PR o deploy, se ejecutan localmente según corresponda:
+  - tests unitarios y de integración
+  - tests E2E
+  - typecheck (`tsc --noEmit`)
+  - lint
+  - build
+  - `git diff --check`
+- **Staging no es entorno de desarrollo**: staging no se utiliza como entorno principal de desarrollo, diagnóstico o experimentación.
+- **No modificar staging directamente**: no se aplica ningún cambio a staging antes de completar la validación local con tests verdes.
+- **Staging solo post-validación**: staging se utiliza únicamente después de pruebas locales verdes y autorización explícita del responsable.
+- **Hotfix excepcional**: si un hotfix en staging es estrictamente necesario, debe quedar reproducido, versionado y probado localmente después de aplicado.
+- **Autorización requerida**: merge, deploy y cambios de base de datos (migraciones, seeds, datos) requieren autorización explícita.
+
+### Limpieza del repositorio de staging
+
+El checkout de staging debe permanecer siempre limpio.
+
+- **Prohibido en staging**: no se deben crear scripts temporales, fixtures de diagnóstico, dumps, logs, archivos de bootstrap, archivos de prueba o archivos auxiliares no versionados dentro del checkout de staging.
+- **Archivos temporales**: deben guardarse en `/tmp`, el home del usuario, o una ubicación externa al repositorio.
+
+### Deploy automático a staging
+
+En BuildingOS, fusionar cambios hacia `main` activa automáticamente el workflow `Deploy main to staging`.
+
+- Autorizar un merge hacia `main` implica también autorizar el despliegue automático a staging, salvo que el workflow haya sido deshabilitado explícitamente antes del merge.
+- Antes de autorizar un merge, se debe confirmar:
+  - validaciones locales verdes
+  - checks del PR verdes
+  - migraciones revisadas
+  - staging preparado para recibir el cambio
+  - ausencia de archivos temporales dentro del checkout remoto
+
+### Protección del checkout remoto
+
+- Si el deploy detecta archivos tracked, staged o untracked en el checkout remoto, debe detenerse.
+- **Prohibido**: solucionar automáticamente esa situación mediante `git clean`, `git reset --hard`, borrado automático, sobrescritura forzada o eliminación de archivos sin inspección.
+- Los archivos encontrados deben inspeccionarse primero y, si son necesarios, preservarse fuera del repositorio antes de limpiar el checkout.
+
+### Flujo oficial
+
+```
+Trabajo local
+→ pruebas locales verdes
+→ commit
+→ PR
+→ checks verdes
+→ autorización de merge
+→ merge a main
+→ deploy automático a staging
+→ validación funcional en staging
+```
+
 ## RTK Usage
 When working with AI coding agents such as Codex or OpenCode, prefer RTK commands to reduce token usage and keep command outputs compact.
 
