@@ -109,6 +109,15 @@ describe('CreateRecurringExpenseDto', () => {
       expect(errors.find((e) => e.property === 'amount')).toBeDefined();
     });
 
+    it('rejects decimal amount (must be integer cents)', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        amount: 10.5,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'amount')).toBeDefined();
+    });
+
     it('rejects missing currency', async () => {
       const { currency, ...rest } = validPayload;
       const dto = plainToInstance(CreateRecurringExpenseDto, rest);
@@ -225,6 +234,12 @@ describe('UpdateRecurringExpenseDto', () => {
       const dto = plainToInstance(UpdateRecurringExpenseDto, {
         amount: 'invalid',
       });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'amount')).toBeDefined();
+    });
+
+    it('rejects decimal amount (must be integer cents)', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, { amount: 10.5 });
       const errors = await validate(dto);
       expect(errors.find((e) => e.property === 'amount')).toBeDefined();
     });

@@ -1,7 +1,7 @@
 import {
   IsString,
   IsNotEmpty,
-  IsNumber,
+  IsInt,
   IsOptional,
   IsBoolean,
   Min,
@@ -13,7 +13,7 @@ export class CreateRecurringExpenseDto {
   @IsNotEmpty()
   categoryId!: string;
 
-  @IsNumber()
+  @IsInt()
   @Min(1)
   amount!: number;
 
@@ -38,7 +38,7 @@ export class UpdateRecurringExpenseDto {
   isActive?: boolean;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(1)
   amount?: number;
 

@@ -39,7 +39,7 @@ import {
 } from './finanzas.dto';
 import { Payment } from '@prisma/client';
 
-class GetPaymentAuditLogQuery {
+export class GetPaymentAuditLogQuery {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
