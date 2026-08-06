@@ -124,6 +124,29 @@ describe('ResidentAccessService', () => {
     }));
   });
 
+  it('denies access to a different unit in the same building when resident only occupies one unit', async () => {
+    jest.spyOn(prisma.unitOccupant, 'findMany').mockResolvedValue([
+      {
+        id: 'occupancy-1',
+        memberId: 'member-1',
+        unitId: 'unit-own',
+        unit: {
+          id: 'unit-own',
+          code: 'A-01',
+          label: 'Unidad Propia',
+          building: {
+            id: 'building-1',
+            name: 'Edificio A',
+            alias: 'A',
+          },
+        },
+      },
+    ] as never);
+
+    await expect(service.assertUnitAccess('tenant-1', 'user-1', 'unit-neighbor', 'building-1'))
+      .rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('does not self-scope a resident who also has a privileged tenant role', () => {
     expect(service.shouldEnforce(['RESIDENT'])).toBe(true);
     expect(service.shouldEnforce(['RESIDENT', 'TENANT_ADMIN'])).toBe(false);
