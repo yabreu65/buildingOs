@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   Controller,
   Get,
@@ -12,6 +13,13 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  Min,
+  Matches,
+} from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
@@ -24,12 +32,37 @@ import {
 import { ImportExpensesDto, ExpenseImportResult } from './expense-import.dto';
 
 class ListExpensesQuery {
+  @IsOptional()
+  @IsString()
   buildingId?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period?: string;
+
+  @IsOptional()
+  @IsString()
   status?: string;
+
+  @IsOptional()
+  @IsString()
   categoryId?: string;
+
+  @IsOptional()
+  @IsString()
   scopeType?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   limit?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
   offset?: number;
 }
 
@@ -133,23 +166,11 @@ export class ExpensesController {
   @Post('import/from-excel')
   @HttpCode(HttpStatus.OK)
   async importFromExcel(
-    @Body()
-    body: {
-      period: string; // YYYY-MM
-      rows: Array<{
-        fecha: string;
-        descripcion: string;
-        monto: number;
-        moneda: string;
-        edificio: string;
-        categoria: string;
-        proveedor?: string;
-      }>;
-    },
+    @Body() body: ImportExpensesDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseImportResult> {
-    if (!body.period || !body.rows || !Array.isArray(body.rows)) {
-      throw new BadRequestException('period y rows (array) son requeridos');
+    if (!body.rows || !Array.isArray(body.rows) || body.rows.length === 0) {
+      throw new BadRequestException('rows (array) son requeridos');
     }
 
     const result = await this.expensesService.importExpensesFromExcel(

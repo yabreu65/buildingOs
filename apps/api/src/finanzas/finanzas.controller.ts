@@ -62,7 +62,6 @@ import {
 } from './finanzas.dto';
 import {
   ImportExpensesDto,
-  ExpenseImportRow,
   ExpenseImportResult,
 } from './expense-import.dto';
 
@@ -515,7 +514,7 @@ export class FinanzasController {
   @Post('expenses/import')
   async importExpenses(
     @Param('buildingId') buildingId: string,
-    @Body() importDto: ImportExpensesDto & { rows: ExpenseImportRow[] },
+    @Body() importDto: ImportExpensesDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<ExpenseImportResult> {
     const tenantId = req.tenantId!;
