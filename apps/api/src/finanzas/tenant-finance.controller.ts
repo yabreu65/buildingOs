@@ -1,3 +1,10 @@
+import { Type } from 'class-transformer';
+import {
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+} from 'class-validator';
 import {
   Controller,
   Get,
@@ -32,7 +39,14 @@ import {
 } from './finanzas.dto';
 import { Payment } from '@prisma/client';
 
-interface GetPaymentAuditLogQuery { limit?: number }
+export class GetPaymentAuditLogQuery {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number;
+}
 
 /**
  * TenantFinanceController: Tenant-level (aggregated) finance endpoints

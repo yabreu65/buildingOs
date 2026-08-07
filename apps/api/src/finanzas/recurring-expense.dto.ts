@@ -1,14 +1,50 @@
-export interface CreateRecurringExpenseDto {
-  categoryId: string;
-  amount: number; // in cents
-  currency: string; // ISO: ARS, VES, USD
-  concept: string;
-  frequency: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+import {
+  IsString,
+  IsNotEmpty,
+  IsInt,
+  IsOptional,
+  IsBoolean,
+  Min,
+  IsIn,
+} from 'class-validator';
+
+export class CreateRecurringExpenseDto {
+  @IsString()
+  @IsNotEmpty()
+  categoryId!: string;
+
+  @IsInt()
+  @Min(1)
+  amount!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  @IsIn(['ARS', 'VES', 'USD'])
+  currency!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  concept!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @IsIn(['MONTHLY', 'QUARTERLY', 'YEARLY'])
+  frequency!: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
 }
 
-export interface UpdateRecurringExpenseDto {
+export class UpdateRecurringExpenseDto {
+  @IsOptional()
+  @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
   amount?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   concept?: string;
 }
 

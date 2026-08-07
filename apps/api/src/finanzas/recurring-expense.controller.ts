@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   UseGuards,
+  UseInterceptors,
   Request,
   ForbiddenException,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import type { Role } from '@buildingos/contracts';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BuildingAccessGuard } from '../tenancy/building-access.guard';
 import { RecurringExpenseService } from './recurring-expense.service';
+import { StrictBooleanInterceptor } from './strict-boolean.interceptor';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import {
   CreateRecurringExpenseDto,
@@ -83,6 +85,7 @@ export class RecurringExpenseController {
    * Update a recurring expense template (enable/disable or modify)
    */
   @Patch(':id')
+  @UseInterceptors(new StrictBooleanInterceptor())
   async updateRecurringExpense(
     @Param('buildingId') buildingId: string,
     @Param('id') recurringId: string,
