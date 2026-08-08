@@ -258,6 +258,8 @@ model Tenant {
   pushSubscriptions    PushSubscription[]
   paymentProviderConfigs PaymentProviderConfig[]
   emailDeliveries       EmailDelivery[]
+  unitBalanceSnapshots  UnitBalanceMonthlySnapshot[]
+  buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
 }
 
 model User {
@@ -441,6 +443,8 @@ model Building {
   liquidations         Liquidation[]
   adjustments          Adjustment[]
   unitAssociations     UnitAssociation[]
+  balanceSnapshots     BuildingBalanceMonthlySnapshot[]
+  unitBalanceSnapshots UnitBalanceMonthlySnapshot[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, alias])
@@ -474,6 +478,7 @@ model Unit {
   unitGroupMembers UnitGroupMember[]
   apartmentParkings UnitAssociation[] @relation("ApartmentParkings")
   parkingApartments UnitAssociation[] @relation("ParkingApartment")
+  balanceSnapshots UnitBalanceMonthlySnapshot[]
 
   @@unique([buildingId, code])
   @@unique([tenantId, buildingId, code])
@@ -1673,6 +1678,62 @@ model PaymentAllocation {
   @@unique([paymentId, chargeId]) // One allocation per payment/charge pair
   @@index([tenantId, paymentId])
   @@index([tenantId, chargeId])
+}
+
+// ============================================================================
+// P2-A: MONTHLY SNAPSHOTS (Read-model for historical trends)
+// ============================================================================
+model UnitBalanceMonthlySnapshot {
+  id               String   @id @default(cuid())
+  tenantId         String
+  buildingId       String
+  unitId           String
+  period           String
+  asOf             DateTime
+  currency         String   @default("ARS")
+  chargedMinor     Int
+  collectedMinor   Int
+  outstandingMinor Int
+  overdueMinor     Int?
+  collectionRateBp Int?
+  snapshotVersion  String   @default("p2a-v1")
+  generatedAt      DateTime @default(now())
+  recomputedAt     DateTime?
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unit     Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, unitId, period, currency])
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, period])
+  @@index([tenantId, asOf])
+}
+
+model BuildingBalanceMonthlySnapshot {
+  id               String   @id @default(cuid())
+  tenantId         String
+  buildingId       String
+  period           String
+  asOf             DateTime
+  currency         String   @default("ARS")
+  unitCount        Int
+  chargedMinor     Int
+  collectedMinor   Int
+  outstandingMinor Int
+  overdueMinor     Int?
+  collectionRateBp Int?
+  snapshotVersion  String   @default("p2a-v1")
+  generatedAt      DateTime @default(now())
+  recomputedAt     DateTime?
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, buildingId, period, currency])
+  @@index([tenantId, period])
+  @@index([tenantId, buildingId, period])
+  @@index([tenantId, asOf])
 }
 
 // ============================================================================
