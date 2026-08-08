@@ -14,6 +14,10 @@ const useQueryClientMock = jest.fn();
 const useTenantFinanceSummaryMock = jest.fn();
 const useBuildingsMock = jest.fn();
 const useExpensesMock = jest.fn();
+const useTenantRecurringExpensesMock = jest.fn();
+const useCreateTenantRecurringExpenseMock = jest.fn();
+const useUpdateTenantRecurringExpenseMock = jest.fn();
+const useExpenseLedgerCategoriesMock = jest.fn();
 let searchParams = new URLSearchParams();
 
 jest.mock('next/navigation', () => ({
@@ -43,6 +47,10 @@ jest.mock('@/features/buildings/hooks', () => ({
 
 jest.mock('../hooks/useExpenseLedger', () => ({
   useExpenses: (...args: unknown[]) => useExpensesMock(...args),
+  useTenantRecurringExpenses: (...args: unknown[]) => useTenantRecurringExpensesMock(...args),
+  useCreateTenantRecurringExpense: (...args: unknown[]) => useCreateTenantRecurringExpenseMock(...args),
+  useUpdateTenantRecurringExpense: (...args: unknown[]) => useUpdateTenantRecurringExpenseMock(...args),
+  useExpenseLedgerCategories: (...args: unknown[]) => useExpenseLedgerCategoriesMock(...args),
 }));
 
 jest.mock('../services/finance.api', () => ({
@@ -97,6 +105,12 @@ jest.mock('./NotasRevelatoriasPanel', () => ({
   NotasRevelatoriasPanel: () => <div>Notas Revelatorias panel</div>,
 }));
 
+jest.mock('./TenantRecurringExpensesTab', () => ({
+  TenantRecurringExpensesTab: ({ tenantId }: { tenantId: string }) => (
+    <div data-testid="tenant-recurring-tab">Tenant recurring tab {tenantId}</div>
+  ),
+}));
+
 jest.mock('@/shared/lib/format/money', () => ({
   formatCurrency: (value: number) => `$${value.toLocaleString('es-AR')}`,
 }));
@@ -138,6 +152,21 @@ describe('TenantFinanceDashboard', () => {
       error: null,
       refetch: jest.fn(),
     });
+    useTenantRecurringExpensesMock.mockReturnValue({
+      data: [],
+      isPending: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    useCreateTenantRecurringExpenseMock.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+    useUpdateTenantRecurringExpenseMock.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+    useExpenseLedgerCategoriesMock.mockReturnValue({ data: [] });
   });
 
   it('opens the payments tab from the query string and updates when navigation changes', () => {
@@ -171,5 +200,26 @@ describe('TenantFinanceDashboard', () => {
 
     expect(routerReplace).toHaveBeenCalledWith('/tenant-1/finanzas?foo=bar&tab=payments', { scroll: false });
     expect(periodInput.value).toBe('2026-08');
+  });
+
+  it('shows the recurring rules tab', () => {
+    render(<TenantFinanceDashboard />);
+
+    expect(screen.getByText('Reglas recurrentes')).toBeTruthy();
+  });
+
+  it('selects the recurring tab from ?tab=recurring', () => {
+    searchParams = new URLSearchParams('tab=recurring');
+    render(<TenantFinanceDashboard />);
+
+    expect(screen.getByTestId('tenant-recurring-tab').textContent).toContain(
+      'Tenant recurring tab tenant-1',
+    );
+  });
+
+  it('does not render the recurring tab by default', () => {
+    render(<TenantFinanceDashboard />);
+
+    expect(screen.queryByTestId('tenant-recurring-tab')).toBeNull();
   });
 });

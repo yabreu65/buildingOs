@@ -4,6 +4,9 @@ import {
   createLiquidationDraft,
   publishLiquidation,
   reviewLiquidation,
+  listTenantRecurringExpenses,
+  createTenantRecurringExpense,
+  updateTenantRecurringExpense,
 } from './expense-ledger.api';
 
 jest.mock('@/shared/lib/http/client', () => ({
@@ -64,5 +67,80 @@ describe('expense ledger liquidation API', () => {
         baseCurrency: 'ARS',
       }),
     ).rejects.toThrow('network down');
+  });
+});
+
+describe('tenant recurring expenses API', () => {
+  beforeEach(() => {
+    mockedApiClient.mockReset();
+    mockedApiClient.mockResolvedValue({});
+  });
+
+  it('lists tenant recurring expenses through the tenant route with includeInactive=true', async () => {
+    await listTenantRecurringExpenses('tenant-1', true);
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/recurring-expenses?includeInactive=true',
+      method: 'GET',
+    });
+  });
+
+  it('lists tenant recurring expenses without includeInactive when not requested', async () => {
+    await listTenantRecurringExpenses('tenant-1');
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/recurring-expenses',
+      method: 'GET',
+    });
+  });
+
+  it('creates tenant recurring expenses through the tenant route with the full payload', async () => {
+    const payload = {
+      scopeType: 'TENANT_SHARED' as const,
+      allocationMode: 'MANUAL' as const,
+      categoryId: 'category-1',
+      amount: 10000,
+      currency: 'ARS',
+      concept: 'Limpieza',
+      frequency: 'MONTHLY' as const,
+      allocations: [
+        { buildingId: 'building-1', percentage: 60 },
+        { buildingId: 'building-2', percentage: 40 },
+      ],
+    };
+
+    await createTenantRecurringExpense('tenant-1', payload);
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/recurring-expenses',
+      method: 'POST',
+      body: payload,
+    });
+  });
+
+  it('updates tenant recurring expenses through the tenant route with id', async () => {
+    await updateTenantRecurringExpense('tenant-1', 're-1', { isActive: false });
+
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/recurring-expenses/re-1',
+      method: 'PATCH',
+      body: { isActive: false },
+    });
+  });
+
+  it('does not use the buildings route for tenant-scoped operations', async () => {
+    await listTenantRecurringExpenses('tenant-1', true);
+    await createTenantRecurringExpense('tenant-1', {
+      scopeType: 'TENANT_SHARED',
+      allocationMode: 'EQUAL_SHARE',
+      categoryId: 'category-1',
+      amount: 10000,
+      currency: 'ARS',
+      concept: 'Limpieza',
+      frequency: 'MONTHLY',
+    });
+
+    const calls = mockedApiClient.mock.calls.map((call) => call[0]);
+    expect(calls.every((call) => !String(call.path).startsWith('/buildings/'))).toBe(true);
   });
 });

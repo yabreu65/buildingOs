@@ -104,10 +104,19 @@ export interface BulkValidateExpensesResult {
   errorCount: number;
 }
 
+export type RecurringExpenseAllocationMode =
+  | 'MANUAL'
+  | 'EQUAL_SHARE'
+  | 'BUILDING_TOTAL_M2';
+
+export type RecurringExpenseScopeType = 'BUILDING' | 'TENANT_SHARED';
+
 export interface RecurringExpense {
   id: string;
   tenantId: string;
-  buildingId: string;
+  buildingId: string | null;
+  scopeType: RecurringExpenseScopeType;
+  allocationMode: RecurringExpenseAllocationMode | null;
   categoryId: string;
   amount: number;
   currency: string;
@@ -117,6 +126,22 @@ export interface RecurringExpense {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RecurringExpenseAllocationInput {
+  buildingId: string;
+  percentage: number;
+}
+
+export interface CreateTenantRecurringExpenseData {
+  scopeType: 'TENANT_SHARED';
+  allocationMode: RecurringExpenseAllocationMode;
+  categoryId: string;
+  amount: number;
+  currency: string;
+  concept: string;
+  frequency: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+  allocations?: RecurringExpenseAllocationInput[];
 }
 
 export interface CreateRecurringExpenseData {
@@ -383,6 +408,46 @@ export async function updateRecurringExpense(
 ): Promise<RecurringExpense> {
   return apiClient<RecurringExpense, UpdateRecurringExpenseData>({
     path: `/buildings/${buildingId}/recurring-expenses/${recurringExpenseId}`,
+    method: 'PATCH',
+    body: data,
+  });
+}
+
+// ── Tenant-shared RecurringExpenses API ─────────────────────────────────────
+// TENANT_SHARED scope: multi-building rules managed at tenant level.
+
+export async function listTenantRecurringExpenses(
+  tenantId: string,
+  includeInactive?: boolean,
+): Promise<RecurringExpense[]> {
+  const qs = new URLSearchParams();
+  if (includeInactive) qs.append('includeInactive', 'true');
+
+  const queryStr = qs.toString();
+  return apiClient<RecurringExpense[]>({
+    path: `/tenants/${tenantId}/recurring-expenses${queryStr ? '?' + queryStr : ''}`,
+    method: 'GET',
+  });
+}
+
+export async function createTenantRecurringExpense(
+  tenantId: string,
+  data: CreateTenantRecurringExpenseData,
+): Promise<RecurringExpense> {
+  return apiClient<RecurringExpense, CreateTenantRecurringExpenseData>({
+    path: `/tenants/${tenantId}/recurring-expenses`,
+    method: 'POST',
+    body: data,
+  });
+}
+
+export async function updateTenantRecurringExpense(
+  tenantId: string,
+  recurringExpenseId: string,
+  data: UpdateRecurringExpenseData,
+): Promise<RecurringExpense> {
+  return apiClient<RecurringExpense, UpdateRecurringExpenseData>({
+    path: `/tenants/${tenantId}/recurring-expenses/${recurringExpenseId}`,
     method: 'PATCH',
     body: data,
   });

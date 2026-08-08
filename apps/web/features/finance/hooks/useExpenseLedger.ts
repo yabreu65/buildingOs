@@ -13,6 +13,9 @@ import {
   listRecurringExpenses,
   createRecurringExpense,
   updateRecurringExpense,
+  listTenantRecurringExpenses,
+  createTenantRecurringExpense,
+  updateTenantRecurringExpense,
   listIncomes,
   createIncome,
   updateIncome,
@@ -30,6 +33,7 @@ import {
   CreateExpenseData,
   CreateRecurringExpenseData,
   UpdateRecurringExpenseData,
+  CreateTenantRecurringExpenseData,
   ListIncomesParams,
   CreateIncomeData,
   createAdjustment,
@@ -211,6 +215,51 @@ export function useUpdateRecurringExpense(buildingId: string) {
     }) => updateRecurringExpense(buildingId, recurringExpenseId, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['recurring-expenses', buildingId] });
+      void queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    },
+  });
+}
+
+// ── Tenant-shared RecurringExpenses hooks ───────────────────────────────────
+
+export function useTenantRecurringExpenses(tenantId: string) {
+  return useQuery({
+    queryKey: ['tenant-recurring-expenses', tenantId],
+    queryFn: () => listTenantRecurringExpenses(tenantId, true),
+    enabled: !!tenantId,
+    staleTime: 2 * 60 * 1000,
+    placeholderData: (prev) => prev ?? [],
+  });
+}
+
+export function useCreateTenantRecurringExpense(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateTenantRecurringExpenseData) =>
+      createTenantRecurringExpense(tenantId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ['tenant-recurring-expenses', tenantId],
+      });
+      void queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    },
+  });
+}
+
+export function useUpdateTenantRecurringExpense(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      recurringExpenseId,
+      data,
+    }: {
+      recurringExpenseId: string;
+      data: UpdateRecurringExpenseData;
+    }) => updateTenantRecurringExpense(tenantId, recurringExpenseId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ['tenant-recurring-expenses', tenantId],
+      });
       void queryClient.invalidateQueries({ queryKey: ['expenses'] });
     },
   });
