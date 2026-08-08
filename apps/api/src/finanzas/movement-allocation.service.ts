@@ -30,11 +30,11 @@ type MovementAllocationWithBuilding = Prisma.MovementAllocationGetPayload<{
 const PERCENTAGE_SCALE = 10_000;
 const TOTAL_PERCENTAGE_BASIS_POINTS = 100 * PERCENTAGE_SCALE;
 
-function toBasisPoints(percentage: number): number {
+export function toBasisPoints(percentage: number): number {
   return Math.round(percentage * PERCENTAGE_SCALE);
 }
 
-function allocateByLargestRemainder(
+export function allocateByLargestRemainder(
   totalAmountMinor: number,
   allocations: CreateAllocationInput[],
 ): number[] {
@@ -214,6 +214,35 @@ export class MovementAllocationService {
       entityType: 'MovementAllocation',
       entityId: expenseId,
       metadata: { allocationCount: allocations.length, totalAmount: amountMinor },
+    });
+  }
+
+  /**
+   * Creates MovementAllocations inside an existing Prisma transaction.
+   * Does NOT validate (caller must validate beforehand).
+   * Does NOT audit (caller handles audit after commit).
+   */
+  async createForExpenseInTx(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    expenseId: string,
+    amountMinor: number,
+    currencyCode: string,
+    allocations: CreateAllocationInput[],
+  ): Promise<void> {
+    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
+      ? allocateByLargestRemainder(amountMinor, allocations)
+      : allocations.map((alloc) => alloc.amountMinor!);
+
+    await tx.movementAllocation.createMany({
+      data: allocations.map((alloc, index) => ({
+        tenantId,
+        expenseId,
+        buildingId: alloc.buildingId,
+        percentage: alloc.percentage ?? null,
+        amountMinor: allocatedAmounts[index],
+        currencyCode,
+      })),
     });
   }
 

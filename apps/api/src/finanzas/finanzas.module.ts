@@ -45,6 +45,7 @@ import { ExpenseReportsController } from './expense-reports.controller';
 import { ExpenseReportsService } from './expense-reports.service';
 import { ExpenseImportService } from './expense-import.service';
 import { RecurringExpenseController } from './recurring-expense.controller';
+import { TenantRecurringExpenseController } from './tenant-recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
 import { FinanceSummaryService } from './finance-summary.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
@@ -79,6 +80,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     VendorPreferenceController,
     ExpenseReportsController,
     RecurringExpenseController,
+    TenantRecurringExpenseController,
     PaymentWebhookController,
   ],
   providers: [

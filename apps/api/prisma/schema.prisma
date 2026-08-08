@@ -123,6 +123,12 @@ enum MovementScope {
   UNIT_GROUP      // Se reparte solo entre un grupo de unidades
 }
 
+enum RecurringExpenseAllocationMode {
+  MANUAL            // Porcentajes fijos en RecurringExpenseAllocation
+  EQUAL_SHARE       // Reparto igualitario dinámico
+  BUILDING_TOTAL_M2 // Proporcional a m² totales dinámico
+}
+
 enum IncomeDestination {
   APPLY_TO_EXPENSES  // Baja el neto a prorratear
   RESERVE_FUND       // Va a fondo de reserva (no afecta liquidación)
@@ -234,6 +240,7 @@ model Tenant {
   expenseLedgerCategories  ExpenseLedgerCategory[]
   expenses                 Expense[]
   recurringExpenses        RecurringExpense[]
+  recurringExpenseAllocations RecurringExpenseAllocation[]
   incomes                  Income[]
   movementAllocations      MovementAllocation[]
   unitGroups               UnitGroup[]
@@ -426,6 +433,7 @@ model Building {
   expensePeriods       ExpensePeriod[]
   expenses             Expense[]
   recurringExpenses    RecurringExpense[]
+  recurringExpenseAllocations RecurringExpenseAllocation[]
   incomes              Income[]
   movementAllocations  MovementAllocation[]
   unitGroups           UnitGroup[]
@@ -1759,26 +1767,47 @@ model Expense {
 // FINANZAS: RecurringExpense (Templates for auto-generated DRAFT expenses)
 // ============================================================================
 model RecurringExpense {
-  id            String   @id @default(cuid())
+  id            String        @id @default(cuid())
   tenantId      String
-  buildingId    String
+  buildingId    String?
+  scopeType     MovementScope @default(BUILDING)
+  allocationMode RecurringExpenseAllocationMode? // Solo para TENANT_SHARED
   categoryId    String
-  amount        Int      // En centavos
-  currency      String   // ISO: ARS, VES, USD
-  concept       String   // Descripción del gasto (ej: "Electricidad Base")
-  frequency     String   // MONTHLY, QUARTERLY, YEARLY
-  nextRunDate   DateTime // Próxima fecha de ejecución
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  amount        Int           // En centavos
+  currency      String        // ISO: ARS, VES, USD
+  concept       String        // Descripción del gasto (ej: "Electricidad Base")
+  frequency     String        // MONTHLY, QUARTERLY, YEARLY
+  nextRunDate   DateTime      // Próxima fecha de ejecución
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building    Building?             @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  allocations RecurringExpenseAllocation[]
 
   @@index([tenantId, buildingId, nextRunDate])
   @@index([isActive, nextRunDate])
   @@index([tenantId, isActive])
+  @@index([tenantId, scopeType])
+}
+
+model RecurringExpenseAllocation {
+  id                 String   @id @default(cuid())
+  recurringExpenseId String
+  tenantId           String
+  buildingId         String
+  percentage         Float
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  recurringExpense RecurringExpense @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building         Building         @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+
+  @@unique([recurringExpenseId, buildingId])
+  @@index([tenantId, recurringExpenseId])
 }
 
 // ============================================================================

@@ -1,9 +1,96 @@
+import 'reflect-metadata';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import {
   CreateRecurringExpenseDto,
   UpdateRecurringExpenseDto,
+  RecurringExpenseAllocationInputDto,
 } from './recurring-expense.dto';
+
+describe('RecurringExpenseAllocationInputDto', () => {
+  describe('valid payloads', () => {
+    it('accepts buildingId with percentage', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        percentage: 50,
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects allocation with amountMinor only (percentage is required)', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        amountMinor: 5000,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+
+    it('rejects missing percentage', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+  });
+
+  describe('invalid payloads', () => {
+    it('rejects missing buildingId', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        percentage: 50,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'buildingId')).toBeDefined();
+    });
+
+    it('rejects empty buildingId', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: '',
+        percentage: 50,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'buildingId')).toBeDefined();
+    });
+
+    it('rejects negative percentage', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        percentage: -10,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+
+    it('rejects decimal percentage (must be integer)', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        percentage: 50.5,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+
+    it('rejects non-numeric percentage', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        percentage: 'abc',
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+
+    it('rejects percentage above 100', async () => {
+      const dto = plainToInstance(RecurringExpenseAllocationInputDto, {
+        buildingId: 'bld-1',
+        percentage: 150,
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'percentage')).toBeDefined();
+    });
+  });
+});
 
 describe('CreateRecurringExpenseDto', () => {
   const validPayload = {
@@ -53,6 +140,71 @@ describe('CreateRecurringExpenseDto', () => {
         ...validPayload,
         currency: 'VES',
       });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts BUILDING scopeType', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'BUILDING',
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts TENANT_SHARED scopeType with allocations', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'EQUAL_SHARE',
+        allocations: [
+          { buildingId: 'bld-1', percentage: 50 },
+          { buildingId: 'bld-2', percentage: 50 },
+        ],
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts allocationMode EQUAL_SHARE', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'EQUAL_SHARE',
+        allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts allocationMode BUILDING_TOTAL_M2', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'BUILDING_TOTAL_M2',
+        allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts allocationMode MANUAL with percentage allocations', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'MANUAL',
+        allocations: [
+          { buildingId: 'bld-1', percentage: 50 },
+          { buildingId: 'bld-2', percentage: 50 },
+        ],
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts optional scopeType (defaults to BUILDING at service level)', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, validPayload);
       const errors = await validate(dto);
       expect(errors).toHaveLength(0);
     });
@@ -165,6 +317,37 @@ describe('CreateRecurringExpenseDto', () => {
       const errors = await validate(dto);
       expect(errors.find((e) => e.property === 'frequency')).toBeDefined();
     });
+
+    it('rejects invalid scopeType', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'UNIT_GROUP',
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'scopeType')).toBeDefined();
+    });
+
+    it('rejects invalid allocationMode', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'INVALID',
+        allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'allocationMode')).toBeDefined();
+    });
+
+    it('rejects empty allocations array', async () => {
+      const dto = plainToInstance(CreateRecurringExpenseDto, {
+        ...validPayload,
+        scopeType: 'TENANT_SHARED',
+        allocationMode: 'EQUAL_SHARE',
+        allocations: [],
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'allocations')).toBeDefined();
+    });
   });
 });
 
@@ -204,6 +387,37 @@ describe('UpdateRecurringExpenseDto', () => {
 
     it('accepts empty payload (no changes)', async () => {
       const dto = plainToInstance(UpdateRecurringExpenseDto, {});
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts updating allocationMode', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, {
+        allocationMode: 'BUILDING_TOTAL_M2',
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts updating allocations', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, {
+        allocations: [
+          { buildingId: 'bld-1', percentage: 60 },
+          { buildingId: 'bld-2', percentage: 40 },
+        ],
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts updating both allocationMode and allocations', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, {
+        allocationMode: 'MANUAL',
+        allocations: [
+          { buildingId: 'bld-1', percentage: 60 },
+          { buildingId: 'bld-2', percentage: 40 },
+        ],
+      });
       const errors = await validate(dto);
       expect(errors).toHaveLength(0);
     });
@@ -282,6 +496,22 @@ describe('UpdateRecurringExpenseDto', () => {
       const dto = plainToInstance(UpdateRecurringExpenseDto, { concept: '' });
       const errors = await validate(dto);
       expect(errors.find((e) => e.property === 'concept')).toBeDefined();
+    });
+
+    it('rejects invalid allocationMode', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, {
+        allocationMode: 'INVALID',
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'allocationMode')).toBeDefined();
+    });
+
+    it('rejects empty allocations array', async () => {
+      const dto = plainToInstance(UpdateRecurringExpenseDto, {
+        allocations: [],
+      });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'allocations')).toBeDefined();
     });
   });
 });

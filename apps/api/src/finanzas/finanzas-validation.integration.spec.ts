@@ -4,6 +4,7 @@ import request = require('supertest');
 import { ExpensesController } from './expenses.controller';
 import { ExpensesService } from './expenses.service';
 import { RecurringExpenseController } from './recurring-expense.controller';
+import { TenantRecurringExpenseController } from './tenant-recurring-expense.controller';
 import { RecurringExpenseService } from './recurring-expense.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
@@ -47,7 +48,7 @@ describe('Finance ValidationPipe integration', () => {
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      controllers: [ExpensesController, RecurringExpenseController],
+      controllers: [ExpensesController, RecurringExpenseController, TenantRecurringExpenseController],
       providers: [
         { provide: ExpensesService, useValue: mockExpensesService },
         { provide: RecurringExpenseService, useValue: mockRecurringExpenseService },
@@ -377,7 +378,200 @@ describe('Finance ValidationPipe integration', () => {
       await request(app.getHttpServer())
         .patch(baseUrl)
         .send({ amount: 7500, concept: 'Updated' });
-      expect(mockRecurringExpenseService.updateRecurringExpense).toHaveBeenCalled();
+      expect(mockRecurringExpenseService.updateRecurringExpense).toHaveBeenCalledWith(
+        't-1',
+        're-1',
+        expect.objectContaining({ amount: 7500, concept: 'Updated' }),
+        { scopeType: 'BUILDING', buildingId: 'b-1' },
+      );
+    });
+  });
+
+  describe('RecurringExpenseController — create with scopeType', () => {
+    const baseUrl = '/buildings/b-1/recurring-expenses';
+
+    it('rejects invalid scopeType', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          scopeType: 'UNIT_GROUP',
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects invalid allocationMode', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          scopeType: 'TENANT_SHARED',
+          allocationMode: 'INVALID',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects empty allocations for TENANT_SHARED', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          scopeType: 'TENANT_SHARED',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [],
+        });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('TenantRecurringExpenseController — create', () => {
+    const baseUrl = '/tenants/t-1/recurring-expenses';
+
+    it('rejects decimal amount', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 10.5,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects invalid currency', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'EUR',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects invalid frequency', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'WEEKLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects empty allocations for TENANT_SHARED', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Test',
+          frequency: 'MONTHLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects empty concept', async () => {
+      const res = await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: '',
+          frequency: 'MONTHLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('calls service for valid TENANT_SHARED payload', async () => {
+      await request(app.getHttpServer())
+        .post(baseUrl)
+        .send({
+          categoryId: 'cat-1',
+          amount: 5000,
+          currency: 'ARS',
+          concept: 'Expensas compartidas',
+          frequency: 'MONTHLY',
+          allocationMode: 'EQUAL_SHARE',
+          allocations: [{ buildingId: 'bld-1', percentage: 100 }],
+        });
+      expect(mockRecurringExpenseService.createRecurringExpense).toHaveBeenCalled();
+    });
+  });
+
+  describe('TenantRecurringExpenseController — update', () => {
+    const baseUrl = '/tenants/t-1/recurring-expenses/re-1';
+
+    it('accepts true as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: true });
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects 0 as isActive', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ isActive: 0 });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects invalid allocationMode', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ allocationMode: 'INVALID' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects empty allocations', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ allocations: [] });
+      expect(res.status).toBe(400);
+    });
+
+    it('calls service for valid update', async () => {
+      await request(app.getHttpServer())
+        .patch(baseUrl)
+        .send({ amount: 7500, concept: 'Updated' });
+      expect(mockRecurringExpenseService.updateRecurringExpense).toHaveBeenCalledWith(
+        't-1',
+        're-1',
+        expect.objectContaining({ amount: 7500, concept: 'Updated' }),
+        { scopeType: 'TENANT_SHARED', buildingId: null },
+      );
     });
   });
 });
