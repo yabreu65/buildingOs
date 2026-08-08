@@ -19,13 +19,14 @@ import { ExpenseLedgerCategoriesManager } from './ExpenseLedgerCategoriesManager
 import { TenantExpensesList } from './TenantExpensesList';
 import { ExpenseHistoryReport } from './ExpenseHistoryReport';
 import { NotasRevelatoriasPanel } from './NotasRevelatoriasPanel';
+import { TenantRecurringExpensesTab } from './TenantRecurringExpensesTab';
 import { useExpenses } from '../hooks/useExpenseLedger';
 import { formatCurrency } from '@/shared/lib/format/money';
 import { getDownloadUrl } from '@/features/buildings/services/documents.api';
 import { FileText, Loader2 } from 'lucide-react';
 import { useToast } from '@/shared/components/ui/Toast';
 
-type Tab = 'overview' | 'rubros' | 'expenses' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas';
+type Tab = 'overview' | 'rubros' | 'expenses' | 'recurring' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas';
 
 interface Params {
   tenantId: string;
@@ -43,7 +44,7 @@ export const TenantFinanceDashboard = () => {
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'payments', 'charges', 'delinquent', 'reports', 'notas'];
+  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'recurring', 'payments', 'charges', 'delinquent', 'reports', 'notas'];
   const activeTab = (() => {
     const tabParam = searchParams.get('tab');
     if (tabParam && allowedTabs.includes(tabParam as Tab)) {
@@ -169,16 +170,17 @@ export const TenantFinanceDashboard = () => {
         {/* Tabs */}
         <div className="space-y-4">
            <div className="flex flex-wrap gap-2">
-             {[
-               { id: 'overview', label: 'Resumen' },
-               { id: 'expenses', label: `Gastos comunes (${visibleTenantExpenses.length})` },
-               { id: 'rubros', label: 'Rubros' },
-               { id: 'payments', label: `Pagos (${payments.length})` },
-               { id: 'charges', label: 'Cargos' },
-               { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
-               { id: 'reports', label: 'Historial de gastos' },
-               { id: 'notas', label: 'Notas Revelatorias' },
-             ].map((tab) => (
+              {[
+                { id: 'overview', label: 'Resumen' },
+                { id: 'expenses', label: `Gastos comunes (${visibleTenantExpenses.length})` },
+                { id: 'rubros', label: 'Rubros' },
+                { id: 'recurring', label: 'Reglas recurrentes' },
+                { id: 'payments', label: `Pagos (${payments.length})` },
+                { id: 'charges', label: 'Cargos' },
+                { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
+                { id: 'reports', label: 'Historial de gastos' },
+                { id: 'notas', label: 'Notas Revelatorias' },
+              ].map((tab) => (
              <button
                key={tab.id}
                onClick={() => updateTab(tab.id as Tab)}
@@ -237,6 +239,9 @@ export const TenantFinanceDashboard = () => {
             tenantId={tenantId || ''}
             defaultScopeFilter="CONDOMINIUM_COMMON"
           />
+        )}
+        {activeTab === 'recurring' && (
+          <TenantRecurringExpensesTab tenantId={tenantId || ''} />
         )}
         {activeTab === 'payments' && (
           <>
