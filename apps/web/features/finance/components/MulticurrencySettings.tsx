@@ -10,6 +10,8 @@ import { createExchangeRate, getFinanceSettings, listExchangeRates, updateExchan
 
 interface Props { readonly tenantId: string }
 
+const DECIMAL_28_12_POSITIVE_PATTERN = /^(?!0+(?:\.0+)?$)\d{1,16}(?:\.\d{1,12})?$/;
+
 function formatCalendarDate(value: string) {
   const [year, month, day] = value.slice(0, 10).split('-');
   return `${day}/${month}/${year}`;
@@ -39,7 +41,7 @@ export function MulticurrencySettings({ tenantId }: Props) {
     event.preventDefault();
     if (baseCurrency === quoteCurrency) return setValidationError('Origen y destino deben ser diferentes.');
     if (!rate) return setValidationError('La tasa es obligatoria.');
-    if (!/^(?:0*\.\d{0,11}[1-9]|0*[1-9]\d*(?:\.\d{1,12})?)$/.test(rate)) return setValidationError('La tasa debe ser mayor que cero.');
+    if (!DECIMAL_28_12_POSITIVE_PATTERN.test(rate)) return setValidationError('La tasa debe ser mayor que cero.');
     if (!effectiveAt) return setValidationError('La fecha efectiva es obligatoria.');
     setValidationError(null);
     saveRate.mutate();

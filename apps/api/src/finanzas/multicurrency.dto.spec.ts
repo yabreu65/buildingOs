@@ -16,7 +16,7 @@ describe('multicurrency DTO validation', () => {
     ['create', CreateExchangeRateDto, { baseCurrency: 'USD', quoteCurrency: 'VES' }],
     ['update', UpdateExchangeRateDto, {}],
   ] as const)('%s exchange rate', (_operation, Dto, additionalFields) => {
-    it.each(['1', '36.5', '9999999999999999', '9999999999999999.123456789012'])('accepts rate %s', async (rate) => {
+    it.each(['1', '36.5', '0.50', '0.000000000001', '9999999999999999', '9999999999999999.123456789012'])('accepts rate %s', async (rate) => {
       const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
       await expect(validate(value)).resolves.toHaveLength(0);
     });

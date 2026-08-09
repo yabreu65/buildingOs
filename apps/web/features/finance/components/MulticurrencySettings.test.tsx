@@ -46,28 +46,46 @@ describe('MulticurrencySettings', () => {
     expect(await screen.findByText('Moneda funcional actualizada.')).toBeTruthy();
   });
 
-  it.each([
-    ['same pair', 'Origen y destino deben ser diferentes.', { destination: 'USD', rate: '1' }],
-    ['required rate', 'La tasa es obligatoria.', { destination: 'VES', rate: '' }],
-    ['positive rate', 'La tasa debe ser mayor que cero.', { destination: 'VES', rate: '0' }],
-  ])('validates %s', async (_name, message, values) => {
+  it('rejects an exchange rate with the same currency pair', async () => {
     renderSubject();
     await screen.findByText('No hay tasas registradas.');
-    fireEvent.change(screen.getByLabelText('Destino'), { target: { value: values.destination } });
-    fireEvent.change(screen.getByLabelText('Tasa'), { target: { value: values.rate } });
+    fireEvent.change(screen.getByLabelText('Destino'), { target: { value: 'USD' } });
+    fireEvent.change(screen.getByLabelText('Tasa'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Fecha efectiva'), { target: { value: '2026-08-09' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar tasa' }));
+    expect(screen.getByText('Origen y destino deben ser diferentes.')).toBeTruthy();
+    expect(mockedApi.createExchangeRate).not.toHaveBeenCalled();
+  });
+
+  it.each(['1', '36.5', '0.50', '0.1', '0.000000000001', '9999999999999999', '9999999999999999.123456789012'])('accepts rate %s and preserves its string payload', async (rate) => {
+    renderSubject();
+    await screen.findByText('No hay tasas registradas.');
+    fireEvent.change(screen.getByLabelText('Tasa'), { target: { value: rate } });
+    fireEvent.change(screen.getByLabelText('Fecha efectiva'), { target: { value: '2026-08-09' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar tasa' }));
+    await waitFor(() => expect(mockedApi.createExchangeRate).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ rate })));
+  });
+
+  it.each([
+    ['0', 'La tasa debe ser mayor que cero.'],
+    ['0.0', 'La tasa debe ser mayor que cero.'],
+    ['0.000000000000', 'La tasa debe ser mayor que cero.'],
+    ['-1', 'La tasa debe ser mayor que cero.'],
+    ['-0.50', 'La tasa debe ser mayor que cero.'],
+    ['+0', 'La tasa debe ser mayor que cero.'],
+    ['99999999999999999', 'La tasa debe ser mayor que cero.'],
+    ['1.1234567890123', 'La tasa debe ser mayor que cero.'],
+    ['abc', 'La tasa debe ser mayor que cero.'],
+    ['', 'La tasa es obligatoria.'],
+    ['.50', 'La tasa debe ser mayor que cero.'],
+  ])('rejects rate %s', async (rate, message) => {
+    renderSubject();
+    await screen.findByText('No hay tasas registradas.');
+    fireEvent.change(screen.getByLabelText('Tasa'), { target: { value: rate } });
     fireEvent.change(screen.getByLabelText('Fecha efectiva'), { target: { value: '2026-08-09' } });
     fireEvent.click(screen.getByRole('button', { name: 'Agregar tasa' }));
     expect(screen.getByText(message)).toBeTruthy();
     expect(mockedApi.createExchangeRate).not.toHaveBeenCalled();
-  });
-
-  it('creates a rate while preserving its decimal string payload', async () => {
-    renderSubject();
-    await screen.findByText('No hay tasas registradas.');
-    fireEvent.change(screen.getByLabelText('Tasa'), { target: { value: '36.500000000001' } });
-    fireEvent.change(screen.getByLabelText('Fecha efectiva'), { target: { value: '2026-08-09' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar tasa' }));
-    await waitFor(() => expect(mockedApi.createExchangeRate).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ rate: '36.500000000001' })));
   });
 
   it('shows API loading errors', async () => {
