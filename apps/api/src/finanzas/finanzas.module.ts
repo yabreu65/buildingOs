@@ -37,6 +37,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { StorageModule } from '../storage/storage.module';
 import { PaymentGatewayModule } from './payment-gateway/payment-gateway.module';
 import { ConfigService } from '../config/config.service';
+import { MulticurrencyController } from './multicurrency.controller';
+import { MulticurrencyService } from './multicurrency.service';
 import { AppConfigModule } from '../config/config.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
@@ -82,6 +84,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     RecurringExpenseController,
     TenantRecurringExpenseController,
     PaymentWebhookController,
+    MulticurrencyController,
   ],
   providers: [
     FinanzasService,
@@ -121,6 +124,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     FinanceSummaryService,
     PaymentReceiptService,
     SignatureGuard,
+    MulticurrencyService,
   ],
   exports: [
     FinanzasService,

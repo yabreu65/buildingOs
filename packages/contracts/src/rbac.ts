@@ -21,6 +21,8 @@ export type Permission =
   | "tickets.read"
   | "tickets.write"
   | "tickets.manage"
+  | "finance.settings.read"
+  | "finance.settings.write"
   | "members.manage";
 
 export interface ScopedRole {

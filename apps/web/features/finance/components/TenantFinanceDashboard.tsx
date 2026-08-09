@@ -25,8 +25,9 @@ import { formatCurrency } from '@/shared/lib/format/money';
 import { getDownloadUrl } from '@/features/buildings/services/documents.api';
 import { FileText, Loader2 } from 'lucide-react';
 import { useToast } from '@/shared/components/ui/Toast';
+import { MulticurrencySettings } from './MulticurrencySettings';
 
-type Tab = 'overview' | 'rubros' | 'expenses' | 'recurring' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas';
+type Tab = 'overview' | 'rubros' | 'expenses' | 'recurring' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas' | 'settings';
 
 interface Params {
   tenantId: string;
@@ -44,7 +45,7 @@ export const TenantFinanceDashboard = () => {
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'recurring', 'payments', 'charges', 'delinquent', 'reports', 'notas'];
+  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'recurring', 'payments', 'charges', 'delinquent', 'reports', 'notas', 'settings'];
   const activeTab = (() => {
     const tabParam = searchParams.get('tab');
     if (tabParam && allowedTabs.includes(tabParam as Tab)) {
@@ -179,7 +180,8 @@ export const TenantFinanceDashboard = () => {
                 { id: 'charges', label: 'Cargos' },
                 { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
                 { id: 'reports', label: 'Historial de gastos' },
-                { id: 'notas', label: 'Notas Revelatorias' },
+                 { id: 'notas', label: 'Notas Revelatorias' },
+                 { id: 'settings', label: 'Configuración' },
               ].map((tab) => (
              <button
                key={tab.id}
@@ -329,6 +331,7 @@ export const TenantFinanceDashboard = () => {
         {activeTab === 'notas' && (
           <NotasRevelatoriasPanel tenantId={tenantId || ''} />
         )}
+        {activeTab === 'settings' && <MulticurrencySettings tenantId={tenantId || ''} />}
       </div>
 
       {/* Payment Approval Modal */}

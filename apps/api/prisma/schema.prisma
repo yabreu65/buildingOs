@@ -190,6 +190,7 @@ model Tenant {
 
   // Localization & Currency
   currency              String @default("ARS") // ARS (Argentina), VES (Venezuela), USD
+  functionalCurrency    String @default("ARS")
   locale                String @default("es-AR") // es-AR, es-VE, en-US
 
   // Building alias generation sequence
@@ -260,6 +261,7 @@ model Tenant {
   emailDeliveries       EmailDelivery[]
   unitBalanceSnapshots  UnitBalanceMonthlySnapshot[]
   buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
+  exchangeRates         ExchangeRate[]
 }
 
 model User {
@@ -330,11 +332,32 @@ model Membership {
   aiInteractionLogs     AiInteractionLog[]
   aiActionEvents        AiActionEvent[]
   planChangeRequests    PlanChangeRequest[]   @relation("PlanRequestRequestedBy")
+  exchangeRatesCreated  ExchangeRate[]        @relation("ExchangeRateCreatedBy")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
   @@index([userId])
   userContext      UserContext?
+}
+
+model ExchangeRate {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  baseCurrency          String
+  quoteCurrency         String
+  rate                  Decimal  @db.Decimal(28, 12)
+  effectiveAt           DateTime
+  source                String?
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByMembership Membership? @relation("ExchangeRateCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, baseCurrency, quoteCurrency, effectiveAt], map: "ExchangeRate_tenant_pair_effective_key")
+  @@index([tenantId, baseCurrency, quoteCurrency, effectiveAt(sort: Desc)], map: "ExchangeRate_tenant_pair_effective_idx")
+  @@index([createdByMembershipId])
 }
 
 model UserContext {

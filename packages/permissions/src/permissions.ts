@@ -6,6 +6,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "units.read","units.write",
     "payments.submit","payments.review",
     "tickets.read","tickets.write","tickets.manage",
+    "finance.settings.read","finance.settings.write",
     "members.manage",
   ],
   TENANT_OWNER: [
@@ -13,6 +14,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "units.read","units.write",
     "payments.submit","payments.review",
     "tickets.read","tickets.write","tickets.manage",
+    "finance.settings.read","finance.settings.write",
     "members.manage",
   ],
   TENANT_ADMIN: [
@@ -20,6 +22,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "units.read","units.write",
     "payments.review",
     "tickets.read","tickets.write","tickets.manage",
+    "finance.settings.read","finance.settings.write",
     "members.manage",
   ],
   OPERATOR: [
@@ -27,6 +30,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "units.read",
     "payments.review",
     "tickets.read","tickets.write","tickets.manage",
+    "finance.settings.read",
   ],
   RESIDENT: [
     "tickets.read","tickets.write",
