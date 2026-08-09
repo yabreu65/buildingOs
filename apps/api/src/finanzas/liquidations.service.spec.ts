@@ -4,6 +4,7 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { LiquidationsService } from './liquidations.service';
@@ -72,6 +73,7 @@ describe('LiquidationsService', () => {
     };
     liquidation: {
       findFirst: jest.Mock;
+      create: jest.Mock;
       updateMany: jest.Mock;
       delete: jest.Mock;
     };
@@ -121,6 +123,12 @@ describe('LiquidationsService', () => {
           return Promise.resolve(baseLiquidation);
         }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockImplementation(({ data }) => Promise.resolve({
+          ...baseLiquidation,
+          ...data,
+          status: 'DRAFT',
+          publicationSnapshot: null,
+        })),
         delete: jest.fn(),
       },
       charge: {
@@ -321,14 +329,116 @@ describe('LiquidationsService', () => {
       { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
     ]);
 
-    await expect(
-      service.createDraft('tenant-1', 'member-1', {
+    await expect(service.createDraft('tenant-1', 'member-1', {
         buildingId: 'building-1',
         period: '2026-05',
         baseCurrency: 'USD',
-      }),
-    ).rejects.toThrow(BadRequestException);
+      })).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_BASE_CURRENCY_MISMATCH',
+          message: 'La moneda de los movimientos (ARS) no coincide con la moneda base de la liquidación (USD).',
+        },
+      });
 
+    expect(auditService.createLogRequired).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ARS', ['ARS', 'ARS']],
+    ['USD', ['USD', 'USD']],
+  ])('creates a %s draft when every movement uses the base currency', async (baseCurrency, currencies) => {
+    tx.liquidation.findFirst.mockResolvedValueOnce(null);
+    tx.expense.findMany
+      .mockResolvedValueOnce(currencies.map((currencyCode, index) => ({
+        id: `exp-${index + 1}`,
+        amountMinor: 100 + index,
+        currencyCode,
+        invoiceDate: new Date('2026-05-01T00:00:00.000Z'),
+        description: null,
+        category: { name: 'Water' },
+        vendor: { name: 'Vendor' },
+      })))
+      .mockResolvedValueOnce([]);
+
+    await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency,
+    });
+
+    expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: 'tenant-1', baseCurrency, totalAmountMinor: 201,
+        totalsByCurrency: { [baseCurrency]: 201 },
+      }),
+    }));
+  });
+
+  it.each([
+    ['MIXED_CURRENCY_LIQUIDATION_NOT_SUPPORTED', ['USD', 'ARS'], 'No se puede generar una liquidación con movimientos en distintas monedas.'],
+    ['LIQUIDATION_BASE_CURRENCY_MISMATCH', ['USD', 'USD'], 'La moneda de los movimientos (USD) no coincide con la moneda base de la liquidación (ARS).'],
+  ])('rejects invalid currencies with %s before financial writes', async (error, currencies, message) => {
+    tx.liquidation.findFirst.mockResolvedValueOnce(null);
+    tx.expense.findMany
+      .mockResolvedValueOnce(currencies.map((currencyCode, index) => ({
+        id: `exp-${index + 1}`, amountMinor: 100, currencyCode,
+        invoiceDate: new Date('2026-05-01T00:00:00.000Z'), description: null,
+        category: { name: 'Water' }, vendor: { name: 'Vendor' },
+      })))
+      .mockResolvedValueOnce([]);
+
+    const promise = service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityException);
+    await expect(promise).rejects.toMatchObject({ response: { statusCode: 422, error, message } });
+    expect(tx.unit.findMany).not.toHaveBeenCalled();
+    expect(tx.liquidation.create).not.toHaveBeenCalled();
+    expect(tx.charge.createMany).not.toHaveBeenCalled();
+    expect(tx.liquidation.updateMany).not.toHaveBeenCalled();
+    expect(auditService.createLogRequired).not.toHaveBeenCalled();
+  });
+
+  it('guards included adjustments and preserves the existing empty behavior', async () => {
+    tx.liquidation.findFirst.mockResolvedValueOnce(null);
+    tx.adjustment.findMany.mockResolvedValueOnce([{
+      id: 'adj-1', amountMinor: 100, currencyCode: 'USD',
+      sourceInvoiceDate: new Date('2026-04-01T00:00:00.000Z'), sourcePeriod: '2026-04',
+      reason: 'Correction', category: { name: 'Water' },
+    }]);
+
+    await expect(service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    })).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_BASE_CURRENCY_MISMATCH' },
+    });
+    expect(tx.liquidation.create).not.toHaveBeenCalled();
+
+    tx.liquidation.findFirst.mockResolvedValueOnce(null);
+    tx.adjustment.findMany.mockResolvedValueOnce([]);
+    await expect(service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    })).rejects.toThrow('No hay gastos VALIDADOS ni ajustes');
+  });
+
+  it('rejects a legacy mixed-currency draft before publication writes', async () => {
+    tx.liquidation.findFirst.mockResolvedValueOnce({
+      ...baseLiquidation,
+      totalsByCurrency: { ARS: 100, USD: 100 },
+      expenseSnapshot: [
+        { ...baseLiquidation.expenseSnapshot[0], amountMinor: 100 },
+        { ...baseLiquidation.expenseSnapshot[0], expenseId: 'exp-2', amountMinor: 100, currencyCode: 'USD' },
+      ],
+    });
+
+    await expect(service.publishLiquidation('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'MIXED_CURRENCY_LIQUIDATION_NOT_SUPPORTED' },
+    });
+    expect(tx.unit.findMany).not.toHaveBeenCalled();
+    expect(tx.charge.createMany).not.toHaveBeenCalled();
+    expect(tx.liquidation.updateMany).not.toHaveBeenCalled();
     expect(auditService.createLogRequired).not.toHaveBeenCalled();
   });
 

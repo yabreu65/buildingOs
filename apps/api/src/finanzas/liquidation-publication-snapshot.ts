@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 export interface PublishedExpenseSnapshot {
@@ -62,6 +62,30 @@ export interface LiquidationDistributionAllocation {
   unitLabel: string | null;
   areaM2: number;
   amountMinor: number;
+}
+
+export function assertLiquidationMovementCurrency(
+  movements: ReadonlyArray<{ currencyCode: string }>,
+  baseCurrency: string,
+): void {
+  const currencies = new Set(movements.map((movement) => movement.currencyCode));
+
+  if (currencies.size > 1) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'MIXED_CURRENCY_LIQUIDATION_NOT_SUPPORTED',
+      message: 'No se puede generar una liquidación con movimientos en distintas monedas.',
+    });
+  }
+
+  const [movementCurrency] = currencies;
+  if (movementCurrency !== undefined && movementCurrency !== baseCurrency) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_BASE_CURRENCY_MISMATCH',
+      message: `La moneda de los movimientos (${movementCurrency}) no coincide con la moneda base de la liquidación (${baseCurrency}).`,
+    });
+  }
 }
 
 export function buildLiquidationPublicationSnapshot(

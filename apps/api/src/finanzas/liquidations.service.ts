@@ -16,6 +16,7 @@ import {
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
 import {
+  assertLiquidationMovementCurrency,
   parseLiquidationPublicationSnapshot,
   type PublishedExpenseSnapshot,
 } from './liquidation-publication-snapshot';
@@ -245,12 +246,6 @@ export class LiquidationsService {
         },
       });
 
-      const billableUnits = await tx.unit.findMany({
-        where: { tenantId, buildingId: dto.buildingId, isBillable: true },
-        include: { unitCategory: { select: { coefficient: true, id: true } } },
-        orderBy: { code: 'asc' },
-      });
-
       const allExpenses: LiquidationExpenseSnapshotRow[] = buildingExpenses.map((expense) => ({
         expenseId: expense.id,
         categoryName: expense.category.name,
@@ -324,6 +319,14 @@ export class LiquidationsService {
             `Registrá gastos propios del edificio o verificá que los gastos comunes tengan asignación a este edificio.`,
         );
       }
+
+      assertLiquidationMovementCurrency(expenseSnapshotItems, dto.baseCurrency);
+
+      const billableUnits = await tx.unit.findMany({
+        where: { tenantId, buildingId: dto.buildingId, isBillable: true },
+        include: { unitCategory: { select: { coefficient: true, id: true } } },
+        orderBy: { code: 'asc' },
+      });
 
       const totalAmountMinor = this.requireCurrencyTotal(totalsByCurrency, dto.baseCurrency);
       const chargesPreview = this.calculateDistribution(
