@@ -78,7 +78,7 @@ export function assertLiquidationMovementCurrency(
     });
   }
 
-  const movementCurrency = currencies.values().next().value as string | undefined;
+  const [movementCurrency] = currencies;
   if (movementCurrency !== undefined && movementCurrency !== baseCurrency) {
     throw new UnprocessableEntityException({
       statusCode: 422,
