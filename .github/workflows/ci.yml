@@ -48,6 +48,9 @@ jobs:
       - name: 📦 Install dependencies
         run: npm ci
 
+      - name: 🏗️ Build internal packages
+        run: npm run build:packages
+
       - name: 🧬 Generate Prisma client
         run: npm run prisma:generate -w apps/api
 
