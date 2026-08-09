@@ -12,12 +12,10 @@ import {
   Length,
   Matches,
   ValidateIf,
-  registerDecorator,
-  ValidationOptions,
-  ValidationArguments,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { MovementType } from '@prisma/client';
+import { IsStrictDateString } from './strict-date.decorator';
 
 export type ExpenseLedgerCategoryMovementType = 'EXPENSE' | 'INCOME';
 export type ExpenseLedgerCategoryCatalogScope = 'BUILDING' | 'CONDOMINIUM_COMMON';
@@ -270,34 +268,6 @@ export class LiquidationParamDto {
   @IsString()
   @Matches(/^c[0-9a-z]{24}$/)
   liquidationId!: string;
-}
-
-function IsStrictDateString(validationOptions?: ValidationOptions) {
-  return (object: object, propertyName: string): void => {
-    registerDecorator({
-      name: 'IsStrictDateString',
-      target: object.constructor,
-      propertyName,
-      options: validationOptions,
-      validator: {
-        validate(value: unknown, args: ValidationArguments): boolean {
-          if (typeof value !== 'string') {
-            return false;
-          }
-
-          if (value.trim() !== value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-            return false;
-          }
-
-          const date = new Date(`${value}T00:00:00.000Z`);
-          return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-        },
-        defaultMessage(validationArguments?: ValidationArguments): string {
-          return `${validationArguments?.property ?? 'value'} must be a valid YYYY-MM-DD date`;
-        },
-      },
-    });
-  };
 }
 
 export interface LiquidationResponseDto {
