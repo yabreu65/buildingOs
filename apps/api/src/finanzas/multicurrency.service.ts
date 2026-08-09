@@ -44,15 +44,20 @@ export class MulticurrencyService {
       if (!membership) throw new BadRequestException('Creator membership does not belong to tenant');
     }
     const rate = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.create({ data: { tenantId, ...dto, rate: new Prisma.Decimal(dto.rate), effectiveAt: new Date(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
+      this.prisma.exchangeRate.create({ data: { tenantId, baseCurrency: dto.baseCurrency, quoteCurrency: dto.quoteCurrency, rate: new Prisma.Decimal(dto.rate), effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
     );
     return this.serialize(rate);
   }
 
   async update(tenantId: string, id: string, dto: UpdateExchangeRateDto): Promise<ExchangeRateResponse> {
     this.assertRate(dto.rate);
+    const data: Prisma.ExchangeRateUpdateManyMutationInput = {
+      rate: new Prisma.Decimal(dto.rate),
+      effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt),
+      ...(dto.source !== undefined ? { source: dto.source.trim() || null } : {}),
+    };
     const result = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.updateMany({ where: { id, tenantId }, data: { ...dto, rate: new Prisma.Decimal(dto.rate), effectiveAt: new Date(dto.effectiveAt), source: dto.source?.trim() || null } }),
+      this.prisma.exchangeRate.updateMany({ where: { id, tenantId }, data }),
     );
     if (result.count !== 1) throw new NotFoundException('Exchange rate not found');
     const rate = await this.prisma.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
@@ -65,6 +70,10 @@ export class MulticurrencyService {
 
   private assertRate(rate: string): void {
     if (!new Prisma.Decimal(rate).greaterThan(0)) throw new BadRequestException('Rate must be greater than zero');
+  }
+
+  private normalizeEffectiveDate(date: string): Date {
+    return new Date(`${date}T00:00:00.000Z`);
   }
 
   private async executeExchangeRateWrite<T>(operation: Promise<T>): Promise<T> {

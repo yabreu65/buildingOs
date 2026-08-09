@@ -17,14 +17,21 @@ describe('multicurrency DTO validation', () => {
     ['update', UpdateExchangeRateDto, {}],
   ] as const)('%s exchange rate', (_operation, Dto, additionalFields) => {
     it.each(['1', '36.5', '0.50', '0.000000000001', '9999999999999999', '9999999999999999.123456789012'])('accepts rate %s', async (rate) => {
-      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
+      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09' });
       await expect(validate(value)).resolves.toHaveLength(0);
     });
 
     it.each(['99999999999999999', '1.1234567890123', '0', '-1', '+0'])('rejects rate %s', async (rate) => {
-      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
+      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09' });
       expect(await validate(value)).not.toHaveLength(0);
     });
+  });
+
+  it.each(['2026-08-09T00:00:00.000Z', '2026-02-30', '2026-8-9', 'not-a-date'])('rejects non-canonical effective date %s for create and update', async (effectiveAt) => {
+    const create = Object.assign(new CreateExchangeRateDto(), { baseCurrency: 'USD', quoteCurrency: 'VES', rate: '1', effectiveAt });
+    const update = Object.assign(new UpdateExchangeRateDto(), { rate: '1', effectiveAt });
+    expect(await validate(create)).not.toHaveLength(0);
+    expect(await validate(update)).not.toHaveLength(0);
   });
 
   it('rejects invalid currencies and effective dates', async () => {

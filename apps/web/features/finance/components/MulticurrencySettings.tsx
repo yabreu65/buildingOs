@@ -18,7 +18,7 @@ function formatCalendarDate(value: string) {
 }
 
 export function MulticurrencySettings({ tenantId }: Props) {
-  const canWrite = useCan('finance.settings.write');
+  const canWrite = useCan('finance.settings.write', tenantId);
   const client = useQueryClient();
   const settings = useQuery({ queryKey: ['finance-settings', tenantId], queryFn: () => getFinanceSettings(tenantId) });
   const rates = useQuery({ queryKey: ['exchange-rates', tenantId], queryFn: () => listExchangeRates(tenantId) });
@@ -28,14 +28,17 @@ export function MulticurrencySettings({ tenantId }: Props) {
   const [rate, setRate] = useState('');
   const [effectiveAt, setEffectiveAt] = useState('');
   const [source, setSource] = useState('');
+  const [sourceTouched, setSourceTouched] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const selectedFunctionalCurrency = functionalCurrency ?? settings.data?.functionalCurrency ?? 'ARS';
   const saveSettings = useMutation({ mutationFn: () => updateFinanceSettings(tenantId, selectedFunctionalCurrency), onSuccess: () => client.invalidateQueries({ queryKey: ['finance-settings', tenantId] }) });
   const saveRate = useMutation({ mutationFn: () => {
-    const input = { rate, effectiveAt: new Date(`${effectiveAt}T00:00:00.000Z`).toISOString(), source: source.trim() || undefined };
-    return editingId ? updateExchangeRate(tenantId, editingId, input) : createExchangeRate(tenantId, { baseCurrency, quoteCurrency, ...input });
-  }, onSuccess: () => { setRate(''); setSource(''); setEffectiveAt(''); setEditingId(null); void client.invalidateQueries({ queryKey: ['exchange-rates', tenantId] }); } });
+    const input = { rate, effectiveAt };
+    return editingId
+      ? updateExchangeRate(tenantId, editingId, { ...input, ...(sourceTouched ? { source: source.trim() } : {}) })
+      : createExchangeRate(tenantId, { baseCurrency, quoteCurrency, ...input, ...(source.trim() ? { source: source.trim() } : {}) });
+  }, onSuccess: () => { setRate(''); setSource(''); setSourceTouched(false); setEffectiveAt(''); setEditingId(null); void client.invalidateQueries({ queryKey: ['exchange-rates', tenantId] }); } });
 
   const submitRate = (event: FormEvent) => {
     event.preventDefault();
@@ -72,13 +75,13 @@ export function MulticurrencySettings({ tenantId }: Props) {
         <select aria-label="Destino" value={quoteCurrency} disabled={editingId !== null} onChange={(event) => setQuoteCurrency(event.target.value as CanonicalCurrency)} className="border rounded px-3 py-2">{CANONICAL_CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
         <input aria-label="Tasa" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="Tasa" inputMode="decimal" className="border rounded px-3 py-2" />
         <input aria-label="Fecha efectiva" type="date" value={effectiveAt} onChange={(event) => setEffectiveAt(event.target.value)} className="border rounded px-3 py-2" />
-        <input aria-label="Fuente" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Fuente (opcional)" className="border rounded px-3 py-2" />
+        <input aria-label="Fuente" value={source} onChange={(event) => { setSource(event.target.value); setSourceTouched(true); }} placeholder="Fuente (opcional)" className="border rounded px-3 py-2" />
         <Button type="submit" disabled={saveRate.isPending}>{editingId ? 'Guardar cambios' : 'Agregar tasa'}</Button>
       </form>}
       {validationError && <p className="text-sm text-red-700">{validationError}</p>}
       {saveRate.isSuccess && <p className="text-sm text-green-700">Tasa guardada.</p>}
       {saveRate.error && <p className="text-sm text-red-700">{saveRate.error.message}</p>}
-      {!rates.data?.length ? <p className="text-sm text-muted-foreground">No hay tasas registradas.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>Origen</th><th>Destino</th><th>Tasa</th><th>Fecha efectiva</th><th>Fuente</th>{canWrite && <th>Acciones</th>}</tr></thead><tbody>{rates.data.map((item) => <tr key={item.id}><td>{item.baseCurrency}</td><td>{item.quoteCurrency}</td><td>{item.rate}</td><td>{formatCalendarDate(item.effectiveAt)}</td><td>{item.source || 'Sin fuente'}</td>{canWrite && <td><button type="button" onClick={() => { setEditingId(item.id); setBaseCurrency(item.baseCurrency); setQuoteCurrency(item.quoteCurrency); setRate(item.rate); setEffectiveAt(item.effectiveAt.slice(0, 10)); setSource(item.source || ''); }}>Editar</button></td>}</tr>)}</tbody></table></div>}
+      {!rates.data?.length ? <p className="text-sm text-muted-foreground">No hay tasas registradas.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>Origen</th><th>Destino</th><th>Tasa</th><th>Fecha efectiva</th><th>Fuente</th>{canWrite && <th>Acciones</th>}</tr></thead><tbody>{rates.data.map((item) => <tr key={item.id}><td>{item.baseCurrency}</td><td>{item.quoteCurrency}</td><td>{item.rate}</td><td>{formatCalendarDate(item.effectiveAt)}</td><td>{item.source || 'Sin fuente'}</td>{canWrite && <td><button type="button" onClick={() => { setEditingId(item.id); setBaseCurrency(item.baseCurrency); setQuoteCurrency(item.quoteCurrency); setRate(item.rate); setEffectiveAt(item.effectiveAt.slice(0, 10)); setSource(item.source || ''); setSourceTouched(false); }}>Editar</button></td>}</tr>)}</tbody></table></div>}
     </Card>
   </div>;
 }

@@ -1,5 +1,6 @@
 import { CANONICAL_CURRENCIES, type CanonicalCurrency } from '@buildingos/contracts';
-import { IsDateString, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsStrictDateString } from './strict-date.decorator';
 
 const DECIMAL_28_12_POSITIVE_PATTERN = /^(?!0+(?:\.0+)?$)\d{1,16}(?:\.\d{1,12})?$/;
 const DECIMAL_28_12_POSITIVE_MESSAGE = 'rate must be greater than zero with at most 16 integer and 12 fractional digits';
@@ -30,7 +31,7 @@ export class CreateExchangeRateDto {
   @Matches(DECIMAL_28_12_POSITIVE_PATTERN, { message: DECIMAL_28_12_POSITIVE_MESSAGE })
   rate!: string;
 
-  @IsDateString()
+  @IsStrictDateString({ message: 'effectiveAt must be a valid YYYY-MM-DD date' })
   effectiveAt!: string;
 
   @IsOptional()
@@ -44,7 +45,7 @@ export class UpdateExchangeRateDto {
   @Matches(DECIMAL_28_12_POSITIVE_PATTERN, { message: DECIMAL_28_12_POSITIVE_MESSAGE })
   rate!: string;
 
-  @IsDateString()
+  @IsStrictDateString({ message: 'effectiveAt must be a valid YYYY-MM-DD date' })
   effectiveAt!: string;
 
   @IsOptional()

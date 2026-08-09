@@ -11,7 +11,7 @@ describe('MulticurrencyService', () => {
   };
   const prisma = { tenant, membership, exchangeRate } as unknown as PrismaService;
   const service = new MulticurrencyService(prisma);
-  const dto = { baseCurrency: 'USD' as const, quoteCurrency: 'VES' as const, rate: '36.500000000001', effectiveAt: '2026-08-09T00:00:00.000Z', source: 'Central bank' };
+  const dto = { baseCurrency: 'USD' as const, quoteCurrency: 'VES' as const, rate: '36.500000000001', effectiveAt: '2026-08-09', source: 'Central bank' };
   const record = { id: 'rate-1', tenantId: 'tenant-1', ...dto, rate: new Prisma.Decimal(dto.rate), effectiveAt: new Date(dto.effectiveAt), source: dto.source, createdByMembershipId: 'membership-1', createdAt: new Date(), updatedAt: new Date() };
   const publicResponseFields = ['id', 'baseCurrency', 'quoteCurrency', 'rate', 'effectiveAt', 'source', 'createdAt', 'updatedAt'];
 
@@ -44,6 +44,7 @@ describe('MulticurrencyService', () => {
     exchangeRate.create.mockResolvedValue(record);
     await expect(service.create('tenant-1', 'membership-1', dto)).resolves.toMatchObject({ rate: '36.500000000001' });
     expect(exchangeRate.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ tenantId: 'tenant-1', rate: expect.any(Prisma.Decimal) }) }));
+    expect(exchangeRate.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ effectiveAt: new Date('2026-08-09T00:00:00.000Z') }) }));
   });
 
   it.each([
@@ -133,6 +134,23 @@ describe('MulticurrencyService', () => {
     const response = await service.update('tenant-1', 'rate-1', { rate: '40.25', effectiveAt: dto.effectiveAt, source: 'Market' });
     expect(exchangeRate.updateMany).toHaveBeenCalledWith({ where: { id: 'rate-1', tenantId: 'tenant-1' }, data: expect.not.objectContaining({ baseCurrency: expect.anything(), quoteCurrency: expect.anything() }) });
     expectPublicExchangeRate(response);
+  });
+
+  it.each([
+    [undefined, undefined],
+    ['  Market  ', 'Market'],
+    ['', null],
+    ['   ', null],
+  ])('maps PATCH source %p to %p without omission ambiguity', async (source, expectedSource) => {
+    exchangeRate.updateMany.mockResolvedValue({ count: 1 });
+    exchangeRate.findFirstOrThrow.mockResolvedValue(record);
+
+    await service.update('tenant-1', 'rate-1', { rate: '40.25', effectiveAt: '2026-08-10', source });
+
+    const data = exchangeRate.updateMany.mock.calls[0][0].data;
+    expect(data.effectiveAt).toEqual(new Date('2026-08-10T00:00:00.000Z'));
+    if (source === undefined) expect(data).not.toHaveProperty('source');
+    else expect(data).toHaveProperty('source', expectedSource);
   });
 
   it('does not update a rate from another tenant', async () => {

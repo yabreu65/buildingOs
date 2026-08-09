@@ -105,6 +105,18 @@ describe('MulticurrencySettings', () => {
     const payload = mockedApi.updateExchangeRate.mock.calls[0][2];
     expect(payload).not.toHaveProperty('baseCurrency');
     expect(payload).not.toHaveProperty('quoteCurrency');
+    expect(payload).not.toHaveProperty('source');
+    expect(payload.effectiveAt).toBe('2026-08-09');
+  });
+
+  it('sends an empty source only when an existing source is explicitly cleared', async () => {
+    mockedApi.listExchangeRates.mockResolvedValue([{ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5', effectiveAt: '2026-08-09T00:00:00.000Z', source: 'Central bank' }]);
+    renderSubject();
+    await screen.findByText('Central bank');
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    fireEvent.change(screen.getByLabelText('Fuente'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(mockedApi.updateExchangeRate).toHaveBeenCalledWith('tenant-1', 'rate-1', expect.objectContaining({ source: '' })));
   });
 
   it('shows data without mutation controls for an OPERATOR', async () => {
@@ -117,6 +129,7 @@ describe('MulticurrencySettings', () => {
     expect(screen.queryByRole('button', { name: 'Guardar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Agregar tasa' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Editar' })).toBeNull();
+    expect(mockedUseCan).toHaveBeenCalledWith('finance.settings.write', 'tenant-1');
   });
 
   it.each<Role>(['TENANT_ADMIN', 'TENANT_OWNER'])('allows %s to mutate using canonical permissions', async (role) => {
