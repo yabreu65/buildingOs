@@ -3,12 +3,18 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MulticurrencySettings } from './MulticurrencySettings';
 import * as api from '../services/multicurrency.api';
+import { can } from '@/features/rbac/rbac.permissions';
+import * as rbacHooks from '@/features/rbac/rbac.hooks';
+import type { Role } from '@buildingos/contracts';
 
 jest.mock('../services/multicurrency.api');
+jest.mock('@/features/rbac/rbac.hooks', () => ({ useCan: jest.fn() }));
 jest.mock('@buildingos/contracts', () => ({ CANONICAL_CURRENCIES: ['USD', 'VES', 'ARS', 'COP'] }));
 const mockedApi = jest.mocked(api);
+const mockedUseCan = jest.mocked(rbacHooks.useCan);
 
-function renderSubject() {
+function renderSubject(role: Role = 'TENANT_ADMIN') {
+  mockedUseCan.mockImplementation((permission) => can(role, permission));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={client}><MulticurrencySettings tenantId="tenant-1" /></QueryClientProvider>);
 }
@@ -81,5 +87,26 @@ describe('MulticurrencySettings', () => {
     const payload = mockedApi.updateExchangeRate.mock.calls[0][2];
     expect(payload).not.toHaveProperty('baseCurrency');
     expect(payload).not.toHaveProperty('quoteCurrency');
+  });
+
+  it('shows data without mutation controls for an OPERATOR', async () => {
+    mockedApi.listExchangeRates.mockResolvedValue([{ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5', effectiveAt: '2026-08-09T00:00:00.000Z', source: 'Central bank' }]);
+    renderSubject('OPERATOR');
+    await screen.findByText('Central bank');
+    expect(screen.getAllByText('VES')).not.toHaveLength(0);
+    expect(screen.getByText('09/08/2026')).toBeTruthy();
+    expect(screen.queryByLabelText('Moneda funcional')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Guardar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Agregar tasa' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Editar' })).toBeNull();
+  });
+
+  it.each<Role>(['TENANT_ADMIN', 'TENANT_OWNER'])('allows %s to mutate using canonical permissions', async (role) => {
+    mockedApi.listExchangeRates.mockResolvedValue([{ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5', effectiveAt: '2026-08-09T00:00:00.000Z', source: null }]);
+    renderSubject(role);
+    await screen.findByText('09/08/2026');
+    expect(screen.getByRole('button', { name: 'Guardar' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Agregar tasa' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Editar' })).toBeTruthy();
   });
 });

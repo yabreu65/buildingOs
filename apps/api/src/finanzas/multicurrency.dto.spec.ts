@@ -1,5 +1,5 @@
 import { validate } from 'class-validator';
-import { CreateExchangeRateDto, UpdateFinanceSettingsDto } from './multicurrency.dto';
+import { CreateExchangeRateDto, UpdateExchangeRateDto, UpdateFinanceSettingsDto } from './multicurrency.dto';
 
 describe('multicurrency DTO validation', () => {
   it.each(['USD', 'VES', 'ARS', 'COP'])('accepts functional currency %s', async (currency) => {
@@ -12,9 +12,19 @@ describe('multicurrency DTO validation', () => {
     expect(await validate(value)).not.toHaveLength(0);
   });
 
-  it.each(['0', '-1', '1.1234567890123'])('rejects invalid rate %s', async (rate) => {
-    const value = Object.assign(new CreateExchangeRateDto(), { baseCurrency: 'USD', quoteCurrency: 'VES', rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
-    expect(await validate(value)).not.toHaveLength(0);
+  describe.each([
+    ['create', CreateExchangeRateDto, { baseCurrency: 'USD', quoteCurrency: 'VES' }],
+    ['update', UpdateExchangeRateDto, {}],
+  ] as const)('%s exchange rate', (_operation, Dto, additionalFields) => {
+    it.each(['1', '36.5', '9999999999999999', '9999999999999999.123456789012'])('accepts rate %s', async (rate) => {
+      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
+      await expect(validate(value)).resolves.toHaveLength(0);
+    });
+
+    it.each(['99999999999999999', '1.1234567890123', '0', '-1', '+0'])('rejects rate %s', async (rate) => {
+      const value = Object.assign(new Dto(), additionalFields, { rate, effectiveAt: '2026-08-09T00:00:00.000Z' });
+      expect(await validate(value)).not.toHaveLength(0);
+    });
   });
 
   it('rejects invalid currencies and effective dates', async () => {

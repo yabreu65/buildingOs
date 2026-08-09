@@ -5,11 +5,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useState } from 'react';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
+import { useCan } from '@/features/rbac/rbac.hooks';
 import { createExchangeRate, getFinanceSettings, listExchangeRates, updateExchangeRate, updateFinanceSettings } from '../services/multicurrency.api';
 
 interface Props { readonly tenantId: string }
 
+function formatCalendarDate(value: string) {
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return `${day}/${month}/${year}`;
+}
+
 export function MulticurrencySettings({ tenantId }: Props) {
+  const canWrite = useCan('finance.settings.write');
   const client = useQueryClient();
   const settings = useQuery({ queryKey: ['finance-settings', tenantId], queryFn: () => getFinanceSettings(tenantId) });
   const rates = useQuery({ queryKey: ['exchange-rates', tenantId], queryFn: () => listExchangeRates(tenantId) });
@@ -46,30 +53,30 @@ export function MulticurrencySettings({ tenantId }: Props) {
     <Card className="p-6 space-y-3">
       <h2 className="font-semibold">Moneda funcional</h2>
       <p className="text-sm text-muted-foreground">Moneda de referencia contable del tenant. No convierte movimientos existentes.</p>
-      <div className="flex gap-2">
-        <select aria-label="Moneda funcional" value={selectedFunctionalCurrency} onChange={(event) => setFunctionalCurrency(event.target.value as CanonicalCurrency)} className="border rounded px-3 py-2">
-          {CANONICAL_CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}
-        </select>
-        <Button onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending}>Guardar</Button>
-      </div>
+      {canWrite ? <div className="flex gap-2">
+          <select aria-label="Moneda funcional" value={selectedFunctionalCurrency} onChange={(event) => setFunctionalCurrency(event.target.value as CanonicalCurrency)} className="border rounded px-3 py-2">
+            {CANONICAL_CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}
+          </select>
+          <Button onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending}>Guardar</Button>
+        </div> : <p>{selectedFunctionalCurrency}</p>}
       {saveSettings.isSuccess && <p className="text-sm text-green-700">Moneda funcional actualizada.</p>}
       {saveSettings.error && <p className="text-sm text-red-700">{saveSettings.error.message}</p>}
     </Card>
     <Card className="p-6 space-y-4">
       <h2 className="font-semibold">Tasas de cambio</h2>
       <p className="text-sm text-muted-foreground">Semántica: 1 moneda de origen = tasa monedas de destino.</p>
-      <form onSubmit={submitRate} className="grid gap-3 md:grid-cols-5">
+      {canWrite && <form onSubmit={submitRate} className="grid gap-3 md:grid-cols-5">
         <select aria-label="Origen" value={baseCurrency} disabled={editingId !== null} onChange={(event) => setBaseCurrency(event.target.value as CanonicalCurrency)} className="border rounded px-3 py-2">{CANONICAL_CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
         <select aria-label="Destino" value={quoteCurrency} disabled={editingId !== null} onChange={(event) => setQuoteCurrency(event.target.value as CanonicalCurrency)} className="border rounded px-3 py-2">{CANONICAL_CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
         <input aria-label="Tasa" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="Tasa" inputMode="decimal" className="border rounded px-3 py-2" />
         <input aria-label="Fecha efectiva" type="date" value={effectiveAt} onChange={(event) => setEffectiveAt(event.target.value)} className="border rounded px-3 py-2" />
         <input aria-label="Fuente" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Fuente (opcional)" className="border rounded px-3 py-2" />
         <Button type="submit" disabled={saveRate.isPending}>{editingId ? 'Guardar cambios' : 'Agregar tasa'}</Button>
-      </form>
+      </form>}
       {validationError && <p className="text-sm text-red-700">{validationError}</p>}
       {saveRate.isSuccess && <p className="text-sm text-green-700">Tasa guardada.</p>}
       {saveRate.error && <p className="text-sm text-red-700">{saveRate.error.message}</p>}
-      {!rates.data?.length ? <p className="text-sm text-muted-foreground">No hay tasas registradas.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>Origen</th><th>Destino</th><th>Tasa</th><th>Fecha efectiva</th><th>Fuente</th><th>Acciones</th></tr></thead><tbody>{rates.data.map((item) => <tr key={item.id}><td>{item.baseCurrency}</td><td>{item.quoteCurrency}</td><td>{item.rate}</td><td>{new Date(item.effectiveAt).toLocaleDateString()}</td><td>{item.source || 'Sin fuente'}</td><td><button type="button" onClick={() => { setEditingId(item.id); setBaseCurrency(item.baseCurrency); setQuoteCurrency(item.quoteCurrency); setRate(item.rate); setEffectiveAt(item.effectiveAt.slice(0, 10)); setSource(item.source || ''); }}>Editar</button></td></tr>)}</tbody></table></div>}
+      {!rates.data?.length ? <p className="text-sm text-muted-foreground">No hay tasas registradas.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>Origen</th><th>Destino</th><th>Tasa</th><th>Fecha efectiva</th><th>Fuente</th>{canWrite && <th>Acciones</th>}</tr></thead><tbody>{rates.data.map((item) => <tr key={item.id}><td>{item.baseCurrency}</td><td>{item.quoteCurrency}</td><td>{item.rate}</td><td>{formatCalendarDate(item.effectiveAt)}</td><td>{item.source || 'Sin fuente'}</td>{canWrite && <td><button type="button" onClick={() => { setEditingId(item.id); setBaseCurrency(item.baseCurrency); setQuoteCurrency(item.quoteCurrency); setRate(item.rate); setEffectiveAt(item.effectiveAt.slice(0, 10)); setSource(item.source || ''); }}>Editar</button></td>}</tr>)}</tbody></table></div>}
     </Card>
   </div>;
 }

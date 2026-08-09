@@ -1,6 +1,9 @@
 import { CANONICAL_CURRENCIES, type CanonicalCurrency } from '@buildingos/contracts';
 import { IsDateString, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
+const DECIMAL_28_12_POSITIVE_PATTERN = /^(?!0+(?:\.0+)?$)\d{1,16}(?:\.\d{1,12})?$/;
+const DECIMAL_28_12_POSITIVE_MESSAGE = 'rate must be greater than zero with at most 16 integer and 12 fractional digits';
+
 export class UpdateFinanceSettingsDto {
   @IsIn(CANONICAL_CURRENCIES)
   functionalCurrency!: CanonicalCurrency;
@@ -24,7 +27,7 @@ export class CreateExchangeRateDto {
   quoteCurrency!: CanonicalCurrency;
 
   @IsString()
-  @Matches(/^(?:0*\.\d{0,11}[1-9]|0*[1-9]\d*(?:\.\d{1,12})?)$/, { message: 'rate must be a positive decimal string with at most 12 decimal places' })
+  @Matches(DECIMAL_28_12_POSITIVE_PATTERN, { message: DECIMAL_28_12_POSITIVE_MESSAGE })
   rate!: string;
 
   @IsDateString()
@@ -38,7 +41,7 @@ export class CreateExchangeRateDto {
 
 export class UpdateExchangeRateDto {
   @IsString()
-  @Matches(/^(?:0*\.\d{0,11}[1-9]|0*[1-9]\d*(?:\.\d{1,12})?)$/, { message: 'rate must be a positive decimal string with at most 12 decimal places' })
+  @Matches(DECIMAL_28_12_POSITIVE_PATTERN, { message: DECIMAL_28_12_POSITIVE_MESSAGE })
   rate!: string;
 
   @IsDateString()
