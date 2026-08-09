@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanzasValidators } from './finanzas.validators';
 import {
+  assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
   type PublishedExpenseSnapshot,
 } from './liquidation-publication-snapshot';
@@ -507,6 +508,9 @@ export class LiquidationPublicationUseCase {
             );
           }
 
+          const publicationExpenses = getPublicationSnapshotExpenses(current.expenseSnapshot);
+          assertLiquidationMovementCurrency(publicationExpenses, current.baseCurrency);
+
           const billableUnits = await tx.unit.findMany({
             where: { tenantId, buildingId: current.buildingId, isBillable: true },
             include: { unitCategory: { select: { coefficient: true, id: true } } },
@@ -537,7 +541,7 @@ export class LiquidationPublicationUseCase {
             baseCurrency: current.baseCurrency,
             totalAmountMinor: current.totalAmountMinor,
             totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
-            expenses: getPublicationSnapshotExpenses(current.expenseSnapshot),
+            expenses: publicationExpenses,
             allocations: distribution.map((item) => ({
               unitId: item.unitId,
               unitCode: item.unitCode,
