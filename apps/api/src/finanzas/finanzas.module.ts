@@ -39,6 +39,7 @@ import { PaymentGatewayModule } from './payment-gateway/payment-gateway.module';
 import { ConfigService } from '../config/config.service';
 import { MulticurrencyController } from './multicurrency.controller';
 import { MulticurrencyService } from './multicurrency.service';
+import { CurrencyConversionService } from './currency-conversion.service';
 import { AppConfigModule } from '../config/config.module';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
@@ -125,6 +126,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     PaymentReceiptService,
     SignatureGuard,
     MulticurrencyService,
+    CurrencyConversionService,
   ],
   exports: [
     FinanzasService,
@@ -142,6 +144,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     RecurringExpenseService,
     FinanceSummaryService,
     PaymentReceiptService,
+    CurrencyConversionService,
   ],
 })
 export class FinanzasModule {}
