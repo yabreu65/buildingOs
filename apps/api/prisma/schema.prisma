@@ -356,6 +356,7 @@ model ExchangeRate {
   createdByMembership Membership? @relation("ExchangeRateCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   expenses            Expense[]
   incomes             Income[]
+  adjustments         Adjustment[]
 
   @@unique([tenantId, baseCurrency, quoteCurrency, effectiveAt], map: "ExchangeRate_tenant_pair_effective_key")
   @@index([tenantId, baseCurrency, quoteCurrency, effectiveAt(sort: Desc)], map: "ExchangeRate_tenant_pair_effective_idx")
@@ -2088,16 +2089,25 @@ model Adjustment {
   validatedAt              DateTime?
   voidedByMembershipId     String?
   voidedAt                 DateTime?
+  functionalAmountMinor    Int?           // Snapshot: monto en moneda funcional (minor units) al momento de validación
+  functionalCurrencyCode   String?        // Snapshot: moneda funcional del tenant
+  exchangeRateId           String?        // Snapshot: FK a la tasa usada (null si IDENTITY)
+  exchangeRateValue        Decimal?       @db.Decimal(28, 12) // Snapshot numérico de la tasa aplicada (nunca derivar solo de la fila)
+  exchangeRateDirection    String?        // Snapshot: IDENTITY | DIRECT | INVERSE
+  exchangeRateEffectiveAt  DateTime?      // Snapshot: efectividad de la tasa fuente
+  conversionDate           DateTime?      // Snapshot: fecha de conversión (sourceInvoiceDate, UTC date-only)
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
-  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  building Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  category ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building     Building              @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  category     ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  exchangeRate ExchangeRate?         @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, buildingId, targetPeriod, status])
   @@index([tenantId, buildingId, sourcePeriod])
   @@index([tenantId, status])
+  @@index([tenantId, exchangeRateId])
 }
 
 // ============================================================================

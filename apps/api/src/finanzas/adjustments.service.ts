@@ -8,6 +8,7 @@ import { AdjustmentStatus, AuditAction, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { CurrencyConversionService } from './currency-conversion.service';
 import {
   CreateAdjustmentDto,
   AdjustmentResponseDto,
@@ -29,6 +30,7 @@ export class AdjustmentsService {
     private readonly prisma: PrismaService,
     private readonly validators: FinanzasValidators,
     private readonly auditService: AuditService,
+    private readonly currencyConversionService: CurrencyConversionService,
   ) {}
 
   async createAdjustment(
@@ -121,12 +123,24 @@ export class AdjustmentsService {
       );
     }
 
+    const conversionSnapshot = await this.buildAdjustmentConversionSnapshot(
+      tenantId,
+      adjustment,
+    );
+
     const updated = await this.prisma.adjustment.update({
       where: { id: adjustmentId },
       data: {
         status: 'VALIDATED',
         validatedByMembershipId: membershipId,
         validatedAt: new Date(),
+        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+        exchangeRateId: conversionSnapshot.exchangeRateId,
+        exchangeRateValue: conversionSnapshot.exchangeRateValue,
+        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+        conversionDate: conversionSnapshot.conversionDate,
       },
       include: {
         category: { select: { name: true } },
@@ -183,6 +197,61 @@ export class AdjustmentsService {
     return adjustments.map((adjustment) => this.toDto(adjustment));
   }
 
+  private toConversionDate(sourceInvoiceDate: Date): string {
+    const year = sourceInvoiceDate.getUTCFullYear();
+    const month = String(sourceInvoiceDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(sourceInvoiceDate.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private async buildAdjustmentConversionSnapshot(
+    tenantId: string,
+    adjustment: {
+      amountMinor: number;
+      currencyCode: string;
+      sourceInvoiceDate: Date;
+    },
+  ): Promise<{
+    functionalAmountMinor: number;
+    functionalCurrencyCode: string;
+    exchangeRateId: string | null;
+    exchangeRateValue: string;
+    exchangeRateDirection: 'IDENTITY' | 'DIRECT' | 'INVERSE';
+    exchangeRateEffectiveAt: Date | null;
+    conversionDate: Date;
+  }> {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: tenantId },
+      select: { id: true, functionalCurrency: true },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant no encontrado: ${tenantId}`);
+    }
+
+    const result = await this.currencyConversionService.convert({
+      tenantId,
+      amount: adjustment.amountMinor,
+      originalCurrency: adjustment.currencyCode as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['originalCurrency'],
+      functionalCurrency: tenant.functionalCurrency as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['functionalCurrency'],
+      conversionDate: this.toConversionDate(adjustment.sourceInvoiceDate),
+    });
+
+    return {
+      functionalAmountMinor: result.functionalAmount,
+      functionalCurrencyCode: result.functionalCurrency,
+      exchangeRateId: result.sourceExchangeRateId,
+      exchangeRateValue: result.appliedRate,
+      exchangeRateDirection: result.direction,
+      exchangeRateEffectiveAt: result.sourceEffectiveAt,
+      conversionDate: result.conversionDate,
+    };
+  }
+
   private toDto(adjustment: AdjustmentWithCategoryName): AdjustmentResponseDto {
     return {
       id: adjustment.id,
@@ -200,6 +269,16 @@ export class AdjustmentsService {
       createdByMembershipId: adjustment.createdByMembershipId,
       validatedByMembershipId: adjustment.validatedByMembershipId,
       validatedAt: adjustment.validatedAt,
+      functionalAmountMinor: adjustment.functionalAmountMinor ?? null,
+      functionalCurrencyCode: adjustment.functionalCurrencyCode ?? null,
+      exchangeRateId: adjustment.exchangeRateId ?? null,
+      exchangeRateValue:
+        adjustment.exchangeRateValue === null || adjustment.exchangeRateValue === undefined
+          ? null
+          : adjustment.exchangeRateValue.toString(),
+      exchangeRateDirection: adjustment.exchangeRateDirection ?? null,
+      exchangeRateEffectiveAt: adjustment.exchangeRateEffectiveAt ?? null,
+      conversionDate: adjustment.conversionDate ?? null,
       createdAt: adjustment.createdAt,
       updatedAt: adjustment.updatedAt,
     };
