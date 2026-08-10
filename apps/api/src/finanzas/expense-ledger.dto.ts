@@ -467,6 +467,13 @@ export interface AdjustmentResponseDto {
   createdByMembershipId: string;
   validatedByMembershipId: string | null;
   validatedAt: Date | null;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: Date | null;
+  conversionDate?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

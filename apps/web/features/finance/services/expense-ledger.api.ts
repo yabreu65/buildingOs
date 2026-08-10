@@ -785,7 +785,7 @@ export async function getNotasRevelatorias(
 
 // ── Adjustments / Retroactivos ─────────────────────────────────────────────
 
-export type AdjustmentStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
+export type AdjustmentStatus = 'DRAFT' | 'VALIDATED' | 'VOIDED';
 
 export interface Adjustment {
   id: string;
@@ -803,6 +803,13 @@ export interface Adjustment {
   createdByMembershipId: string;
   validatedByMembershipId: string | null;
   validatedAt: string | null;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: string | null;
+  conversionDate?: string | null;
   createdAt: string;
   updatedAt: string;
 }
