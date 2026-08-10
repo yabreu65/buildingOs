@@ -23,9 +23,10 @@ import { ExpenseLedgerCategoriesService } from './expense-ledger-categories.serv
 import { ExpensesService } from './expenses.service';
 import { IncomesService } from './incomes.service';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationEngineService } from './liquidation-engine.service';
+import { LiquidationEngineController } from './liquidation-engine.controller';
 import { MovementAllocationService } from './movement-allocation.service';
 import { UnitGroupService } from './unit-group.service';
-import { LiquidationEngineService } from './liquidation-engine.service';
 import { AdjustmentsService } from './adjustments.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ResidentAccessModule } from '../resident-access/resident-access.module';
@@ -77,6 +78,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     ExpensesController,
     IncomesController,
     LiquidationsController,
+    LiquidationEngineController,
     UnitGroupController,
     MovementAllocationController,
     AdjustmentsController,

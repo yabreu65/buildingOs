@@ -215,6 +215,7 @@ export function toLiquidationResponseDto(
     period: liquidation.period,
     chargePeriod: liquidation.chargePeriod,
     status: liquidation.status,
+    valuationMode: liquidation.valuationMode,
     baseCurrency: liquidation.baseCurrency,
     totalAmountMinor: liquidation.totalAmountMinor,
     totalsByCurrency: parseTotalsByCurrency(liquidation.totalsByCurrency),
