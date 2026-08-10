@@ -257,6 +257,43 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
   });
 
+  describe('same-currency provider partial payment', () => {
+    it('charge 10000, payment 4000, event 4000 => allocation 4000, charge PARTIAL, outstanding 6000', async () => {
+      mockPrisma.charge.findFirst.mockImplementation(() =>
+        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
+
+      const result = await run(paidEvent({ amount: 4000 }));
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ amount: 4000 }),
+        }),
+      );
+      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'PARTIAL' }) }),
+      );
+      // ledger-derived outstanding
+      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+    });
+
+    it('replay of the partial event does not duplicate the allocation', async () => {
+      mockPrisma.charge.findFirst.mockImplementation(() =>
+        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
+
+      await run(paidEvent({ amount: 4000 }));
+      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+      await run(paidEvent({ amount: 4000 }));
+
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledTimes(1);
+      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+    });
+  });
+
   describe('amount guards', () => {
     it('event amount above charge outstanding => 422, no mutation', async () => {
       createdAllocations.push({ amount: 8000 });
