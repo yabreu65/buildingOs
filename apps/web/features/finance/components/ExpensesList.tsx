@@ -241,6 +241,17 @@ export function ExpensesList({
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
                     {formatCurrency(expense.amountMinor, expense.currencyCode)}
+                    {expense.functionalAmountMinor != null &&
+                      expense.functionalCurrencyCode &&
+                      expense.functionalCurrencyCode !== expense.currencyCode && (
+                        <p className="text-xs text-muted-foreground">
+                          ≈{' '}
+                          {formatCurrency(
+                            expense.functionalAmountMinor,
+                            expense.functionalCurrencyCode,
+                          )}
+                        </p>
+                      )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span

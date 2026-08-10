@@ -216,6 +216,13 @@ export interface ExpenseResponseDto {
   status: 'DRAFT' | 'VALIDATED' | 'VOID';
   scopeType: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
   unitGroupId: string | null;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: Date | null;
+  conversionDate?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

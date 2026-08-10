@@ -14,6 +14,7 @@ import {
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
 import { MovementAllocationService } from './movement-allocation.service';
+import { CurrencyConversionService } from './currency-conversion.service';
 
 @Injectable()
 export class ExpensesService {
@@ -22,12 +23,64 @@ export class ExpensesService {
     private readonly auditService: AuditService,
     private readonly validators: FinanzasValidators,
     private readonly movementAllocationService: MovementAllocationService,
+    private readonly currencyConversionService: CurrencyConversionService,
   ) {}
 
   private getAccountingPeriodFromInvoiceDate(invoiceDate: Date): string {
     const year = invoiceDate.getUTCFullYear();
     const month = String(invoiceDate.getUTCMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
+  }
+
+  private toConversionDate(invoiceDate: Date): string {
+    const year = invoiceDate.getUTCFullYear();
+    const month = String(invoiceDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(invoiceDate.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private async buildExpenseConversionSnapshot(
+    tenantId: string,
+    expense: { amountMinor: number; currencyCode: string; invoiceDate: Date },
+  ): Promise<{
+    functionalAmountMinor: number;
+    functionalCurrencyCode: string;
+    exchangeRateId: string | null;
+    exchangeRateValue: string;
+    exchangeRateDirection: 'IDENTITY' | 'DIRECT' | 'INVERSE';
+    exchangeRateEffectiveAt: Date | null;
+    conversionDate: Date;
+  }> {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: tenantId },
+      select: { id: true, functionalCurrency: true },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant no encontrado: ${tenantId}`);
+    }
+
+    const result = await this.currencyConversionService.convert({
+      tenantId,
+      amount: expense.amountMinor,
+      originalCurrency: expense.currencyCode as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['originalCurrency'],
+      functionalCurrency: tenant.functionalCurrency as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['functionalCurrency'],
+      conversionDate: this.toConversionDate(expense.invoiceDate),
+    });
+
+    return {
+      functionalAmountMinor: result.functionalAmount,
+      functionalCurrencyCode: result.functionalCurrency,
+      exchangeRateId: result.sourceExchangeRateId,
+      exchangeRateValue: result.appliedRate,
+      exchangeRateDirection: result.direction,
+      exchangeRateEffectiveAt: result.sourceEffectiveAt,
+      conversionDate: result.conversionDate,
+    };
   }
 
   private accountingPeriodWhere(period?: string):
@@ -419,12 +472,24 @@ export class ExpensesService {
 
     this.assertExpenseCanBeValidated(expense);
 
+    const conversionSnapshot = await this.buildExpenseConversionSnapshot(
+      tenantId,
+      expense,
+    );
+
     const updated = await this.prisma.expense.update({
       where: { id: expenseId },
       data: {
         status: 'VALIDATED',
         validatedByMembershipId: membershipId,
         validatedAt: new Date(),
+        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+        exchangeRateId: conversionSnapshot.exchangeRateId,
+        exchangeRateValue: conversionSnapshot.exchangeRateValue,
+        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+        conversionDate: conversionSnapshot.conversionDate,
       },
       include: {
         category: { select: { name: true } },
@@ -463,12 +528,24 @@ export class ExpensesService {
 
     this.assertExpenseCanBeValidated(expense);
 
+    const conversionSnapshot = await this.buildExpenseConversionSnapshot(
+      tenantId,
+      expense,
+    );
+
     const updated = await this.prisma.expense.update({
       where: { id: expenseId },
       data: {
         status: 'VALIDATED',
         validatedByMembershipId: membershipId ?? null,
         validatedAt: new Date(),
+        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+        exchangeRateId: conversionSnapshot.exchangeRateId,
+        exchangeRateValue: conversionSnapshot.exchangeRateValue,
+        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+        conversionDate: conversionSnapshot.conversionDate,
       },
       include: {
         category: { select: { name: true } },
@@ -558,6 +635,13 @@ export class ExpensesService {
       status: 'DRAFT' | 'VALIDATED' | 'VOID';
       scopeType: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
       unitGroupId: string | null;
+      functionalAmountMinor?: number | null;
+      functionalCurrencyCode?: string | null;
+      exchangeRateId?: string | null;
+      exchangeRateValue?: { toString(): string } | string | null;
+      exchangeRateDirection?: string | null;
+      exchangeRateEffectiveAt?: Date | null;
+      conversionDate?: Date | null;
       createdAt: Date;
       updatedAt: Date;
       category: { name: string };
@@ -582,6 +666,16 @@ export class ExpensesService {
       status: expense.status,
       scopeType: expense.scopeType,
       unitGroupId: expense.unitGroupId,
+      functionalAmountMinor: expense.functionalAmountMinor ?? null,
+      functionalCurrencyCode: expense.functionalCurrencyCode ?? null,
+      exchangeRateId: expense.exchangeRateId ?? null,
+      exchangeRateValue:
+        expense.exchangeRateValue === null || expense.exchangeRateValue === undefined
+          ? null
+          : expense.exchangeRateValue.toString(),
+      exchangeRateDirection: expense.exchangeRateDirection ?? null,
+      exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt ?? null,
+      conversionDate: expense.conversionDate ?? null,
       createdAt: expense.createdAt,
       updatedAt: expense.updatedAt,
     };

@@ -354,6 +354,7 @@ model ExchangeRate {
 
   tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdByMembership Membership? @relation("ExchangeRateCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  expenses            Expense[]
 
   @@unique([tenantId, baseCurrency, quoteCurrency, effectiveAt], map: "ExchangeRate_tenant_pair_effective_key")
   @@index([tenantId, baseCurrency, quoteCurrency, effectiveAt(sort: Desc)], map: "ExchangeRate_tenant_pair_effective_idx")
@@ -1830,6 +1831,13 @@ model Expense {
   validatedAt              DateTime?
   voidedByMembershipId     String?
   voidedAt                 DateTime?
+  functionalAmountMinor    Int?           // Snapshot: monto en moneda funcional (minor units) al momento de validación
+  functionalCurrencyCode   String?        // Snapshot: moneda funcional del tenant
+  exchangeRateId           String?        // Snapshot: FK a la tasa usada (null si IDENTITY)
+  exchangeRateValue        Decimal?       @db.Decimal(28, 12) // Snapshot numérico de la tasa aplicada (nunca derivar solo de la fila)
+  exchangeRateDirection    String?        // Snapshot: IDENTITY | DIRECT | INVERSE
+  exchangeRateEffectiveAt  DateTime?      // Snapshot: efectividad de la tasa fuente
+  conversionDate           DateTime?      // Snapshot: fecha de conversión (invoiceDate, UTC date-only)
   createdAt                DateTime       @default(now())
   updatedAt                DateTime       @updatedAt
 
@@ -1838,6 +1846,7 @@ model Expense {
   category    ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   vendor      Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   unitGroup   UnitGroup?           @relation(fields: [unitGroupId], references: [id], onDelete: SetNull)
+  exchangeRate ExchangeRate?        @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
   allocations MovementAllocation[]
 
   @@index([tenantId, buildingId, period])
@@ -1845,6 +1854,7 @@ model Expense {
   @@index([tenantId, period, categoryId])
   @@index([tenantId, scopeType])
   @@index([tenantId, buildingId, liquidationPeriod, status])
+  @@index([tenantId, exchangeRateId])
 }
 
 // ============================================================================
