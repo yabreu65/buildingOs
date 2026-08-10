@@ -90,6 +90,9 @@ describe('LiquidationsService', () => {
 
   beforeEach(async () => {
     tx = {
+      tenant: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'tenant-1', functionalCurrency: 'ARS' }),
+      },
       membership: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'member-1',

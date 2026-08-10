@@ -16,6 +16,7 @@ const baseLiquidation = {
   period: '2026-05',
   chargePeriod: '2026-06',
   status: 'REVIEWED' as const,
+  valuationMode: null,
   baseCurrency: 'ARS',
   totalAmountMinor: 101,
   totalsByCurrency: { ARS: 101 },
@@ -146,7 +147,8 @@ describe('LiquidationPublicationUseCase', () => {
         data: expect.objectContaining({
           status: 'PUBLISHED',
           publicationSnapshot: expect.objectContaining({
-            version: 1,
+            version: 2,
+            valuationMode: 'LEGACY_NOMINAL',
             totalAmountMinor: 101,
             dueDate: '2026-06-10T00:00:00.000Z',
           }),
@@ -348,5 +350,160 @@ describe('LiquidationPublicationUseCase', () => {
     expect(notificationsService.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
       userId: 'user-1',
     }));
+  });
+
+  describe('FUNCTIONAL valuation publication', () => {
+    const functionalLiquidation = {
+      ...baseLiquidation,
+      valuationMode: 'FUNCTIONAL' as const,
+      baseCurrency: 'VES',
+      totalAmountMinor: 36625,
+      totalsByCurrency: { USD: 1000, COP: 200 },
+      expenseSnapshot: [
+        {
+          expenseId: 'exp-1',
+          categoryName: 'Maintenance',
+          vendorName: 'Vendor',
+          amountMinor: 1000,
+          currencyCode: 'USD',
+          invoiceDate: '2026-08-05T00:00:00.000Z',
+          description: null,
+          type: 'EXPENSE',
+          functionalAmountMinor: 36500,
+          functionalCurrencyCode: 'VES',
+          exchangeRateId: 'rate-1',
+          exchangeRateValue: '36.5',
+          exchangeRateDirection: 'DIRECT',
+          exchangeRateEffectiveAt: '2026-08-04T00:00:00.000Z',
+          conversionDate: '2026-08-05T00:00:00.000Z',
+        },
+        {
+          expenseId: 'ADJ-adj-1',
+          categoryName: 'Water',
+          vendorName: null,
+          amountMinor: 200,
+          currencyCode: 'COP',
+          invoiceDate: '2026-08-01T00:00:00.000Z',
+          description: 'Ajuste retroactivo: correction',
+          type: 'ADJUSTMENT',
+          sourcePeriod: '2026-08',
+          functionalAmountMinor: 125,
+          functionalCurrencyCode: 'VES',
+          exchangeRateId: 'rate-inv',
+          exchangeRateValue: '25',
+          exchangeRateDirection: 'INVERSE',
+          exchangeRateEffectiveAt: '2026-07-20T00:00:00.000Z',
+          conversionDate: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    };
+
+    const mockFunctionalPublish = () => {
+      tx.liquidation.findFirst
+        .mockReset()
+        .mockResolvedValueOnce(functionalLiquidation)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-10T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-10T00:00:00.000Z'),
+        });
+      tx.unit.findMany.mockResolvedValue([
+        { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+      ]);
+      tx.charge.findMany.mockResolvedValue([]);
+    };
+
+    it('publishes a FUNCTIONAL liquidation and writes a version 2 snapshot', async () => {
+      mockFunctionalPublish();
+
+      const result = await useCase.execute(
+        'tenant-1',
+        'liq-1',
+        'member-1',
+        { dueDate: '2026-09-10' },
+        'post-commit',
+      );
+
+      expect(result.status).toBe('PUBLISHED');
+      const snapshotUpdate = (tx.liquidation.updateMany as jest.Mock).mock.calls.find(
+        (call) => (call[0].data?.publicationSnapshot as { version?: number })?.version === 2,
+      );
+      expect(snapshotUpdate).toBeDefined();
+      expect(snapshotUpdate[0].data.publicationSnapshot).toMatchObject({
+        version: 2,
+        valuationMode: 'FUNCTIONAL',
+        totalAmountMinor: 36625,
+      });
+      expect(snapshotUpdate[0].data.publicationSnapshot.expenses[1]).toMatchObject({
+        expenseId: 'ADJ-adj-1',
+        functionalAmountMinor: 125,
+        exchangeRateDirection: 'INVERSE',
+      });
+    });
+
+    it('charges equal the functional total exactly', async () => {
+      mockFunctionalPublish();
+
+      await useCase.execute(
+        'tenant-1',
+        'liq-1',
+        'member-1',
+        { dueDate: '2026-09-10' },
+        'post-commit',
+      );
+
+      const chargeCreate = (tx.charge.createMany as jest.Mock).mock.calls[0] as [
+        { data: Array<{ amount: number; currency: string }> },
+      ];
+      const totalCharges = chargeCreate[0].data.reduce(
+        (sum, charge) => sum + charge.amount,
+        0,
+      );
+      expect(totalCharges).toBe(36625);
+      expect(chargeCreate[0].data.every((charge) => charge.currency === 'VES')).toBe(true);
+    });
+
+    it('blocks publication when the source snapshot drifts from the total', async () => {
+      mockFunctionalPublish();
+      tx.liquidation.findFirst
+        .mockReset()
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          totalAmountMinor: 36626,
+        })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-10T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-10T00:00:00.000Z'),
+        });
+
+      await expect(
+        useCase.execute(
+          'tenant-1',
+          'liq-1',
+          'member-1',
+          { dueDate: '2026-09-10' },
+          'post-commit',
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
+        },
+      });
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
+    });
   });
 });

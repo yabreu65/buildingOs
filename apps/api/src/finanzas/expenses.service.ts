@@ -13,7 +13,10 @@ import {
   ExpenseResponseDto,
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
-import { MovementAllocationService } from './movement-allocation.service';
+import {
+  MovementAllocationService,
+  allocateFunctionalByLargestRemainder,
+} from './movement-allocation.service';
 import { CurrencyConversionService } from './currency-conversion.service';
 
 @Injectable()
@@ -30,6 +33,92 @@ export class ExpensesService {
     const year = invoiceDate.getUTCFullYear();
     const month = String(invoiceDate.getUTCMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
+  }
+
+  private async persistValidatedExpense(
+    expense: {
+      id: string;
+      tenantId: string;
+      scopeType: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
+    },
+    snapshot: {
+      functionalAmountMinor: number;
+      functionalCurrencyCode: string;
+      exchangeRateId: string | null;
+      exchangeRateValue: string;
+      exchangeRateDirection: 'IDENTITY' | 'DIRECT' | 'INVERSE';
+      exchangeRateEffectiveAt: Date | null;
+      conversionDate: Date;
+    },
+    validatedByMembershipId: string | null,
+  ) {
+    const baseData = {
+      status: 'VALIDATED' as const,
+      validatedByMembershipId,
+      validatedAt: new Date(),
+      functionalAmountMinor: snapshot.functionalAmountMinor,
+      functionalCurrencyCode: snapshot.functionalCurrencyCode,
+      exchangeRateId: snapshot.exchangeRateId,
+      exchangeRateValue: snapshot.exchangeRateValue,
+      exchangeRateDirection: snapshot.exchangeRateDirection,
+      exchangeRateEffectiveAt: snapshot.exchangeRateEffectiveAt,
+      conversionDate: snapshot.conversionDate,
+    };
+
+    if (expense.scopeType !== 'TENANT_SHARED') {
+      return this.prisma.expense.update({
+        where: { id: expense.id },
+        data: baseData,
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
+    }
+
+    const allocations = await this.prisma.movementAllocation.findMany({
+      where: { tenantId: expense.tenantId, expenseId: expense.id },
+      select: { id: true, amountMinor: true },
+    });
+
+    if (allocations.length === 0) {
+      return this.prisma.expense.update({
+        where: { id: expense.id },
+        data: baseData,
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
+    }
+
+    const shares = allocateFunctionalByLargestRemainder(
+      snapshot.functionalAmountMinor,
+      allocations.map((allocation) => allocation.amountMinor ?? 0),
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.expense.update({
+        where: { id: expense.id },
+        data: baseData,
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
+
+      for (const [index, allocation] of allocations.entries()) {
+        await tx.movementAllocation.update({
+          where: { id: allocation.id },
+          data: {
+            functionalAmountMinor: shares[index],
+            functionalCurrencyCode: snapshot.functionalCurrencyCode,
+          },
+        });
+      }
+
+      return updated;
+    });
   }
 
   private toConversionDate(invoiceDate: Date): string {
@@ -477,25 +566,11 @@ export class ExpensesService {
       expense,
     );
 
-    const updated = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        status: 'VALIDATED',
-        validatedByMembershipId: membershipId,
-        validatedAt: new Date(),
-        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
-        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
-        exchangeRateId: conversionSnapshot.exchangeRateId,
-        exchangeRateValue: conversionSnapshot.exchangeRateValue,
-        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
-        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
-        conversionDate: conversionSnapshot.conversionDate,
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
-    });
+    const updated = await this.persistValidatedExpense(
+      expense,
+      conversionSnapshot,
+      membershipId,
+    );
 
     void this.auditService.createLog({
       tenantId,
@@ -533,25 +608,11 @@ export class ExpensesService {
       expense,
     );
 
-    const updated = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        status: 'VALIDATED',
-        validatedByMembershipId: membershipId ?? null,
-        validatedAt: new Date(),
-        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
-        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
-        exchangeRateId: conversionSnapshot.exchangeRateId,
-        exchangeRateValue: conversionSnapshot.exchangeRateValue,
-        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
-        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
-        conversionDate: conversionSnapshot.conversionDate,
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
-    });
+    const updated = await this.persistValidatedExpense(
+      expense,
+      conversionSnapshot,
+      membershipId ?? null,
+    );
 
     void this.auditService.createLog({
       tenantId,
@@ -561,10 +622,8 @@ export class ExpensesService {
       entityId: expenseId,
       metadata: {
         period: expense.period,
-        liquidationPeriod: expense.liquidationPeriod,
         amountMinor: expense.amountMinor,
         currencyCode: expense.currencyCode,
-        bulkOperation: true,
       },
     });
 
