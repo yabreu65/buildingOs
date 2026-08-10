@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ChargeStatus, Prisma } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
@@ -138,6 +139,7 @@ type LiquidationRecord = {
   period: string;
   chargePeriod: string | null;
   status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   baseCurrency: string;
   totalAmountMinor: number;
   totalsByCurrency: unknown;
@@ -158,6 +160,7 @@ export interface DraftLiquidationInput {
   readonly buildingId: string;
   readonly period: string;
   readonly chargePeriod?: string | null;
+  readonly valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   readonly baseCurrency: string;
   readonly totalAmountMinor: number;
   readonly totalsByCurrency: Prisma.InputJsonObject;
@@ -212,6 +215,7 @@ export function toLiquidationResponseDto(
     period: liquidation.period,
     chargePeriod: liquidation.chargePeriod,
     status: liquidation.status,
+    valuationMode: liquidation.valuationMode,
     baseCurrency: liquidation.baseCurrency,
     totalAmountMinor: liquidation.totalAmountMinor,
     totalsByCurrency: parseTotalsByCurrency(liquidation.totalsByCurrency),
@@ -351,6 +355,7 @@ export async function createLiquidationDraftRecord(
       buildingId: input.buildingId,
       period: input.period,
       chargePeriod: input.chargePeriod ?? null,
+      valuationMode: input.valuationMode ?? null,
       baseCurrency: input.baseCurrency,
       totalAmountMinor: input.totalAmountMinor,
       totalsByCurrency: input.totalsByCurrency,
@@ -509,7 +514,32 @@ export class LiquidationPublicationUseCase {
           }
 
           const publicationExpenses = getPublicationSnapshotExpenses(current.expenseSnapshot);
-          assertLiquidationMovementCurrency(publicationExpenses, current.baseCurrency);
+          const valuationMode = current.valuationMode ?? 'LEGACY_NOMINAL';
+          assertLiquidationMovementCurrency(
+            publicationExpenses,
+            current.baseCurrency,
+            valuationMode,
+          );
+
+          const valuedSourceTotal =
+            valuationMode === 'FUNCTIONAL'
+              ? publicationExpenses.reduce(
+                  (sum, expense) => sum + (expense.functionalAmountMinor ?? NaN),
+                  0,
+                )
+              : publicationExpenses.reduce((sum, expense) => sum + expense.amountMinor, 0);
+
+          if (
+            !Number.isSafeInteger(valuedSourceTotal) ||
+            valuedSourceTotal !== current.totalAmountMinor
+          ) {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
+              message:
+                'El snapshot de fuentes de la liquidación no reconcilia con su total; no se publica',
+            });
+          }
 
           const billableUnits = await tx.unit.findMany({
             where: { tenantId, buildingId: current.buildingId, isBillable: true },
@@ -538,6 +568,7 @@ export class LiquidationPublicationUseCase {
             tenantId,
             buildingId: current.buildingId,
             period: current.period,
+            valuationMode,
             baseCurrency: current.baseCurrency,
             totalAmountMinor: current.totalAmountMinor,
             totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
@@ -809,7 +840,26 @@ function isSerializationConflict(
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
 }
 
-function parseExpenseSnapshot(value: unknown): LiquidationExpenseSnapshotItem[] {
+interface ParsedLiquidationExpenseItem {
+  expenseId: string;
+  categoryName: string;
+  vendorName: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  invoiceDate: string;
+  description: string | null;
+  type: 'EXPENSE' | 'ADJUSTMENT';
+  sourcePeriod?: string;
+  functionalAmountMinor?: number;
+  functionalCurrencyCode?: string;
+  exchangeRateId?: string;
+  exchangeRateValue?: string;
+  exchangeRateDirection?: string;
+  exchangeRateEffectiveAt?: string;
+  conversionDate?: string;
+}
+
+function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
   if (!Array.isArray(value)) {
     throw new BadRequestException('Liquidation expense snapshot is invalid');
   }
@@ -829,6 +879,13 @@ function parseExpenseSnapshot(value: unknown): LiquidationExpenseSnapshotItem[] 
     const description = snapshot.description;
     const type = snapshot.type;
     const sourcePeriod = snapshot.sourcePeriod;
+    const functionalAmountMinor = snapshot.functionalAmountMinor;
+    const functionalCurrencyCode = snapshot.functionalCurrencyCode;
+    const exchangeRateId = snapshot.exchangeRateId;
+    const exchangeRateValue = snapshot.exchangeRateValue;
+    const exchangeRateDirection = snapshot.exchangeRateDirection;
+    const exchangeRateEffectiveAt = snapshot.exchangeRateEffectiveAt;
+    const conversionDate = snapshot.conversionDate;
 
     if (typeof expenseId !== 'string') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid expenseId`);
@@ -863,6 +920,56 @@ function parseExpenseSnapshot(value: unknown): LiquidationExpenseSnapshotItem[] 
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid invoiceDate`);
     }
 
+    const parseOptionalInt = (value: unknown, field: string): number | undefined => {
+      if (value === null || value === undefined) {
+        return undefined;
+      }
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+        throw new BadRequestException(
+          `Liquidation expense snapshot item ${index} has invalid ${field}`,
+        );
+      }
+      return value;
+    };
+
+    const parseOptionalString = (value: unknown, field: string): string | undefined => {
+      if (value === null || value === undefined) {
+        return undefined;
+      }
+      if (typeof value !== 'string' || value.length === 0) {
+        throw new BadRequestException(
+          `Liquidation expense snapshot item ${index} has invalid ${field}`,
+        );
+      }
+      return value;
+    };
+
+    const parseOptionalIsoDate = (value: unknown, field: string): string | undefined => {
+      if (value === null || value === undefined) {
+        return undefined;
+      }
+      const parsed = new Date(String(value));
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(
+          `Liquidation expense snapshot item ${index} has invalid ${field}`,
+        );
+      }
+      return parsed.toISOString();
+    };
+
+    const parsedFunctionalAmountMinor = parseOptionalInt(functionalAmountMinor, 'functionalAmountMinor');
+    const parsedFunctionalCurrencyCode = parseOptionalString(functionalCurrencyCode, 'functionalCurrencyCode');
+    const parsedExchangeRateId = parseOptionalString(exchangeRateId, 'exchangeRateId');
+    const parsedExchangeRateValue = parseOptionalString(
+      exchangeRateValue === null || exchangeRateValue === undefined
+        ? undefined
+        : String(exchangeRateValue),
+      'exchangeRateValue',
+    );
+    const parsedExchangeRateDirection = parseOptionalString(exchangeRateDirection, 'exchangeRateDirection');
+    const parsedExchangeRateEffectiveAt = parseOptionalIsoDate(exchangeRateEffectiveAt, 'exchangeRateEffectiveAt');
+    const parsedConversionDate = parseOptionalIsoDate(conversionDate, 'conversionDate');
+
     return {
       expenseId,
       categoryName,
@@ -873,6 +980,13 @@ function parseExpenseSnapshot(value: unknown): LiquidationExpenseSnapshotItem[] 
       description,
       type,
       sourcePeriod: sourcePeriod ?? undefined,
+      functionalAmountMinor: parsedFunctionalAmountMinor,
+      functionalCurrencyCode: parsedFunctionalCurrencyCode,
+      exchangeRateId: parsedExchangeRateId,
+      exchangeRateValue: parsedExchangeRateValue,
+      exchangeRateDirection: parsedExchangeRateDirection,
+      exchangeRateEffectiveAt: parsedExchangeRateEffectiveAt,
+      conversionDate: parsedConversionDate,
     };
   });
 }
@@ -890,6 +1004,27 @@ function getPublicationSnapshotExpenses(
     description: expense.description,
     type: expense.type,
     ...(expense.sourcePeriod ? { sourcePeriod: expense.sourcePeriod } : {}),
+    ...(expense.functionalAmountMinor !== null && expense.functionalAmountMinor !== undefined
+      ? { functionalAmountMinor: expense.functionalAmountMinor }
+      : {}),
+    ...(expense.functionalCurrencyCode !== null && expense.functionalCurrencyCode !== undefined
+      ? { functionalCurrencyCode: expense.functionalCurrencyCode }
+      : {}),
+    ...(expense.exchangeRateId !== null && expense.exchangeRateId !== undefined
+      ? { exchangeRateId: expense.exchangeRateId }
+      : {}),
+    ...(expense.exchangeRateValue !== null && expense.exchangeRateValue !== undefined
+      ? { exchangeRateValue: expense.exchangeRateValue }
+      : {}),
+    ...(expense.exchangeRateDirection !== null && expense.exchangeRateDirection !== undefined
+      ? { exchangeRateDirection: expense.exchangeRateDirection }
+      : {}),
+    ...(expense.exchangeRateEffectiveAt !== null && expense.exchangeRateEffectiveAt !== undefined
+      ? { exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt }
+      : {}),
+    ...(expense.conversionDate !== null && expense.conversionDate !== undefined
+      ? { conversionDate: expense.conversionDate }
+      : {}),
   }));
 }
 

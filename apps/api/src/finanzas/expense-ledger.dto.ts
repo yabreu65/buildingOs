@@ -284,6 +284,7 @@ export interface LiquidationResponseDto {
   period: string;
   chargePeriod?: string | null;
   status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+  valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   baseCurrency: string;
   totalAmountMinor: number;
   totalsByCurrency: Record<string, number>;

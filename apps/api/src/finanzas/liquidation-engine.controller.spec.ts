@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { LiquidationEngineController } from './liquidation-engine.controller';
 import { LiquidationEngineService } from './liquidation-engine.service';
+import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedRequest } from '../common/types/request.types';
 
 describe('LiquidationEngineController', () => {
@@ -47,6 +48,14 @@ describe('LiquidationEngineController', () => {
         {
           provide: LiquidationEngineService,
           useValue: service,
+        },
+        {
+          provide: 'APP_CONFIG',
+          useValue: { jwtSecret: 'test-secret-at-least-32-chars' },
+        },
+        {
+          provide: PrismaService,
+          useValue: { membership: { findFirst: jest.fn() } },
         },
       ],
     }).compile();

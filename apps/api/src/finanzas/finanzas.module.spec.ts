@@ -4,7 +4,7 @@ import { LiquidationEngineController } from './liquidation-engine.controller';
 import { LiquidationsController } from './liquidations.controller';
 
 describe('FinanzasModule', () => {
-  it('registers only the hardened liquidation controller route', () => {
+  it('registers the liquidation controllers with the same hardened engine behind both routes', () => {
     const controllersMetadata = Reflect.getMetadata(
       MODULE_METADATA.CONTROLLERS,
       FinanzasModule,
@@ -17,6 +17,6 @@ describe('FinanzasModule', () => {
     const controllers = controllersMetadata;
 
     expect(controllers).toContain(LiquidationsController);
-    expect(controllers).not.toContain(LiquidationEngineController);
+    expect(controllers).toContain(LiquidationEngineController);
   });
 });

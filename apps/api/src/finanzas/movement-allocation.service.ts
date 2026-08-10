@@ -79,6 +79,75 @@ export function allocateByLargestRemainder(
   return allocatedAmounts;
 }
 
+/**
+ * Distribuye un total funcional (minor units) entre pesos nominales enteros
+ * usando largest remainder con aritmética decimal exacta.
+ *
+ * Garantiza: SUM(resultado) === totalFunctionalMinor exactamente.
+ */
+export function allocateFunctionalByLargestRemainder(
+  totalFunctionalMinor: number,
+  weights: readonly number[],
+): number[] {
+  if (weights.length === 0) {
+    throw new BadRequestException('No hay pesos para distribuir el monto funcional');
+  }
+
+  const totalDecimal = new Prisma.Decimal(totalFunctionalMinor);
+  const weightDecimals = weights.map((weight) => new Prisma.Decimal(weight ?? 0));
+  const totalWeight = weightDecimals.reduce(
+    (sum, weight) => sum.add(weight),
+    new Prisma.Decimal(0),
+  );
+
+  const exactShares = weightDecimals.map((weight, index) => {
+    const raw = totalDecimal.mul(weight).div(totalWeight);
+    const floor = raw.toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
+    return {
+      index,
+      amountMinor: floor.toNumber(),
+      remainder: raw.sub(floor),
+    };
+  });
+
+  const allocatedAmount = exactShares.reduce(
+    (sum, share) => sum + share.amountMinor,
+    0,
+  );
+  const missingCents = totalFunctionalMinor - allocatedAmount;
+
+  if (missingCents < 0 || !Number.isSafeInteger(missingCents)) {
+    throw new BadRequestException(
+      `Error de redondeo al distribuir el monto funcional ${totalFunctionalMinor}`,
+    );
+  }
+
+  exactShares
+    .slice()
+    .sort(
+      (a, b) =>
+        b.remainder.comparedTo(a.remainder) || a.index - b.index,
+    )
+    .slice(0, missingCents)
+    .forEach((share) => {
+      const target = exactShares[share.index];
+      if (target) {
+        target.amountMinor += 1;
+      }
+    });
+
+  const allocatedAmounts = exactShares.map((share) => share.amountMinor);
+  const finalAmount = allocatedAmounts.reduce((sum, amount) => sum + amount, 0);
+
+  if (finalAmount !== totalFunctionalMinor) {
+    throw new BadRequestException(
+      `Error de redondeo: las allocations funcionales suman ${finalAmount}, esperado ${totalFunctionalMinor}`,
+    );
+  }
+
+  return allocatedAmounts;
+}
+
 @Injectable()
 export class MovementAllocationService {
   constructor(

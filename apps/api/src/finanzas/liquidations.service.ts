@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ChargeStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,6 +16,11 @@ import {
   LiquidationDetailDto,
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
+import {
+  determineLiquidationValuationMode,
+  isFunctionalSnapshotPresent,
+  sumValuationAmounts,
+} from './liquidation-valuation';
 import {
   assertLiquidationMovementCurrency,
   parseLiquidationPublicationSnapshot,
@@ -38,6 +44,13 @@ interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
   sourcePeriod?: string;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: string | null;
+  conversionDate?: string | null;
 }
 
 interface LiquidationExpenseSnapshotRow {
@@ -50,6 +63,13 @@ interface LiquidationExpenseSnapshotRow {
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
   sourcePeriod?: string;
+  functionalAmountMinor: number | null;
+  functionalCurrencyCode: string | null;
+  exchangeRateId: string | null;
+  exchangeRateValue: string | null;
+  exchangeRateDirection: string | null;
+  exchangeRateEffectiveAt: Date | null;
+  conversionDate: Date | null;
 }
 
 interface CancelLiquidationOptions {
@@ -255,6 +275,16 @@ export class LiquidationsService {
         invoiceDate: expense.invoiceDate,
         description: expense.description,
         type: 'EXPENSE',
+        functionalAmountMinor: expense.functionalAmountMinor,
+        functionalCurrencyCode: expense.functionalCurrencyCode,
+        exchangeRateId: expense.exchangeRateId,
+        exchangeRateValue:
+          expense.exchangeRateValue === null || expense.exchangeRateValue === undefined
+            ? null
+            : expense.exchangeRateValue.toString(),
+        exchangeRateDirection: expense.exchangeRateDirection,
+        exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
+        conversionDate: expense.conversionDate,
       }));
 
       for (const expense of allocatedSharedExpenses) {
@@ -269,6 +299,17 @@ export class LiquidationsService {
             invoiceDate: expense.invoiceDate,
             description: expense.description,
             type: 'EXPENSE',
+            functionalAmountMinor: allocation.functionalAmountMinor,
+            functionalCurrencyCode:
+              allocation.functionalCurrencyCode ?? expense.functionalCurrencyCode,
+            exchangeRateId: expense.exchangeRateId,
+            exchangeRateValue:
+              expense.exchangeRateValue === null || expense.exchangeRateValue === undefined
+                ? null
+                : expense.exchangeRateValue.toString(),
+            exchangeRateDirection: expense.exchangeRateDirection,
+            exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
+            conversionDate: expense.conversionDate,
           });
         }
       }
@@ -282,6 +323,13 @@ export class LiquidationsService {
         invoiceDate: expense.invoiceDate.toISOString(),
         description: expense.description,
         type: expense.type,
+        functionalAmountMinor: expense.functionalAmountMinor,
+        functionalCurrencyCode: expense.functionalCurrencyCode,
+        exchangeRateId: expense.exchangeRateId,
+        exchangeRateValue: expense.exchangeRateValue,
+        exchangeRateDirection: expense.exchangeRateDirection,
+        exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt?.toISOString() ?? null,
+        conversionDate: expense.conversionDate?.toISOString() ?? null,
       }));
 
       const totalsByCurrency: Record<string, number> = {};
@@ -304,6 +352,17 @@ export class LiquidationsService {
           description: `Ajuste retroactivo: ${adjustment.reason}`,
           type: 'ADJUSTMENT',
           sourcePeriod: adjustment.sourcePeriod,
+          functionalAmountMinor: adjustment.functionalAmountMinor,
+          functionalCurrencyCode: adjustment.functionalCurrencyCode,
+          exchangeRateId: adjustment.exchangeRateId,
+          exchangeRateValue:
+            adjustment.exchangeRateValue === null || adjustment.exchangeRateValue === undefined
+              ? null
+              : adjustment.exchangeRateValue.toString(),
+          exchangeRateDirection: adjustment.exchangeRateDirection,
+          exchangeRateEffectiveAt:
+            adjustment.exchangeRateEffectiveAt?.toISOString() ?? null,
+          conversionDate: adjustment.conversionDate?.toISOString() ?? null,
         });
 
         totalsByCurrency[adjustment.currencyCode] = this.safeAddAmountMinor(
@@ -320,7 +379,50 @@ export class LiquidationsService {
         );
       }
 
-      assertLiquidationMovementCurrency(expenseSnapshotItems, dto.baseCurrency);
+      const tenant = await tx.tenant.findFirst({
+        where: { id: tenantId },
+        select: { functionalCurrency: true },
+      });
+
+      if (!tenant) {
+        throw new NotFoundException(`Tenant no encontrado: ${tenantId}`);
+      }
+
+      const valuationSources = expenseSnapshotItems.map((item) => ({
+        id: item.expenseId,
+        type: item.type,
+        amountMinor: item.amountMinor,
+        currencyCode: item.currencyCode,
+        functionalAmountMinor: item.functionalAmountMinor ?? null,
+        functionalCurrencyCode: item.functionalCurrencyCode ?? null,
+        exchangeRateId: item.exchangeRateId ?? null,
+        exchangeRateValue: item.exchangeRateValue ?? null,
+        exchangeRateDirection: item.exchangeRateDirection ?? null,
+        exchangeRateEffectiveAt: item.exchangeRateEffectiveAt ?? null,
+        conversionDate: item.conversionDate ?? null,
+      }));
+
+      const hasFunctionalSources = valuationSources.some(
+        (source) => isFunctionalSnapshotPresent(source),
+      );
+
+      if (hasFunctionalSources && dto.baseCurrency !== tenant.functionalCurrency) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_BASE_CURRENCY_MISMATCH',
+          message: `La moneda base solicitada (${dto.baseCurrency}) no coincide con la moneda funcional del tenant (${tenant.functionalCurrency})`,
+        });
+      }
+
+      const valuationMode = determineLiquidationValuationMode(
+        valuationSources,
+        dto.baseCurrency,
+      );
+      assertLiquidationMovementCurrency(
+        expenseSnapshotItems,
+        dto.baseCurrency,
+        valuationMode,
+      );
 
       const billableUnits = await tx.unit.findMany({
         where: { tenantId, buildingId: dto.buildingId, isBillable: true },
@@ -328,7 +430,7 @@ export class LiquidationsService {
         orderBy: { code: 'asc' },
       });
 
-      const totalAmountMinor = this.requireCurrencyTotal(totalsByCurrency, dto.baseCurrency);
+      const totalAmountMinor = sumValuationAmounts(valuationSources, valuationMode);
       const chargesPreview = this.calculateDistribution(
         billableUnits,
         totalAmountMinor,
@@ -341,6 +443,7 @@ export class LiquidationsService {
         tenantId,
         buildingId: dto.buildingId,
         period: dto.period,
+        valuationMode,
         baseCurrency: dto.baseCurrency,
         totalAmountMinor,
         totalsByCurrency,
@@ -614,6 +717,7 @@ export class LiquidationsService {
     period: string;
     chargePeriod: string | null;
     status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+    valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
     baseCurrency: string;
     totalAmountMinor: number;
     totalsByCurrency: unknown;
@@ -633,6 +737,7 @@ export class LiquidationsService {
       period: liq.period,
       chargePeriod: liq.chargePeriod,
       status: liq.status,
+      valuationMode: liq.valuationMode,
       baseCurrency: liq.baseCurrency,
       totalAmountMinor: liq.totalAmountMinor,
       totalsByCurrency,
@@ -653,6 +758,7 @@ export class LiquidationsService {
       period: string;
       chargePeriod: string | null;
       status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+      valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
       baseCurrency: string;
       totalAmountMinor: number;
       totalsByCurrency: unknown;

@@ -5,6 +5,7 @@ import { apiClient } from '@/shared/lib/http/client';
 export type ExpenseStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
 export type IncomeStatus = 'DRAFT' | 'RECORDED' | 'VOID';
 export type LiquidationStatus = 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
+export type LiquidationValuationMode = 'FUNCTIONAL' | 'LEGACY_NOMINAL';
 export type CatalogScope = 'BUILDING' | 'CONDOMINIUM_COMMON';
 
 export interface ExpenseLedgerCategory {
@@ -90,6 +91,7 @@ export interface Liquidation {
   buildingId: string;
   period: string;
   status: LiquidationStatus;
+  valuationMode?: LiquidationValuationMode | null;
   baseCurrency: string;
   totalAmountMinor: number;
   totalsByCurrency: Record<string, number>;

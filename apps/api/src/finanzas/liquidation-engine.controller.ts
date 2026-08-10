@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { IsISO8601, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { LiquidationEngineService } from './liquidation-engine.service';
 
@@ -32,7 +33,7 @@ export class PublishLiquidationDto {
 }
 
 @Controller('tenants/:tenantId/liquidations')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class LiquidationEngineController {
   constructor(private readonly liquidationEngine: LiquidationEngineService) {}
 

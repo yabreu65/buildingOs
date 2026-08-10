@@ -1,5 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, UnprocessableEntityException } from '@nestjs/common';
 import {
+  assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
   distributeLiquidationAmountByLargestRemainder,
   parseLiquidationPublicationSnapshot,
@@ -14,6 +15,7 @@ describe('liquidation publication snapshot', () => {
     baseCurrency: 'ARS',
     totalAmountMinor: 100,
     totalsByCurrency: { ARS: 100 },
+    valuationMode: 'LEGACY_NOMINAL' as const,
     expenses: [
       {
         expenseId: 'exp-1',
@@ -261,5 +263,184 @@ describe('liquidation publication snapshot', () => {
         ],
       }),
     ).toThrow(BadRequestException);
+  });
+
+  describe('valuation mode aware guards', () => {
+    it('FUNCTIONAL allows different original currencies converging to base', () => {
+      expect(() =>
+        assertLiquidationMovementCurrency(
+          [
+            { currencyCode: 'USD', functionalAmountMinor: 36500, functionalCurrencyCode: 'VES' },
+            { currencyCode: 'COP', functionalAmountMinor: 125, functionalCurrencyCode: 'VES' },
+          ],
+          'VES',
+          'FUNCTIONAL',
+        ),
+      ).not.toThrow();
+    });
+
+    it('FUNCTIONAL rejects a movement without functional amount', () => {
+      expect(() =>
+        assertLiquidationMovementCurrency(
+          [{ currencyCode: 'USD', functionalAmountMinor: null, functionalCurrencyCode: null }],
+          'VES',
+          'FUNCTIONAL',
+        ),
+      ).toThrow(UnprocessableEntityException);
+    });
+
+    it('FUNCTIONAL rejects a movement that does not converge to base currency', () => {
+      expect(() =>
+        assertLiquidationMovementCurrency(
+          [{ currencyCode: 'USD', functionalAmountMinor: 100, functionalCurrencyCode: 'ARS' }],
+          'VES',
+          'FUNCTIONAL',
+        ),
+      ).toThrow(UnprocessableEntityException);
+    });
+
+    it('LEGACY_NOMINAL keeps the mixed currency behavior', () => {
+      expect(() =>
+        assertLiquidationMovementCurrency(
+          [{ currencyCode: 'USD' }, { currencyCode: 'ARS' }],
+          'VES',
+          'LEGACY_NOMINAL',
+        ),
+      ).toThrow(UnprocessableEntityException);
+    });
+  });
+
+  describe('publication snapshot v2', () => {
+    const functionalInput = {
+      ...baseInput,
+      baseCurrency: 'VES',
+      totalAmountMinor: 36625,
+      totalsByCurrency: { USD: 1000, COP: 200 },
+      valuationMode: 'FUNCTIONAL' as const,
+      allocations: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 36625 },
+      ],
+      expenses: [
+        {
+          expenseId: 'exp-1',
+          categoryName: 'Maintenance',
+          vendorName: 'Vendor',
+          amountMinor: 1000,
+          currencyCode: 'USD',
+          invoiceDate: '2026-08-05T00:00:00.000Z',
+          description: null,
+          type: 'EXPENSE' as const,
+          functionalAmountMinor: 36500,
+          functionalCurrencyCode: 'VES',
+          exchangeRateId: 'rate-1',
+          exchangeRateValue: '36.5',
+          exchangeRateDirection: 'DIRECT',
+          exchangeRateEffectiveAt: '2026-08-04T00:00:00.000Z',
+          conversionDate: '2026-08-05T00:00:00.000Z',
+        },
+        {
+          expenseId: 'ADJ-adj-1',
+          categoryName: 'Water',
+          vendorName: null,
+          amountMinor: 200,
+          currencyCode: 'COP',
+          invoiceDate: '2026-08-01T00:00:00.000Z',
+          description: 'Ajuste retroactivo: correction',
+          type: 'ADJUSTMENT' as const,
+          sourcePeriod: '2026-08',
+          functionalAmountMinor: 125,
+          functionalCurrencyCode: 'VES',
+          exchangeRateId: 'rate-inv',
+          exchangeRateValue: '25',
+          exchangeRateDirection: 'INVERSE',
+          exchangeRateEffectiveAt: '2026-07-20T00:00:00.000Z',
+          conversionDate: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    };
+
+    it('builds version 2 with functional provenance per source', () => {
+      const snapshot = buildLiquidationPublicationSnapshot(functionalInput);
+
+      expect(snapshot).toMatchObject({
+        version: 2,
+        valuationMode: 'FUNCTIONAL',
+        totalAmountMinor: 36625,
+      });
+      expect(snapshot.expenses[0]).toMatchObject({
+        functionalAmountMinor: 36500,
+        exchangeRateValue: '36.5',
+        exchangeRateDirection: 'DIRECT',
+      });
+      expect(snapshot.expenses[1]).toMatchObject({
+        functionalAmountMinor: 125,
+        exchangeRateDirection: 'INVERSE',
+        exchangeRateId: 'rate-inv',
+      });
+    });
+
+    it('parses version 2 back with functional provenance', () => {
+      const snapshot = buildLiquidationPublicationSnapshot(functionalInput);
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+
+      expect(parsed).toMatchObject({
+        version: 2,
+        valuationMode: 'FUNCTIONAL',
+        totalAmountMinor: 36625,
+      });
+      expect(parsed?.expenses[0]).toMatchObject({
+        functionalAmountMinor: 36500,
+        exchangeRateValue: '36.5',
+      });
+    });
+
+    it('rejects a v2 snapshot whose functional sum does not match the total', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshot({
+          ...functionalInput,
+          totalAmountMinor: 36626,
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('parses a legacy v2 snapshot as version 1 for compatibility', () => {
+      const snapshot = buildLiquidationPublicationSnapshot(baseInput);
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+
+      expect(parsed).toMatchObject({ version: 1 });
+    });
+
+    it('still parses a raw historical v1 snapshot', () => {
+      const legacyV1 = {
+        version: 1,
+        liquidationId: 'liq-historic',
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        period: '2026-04',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 50,
+        totalsByCurrency: { ARS: 50 },
+        expenses: [
+          {
+            expenseId: 'exp-9',
+            categoryName: 'Water',
+            vendorName: null,
+            amountMinor: 50,
+            currencyCode: 'ARS',
+            invoiceDate: '2026-04-01T00:00:00.000Z',
+            description: null,
+            type: 'EXPENSE',
+          },
+        ],
+        allocations: [
+          { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 50 },
+        ],
+        dueDate: '2026-05-10T00:00:00.000Z',
+        publishedAt: '2026-06-01T00:00:00.000Z',
+      };
+
+      const parsed = parseLiquidationPublicationSnapshot(legacyV1);
+      expect(parsed).toMatchObject({ version: 1, totalAmountMinor: 50 });
+    });
   });
 });

@@ -11,6 +11,13 @@ export interface PublishedExpenseSnapshot {
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
   sourcePeriod?: string;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: string | null;
+  conversionDate?: string | null;
 }
 
 export interface PublishedAllocationSnapshot {
@@ -35,6 +42,26 @@ export interface LiquidationPublicationSnapshotV1 {
   publishedAt: string;
 }
 
+export interface LiquidationPublicationSnapshotV2 {
+  version: 2;
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
+  liquidationId: string;
+  tenantId: string;
+  buildingId: string;
+  period: string;
+  baseCurrency: string;
+  totalAmountMinor: number;
+  totalsByCurrency: Record<string, number>;
+  expenses: readonly PublishedExpenseSnapshot[];
+  allocations: readonly PublishedAllocationSnapshot[];
+  dueDate: string;
+  publishedAt: string;
+}
+
+export type LiquidationPublicationSnapshot =
+  | LiquidationPublicationSnapshotV1
+  | LiquidationPublicationSnapshotV2;
+
 export interface BuildLiquidationPublicationSnapshotInput {
   liquidationId: string;
   tenantId: string;
@@ -47,6 +74,7 @@ export interface BuildLiquidationPublicationSnapshotInput {
   allocations: readonly PublishedAllocationSnapshot[];
   dueDate: Date;
   publishedAt: Date;
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
 }
 
 export interface LiquidationDistributionUnit {
@@ -65,9 +93,37 @@ export interface LiquidationDistributionAllocation {
 }
 
 export function assertLiquidationMovementCurrency(
-  movements: ReadonlyArray<{ currencyCode: string }>,
+  movements: ReadonlyArray<{
+    currencyCode: string;
+    functionalAmountMinor?: number | null;
+    functionalCurrencyCode?: string | null;
+  }>,
   baseCurrency: string,
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' = 'LEGACY_NOMINAL',
 ): void {
+  if (valuationMode === 'FUNCTIONAL') {
+    for (const movement of movements) {
+      if (movement.functionalAmountMinor === null || movement.functionalAmountMinor === undefined) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+          message:
+            'La liquidación FUNCTIONAL incluye un movimiento sin snapshot funcional',
+        });
+      }
+      if (
+        movement.functionalCurrencyCode !== baseCurrency
+      ) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+          message: `El movimiento en ${movement.currencyCode} no converge a la moneda base (${baseCurrency})`,
+        });
+      }
+    }
+    return;
+  }
+
   const currencies = new Set(movements.map((movement) => movement.currencyCode));
 
   if (currencies.size > 1) {
@@ -109,15 +165,18 @@ export function buildLiquidationPublicationSnapshot(
       safeAddMinor(sum, allocation.amountMinor, 'allocations.totalAmountMinor'),
     0,
   );
-  const baseCurrencyTotal = totalsByCurrency[input.baseCurrency];
+  const valuedTotal =
+    input.valuationMode === 'FUNCTIONAL'
+      ? sumFunctionalAmount(expenses, input.valuationMode)
+      : expenseTotalsByCurrency[input.baseCurrency];
 
-  if (baseCurrencyTotal === undefined) {
+  if (valuedTotal === undefined) {
     throw new BadRequestException(
       'Liquidation publication snapshot must include the base currency total',
     );
   }
 
-  if (baseCurrencyTotal !== input.totalAmountMinor) {
+  if (valuedTotal !== input.totalAmountMinor) {
     throw new BadRequestException(
       'Liquidation publication snapshot totals must match the liquidation total',
     );
@@ -132,7 +191,8 @@ export function buildLiquidationPublicationSnapshot(
   assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
 
   return createJsonObject({
-    version: 1,
+    version: 2,
+    valuationMode: input.valuationMode,
     liquidationId: input.liquidationId,
     tenantId: input.tenantId,
     buildingId: input.buildingId,
@@ -260,7 +320,7 @@ export function distributeLiquidationAmountByLargestRemainder(
 
 export function parseLiquidationPublicationSnapshot(
   value: unknown,
-): LiquidationPublicationSnapshotV1 | null {
+): LiquidationPublicationSnapshot | null {
   if (value === null) {
     return null;
   }
@@ -269,7 +329,7 @@ export function parseLiquidationPublicationSnapshot(
     throw new BadRequestException('Liquidation publication snapshot is invalid');
   }
 
-  if (value.version !== 1) {
+  if (value.version !== 1 && value.version !== 2) {
     throw new BadRequestException('Liquidation publication snapshot version is invalid');
   }
 
@@ -282,6 +342,10 @@ export function parseLiquidationPublicationSnapshot(
   const totalsByCurrency = parseTotalsByCurrency(value.totalsByCurrency);
   const dueDate = parseIsoDateString(value.dueDate, 'dueDate');
   const publishedAt = parseIsoDateString(value.publishedAt, 'publishedAt');
+  const valuationMode =
+    value.version === 2
+      ? parseValuationMode(value.valuationMode)
+      : ('LEGACY_NOMINAL' as const);
 
   if (!Array.isArray(value.expenses)) {
     throw new BadRequestException('Liquidation publication snapshot expenses are invalid');
@@ -299,14 +363,18 @@ export function parseLiquidationPublicationSnapshot(
       safeAddMinor(sum, allocation.amountMinor, 'allocations.totalAmountMinor'),
     0,
   );
+  const valuedTotal =
+    valuationMode === 'FUNCTIONAL'
+      ? sumFunctionalAmount(expenses, valuationMode)
+      : totalsByCurrency[baseCurrency];
 
-  if (totalsByCurrency[baseCurrency] === undefined) {
+  if (valuedTotal === undefined) {
     throw new BadRequestException(
       'Liquidation publication snapshot must include the base currency total',
     );
   }
 
-  if (totalsByCurrency[baseCurrency] !== totalAmountMinor) {
+  if (valuedTotal !== totalAmountMinor) {
     throw new BadRequestException(
       'Liquidation publication snapshot totals must match the liquidation total',
     );
@@ -320,8 +388,26 @@ export function parseLiquidationPublicationSnapshot(
 
   assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
 
+  if (valuationMode === 'LEGACY_NOMINAL') {
+    return {
+      version: 1,
+      liquidationId,
+      tenantId,
+      buildingId,
+      period,
+      baseCurrency,
+      totalAmountMinor,
+      totalsByCurrency,
+      expenses,
+      allocations,
+      dueDate,
+      publishedAt,
+    };
+  }
+
   return {
-    version: 1,
+    version: 2,
+    valuationMode,
     liquidationId,
     tenantId,
     buildingId,
@@ -334,6 +420,35 @@ export function parseLiquidationPublicationSnapshot(
     dueDate,
     publishedAt,
   };
+}
+
+function parseValuationMode(value: unknown): 'FUNCTIONAL' | 'LEGACY_NOMINAL' {
+  if (value === 'FUNCTIONAL' || value === 'LEGACY_NOMINAL') {
+    return value;
+  }
+  throw new BadRequestException('Liquidation publication snapshot valuationMode is invalid');
+}
+
+function sumFunctionalAmount(
+  items: readonly PublishedExpenseSnapshot[],
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL',
+): number | undefined {
+  if (valuationMode === 'LEGACY_NOMINAL') {
+    return undefined;
+  }
+
+  return items.reduce((sum, item) => {
+    if (item.functionalAmountMinor === null || item.functionalAmountMinor === undefined) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot functional amount is invalid',
+      );
+    }
+    return safeAddMinor(
+      sum,
+      item.functionalAmountMinor,
+      `functionalAmountMinor:${item.expenseId}`,
+    );
+  }, 0);
 }
 
 function normalizeExpenseSnapshot(value: PublishedExpenseSnapshot): PublishedExpenseSnapshot {
@@ -370,6 +485,27 @@ function normalizeExpenseSnapshot(value: PublishedExpenseSnapshot): PublishedExp
     description: value.description,
     type: value.type,
     ...(sourcePeriod ? { sourcePeriod } : {}),
+    ...(value.functionalAmountMinor !== null && value.functionalAmountMinor !== undefined
+      ? { functionalAmountMinor: value.functionalAmountMinor }
+      : {}),
+    ...(value.functionalCurrencyCode !== null && value.functionalCurrencyCode !== undefined
+      ? { functionalCurrencyCode: value.functionalCurrencyCode }
+      : {}),
+    ...(value.exchangeRateId !== null && value.exchangeRateId !== undefined
+      ? { exchangeRateId: value.exchangeRateId }
+      : {}),
+    ...(value.exchangeRateValue !== null && value.exchangeRateValue !== undefined
+      ? { exchangeRateValue: value.exchangeRateValue }
+      : {}),
+    ...(value.exchangeRateDirection !== null && value.exchangeRateDirection !== undefined
+      ? { exchangeRateDirection: value.exchangeRateDirection }
+      : {}),
+    ...(value.exchangeRateEffectiveAt !== null && value.exchangeRateEffectiveAt !== undefined
+      ? { exchangeRateEffectiveAt: value.exchangeRateEffectiveAt }
+      : {}),
+    ...(value.conversionDate !== null && value.conversionDate !== undefined
+      ? { conversionDate: value.conversionDate }
+      : {}),
   };
 }
 
@@ -420,6 +556,27 @@ function toExpenseJsonObject(value: PublishedExpenseSnapshot): Prisma.InputJsonO
     description: value.description,
     type: value.type,
     ...(value.sourcePeriod ? { sourcePeriod: value.sourcePeriod } : {}),
+    ...(value.functionalAmountMinor !== null && value.functionalAmountMinor !== undefined
+      ? { functionalAmountMinor: value.functionalAmountMinor }
+      : {}),
+    ...(value.functionalCurrencyCode !== null && value.functionalCurrencyCode !== undefined
+      ? { functionalCurrencyCode: value.functionalCurrencyCode }
+      : {}),
+    ...(value.exchangeRateId !== null && value.exchangeRateId !== undefined
+      ? { exchangeRateId: value.exchangeRateId }
+      : {}),
+    ...(value.exchangeRateValue !== null && value.exchangeRateValue !== undefined
+      ? { exchangeRateValue: value.exchangeRateValue }
+      : {}),
+    ...(value.exchangeRateDirection !== null && value.exchangeRateDirection !== undefined
+      ? { exchangeRateDirection: value.exchangeRateDirection }
+      : {}),
+    ...(value.exchangeRateEffectiveAt !== null && value.exchangeRateEffectiveAt !== undefined
+      ? { exchangeRateEffectiveAt: value.exchangeRateEffectiveAt }
+      : {}),
+    ...(value.conversionDate !== null && value.conversionDate !== undefined
+      ? { conversionDate: value.conversionDate }
+      : {}),
   });
 }
 
@@ -455,6 +612,35 @@ function parseExpenseSnapshot(value: unknown): PublishedExpenseSnapshot {
       ? undefined
       : parseNonEmptyString(value.sourcePeriod, 'sourcePeriod');
 
+  const functionalAmountMinor =
+    value.functionalAmountMinor === undefined || value.functionalAmountMinor === null
+      ? undefined
+      : parseSafeIntegerNonNegative(value.functionalAmountMinor, 'functionalAmountMinor');
+  const functionalCurrencyCode =
+    value.functionalCurrencyCode === undefined || value.functionalCurrencyCode === null
+      ? undefined
+      : parseNonEmptyString(value.functionalCurrencyCode, 'functionalCurrencyCode');
+  const exchangeRateId =
+    value.exchangeRateId === undefined || value.exchangeRateId === null
+      ? undefined
+      : parseNonEmptyString(value.exchangeRateId, 'exchangeRateId');
+  const exchangeRateValue =
+    value.exchangeRateValue === undefined || value.exchangeRateValue === null
+      ? undefined
+      : parseNonEmptyString(String(value.exchangeRateValue), 'exchangeRateValue');
+  const exchangeRateDirection =
+    value.exchangeRateDirection === undefined || value.exchangeRateDirection === null
+      ? undefined
+      : parseNonEmptyString(value.exchangeRateDirection, 'exchangeRateDirection');
+  const exchangeRateEffectiveAt =
+    value.exchangeRateEffectiveAt === undefined || value.exchangeRateEffectiveAt === null
+      ? undefined
+      : parseIsoDateString(value.exchangeRateEffectiveAt, 'exchangeRateEffectiveAt');
+  const conversionDate =
+    value.conversionDate === undefined || value.conversionDate === null
+      ? undefined
+      : parseIsoDateString(value.conversionDate, 'conversionDate');
+
   return {
     expenseId,
     categoryName,
@@ -465,6 +651,13 @@ function parseExpenseSnapshot(value: unknown): PublishedExpenseSnapshot {
     description,
     type,
     ...(sourcePeriod ? { sourcePeriod } : {}),
+    ...(functionalAmountMinor !== undefined ? { functionalAmountMinor } : {}),
+    ...(functionalCurrencyCode !== undefined ? { functionalCurrencyCode } : {}),
+    ...(exchangeRateId !== undefined ? { exchangeRateId } : {}),
+    ...(exchangeRateValue !== undefined ? { exchangeRateValue } : {}),
+    ...(exchangeRateDirection !== undefined ? { exchangeRateDirection } : {}),
+    ...(exchangeRateEffectiveAt !== undefined ? { exchangeRateEffectiveAt } : {}),
+    ...(conversionDate !== undefined ? { conversionDate } : {}),
   };
 }
 

@@ -142,6 +142,11 @@ enum LiquidationStatus {
   CANCELED
 }
 
+enum LiquidationValuationMode {
+  FUNCTIONAL
+  LEGACY_NOMINAL
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -1960,16 +1965,18 @@ model Income {
 // FINANZAS: MovementAllocation (Distribución de Expense/Income TENANT_SHARED)
 // ============================================================================
 model MovementAllocation {
-  id           String   @id @default(cuid())
-  tenantId     String
-  expenseId    String?  // XOR con incomeId
-  incomeId     String?  // XOR con expenseId
-  buildingId   String
-  percentage   Float?   // % del total (0–100), si se distribuye por %
-  amountMinor  Int?     // monto fijo en esa moneda
-  currencyCode String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                      String   @id @default(cuid())
+  tenantId                String
+  expenseId               String?  // XOR con incomeId
+  incomeId                String?  // XOR con expenseId
+  buildingId              String
+  percentage              Float?   // % del total (0–100), si se distribuye por %
+  amountMinor             Int?     // monto fijo en esa moneda
+  currencyCode            String?
+  functionalAmountMinor   Int?     // Snapshot: porción en moneda funcional al validar el Expense
+  functionalCurrencyCode  String?  // Snapshot: moneda funcional del tenant al validar el Expense
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   expense  Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
@@ -2035,6 +2042,7 @@ model Liquidation {
   period                   String            // YYYY-MM format - período de devengo
   chargePeriod             String?           // YYYY-MM - período de cobro (default: period + 1 mes)
   status                   LiquidationStatus @default(DRAFT)
+  valuationMode            LiquidationValuationMode? // NULL = histórico pre-3D / legacy
   baseCurrency             String            // Moneda base de liquidación
   totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
   totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
