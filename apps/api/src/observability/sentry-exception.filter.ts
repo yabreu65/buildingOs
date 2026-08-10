@@ -24,6 +24,28 @@ interface HttpExceptionResponseBody {
   message?: string | string[];
 }
 
+const SAFE_BODY_KEYS = new Set([
+  'statusCode',
+  'message',
+  'error',
+  'code',
+  'originalCurrency',
+  'functionalCurrency',
+  'conversionDate',
+  'baseCurrency',
+  'quoteCurrency',
+  'effectiveAt',
+]);
+
+function isSafeResponseValue(value: unknown): boolean {
+  return (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    value === null
+  );
+}
+
 @Catch()
 export class SentryExceptionFilter implements ExceptionFilter {
   constructor(
@@ -48,7 +70,10 @@ export class SentryExceptionFilter implements ExceptionFilter {
 
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal Server Error';
+    let responseMessage = 'Internal Server Error';
     let error: Error | null = null;
+    const structuredFields: Record<string, string | number | boolean | null> =
+      {};
 
     // Handle HttpException
     if (exception instanceof HttpException) {
@@ -58,12 +83,23 @@ export class SentryExceptionFilter implements ExceptionFilter {
         typeof exceptionResponse === 'string'
           ? exceptionResponse
           : this.getHttpExceptionMessage(exceptionResponse);
+      responseMessage = message;
       error = exception as Error;
+
+      // Preserve structured safe fields (business codes and authorized metadata)
+      if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+        for (const [key, value] of Object.entries(exceptionResponse)) {
+          if (SAFE_BODY_KEYS.has(key) && isSafeResponseValue(value)) {
+            structuredFields[key] = value;
+          }
+        }
+      }
     }
     // Handle regular errors
     else if (exception instanceof Error) {
       error = exception;
       message = exception.message;
+      // Do not echo unexpected error internals to the client
     }
     // Handle unknown exceptions
     else {
@@ -108,7 +144,8 @@ export class SentryExceptionFilter implements ExceptionFilter {
     // Send response
     response.status(statusCode).json({
       statusCode,
-      message,
+      message: responseMessage,
+      ...structuredFields,
       requestId: context.requestId,
       timestamp: new Date().toISOString(),
     });

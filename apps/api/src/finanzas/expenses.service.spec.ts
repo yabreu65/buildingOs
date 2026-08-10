@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { MovementAllocationService } from './movement-allocation.service';
+import { CurrencyConversionService } from './currency-conversion.service';
 import { CreateExpenseDto } from './expense-ledger.dto';
 
 const makeExpense = (overrides: Record<string, unknown> = {}) => ({
@@ -28,12 +29,31 @@ const makeExpense = (overrides: Record<string, unknown> = {}) => ({
   status: 'DRAFT',
   scopeType: 'BUILDING',
   unitGroupId: null,
+  functionalAmountMinor: null,
+  functionalCurrencyCode: null,
+  exchangeRateId: null,
+  exchangeRateValue: null,
+  exchangeRateDirection: null,
+  exchangeRateEffectiveAt: null,
+  conversionDate: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   category: { name: 'Maintenance' },
   vendor: { name: 'Vendor' },
   ...overrides,
 });
+
+const identityConversionResult = {
+  originalAmount: 1000,
+  originalCurrency: 'ARS',
+  functionalAmount: 1000,
+  functionalCurrency: 'ARS',
+  sourceExchangeRateId: null,
+  appliedRate: '1',
+  direction: 'IDENTITY',
+  sourceEffectiveAt: null,
+  conversionDate: new Date('2026-05-01T00:00:00.000Z'),
+};
 
 const defaultCreateDto: CreateExpenseDto = {
   buildingId: 'building-1',
@@ -51,6 +71,7 @@ describe('ExpensesService', () => {
   let validators: FinanzasValidators;
   let movementAllocation: MovementAllocationService;
   let audit: AuditService;
+  let currencyConversion: CurrencyConversionService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -65,6 +86,13 @@ describe('ExpensesService', () => {
               findFirst: jest.fn(),
               update: jest.fn(),
             },
+            tenant: {
+              findFirst: jest.fn().mockResolvedValue({
+                id: 'tenant-1',
+                functionalCurrency: 'ARS',
+              }),
+            },
+            exchangeRate: { findFirst: jest.fn() },
             liquidation: { findFirst: jest.fn() },
             expenseLedgerCategory: { findFirst: jest.fn() },
             vendor: { findFirst: jest.fn() },
@@ -84,6 +112,12 @@ describe('ExpensesService', () => {
           provide: MovementAllocationService,
           useValue: { createForExpense: jest.fn() },
         },
+        {
+          provide: CurrencyConversionService,
+          useValue: {
+            convert: jest.fn().mockResolvedValue(identityConversionResult),
+          },
+        },
       ],
     }).compile();
 
@@ -92,6 +126,7 @@ describe('ExpensesService', () => {
     validators = module.get<FinanzasValidators>(FinanzasValidators);
     movementAllocation = module.get<MovementAllocationService>(MovementAllocationService);
     audit = module.get<AuditService>(AuditService);
+    currencyConversion = module.get<CurrencyConversionService>(CurrencyConversionService);
   });
 
   // ── CREATE EXPENSE ─────────────────────────────────────────────────────

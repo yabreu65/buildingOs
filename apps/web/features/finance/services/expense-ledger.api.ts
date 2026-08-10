@@ -39,6 +39,13 @@ export interface Expense {
   status: ExpenseStatus;
   scopeType: ExpenseScopeType;
   unitGroupId: string | null;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: string | null;
+  conversionDate?: string | null;
   createdAt: string;
   updatedAt: string;
 }
