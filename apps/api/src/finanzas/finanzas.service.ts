@@ -9,6 +9,7 @@ import type { AuthenticatedMembership, PortalContext } from '../common/types/req
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
+import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
 import {
   CreateChargeDto,
@@ -872,6 +873,16 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
+
+      // 3E1: the payment's allocations became effective at APPROVED, so the
+      // affected charges must be recalculated from effective allocations only
+      // (a SUBMITTED reservation must never mark PARTIAL/PAID).
+      const affectedChargeIds = payment.paymentAllocations.map(
+        (allocation) => allocation.chargeId,
+      );
+      for (const chargeId of affectedChargeIds) {
+        await this.recalculateChargeStatus(chargeId, tx);
+      }
 
       await this.tryReconcilePayment(payment.id, tx);
       return approvedPayment;
@@ -1740,7 +1751,7 @@ export class FinanzasService {
   }
 
   private isEffectivePaymentStatus(status?: PaymentStatus | null): boolean {
-    return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED;
+    return isEffectivePaymentStatusShared(status);
   }
 
   // ============================================================================

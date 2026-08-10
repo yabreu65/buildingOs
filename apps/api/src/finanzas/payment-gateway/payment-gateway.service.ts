@@ -26,6 +26,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
 import { ChargeStatus } from '@prisma/client';
 import { Inject } from '@nestjs/common';
+import {
+  EFFECTIVE_PAYMENT_STATUSES,
+  isEffectivePaymentStatus,
+} from '../payment-status-semantics';
 
 @Injectable()
 export class PaymentGatewayService {
@@ -130,7 +134,7 @@ export class PaymentGatewayService {
       include: {
         paymentAllocations: {
           where: {
-            payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+            payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } },
           },
           select: { amount: true },
         },
@@ -231,15 +235,17 @@ export class PaymentGatewayService {
         });
       }
 
-      const alreadyAllocated = payment.paymentAllocations.reduce(
-        (sum, allocation) => sum + allocation.amount,
-        0,
-      );
-      if (alreadyAllocated + verifiedAmount > payment.amount) {
+      // 3E1 hardening: the provider amount must reconcile EXACTLY with the
+      // local payment amount. Any difference blocks the whole reconciliation
+      // (no allocation, no status mutation) and leaves the event unprocessed.
+      if (verifiedAmount !== payment.amount) {
+        this.logger.error(
+          `Webhook event ${event.eventId}: provider amount ${verifiedAmount} does not match local payment amount ${payment.amount}`,
+        );
         throw new UnprocessableEntityException({
           statusCode: 422,
-          error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_PAYMENT',
-          message: 'El monto del evento supera el monto del pago local',
+          error: 'PAYMENT_PROVIDER_AMOUNT_MISMATCH',
+          message: 'El monto del proveedor no coincide con el monto del pago local',
         });
       }
 
@@ -251,6 +257,18 @@ export class PaymentGatewayService {
           `Webhook event ${event.eventId}: allocation for payment ${payment.id} / charge ${charge.id} already exists`,
         );
         return true;
+      }
+
+      const alreadyAllocated = payment.paymentAllocations.reduce(
+        (sum, allocation) => sum + allocation.amount,
+        0,
+      );
+      if (alreadyAllocated + verifiedAmount > payment.amount) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_PAYMENT',
+          message: 'El monto del evento supera el monto del pago local',
+        });
       }
 
       let effectivePaymentStatus = payment.status;
@@ -309,7 +327,7 @@ export class PaymentGatewayService {
       include: {
         paymentAllocations: {
           where: {
-            payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+            payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } },
           },
           select: { amount: true },
         },
@@ -353,7 +371,7 @@ export class PaymentGatewayService {
       },
     });
 
-    if (!payment || payment.status !== 'APPROVED') {
+    if (!payment || !isEffectivePaymentStatus(payment.status)) {
       return;
     }
 

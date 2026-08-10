@@ -128,22 +128,39 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
 
     it('uses the real provider amount, never an inferred outstanding', async () => {
-      await run(paidEvent({ amount: 7500 }));
+      await run(paidEvent());
 
       expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ amount: 7500 }),
+          data: expect.objectContaining({ amount: 10000 }),
         }),
       );
-      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ status: 'PARTIAL' }) }),
+    });
+
+    it('provider amount different from the local payment => 422 PAYMENT_PROVIDER_AMOUNT_MISMATCH, no mutation', async () => {
+      await expect(run(paidEvent({ amount: 7500 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_PROVIDER_AMOUNT_MISMATCH' },
+      });
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('recalculates the charge to PAID from the allocation (ledger-derived status)', async () => {
+      await run(paidEvent());
+
+      const paidUpdate = (mockPrisma.charge.update as jest.Mock).mock.calls.find(
+        (call) => call[0].data?.status === 'PAID',
       );
+      expect(paidUpdate).toBeDefined();
     });
 
     it('skips allocation creation when the pair already exists (idempotent ledger)', async () => {
       mockPrisma.payment.findFirst.mockResolvedValue(
         payment({
-          amount: 20000,
+          amount: 10000,
           status: 'APPROVED',
           paymentAllocations: [{ chargeId: 'charge-1', amount: 10000 }],
         }),
@@ -241,17 +258,6 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
   });
 
   describe('amount guards', () => {
-    it('event amount above payment amount => 422, no mutation', async () => {
-      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 5000 }));
-
-      await expect(run(paidEvent({ amount: 7500 }))).rejects.toMatchObject({
-        response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_PAYMENT' },
-      });
-
-      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
-      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
-    });
-
     it('event amount above charge outstanding => 422, no mutation', async () => {
       createdAllocations.push({ amount: 8000 });
 
