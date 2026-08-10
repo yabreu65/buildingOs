@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { MovementAllocationService } from './movement-allocation.service';
+import { CurrencyConversionService } from './currency-conversion.service';
 import {
   CreateIncomeDto,
   UpdateIncomeDto,
@@ -21,6 +22,7 @@ export class IncomesService {
     private readonly auditService: AuditService,
     private readonly validators: FinanzasValidators,
     private readonly movementAllocationService: MovementAllocationService,
+    private readonly currencyConversionService: CurrencyConversionService,
   ) {}
 
   async listIncomes(
@@ -204,6 +206,12 @@ export class IncomesService {
       throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
     }
 
+    if (income.status !== 'DRAFT') {
+      throw new BadRequestException(
+        `Solo se pueden editar ingresos en DRAFT. Estado actual: ${income.status}`,
+      );
+    }
+
     // If changing category, validate it's INCOME type
     if (dto.categoryId && dto.categoryId !== income.categoryId) {
       const newCategory = await this.prisma.expenseLedgerCategory.findFirst({
@@ -252,6 +260,57 @@ export class IncomesService {
     return this.toDto(updated);
   }
 
+  private toConversionDate(receivedDate: Date): string {
+    const year = receivedDate.getUTCFullYear();
+    const month = String(receivedDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(receivedDate.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private async buildIncomeConversionSnapshot(
+    tenantId: string,
+    income: { amountMinor: number; currencyCode: string; receivedDate: Date },
+  ): Promise<{
+    functionalAmountMinor: number;
+    functionalCurrencyCode: string;
+    exchangeRateId: string | null;
+    exchangeRateValue: string;
+    exchangeRateDirection: 'IDENTITY' | 'DIRECT' | 'INVERSE';
+    exchangeRateEffectiveAt: Date | null;
+    conversionDate: Date;
+  }> {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: tenantId },
+      select: { id: true, functionalCurrency: true },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant no encontrado: ${tenantId}`);
+    }
+
+    const result = await this.currencyConversionService.convert({
+      tenantId,
+      amount: income.amountMinor,
+      originalCurrency: income.currencyCode as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['originalCurrency'],
+      functionalCurrency: tenant.functionalCurrency as Parameters<
+        typeof this.currencyConversionService.convert
+      >[0]['functionalCurrency'],
+      conversionDate: this.toConversionDate(income.receivedDate),
+    });
+
+    return {
+      functionalAmountMinor: result.functionalAmount,
+      functionalCurrencyCode: result.functionalCurrency,
+      exchangeRateId: result.sourceExchangeRateId,
+      exchangeRateValue: result.appliedRate,
+      exchangeRateDirection: result.direction,
+      exchangeRateEffectiveAt: result.sourceEffectiveAt,
+      conversionDate: result.conversionDate,
+    };
+  }
+
   async recordIncome(
     tenantId: string,
     incomeId: string,
@@ -277,12 +336,24 @@ export class IncomesService {
       );
     }
 
+    const conversionSnapshot = await this.buildIncomeConversionSnapshot(
+      tenantId,
+      income,
+    );
+
     const updated = await this.prisma.income.update({
       where: { id: incomeId },
       data: {
         status: 'RECORDED',
         recordedByMembershipId: membershipId,
         recordedAt: new Date(),
+        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+        exchangeRateId: conversionSnapshot.exchangeRateId,
+        exchangeRateValue: conversionSnapshot.exchangeRateValue,
+        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+        conversionDate: conversionSnapshot.conversionDate,
       },
       include: { category: true },
     });
@@ -355,6 +426,13 @@ export class IncomesService {
     scopeType: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
     destination: 'APPLY_TO_EXPENSES' | 'RESERVE_FUND' | 'SPECIAL_FUND';
     unitGroupId: string | null;
+    functionalAmountMinor?: number | null;
+    functionalCurrencyCode?: string | null;
+    exchangeRateId?: string | null;
+    exchangeRateValue?: { toString(): string } | string | null;
+    exchangeRateDirection?: string | null;
+    exchangeRateEffectiveAt?: Date | null;
+    conversionDate?: Date | null;
     createdAt: Date;
     updatedAt: Date;
     category: { name: string };
@@ -375,6 +453,16 @@ export class IncomesService {
       scopeType: income.scopeType,
       destination: income.destination,
       unitGroupId: income.unitGroupId,
+      functionalAmountMinor: income.functionalAmountMinor ?? null,
+      functionalCurrencyCode: income.functionalCurrencyCode ?? null,
+      exchangeRateId: income.exchangeRateId ?? null,
+      exchangeRateValue:
+        income.exchangeRateValue === null || income.exchangeRateValue === undefined
+          ? null
+          : income.exchangeRateValue.toString(),
+      exchangeRateDirection: income.exchangeRateDirection ?? null,
+      exchangeRateEffectiveAt: income.exchangeRateEffectiveAt ?? null,
+      conversionDate: income.conversionDate ?? null,
       createdAt: income.createdAt,
       updatedAt: income.updatedAt,
     };
