@@ -78,12 +78,20 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const status = this.mapStatus(payment.status);
     const externalRef = payment.external_reference;
 
+    const transactionAmount = payment.transaction_amount;
+    const currencyId = payment.currency_id;
+
     return {
       eventId: String(payment.id),
       eventType: webhookData.action || 'payment.updated',
       chargeId: externalRef,
       externalId: String(payment.id),
       status,
+      amount:
+        typeof transactionAmount === 'number' && Number.isFinite(transactionAmount)
+          ? Math.round(transactionAmount * 100)
+          : undefined,
+      currency: typeof currencyId === 'string' ? currencyId : undefined,
       rawPayload: payload,
     };
   }

@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -453,6 +453,31 @@ export class FinanzasService {
     const charge = await this.prisma.charge.findUnique({
       where: { id: chargeId },
     });
+
+    // 2.5. A charge with effective (APPROVED/RECONCILED) payments cannot be
+    // canceled: PaymentAllocation history must stay coherent. SUBMITTED
+    // payments are only reservations and do not block cancellation.
+    const effectiveAllocation = await this.prisma.paymentAllocation.findFirst({
+      where: {
+        tenantId,
+        chargeId,
+        payment: {
+          status: {
+            in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED],
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    if (effectiveAllocation) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS',
+        message:
+          'No se puede cancelar un cargo con pagos efectivos aplicados',
+      });
+    }
 
     // 3. Cancel
     const canceledCharge = await this.prisma.charge.update({
@@ -1035,6 +1060,16 @@ export class FinanzasService {
       throw new NotFoundException(
         `Charge not found or does not belong to this building/tenant`,
       );
+    }
+
+    // 3.75. Same-currency invariant: allocation amount is always expressed in
+    // Charge.currency. A cross-currency allocation is not supported until 3E3.
+    if (payment.currency !== charge.currency) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+        message: `La moneda del pago (${payment.currency}) no coincide con la moneda del cargo (${charge.currency})`,
+      });
     }
 
     if (!payment.unitId) {

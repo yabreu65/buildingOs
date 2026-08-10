@@ -16,6 +16,7 @@ import {
   ArrayUnique,
 } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod, RejectionReason } from '@prisma/client';
+import { CANONICAL_CURRENCIES } from '@buildingos/contracts';
 import {
   BuildingChargeParamDto,
   BuildingPaymentParamDto,
@@ -42,7 +43,7 @@ export class CreateChargeDto {
   amount!: number; // In cents
 
   @IsOptional()
-  @IsString()
+  @IsIn(CANONICAL_CURRENCIES, { message: 'currency must be one of USD, VES, ARS, or COP' })
   currency?: string; // Default: ARS
 
   @IsOptional()
@@ -73,7 +74,7 @@ export class UpdateChargeDto {
   amount?: number;
 
   @IsOptional()
-  @IsString()
+  @IsIn(CANONICAL_CURRENCIES, { message: 'currency must be one of USD, VES, ARS, or COP' })
   currency?: string;
 
   @IsOptional()
@@ -112,7 +113,7 @@ export class SubmitPaymentDto {
   amount!: number; // In cents
 
   @IsOptional()
-  @IsString()
+  @IsIn(CANONICAL_CURRENCIES, { message: 'currency must be one of USD, VES, ARS, or COP' })
   currency?: string; // Default: ARS
 
   @IsEnum(PaymentMethod)
