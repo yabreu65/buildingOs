@@ -96,6 +96,7 @@ describe('E2E Payment Flow', () => {
         update: jest.fn(),
       },
       payment: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'payment-e2e-1' }]),
         findFirst: jest.fn().mockImplementation(() => Promise.resolve(paymentRecord)),
         findUnique: jest.fn().mockImplementation(() => Promise.resolve(paymentRecord)),
         update: jest.fn().mockImplementation(

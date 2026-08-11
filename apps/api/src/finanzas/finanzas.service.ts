@@ -15,6 +15,7 @@ import {
   type FunctionalSnapshotFields,
 } from './functional-snapshot';
 import {
+  assertPaymentAllocationCurrencyMode,
   createLockedAllocation,
   lockChargesForAllocation,
   lockPaymentForAllocation,
@@ -844,6 +845,10 @@ export class FinanzasService {
             'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
           );
         }
+        assertPaymentAllocationCurrencyMode(
+          payment.currency,
+          lockedSelection.map((selection) => ({ charge: selection.charge })),
+        );
 
         for (const selection of lockedSelection) {
           await tx.paymentAllocation.create({
@@ -1015,11 +1020,15 @@ export class FinanzasService {
         );
       }
 
-      await this.validateResidentPaymentAllocationsForApproval(
+      const lockedSelection = await this.validateResidentPaymentAllocationsForApproval(
         tx,
         tenantId,
         buildingId,
         payment,
+      );
+      assertPaymentAllocationCurrencyMode(
+        payment.currency,
+        lockedSelection.map((selection) => ({ charge: selection.charge })),
       );
       const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
       const snapshot = await this.ensurePaymentFunctionalSnapshot(
@@ -3079,11 +3088,15 @@ export class FinanzasService {
         );
       }
 
-      await this.validateResidentPaymentAllocationsForApproval(
+      const lockedSelection = await this.validateResidentPaymentAllocationsForApproval(
         tx,
         tenantId,
         payment.buildingId,
         payment,
+      );
+      assertPaymentAllocationCurrencyMode(
+        payment.currency,
+        lockedSelection.map((selection) => ({ charge: selection.charge })),
       );
       const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
       const snapshot = await this.ensurePaymentFunctionalSnapshot(

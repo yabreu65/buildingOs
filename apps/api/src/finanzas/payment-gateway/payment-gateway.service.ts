@@ -24,7 +24,7 @@ import {
 } from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
-import { ChargeStatus, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { Inject } from '@nestjs/common';
 import {
   EFFECTIVE_PAYMENT_STATUSES,
@@ -37,9 +37,12 @@ import {
   type FunctionalSnapshotFields,
 } from '../functional-snapshot';
 import {
+  assertPaymentAllocationCurrencyMode,
   createLockedAllocation,
   lockChargesForAllocation,
   lockPaymentForAllocation,
+  recalculateLockedCharge,
+  reconcilePaymentWhenConsumed,
 } from '../payment-allocation-transaction';
 
 /**
@@ -130,6 +133,15 @@ export class PaymentGatewayService {
       return { ...event, chargeUpdated: false };
     }
 
+    const providerReference = event.externalId?.trim();
+    if (!providerReference) {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'PAYMENT_PROVIDER_REFERENCE_REQUIRED',
+        message: 'Paid webhook event missing provider reference',
+      });
+    }
+
     // Idempotency: check only after the event is known to require durable side effects.
     const isDuplicate = await this.idempotencyService.isProcessed(event.eventId, providerName);
     if (isDuplicate) {
@@ -137,7 +149,7 @@ export class PaymentGatewayService {
       return { ...event, chargeUpdated: false };
     }
 
-    const chargeUpdated = await this.applyPaidEvent(event);
+    const chargeUpdated = await this.applyPaidEvent(event, providerReference);
 
     if (chargeUpdated) {
       await this.idempotencyService.cacheProcessed(event.eventId, providerName);
@@ -152,7 +164,7 @@ export class PaymentGatewayService {
     return { ...event, chargeUpdated };
   }
 
-  private async applyPaidEvent(event: WebhookEvent): Promise<boolean> {
+  private async applyPaidEvent(event: WebhookEvent, providerReference: string): Promise<boolean> {
     if (!event.chargeId) {
       this.logger.warn(`Webhook event ${event.eventId} has no chargeId; no financial mutation`);
       return false;
@@ -223,23 +235,6 @@ export class PaymentGatewayService {
       });
     }
 
-    const effectiveAllocated = charge.paymentAllocations.reduce(
-      (sum, allocation) => sum + allocation.amount,
-      0,
-    );
-    const outstanding = charge.amount - effectiveAllocated;
-
-    if (verifiedAmount > outstanding) {
-      this.logger.error(
-        `Webhook event ${event.eventId}: provider amount ${verifiedAmount} exceeds charge outstanding ${outstanding}`,
-      );
-      throw new UnprocessableEntityException({
-        statusCode: 422,
-        error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_OUTSTANDING',
-        message: 'El monto del evento supera el saldo pendiente del cargo',
-      });
-    }
-
     return this.prisma.$transaction(async (tx) => {
       const eventLockKey = `webhook:${this.provider?.providerName}:${event.eventId}`;
       await tx.$executeRaw(
@@ -255,19 +250,22 @@ export class PaymentGatewayService {
       });
       if (processed) return true;
 
-      const discoveredPayment = await tx.payment.findFirst({
+      const discoveredPayments = await tx.payment.findMany({
         where: {
           tenantId: charge.tenantId,
-          reference: event.externalId ?? undefined,
+          reference: providerReference,
         },
         select: { id: true },
+        take: 2,
       });
-      if (!discoveredPayment) {
+      if (discoveredPayments.length !== 1) {
         this.logger.error(
-          `Webhook event ${event.eventId}: no local payment with reference ${event.externalId} for tenant ${charge.tenantId}; manual review required`,
+          `Webhook event ${event.eventId}: expected one local payment with reference ${providerReference} for tenant ${charge.tenantId}, found ${discoveredPayments.length}; manual review required`,
         );
         return false;
       }
+      const discoveredPayment = discoveredPayments[0];
+      if (discoveredPayment === undefined) return false;
       const scope = {
         tenantId: charge.tenantId,
         buildingId: charge.buildingId,
@@ -277,7 +275,9 @@ export class PaymentGatewayService {
       await lockPaymentForAllocation(tx, scope);
       const payment = await tx.payment.findFirst({
         where: { id: discoveredPayment.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
-        include: { paymentAllocations: true },
+        include: {
+          paymentAllocations: { include: { charge: { select: { currency: true } } } },
+        },
       });
       if (!payment) return false;
       await lockChargesForAllocation(tx, charge.tenantId, charge.buildingId, [charge.id]);
@@ -285,14 +285,16 @@ export class PaymentGatewayService {
         where: { id: charge.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
         include: {
           paymentAllocations: {
-            where: { payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } } },
-            select: { amount: true },
+            include: { payment: { select: { id: true, status: true } } },
           },
         },
       });
       if (!lockedCharge) return false;
       const lockedOutstanding = lockedCharge.amount - lockedCharge.paymentAllocations.reduce(
-        (sum, allocation) => sum + allocation.amount,
+        (sum, allocation) =>
+          allocation.payment.id !== payment.id && isEffectivePaymentStatus(allocation.payment.status)
+            ? sum + allocation.amount
+            : sum,
         0,
       );
       if (verifiedAmount > lockedOutstanding) {
@@ -328,20 +330,21 @@ export class PaymentGatewayService {
         (allocation) => allocation.chargeId === charge.id,
       );
       if (existingAllocation) {
-        this.logger.log(
-          `Webhook event ${event.eventId}: allocation for payment ${payment.id} / charge ${charge.id} already exists`,
-        );
-        await tx.processedWebhookEvent.create({
-          data: { eventId: event.eventId, provider: this.provider!.providerName },
-        });
-        return true;
+        if (existingAllocation.amount !== verifiedAmount) {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            error: 'PAYMENT_PROVIDER_AMOUNT_MISMATCH',
+          });
+        }
       }
+
+      assertPaymentAllocationCurrencyMode(payment.currency, payment.paymentAllocations);
 
       const alreadyAllocated = payment.paymentAllocations.reduce(
         (sum, allocation) => sum + allocation.amount,
         0,
       );
-      if (alreadyAllocated + verifiedAmount > payment.amount) {
+      if (!existingAllocation && alreadyAllocated + verifiedAmount > payment.amount) {
         throw new UnprocessableEntityException({
           statusCode: 422,
           error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_PAYMENT',
@@ -378,7 +381,12 @@ export class PaymentGatewayService {
         return false;
       }
 
-      await createLockedAllocation(tx, scope, verifiedAmount);
+      if (!existingAllocation) {
+        await createLockedAllocation(tx, scope, verifiedAmount);
+      } else {
+        await recalculateLockedCharge(tx, charge.id);
+        await reconcilePaymentWhenConsumed(tx, payment.id);
+      }
       await tx.processedWebhookEvent.create({
         data: { eventId: event.eventId, provider: this.provider!.providerName },
       });
@@ -386,9 +394,6 @@ export class PaymentGatewayService {
       return true;
     });
   }
-
-
-
   /**
    * 3E2: freeze a COMPLETE functional snapshot before the gateway effective
    * transition. COMPLETE → reuse; LEGACY_NULL → requires the provider
@@ -463,81 +468,6 @@ export class PaymentGatewayService {
         conversionDate: event.paidAt,
       },
     );
-  }
-
-  /**
-   * Mirrors the ledger status computation: charge status derives exclusively
-   * from its effective allocations. Never a direct PAID mutation.
-   */
-  private async recalculateChargeStatus(
-    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
-    chargeId: string,
-  ): Promise<void> {
-    const charge = await tx.charge.findFirst({
-      where: { id: chargeId },
-      include: {
-        paymentAllocations: {
-          where: {
-            payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } },
-          },
-          select: { amount: true },
-        },
-      },
-    });
-
-    if (!charge) {
-      return;
-    }
-
-    const totalAllocated = charge.paymentAllocations.reduce(
-      (sum, allocation) => sum + allocation.amount,
-      0,
-    );
-
-    let newStatus: ChargeStatus;
-    if (totalAllocated === 0) {
-      newStatus = ChargeStatus.PENDING;
-    } else if (totalAllocated < charge.amount) {
-      newStatus = ChargeStatus.PARTIAL;
-    } else {
-      newStatus = ChargeStatus.PAID;
-    }
-
-    if (newStatus !== charge.status) {
-      await tx.charge.update({
-        where: { id: chargeId },
-        data: { status: newStatus, updatedAt: new Date() },
-      });
-    }
-  }
-
-  private async reconcilePaymentIfAllPaid(
-    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
-    paymentId: string,
-  ): Promise<void> {
-    const payment = await tx.payment.findFirst({
-      where: { id: paymentId },
-      include: {
-        paymentAllocations: { include: { charge: true } },
-      },
-    });
-
-    if (!payment || !isEffectivePaymentStatus(payment.status)) {
-      return;
-    }
-
-    const allPaid =
-      payment.paymentAllocations.length > 0 &&
-      payment.paymentAllocations.every(
-        (allocation) => allocation.charge.status === ChargeStatus.PAID,
-      );
-
-    if (allPaid) {
-      await tx.payment.update({
-        where: { id: paymentId },
-        data: { status: 'RECONCILED', updatedAt: new Date() },
-      });
-    }
   }
 
   /**

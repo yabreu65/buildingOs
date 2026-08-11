@@ -19,6 +19,33 @@ export interface AllocationScope {
   readonly chargeId: string;
 }
 
+interface AllocationChargeCurrency {
+  readonly charge: { readonly currency: string };
+}
+
+type PaymentAllocationCurrencyMode = 'SAME' | 'CROSS' | null;
+
+export function assertPaymentAllocationCurrencyMode(
+  paymentCurrency: string,
+  allocations: readonly AllocationChargeCurrency[],
+  candidateChargeCurrency?: string,
+): PaymentAllocationCurrencyMode {
+  const currencies = candidateChargeCurrency
+    ? [...allocations.map((allocation) => allocation.charge.currency), candidateChargeCurrency]
+    : allocations.map((allocation) => allocation.charge.currency);
+  const hasSame = currencies.some((currency) => currency === paymentCurrency);
+  const hasCross = currencies.some((currency) => currency !== paymentCurrency);
+  if (hasSame && hasCross) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+    });
+  }
+  if (hasSame) return 'SAME';
+  if (hasCross) return 'CROSS';
+  return null;
+}
+
 export async function lockPaymentForAllocation(
   tx: Prisma.TransactionClient,
   scope: Pick<AllocationScope, 'tenantId' | 'buildingId' | 'paymentId'>,
@@ -117,8 +144,12 @@ export async function reconcilePaymentWhenConsumed(
     },
   });
   if (!payment || payment.status !== PaymentStatus.APPROVED) return;
+  const allocationMode = assertPaymentAllocationCurrencyMode(
+    payment.currency,
+    payment.paymentAllocations,
+  );
   const snapshotState = classifyFunctionalSnapshot(payment);
-  if (snapshotState === 'PARTIAL_INVALID' || payment.paymentAllocations.length === 0) return;
+  if (snapshotState === 'PARTIAL_INVALID' || allocationMode === null) return;
 
   let originalConsumed = 0;
   let functionalConsumed = 0;
@@ -137,8 +168,10 @@ export async function reconcilePaymentWhenConsumed(
   const allPaid = payment.paymentAllocations.every(
     (allocation) => allocation.charge.status === ChargeStatus.PAID,
   );
-  const completelyConsumed = snapshotState === 'COMPLETE' && payment.currency !== payment.functionalCurrencyCode
-    ? originalConsumed === payment.amount && functionalConsumed === payment.functionalAmountMinor
+  const completelyConsumed = allocationMode === 'CROSS'
+    ? snapshotState === 'COMPLETE' &&
+      originalConsumed === payment.amount &&
+      functionalConsumed === payment.functionalAmountMinor
     : originalConsumed === payment.amount;
   if (allPaid && completelyConsumed) {
     await tx.payment.update({
@@ -157,6 +190,12 @@ export async function createLockedAllocation(
   const payment = await loadLockedPayment(tx, scope);
   await lockChargesForAllocation(tx, scope.tenantId, scope.buildingId, [scope.chargeId]);
   const charge = await loadLockedCharge(tx, scope);
+
+  assertPaymentAllocationCurrencyMode(
+    payment.currency,
+    payment.paymentAllocations,
+    charge.currency,
+  );
 
   if (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED) {
     throw new ConflictException(`Cannot allocate payment in status ${payment.status}`);
