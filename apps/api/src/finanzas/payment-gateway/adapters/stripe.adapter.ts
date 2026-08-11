@@ -13,6 +13,25 @@ import {
   PaymentProviderName,
 } from '../interfaces/payment-provider.interface';
 
+/**
+ * Stripe epoch (seconds since Unix epoch, UTC instant) → UTC calendar date
+ * YYYY-MM-DD. Explicit and deterministic: the project has no tenant timezone.
+ */
+export function epochToUtcDay(epochSeconds: number): string | undefined {
+  if (!Number.isInteger(epochSeconds) || epochSeconds <= 0) {
+    return undefined;
+  }
+  const date = new Date(epochSeconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+
 @Injectable()
 export class StripeAdapter implements PaymentProvider {
   readonly providerName: PaymentProviderName = 'stripe';
@@ -81,6 +100,16 @@ export class StripeAdapter implements PaymentProvider {
         status = 'PENDING';
     }
 
+    // Economic date: the provider EVENT timestamp (success event), NOT the
+    // Checkout Session creation timestamp. session.created is the start of
+    // the checkout, not evidence of the payment instant. Normalized as UTC
+    // calendar date (no tenant timezone exists).
+    const eventCreated = (payload as { created?: unknown }).created;
+    const paidAt =
+      status === 'PAID' && typeof eventCreated === 'number' && Number.isFinite(eventCreated)
+        ? epochToUtcDay(eventCreated)
+        : undefined;
+
     return {
       eventId: sessionId,
       eventType,
@@ -92,6 +121,7 @@ export class StripeAdapter implements PaymentProvider {
           ? session.amount_total
           : undefined,
       currency: typeof session.currency === 'string' ? session.currency.toUpperCase() : undefined,
+      paidAt,
       rawPayload: payload,
     };
   }

@@ -9,8 +9,10 @@ import { PAYMENT_PROVIDER_TOKEN } from './interfaces/payment-provider.interface'
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { PrismaModule } from '../../prisma/prisma.module';
+import { PrismaService } from '../../prisma/prisma.service';
 import { RedisModule } from '../../redis/redis.module';
 import { IdempotencyService } from './webhooks/idempotency.service';
+import { CurrencyConversionService } from '../currency-conversion.service';
 import { ConfiguredPaymentProviderName, PaymentProvider } from './interfaces/payment-provider.interface';
 
 export interface PaymentGatewayOptions {
@@ -37,7 +39,16 @@ export class PaymentGatewayModule {
       return {
         module: PaymentGatewayModule,
         imports: [PrismaModule, RedisModule],
-        providers: [noopPaymentProvider, IdempotencyService, PaymentGatewayService],
+        providers: [
+          noopPaymentProvider,
+          IdempotencyService,
+          PaymentGatewayService,
+          {
+            provide: CurrencyConversionService,
+            useFactory: (prisma: PrismaService) => new CurrencyConversionService(prisma),
+            inject: [PrismaService],
+          },
+        ],
         exports: [PAYMENT_PROVIDER_TOKEN, PaymentGatewayService],
       };
     }
@@ -59,7 +70,16 @@ export class PaymentGatewayModule {
     return {
       module: PaymentGatewayModule,
       imports: [PrismaModule, RedisModule],
-      providers: [providerFactory, IdempotencyService, PaymentGatewayService],
+      providers: [
+        providerFactory,
+        IdempotencyService,
+        PaymentGatewayService,
+        {
+          provide: CurrencyConversionService,
+          useFactory: (prisma: PrismaService) => new CurrencyConversionService(prisma),
+          inject: [PrismaService],
+        },
+      ],
       exports: [PAYMENT_PROVIDER_TOKEN, PaymentGatewayService],
     };
   }

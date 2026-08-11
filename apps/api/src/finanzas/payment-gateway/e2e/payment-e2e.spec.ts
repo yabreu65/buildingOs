@@ -51,11 +51,15 @@ describe('E2E Payment Flow', () => {
       status: 'PAID',
       amount: 10000,
       currency: 'ARS',
+      paidAt: '2026-08-10',
       rawPayload: {},
     });
     mockProvider.getChargeStatus = jest.fn().mockResolvedValue('PAID');
 
     mockPrisma = {
+      tenant: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'tenant-e2e', functionalCurrency: 'ARS' }),
+      },
       charge: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'charge-e2e-1',
@@ -91,7 +95,22 @@ describe('E2E Payment Flow', () => {
       markProcessed: jest.fn(),
     };
 
-    service = new PaymentGatewayService(mockProvider as any, mockPrisma, mockIdempotencyService);
+    service = new PaymentGatewayService(
+      mockProvider as any,
+      mockPrisma,
+      mockIdempotencyService,
+      {
+        convert: jest.fn().mockResolvedValue({
+          functionalAmount: 10000,
+          functionalCurrency: 'ARS',
+          sourceExchangeRateId: null,
+          appliedRate: '1',
+          direction: 'IDENTITY',
+          sourceEffectiveAt: null,
+          conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+        }),
+      },
+    );
   });
 
   it('creates a payment preference and processes webhook to ledger evidence', async () => {

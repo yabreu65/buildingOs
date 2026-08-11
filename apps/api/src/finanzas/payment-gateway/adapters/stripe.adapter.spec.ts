@@ -3,7 +3,7 @@
  * Task 2.2: Verify createPreference, handleWebhook, getChargeStatus
  */
 
-import { StripeAdapter } from './stripe.adapter';
+import { StripeAdapter, epochToUtcDay } from './stripe.adapter';
 import { BadRequestException } from '@nestjs/common';
 
 describe('StripeAdapter', () => {
@@ -157,4 +157,17 @@ describe('StripeAdapter', () => {
       expect(status).toBe('CANCELLED');
     });
   });
+
+describe('epochToUtcDay (Stripe economic date)', () => {
+  it('converts a Unix epoch to a deterministic UTC calendar date', () => {
+    // 2026-08-10T00:00:00Z
+    expect(epochToUtcDay(1786320000)).toBe('2026-08-10');
+    // 2026-08-10T23:59:59Z stays on the same UTC day
+    expect(epochToUtcDay(1786406399)).toBe('2026-08-10');
+  });
+
+  it.each([0, -1, NaN, Infinity, 1.5])('rejects invalid epochs %s', (epoch) => {
+    expect(epochToUtcDay(epoch)).toBeUndefined();
+  });
+});
 });

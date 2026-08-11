@@ -20,6 +20,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
   let mockProvider: jest.Mocked<PaymentProvider>;
   let mockPrisma: any;
   let mockIdempotencyService: any;
+  let mockConversion: any;
   let createdAllocations: Array<{ amount: number }>;
 
   const charge = (overrides: Record<string, unknown> = {}) => ({
@@ -55,6 +56,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     status: 'PAID',
     amount: 10000,
     currency: 'ARS',
+    paidAt: '2026-08-10',
     rawPayload: {},
     ...overrides,
   });
@@ -68,6 +70,9 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       getChargeStatus: jest.fn(),
     };
     mockPrisma = {
+      tenant: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'tenant-1', functionalCurrency: 'VES' }),
+      },
       charge: {
         findFirst: jest.fn(() =>
           Promise.resolve(charge({ paymentAllocations: [...createdAllocations] })),
@@ -90,8 +95,34 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       isProcessed: jest.fn().mockResolvedValue(false),
       markProcessed: jest.fn().mockResolvedValue(undefined),
     };
-    service = new PaymentGatewayService(mockProvider, mockPrisma, mockIdempotencyService);
+    mockConversion = {
+      convert: jest.fn().mockResolvedValue({
+        functionalAmount: 365000,
+        functionalCurrency: 'VES',
+        sourceExchangeRateId: 'rate-1',
+        appliedRate: '36.5',
+        direction: 'DIRECT',
+        sourceEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+        conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+      }),
+    };
+    service = new PaymentGatewayService(
+      mockProvider,
+      mockPrisma,
+      mockIdempotencyService,
+      mockConversion,
+    );
   });
+
+  const completePaymentSnapshot = {
+    functionalAmountMinor: 36500,
+    functionalCurrencyCode: 'VES',
+    exchangeRateId: 'rate-1',
+    exchangeRateValue: '36.5',
+    exchangeRateDirection: 'DIRECT',
+    exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+    conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+  };
 
   const run = (event: WebhookEvent) => {
     mockProvider.handleWebhook.mockResolvedValue(event);
@@ -311,6 +342,116 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       await expect(run(paidEvent({ amount: 7500 }))).rejects.toMatchObject({
         response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_CHARGE' },
       });
+    });
+  });
+
+  describe('3E2 gateway snapshot', () => {
+    it('freezes a COMPLETE snapshot before the effective transition when the payment is SUBMITTED', async () => {
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'APPROVED',
+            functionalAmountMinor: 365000,
+            functionalCurrencyCode: 'VES',
+            exchangeRateDirection: 'DIRECT',
+          }),
+        }),
+      );
+      expect(mockConversion.convert).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionDate: '2026-08-10' }),
+        mockPrisma,
+      );
+    });
+
+    it('missing provider economic date => no effective transition (ServiceUnavailable)', async () => {
+      await expect(run(paidEvent({ paidAt: undefined }))).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('missing rate => no effective transition and no markProcessed', async () => {
+      mockConversion.convert.mockRejectedValue(
+        new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'EXCHANGE_RATE_NOT_FOUND',
+          message: 'no rate',
+        }),
+      );
+
+      await expect(run(paidEvent())).rejects.toThrow(UnprocessableEntityException);
+
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('replay after a frozen snapshot never reconverts', async () => {
+      await run(paidEvent());
+      const convertCallsAfterFirst = mockConversion.convert.mock.calls.length;
+      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+      await run(paidEvent());
+
+      expect(mockConversion.convert.mock.calls.length).toBe(convertCallsAfterFirst);
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('an existing COMPLETE snapshot is reused exactly (no reconversion)', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue(
+        payment({
+          status: 'SUBMITTED',
+          ...completePaymentSnapshot,
+        }),
+      );
+
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockConversion.convert).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ functionalAmountMinor: expect.anything() }),
+        }),
+      );
+    });
+  });
+
+  describe('3E2 gateway paidAt economic date', () => {
+    it('Payment.paidAt derives from the provider economic date (same day as conversionDate)', async () => {
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paidAt: new Date('2026-08-10T00:00:00.000Z'),
+          }),
+        }),
+      );
+      // conversionDate proviene del mismo event.paidAt (el convert mock recibe '2026-08-10')
+      expect(mockConversion.convert).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionDate: '2026-08-10' }),
+        mockPrisma,
+      );
+    });
+
+    it('midnight boundary: a late-day provider date never shifts to the processing day', async () => {
+      const result = await run(paidEvent({ paidAt: '2026-08-10' }));
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paidAt: new Date('2026-08-10T00:00:00.000Z'),
+          }),
+        }),
+      );
     });
   });
 

@@ -30,6 +30,29 @@ import {
   EFFECTIVE_PAYMENT_STATUSES,
   isEffectivePaymentStatus,
 } from '../payment-status-semantics';
+import { CurrencyConversionService } from '../currency-conversion.service';
+import {
+  buildPaymentFunctionalSnapshot,
+  classifyFunctionalSnapshot,
+  type FunctionalSnapshotFields,
+} from '../functional-snapshot';
+
+/**
+ * 3E2 fix: the gateway Payment.paidAt must derive from the SAME verified
+ * provider economic date used for the FX snapshot (YYYY-MM-DD), never from
+ * server processing time. Returns undefined for malformed days (defense).
+ */
+export function gatewayPaymentDate(day: string | undefined): Date | undefined {
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return undefined;
+  }
+  const date = new Date(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== day) {
+    return undefined;
+  }
+  return date;
+}
+
 
 @Injectable()
 export class PaymentGatewayService {
@@ -39,6 +62,7 @@ export class PaymentGatewayService {
     @Optional() @Inject(PAYMENT_PROVIDER_TOKEN) private readonly provider: PaymentProvider | null,
     private readonly prisma: PrismaService,
     private readonly idempotencyService: IdempotencyService,
+    private readonly currencyConversionService: CurrencyConversionService,
   ) {}
 
   /**
@@ -273,13 +297,20 @@ export class PaymentGatewayService {
 
       let effectivePaymentStatus = payment.status;
       if (payment.status === 'SUBMITTED') {
+        const snapshotData = await this.gatewayPaymentSnapshot(
+          tx,
+          charge.tenantId,
+          payment,
+          event,
+        );
         await tx.payment.update({
           where: { id: payment.id },
           data: {
             status: 'APPROVED',
-            paidAt: new Date(),
+            paidAt: gatewayPaymentDate(event.paidAt),
             paymentEventId: event.eventId,
             updatedAt: new Date(),
+            ...snapshotData,
           },
         });
         effectivePaymentStatus = 'APPROVED';
@@ -312,6 +343,84 @@ export class PaymentGatewayService {
 
       return true;
     });
+  }
+
+
+
+  /**
+   * 3E2: freeze a COMPLETE functional snapshot before the gateway effective
+   * transition. COMPLETE → reuse; LEGACY_NULL → requires the provider
+   * economic date (event.paidAt, YYYY-MM-DD) — missing date blocks the whole
+   * reconciliation; PARTIAL_INVALID → block.
+   */
+  private async gatewayPaymentSnapshot(
+    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
+    tenantId: string,
+    payment: FunctionalSnapshotFields & {
+      amount: number;
+      currency: string;
+    },
+    event: WebhookEvent,
+  ): Promise<Record<string, unknown>> {
+    const state = classifyFunctionalSnapshot(payment);
+
+    if (state === 'COMPLETE') {
+      return {};
+    }
+
+    if (state === 'PARTIAL_INVALID') {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
+        message: 'El pago posee un snapshot funcional incompleto o incoherente',
+      });
+    }
+
+    if (!event.paidAt) {
+      this.logger.error(
+        `Webhook event ${event.eventId}: no provider economic date; no effective transition`,
+      );
+      throw new ServiceUnavailableException(
+        'Webhook event missing provider economic date; manual review required',
+      );
+    }
+
+    const tenant = await tx.tenant.findFirst({
+      where: { id: tenantId },
+      select: { functionalCurrency: true },
+    });
+    if (!tenant) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
+        message: 'Tenant no encontrado para el snapshot del pago',
+      });
+    }
+
+    return buildPaymentFunctionalSnapshot(
+      (input) =>
+        this.currencyConversionService.convert(
+          {
+            tenantId: input.tenantId,
+            amount: input.amount,
+            originalCurrency: input.originalCurrency as Parameters<
+              typeof this.currencyConversionService.convert
+            >[0]['originalCurrency'],
+            functionalCurrency: input.functionalCurrency as Parameters<
+              typeof this.currencyConversionService.convert
+            >[0]['functionalCurrency'],
+            conversionDate: input.conversionDate,
+          },
+          tx,
+        ),
+      tenantId,
+      {
+        amountMinor: payment.amount,
+        currencyCode: payment.currency,
+        functionalCurrency: tenant.functionalCurrency,
+        conversionDate: event.paidAt,
+      },
+    );
   }
 
   /**

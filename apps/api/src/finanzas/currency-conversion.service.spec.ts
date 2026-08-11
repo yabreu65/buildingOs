@@ -342,4 +342,113 @@ describe("CurrencyConversionService", () => {
       ...overrides,
     } as Parameters<CurrencyConversionService["convert"]>[0];
   }
+
+describe("CurrencyConversionService transaction propagation", () => {
+  const rootExchangeRate = { findFirst: jest.fn() };
+  const rootPrisma = { exchangeRate: rootExchangeRate } as unknown as PrismaService;
+  const rootService = new CurrencyConversionService(rootPrisma);
+
+  const txExchangeRate = { findFirst: jest.fn() };
+  const tx = { exchangeRate: txExchangeRate } as unknown as Parameters<
+    CurrencyConversionService["convert"]
+  >[1];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    rootExchangeRate.findFirst.mockResolvedValue(null);
+    txExchangeRate.findFirst.mockResolvedValue(null);
+  });
+
+  const input = {
+    tenantId: "tenant-1",
+    amount: 1000,
+    originalCurrency: "USD" as CanonicalCurrency,
+    functionalCurrency: "VES" as CanonicalCurrency,
+    conversionDate: "2026-08-09",
+  };
+
+  it("uses the root PrismaService when no client is provided", async () => {
+    rootExchangeRate.findFirst.mockResolvedValue(
+      new Prisma.Decimal("36.5").toNumber() ? {
+        id: "rate-1",
+        rate: new Prisma.Decimal("36.5"),
+        effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
+      } : null,
+    );
+
+    await rootService.convert(input);
+
+    expect(rootExchangeRate.findFirst).toHaveBeenCalledTimes(1);
+    expect(txExchangeRate.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("uses the provided tx client and NEVER the root client", async () => {
+    txExchangeRate.findFirst.mockResolvedValue({
+      id: "rate-1",
+      rate: new Prisma.Decimal("36.5"),
+      effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
+    });
+
+    const result = await rootService.convert(input, tx);
+
+    expect(txExchangeRate.findFirst).toHaveBeenCalledTimes(1);
+    expect(rootExchangeRate.findFirst).not.toHaveBeenCalled();
+    expect(result.direction).toBe("DIRECT");
+    expect(result.functionalAmount).toBe(36500);
+  });
+
+  it("DIRECT with tx resolves through the tx client", async () => {
+    txExchangeRate.findFirst.mockResolvedValue({
+      id: "rate-direct",
+      rate: new Prisma.Decimal("36.5"),
+      effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
+    });
+
+    const result = await rootService.convert(input, tx);
+
+    expect(result.direction).toBe("DIRECT");
+    expect(txExchangeRate.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ tenantId: "tenant-1" }) }),
+    );
+  });
+
+  it("INVERSE with tx resolves through the tx client", async () => {
+    txExchangeRate.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "rate-inv",
+        rate: new Prisma.Decimal("0.04"),
+        effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
+      });
+
+    const result = await rootService.convert(
+      { ...input, originalCurrency: "ARS", functionalCurrency: "VES" },
+      tx,
+    );
+
+    expect(result.direction).toBe("INVERSE");
+    expect(txExchangeRate.findFirst).toHaveBeenCalledTimes(2);
+    expect(rootExchangeRate.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("IDENTITY with tx performs zero queries on root AND tx", async () => {
+    const result = await rootService.convert(
+      { ...input, originalCurrency: "VES", functionalCurrency: "VES" },
+      tx,
+    );
+
+    expect(result.direction).toBe("IDENTITY");
+    expect(txExchangeRate.findFirst).not.toHaveBeenCalled();
+    expect(rootExchangeRate.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("missing rate with tx rejects with EXCHANGE_RATE_NOT_FOUND", async () => {
+    txExchangeRate.findFirst.mockResolvedValue(null);
+
+    await expect(rootService.convert(input, tx)).rejects.toMatchObject({
+      response: expect.objectContaining({ code: "EXCHANGE_RATE_NOT_FOUND" }),
+    });
+    expect(rootExchangeRate.findFirst).not.toHaveBeenCalled();
+  });
+});
 });

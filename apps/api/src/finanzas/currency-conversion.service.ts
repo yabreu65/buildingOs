@@ -41,12 +41,32 @@ interface RateSnapshot {
   readonly effectiveAt: Date;
 }
 
+export interface CurrencyConversionDb {
+  readonly exchangeRate: {
+    findFirst: (args: {
+      where: {
+        tenantId: string;
+        baseCurrency: CanonicalCurrency;
+        quoteCurrency: CanonicalCurrency;
+        effectiveAt: { lte: Date };
+      };
+      orderBy: { effectiveAt: 'desc' };
+      select: { id: true; rate: true; effectiveAt: true };
+    }) => Promise<{
+      id: string;
+      rate: Prisma.Decimal;
+      effectiveAt: Date;
+    } | null>;
+  };
+}
+
 @Injectable()
 export class CurrencyConversionService {
   constructor(private readonly prisma: PrismaService) {}
 
   async convert(
     input: CurrencyConversionInput,
+    db: CurrencyConversionDb = this.prisma,
   ): Promise<CurrencyConversionResult> {
     this.assertInput(input);
     const conversionDate = this.normalizeDate(input.conversionDate);
@@ -63,6 +83,7 @@ export class CurrencyConversionService {
     }
 
     const direct = await this.findRate(
+      db,
       input.tenantId,
       input.originalCurrency,
       input.functionalCurrency,
@@ -84,6 +105,7 @@ export class CurrencyConversionService {
     }
 
     const inverse = await this.findRate(
+      db,
       input.tenantId,
       input.functionalCurrency,
       input.originalCurrency,
@@ -113,12 +135,13 @@ export class CurrencyConversionService {
   }
 
   private async findRate(
+    db: CurrencyConversionDb,
     tenantId: string,
     baseCurrency: CanonicalCurrency,
     quoteCurrency: CanonicalCurrency,
     conversionDate: Date,
   ): Promise<RateSnapshot | null> {
-    return this.prisma.exchangeRate.findFirst({
+    return db.exchangeRate.findFirst({
       where: {
         tenantId,
         baseCurrency,

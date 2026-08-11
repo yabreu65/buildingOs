@@ -17,6 +17,7 @@ import {
 } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod, RejectionReason } from '@prisma/client';
 import { CANONICAL_CURRENCIES } from '@buildingos/contracts';
+import { IsStrictDateString } from './strict-date.decorator';
 import {
   BuildingChargeParamDto,
   BuildingPaymentParamDto,
@@ -126,6 +127,14 @@ export class SubmitPaymentDto {
   @IsOptional()
   @IsString()
   proofFileId?: string;
+
+  /**
+   * Economic bank day of the transfer, declared by the user.
+   * Strict date-only YYYY-MM-DD (never a datetime).
+   */
+  @IsOptional()
+  @IsStrictDateString({ message: 'transferDate must be a valid YYYY-MM-DD date' })
+  transferDate?: string;
 }
 
 export class ApprovePaymentDto {
@@ -392,6 +401,14 @@ export interface PaymentDetailDto {
   rejectionReason?: string | null;
   rejectionComment?: string | null;
   reviewedAt?: Date | null;
+  transferDate?: Date | null;
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: Date | null;
+  conversionDate?: Date | null;
   // Receipt fields
   receiptDocumentId?: string | null;
   receiptNumber?: string | null;
