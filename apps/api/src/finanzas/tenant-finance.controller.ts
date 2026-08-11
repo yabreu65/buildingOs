@@ -36,6 +36,7 @@ import {
   PaymentAuditLogDto,
   PaymentDuplicateCheckResultDto,
   ListTenantChargesQueryDto,
+  PaymentDetailDto,
 } from './finanzas.dto';
 import { Payment } from '@prisma/client';
 
@@ -134,7 +135,7 @@ export class TenantFinanceController {
     @Query() query: ListPendingPaymentsQueryDto,
     @Request() req: AuthenticatedRequest,
     @Headers('x-portal-context') portalContext?: string,
-  ): Promise<Payment[]> {
+  ): Promise<PaymentDetailDto[]> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
     const userRoles = req.user.roles || [];
@@ -157,7 +158,7 @@ export class TenantFinanceController {
     @Body() dto: ApprovePaymentDto,
     @Request() req: AuthenticatedRequest,
     @Headers('x-portal-context') portalContext?: string,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     const membershipId = req.user.membershipId || '';
@@ -181,7 +182,7 @@ export class TenantFinanceController {
     @Body() dto: RejectPaymentDto,
     @Request() req: AuthenticatedRequest,
     @Headers('x-portal-context') portalContext?: string,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     const tenantId = req.tenantId!;
     const userRoles = req.user.roles || [];
     const membershipId = req.user.membershipId || '';

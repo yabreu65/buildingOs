@@ -8,6 +8,12 @@ import { PaymentReceiptService } from '../receipts/payment-receipt.service';
 import type { AuthenticatedMembership, PortalContext } from '../common/types/request.types';
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
+import { CurrencyConversionService } from './currency-conversion.service';
+import {
+  buildPaymentFunctionalSnapshot,
+  classifyFunctionalSnapshot,
+  type FunctionalSnapshotFields,
+} from './functional-snapshot';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
@@ -36,9 +42,11 @@ import {
   PaymentDuplicateCheckResultDto,
   UnitLedgerDto,
   MonthlyTrendDto,
+  PaymentDetailDto,
 } from './finanzas.dto';
 
-export interface PendingPaymentListItem extends Payment {
+export interface PendingPaymentListItem extends Omit<Payment, 'exchangeRateValue'> {
+  exchangeRateValue: string | null;
   building?: { id: string; name: string } | null;
   unit?: { id: string; label: string | null } | null;
   createdByUser?: { id: string; name: string; email: string } | null;
@@ -155,7 +163,105 @@ export class FinanzasService {
     private readonly notificationsService: NotificationsService,
     private readonly receiptService: PaymentReceiptService,
     private readonly expensesService: ExpensesService,
+    private readonly currencyConversionService: CurrencyConversionService,
   ) {}
+
+  private toConversionDate(date: Date): string {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
+   * 3E2: guarantee a COMPLETE functional snapshot before an effective
+   * transition (SUBMITTED → APPROVED).
+   *
+   * - COMPLETE: reuse exactly, never reconvert.
+   * - LEGACY_NULL: freeze with transferDate if present, else the definitive
+   *   paidAt. Covers pre-3E2 SUBMITTED payments approved after rollout.
+   * - PARTIAL_INVALID: block with a stable structured error.
+   */
+  private async paymentFunctionalSnapshot(
+    client: Prisma.TransactionClient | PrismaService,
+    tenantId: string,
+    amountMinor: number,
+    currencyCode: string,
+    conversionDate: Date,
+  ): Promise<{
+    functionalAmountMinor: number;
+    functionalCurrencyCode: string;
+    exchangeRateId: string | null;
+    exchangeRateValue: string;
+    exchangeRateDirection: 'IDENTITY' | 'DIRECT' | 'INVERSE';
+    exchangeRateEffectiveAt: Date | null;
+    conversionDate: Date;
+  }> {
+    const tenant = await client.tenant.findFirst({
+      where: { id: tenantId },
+      select: { functionalCurrency: true },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant no encontrado: ${tenantId}`);
+    }
+
+    return buildPaymentFunctionalSnapshot(
+      (input) =>
+        this.currencyConversionService.convert({
+          tenantId: input.tenantId,
+          amount: input.amount,
+          originalCurrency: input.originalCurrency as Parameters<
+            typeof this.currencyConversionService.convert
+          >[0]['originalCurrency'],
+          functionalCurrency: input.functionalCurrency as Parameters<
+            typeof this.currencyConversionService.convert
+          >[0]['functionalCurrency'],
+          conversionDate: input.conversionDate,
+        }),
+      tenantId,
+      {
+        amountMinor,
+        currencyCode,
+        functionalCurrency: tenant.functionalCurrency,
+        conversionDate: this.toConversionDate(conversionDate),
+      },
+    );
+  }
+
+  private async ensurePaymentFunctionalSnapshot(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    payment: FunctionalSnapshotFields & {
+      amount: number;
+      currency: string;
+      transferDate: Date | null;
+    },
+    paidAt: Date,
+  ): Promise<Record<string, unknown>> {
+    const state = classifyFunctionalSnapshot(payment);
+
+    if (state === 'COMPLETE') {
+      return {};
+    }
+
+    if (state === 'PARTIAL_INVALID') {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
+        message: 'El pago posee un snapshot funcional incompleto o incoherente',
+      });
+    }
+
+    const conversionDate = payment.transferDate ?? paidAt;
+    return this.paymentFunctionalSnapshot(
+      tx,
+      tenantId,
+      payment.amount,
+      payment.currency,
+      conversionDate,
+    );
+  }
 
   // ============================================================================
   // CHARGE OPERATIONS
@@ -525,7 +631,7 @@ export class FinanzasService {
     userRoles: string[],
     dto: SubmitPaymentDto,
     portalContext?: PortalContext,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     // 1. Permission check
     if (!this.validators.canSubmitPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'submit');
@@ -673,6 +779,21 @@ export class FinanzasService {
           );
         }
 
+        // 3E2: when the resident declares a transferDate (economic bank day,
+        // strict YYYY-MM-DD), the functional snapshot is frozen AT SUBMIT.
+        // If the conversion fails the whole submit fails: no Payment and no
+        // reservation allocations are created.
+        const transferDate = dto.transferDate ? new Date(`${dto.transferDate}T00:00:00.000Z`) : null;
+        const submitSnapshot = transferDate
+          ? await this.paymentFunctionalSnapshot(
+              tx,
+              tenantId,
+              calculatedAmount,
+              paymentCurrency,
+              transferDate,
+            )
+          : null;
+
         const payment = await tx.payment.create({
           data: {
             tenantId,
@@ -686,6 +807,8 @@ export class FinanzasService {
             proofFileId: dto.proofFileId || null,
             createdByUserId: userId,
             notes: this.createResidentDirectedPaymentMarker(),
+            transferDate,
+            ...(submitSnapshot ?? {}),
           },
         });
 
@@ -827,7 +950,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: ApprovePaymentDto,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'approve');
@@ -864,13 +987,21 @@ export class FinanzasService {
         buildingId,
         payment,
       );
+      const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
+      const snapshot = await this.ensurePaymentFunctionalSnapshot(
+        tx,
+        tenantId,
+        payment,
+        paidAt,
+      );
       const approvedPayment = await tx.payment.update({
         where: { id: payment.id },
         data: {
           status: PaymentStatus.APPROVED,
-          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+          paidAt,
           reviewedByMembershipId: membershipId,
           updatedAt: new Date(),
+          ...snapshot,
         },
       });
 
@@ -927,7 +1058,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: RejectPaymentDto,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }
@@ -1403,13 +1534,19 @@ export class FinanzasService {
     return publicNotes || null;
   }
 
-  private sanitizePaymentForResponse<T extends { notes?: string | null }>(
-    payment: T,
-  ): SanitizedPayment<T> {
+  private sanitizePaymentForResponse<
+    T extends { notes?: string | null; exchangeRateValue?: unknown },
+  >(payment: T): SanitizedPayment<T> & { exchangeRateValue?: string | null } {
     const publicNotes = this.stripInternalPaymentMarkers(payment.notes);
-    const { notes: _internalNotes, ...publicPayment } = payment;
+    const { notes: _internalNotes, exchangeRateValue, ...publicPayment } = payment;
 
-    return { ...publicPayment, notes: publicNotes };
+    return {
+      ...publicPayment,
+      notes: publicNotes,
+      ...(exchangeRateValue === null || exchangeRateValue === undefined
+        ? { exchangeRateValue: null }
+        : { exchangeRateValue: (exchangeRateValue as { toString(): string }).toString() }),
+    } as SanitizedPayment<T> & { exchangeRateValue?: string | null };
   }
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
@@ -2414,7 +2551,7 @@ export class FinanzasService {
     paymentId: string,
     userRoles: string[],
     membershipId: string,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'revive');
@@ -2478,7 +2615,7 @@ export class FinanzasService {
     paymentId: string,
     userRoles: string[],
     userId: string,
-  ): Promise<PaymentWithAllocationSummary> {
+  ): Promise<PaymentDetailDto> {
     // 1. Find payment
     const payment = await this.prisma.payment.findFirst({
       where: { id: paymentId, tenantId, buildingId },
@@ -2539,7 +2676,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     reason?: string,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'cancel');
@@ -2864,6 +3001,17 @@ export class FinanzasService {
       return;
     }
 
+    // 3E2: an APPROVED payment may reach RECONCILED only with a COMPLETE
+    // snapshot or as historical legacy (ALL snapshot fields NULL). A partial
+    // snapshot is corruption and blocks reconciliation.
+    const snapshotState = classifyFunctionalSnapshot(payment);
+    if (snapshotState === 'PARTIAL_INVALID') {
+      this.logger.error(
+        `Payment ${paymentId} has a partial functional snapshot; RECONCILED blocked`,
+      );
+      return;
+    }
+
     // Check if all allocated charges are fully paid
     const allPaid = payment.paymentAllocations.every(
       (alloc) => alloc.charge.status === ChargeStatus.PAID,
@@ -2994,7 +3142,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: ApprovePaymentDto,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     // Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'approve');
@@ -3028,14 +3176,22 @@ export class FinanzasService {
         payment.buildingId,
         payment,
       );
+      const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
+      const snapshot = await this.ensurePaymentFunctionalSnapshot(
+        tx,
+        tenantId,
+        payment,
+        paidAt,
+      );
       const approvedPayment = await tx.payment.update({
         where: { id: payment.id },
         data: {
           status: PaymentStatus.APPROVED,
           reviewedByMembershipId: membershipId,
           reviewedAt: new Date(),
-          paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date(),
+          paidAt,
           updatedAt: new Date(),
+          ...snapshot,
         },
       });
 
@@ -3097,7 +3253,7 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: RejectPaymentDto,
-  ): Promise<Payment> {
+  ): Promise<PaymentDetailDto> {
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'reject');
     }

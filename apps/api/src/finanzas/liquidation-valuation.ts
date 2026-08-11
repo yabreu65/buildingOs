@@ -1,5 +1,5 @@
 import { UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { classifyFunctionalSnapshot, isFunctionalSnapshotPresent } from './functional-snapshot';
 
 export type LiquidationValuationMode = 'FUNCTIONAL' | 'LEGACY_NOMINAL';
 
@@ -17,8 +17,6 @@ export interface LiquidationValuationSource {
   conversionDate: Date | string | null;
 }
 
-const VALID_DIRECTIONS = new Set(['IDENTITY', 'DIRECT', 'INVERSE']);
-
 function functionalSnapshotRequired(message: string): never {
   throw new UnprocessableEntityException({
     statusCode: 422,
@@ -27,43 +25,16 @@ function functionalSnapshotRequired(message: string): never {
   });
 }
 
-function rateToString(
-  value: string | number | { toString(): string } | null,
-): string | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  return value.toString();
-}
-
-export function isFunctionalSnapshotPresent(
-  source: LiquidationValuationSource,
-): boolean {
-  return (
-    source.functionalAmountMinor != null ||
-    source.functionalCurrencyCode != null ||
-    source.exchangeRateId != null ||
-    rateToString(source.exchangeRateValue) != null ||
-    source.exchangeRateDirection != null ||
-    source.exchangeRateEffectiveAt != null ||
-    source.conversionDate != null
-  );
-}
+export { isFunctionalSnapshotPresent };
 
 export function assertFunctionalSnapshotComplete(
   source: LiquidationValuationSource,
   baseCurrency: string,
 ): void {
-  const rate = rateToString(source.exchangeRateValue);
-
-  if (source.functionalAmountMinor === null) {
+  const state = classifyFunctionalSnapshot(source);
+  if (state !== 'COMPLETE') {
     functionalSnapshotRequired(
-      `La fuente ${source.type}:${source.id} no posee functionalAmountMinor`,
-    );
-  }
-  if (source.functionalCurrencyCode === null) {
-    functionalSnapshotRequired(
-      `La fuente ${source.type}:${source.id} no posee functionalCurrencyCode`,
+      `La fuente ${source.type}:${source.id} posee un snapshot funcional incompleto o incoherente`,
     );
   }
   if (source.functionalCurrencyCode !== baseCurrency) {
@@ -71,59 +42,6 @@ export function assertFunctionalSnapshotComplete(
       `La fuente ${source.type}:${source.id} está en ${source.functionalCurrencyCode}, ` +
         `se esperaba la moneda base de la liquidación (${baseCurrency})`,
     );
-  }
-  if (rate === null) {
-    functionalSnapshotRequired(
-      `La fuente ${source.type}:${source.id} no posee exchangeRateValue`,
-    );
-  }
-  if (
-    source.exchangeRateDirection === null ||
-    !VALID_DIRECTIONS.has(source.exchangeRateDirection)
-  ) {
-    functionalSnapshotRequired(
-      `La fuente ${source.type}:${source.id} no posee una dirección de conversión válida`,
-    );
-  }
-  if (source.conversionDate === null) {
-    functionalSnapshotRequired(
-      `La fuente ${source.type}:${source.id} no posee conversionDate`,
-    );
-  }
-
-  const rateDecimal = new Prisma.Decimal(rate);
-
-  if (source.exchangeRateDirection === 'IDENTITY') {
-    if (!rateDecimal.equals(1)) {
-      functionalSnapshotRequired(
-        `La fuente ${source.type}:${source.id} es IDENTITY pero su tasa no es 1`,
-      );
-    }
-    if (source.exchangeRateId !== null || source.exchangeRateEffectiveAt !== null) {
-      functionalSnapshotRequired(
-        `La fuente ${source.type}:${source.id} es IDENTITY pero referencia una tasa`,
-      );
-    }
-    return;
-  }
-
-  if (source.exchangeRateDirection === 'DIRECT' || source.exchangeRateDirection === 'INVERSE') {
-    if (!rateDecimal.greaterThan(0)) {
-      functionalSnapshotRequired(
-        `La fuente ${source.type}:${source.id} posee una tasa no positiva`,
-      );
-    }
-    if (source.exchangeRateId === null) {
-      functionalSnapshotRequired(
-        `La fuente ${source.type}:${source.id} no referencia la tasa fuente`,
-      );
-    }
-    if (source.exchangeRateEffectiveAt === null) {
-      functionalSnapshotRequired(
-        `La fuente ${source.type}:${source.id} no posee la efectividad de la tasa`,
-      );
-    }
-    return;
   }
 }
 

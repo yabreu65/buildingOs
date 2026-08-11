@@ -362,6 +362,7 @@ model ExchangeRate {
   expenses            Expense[]
   incomes             Income[]
   adjustments         Adjustment[]
+  payments            Payment[]
 
   @@unique([tenantId, baseCurrency, quoteCurrency, effectiveAt], map: "ExchangeRate_tenant_pair_effective_key")
   @@index([tenantId, baseCurrency, quoteCurrency, effectiveAt(sort: Desc)], map: "ExchangeRate_tenant_pair_effective_idx")
@@ -1656,6 +1657,13 @@ model Payment {
 
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
+  functionalAmountMinor    Int?            // Snapshot: monto en moneda funcional (minor units) al congelarse
+  functionalCurrencyCode   String?         // Snapshot: moneda funcional del tenant al congelarse
+  exchangeRateId           String?         // Snapshot: FK a la tasa usada (null si IDENTITY)
+  exchangeRateValue        Decimal?        @db.Decimal(28, 12) // Snapshot numérico de la tasa aplicada
+  exchangeRateDirection    String?         // Snapshot: IDENTITY | DIRECT | INVERSE
+  exchangeRateEffectiveAt  DateTime?       // Snapshot: efectividad de la tasa fuente
+  conversionDate           DateTime?       // Snapshot: fecha económica del pago (UTC date-only)
 
   // Relations
   tenant                  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1664,6 +1672,7 @@ model Payment {
   createdByUser           User                @relation("PaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   reviewedByMembership    Membership?         @relation(fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
   proofFile               File?               @relation(fields: [proofFileId], references: [id], onDelete: SetNull)
+  exchangeRate            ExchangeRate?       @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
   paymentAllocations      PaymentAllocation[]
   auditLogs               PaymentAuditLog[]
 
@@ -1672,6 +1681,7 @@ model Payment {
   @@index([tenantId, createdByUserId])
   @@index([status])
   @@index([tenantId, receiptStatus])
+  @@index([tenantId, exchangeRateId])
   @@unique([tenantId, receiptNumber])
 }
 

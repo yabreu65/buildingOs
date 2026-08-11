@@ -17,6 +17,28 @@ import {
 } from '../interfaces/payment-provider.interface';
 
 /**
+ * Extracts the provider-declared calendar day from a full ISO 8601 datetime
+ * WITHOUT converting to UTC first (2026-08-10T23:30:00-04:00 → 2026-08-10).
+ * Returns undefined when the value is not a valid ISO datetime.
+ */
+export function providerDeclaredDay(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim() !== value) {
+    return undefined;
+  }
+  const iso = value.trim();
+  const match = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.exec(iso);
+  if (!match) {
+    return undefined;
+  }
+  const day = match[0].slice(0, 10);
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return day;
+}
+
+/**
  * Converts a provider monetary amount (currency units, e.g. 10.10) to minor
  * units (1010) using exact decimal arithmetic. Binary float paths are never
  * used for money.
@@ -117,6 +139,12 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const transactionAmount = payment.transaction_amount;
     const currencyId = payment.currency_id;
 
+    // Economic date: the provider-declared day of approval, falling back to
+    // the transaction date. Never UTC-shifted; absent if not verifiable.
+    const declaredDay =
+      providerDeclaredDay(payment.date_approved) ??
+      providerDeclaredDay(payment.transaction_details?.transaction_date);
+
     return {
       eventId: String(payment.id),
       eventType: webhookData.action || 'payment.updated',
@@ -125,6 +153,7 @@ export class MercadoPagoAdapter implements PaymentProvider {
       status,
       amount: toMinorUnits(transactionAmount),
       currency: typeof currencyId === 'string' ? currencyId : undefined,
+      paidAt: declaredDay,
       rawPayload: payload,
     };
   }

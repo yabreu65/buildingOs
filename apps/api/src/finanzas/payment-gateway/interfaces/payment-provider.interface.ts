@@ -37,6 +37,14 @@ export interface WebhookEvent {
    * Absent when the provider event does not carry verifiable currency evidence.
    */
   currency?: string;
+  /**
+   * Economic payment date (YYYY-MM-DD) as declared/verified by the provider.
+   * MP: date_approved (fallback transaction_details.transaction_date), using
+   * the provider-declared calendar day (never UTC-shifted). Stripe: the
+   * success event timestamp as UTC calendar date. Absent when the provider
+   * event does not carry a defensible economic date.
+   */
+  paidAt?: string;
   rawPayload: unknown;
 }
 

@@ -3,7 +3,7 @@
  * Task 2.1: Verify createPreference, handleWebhook, getChargeStatus
  */
 
-import { MercadoPagoAdapter, toMinorUnits } from './mercadopago.adapter';
+import { MercadoPagoAdapter, toMinorUnits, providerDeclaredDay } from './mercadopago.adapter';
 import { PaymentStatus } from '../interfaces/payment-provider.interface';
 import { createHmac } from 'crypto';
 import { HttpException } from '@nestjs/common';
@@ -299,4 +299,23 @@ describe('MercadoPagoAdapter', () => {
       expect(status).toBe('CANCELLED');
     });
   });
+
+describe('providerDeclaredDay (provider economic date)', () => {
+  it('preserves the provider-declared calendar day without UTC shift', () => {
+    expect(providerDeclaredDay('2026-08-10T23:30:00-04:00')).toBe('2026-08-10');
+    expect(providerDeclaredDay('2026-08-10T00:30:00+05:00')).toBe('2026-08-10');
+    expect(providerDeclaredDay('2026-08-10T12:00:00.000Z')).toBe('2026-08-10');
+  });
+
+  it.each(['2026-08-10', 'not-a-date', '', '2026-13-45T10:00:00Z', null, undefined, 123])(
+    'rejects invalid values %s',
+    (input) => {
+      expect(providerDeclaredDay(input as never)).toBeUndefined();
+    },
+  );
+
+  it('does NOT convert to UTC first (midnight boundary stays on declared day)', () => {
+    expect(providerDeclaredDay('2026-08-10T23:30:00-04:00')).toBe('2026-08-10');
+  });
+});
 });
