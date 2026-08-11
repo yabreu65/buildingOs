@@ -37,6 +37,18 @@ describe('E2E Payment Flow', () => {
   let mockIdempotencyService: any;
 
   beforeEach(() => {
+    const createdAllocations: Array<{ amount: number }> = [];
+    let paymentRecord = {
+      id: 'payment-e2e-1',
+      tenantId: 'tenant-e2e',
+      buildingId: 'building-e2e',
+      unitId: 'unit-e2e',
+      amount: 10000,
+      currency: 'ARS',
+      status: 'SUBMITTED',
+      reference: 'mock-ext-1',
+      paymentAllocations: [] as Array<Record<string, unknown>>,
+    };
     mockProvider = new MockPaymentProvider() as jest.Mocked<MockPaymentProvider>;
     mockProvider.createPreference = jest.fn().mockResolvedValue({
       preferenceId: 'mock-pref-1',
@@ -71,28 +83,53 @@ describe('E2E Payment Flow', () => {
           status: 'PENDING',
           paymentAllocations: [],
         }),
+        findUnique: jest.fn().mockImplementation(() => Promise.resolve({
+          id: 'charge-e2e-1',
+          amount: 10000,
+          currency: 'ARS',
+          status: createdAllocations.length === 0 ? 'PENDING' : 'PAID',
+          paymentAllocations: createdAllocations.map((allocation) => ({
+            ...allocation,
+            payment: { status: paymentRecord.status },
+          })),
+        })),
         update: jest.fn(),
       },
       payment: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'payment-e2e-1',
-          tenantId: 'tenant-e2e',
-          buildingId: 'building-e2e',
-          unitId: 'unit-e2e',
-          amount: 10000,
-          currency: 'ARS',
-          status: 'SUBMITTED',
-          reference: 'mock-ext-1',
-          paymentAllocations: [],
-        }),
-        update: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([{ id: 'payment-e2e-1' }]),
+        findFirst: jest.fn().mockImplementation(() => Promise.resolve(paymentRecord)),
+        findUnique: jest.fn().mockImplementation(() => Promise.resolve(paymentRecord)),
+        update: jest.fn().mockImplementation(
+          ({ data }: { data: Record<string, unknown> }) => {
+            paymentRecord = { ...paymentRecord, ...data };
+            return Promise.resolve(paymentRecord);
+          },
+        ),
       },
-      paymentAllocation: { create: jest.fn() },
+      paymentAllocation: {
+        create: jest.fn().mockImplementation(
+          ({ data }: { data: { amount: number; chargeId: string } }) => {
+            createdAllocations.push({ amount: data.amount });
+            paymentRecord.paymentAllocations.push({
+              ...data,
+              charge: { currency: 'ARS', status: 'PAID' },
+            });
+            return Promise.resolve({ id: 'allocation-e2e-1', ...data });
+          },
+        ),
+      },
+      processedWebhookEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'processed-e2e-1' }),
+      },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
       $transaction: jest.fn((callback: (client: unknown) => unknown) => callback(mockPrisma)),
     };
     mockIdempotencyService = {
       isProcessed: jest.fn(),
       markProcessed: jest.fn(),
+      cacheProcessed: jest.fn(),
     };
 
     service = new PaymentGatewayService(
@@ -130,6 +167,7 @@ describe('E2E Payment Flow', () => {
     // Step 2: Process webhook (charge PENDING + local SUBMITTED payment)
     mockIdempotencyService.isProcessed.mockResolvedValue(false);
     mockIdempotencyService.markProcessed.mockResolvedValue(undefined);
+    mockIdempotencyService.cacheProcessed.mockResolvedValue(undefined);
 
     const result = await service.processWebhookEvent(
       { action: 'payment.approved', data: { id: 'mock-evt-1' } },
@@ -151,7 +189,7 @@ describe('E2E Payment Flow', () => {
       }),
     );
     expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
-    expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
+    expect(mockIdempotencyService.cacheProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
   });
 
   it('rejects duplicate webhook delivery (idempotency)', async () => {

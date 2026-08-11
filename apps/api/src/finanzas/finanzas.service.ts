@@ -14,6 +14,15 @@ import {
   classifyFunctionalSnapshot,
   type FunctionalSnapshotFields,
 } from './functional-snapshot';
+import {
+  assertPaymentAllocationCurrencyMode,
+  createLockedAllocation,
+  deleteLockedAllocation,
+  lockChargesForAllocation,
+  lockPaymentForAllocation,
+  recalculateLockedCharge,
+  reconcilePaymentWhenConsumed,
+} from './payment-allocation-transaction';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
@@ -814,14 +823,43 @@ export class FinanzasService {
             ...(submitSnapshot ?? {}),
           },
         });
+        await lockPaymentForAllocation(tx, {
+          tenantId,
+          buildingId,
+          paymentId: payment.id,
+        });
+        await lockChargesForAllocation(
+          tx,
+          tenantId,
+          buildingId,
+          canonicalSelection.map(({ charge }) => charge.id),
+        );
+        const lockedSelection = this.validateCanonicalResidentChargeSelection(
+          await this.loadResidentChargeSelection(tx, tenantId, buildingId, dto.unitId!),
+          requestedChargeIds,
+        );
+        const lockedAmount = lockedSelection.reduce(
+          (sum, item) => sum + item.approvedOutstanding,
+          0,
+        );
+        if (lockedAmount !== calculatedAmount) {
+          throw new ConflictException(
+            'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
+          );
+        }
+        assertPaymentAllocationCurrencyMode(
+          payment.currency,
+          lockedSelection.map((selection) => ({ charge: selection.charge })),
+        );
 
-        for (const selection of canonicalSelection) {
+        for (const selection of lockedSelection) {
           await tx.paymentAllocation.create({
             data: {
               tenantId,
               paymentId: payment.id,
               chargeId: selection.charge.id,
               amount: selection.approvedOutstanding,
+              paymentOriginalAmountMinor: selection.approvedOutstanding,
             },
           });
         }
@@ -984,11 +1022,15 @@ export class FinanzasService {
         );
       }
 
-      await this.validateResidentPaymentAllocationsForApproval(
+      const lockedSelection = await this.validateResidentPaymentAllocationsForApproval(
         tx,
         tenantId,
         buildingId,
         payment,
+      );
+      assertPaymentAllocationCurrencyMode(
+        payment.currency,
+        lockedSelection.map((selection) => ({ charge: selection.charge })),
       );
       const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
       const snapshot = await this.ensurePaymentFunctionalSnapshot(
@@ -1084,13 +1126,12 @@ export class FinanzasService {
         throw new BadRequestException('Cannot reject a canceled payment');
       }
 
-      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+      await this.releaseSubmittedPaymentAllocations(
         tx,
         paymentId,
         tenantId,
+        buildingId,
       );
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
@@ -1103,10 +1144,6 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {
@@ -1165,133 +1202,42 @@ export class FinanzasService {
       buildingId,
     );
 
-    // 3. Validate payment and charge (outside transaction for initial validation)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: dto.paymentId,
-        tenantId,
-        buildingId,
-      },
-      include: {
-        paymentAllocations: true,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // 3.5. Validate payment is in valid status for allocation
-    if (
-      payment.status !== PaymentStatus.APPROVED &&
-      payment.status !== PaymentStatus.RECONCILED
-    ) {
-      throw new ConflictException(
-        `Cannot allocate payment in status ${payment.status}. Payment must be APPROVED or RECONCILED.`,
-      );
-    }
-
-    const charge = await this.prisma.charge.findFirst({
-      where: {
-        id: dto.chargeId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!charge) {
-      throw new NotFoundException(
-        `Charge not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // 3.75. Same-currency invariant: allocation amount is always expressed in
-    // Charge.currency. A cross-currency allocation is not supported until 3E3.
-    if (payment.currency !== charge.currency) {
-      throw new UnprocessableEntityException({
-        statusCode: 422,
-        error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
-        message: `La moneda del pago (${payment.currency}) no coincide con la moneda del cargo (${charge.currency})`,
-      });
-    }
-
-    if (!payment.unitId) {
-      throw new ConflictException(
-        'Payment must belong to a unit to create allocations in canonical order.',
-      );
-    }
-
-    // 4. Validate total allocations don't exceed payment amount
-    const totalAllocated = payment.paymentAllocations.reduce(
-      (sum, a) => sum + a.amount,
-      0,
-    );
-
-    if (totalAllocated + dto.amount > payment.amount) {
-      throw new ConflictException(
-        `Total allocations (${totalAllocated + dto.amount}) exceed payment amount (${payment.amount})`,
-      );
-    }
-
-    // 5. Validate allocation amount doesn't exceed charge amount
-    if (dto.amount > charge.amount) {
-      throw new ConflictException(
-        `Allocation amount (${dto.amount}) cannot exceed charge amount (${charge.amount})`,
-      );
-    }
-
-    const selectableCharges = await this.loadResidentChargeSelection(
-      this.prisma as Prisma.TransactionClient,
-      tenantId,
-      buildingId,
-      payment.unitId,
-    );
-    const expectedCharge = selectableCharges[0];
-    if (!expectedCharge || expectedCharge.charge.id !== charge.id) {
-      throw new ConflictException(
-        'Solo puedes asignar pagos completos siguiendo la obligación más antigua pendiente.',
-      );
-    }
-
-    if (dto.amount !== expectedCharge.approvedOutstanding) {
-      throw new ConflictException(
-        'Cada período debe pagarse completamente.',
-      );
-    }
-
-    // 6. Check for duplicate allocation
-    const existing = await this.prisma.paymentAllocation.findFirst({
-      where: {
-        tenantId,
-        paymentId: dto.paymentId,
-        chargeId: dto.chargeId,
-      },
-    });
-
-    if (existing) {
-      throw new ConflictException(
-        `Allocation already exists for this payment/charge pair`,
-      );
-    }
-
-    // 7. Create allocation + recalculate status within transaction
     return this.prisma.$transaction(async (tx) => {
-      const allocation = await tx.paymentAllocation.create({
-        data: {
-          tenantId,
-          paymentId: dto.paymentId,
-          chargeId: dto.chargeId,
-          amount: dto.amount,
-        },
+      const scope = { tenantId, buildingId, paymentId: dto.paymentId, chargeId: dto.chargeId };
+      await lockPaymentForAllocation(tx, scope);
+      const payment = await tx.payment.findFirst({
+        where: { id: dto.paymentId, tenantId, buildingId },
+        select: { unitId: true, currency: true },
       });
-
-      // Recalculate charge status within transaction
-      await this.recalculateChargeStatus(dto.chargeId, tx);
-
-      // Attempt to reconcile payment if all charges are PAID
-      await this.tryReconcilePayment(dto.paymentId, tx);
+      if (!payment) {
+        throw new NotFoundException(
+          'Payment not found or does not belong to this building/tenant',
+        );
+      }
+      if (!payment.unitId) throw new ConflictException('Payment must belong to a unit');
+      await lockChargesForAllocation(tx, tenantId, buildingId, [dto.chargeId]);
+      const charge = await tx.charge.findFirst({
+        where: { id: dto.chargeId, tenantId, buildingId },
+        select: { id: true },
+      });
+      if (!charge) {
+        throw new NotFoundException(
+          'Charge not found or does not belong to this building/tenant',
+        );
+      }
+      const selectableCharges = await this.loadResidentChargeSelection(
+        tx, tenantId, buildingId, payment.unitId,
+      );
+      const expectedCharge = selectableCharges[0];
+      if (!expectedCharge || expectedCharge.charge.id !== dto.chargeId) {
+        throw new ConflictException('Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.');
+      }
+      if (payment.currency === expectedCharge.charge.currency
+        ? dto.amount !== expectedCharge.approvedOutstanding
+        : dto.amount > expectedCharge.approvedOutstanding) {
+        throw new ConflictException('La asignación supera o no completa el saldo pendiente del cargo.');
+      }
+      const allocation = await createLockedAllocation(tx, scope, dto.amount);
 
       // Audit: PAYMENT_ALLOCATE
       void this.auditService.createLog({
@@ -1331,34 +1277,9 @@ export class FinanzasService {
       this.validators.throwForbidden('allocations', 'delete');
     }
 
-    // 2. Validate allocation
-    const allocation = await this.prisma.paymentAllocation.findFirst({
-      where: { id: allocationId, tenantId },
-    });
-
-    if (!allocation) {
-      throw new NotFoundException(
-        `Allocation not found or does not belong to this tenant`,
-      );
-    }
-
-    // 3. Verify payment belongs to building
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: allocation.paymentId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Associated payment does not belong to this building`,
-      );
-    }
-
-    // 4. Delete allocation + recalculate status within transaction
     return this.prisma.$transaction(async (tx) => {
+      const allocation = await deleteLockedAllocation(tx, tenantId, buildingId, allocationId);
+
       // Audit: ALLOCATION_DELETE (before deletion)
       void this.auditService.createLog({
         tenantId,
@@ -1373,16 +1294,6 @@ export class FinanzasService {
         },
       });
 
-      // Delete allocation
-      await tx.paymentAllocation.delete({
-        where: { id: allocationId },
-      });
-
-      // Recalculate charge status within transaction
-      await this.recalculateChargeStatus(allocation.chargeId, tx);
-
-      // Attempt to reconcile payment if all charges are PAID
-      await this.tryReconcilePayment(allocation.paymentId, tx);
     });
   }
 
@@ -1454,6 +1365,7 @@ export class FinanzasService {
     tx: Prisma.TransactionClient,
     paymentId: string,
     tenantId: string,
+    buildingId: string,
   ): Promise<Array<{ chargeId: string; amount: number }>> {
     const allocations = await tx.paymentAllocation.findMany({
       where: {
@@ -1470,14 +1382,32 @@ export class FinanzasService {
       return [];
     }
 
+    await lockChargesForAllocation(
+      tx,
+      tenantId,
+      buildingId,
+      allocations.map((allocation) => allocation.chargeId),
+    );
+    const lockedAllocations = await tx.paymentAllocation.findMany({
+      where: {
+        tenantId,
+        paymentId,
+        charge: { tenantId, buildingId },
+      },
+      select: { chargeId: true, amount: true },
+    });
+
     await tx.paymentAllocation.deleteMany({
       where: {
         tenantId,
         paymentId,
+        chargeId: { in: lockedAllocations.map((allocation) => allocation.chargeId) },
       },
     });
-
-    return allocations;
+    for (const chargeId of [...new Set(lockedAllocations.map((allocation) => allocation.chargeId))].sort()) {
+      await recalculateLockedCharge(tx, chargeId);
+    }
+    return lockedAllocations;
   }
 
   private async validatePaymentProofFileInTransaction(
@@ -1787,8 +1717,8 @@ export class FinanzasService {
       selectedUnitId,
     );
 
-    for (const chargeId of selectedChargeIds) {
-      await this.lockChargeForApproval(tx, chargeId);
+    for (const chargeId of [...selectedChargeIds].sort()) {
+      await this.lockChargeForApproval(tx, tenantId, buildingId, chargeId);
     }
 
     const selectableCharges = await this.loadResidentChargeSelection(
@@ -1843,9 +1773,13 @@ export class FinanzasService {
 
   private async lockChargeForApproval(
     tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
     chargeId: string,
   ): Promise<void> {
-    await tx.$queryRaw(Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} FOR UPDATE`);
+    await tx.$queryRaw(
+      Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
+    );
   }
 
   private async lockSubmittedPaymentForApproval(
@@ -2709,20 +2643,13 @@ export class FinanzasService {
         );
       }
 
-      const releasedAllocations =
-        payment.status === PaymentStatus.SUBMITTED
-          ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)
-          : [];
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
+      if (payment.status === PaymentStatus.SUBMITTED) {
+        await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId, buildingId);
+      }
       const canceledPayment = await tx.payment.update({
         where: { id: paymentId },
         data: { canceledAt: new Date(), updatedAt: new Date() },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {
@@ -2987,48 +2914,10 @@ export class FinanzasService {
     paymentId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    const client = tx ?? this.prisma;
-
-    const payment = await client.payment.findUnique({
-      where: { id: paymentId },
-      include: {
-        paymentAllocations: {
-          include: {
-            charge: true,
-          },
-        },
-      },
-    });
-
-    if (!payment || payment.status !== PaymentStatus.APPROVED) {
-      return;
-    }
-
-    // 3E2: an APPROVED payment may reach RECONCILED only with a COMPLETE
-    // snapshot or as historical legacy (ALL snapshot fields NULL). A partial
-    // snapshot is corruption and blocks reconciliation.
-    const snapshotState = classifyFunctionalSnapshot(payment);
-    if (snapshotState === 'PARTIAL_INVALID') {
-      this.logger.error(
-        `Payment ${paymentId} has a partial functional snapshot; RECONCILED blocked`,
-      );
-      return;
-    }
-
-    // Check if all allocated charges are fully paid
-    const allPaid = payment.paymentAllocations.every(
-      (alloc) => alloc.charge.status === ChargeStatus.PAID,
+    await reconcilePaymentWhenConsumed(
+      (tx ?? this.prisma) as Prisma.TransactionClient,
+      paymentId,
     );
-
-    if (allPaid && payment.paymentAllocations.length > 0) {
-      await client.payment.update({
-        where: { id: paymentId },
-        data: {
-          status: PaymentStatus.RECONCILED,
-          updatedAt: new Date(),
-        },
-      });
-    }
   }
 
   // ============================================================================
@@ -3173,11 +3062,15 @@ export class FinanzasService {
         );
       }
 
-      await this.validateResidentPaymentAllocationsForApproval(
+      const lockedSelection = await this.validateResidentPaymentAllocationsForApproval(
         tx,
         tenantId,
         payment.buildingId,
         payment,
+      );
+      assertPaymentAllocationCurrencyMode(
+        payment.currency,
+        lockedSelection.map((selection) => ({ charge: selection.charge })),
       );
       const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
       const snapshot = await this.ensurePaymentFunctionalSnapshot(
@@ -3282,13 +3175,12 @@ export class FinanzasService {
         throw new BadRequestException('Cannot reject a canceled payment');
       }
 
-      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+      await this.releaseSubmittedPaymentAllocations(
         tx,
         paymentId,
         tenantId,
+        payment.buildingId,
       );
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
@@ -3301,10 +3193,6 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {

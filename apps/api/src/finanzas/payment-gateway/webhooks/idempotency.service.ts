@@ -63,4 +63,8 @@ export class IdempotencyService {
 
     this.logger.debug(`Webhook ${eventId} marked as processed for provider ${provider}`);
   }
+
+  async cacheProcessed(eventId: string, provider: string): Promise<void> {
+    await this.redis.set(`webhook:${provider}:${eventId}`, '1', this.REDIS_TTL);
+  }
 }

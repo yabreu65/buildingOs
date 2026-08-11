@@ -632,19 +632,21 @@ describe('FinanzasService', () => {
           notes: 'resident-charge-selection-requires-resubmission',
         }),
       });
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith({
-        data: {
-          tenantId,
-          paymentId: 'payment-123',
-          chargeId: 'charge-123',
-          amount: 10000,
-        },
-      });
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            tenantId,
+            paymentId: 'payment-123',
+            chargeId: 'charge-123',
+            amount: 10000,
+          }),
+        }),
+      );
       expect(prismaService.$executeRaw).toHaveBeenCalledTimes(2);
     });
 
     it('should accept an overdue resident charge as long as it still has outstanding balance', async () => {
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-123',
           tenantId,
@@ -680,14 +682,16 @@ describe('FinanzasService', () => {
 
       expect(result.status).toBe(PaymentStatus.SUBMITTED);
       expect(prismaService.payment.create).toHaveBeenCalled();
-      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith({
-        data: {
-          tenantId,
-          paymentId: 'payment-123',
-          chargeId: 'charge-123',
-          amount: 10000,
-        },
-      });
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            tenantId,
+            paymentId: 'payment-123',
+            chargeId: 'charge-123',
+            amount: 10000,
+          }),
+        }),
+      );
     });
 
     it('should reject transfer payment without proofFileId', async () => {
@@ -809,7 +813,7 @@ describe('FinanzasService', () => {
 
     it('should allow the same unit and amount when the selected charge is different', async () => {
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-456',
           tenantId,
@@ -945,7 +949,7 @@ describe('FinanzasService', () => {
     });
 
     it('should accept a prefix of two consecutive resident obligations and allocate the exact total', async () => {
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-1',
           tenantId,
@@ -1710,10 +1714,18 @@ describe('FinanzasService', () => {
           amount: 10000,
           currency: 'ARS',
           status: PaymentStatus.APPROVED,
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
           paymentAllocations: [
             {
               amount: 10000,
-              charge: { status: ChargeStatus.PAID },
+              paymentOriginalAmountMinor: null,
+              charge: { currency: 'ARS', status: ChargeStatus.PAID },
             },
           ],
         } as any)
@@ -2630,7 +2642,7 @@ describe('FinanzasService', () => {
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
       expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
@@ -2685,7 +2697,7 @@ describe('FinanzasService', () => {
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
       expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
@@ -2705,7 +2717,7 @@ describe('FinanzasService', () => {
 
       expect(result.canceledAt).toBeTruthy();
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
     });
@@ -2997,7 +3009,7 @@ describe('FinanzasService', () => {
 
       expect(makeAllocation()).toHaveLength(1);
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(notificationSpy).not.toHaveBeenCalled();
     });
@@ -3918,11 +3930,66 @@ describe('FinanzasService', () => {
         expect(prismaService.paymentAllocation.create).toHaveBeenCalled();
       });
 
-      it('blocks cross-currency allocation with 422 PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED', async () => {
+      it.each(['foreign', 'nonexistent'])('%s payment returns the canonical 404 without mutations', async () => {
+        jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
+
+        await expect(service.createAllocation(
+          'tenant-1',
+          'building-1',
+          ['TENANT_ADMIN'],
+          'member-1',
+          { paymentId: 'payment-1', chargeId: 'charge-1', amount: 10000 },
+        )).rejects.toMatchObject({
+          response: {
+            statusCode: 404,
+            message: 'Payment not found or does not belong to this building/tenant',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+        expect(prismaService.payment.update).not.toHaveBeenCalled();
+      });
+
+      it('keeps the existing 409 when the scoped payment has no unit', async () => {
+        await expect(allocate({ unitId: null }, {})).rejects.toMatchObject({
+          response: {
+            statusCode: 409,
+            message: 'Payment must belong to a unit',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      });
+
+      it('returns the canonical 404 when the scoped charge lookup cannot see a foreign charge', async () => {
+        jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(basePayment as never);
+        jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue(null);
+
+        await expect(service.createAllocation(
+          'tenant-1',
+          'building-1',
+          ['TENANT_ADMIN'],
+          'member-1',
+          { paymentId: 'payment-1', chargeId: 'charge-1', amount: 10000 },
+        )).rejects.toMatchObject({
+          response: {
+            statusCode: 404,
+            message: 'Charge not found or does not belong to this building/tenant',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+        expect(prismaService.payment.update).not.toHaveBeenCalled();
+      });
+
+      it('blocks cross-currency allocation with a legacy-null payment (422 PAYMENT_LEGACY_SNAPSHOT_REQUIRED)', async () => {
         await expect(allocate({ currency: 'VES' }, {})).rejects.toMatchObject({
           response: {
             statusCode: 422,
-            error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+            error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED',
           },
         });
         expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
@@ -4168,6 +4235,8 @@ describe('FinanzasService', () => {
     it('reconcile allows legacy APPROVED NULL without any rate lookup', async () => {
       jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue({
         id: paymentId,
+        amount: 10000,
+        currency: 'ARS',
         status: PaymentStatus.APPROVED,
         functionalAmountMinor: null,
         functionalCurrencyCode: null,
@@ -4177,7 +4246,7 @@ describe('FinanzasService', () => {
         exchangeRateEffectiveAt: null,
         conversionDate: null,
         paymentAllocations: [
-          { charge: { id: 'charge-123', status: ChargeStatus.PAID }, amount: 10000 },
+          { charge: { id: 'charge-123', currency: 'ARS', status: ChargeStatus.PAID }, amount: 10000, paymentOriginalAmountMinor: null },
         ],
       } as never);
       jest.spyOn(prismaService.payment, 'update').mockResolvedValue({} as never);
@@ -4195,6 +4264,8 @@ describe('FinanzasService', () => {
     it('reconcile blocks a PARTIAL snapshot (no RECONCILED)', async () => {
       jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue({
         id: paymentId,
+        amount: 10000,
+        currency: 'USD',
         status: PaymentStatus.APPROVED,
         functionalAmountMinor: 36500,
         functionalCurrencyCode: null,
@@ -4204,7 +4275,7 @@ describe('FinanzasService', () => {
         exchangeRateEffectiveAt: null,
         conversionDate: null,
         paymentAllocations: [
-          { charge: { id: 'charge-123', status: ChargeStatus.PAID }, amount: 10000 },
+          { charge: { id: 'charge-123', currency: 'VES', status: ChargeStatus.PAID }, amount: 10000, paymentOriginalAmountMinor: null },
         ],
       } as never);
       jest.spyOn(prismaService.payment, 'update').mockResolvedValue({} as never);
@@ -4248,6 +4319,204 @@ describe('FinanzasService', () => {
         }),
       );
       expect(prismaService.exchangeRate.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== 3E3: CROSS-CURRENCY PAYMENT ALLOCATION ==========
+  describe('3E3 cross-currency payment allocation', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const membershipId = 'membership-123';
+
+    const paymentFixture = (overrides: Record<string, unknown> = {}) => ({
+      id: 'payment-x',
+      tenantId,
+      buildingId,
+      unitId: 'unit-123',
+      amount: 10000,
+      currency: 'USD',
+      status: PaymentStatus.APPROVED,
+      functionalAmountMinor: 365000,
+      functionalCurrencyCode: 'VES',
+      exchangeRateId: 'rate-1',
+      exchangeRateValue: '36.5',
+      exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+      paymentAllocations: [],
+      ...overrides,
+    });
+
+    const chargeFixture = (overrides: Record<string, unknown> = {}) => ({
+      id: 'charge-x',
+      tenantId,
+      buildingId,
+      unitId: 'unit-123',
+      amount: 182500,
+      currency: 'VES',
+      status: ChargeStatus.PENDING,
+      canceledAt: null,
+      dueDate: new Date('2026-08-20T00:00:00.000Z'),
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+      ...overrides,
+    });
+
+    const setup = (
+      payment: Record<string, unknown>,
+      charge: Record<string, unknown>,
+      outstanding = 182500,
+    ) => {
+      jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(payment as never);
+      jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue(charge as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          ...charge,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.paymentAllocation, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prismaService.paymentAllocation, 'create').mockResolvedValue({} as never);
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        ...charge,
+        paymentAllocations: [{ amount: 0, payment: { status: 'APPROVED' } }],
+      } as never);
+      jest.spyOn(prismaService.charge, 'update').mockResolvedValue({} as never);
+      jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue(null);
+      jest.spyOn(prismaService.payment, 'update').mockResolvedValue({} as never);
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as never);
+      return service.createAllocation(
+        tenantId,
+        buildingId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paymentId: 'payment-x', chargeId: 'charge-x', amount: outstanding },
+      );
+    };
+
+    it('cross-currency full allocation: amount in Charge.currency + exact original share', async () => {
+      await setup(paymentFixture(), chargeFixture());
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            amount: 182500,
+            paymentOriginalAmountMinor: 5000,
+          }),
+        }),
+      );
+    });
+
+    it('cross-currency partial allocation consumes proportional original share', async () => {
+      await setup(paymentFixture(), chargeFixture({ amount: 10000 }), 1825);
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            amount: 1825,
+            paymentOriginalAmountMinor: 50,
+          }),
+        }),
+      );
+    });
+
+    it('same-currency new allocation carries the explicit original share', async () => {
+      await setup(
+        paymentFixture({ currency: 'VES', functionalCurrencyCode: 'VES', amount: 10000, functionalAmountMinor: 10000 }),
+        chargeFixture({ currency: 'VES', amount: 10000 }),
+        10000,
+      );
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            amount: 10000,
+            paymentOriginalAmountMinor: 10000,
+          }),
+        }),
+      );
+    });
+
+    it('cross-currency over functional snapshot blocked', async () => {
+      await expect(
+        setup(paymentFixture(), chargeFixture({ amount: 1000000 }), 500000),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED' },
+      });
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+
+    it('cross-currency LEGACY_NULL blocked with PAYMENT_LEGACY_SNAPSHOT_REQUIRED', async () => {
+      await expect(
+        setup(
+          paymentFixture({
+            functionalAmountMinor: null,
+            functionalCurrencyCode: null,
+            exchangeRateId: null,
+            exchangeRateValue: null,
+            exchangeRateDirection: null,
+            exchangeRateEffectiveAt: null,
+            conversionDate: null,
+          }),
+          chargeFixture(),
+        ),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+      });
+      expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+
+    it('cross-currency PARTIAL_INVALID blocked with PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID', async () => {
+      await expect(
+        setup(
+          paymentFixture({ functionalAmountMinor: 365000, functionalCurrencyCode: null }),
+          chargeFixture(),
+        ),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID' },
+      });
+    });
+
+    it('cross-currency incompatible functional currency blocked', async () => {
+      await expect(
+        setup(
+          paymentFixture({ functionalCurrencyCode: 'ARS' }),
+          chargeFixture(),
+        ),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED' },
+      });
+    });
+
+    it('cross-currency never queries ExchangeRate during allocation', async () => {
+      await setup(paymentFixture(), chargeFixture());
+
+      expect(prismaService.exchangeRate.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('frozen snapshot survives tenant functionalCurrency change (no current lookup)', async () => {
+      await setup(paymentFixture(), chargeFixture());
+      jest
+        .spyOn(prismaService.tenant, 'findFirst')
+        .mockResolvedValue({ id: tenantId, functionalCurrency: 'ARS' });
+
+      expect(prismaService.paymentAllocation.create).toHaveBeenCalled();
+    });
+
+    it('odd split: partial shares are deterministic and never exceed originals', async () => {
+      const payment = paymentFixture({ amount: 10000, functionalAmountMinor: 33333 });
+      const charge = chargeFixture({ amount: 33333 });
+      await setup(payment, charge, 11111);
+
+      const share = (
+        (prismaService.paymentAllocation.create as jest.Mock).mock.calls[0][0] as {
+          data: { paymentOriginalAmountMinor: number };
+        }
+      ).data.paymentOriginalAmountMinor;
+      expect(Number.isSafeInteger(share)).toBe(true);
+      expect(share).toBeGreaterThanOrEqual(0);
+      expect(share).toBeLessThanOrEqual(10000);
     });
   });
 });
