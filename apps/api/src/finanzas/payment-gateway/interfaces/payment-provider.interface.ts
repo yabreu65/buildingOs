@@ -27,6 +27,16 @@ export interface WebhookEvent {
   chargeId?: string;
   externalId?: string;
   status: PaymentStatus;
+  /**
+   * Verified financial amount in minor units, as reported by the provider.
+   * Absent when the provider event does not carry verifiable amount evidence.
+   */
+  amount?: number;
+  /**
+   * Verified currency of the payment, as reported by the provider.
+   * Absent when the provider event does not carry verifiable currency evidence.
+   */
+  currency?: string;
   rawPayload: unknown;
 }
 

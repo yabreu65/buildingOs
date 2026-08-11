@@ -4,6 +4,7 @@
  */
 
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHmac, timingSafeEqual } from 'crypto';
 import {
   PaymentProvider,
@@ -14,6 +15,41 @@ import {
   PaymentProviderName,
   WebhookSignatureContext,
 } from '../interfaces/payment-provider.interface';
+
+/**
+ * Converts a provider monetary amount (currency units, e.g. 10.10) to minor
+ * units (1010) using exact decimal arithmetic. Binary float paths are never
+ * used for money.
+ *
+ * Returns undefined (and therefore blocks auto-reconciliation) when the value
+ * is not a finite number, is not positive, or carries more precision than the
+ * supported 2-decimal currency contract.
+ */
+export function toMinorUnits(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const amount = new Prisma.Decimal(String(value));
+  if (!amount.greaterThan(0)) {
+    return undefined;
+  }
+
+  const scaled = amount.mul(100);
+  if (!scaled.isInteger()) {
+    // More precision than the currency supports: never round silently.
+    return undefined;
+  }
+
+  const maxSafe = new Prisma.Decimal(Number.MAX_SAFE_INTEGER);
+  if (scaled.greaterThan(maxSafe)) {
+    return undefined;
+  }
+
+  return scaled.toNumber();
+}
+
+
 
 @Injectable()
 export class MercadoPagoAdapter implements PaymentProvider {
@@ -78,12 +114,17 @@ export class MercadoPagoAdapter implements PaymentProvider {
     const status = this.mapStatus(payment.status);
     const externalRef = payment.external_reference;
 
+    const transactionAmount = payment.transaction_amount;
+    const currencyId = payment.currency_id;
+
     return {
       eventId: String(payment.id),
       eventType: webhookData.action || 'payment.updated',
       chargeId: externalRef,
       externalId: String(payment.id),
       status,
+      amount: toMinorUnits(transactionAmount),
+      currency: typeof currencyId === 'string' ? currencyId : undefined,
       rawPayload: payload,
     };
   }

@@ -87,6 +87,11 @@ export class StripeAdapter implements PaymentProvider {
       chargeId,
       externalId: sessionId,
       status,
+      amount:
+        typeof session.amount_total === 'number' && Number.isSafeInteger(session.amount_total)
+          ? session.amount_total
+          : undefined,
+      currency: typeof session.currency === 'string' ? session.currency.toUpperCase() : undefined,
       rawPayload: payload,
     };
   }

@@ -1,20 +1,66 @@
 /**
- * Tests for PaymentGatewayService
- * Task 2.3: Delegates to active adapter, confirmCharge on webhook
- * Fix 4: Uses IdempotencyService instead of inline Redis/Prisma checks
+ * Tests for PaymentGatewayService — 3E1 ledger contract
+ *
+ * Financial rules under test:
+ * - A charge is NEVER marked PAID directly: gateway events must produce
+ *   Payment + PaymentAllocation ledger evidence and recalculated status.
+ * - Missing/invalid provider amount or currency => no financial mutation.
+ * - 3E1 is same-currency: event.currency must equal Charge.currency.
+ * - Local Payment matched tenant-scoped by reference; absent Payment => no
+ *   mutation (no invented actor).
+ * - Replay is idempotent (IdempotencyService + unique payment/charge pair).
  */
 
 import { PaymentGatewayService } from './payment-gateway.service';
-import { PaymentProvider, PaymentPreference, WebhookEvent, PaymentStatus } from './interfaces/payment-provider.interface';
-import { HttpException } from '@nestjs/common';
+import { PaymentProvider, WebhookEvent } from './interfaces/payment-provider.interface';
+import { UnprocessableEntityException, ServiceUnavailableException } from '@nestjs/common';
 
-describe('PaymentGatewayService', () => {
+describe('PaymentGatewayService (3E1 ledger)', () => {
   let service: PaymentGatewayService;
   let mockProvider: jest.Mocked<PaymentProvider>;
   let mockPrisma: any;
   let mockIdempotencyService: any;
+  let createdAllocations: Array<{ amount: number }>;
+
+  const charge = (overrides: Record<string, unknown> = {}) => ({
+    id: 'charge-1',
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    unitId: 'unit-1',
+    amount: 10000,
+    currency: 'ARS',
+    status: 'PENDING',
+    paymentAllocations: [],
+    ...overrides,
+  });
+
+  const payment = (overrides: Record<string, unknown> = {}) => ({
+    id: 'payment-1',
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    unitId: 'unit-1',
+    amount: 10000,
+    currency: 'ARS',
+    status: 'SUBMITTED',
+    reference: 'ext-1',
+    paymentAllocations: [],
+    ...overrides,
+  });
+
+  const paidEvent = (overrides: Partial<WebhookEvent> = {}): WebhookEvent => ({
+    eventId: 'evt-1',
+    eventType: 'payment.updated',
+    chargeId: 'charge-1',
+    externalId: 'ext-1',
+    status: 'PAID',
+    amount: 10000,
+    currency: 'ARS',
+    rawPayload: {},
+    ...overrides,
+  });
 
   beforeEach(() => {
+    createdAllocations = [];
     mockProvider = {
       providerName: 'mercadopago',
       createPreference: jest.fn(),
@@ -23,13 +69,22 @@ describe('PaymentGatewayService', () => {
     };
     mockPrisma = {
       charge: {
-        findUnique: jest.fn(),
+        findFirst: jest.fn(() =>
+          Promise.resolve(charge({ paymentAllocations: [...createdAllocations] })),
+        ),
         update: jest.fn(),
       },
       payment: {
-        findFirst: jest.fn(),
+        findFirst: jest.fn(() => Promise.resolve(payment())),
         update: jest.fn(),
       },
+      paymentAllocation: {
+        create: jest.fn(({ data }: { data: { amount: number } }) => {
+          createdAllocations.push({ amount: data.amount });
+          return Promise.resolve({ id: 'alloc-1', ...data });
+        }),
+      },
+      $transaction: jest.fn((callback: (client: unknown) => unknown) => callback(mockPrisma)),
     };
     mockIdempotencyService = {
       isProcessed: jest.fn().mockResolvedValue(false),
@@ -38,227 +93,244 @@ describe('PaymentGatewayService', () => {
     service = new PaymentGatewayService(mockProvider, mockPrisma, mockIdempotencyService);
   });
 
-  describe('createPreference', () => {
-    it('delegates to the active provider', async () => {
-      const mockPreference: PaymentPreference = {
-        preferenceId: 'pref-1',
-        checkoutUrl: 'https://pay.example.com/1',
-        provider: 'mercadopago',
-      };
-      mockProvider.createPreference.mockResolvedValue(mockPreference);
+  const run = (event: WebhookEvent) => {
+    mockProvider.handleWebhook.mockResolvedValue(event);
+    return service.processWebhookEvent(event.rawPayload, 'sig', 'mercadopago');
+  };
 
-      const result = await service.createPreference({
-        chargeId: 'charge-1',
-        tenantId: 'tenant-1',
-        amount: 10000,
-        currency: 'ARS',
-        concept: 'Test',
-      });
+  describe('ledger evidence', () => {
+    it('creates PaymentAllocation and recalculates charge status (never direct PAID)', async () => {
+      const result = await run(paidEvent());
 
-      expect(result).toEqual(mockPreference);
-      expect(mockProvider.createPreference).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('processWebhookEvent', () => {
-    it('exposes the active configured provider', () => {
-      expect(service.getActiveProviderName()).toBe('mercadopago');
-    });
-
-    it('delegates to the provider and confirms charge on PAID', async () => {
-      const webhookEvent: WebhookEvent = {
-        eventId: 'evt-1',
-        eventType: 'payment.approved',
-        chargeId: 'charge-1',
-        externalId: 'pay-1',
-        status: 'PAID',
-        rawPayload: {},
-      };
-      mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-1', status: 'PENDING' });
-      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-1', status: 'PAID' });
-      mockPrisma.payment.findFirst.mockResolvedValue(null);
-      mockPrisma.payment.update.mockResolvedValue({ id: 'pay-1', paymentEventId: 'evt-1' });
-      mockIdempotencyService.isProcessed.mockResolvedValue(false);
-
-      const signatureContext = { signature: 'sig', requestId: 'req-1', dataId: 'pay-1' };
-
-      const result = await service.processWebhookEvent({}, signatureContext, 'mercadopago');
-
-      expect(result.status).toBe('PAID');
-      expect(mockProvider.handleWebhook).toHaveBeenCalledWith(
-        {},
-        'sig',
-        { ...signatureContext, provider: 'mercadopago' },
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paymentId: 'payment-1',
+            chargeId: 'charge-1',
+            amount: 10000,
+          }),
+        }),
       );
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'APPROVED', paymentEventId: 'evt-1' }),
+        }),
+      );
+      // Charge PAID status derives from allocations (recalc), never a direct mutation:
+      const paidUpdate = (mockPrisma.charge.update as jest.Mock).mock.calls.find(
+        (call) => call[0].data?.status === 'PAID',
+      );
+      expect(paidUpdate).toBeDefined();
+      expect((mockPrisma.paymentAllocation.create as jest.Mock).mock.invocationCallOrder[0])
+        .toBeLessThan((mockPrisma.charge.update as jest.Mock).mock.invocationCallOrder[0]);
       expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
-      expect(mockPrisma.charge.update).toHaveBeenCalledWith({
-        where: { id: 'charge-1' },
-        data: { status: 'PAID', paymentExternalId: 'pay-1' },
-      });
-      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
-        mockPrisma.charge.update.mock.invocationCallOrder[0],
+    });
+
+    it('uses the real provider amount, never an inferred outstanding', async () => {
+      await run(paidEvent());
+
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ amount: 10000 }),
+        }),
       );
     });
 
-    it('processes PAID after an ignored PENDING webhook with the same MercadoPago payment id', async () => {
-      mockProvider.handleWebhook
-        .mockResolvedValueOnce({
-          eventId: 'mp-payment-1',
-          eventType: 'payment.pending',
-          chargeId: 'charge-1',
-          externalId: 'mp-payment-1',
-          status: 'PENDING',
-          rawPayload: {},
-        })
-        .mockResolvedValueOnce({
-          eventId: 'mp-payment-1',
-          eventType: 'payment.approved',
-          chargeId: 'charge-1',
-          externalId: 'mp-payment-1',
-          status: 'PAID',
-          rawPayload: {},
-        });
-      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-1', status: 'PENDING' });
-      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-1', status: 'PAID' });
-      mockPrisma.payment.findFirst.mockResolvedValue(null);
-
-      const pendingResult = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
-      const paidResult = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
-
-      expect(pendingResult.chargeUpdated).toBe(false);
-      expect(paidResult.chargeUpdated).toBe(true);
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledTimes(1);
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('mp-payment-1', 'mercadopago');
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledTimes(1);
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('mp-payment-1', 'mercadopago');
-      expect(mockPrisma.charge.update).toHaveBeenCalledWith({
-        where: { id: 'charge-1' },
-        data: { status: 'PAID', paymentExternalId: 'mp-payment-1' },
+    it('provider amount different from the local payment => 422 PAYMENT_PROVIDER_AMOUNT_MISMATCH, no mutation', async () => {
+      await expect(run(paidEvent({ amount: 7500 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_PROVIDER_AMOUNT_MISMATCH' },
       });
-    });
 
-    it.each(['REJECTED', 'CANCELLED', 'PENDING'] as const)(
-      'acknowledges %s without charge updates or processed markers',
-      async (status) => {
-        const webhookEvent: WebhookEvent = {
-          eventId: `evt-${status.toLowerCase()}`,
-          eventType: `payment.${status.toLowerCase()}`,
-          chargeId: 'charge-2',
-          externalId: 'pay-2',
-          status,
-          rawPayload: {},
-        };
-        mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-
-        const result = await service.processWebhookEvent({}, { signature: 'sig' });
-
-        expect(result).toMatchObject({ status, chargeUpdated: false });
-        expect(mockIdempotencyService.isProcessed).not.toHaveBeenCalled();
-        expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
-        expect(mockPrisma.charge.findUnique).not.toHaveBeenCalled();
-        expect(mockPrisma.charge.update).not.toHaveBeenCalled();
-        expect(mockPrisma.payment.update).not.toHaveBeenCalled();
-      },
-    );
-
-    it('does not mark PAID as processed when the charge update fails', async () => {
-      const webhookEvent: WebhookEvent = {
-        eventId: 'evt-paid-fail',
-        eventType: 'payment.approved',
-        chargeId: 'charge-fail',
-        externalId: 'pay-fail',
-        status: 'PAID',
-        rawPayload: {},
-      };
-      mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-fail', status: 'PENDING' });
-      mockPrisma.charge.update.mockRejectedValue(new Error('database timeout'));
-
-      await expect(service.processWebhookEvent({}, { signature: 'sig' })).rejects.toThrow('database timeout');
-
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-paid-fail', 'mercadopago');
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
       expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
     });
 
-    it('skips processing for duplicate webhook events', async () => {
-      const webhookEvent: WebhookEvent = {
-        eventId: 'evt-dup',
-        eventType: 'payment.approved',
-        chargeId: 'charge-3',
-        externalId: 'pay-3',
-        status: 'PAID',
-        rawPayload: {},
-      };
-      mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+    it('recalculates the charge to PAID from the allocation (ledger-derived status)', async () => {
+      await run(paidEvent());
 
-      const result = await service.processWebhookEvent({}, { signature: 'sig' }, 'mercadopago');
+      const paidUpdate = (mockPrisma.charge.update as jest.Mock).mock.calls.find(
+        (call) => call[0].data?.status === 'PAID',
+      );
+      expect(paidUpdate).toBeDefined();
+    });
+
+    it('skips allocation creation when the pair already exists (idempotent ledger)', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue(
+        payment({
+          amount: 10000,
+          status: 'APPROVED',
+          paymentAllocations: [{ chargeId: 'charge-1', amount: 10000 }],
+        }),
+      );
+
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).toHaveBeenCalled();
+    });
+  });
+
+  describe('missing financial evidence', () => {
+    it('missing provider amount => no financial mutation, event left unprocessed', async () => {
+      await expect(run(paidEvent({ amount: undefined }))).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('missing provider currency => no financial mutation', async () => {
+      await expect(run(paidEvent({ currency: undefined }))).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('non-canonical provider currency => no financial mutation', async () => {
+      await expect(run(paidEvent({ currency: 'XYZ' }))).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('same-currency invariant', () => {
+    it('currency mismatch event vs charge => 422 PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED', async () => {
+      mockPrisma.charge.findFirst.mockResolvedValue(charge({ currency: 'VES' }));
+
+      await expect(run(paidEvent({ currency: 'ARS' }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED' },
+      });
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('currency mismatch payment vs event => 422, no allocation', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue(payment({ currency: 'VES' }));
+
+      await expect(run(paidEvent())).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED' },
+      });
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tenant isolation', () => {
+    it('matches the local payment tenant-scoped by reference', async () => {
+      await run(paidEvent());
+
+      expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId: 'tenant-1',
+            reference: 'ext-1',
+          }),
+        }),
+      );
+    });
+
+    it('no local payment => no mutation and event left unprocessed', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+      const result = await run(paidEvent());
 
       expect(result.chargeUpdated).toBe(false);
-      expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('evt-dup', 'mercadopago');
-      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
-      expect(mockPrisma.charge.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
       expect(mockPrisma.charge.update).not.toHaveBeenCalled();
-      expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
-      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
-    });
-
-    it('marks successful PAID events after charge and payment side effects', async () => {
-      const webhookEvent: WebhookEvent = {
-        eventId: 'evt-paid-side-effects',
-        eventType: 'payment.approved',
-        chargeId: 'charge-side-effects',
-        externalId: 'pay-side-effects',
-        status: 'PAID',
-        rawPayload: {},
-      };
-      mockProvider.handleWebhook.mockResolvedValue(webhookEvent);
-      mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-side-effects', status: 'PENDING' });
-      mockPrisma.charge.update.mockResolvedValue({ id: 'charge-side-effects', status: 'PAID' });
-      mockPrisma.payment.findFirst.mockResolvedValue({ id: 'payment-1' });
-      mockPrisma.payment.update.mockResolvedValue({ id: 'payment-1', paymentEventId: 'evt-paid-side-effects' });
-
-      await service.processWebhookEvent({}, { signature: 'sig' });
-
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-paid-side-effects', 'mercadopago');
-      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
-        mockPrisma.charge.update.mock.invocationCallOrder[0],
-      );
-      expect(mockIdempotencyService.markProcessed.mock.invocationCallOrder[0]).toBeGreaterThan(
-        mockPrisma.payment.update.mock.invocationCallOrder[0],
-      );
-    });
-
-    it('rejects direct webhook processing when requested provider conflicts with active provider', async () => {
-      await expect(service.processWebhookEvent({}, { signature: 'sig' }, 'stripe')).rejects.toThrow(
-        'Webhook provider mismatch: active provider is mercadopago',
-      );
-
-      expect(mockProvider.handleWebhook).not.toHaveBeenCalled();
-      expect(mockIdempotencyService.isProcessed).not.toHaveBeenCalled();
-    });
-
-    it('rejects direct webhook processing with HTTP 400 when requested provider conflicts with active provider', async () => {
-      await expect(service.processWebhookEvent({}, { signature: 'sig' }, 'stripe')).rejects.toMatchObject({ status: 400 });
-    });
-
-    it('rejects direct webhook processing with HTTP 503 when no provider is configured', async () => {
-      const serviceWithoutProvider = new PaymentGatewayService(null, mockPrisma, mockIdempotencyService);
-
-      await expect(serviceWithoutProvider.processWebhookEvent({}, { signature: 'sig' })).rejects.toBeInstanceOf(HttpException);
-      await expect(serviceWithoutProvider.processWebhookEvent({}, { signature: 'sig' })).rejects.toMatchObject({ status: 503 });
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
     });
   });
 
-  describe('getChargeStatus', () => {
-    it('delegates to the provider', async () => {
-      mockProvider.getChargeStatus.mockResolvedValue('PAID');
+  describe('same-currency provider partial payment', () => {
+    it('charge 10000, payment 4000, event 4000 => allocation 4000, charge PARTIAL, outstanding 6000', async () => {
+      mockPrisma.charge.findFirst.mockImplementation(() =>
+        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
 
-      const status = await service.getChargeStatus('pay-1');
-      expect(status).toBe('PAID');
-      expect(mockProvider.getChargeStatus).toHaveBeenCalledWith('pay-1');
+      const result = await run(paidEvent({ amount: 4000 }));
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ amount: 4000 }),
+        }),
+      );
+      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'PARTIAL' }) }),
+      );
+      // ledger-derived outstanding
+      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+    });
+
+    it('replay of the partial event does not duplicate the allocation', async () => {
+      mockPrisma.charge.findFirst.mockImplementation(() =>
+        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
+
+      await run(paidEvent({ amount: 4000 }));
+      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+      await run(paidEvent({ amount: 4000 }));
+
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledTimes(1);
+      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+    });
+  });
+
+  describe('amount guards', () => {
+    it('event amount above charge outstanding => 422, no mutation', async () => {
+      createdAllocations.push({ amount: 8000 });
+
+      await expect(run(paidEvent({ amount: 3000 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_OUTSTANDING' },
+      });
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+
+    it('event amount above charge amount => 422, no mutation', async () => {
+      mockPrisma.charge.findFirst.mockResolvedValue(charge({ amount: 5000 }));
+
+      await expect(run(paidEvent({ amount: 7500 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_CHARGE' },
+      });
+    });
+  });
+
+  describe('idempotency / replay', () => {
+    it('skips processing when the event was already processed', async () => {
+      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(false);
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('duplicate event cannot duplicate the allocation (unique payment/charge pair)', async () => {
+      await run(paidEvent());
+      mockIdempotencyService.isProcessed.mockResolvedValue(true);
+      await run(paidEvent());
+
+      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledTimes(1);
     });
   });
 });

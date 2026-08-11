@@ -127,6 +127,8 @@ describe('FinanzasService', () => {
             canSubmitPayments: jest.fn(),
             canReviewPayments: jest.fn(),
             validateResidentUnitAccess: jest.fn(),
+            canAllocate: jest.fn(),
+            validateChargeBelongsToBuildingAndTenant: jest.fn(),
           },
         },
       ],
@@ -1217,6 +1219,15 @@ describe('FinanzasService', () => {
       jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue(null);
       jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue(null);
       jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as any);
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-123',
+        amount: 10000,
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [
+          { amount: 10000, payment: { status: PaymentStatus.APPROVED } },
+        ],
+      } as never);
+      jest.spyOn(prismaService.charge, 'update').mockResolvedValue({} as any);
     });
 
     it('keeps a resident-selected payment on a single charge without FIFO allocation', async () => {
@@ -1465,6 +1476,117 @@ describe('FinanzasService', () => {
             status: PaymentStatus.APPROVED,
           }),
         }),
+      );
+    });
+  });
+
+  // 3E1: approval recalculates affected charges from effective allocations
+  describe('approvePayment (3E1 charge recalculation)', () => {
+    const tenantId = 'tenant-123';
+    const buildingId = 'building-123';
+    const paymentId = 'payment-123';
+    const membershipId = 'membership-123';
+
+    const approve = () =>
+      service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+    beforeEach(() => {
+      jest.spyOn(validators, 'canReviewPayments').mockReturnValue(true);
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: paymentId,
+        tenantId,
+        buildingId,
+        unitId: 'unit-123',
+        amount: 10000,
+        currency: 'ARS',
+        status: PaymentStatus.SUBMITTED,
+        canceledAt: null,
+        paymentAllocations: [{ chargeId: 'charge-123', amount: 10000, charge: {} }],
+      } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-123',
+          tenantId,
+          buildingId,
+          unitId: 'unit-123',
+          amount: 10000,
+          currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          paymentAllocations: [],
+        },
+      ] as never);
+      jest.spyOn(prismaService.payment, 'update').mockResolvedValue({
+        id: paymentId,
+        status: PaymentStatus.APPROVED,
+      } as never);
+      jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue(null);
+      jest.spyOn(prismaService.charge, 'update').mockResolvedValue({} as never);
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockResolvedValue({} as never);
+    });
+
+    it('marks the charge PAID when the approved allocation covers it fully', async () => {
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-123',
+        amount: 10000,
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [
+          { amount: 10000, payment: { status: PaymentStatus.APPROVED } },
+        ],
+      } as never);
+
+      await approve();
+
+      expect(prismaService.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'charge-123' },
+          data: expect.objectContaining({ status: ChargeStatus.PAID }),
+        }),
+      );
+    });
+
+    it('marks the charge PARTIAL when the approved allocation covers it partially', async () => {
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-123',
+        amount: 10000,
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [
+          { amount: 4000, payment: { status: PaymentStatus.APPROVED } },
+        ],
+      } as never);
+
+      await approve();
+
+      expect(prismaService.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: ChargeStatus.PARTIAL }),
+        }),
+      );
+    });
+
+    it('never counts a SUBMITTED reservation as effective money for Charge.status', async () => {
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-123',
+        amount: 10000,
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [
+          { amount: 10000, payment: { status: PaymentStatus.SUBMITTED } },
+        ],
+      } as never);
+
+      await approve();
+
+      expect(prismaService.charge.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: ChargeStatus.PAID }) }),
+      );
+      expect(prismaService.charge.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: ChargeStatus.PARTIAL }) }),
       );
     });
   });
@@ -3637,6 +3759,150 @@ describe('FinanzasService', () => {
       expect(notificationsService.createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
         userId: residentId,
       }));
+    });
+  });
+
+  // ========== 3E1: CURRENCY INVARIANTS ==========
+  describe('3E1 currency invariants', () => {
+    const baseCharge = {
+      id: 'charge-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 10000,
+      currency: 'ARS',
+      dueDate: new Date('2026-06-10'),
+      period: '2026-05',
+      concept: 'Expensas',
+      status: 'PENDING',
+      canceledAt: null,
+    };
+
+    const basePayment = {
+      id: 'payment-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 10000,
+      currency: 'ARS',
+      status: 'APPROVED',
+      paymentAllocations: [],
+    };
+
+    describe('cancelCharge', () => {
+      const cancel = (allocation: unknown) => {
+        jest.spyOn(validators, 'canWriteCharges').mockReturnValue(true);
+        jest.spyOn(validators, 'validateChargeBelongsToBuildingAndTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue(baseCharge as never);
+        jest
+          .spyOn(prismaService.paymentAllocation, 'findFirst')
+          .mockResolvedValue(allocation as never);
+        return service.cancelCharge(
+          'tenant-1',
+          'building-1',
+          'charge-1',
+          ['TENANT_ADMIN'],
+          'user-1',
+          { reason: 'test' },
+        );
+      };
+
+      it('cancels a charge without effective allocations', async () => {
+        jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
+
+        await expect(cancel(null)).resolves.toBeDefined();
+        expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+        expect(prismaService.paymentAllocation.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              chargeId: 'charge-1',
+              payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+            }),
+          }),
+        );
+      });
+
+      it('treats a SUBMITTED reservation as non-blocking (DB filter excludes it)', async () => {
+        jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
+        jest.spyOn(prismaService.paymentAllocation, 'findFirst').mockResolvedValue(null);
+
+        await expect(cancel(null)).resolves.toBeDefined();
+        expect(prismaService.charge.update).toHaveBeenCalledTimes(1);
+        expect(prismaService.paymentAllocation.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+            }),
+          }),
+        );
+      });
+
+      it('blocks cancellation with an APPROVED allocation (409 CHARGE_HAS_EFFECTIVE_ALLOCATIONS)', async () => {
+        jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
+
+        await expect(cancel({ id: 'alloc-1', payment: { status: 'APPROVED' } })).rejects.toMatchObject({
+          response: {
+            statusCode: 409,
+            error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS',
+          },
+        });
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+      });
+
+      it('blocks cancellation with a RECONCILED allocation (409)', async () => {
+        jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
+
+        await expect(cancel({ id: 'alloc-1', payment: { status: 'RECONCILED' } })).rejects.toMatchObject({
+          response: { statusCode: 409, error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS' },
+        });
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('createAllocation', () => {
+      const allocate = (paymentOverrides: Record<string, unknown>, chargeOverrides: Record<string, unknown>, amount = 10000) => {
+        jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest
+          .spyOn(prismaService.payment, 'findFirst')
+          .mockResolvedValue({ ...basePayment, ...paymentOverrides } as never);
+        jest
+          .spyOn(prismaService.charge, 'findFirst')
+          .mockResolvedValue({ ...baseCharge, ...chargeOverrides, paymentAllocations: [] } as never);
+        jest
+          .spyOn(prismaService.charge, 'findMany')
+          .mockResolvedValue([{ ...baseCharge, ...chargeOverrides, paymentAllocations: [] }] as never);
+        jest.spyOn(prismaService.paymentAllocation, 'create').mockResolvedValue({} as never);
+        return service.createAllocation(
+          'tenant-1',
+          'building-1',
+          ['TENANT_ADMIN'],
+          'member-1',
+          { paymentId: 'payment-1', chargeId: 'charge-1', amount },
+        );
+      };
+
+      it('allows same-currency allocation', async () => {
+        await expect(allocate({}, {})).resolves.toBeDefined();
+        expect(prismaService.paymentAllocation.create).toHaveBeenCalled();
+      });
+
+      it('blocks cross-currency allocation with 422 PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED', async () => {
+        await expect(allocate({ currency: 'VES' }, {})).rejects.toMatchObject({
+          response: {
+            statusCode: 422,
+            error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      });
+
+      it('leaves payment and charge untouched on cross-currency block', async () => {
+        await expect(allocate({ currency: 'VES' }, {})).rejects.toThrow();
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+        expect(prismaService.payment.update).not.toHaveBeenCalled();
+      });
     });
   });
 });

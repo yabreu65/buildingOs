@@ -46,14 +46,45 @@ describe('E2E Payment Flow', () => {
     mockProvider.handleWebhook = jest.fn().mockResolvedValue({
       eventId: 'mock-evt-1',
       eventType: 'payment.approved',
+      chargeId: 'charge-e2e-1',
+      externalId: 'mock-ext-1',
       status: 'PAID',
+      amount: 10000,
+      currency: 'ARS',
       rawPayload: {},
     });
     mockProvider.getChargeStatus = jest.fn().mockResolvedValue('PAID');
 
     mockPrisma = {
-      charge: { findUnique: jest.fn(), update: jest.fn() },
-      payment: { findFirst: jest.fn(), update: jest.fn() },
+      charge: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'charge-e2e-1',
+          tenantId: 'tenant-e2e',
+          buildingId: 'building-e2e',
+          unitId: 'unit-e2e',
+          amount: 10000,
+          currency: 'ARS',
+          status: 'PENDING',
+          paymentAllocations: [],
+        }),
+        update: jest.fn(),
+      },
+      payment: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'payment-e2e-1',
+          tenantId: 'tenant-e2e',
+          buildingId: 'building-e2e',
+          unitId: 'unit-e2e',
+          amount: 10000,
+          currency: 'ARS',
+          status: 'SUBMITTED',
+          reference: 'mock-ext-1',
+          paymentAllocations: [],
+        }),
+        update: jest.fn(),
+      },
+      paymentAllocation: { create: jest.fn() },
+      $transaction: jest.fn((callback: (client: unknown) => unknown) => callback(mockPrisma)),
     };
     mockIdempotencyService = {
       isProcessed: jest.fn(),
@@ -63,7 +94,7 @@ describe('E2E Payment Flow', () => {
     service = new PaymentGatewayService(mockProvider as any, mockPrisma, mockIdempotencyService);
   });
 
-  it('creates a payment preference and processes webhook to PAID', async () => {
+  it('creates a payment preference and processes webhook to ledger evidence', async () => {
     // Step 1: Create preference
     const preference = await service.createPreference({
       chargeId: 'charge-e2e-1',
@@ -77,10 +108,7 @@ describe('E2E Payment Flow', () => {
     expect(preference.checkoutUrl).toBe('https://mock-pay.com/1');
     expect(preference.provider).toBe('mercadopago');
 
-    // Step 2: Process webhook (charge is PENDING, webhook says PAID)
-    mockPrisma.charge.findUnique.mockResolvedValue({ id: 'charge-e2e-1', status: 'PENDING' });
-    mockPrisma.charge.update.mockResolvedValue({ id: 'charge-e2e-1', status: 'PAID' });
-    mockPrisma.payment.findFirst.mockResolvedValue(null);
+    // Step 2: Process webhook (charge PENDING + local SUBMITTED payment)
     mockIdempotencyService.isProcessed.mockResolvedValue(false);
     mockIdempotencyService.markProcessed.mockResolvedValue(undefined);
 
@@ -90,9 +118,19 @@ describe('E2E Payment Flow', () => {
       'mercadopago',
     );
 
-    // Step 3: Verify charge was processed
+    // Step 3: Ledger evidence was produced
     expect(result.status).toBe('PAID');
-    // Verify IdempotencyService was called correctly
+    expect(result.chargeUpdated).toBe(true);
+    expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ paymentId: 'payment-e2e-1', amount: 10000 }),
+      }),
+    );
+    expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'APPROVED', paymentEventId: 'mock-evt-1' }),
+      }),
+    );
     expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
     expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
   });

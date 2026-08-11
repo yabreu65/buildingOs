@@ -3,10 +3,55 @@
  * Task 2.1: Verify createPreference, handleWebhook, getChargeStatus
  */
 
-import { MercadoPagoAdapter } from './mercadopago.adapter';
+import { MercadoPagoAdapter, toMinorUnits } from './mercadopago.adapter';
 import { PaymentStatus } from '../interfaces/payment-provider.interface';
 import { createHmac } from 'crypto';
 import { HttpException } from '@nestjs/common';
+
+describe('toMinorUnits (exact decimal money conversion)', () => {
+  it.each([
+    [10.0, 1000],
+    [10.01, 1001],
+    [10.1, 1010],
+    [0.01, 1],
+    [36.5, 3650],
+    [1, 100],
+    [0.99, 99],
+  ])('converts %s to %s minor units', (input, expected) => {
+    expect(toMinorUnits(input)).toBe(expected);
+  });
+
+  it.each([10.005, 10.001, 0.001, 3.333])(
+    'rejects excessive decimal precision %s (never rounds silently)',
+    (input) => {
+      expect(toMinorUnits(input)).toBeUndefined();
+    },
+  );
+
+  it.each([NaN, Infinity, -Infinity, -1, -0.01, 0])(
+    'rejects non-positive or non-finite %s',
+    (input) => {
+      expect(toMinorUnits(input)).toBeUndefined();
+    },
+  );
+
+  it.each(['10.00', null, undefined, {}, '10'])(
+    'rejects unexpected value types %s',
+    (input) => {
+      expect(toMinorUnits(input as never)).toBeUndefined();
+    },
+  );
+
+  it('rejects values beyond safe integer range', () => {
+    expect(toMinorUnits(Number.MAX_SAFE_INTEGER / 100 + 10000)).toBeUndefined();
+  });
+
+  it('never uses binary float arithmetic for money', () => {
+    // 0.1 + 0.2 in binary float is 0.30000000000000004 — must be rejected
+    // because the exact decimal representation carries extra precision.
+    expect(toMinorUnits(0.1 + 0.2)).toBeUndefined();
+  });
+});
 
 describe('MercadoPagoAdapter', () => {
   const webhookSecret = 'test-webhook-secret';
