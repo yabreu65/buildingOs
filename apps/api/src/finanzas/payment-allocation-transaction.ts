@@ -23,6 +23,18 @@ interface AllocationChargeCurrency {
   readonly charge: { readonly currency: string };
 }
 
+interface ChargeAvailabilityAllocation {
+  readonly amount: number;
+  readonly payment: { readonly id?: string; readonly status: PaymentStatus };
+}
+
+export interface DeletedAllocationMetadata {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly chargeId: string;
+  readonly amount: number;
+}
+
 type PaymentAllocationCurrencyMode = 'SAME' | 'CROSS' | null;
 
 export function assertPaymentAllocationCurrencyMode(
@@ -133,6 +145,21 @@ export async function recalculateLockedCharge(
   }
 }
 
+export function calculateChargeAvailableOutstanding(
+  chargeAmount: number,
+  allocations: readonly ChargeAvailabilityAllocation[],
+  currentPaymentId?: string,
+): number {
+  const consumed = allocations.reduce((sum, allocation) => {
+    if (currentPaymentId !== undefined && allocation.payment.id === currentPaymentId) return sum;
+    return isEffectivePaymentStatus(allocation.payment.status) ||
+      allocation.payment.status === PaymentStatus.SUBMITTED
+      ? sum + allocation.amount
+      : sum;
+  }, 0);
+  return chargeAmount - consumed;
+}
+
 export async function reconcilePaymentWhenConsumed(
   tx: Prisma.TransactionClient,
   paymentId: string,
@@ -143,13 +170,16 @@ export async function reconcilePaymentWhenConsumed(
       paymentAllocations: { include: { charge: { select: { currency: true, status: true } } } },
     },
   });
-  if (!payment || payment.status !== PaymentStatus.APPROVED) return;
+  if (
+    !payment ||
+    (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED)
+  ) return;
   const allocationMode = assertPaymentAllocationCurrencyMode(
     payment.currency,
     payment.paymentAllocations,
   );
   const snapshotState = classifyFunctionalSnapshot(payment);
-  if (snapshotState === 'PARTIAL_INVALID' || allocationMode === null) return;
+  if (snapshotState === 'PARTIAL_INVALID') return;
 
   let originalConsumed = 0;
   let functionalConsumed = 0;
@@ -172,13 +202,49 @@ export async function reconcilePaymentWhenConsumed(
     ? snapshotState === 'COMPLETE' &&
       originalConsumed === payment.amount &&
       functionalConsumed === payment.functionalAmountMinor
-    : originalConsumed === payment.amount;
-  if (allPaid && completelyConsumed) {
+    : allocationMode === 'SAME' && originalConsumed === payment.amount;
+  const nextStatus = allPaid && completelyConsumed
+    ? PaymentStatus.RECONCILED
+    : PaymentStatus.APPROVED;
+  if (nextStatus !== payment.status) {
     await tx.payment.update({
       where: { id: paymentId },
-      data: { status: PaymentStatus.RECONCILED, updatedAt: new Date() },
+      data: { status: nextStatus, updatedAt: new Date() },
     });
   }
+}
+
+export async function deleteLockedAllocation(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  buildingId: string,
+  allocationId: string,
+): Promise<DeletedAllocationMetadata> {
+  const discovered = await tx.paymentAllocation.findFirst({
+    where: { id: allocationId, tenantId },
+    select: { paymentId: true, chargeId: true },
+  });
+  const notFound = () => new NotFoundException('Allocation not found or does not belong to this tenant');
+  if (!discovered) throw notFound();
+
+  await lockPaymentForAllocation(tx, { tenantId, buildingId, paymentId: discovered.paymentId });
+  await lockChargesForAllocation(tx, tenantId, buildingId, [discovered.chargeId]);
+  const allocation = await tx.paymentAllocation.findFirst({
+    where: {
+      id: allocationId,
+      tenantId,
+      payment: { tenantId, buildingId },
+      charge: { tenantId, buildingId },
+    },
+    select: { id: true, paymentId: true, chargeId: true, amount: true },
+  });
+  if (!allocation) throw notFound();
+
+  const deleted = await tx.paymentAllocation.deleteMany({ where: { id: allocationId, tenantId } });
+  if (deleted.count !== 1) throw notFound();
+  await recalculateLockedCharge(tx, allocation.chargeId);
+  await reconcilePaymentWhenConsumed(tx, allocation.paymentId);
+  return allocation;
 }
 
 export async function createLockedAllocation(
@@ -255,16 +321,7 @@ export async function createLockedAllocation(
     throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_ORIGINAL_AMOUNT_EXCEEDED' });
   }
 
-  const chargeAllocations = charge.paymentAllocations ?? [];
-  const effectiveConsumed = chargeAllocations.reduce(
-    (sum, allocation) => isEffectivePaymentStatus(allocation.payment.status) ? sum + allocation.amount : sum,
-    0,
-  );
-  const reservedConsumed = chargeAllocations.reduce(
-    (sum, allocation) => allocation.payment.status === PaymentStatus.SUBMITTED ? sum + allocation.amount : sum,
-    0,
-  );
-  if (amount > charge.amount - effectiveConsumed - reservedConsumed) {
+  if (amount > calculateChargeAvailableOutstanding(charge.amount, charge.paymentAllocations ?? [])) {
     throw new ConflictException('The allocation exceeds the charge available outstanding');
   }
 

@@ -2642,7 +2642,7 @@ describe('FinanzasService', () => {
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
       expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
@@ -2697,7 +2697,7 @@ describe('FinanzasService', () => {
         }),
       }));
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
       expect(notificationSpy).toHaveBeenCalledWith(tenantId, expect.any(Object), 'OTHER', undefined);
@@ -2717,7 +2717,7 @@ describe('FinanzasService', () => {
 
       expect(result.canceledAt).toBeTruthy();
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(makeAllocation()).toHaveLength(0);
     });
@@ -3009,7 +3009,7 @@ describe('FinanzasService', () => {
 
       expect(makeAllocation()).toHaveLength(1);
       expect(prismaService.paymentAllocation.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId, paymentId },
+        where: { tenantId, paymentId, chargeId: { in: [chargeId] } },
       });
       expect(notificationSpy).not.toHaveBeenCalled();
     });

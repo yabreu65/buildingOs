@@ -17,8 +17,10 @@ import {
 import {
   assertPaymentAllocationCurrencyMode,
   createLockedAllocation,
+  deleteLockedAllocation,
   lockChargesForAllocation,
   lockPaymentForAllocation,
+  recalculateLockedCharge,
   reconcilePaymentWhenConsumed,
 } from './payment-allocation-transaction';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
@@ -1124,13 +1126,12 @@ export class FinanzasService {
         throw new BadRequestException('Cannot reject a canceled payment');
       }
 
-      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+      await this.releaseSubmittedPaymentAllocations(
         tx,
         paymentId,
         tenantId,
+        buildingId,
       );
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
@@ -1143,10 +1144,6 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {
@@ -1280,34 +1277,9 @@ export class FinanzasService {
       this.validators.throwForbidden('allocations', 'delete');
     }
 
-    // 2. Validate allocation
-    const allocation = await this.prisma.paymentAllocation.findFirst({
-      where: { id: allocationId, tenantId },
-    });
-
-    if (!allocation) {
-      throw new NotFoundException(
-        `Allocation not found or does not belong to this tenant`,
-      );
-    }
-
-    // 3. Verify payment belongs to building
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: allocation.paymentId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Associated payment does not belong to this building`,
-      );
-    }
-
-    // 4. Delete allocation + recalculate status within transaction
     return this.prisma.$transaction(async (tx) => {
+      const allocation = await deleteLockedAllocation(tx, tenantId, buildingId, allocationId);
+
       // Audit: ALLOCATION_DELETE (before deletion)
       void this.auditService.createLog({
         tenantId,
@@ -1322,16 +1294,6 @@ export class FinanzasService {
         },
       });
 
-      // Delete allocation
-      await tx.paymentAllocation.delete({
-        where: { id: allocationId },
-      });
-
-      // Recalculate charge status within transaction
-      await this.recalculateChargeStatus(allocation.chargeId, tx);
-
-      // Attempt to reconcile payment if all charges are PAID
-      await this.tryReconcilePayment(allocation.paymentId, tx);
     });
   }
 
@@ -1403,6 +1365,7 @@ export class FinanzasService {
     tx: Prisma.TransactionClient,
     paymentId: string,
     tenantId: string,
+    buildingId: string,
   ): Promise<Array<{ chargeId: string; amount: number }>> {
     const allocations = await tx.paymentAllocation.findMany({
       where: {
@@ -1419,14 +1382,32 @@ export class FinanzasService {
       return [];
     }
 
+    await lockChargesForAllocation(
+      tx,
+      tenantId,
+      buildingId,
+      allocations.map((allocation) => allocation.chargeId),
+    );
+    const lockedAllocations = await tx.paymentAllocation.findMany({
+      where: {
+        tenantId,
+        paymentId,
+        charge: { tenantId, buildingId },
+      },
+      select: { chargeId: true, amount: true },
+    });
+
     await tx.paymentAllocation.deleteMany({
       where: {
         tenantId,
         paymentId,
+        chargeId: { in: lockedAllocations.map((allocation) => allocation.chargeId) },
       },
     });
-
-    return allocations;
+    for (const chargeId of [...new Set(lockedAllocations.map((allocation) => allocation.chargeId))].sort()) {
+      await recalculateLockedCharge(tx, chargeId);
+    }
+    return lockedAllocations;
   }
 
   private async validatePaymentProofFileInTransaction(
@@ -2662,20 +2643,13 @@ export class FinanzasService {
         );
       }
 
-      const releasedAllocations =
-        payment.status === PaymentStatus.SUBMITTED
-          ? await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId)
-          : [];
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
+      if (payment.status === PaymentStatus.SUBMITTED) {
+        await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId, buildingId);
+      }
       const canceledPayment = await tx.payment.update({
         where: { id: paymentId },
         data: { canceledAt: new Date(), updatedAt: new Date() },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {
@@ -3201,13 +3175,12 @@ export class FinanzasService {
         throw new BadRequestException('Cannot reject a canceled payment');
       }
 
-      const releasedAllocations = await this.releaseSubmittedPaymentAllocations(
+      await this.releaseSubmittedPaymentAllocations(
         tx,
         paymentId,
         tenantId,
+        payment.buildingId,
       );
-      const chargeIds = releasedAllocations.map((allocation) => allocation.chargeId);
-
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
@@ -3220,10 +3193,6 @@ export class FinanzasService {
           updatedAt: new Date(),
         },
       });
-
-      for (const chargeId of chargeIds) {
-        await this.recalculateChargeStatus(chargeId, tx);
-      }
 
       await tx.paymentAuditLog.create({
         data: {

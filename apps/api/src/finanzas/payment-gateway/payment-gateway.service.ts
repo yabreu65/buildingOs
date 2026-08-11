@@ -28,7 +28,6 @@ import { Prisma } from '@prisma/client';
 import { Inject } from '@nestjs/common';
 import {
   EFFECTIVE_PAYMENT_STATUSES,
-  isEffectivePaymentStatus,
 } from '../payment-status-semantics';
 import { CurrencyConversionService } from '../currency-conversion.service';
 import {
@@ -38,6 +37,7 @@ import {
 } from '../functional-snapshot';
 import {
   assertPaymentAllocationCurrencyMode,
+  calculateChargeAvailableOutstanding,
   createLockedAllocation,
   lockChargesForAllocation,
   lockPaymentForAllocation,
@@ -290,12 +290,10 @@ export class PaymentGatewayService {
         },
       });
       if (!lockedCharge) return false;
-      const lockedOutstanding = lockedCharge.amount - lockedCharge.paymentAllocations.reduce(
-        (sum, allocation) =>
-          allocation.payment.id !== payment.id && isEffectivePaymentStatus(allocation.payment.status)
-            ? sum + allocation.amount
-            : sum,
-        0,
+      const lockedOutstanding = calculateChargeAvailableOutstanding(
+        lockedCharge.amount,
+        lockedCharge.paymentAllocations,
+        payment.id,
       );
       if (verifiedAmount > lockedOutstanding) {
         throw new UnprocessableEntityException({

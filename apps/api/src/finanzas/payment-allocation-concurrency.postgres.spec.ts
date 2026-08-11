@@ -1,5 +1,5 @@
 import { ChargeStatus, PaymentMethod, PaymentStatus, PrismaClient, TenantType } from '@prisma/client';
-import { createLockedAllocation } from './payment-allocation-transaction';
+import { createLockedAllocation, deleteLockedAllocation } from './payment-allocation-transaction';
 
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
@@ -233,5 +233,167 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     expect(allocation.paymentOriginalAmountMinor).toBe(10000);
     expect(persistedCharge.status).toBe(ChargeStatus.PAID);
     expect(persistedPayment.status).toBe(PaymentStatus.RECONCILED);
+  });
+
+  it('downgrades and restores a reconciled cross-currency payment when an allocation is deleted and recreated', async () => {
+    const ctx = await fixture('cross-currency-delete-recreate');
+    const effectiveAt = new Date('2026-08-08T00:00:00.000Z');
+    const rate = await observer.exchangeRate.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        baseCurrency: 'USD',
+        quoteCurrency: 'VES',
+        rate: '36.5',
+        effectiveAt,
+        source: '3E3 PostgreSQL regression',
+      },
+    });
+    const payment = await observer.payment.create({
+      data: {
+        ...ctx.paymentData,
+        currency: 'USD',
+        status: PaymentStatus.RECONCILED,
+        functionalAmountMinor: 365000,
+        functionalCurrencyCode: 'VES',
+        exchangeRateId: rate.id,
+        exchangeRateValue: '36.5',
+        exchangeRateDirection: 'DIRECT',
+        exchangeRateEffectiveAt: effectiveAt,
+        conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+      },
+    });
+    const charges = await Promise.all([
+      observer.charge.create({
+        data: { ...ctx.chargeData, amount: 100000, currency: 'VES', status: ChargeStatus.PAID },
+      }),
+      observer.charge.create({
+        data: {
+          ...ctx.chargeData,
+          period: '2026-09',
+          concept: 'cross-currency-delete-recreate-2',
+          amount: 100000,
+          currency: 'VES',
+          status: ChargeStatus.PAID,
+        },
+      }),
+      observer.charge.create({
+        data: {
+          ...ctx.chargeData,
+          period: '2026-10',
+          concept: 'cross-currency-delete-recreate-3',
+          amount: 165000,
+          currency: 'VES',
+          status: ChargeStatus.PAID,
+        },
+      }),
+    ]);
+    const allocations = await Promise.all([
+      observer.paymentAllocation.create({
+        data: {
+          tenantId: ctx.tenant.id,
+          paymentId: payment.id,
+          chargeId: charges[0].id,
+          amount: 100000,
+          paymentOriginalAmountMinor: 2740,
+        },
+      }),
+      observer.paymentAllocation.create({
+        data: {
+          tenantId: ctx.tenant.id,
+          paymentId: payment.id,
+          chargeId: charges[1].id,
+          amount: 100000,
+          paymentOriginalAmountMinor: 2740,
+        },
+      }),
+      observer.paymentAllocation.create({
+        data: {
+          tenantId: ctx.tenant.id,
+          paymentId: payment.id,
+          chargeId: charges[2].id,
+          amount: 165000,
+          paymentOriginalAmountMinor: 4520,
+        },
+      }),
+    ]);
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx,
+      ctx.tenant.id,
+      ctx.building.id,
+      allocations[2].id,
+    ));
+
+    const [downgradedPayment, pendingCharge, remainingTotals] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: charges[2].id } }),
+      observer.paymentAllocation.aggregate({
+        where: { paymentId: payment.id },
+        _sum: { paymentOriginalAmountMinor: true, amount: true },
+      }),
+    ]);
+    expect(downgradedPayment.status).toBe(PaymentStatus.APPROVED);
+    expect(pendingCharge.status).toBe(ChargeStatus.PENDING);
+    expect(remainingTotals._sum.paymentOriginalAmountMinor).toBe(5480);
+    expect(remainingTotals._sum.amount).toBe(200000);
+
+    await firstClient.$transaction((tx) => createLockedAllocation(tx, {
+      tenantId: ctx.tenant.id,
+      buildingId: ctx.building.id,
+      paymentId: payment.id,
+      chargeId: charges[2].id,
+    }, 165000));
+
+    const [restoredPayment, paidCharge, restoredTotals] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: charges[2].id } }),
+      observer.paymentAllocation.aggregate({
+        where: { paymentId: payment.id },
+        _sum: { paymentOriginalAmountMinor: true, amount: true },
+      }),
+    ]);
+    expect(restoredPayment.status).toBe(PaymentStatus.RECONCILED);
+    expect(paidCharge.status).toBe(ChargeStatus.PAID);
+    expect(restoredTotals._sum.paymentOriginalAmountMinor).toBe(10000);
+    expect(restoredTotals._sum.amount).toBe(365000);
+  });
+
+  it('serializes delete with create and returns canonical 404 for a repeated delete', async () => {
+    const ctx = await fixture('delete-create-race');
+    const payment = await observer.payment.create({ data: ctx.paymentData });
+    const charge = await observer.charge.create({ data: ctx.chargeData });
+    const allocation = await firstClient.$transaction((tx) => createLockedAllocation(tx, {
+      tenantId: ctx.tenant.id, buildingId: ctx.building.id,
+      paymentId: payment.id, chargeId: charge.id,
+    }, 10000));
+    let releaseDelete!: () => void;
+    const holdDelete = new Promise<void>((resolve) => { releaseDelete = resolve; });
+    let deleted!: () => void;
+    const deleteReached = new Promise<void>((resolve) => { deleted = resolve; });
+    const first = firstClient.$transaction(async (tx) => {
+      await deleteLockedAllocation(tx, ctx.tenant.id, ctx.building.id, allocation.id);
+      deleted();
+      await holdDelete;
+    });
+    await deleteReached;
+    let secondPid = 0;
+    const second = secondClient.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      secondPid = row.pid;
+      return createLockedAllocation(tx, {
+        tenantId: ctx.tenant.id, buildingId: ctx.building.id,
+        paymentId: payment.id, chargeId: charge.id,
+      }, 10000);
+    });
+    while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitUntilBlocked(secondPid);
+    releaseDelete();
+    await first;
+    await expect(second).resolves.toMatchObject({ amount: 10000 });
+    await expect(firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocation.id,
+    ))).rejects.toMatchObject({ status: 404 });
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.RECONCILED });
   });
 });

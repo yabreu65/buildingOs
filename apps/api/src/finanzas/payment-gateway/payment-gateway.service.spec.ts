@@ -452,6 +452,50 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
         response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_CHARGE' },
       });
     });
+
+    it('accepts 7000 when another SUBMITTED payment reserves 3000 and reuses its own 7000 reservation', async () => {
+      currentPayment = payment({
+        amount: 7000,
+        paymentAllocations: [{ chargeId: 'charge-1', amount: 7000, charge: { currency: 'ARS' } }],
+      });
+      mockPrisma.charge.findFirst.mockResolvedValue(charge({
+        paymentAllocations: [
+          { amount: 7000, payment: { id: 'payment-1', status: 'SUBMITTED' } },
+          { amount: 3000, payment: { id: 'other', status: 'SUBMITTED' } },
+        ],
+      }));
+
+      await expect(run(paidEvent({ amount: 7000 }))).resolves.toEqual(
+        expect.objectContaining({ chargeUpdated: true }),
+      );
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks 7000 when another SUBMITTED payment reserves 7000', async () => {
+      currentPayment = payment({ amount: 7000 });
+      mockPrisma.charge.findFirst.mockResolvedValue(charge({
+        paymentAllocations: [{ amount: 7000, payment: { id: 'other', status: 'SUBMITTED' } }],
+      }));
+
+      await expect(run(paidEvent({ amount: 7000 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_OUTSTANDING' },
+      });
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+    });
+
+    it('subtracts both effective allocations and SUBMITTED reservations from gateway capacity', async () => {
+      currentPayment = payment({ amount: 6000 });
+      mockPrisma.charge.findFirst.mockResolvedValue(charge({
+        paymentAllocations: [
+          { amount: 2000, payment: { id: 'approved', status: 'APPROVED' } },
+          { amount: 3000, payment: { id: 'submitted', status: 'SUBMITTED' } },
+        ],
+      }));
+
+      await expect(run(paidEvent({ amount: 6000 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_OUTSTANDING' },
+      });
+    });
   });
 
   describe('3E2 gateway snapshot', () => {
