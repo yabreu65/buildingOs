@@ -332,6 +332,7 @@ export class PaymentGatewayService {
           paymentId: payment.id,
           chargeId: charge.id,
           amount: verifiedAmount,
+          paymentOriginalAmountMinor: verifiedAmount,
         },
       });
 

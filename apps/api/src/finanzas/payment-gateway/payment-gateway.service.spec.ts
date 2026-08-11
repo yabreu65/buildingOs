@@ -140,6 +140,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
             paymentId: 'payment-1',
             chargeId: 'charge-1',
             amount: 10000,
+            paymentOriginalAmountMinor: 10000,
           }),
         }),
       );

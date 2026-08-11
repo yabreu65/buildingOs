@@ -822,6 +822,7 @@ export class FinanzasService {
               paymentId: payment.id,
               chargeId: selection.charge.id,
               amount: selection.approvedOutstanding,
+              paymentOriginalAmountMinor: selection.approvedOutstanding,
             },
           });
         }
@@ -1173,7 +1174,11 @@ export class FinanzasService {
         buildingId,
       },
       include: {
-        paymentAllocations: true,
+        paymentAllocations: {
+          include: {
+            charge: { select: { currency: true } },
+          },
+        },
       },
     });
 
@@ -1207,31 +1212,131 @@ export class FinanzasService {
       );
     }
 
-    // 3.75. Same-currency invariant: allocation amount is always expressed in
-    // Charge.currency. A cross-currency allocation is not supported until 3E3.
-    if (payment.currency !== charge.currency) {
-      throw new UnprocessableEntityException({
-        statusCode: 422,
-        error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
-        message: `La moneda del pago (${payment.currency}) no coincide con la moneda del cargo (${charge.currency})`,
-      });
+    // 3E3: allocation amount is ALWAYS expressed in Charge.currency.
+    // Same-currency: legacy behavior. Cross-currency is supported only when
+    // the Payment has a COMPLETE frozen snapshot whose functionalCurrencyCode
+    // equals Charge.currency — the frozen snapshot is the historical truth,
+    // never a new rate lookup.
+    const sameCurrency = payment.currency === charge.currency;
+    let originalShare: number | null;
+
+    if (!sameCurrency) {
+      const state = classifyFunctionalSnapshot(payment);
+
+      if (state === 'LEGACY_NULL') {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED',
+          message: 'El pago no posee snapshot funcional; no se puede asignar en otra moneda',
+        });
+      }
+
+      if (state === 'PARTIAL_INVALID') {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
+          message: 'El pago posee un snapshot funcional incompleto o incoherente',
+        });
+      }
+
+      if (payment.functionalCurrencyCode !== charge.currency) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+          message: `La moneda funcional del pago (${payment.functionalCurrencyCode}) no coincide con la moneda del cargo (${charge.currency})`,
+        });
+      }
+
+      if (payment.functionalAmountMinor === null) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
+          message: 'El pago no posee monto funcional congelado',
+        });
+      }
+
+      // Functional consumption counts only allocations expressed in the
+      // payment's frozen functional currency (cross-currency shares).
+      const functionalConsumed = payment.paymentAllocations.reduce(
+        (sum, allocation) =>
+          allocation.charge?.currency === payment.functionalCurrencyCode
+            ? sum + allocation.amount
+            : sum,
+        0,
+      );
+      const functionalRemaining =
+        payment.functionalAmountMinor - functionalConsumed;
+
+      // Original consumption: same-currency allocations consume their amount;
+      // cross-currency allocations consume their frozen original share.
+      // Legacy NULL shares fall back to amount only for same-currency pairs.
+      const originalConsumed = payment.paymentAllocations.reduce(
+        (sum, allocation) => {
+          const isSameCurrencyAllocation =
+            allocation.charge?.currency === payment.currency;
+          return (
+            sum +
+            (allocation.paymentOriginalAmountMinor !== null
+              ? allocation.paymentOriginalAmountMinor
+              : isSameCurrencyAllocation
+                ? allocation.amount
+                : 0)
+          );
+        },
+        0,
+      );
+      const originalRemaining = payment.amount - originalConsumed;
+
+      // The cross-currency allocation consumes BOTH sides proportionally:
+      // never more functional than the frozen snapshot, and never more
+      // original than what is still backed by the remaining original.
+      // A full functional consumption (dto.amount == functionalRemaining)
+      // closes exactly with the full original remainder — no drift.
+      const originalBackedFunctional = new Prisma.Decimal(originalRemaining)
+        .mul(payment.functionalAmountMinor)
+        .div(payment.amount)
+        .toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN)
+        .toNumber();
+      const crossAvailable = Math.min(functionalRemaining, originalBackedFunctional);
+
+      if (dto.amount > functionalRemaining) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED',
+          message: 'La asignación supera el monto funcional disponible del pago',
+        });
+      }
+
+      if (dto.amount !== functionalRemaining && dto.amount > crossAvailable) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED',
+          message: 'La asignación supera el valor funcional respaldado disponible del pago',
+        });
+      }
+
+      // Deterministic proportional original share (exact decimal, HALF_EVEN);
+      // a full functional consumption consumes the exact original remainder.
+      if (dto.amount === functionalRemaining || functionalRemaining === 0) {
+        originalShare = originalRemaining;
+      } else {
+        originalShare = new Prisma.Decimal(originalRemaining)
+          .mul(dto.amount)
+          .div(functionalRemaining)
+          .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_EVEN)
+          .toNumber();
+        if (originalShare > originalRemaining) {
+          originalShare = originalRemaining;
+        }
+      }
+    } else {
+      // New same-currency allocations carry the explicit original share.
+      originalShare = dto.amount;
     }
 
     if (!payment.unitId) {
       throw new ConflictException(
         'Payment must belong to a unit to create allocations in canonical order.',
-      );
-    }
-
-    // 4. Validate total allocations don't exceed payment amount
-    const totalAllocated = payment.paymentAllocations.reduce(
-      (sum, a) => sum + a.amount,
-      0,
-    );
-
-    if (totalAllocated + dto.amount > payment.amount) {
-      throw new ConflictException(
-        `Total allocations (${totalAllocated + dto.amount}) exceed payment amount (${payment.amount})`,
       );
     }
 
@@ -1255,9 +1360,15 @@ export class FinanzasService {
       );
     }
 
-    if (dto.amount !== expectedCharge.approvedOutstanding) {
+    if (sameCurrency && dto.amount !== expectedCharge.approvedOutstanding) {
       throw new ConflictException(
         'Cada período debe pagarse completamente.',
+      );
+    }
+
+    if (!sameCurrency && dto.amount > expectedCharge.approvedOutstanding) {
+      throw new ConflictException(
+        'La asignación supera el saldo pendiente del cargo.',
       );
     }
 
@@ -1284,6 +1395,7 @@ export class FinanzasService {
           paymentId: dto.paymentId,
           chargeId: dto.chargeId,
           amount: dto.amount,
+          paymentOriginalAmountMinor: originalShare,
         },
       });
 

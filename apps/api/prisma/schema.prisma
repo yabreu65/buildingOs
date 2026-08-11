@@ -1709,6 +1709,7 @@ model PaymentAllocation {
   paymentId String
   chargeId  String
   amount    Int      // Amount allocated (in cents, must be <= Payment.amount)
+  paymentOriginalAmountMinor Int? // 3E3: porción del Payment ORIGINAL consumida (en Payment.currency); NULL = legacy same-currency
   createdAt DateTime @default(now())
 
   // Relations
