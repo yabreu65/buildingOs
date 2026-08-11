@@ -24,7 +24,7 @@ import {
 } from './interfaces/payment-provider.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from './webhooks/idempotency.service';
-import { ChargeStatus } from '@prisma/client';
+import { ChargeStatus, Prisma } from '@prisma/client';
 import { Inject } from '@nestjs/common';
 import {
   EFFECTIVE_PAYMENT_STATUSES,
@@ -36,6 +36,11 @@ import {
   classifyFunctionalSnapshot,
   type FunctionalSnapshotFields,
 } from '../functional-snapshot';
+import {
+  createLockedAllocation,
+  lockChargesForAllocation,
+  lockPaymentForAllocation,
+} from '../payment-allocation-transaction';
 
 /**
  * 3E2 fix: the gateway Payment.paidAt must derive from the SAME verified
@@ -135,7 +140,7 @@ export class PaymentGatewayService {
     const chargeUpdated = await this.applyPaidEvent(event);
 
     if (chargeUpdated) {
-      await this.idempotencyService.markProcessed(event.eventId, providerName);
+      await this.idempotencyService.cacheProcessed(event.eventId, providerName);
     } else {
       // No durable side effects applied: do not mark processed so the
       // provider retries and the event stays in manual-review visibility.
@@ -236,19 +241,65 @@ export class PaymentGatewayService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.findFirst({
+      const eventLockKey = `webhook:${this.provider?.providerName}:${event.eventId}`;
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${eventLockKey}, 0))`,
+      );
+      const processed = await tx.processedWebhookEvent.findUnique({
+        where: {
+          eventId_provider: {
+            eventId: event.eventId,
+            provider: this.provider!.providerName,
+          },
+        },
+      });
+      if (processed) return true;
+
+      const discoveredPayment = await tx.payment.findFirst({
         where: {
           tenantId: charge.tenantId,
           reference: event.externalId ?? undefined,
         },
-        include: { paymentAllocations: true },
+        select: { id: true },
       });
-
-      if (!payment) {
+      if (!discoveredPayment) {
         this.logger.error(
           `Webhook event ${event.eventId}: no local payment with reference ${event.externalId} for tenant ${charge.tenantId}; manual review required`,
         );
         return false;
+      }
+      const scope = {
+        tenantId: charge.tenantId,
+        buildingId: charge.buildingId,
+        paymentId: discoveredPayment.id,
+        chargeId: charge.id,
+      };
+      await lockPaymentForAllocation(tx, scope);
+      const payment = await tx.payment.findFirst({
+        where: { id: discoveredPayment.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
+        include: { paymentAllocations: true },
+      });
+      if (!payment) return false;
+      await lockChargesForAllocation(tx, charge.tenantId, charge.buildingId, [charge.id]);
+      const lockedCharge = await tx.charge.findFirst({
+        where: { id: charge.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
+        include: {
+          paymentAllocations: {
+            where: { payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } } },
+            select: { amount: true },
+          },
+        },
+      });
+      if (!lockedCharge) return false;
+      const lockedOutstanding = lockedCharge.amount - lockedCharge.paymentAllocations.reduce(
+        (sum, allocation) => sum + allocation.amount,
+        0,
+      );
+      if (verifiedAmount > lockedOutstanding) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_OUTSTANDING',
+        });
       }
 
       if (payment.currency !== event.currency || payment.currency !== charge.currency) {
@@ -280,6 +331,9 @@ export class PaymentGatewayService {
         this.logger.log(
           `Webhook event ${event.eventId}: allocation for payment ${payment.id} / charge ${charge.id} already exists`,
         );
+        await tx.processedWebhookEvent.create({
+          data: { eventId: event.eventId, provider: this.provider!.providerName },
+        });
         return true;
       }
 
@@ -295,7 +349,6 @@ export class PaymentGatewayService {
         });
       }
 
-      let effectivePaymentStatus = payment.status;
       if (payment.status === 'SUBMITTED') {
         const snapshotData = await this.gatewayPaymentSnapshot(
           tx,
@@ -313,7 +366,6 @@ export class PaymentGatewayService {
             ...snapshotData,
           },
         });
-        effectivePaymentStatus = 'APPROVED';
       } else if (payment.status === 'APPROVED' || payment.status === 'RECONCILED') {
         await tx.payment.update({
           where: { id: payment.id },
@@ -326,21 +378,10 @@ export class PaymentGatewayService {
         return false;
       }
 
-      await tx.paymentAllocation.create({
-        data: {
-          tenantId: charge.tenantId,
-          paymentId: payment.id,
-          chargeId: charge.id,
-          amount: verifiedAmount,
-          paymentOriginalAmountMinor: verifiedAmount,
-        },
+      await createLockedAllocation(tx, scope, verifiedAmount);
+      await tx.processedWebhookEvent.create({
+        data: { eventId: event.eventId, provider: this.provider!.providerName },
       });
-
-      await this.recalculateChargeStatus(tx, charge.id);
-
-      if (effectivePaymentStatus === 'APPROVED') {
-        await this.reconcilePaymentIfAllPaid(tx, payment.id);
-      }
 
       return true;
     });

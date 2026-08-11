@@ -14,6 +14,12 @@ import {
   classifyFunctionalSnapshot,
   type FunctionalSnapshotFields,
 } from './functional-snapshot';
+import {
+  createLockedAllocation,
+  lockChargesForAllocation,
+  lockPaymentForAllocation,
+  reconcilePaymentWhenConsumed,
+} from './payment-allocation-transaction';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
@@ -814,8 +820,32 @@ export class FinanzasService {
             ...(submitSnapshot ?? {}),
           },
         });
+        await lockPaymentForAllocation(tx, {
+          tenantId,
+          buildingId,
+          paymentId: payment.id,
+        });
+        await lockChargesForAllocation(
+          tx,
+          tenantId,
+          buildingId,
+          canonicalSelection.map(({ charge }) => charge.id),
+        );
+        const lockedSelection = this.validateCanonicalResidentChargeSelection(
+          await this.loadResidentChargeSelection(tx, tenantId, buildingId, dto.unitId!),
+          requestedChargeIds,
+        );
+        const lockedAmount = lockedSelection.reduce(
+          (sum, item) => sum + item.approvedOutstanding,
+          0,
+        );
+        if (lockedAmount !== calculatedAmount) {
+          throw new ConflictException(
+            'El monto ya no coincide con la deuda actual. Actualiza la información e inténtalo nuevamente.',
+          );
+        }
 
-        for (const selection of canonicalSelection) {
+        for (const selection of lockedSelection) {
           await tx.paymentAllocation.create({
             data: {
               tenantId,
@@ -1166,244 +1196,28 @@ export class FinanzasService {
       buildingId,
     );
 
-    // 3. Validate payment and charge (outside transaction for initial validation)
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: dto.paymentId,
-        tenantId,
-        buildingId,
-      },
-      include: {
-        paymentAllocations: {
-          include: {
-            charge: { select: { currency: true } },
-          },
-        },
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // 3.5. Validate payment is in valid status for allocation
-    if (
-      payment.status !== PaymentStatus.APPROVED &&
-      payment.status !== PaymentStatus.RECONCILED
-    ) {
-      throw new ConflictException(
-        `Cannot allocate payment in status ${payment.status}. Payment must be APPROVED or RECONCILED.`,
-      );
-    }
-
-    const charge = await this.prisma.charge.findFirst({
-      where: {
-        id: dto.chargeId,
-        tenantId,
-        buildingId,
-      },
-    });
-
-    if (!charge) {
-      throw new NotFoundException(
-        `Charge not found or does not belong to this building/tenant`,
-      );
-    }
-
-    // 3E3: allocation amount is ALWAYS expressed in Charge.currency.
-    // Same-currency: legacy behavior. Cross-currency is supported only when
-    // the Payment has a COMPLETE frozen snapshot whose functionalCurrencyCode
-    // equals Charge.currency — the frozen snapshot is the historical truth,
-    // never a new rate lookup.
-    const sameCurrency = payment.currency === charge.currency;
-    let originalShare: number | null;
-
-    if (!sameCurrency) {
-      const state = classifyFunctionalSnapshot(payment);
-
-      if (state === 'LEGACY_NULL') {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED',
-          message: 'El pago no posee snapshot funcional; no se puede asignar en otra moneda',
-        });
-      }
-
-      if (state === 'PARTIAL_INVALID') {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
-          message: 'El pago posee un snapshot funcional incompleto o incoherente',
-        });
-      }
-
-      if (payment.functionalCurrencyCode !== charge.currency) {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
-          message: `La moneda funcional del pago (${payment.functionalCurrencyCode}) no coincide con la moneda del cargo (${charge.currency})`,
-        });
-      }
-
-      if (payment.functionalAmountMinor === null) {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID',
-          message: 'El pago no posee monto funcional congelado',
-        });
-      }
-
-      // Functional consumption counts only allocations expressed in the
-      // payment's frozen functional currency (cross-currency shares).
-      const functionalConsumed = payment.paymentAllocations.reduce(
-        (sum, allocation) =>
-          allocation.charge?.currency === payment.functionalCurrencyCode
-            ? sum + allocation.amount
-            : sum,
-        0,
-      );
-      const functionalRemaining =
-        payment.functionalAmountMinor - functionalConsumed;
-
-      // Original consumption: same-currency allocations consume their amount;
-      // cross-currency allocations consume their frozen original share.
-      // Legacy NULL shares fall back to amount only for same-currency pairs.
-      const originalConsumed = payment.paymentAllocations.reduce(
-        (sum, allocation) => {
-          const isSameCurrencyAllocation =
-            allocation.charge?.currency === payment.currency;
-          return (
-            sum +
-            (allocation.paymentOriginalAmountMinor !== null
-              ? allocation.paymentOriginalAmountMinor
-              : isSameCurrencyAllocation
-                ? allocation.amount
-                : 0)
-          );
-        },
-        0,
-      );
-      const originalRemaining = payment.amount - originalConsumed;
-
-      // The cross-currency allocation consumes BOTH sides proportionally:
-      // never more functional than the frozen snapshot, and never more
-      // original than what is still backed by the remaining original.
-      // A full functional consumption (dto.amount == functionalRemaining)
-      // closes exactly with the full original remainder — no drift.
-      const originalBackedFunctional = new Prisma.Decimal(originalRemaining)
-        .mul(payment.functionalAmountMinor)
-        .div(payment.amount)
-        .toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN)
-        .toNumber();
-      const crossAvailable = Math.min(functionalRemaining, originalBackedFunctional);
-
-      if (dto.amount > functionalRemaining) {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED',
-          message: 'La asignación supera el monto funcional disponible del pago',
-        });
-      }
-
-      if (dto.amount !== functionalRemaining && dto.amount > crossAvailable) {
-        throw new UnprocessableEntityException({
-          statusCode: 422,
-          error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED',
-          message: 'La asignación supera el valor funcional respaldado disponible del pago',
-        });
-      }
-
-      // Deterministic proportional original share (exact decimal, HALF_EVEN);
-      // a full functional consumption consumes the exact original remainder.
-      if (dto.amount === functionalRemaining || functionalRemaining === 0) {
-        originalShare = originalRemaining;
-      } else {
-        originalShare = new Prisma.Decimal(originalRemaining)
-          .mul(dto.amount)
-          .div(functionalRemaining)
-          .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_EVEN)
-          .toNumber();
-        if (originalShare > originalRemaining) {
-          originalShare = originalRemaining;
-        }
-      }
-    } else {
-      // New same-currency allocations carry the explicit original share.
-      originalShare = dto.amount;
-    }
-
-    if (!payment.unitId) {
-      throw new ConflictException(
-        'Payment must belong to a unit to create allocations in canonical order.',
-      );
-    }
-
-    // 5. Validate allocation amount doesn't exceed charge amount
-    if (dto.amount > charge.amount) {
-      throw new ConflictException(
-        `Allocation amount (${dto.amount}) cannot exceed charge amount (${charge.amount})`,
-      );
-    }
-
-    const selectableCharges = await this.loadResidentChargeSelection(
-      this.prisma as Prisma.TransactionClient,
-      tenantId,
-      buildingId,
-      payment.unitId,
-    );
-    const expectedCharge = selectableCharges[0];
-    if (!expectedCharge || expectedCharge.charge.id !== charge.id) {
-      throw new ConflictException(
-        'Solo puedes asignar pagos completos siguiendo la obligación más antigua pendiente.',
-      );
-    }
-
-    if (sameCurrency && dto.amount !== expectedCharge.approvedOutstanding) {
-      throw new ConflictException(
-        'Cada período debe pagarse completamente.',
-      );
-    }
-
-    if (!sameCurrency && dto.amount > expectedCharge.approvedOutstanding) {
-      throw new ConflictException(
-        'La asignación supera el saldo pendiente del cargo.',
-      );
-    }
-
-    // 6. Check for duplicate allocation
-    const existing = await this.prisma.paymentAllocation.findFirst({
-      where: {
-        tenantId,
-        paymentId: dto.paymentId,
-        chargeId: dto.chargeId,
-      },
-    });
-
-    if (existing) {
-      throw new ConflictException(
-        `Allocation already exists for this payment/charge pair`,
-      );
-    }
-
-    // 7. Create allocation + recalculate status within transaction
     return this.prisma.$transaction(async (tx) => {
-      const allocation = await tx.paymentAllocation.create({
-        data: {
-          tenantId,
-          paymentId: dto.paymentId,
-          chargeId: dto.chargeId,
-          amount: dto.amount,
-          paymentOriginalAmountMinor: originalShare,
-        },
+      const scope = { tenantId, buildingId, paymentId: dto.paymentId, chargeId: dto.chargeId };
+      await lockPaymentForAllocation(tx, scope);
+      const payment = await tx.payment.findFirst({
+        where: { id: dto.paymentId, tenantId, buildingId },
+        select: { unitId: true, currency: true },
       });
-
-      // Recalculate charge status within transaction
-      await this.recalculateChargeStatus(dto.chargeId, tx);
-
-      // Attempt to reconcile payment if all charges are PAID
-      await this.tryReconcilePayment(dto.paymentId, tx);
+      if (!payment?.unitId) throw new ConflictException('Payment must belong to a unit');
+      await lockChargesForAllocation(tx, tenantId, buildingId, [dto.chargeId]);
+      const selectableCharges = await this.loadResidentChargeSelection(
+        tx, tenantId, buildingId, payment.unitId,
+      );
+      const expectedCharge = selectableCharges[0];
+      if (!expectedCharge || expectedCharge.charge.id !== dto.chargeId) {
+        throw new ConflictException('Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.');
+      }
+      if (payment.currency === expectedCharge.charge.currency
+        ? dto.amount !== expectedCharge.approvedOutstanding
+        : dto.amount > expectedCharge.approvedOutstanding) {
+        throw new ConflictException('La asignación supera o no completa el saldo pendiente del cargo.');
+      }
+      const allocation = await createLockedAllocation(tx, scope, dto.amount);
 
       // Audit: PAYMENT_ALLOCATE
       void this.auditService.createLog({
@@ -1899,8 +1713,8 @@ export class FinanzasService {
       selectedUnitId,
     );
 
-    for (const chargeId of selectedChargeIds) {
-      await this.lockChargeForApproval(tx, chargeId);
+    for (const chargeId of [...selectedChargeIds].sort()) {
+      await this.lockChargeForApproval(tx, tenantId, buildingId, chargeId);
     }
 
     const selectableCharges = await this.loadResidentChargeSelection(
@@ -1955,9 +1769,13 @@ export class FinanzasService {
 
   private async lockChargeForApproval(
     tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
     chargeId: string,
   ): Promise<void> {
-    await tx.$queryRaw(Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} FOR UPDATE`);
+    await tx.$queryRaw(
+      Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
+    );
   }
 
   private async lockSubmittedPaymentForApproval(
@@ -3099,48 +2917,10 @@ export class FinanzasService {
     paymentId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    const client = tx ?? this.prisma;
-
-    const payment = await client.payment.findUnique({
-      where: { id: paymentId },
-      include: {
-        paymentAllocations: {
-          include: {
-            charge: true,
-          },
-        },
-      },
-    });
-
-    if (!payment || payment.status !== PaymentStatus.APPROVED) {
-      return;
-    }
-
-    // 3E2: an APPROVED payment may reach RECONCILED only with a COMPLETE
-    // snapshot or as historical legacy (ALL snapshot fields NULL). A partial
-    // snapshot is corruption and blocks reconciliation.
-    const snapshotState = classifyFunctionalSnapshot(payment);
-    if (snapshotState === 'PARTIAL_INVALID') {
-      this.logger.error(
-        `Payment ${paymentId} has a partial functional snapshot; RECONCILED blocked`,
-      );
-      return;
-    }
-
-    // Check if all allocated charges are fully paid
-    const allPaid = payment.paymentAllocations.every(
-      (alloc) => alloc.charge.status === ChargeStatus.PAID,
+    await reconcilePaymentWhenConsumed(
+      (tx ?? this.prisma) as Prisma.TransactionClient,
+      paymentId,
     );
-
-    if (allPaid && payment.paymentAllocations.length > 0) {
-      await client.payment.update({
-        where: { id: paymentId },
-        data: {
-          status: PaymentStatus.RECONCILED,
-          updatedAt: new Date(),
-        },
-      });
-    }
   }
 
   // ============================================================================

@@ -22,6 +22,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
   let mockIdempotencyService: any;
   let mockConversion: any;
   let createdAllocations: Array<{ amount: number }>;
+  let currentPayment: ReturnType<typeof payment>;
 
   const charge = (overrides: Record<string, unknown> = {}) => ({
     id: 'charge-1',
@@ -63,6 +64,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
 
   beforeEach(() => {
     createdAllocations = [];
+    currentPayment = payment();
     mockProvider = {
       providerName: 'mercadopago',
       createPreference: jest.fn(),
@@ -77,23 +79,49 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
         findFirst: jest.fn(() =>
           Promise.resolve(charge({ paymentAllocations: [...createdAllocations] })),
         ),
+        findUnique: jest.fn(() =>
+          Promise.resolve(charge({
+            paymentAllocations: createdAllocations.map((allocation) => ({
+              ...allocation,
+              payment: { status: currentPayment.status },
+            })),
+          })),
+        ),
         update: jest.fn(),
       },
       payment: {
-        findFirst: jest.fn(() => Promise.resolve(payment())),
-        update: jest.fn(),
+        findFirst: jest.fn(() => Promise.resolve(currentPayment)),
+        findUnique: jest.fn(() => Promise.resolve(currentPayment)),
+        update: jest.fn(({ data }: { data: Record<string, unknown> }) => {
+          currentPayment = { ...currentPayment, ...data };
+          return Promise.resolve(currentPayment);
+        }),
       },
       paymentAllocation: {
         create: jest.fn(({ data }: { data: { amount: number } }) => {
           createdAllocations.push({ amount: data.amount });
+          currentPayment = {
+            ...currentPayment,
+            paymentAllocations: [
+              ...currentPayment.paymentAllocations,
+              { ...data, charge: { currency: 'ARS', status: 'PAID' } },
+            ],
+          };
           return Promise.resolve({ id: 'alloc-1', ...data });
         }),
       },
+      processedWebhookEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'processed-1' }),
+      },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
       $transaction: jest.fn((callback: (client: unknown) => unknown) => callback(mockPrisma)),
     };
     mockIdempotencyService = {
       isProcessed: jest.fn().mockResolvedValue(false),
       markProcessed: jest.fn().mockResolvedValue(undefined),
+      cacheProcessed: jest.fn().mockResolvedValue(undefined),
     };
     mockConversion = {
       convert: jest.fn().mockResolvedValue({
@@ -156,7 +184,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       expect(paidUpdate).toBeDefined();
       expect((mockPrisma.paymentAllocation.create as jest.Mock).mock.invocationCallOrder[0])
         .toBeLessThan((mockPrisma.charge.update as jest.Mock).mock.invocationCallOrder[0]);
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
+      expect(mockIdempotencyService.cacheProcessed).toHaveBeenCalledWith('evt-1', 'mercadopago');
     });
 
     it('uses the real provider amount, never an inferred outstanding', async () => {
@@ -202,7 +230,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
 
       expect(result.chargeUpdated).toBe(true);
       expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
-      expect(mockIdempotencyService.markProcessed).toHaveBeenCalled();
+      expect(mockIdempotencyService.cacheProcessed).toHaveBeenCalled();
     });
   });
 
@@ -294,7 +322,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       mockPrisma.charge.findFirst.mockImplementation(() =>
         Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
       );
-      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
+      currentPayment = payment({ amount: 4000 });
 
       const result = await run(paidEvent({ amount: 4000 }));
 
@@ -315,7 +343,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       mockPrisma.charge.findFirst.mockImplementation(() =>
         Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
       );
-      mockPrisma.payment.findFirst.mockResolvedValue(payment({ amount: 4000 }));
+      currentPayment = payment({ amount: 4000 });
 
       await run(paidEvent({ amount: 4000 }));
       mockIdempotencyService.isProcessed.mockResolvedValue(true);
@@ -404,12 +432,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
 
     it('an existing COMPLETE snapshot is reused exactly (no reconversion)', async () => {
-      mockPrisma.payment.findFirst.mockResolvedValue(
-        payment({
-          status: 'SUBMITTED',
-          ...completePaymentSnapshot,
-        }),
-      );
+      currentPayment = payment({ status: 'SUBMITTED', ...completePaymentSnapshot });
 
       const result = await run(paidEvent());
 

@@ -646,7 +646,7 @@ describe('FinanzasService', () => {
     });
 
     it('should accept an overdue resident charge as long as it still has outstanding balance', async () => {
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-123',
           tenantId,
@@ -813,7 +813,7 @@ describe('FinanzasService', () => {
 
     it('should allow the same unit and amount when the selected charge is different', async () => {
       jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-456',
           tenantId,
@@ -949,7 +949,7 @@ describe('FinanzasService', () => {
     });
 
     it('should accept a prefix of two consecutive resident obligations and allocate the exact total', async () => {
-      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValueOnce([
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
         {
           id: 'charge-1',
           tenantId,
@@ -1714,10 +1714,18 @@ describe('FinanzasService', () => {
           amount: 10000,
           currency: 'ARS',
           status: PaymentStatus.APPROVED,
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
           paymentAllocations: [
             {
               amount: 10000,
-              charge: { status: ChargeStatus.PAID },
+              paymentOriginalAmountMinor: null,
+              charge: { currency: 'ARS', status: ChargeStatus.PAID },
             },
           ],
         } as any)
@@ -4172,6 +4180,8 @@ describe('FinanzasService', () => {
     it('reconcile allows legacy APPROVED NULL without any rate lookup', async () => {
       jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue({
         id: paymentId,
+        amount: 10000,
+        currency: 'ARS',
         status: PaymentStatus.APPROVED,
         functionalAmountMinor: null,
         functionalCurrencyCode: null,
@@ -4181,7 +4191,7 @@ describe('FinanzasService', () => {
         exchangeRateEffectiveAt: null,
         conversionDate: null,
         paymentAllocations: [
-          { charge: { id: 'charge-123', status: ChargeStatus.PAID }, amount: 10000 },
+          { charge: { id: 'charge-123', currency: 'ARS', status: ChargeStatus.PAID }, amount: 10000, paymentOriginalAmountMinor: null },
         ],
       } as never);
       jest.spyOn(prismaService.payment, 'update').mockResolvedValue({} as never);
@@ -4199,6 +4209,8 @@ describe('FinanzasService', () => {
     it('reconcile blocks a PARTIAL snapshot (no RECONCILED)', async () => {
       jest.spyOn(prismaService.payment, 'findUnique').mockResolvedValue({
         id: paymentId,
+        amount: 10000,
+        currency: 'USD',
         status: PaymentStatus.APPROVED,
         functionalAmountMinor: 36500,
         functionalCurrencyCode: null,
@@ -4208,7 +4220,7 @@ describe('FinanzasService', () => {
         exchangeRateEffectiveAt: null,
         conversionDate: null,
         paymentAllocations: [
-          { charge: { id: 'charge-123', status: ChargeStatus.PAID }, amount: 10000 },
+          { charge: { id: 'charge-123', currency: 'VES', status: ChargeStatus.PAID }, amount: 10000, paymentOriginalAmountMinor: null },
         ],
       } as never);
       jest.spyOn(prismaService.payment, 'update').mockResolvedValue({} as never);
