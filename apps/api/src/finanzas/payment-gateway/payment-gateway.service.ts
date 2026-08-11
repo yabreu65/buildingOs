@@ -37,6 +37,23 @@ import {
   type FunctionalSnapshotFields,
 } from '../functional-snapshot';
 
+/**
+ * 3E2 fix: the gateway Payment.paidAt must derive from the SAME verified
+ * provider economic date used for the FX snapshot (YYYY-MM-DD), never from
+ * server processing time. Returns undefined for malformed days (defense).
+ */
+export function gatewayPaymentDate(day: string | undefined): Date | undefined {
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return undefined;
+  }
+  const date = new Date(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== day) {
+    return undefined;
+  }
+  return date;
+}
+
+
 @Injectable()
 export class PaymentGatewayService {
   private readonly logger = new Logger(PaymentGatewayService.name);
@@ -290,7 +307,7 @@ export class PaymentGatewayService {
           where: { id: payment.id },
           data: {
             status: 'APPROVED',
-            paidAt: new Date(),
+            paidAt: gatewayPaymentDate(event.paidAt),
             paymentEventId: event.eventId,
             updatedAt: new Date(),
             ...snapshotData,
@@ -327,6 +344,7 @@ export class PaymentGatewayService {
       return true;
     });
   }
+
 
 
   /**

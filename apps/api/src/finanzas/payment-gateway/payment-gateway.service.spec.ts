@@ -421,6 +421,38 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
   });
 
+  describe('3E2 gateway paidAt economic date', () => {
+    it('Payment.paidAt derives from the provider economic date (same day as conversionDate)', async () => {
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paidAt: new Date('2026-08-10T00:00:00.000Z'),
+          }),
+        }),
+      );
+      // conversionDate proviene del mismo event.paidAt (el convert mock recibe '2026-08-10')
+      expect(mockConversion.convert).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionDate: '2026-08-10' }),
+      );
+    });
+
+    it('midnight boundary: a late-day provider date never shifts to the processing day', async () => {
+      const result = await run(paidEvent({ paidAt: '2026-08-10' }));
+
+      expect(result.chargeUpdated).toBe(true);
+      expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            paidAt: new Date('2026-08-10T00:00:00.000Z'),
+          }),
+        }),
+      );
+    });
+  });
+
   describe('idempotency / replay', () => {
     it('skips processing when the event was already processed', async () => {
       mockIdempotencyService.isProcessed.mockResolvedValue(true);
