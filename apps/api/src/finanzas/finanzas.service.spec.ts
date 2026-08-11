@@ -3930,6 +3930,61 @@ describe('FinanzasService', () => {
         expect(prismaService.paymentAllocation.create).toHaveBeenCalled();
       });
 
+      it.each(['foreign', 'nonexistent'])('%s payment returns the canonical 404 without mutations', async () => {
+        jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(null);
+
+        await expect(service.createAllocation(
+          'tenant-1',
+          'building-1',
+          ['TENANT_ADMIN'],
+          'member-1',
+          { paymentId: 'payment-1', chargeId: 'charge-1', amount: 10000 },
+        )).rejects.toMatchObject({
+          response: {
+            statusCode: 404,
+            message: 'Payment not found or does not belong to this building/tenant',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+        expect(prismaService.payment.update).not.toHaveBeenCalled();
+      });
+
+      it('keeps the existing 409 when the scoped payment has no unit', async () => {
+        await expect(allocate({ unitId: null }, {})).rejects.toMatchObject({
+          response: {
+            statusCode: 409,
+            message: 'Payment must belong to a unit',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+      });
+
+      it('returns the canonical 404 when the scoped charge lookup cannot see a foreign charge', async () => {
+        jest.spyOn(validators, 'canAllocate').mockReturnValue(true);
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue(basePayment as never);
+        jest.spyOn(prismaService.charge, 'findFirst').mockResolvedValue(null);
+
+        await expect(service.createAllocation(
+          'tenant-1',
+          'building-1',
+          ['TENANT_ADMIN'],
+          'member-1',
+          { paymentId: 'payment-1', chargeId: 'charge-1', amount: 10000 },
+        )).rejects.toMatchObject({
+          response: {
+            statusCode: 404,
+            message: 'Charge not found or does not belong to this building/tenant',
+          },
+        });
+        expect(prismaService.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(prismaService.charge.update).not.toHaveBeenCalled();
+        expect(prismaService.payment.update).not.toHaveBeenCalled();
+      });
+
       it('blocks cross-currency allocation with a legacy-null payment (422 PAYMENT_LEGACY_SNAPSHOT_REQUIRED)', async () => {
         await expect(allocate({ currency: 'VES' }, {})).rejects.toMatchObject({
           response: {

@@ -1203,8 +1203,22 @@ export class FinanzasService {
         where: { id: dto.paymentId, tenantId, buildingId },
         select: { unitId: true, currency: true },
       });
-      if (!payment?.unitId) throw new ConflictException('Payment must belong to a unit');
+      if (!payment) {
+        throw new NotFoundException(
+          'Payment not found or does not belong to this building/tenant',
+        );
+      }
+      if (!payment.unitId) throw new ConflictException('Payment must belong to a unit');
       await lockChargesForAllocation(tx, tenantId, buildingId, [dto.chargeId]);
+      const charge = await tx.charge.findFirst({
+        where: { id: dto.chargeId, tenantId, buildingId },
+        select: { id: true },
+      });
+      if (!charge) {
+        throw new NotFoundException(
+          'Charge not found or does not belong to this building/tenant',
+        );
+      }
       const selectableCharges = await this.loadResidentChargeSelection(
         tx, tenantId, buildingId, payment.unitId,
       );
