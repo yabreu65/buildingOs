@@ -4094,8 +4094,15 @@ describe('FinanzasService', () => {
 
     it('approve on SUBMITTED legacy-null freezes a DIRECT snapshot with the definitive paidAt', async () => {
       approveSetup();
+      const convertSpy = jest.spyOn(CurrencyConversionService.prototype, 'convert');
 
       await approve('2026-08-10');
+
+      expect(convertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionDate: '2026-08-10' }),
+        prismaService,
+      );
+      convertSpy.mockRestore();
 
       expect(prismaService.payment.update).toHaveBeenCalledWith(
         expect.objectContaining({

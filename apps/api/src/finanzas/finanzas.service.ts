@@ -208,17 +208,20 @@ export class FinanzasService {
 
     return buildPaymentFunctionalSnapshot(
       (input) =>
-        this.currencyConversionService.convert({
-          tenantId: input.tenantId,
-          amount: input.amount,
-          originalCurrency: input.originalCurrency as Parameters<
-            typeof this.currencyConversionService.convert
-          >[0]['originalCurrency'],
-          functionalCurrency: input.functionalCurrency as Parameters<
-            typeof this.currencyConversionService.convert
-          >[0]['functionalCurrency'],
-          conversionDate: input.conversionDate,
-        }),
+        this.currencyConversionService.convert(
+          {
+            tenantId: input.tenantId,
+            amount: input.amount,
+            originalCurrency: input.originalCurrency as Parameters<
+              typeof this.currencyConversionService.convert
+            >[0]['originalCurrency'],
+            functionalCurrency: input.functionalCurrency as Parameters<
+              typeof this.currencyConversionService.convert
+            >[0]['functionalCurrency'],
+            conversionDate: input.conversionDate,
+          },
+          client,
+        ),
       tenantId,
       {
         amountMinor,

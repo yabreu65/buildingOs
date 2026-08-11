@@ -362,6 +362,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       );
       expect(mockConversion.convert).toHaveBeenCalledWith(
         expect.objectContaining({ conversionDate: '2026-08-10' }),
+        mockPrisma,
       );
     });
 
@@ -436,6 +437,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       // conversionDate proviene del mismo event.paidAt (el convert mock recibe '2026-08-10')
       expect(mockConversion.convert).toHaveBeenCalledWith(
         expect.objectContaining({ conversionDate: '2026-08-10' }),
+        mockPrisma,
       );
     });
 
