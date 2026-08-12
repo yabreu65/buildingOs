@@ -566,4 +566,65 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
       .resolves.toMatchObject({ status: PaymentStatus.RECONCILED });
   });
+
+  it.each([
+    { label: 'LEGACY_NULL', snapshotData: {
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null,
+    } },
+    { label: 'PARTIAL_INVALID', snapshotData: {
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: null,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } },
+  ])('commits a CROSS delete when the remaining snapshot is $label (no invented capacity)', async ({ snapshotData }) => {
+    const ctx = await fixture(`delete-${fixturePhase}-cross-snapshot`);
+    const rate = await observer.exchangeRate.create({ data: {
+      tenantId: ctx.tenant.id, baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5',
+      effectiveAt: new Date('2026-08-08T00:00:00.000Z'), source: `${fixturePhase} PostgreSQL snapshot delete`,
+    } });
+    const payment = await observer.payment.create({ data: {
+      ...ctx.paymentData, currency: 'USD', status: PaymentStatus.RECONCILED,
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: rate.id,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } });
+    const charges = await Promise.all([
+      observer.charge.create({ data: { ...ctx.chargeData, amount: 100000, currency: 'VES', status: ChargeStatus.PAID } }),
+      observer.charge.create({ data: {
+        ...ctx.chargeData, period: '2026-09', concept: 'snapshot-delete-2',
+        amount: 265000, currency: 'VES', status: ChargeStatus.PAID,
+      } }),
+    ]);
+    const allocations = await Promise.all(charges.map((charge, index) => observer.paymentAllocation.create({ data: {
+      tenantId: ctx.tenant.id, paymentId: payment.id, chargeId: charge.id,
+      amount: charge.amount, paymentOriginalAmountMinor: index === 0 ? 2740 : 7260,
+    } })));
+
+    await observer.payment.update({ where: { id: payment.id }, data: snapshotData });
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[0].id,
+    ));
+
+    const [remaining, persistedPayment, deletedCharge] = await Promise.all([
+      observer.paymentAllocation.findMany({ where: { paymentId: payment.id } }),
+      observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: charges[0].id } }),
+    ]);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ id: allocations[1].id, paymentOriginalAmountMinor: 7260 });
+    expect(persistedPayment.status).toBe(PaymentStatus.APPROVED);
+    expect(deletedCharge.status).toBe(ChargeStatus.PENDING);
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[1].id,
+    ));
+    await expect(observer.paymentAllocation.count({ where: { paymentId: payment.id } })).resolves.toBe(0);
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.APPROVED });
+  });
 });

@@ -52,6 +52,11 @@ export interface PaymentSideAllocationAggregate {
 export type PaymentSideAllocationClassification =
   | { readonly kind: 'MIXED'; readonly aggregate: null }
   | { readonly kind: 'UNRESOLVED_LEGACY_CROSS'; readonly aggregate: null }
+  | {
+      readonly kind: 'UNRESOLVED_CROSS_SNAPSHOT';
+      readonly reason: 'LEGACY_NULL' | 'PARTIAL_INVALID' | 'CURRENCY_NOT_SUPPORTED';
+      readonly aggregate: null;
+    }
   | { readonly kind: 'CANONICAL'; readonly aggregate: PaymentSideAllocationAggregate };
 
 interface ChargeAvailabilityAllocation {
@@ -110,10 +115,10 @@ export function classifyPaymentSideAllocations(
   if (mode === 'CROSS') {
     const snapshotState = classifyFunctionalSnapshot(payment);
     if (snapshotState === 'LEGACY_NULL') {
-      throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' });
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'LEGACY_NULL', aggregate: null };
     }
     if (snapshotState !== 'COMPLETE') {
-      throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID' });
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'PARTIAL_INVALID', aggregate: null };
     }
     const functionalCurrencyCode = payment.functionalCurrencyCode;
     const functionalAmountMinor = payment.functionalAmountMinor;
@@ -126,7 +131,7 @@ export function classifyPaymentSideAllocations(
         (allocation) => allocation.charge.currency !== functionalCurrencyCode,
       )
     ) {
-      throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED' });
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'CURRENCY_NOT_SUPPORTED', aggregate: null };
     }
     functionalConsumedMinor = payment.paymentAllocations.reduce(
       (sum, allocation) => sum + allocation.amount,
@@ -169,6 +174,14 @@ export function aggregatePaymentSideAllocations(
   }
   if (classification.kind === 'UNRESOLVED_LEGACY_CROSS') {
     throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' });
+  }
+  if (classification.kind === 'UNRESOLVED_CROSS_SNAPSHOT') {
+    const error = classification.reason === 'LEGACY_NULL'
+      ? 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED'
+      : classification.reason === 'PARTIAL_INVALID'
+        ? 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID'
+        : 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED';
+    throw new UnprocessableEntityException({ statusCode: 422, error });
   }
   return classification.aggregate;
 }

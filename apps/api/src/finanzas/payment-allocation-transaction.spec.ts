@@ -481,4 +481,128 @@ describe('payment allocation transaction semantics', () => {
     });
     expect(create).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { label: 'LEGACY_NULL', snapshot: {
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null,
+    } },
+    { label: 'PARTIAL_INVALID', snapshot: { ...completeSnapshot, exchangeRateId: null } },
+  ])('commits a CROSS delete when the remaining snapshot is $label and downgrades conservatively', async ({ snapshot }) => {
+    const allocations = [
+      { id: 'a', paymentId: 'payment', chargeId: 'charge-a', amount: 100000,
+        paymentOriginalAmountMinor: 2740, charge: { currency: 'VES', status: ChargeStatus.PAID } },
+      { id: 'b', paymentId: 'payment', chargeId: 'charge-b', amount: 100000,
+        paymentOriginalAmountMinor: 2740, charge: { currency: 'VES', status: ChargeStatus.PAID } },
+    ];
+    let paymentStatus = PaymentStatus.RECONCILED;
+    const update = jest.fn().mockImplementation(async ({ data }: { data: { status: PaymentStatus } }) => {
+      paymentStatus = data.status;
+    });
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      paymentAllocation: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          const allocation = allocations.find((item) => item.id === where.id);
+          return allocation && (where.payment === undefined
+            ? { paymentId: allocation.paymentId, chargeId: allocation.chargeId }
+            : { id: allocation.id, paymentId: allocation.paymentId, chargeId: allocation.chargeId,
+                amount: allocation.amount });
+        }),
+        deleteMany: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          const index = allocations.findIndex((item) => item.id === where.id);
+          if (index < 0) return { count: 0 };
+          allocations.splice(index, 1);
+          return { count: 1 };
+        }),
+      },
+      charge: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'charge-a', amount: 100000, status: ChargeStatus.PAID, paymentAllocations: [],
+        }),
+        update: jest.fn(),
+      },
+      payment: {
+        findUnique: jest.fn().mockImplementation(async () => ({
+          id: 'payment', amount: 10000, currency: 'USD', status: paymentStatus, ...snapshot,
+          paymentAllocations: allocations,
+        })),
+        update,
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(deleteLockedAllocation(tx, 'tenant', 'building', 'a')).resolves.toEqual({
+      id: 'a', paymentId: 'payment', chargeId: 'charge-a', amount: 100000,
+    });
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]).toMatchObject({ id: 'b' });
+    expect(paymentStatus).toBe(PaymentStatus.APPROVED);
+  });
+
+  it('resumes canonical reconciliation once the last unresolved-snapshot CROSS row is deleted', async () => {
+    const known = { id: 'known', paymentId: 'payment', chargeId: 'known-charge', amount: 365000,
+      paymentOriginalAmountMinor: 10000, charge: { currency: 'VES', status: ChargeStatus.PAID } };
+    const stale = { id: 'stale', paymentId: 'payment', chargeId: 'stale-charge', amount: 100000,
+      paymentOriginalAmountMinor: 2740, charge: { currency: 'VES', status: ChargeStatus.PAID } };
+    const allocations = [known, stale];
+    let paymentStatus = PaymentStatus.RECONCILED;
+    const update = jest.fn().mockImplementation(async ({ data }: { data: { status: PaymentStatus } }) => {
+      paymentStatus = data.status;
+    });
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      paymentAllocation: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          const allocation = allocations.find((item) => item.id === where.id);
+          return allocation && (where.payment === undefined
+            ? { paymentId: allocation.paymentId, chargeId: allocation.chargeId }
+            : { id: allocation.id, paymentId: allocation.paymentId, chargeId: allocation.chargeId,
+                amount: allocation.amount });
+        }),
+        deleteMany: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          const index = allocations.findIndex((item) => item.id === where.id);
+          if (index < 0) return { count: 0 };
+          allocations.splice(index, 1);
+          return { count: 1 };
+        }),
+      },
+      charge: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'stale-charge', amount: 100000, status: ChargeStatus.PAID, paymentAllocations: [],
+        }),
+        update: jest.fn(),
+      },
+      payment: {
+        findUnique: jest.fn().mockImplementation(async () => ({
+          id: 'payment', amount: 10000, currency: 'USD', status: paymentStatus, ...completeSnapshot,
+          paymentAllocations: allocations,
+        })),
+        update,
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'stale');
+    expect(allocations).toHaveLength(1);
+    expect(paymentStatus).toBe(PaymentStatus.RECONCILED);
+    expect(aggregatePaymentSideAllocations({
+      id: 'payment', amount: 10000, currency: 'USD', ...completeSnapshot,
+      paymentAllocations: allocations,
+    })).toMatchObject({ mode: 'CROSS', originalRemainingMinor: 0, functionalRemainingMinor: 0 });
+  });
+
+  it.each([
+    { label: 'LEGACY_NULL', snapshot: {
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null,
+    }, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+    { label: 'PARTIAL_INVALID', snapshot: { ...completeSnapshot, exchangeRateId: null },
+      error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID' },
+  ])('strict aggregation still fails closed for CROSS with $label snapshot', async ({ snapshot, error }) => {
+    expect(() => aggregatePaymentSideAllocations({
+      id: 'payment', amount: 10000, currency: 'USD', ...snapshot,
+      paymentAllocations: [{ amount: 100000, paymentOriginalAmountMinor: 2740, charge: { currency: 'VES' } }],
+    })).toThrow(expect.objectContaining({ response: { statusCode: 422, error } }));
+  });
 });
