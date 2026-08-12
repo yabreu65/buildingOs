@@ -23,6 +23,42 @@ interface AllocationChargeCurrency {
   readonly charge: { readonly currency: string };
 }
 
+interface PaymentSideAllocation extends AllocationChargeCurrency {
+  readonly amount: number;
+  readonly paymentOriginalAmountMinor: number | null;
+}
+
+interface PaymentSideAggregateInput {
+  readonly amount: number;
+  readonly currency: string;
+  readonly functionalAmountMinor: number | null;
+  readonly functionalCurrencyCode: string | null;
+  readonly exchangeRateId: string | null;
+  readonly exchangeRateValue: Prisma.Decimal | null;
+  readonly exchangeRateDirection: string | null;
+  readonly exchangeRateEffectiveAt: Date | null;
+  readonly conversionDate: Date | null;
+  readonly paymentAllocations: readonly PaymentSideAllocation[];
+}
+
+export interface PaymentSideAllocationAggregate {
+  readonly mode: PaymentAllocationCurrencyMode;
+  readonly originalConsumedMinor: number;
+  readonly originalRemainingMinor: number;
+  readonly functionalConsumedMinor: number | null;
+  readonly functionalRemainingMinor: number | null;
+}
+
+export type PaymentSideAllocationClassification =
+  | { readonly kind: 'MIXED'; readonly aggregate: null }
+  | { readonly kind: 'UNRESOLVED_LEGACY_CROSS'; readonly aggregate: null }
+  | {
+      readonly kind: 'UNRESOLVED_CROSS_SNAPSHOT';
+      readonly reason: 'LEGACY_NULL' | 'PARTIAL_INVALID' | 'CURRENCY_NOT_SUPPORTED';
+      readonly aggregate: null;
+    }
+  | { readonly kind: 'CANONICAL'; readonly aggregate: PaymentSideAllocationAggregate };
+
 interface ChargeAvailabilityAllocation {
   readonly amount: number;
   readonly payment: { readonly id?: string; readonly status: PaymentStatus };
@@ -56,6 +92,98 @@ export function assertPaymentAllocationCurrencyMode(
   if (hasSame) return 'SAME';
   if (hasCross) return 'CROSS';
   return null;
+}
+
+export function classifyPaymentSideAllocations(
+  payment: PaymentSideAggregateInput,
+  candidateChargeCurrency?: string,
+): PaymentSideAllocationClassification {
+  const currencies = candidateChargeCurrency === undefined
+    ? payment.paymentAllocations.map((allocation) => allocation.charge.currency)
+    : [...payment.paymentAllocations.map((allocation) => allocation.charge.currency), candidateChargeCurrency];
+  const hasSame = currencies.some((currency) => currency === payment.currency);
+  const hasCross = currencies.some((currency) => currency !== payment.currency);
+  if (hasSame && hasCross) return { kind: 'MIXED', aggregate: null };
+  const mode: PaymentAllocationCurrencyMode = hasSame ? 'SAME' : hasCross ? 'CROSS' : null;
+  const hasUnresolvedLegacyCross = payment.paymentAllocations.some(
+    (allocation) => allocation.paymentOriginalAmountMinor === null &&
+      allocation.charge.currency !== payment.currency,
+  );
+  if (hasUnresolvedLegacyCross) return { kind: 'UNRESOLVED_LEGACY_CROSS', aggregate: null };
+  let functionalConsumedMinor: number | null = null;
+
+  if (mode === 'CROSS') {
+    const snapshotState = classifyFunctionalSnapshot(payment);
+    if (snapshotState === 'LEGACY_NULL') {
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'LEGACY_NULL', aggregate: null };
+    }
+    if (snapshotState !== 'COMPLETE') {
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'PARTIAL_INVALID', aggregate: null };
+    }
+    const functionalCurrencyCode = payment.functionalCurrencyCode;
+    const functionalAmountMinor = payment.functionalAmountMinor;
+    if (
+      functionalCurrencyCode === null ||
+      functionalAmountMinor === null ||
+      functionalCurrencyCode === payment.currency ||
+      (candidateChargeCurrency !== undefined && candidateChargeCurrency !== functionalCurrencyCode) ||
+      payment.paymentAllocations.some(
+        (allocation) => allocation.charge.currency !== functionalCurrencyCode,
+      )
+    ) {
+      return { kind: 'UNRESOLVED_CROSS_SNAPSHOT', reason: 'CURRENCY_NOT_SUPPORTED', aggregate: null };
+    }
+    functionalConsumedMinor = payment.paymentAllocations.reduce(
+      (sum, allocation) => sum + allocation.amount,
+      0,
+    );
+  }
+
+  const originalConsumedMinor = payment.paymentAllocations.reduce((sum, allocation) => {
+    if (allocation.paymentOriginalAmountMinor !== null) {
+      return sum + allocation.paymentOriginalAmountMinor;
+    }
+    if (allocation.charge.currency === payment.currency) return sum + allocation.amount;
+    return sum;
+  }, 0);
+
+  return {
+    kind: 'CANONICAL',
+    aggregate: {
+      mode,
+      originalConsumedMinor,
+      originalRemainingMinor: payment.amount - originalConsumedMinor,
+      functionalConsumedMinor,
+      functionalRemainingMinor: functionalConsumedMinor === null || payment.functionalAmountMinor === null
+        ? null
+        : payment.functionalAmountMinor - functionalConsumedMinor,
+    },
+  };
+}
+
+export function aggregatePaymentSideAllocations(
+  payment: PaymentSideAggregateInput,
+  candidateChargeCurrency?: string,
+): PaymentSideAllocationAggregate {
+  const classification = classifyPaymentSideAllocations(payment, candidateChargeCurrency);
+  if (classification.kind === 'MIXED') {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+    });
+  }
+  if (classification.kind === 'UNRESOLVED_LEGACY_CROSS') {
+    throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' });
+  }
+  if (classification.kind === 'UNRESOLVED_CROSS_SNAPSHOT') {
+    const error = classification.reason === 'LEGACY_NULL'
+      ? 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED'
+      : classification.reason === 'PARTIAL_INVALID'
+        ? 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID'
+        : 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED';
+    throw new UnprocessableEntityException({ statusCode: 422, error });
+  }
+  return classification.aggregate;
 }
 
 export async function lockPaymentForAllocation(
@@ -174,35 +302,15 @@ export async function reconcilePaymentWhenConsumed(
     !payment ||
     (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED)
   ) return;
-  const allocationMode = assertPaymentAllocationCurrencyMode(
-    payment.currency,
-    payment.paymentAllocations,
-  );
-  const snapshotState = classifyFunctionalSnapshot(payment);
-  if (snapshotState === 'PARTIAL_INVALID') return;
-
-  let originalConsumed = 0;
-  let functionalConsumed = 0;
-  for (const allocation of payment.paymentAllocations) {
-    const sameCurrency = allocation.charge.currency === payment.currency;
-    if (allocation.paymentOriginalAmountMinor !== null) {
-      originalConsumed += allocation.paymentOriginalAmountMinor;
-    } else if (sameCurrency) {
-      originalConsumed += allocation.amount;
-    }
-    if (!sameCurrency && allocation.charge.currency === payment.functionalCurrencyCode) {
-      functionalConsumed += allocation.amount;
-    }
-  }
+  if (classifyFunctionalSnapshot(payment) === 'PARTIAL_INVALID') return;
+  const aggregate = aggregatePaymentSideAllocations(payment);
 
   const allPaid = payment.paymentAllocations.every(
     (allocation) => allocation.charge.status === ChargeStatus.PAID,
   );
-  const completelyConsumed = allocationMode === 'CROSS'
-    ? snapshotState === 'COMPLETE' &&
-      originalConsumed === payment.amount &&
-      functionalConsumed === payment.functionalAmountMinor
-    : allocationMode === 'SAME' && originalConsumed === payment.amount;
+  const completelyConsumed = aggregate.mode === 'CROSS'
+    ? aggregate.originalRemainingMinor === 0 && aggregate.functionalRemainingMinor === 0
+    : aggregate.mode === 'SAME' && aggregate.originalRemainingMinor === 0;
   const nextStatus = allPaid && completelyConsumed
     ? PaymentStatus.RECONCILED
     : PaymentStatus.APPROVED;
@@ -210,6 +318,34 @@ export async function reconcilePaymentWhenConsumed(
     await tx.payment.update({
       where: { id: paymentId },
       data: { status: nextStatus, updatedAt: new Date() },
+    });
+  }
+}
+
+async function reconcilePaymentAfterAllocationDelete(
+  tx: Prisma.TransactionClient,
+  paymentId: string,
+): Promise<void> {
+  const payment = await tx.payment.findUnique({
+    where: { id: paymentId },
+    include: {
+      paymentAllocations: { include: { charge: { select: { currency: true, status: true } } } },
+    },
+  });
+  if (
+    !payment ||
+    (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED)
+  ) return;
+
+  const classification = classifyPaymentSideAllocations(payment);
+  if (classification.kind === 'CANONICAL') {
+    await reconcilePaymentWhenConsumed(tx, paymentId);
+    return;
+  }
+  if (payment.status === PaymentStatus.RECONCILED) {
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: { status: PaymentStatus.APPROVED, updatedAt: new Date() },
     });
   }
 }
@@ -243,7 +379,7 @@ export async function deleteLockedAllocation(
   const deleted = await tx.paymentAllocation.deleteMany({ where: { id: allocationId, tenantId } });
   if (deleted.count !== 1) throw notFound();
   await recalculateLockedCharge(tx, allocation.chargeId);
-  await reconcilePaymentWhenConsumed(tx, allocation.paymentId);
+  await reconcilePaymentAfterAllocationDelete(tx, allocation.paymentId);
   return allocation;
 }
 
@@ -257,12 +393,6 @@ export async function createLockedAllocation(
   await lockChargesForAllocation(tx, scope.tenantId, scope.buildingId, [scope.chargeId]);
   const charge = await loadLockedCharge(tx, scope);
 
-  assertPaymentAllocationCurrencyMode(
-    payment.currency,
-    payment.paymentAllocations,
-    charge.currency,
-  );
-
   if (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED) {
     throw new ConflictException(`Cannot allocate payment in status ${payment.status}`);
   }
@@ -270,38 +400,22 @@ export async function createLockedAllocation(
     throw new ConflictException('Allocation already exists for this payment/charge pair');
   }
 
-  const originalConsumed = payment.paymentAllocations.reduce((sum, allocation) => {
-    if (allocation.paymentOriginalAmountMinor !== null) return sum + allocation.paymentOriginalAmountMinor;
-    return allocation.charge.currency === payment.currency ? sum + allocation.amount : sum;
-  }, 0);
+  const aggregate = aggregatePaymentSideAllocations(payment, charge.currency);
+  const originalConsumed = aggregate.originalConsumedMinor;
   if (originalConsumed > payment.amount) {
     throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_ORIGINAL_AMOUNT_EXCEEDED' });
   }
   const sameCurrency = payment.currency === charge.currency;
   let originalShare = amount;
   if (!sameCurrency) {
-    const snapshotState = classifyFunctionalSnapshot(payment);
-    if (snapshotState === 'LEGACY_NULL') {
-      throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' });
-    }
-    if (snapshotState !== 'COMPLETE') {
+    const functionalRemaining = aggregate.functionalRemainingMinor;
+    const functionalAmountMinor = payment.functionalAmountMinor;
+    if (functionalRemaining === null || functionalAmountMinor === null) {
       throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_FUNCTIONAL_SNAPSHOT_INVALID' });
     }
-    if (payment.functionalCurrencyCode !== charge.currency || payment.functionalAmountMinor === null) {
-      throw new UnprocessableEntityException({ statusCode: 422, error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED' });
-    }
-    const functionalConsumed = payment.paymentAllocations.reduce(
-      (sum, allocation) =>
-        allocation.charge.currency === payment.functionalCurrencyCode &&
-        allocation.charge.currency !== payment.currency
-          ? sum + allocation.amount
-          : sum,
-      0,
-    );
-    const functionalRemaining = payment.functionalAmountMinor - functionalConsumed;
     const originalRemaining = payment.amount - originalConsumed;
     const originalBackedFunctional = new Prisma.Decimal(originalRemaining)
-      .mul(payment.functionalAmountMinor)
+      .mul(functionalAmountMinor)
       .div(payment.amount)
       .toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN)
       .toNumber();

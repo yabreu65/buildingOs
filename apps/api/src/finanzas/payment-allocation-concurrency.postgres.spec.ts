@@ -1,9 +1,19 @@
 import { ChargeStatus, PaymentMethod, PaymentStatus, PrismaClient, TenantType } from '@prisma/client';
-import { createLockedAllocation, deleteLockedAllocation } from './payment-allocation-transaction';
+import {
+  createLockedAllocation,
+  deleteLockedAllocation,
+} from './payment-allocation-transaction';
 
+const ACCEPTANCE_DATABASES = new Set([
+  'buildingos_3e3_acceptance',
+  'buildingos_3e4_acceptance',
+]);
+const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
+const fixturePhase = expectedDatabaseName === 'buildingos_3e4_acceptance' ? 'qa3e4' : 'qa3e3';
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
-  process.env.POSTGRES_TEST_DB_NAME === 'buildingos_3e3_acceptance';
+  expectedDatabaseName !== undefined &&
+  ACCEPTANCE_DATABASES.has(expectedDatabaseName);
 const describePostgres = enabled ? describe : describe.skip;
 
 describePostgres('Payment allocation PostgreSQL concurrency', () => {
@@ -20,7 +30,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     secondClient = new PrismaClient();
     await Promise.all([observer.$connect(), firstClient.$connect(), secondClient.$connect()]);
     const [database] = await observer.$queryRaw<Array<{ name: string }>>`SELECT current_database() AS name`;
-    if (database?.name !== 'buildingos_3e3_acceptance') {
+    if (database?.name !== expectedDatabaseName || !ACCEPTANCE_DATABASES.has(database.name)) {
       throw new Error(`Refusing destructive test database ${database?.name ?? 'unknown'}`);
     }
   });
@@ -45,13 +55,13 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
   async function fixture(label: string) {
     const suffix = `${Date.now()}-${Math.random()}`;
     const tenant = await observer.tenant.create({
-      data: { name: `3E3 ${label} ${suffix}`, type: TenantType.ADMINISTRADORA },
+      data: { name: `${fixturePhase}-${label}-${suffix}`, type: TenantType.ADMINISTRADORA },
     });
     tenantIds.push(tenant.id);
     const user = await observer.user.create({
       data: {
-        email: `3e3-${suffix}@buildingos.local`,
-        name: '3E3 concurrency',
+        email: `${fixturePhase}-${suffix}@buildingos.local`,
+        name: `${fixturePhase} concurrency`,
         passwordHash: 'test',
       },
     });
@@ -358,6 +368,166 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     expect(restoredTotals._sum.amount).toBe(365000);
   });
 
+  it('rolls back creation when legacy CROSS consumption has no original share', async () => {
+    const ctx = await fixture('legacy-cross-null');
+    const effectiveAt = new Date('2026-08-08T00:00:00.000Z');
+    const rate = await observer.exchangeRate.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        baseCurrency: 'USD',
+        quoteCurrency: 'VES',
+        rate: '36.5',
+        effectiveAt,
+        source: `${fixturePhase} PostgreSQL regression`,
+      },
+    });
+    const payment = await observer.payment.create({
+      data: {
+        ...ctx.paymentData,
+        currency: 'USD',
+        functionalAmountMinor: 365000,
+        functionalCurrencyCode: 'VES',
+        exchangeRateId: rate.id,
+        exchangeRateValue: '36.5',
+        exchangeRateDirection: 'DIRECT',
+        exchangeRateEffectiveAt: effectiveAt,
+        conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+      },
+    });
+    const [legacyCharge, candidateCharge] = await Promise.all([
+      observer.charge.create({
+        data: { ...ctx.chargeData, amount: 100000, currency: 'VES', status: ChargeStatus.PAID },
+      }),
+      observer.charge.create({
+        data: {
+          ...ctx.chargeData,
+          period: '2026-09',
+          concept: 'legacy-cross-null-candidate',
+          amount: 265000,
+          currency: 'VES',
+        },
+      }),
+    ]);
+    await observer.paymentAllocation.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        paymentId: payment.id,
+        chargeId: legacyCharge.id,
+        amount: 100000,
+        paymentOriginalAmountMinor: null,
+      },
+    });
+
+    await expect(firstClient.$transaction((tx) => createLockedAllocation(tx, {
+      tenantId: ctx.tenant.id,
+      buildingId: ctx.building.id,
+      paymentId: payment.id,
+      chargeId: candidateCharge.id,
+    }, 265000))).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+    });
+
+    const [allocations, persistedPayment, persistedCandidateCharge] = await Promise.all([
+      observer.paymentAllocation.findMany({ where: { paymentId: payment.id } }),
+      observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: candidateCharge.id } }),
+    ]);
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]).toMatchObject({
+      chargeId: legacyCharge.id,
+      amount: 100000,
+      paymentOriginalAmountMinor: null,
+    });
+    expect(persistedPayment.status).toBe(PaymentStatus.APPROVED);
+    expect(persistedCandidateCharge.status).toBe(ChargeStatus.PENDING);
+  });
+
+  it('commits sequential cleanup of two legacy CROSS NULL allocations', async () => {
+    const ctx = await fixture('legacy-cross-null-cleanup');
+    const effectiveAt = new Date('2026-08-08T00:00:00.000Z');
+    const rate = await observer.exchangeRate.create({ data: {
+      tenantId: ctx.tenant.id, baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5',
+      effectiveAt, source: `${fixturePhase} PostgreSQL cleanup`,
+    } });
+    const payment = await observer.payment.create({ data: {
+      ...ctx.paymentData, currency: 'USD', status: PaymentStatus.RECONCILED,
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: rate.id,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT', exchangeRateEffectiveAt: effectiveAt,
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } });
+    const charges = await Promise.all([100000, 265000].map((amount, index) => observer.charge.create({ data: {
+      ...ctx.chargeData, period: `2026-${index + 8}`, concept: `legacy-cleanup-${index}`,
+      amount, currency: 'VES', status: ChargeStatus.PAID,
+    } })));
+    const allocations = await Promise.all(charges.map((charge) => observer.paymentAllocation.create({ data: {
+      tenantId: ctx.tenant.id, paymentId: payment.id, chargeId: charge.id,
+      amount: charge.amount, paymentOriginalAmountMinor: null,
+    } })));
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[0].id,
+    ));
+    await expect(observer.paymentAllocation.findMany({ where: { paymentId: payment.id } }))
+      .resolves.toEqual([expect.objectContaining({ id: allocations[1].id, paymentOriginalAmountMinor: null })]);
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.APPROVED });
+    await expect(observer.charge.findUniqueOrThrow({ where: { id: charges[0].id } }))
+      .resolves.toMatchObject({ status: ChargeStatus.PENDING });
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[1].id,
+    ));
+    await expect(observer.paymentAllocation.count({ where: { paymentId: payment.id } })).resolves.toBe(0);
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.APPROVED });
+    await expect(observer.charge.findUniqueOrThrow({ where: { id: charges[1].id } }))
+      .resolves.toMatchObject({ status: ChargeStatus.PENDING });
+  });
+
+  it('commits progressive mixed cleanup and resumes canonical reconciliation', async () => {
+    const ctx = await fixture('mixed-progressive-cleanup');
+    const effectiveAt = new Date('2026-08-08T00:00:00.000Z');
+    const rate = await observer.exchangeRate.create({ data: {
+      tenantId: ctx.tenant.id, baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5',
+      effectiveAt, source: `${fixturePhase} PostgreSQL mixed cleanup`,
+    } });
+    const payment = await observer.payment.create({ data: {
+      ...ctx.paymentData, currency: 'USD', status: PaymentStatus.RECONCILED,
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: rate.id,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT', exchangeRateEffectiveAt: effectiveAt,
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } });
+    const definitions = [
+      { amount: 4000, currency: 'USD', original: 4000 },
+      { amount: 10000, currency: 'USD', original: 10000 },
+      { amount: 100000, currency: 'VES', original: null },
+      { amount: 265000, currency: 'VES', original: null },
+    ];
+    const charges = await Promise.all(definitions.map((definition, index) => observer.charge.create({ data: {
+      ...ctx.chargeData, period: `2027-0${index + 1}`, concept: `mixed-cleanup-${index}`,
+      amount: definition.amount, currency: definition.currency, status: ChargeStatus.PAID,
+    } })));
+    const allocations = await Promise.all(charges.map((charge, index) => observer.paymentAllocation.create({ data: {
+      tenantId: ctx.tenant.id, paymentId: payment.id, chargeId: charge.id,
+      amount: charge.amount, paymentOriginalAmountMinor: definitions[index].original,
+    } })));
+
+    for (const index of [0, 2]) {
+      await firstClient.$transaction((tx) => deleteLockedAllocation(
+        tx, ctx.tenant.id, ctx.building.id, allocations[index].id,
+      ));
+      await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+        .resolves.toMatchObject({ status: PaymentStatus.APPROVED });
+    }
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[3].id,
+    ));
+    await expect(observer.paymentAllocation.findMany({ where: { paymentId: payment.id } }))
+      .resolves.toEqual([expect.objectContaining({ id: allocations[1].id, paymentOriginalAmountMinor: 10000 })]);
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.RECONCILED });
+  });
+
   it('serializes delete with create and returns canonical 404 for a repeated delete', async () => {
     const ctx = await fixture('delete-create-race');
     const payment = await observer.payment.create({ data: ctx.paymentData });
@@ -395,5 +565,66 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     ))).rejects.toMatchObject({ status: 404 });
     await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
       .resolves.toMatchObject({ status: PaymentStatus.RECONCILED });
+  });
+
+  it.each([
+    { label: 'LEGACY_NULL', snapshotData: {
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null,
+    } },
+    { label: 'PARTIAL_INVALID', snapshotData: {
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: null,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } },
+  ])('commits a CROSS delete when the remaining snapshot is $label (no invented capacity)', async ({ snapshotData }) => {
+    const ctx = await fixture(`delete-${fixturePhase}-cross-snapshot`);
+    const rate = await observer.exchangeRate.create({ data: {
+      tenantId: ctx.tenant.id, baseCurrency: 'USD', quoteCurrency: 'VES', rate: '36.5',
+      effectiveAt: new Date('2026-08-08T00:00:00.000Z'), source: `${fixturePhase} PostgreSQL snapshot delete`,
+    } });
+    const payment = await observer.payment.create({ data: {
+      ...ctx.paymentData, currency: 'USD', status: PaymentStatus.RECONCILED,
+      functionalAmountMinor: 365000, functionalCurrencyCode: 'VES', exchangeRateId: rate.id,
+      exchangeRateValue: '36.5', exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+      conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+    } });
+    const charges = await Promise.all([
+      observer.charge.create({ data: { ...ctx.chargeData, amount: 100000, currency: 'VES', status: ChargeStatus.PAID } }),
+      observer.charge.create({ data: {
+        ...ctx.chargeData, period: '2026-09', concept: 'snapshot-delete-2',
+        amount: 265000, currency: 'VES', status: ChargeStatus.PAID,
+      } }),
+    ]);
+    const allocations = await Promise.all(charges.map((charge, index) => observer.paymentAllocation.create({ data: {
+      tenantId: ctx.tenant.id, paymentId: payment.id, chargeId: charge.id,
+      amount: charge.amount, paymentOriginalAmountMinor: index === 0 ? 2740 : 7260,
+    } })));
+
+    await observer.payment.update({ where: { id: payment.id }, data: snapshotData });
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[0].id,
+    ));
+
+    const [remaining, persistedPayment, deletedCharge] = await Promise.all([
+      observer.paymentAllocation.findMany({ where: { paymentId: payment.id } }),
+      observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: charges[0].id } }),
+    ]);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ id: allocations[1].id, paymentOriginalAmountMinor: 7260 });
+    expect(persistedPayment.status).toBe(PaymentStatus.APPROVED);
+    expect(deletedCharge.status).toBe(ChargeStatus.PENDING);
+
+    await firstClient.$transaction((tx) => deleteLockedAllocation(
+      tx, ctx.tenant.id, ctx.building.id, allocations[1].id,
+    ));
+    await expect(observer.paymentAllocation.count({ where: { paymentId: payment.id } })).resolves.toBe(0);
+    await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
+      .resolves.toMatchObject({ status: PaymentStatus.APPROVED });
   });
 });
