@@ -1,7 +1,9 @@
 import { ChargeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import {
+  aggregatePaymentSideAllocations,
   assertPaymentAllocationCurrencyMode,
   calculateChargeAvailableOutstanding,
+  classifyPaymentSideAllocations,
   createLockedAllocation,
   deleteLockedAllocation,
   reconcilePaymentWhenConsumed,
@@ -52,6 +54,64 @@ describe('payment allocation transaction semantics', () => {
       [{ charge: { currency } }],
       currency,
     )).not.toThrow();
+  });
+
+  it('aggregates SAME explicit and legacy shares in original minor units', () => {
+    expect(aggregatePaymentSideAllocations({
+      id: 'payment', amount: 10000, currency: 'USD',
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null,
+      paymentAllocations: [
+        { amount: 2500, paymentOriginalAmountMinor: 2500, charge: { currency: 'USD' } },
+        { amount: 1500, paymentOriginalAmountMinor: null, charge: { currency: 'USD' } },
+      ],
+    })).toEqual({
+      mode: 'SAME',
+      originalConsumedMinor: 4000,
+      originalRemainingMinor: 6000,
+      functionalConsumedMinor: null,
+      functionalRemainingMinor: null,
+    });
+  });
+
+  it('aggregates partial and full CROSS consumption in both currencies', () => {
+    const payment = {
+      id: 'payment', amount: 10000, currency: 'USD', ...completeSnapshot,
+      paymentAllocations: [2740, 2740].map((share) => ({
+        amount: 100000, paymentOriginalAmountMinor: share, charge: { currency: 'VES' },
+      })),
+    };
+    expect(aggregatePaymentSideAllocations(payment)).toEqual({
+      mode: 'CROSS', originalConsumedMinor: 5480, originalRemainingMinor: 4520,
+      functionalConsumedMinor: 200000, functionalRemainingMinor: 165000,
+    });
+    expect(aggregatePaymentSideAllocations({
+      ...payment,
+      paymentAllocations: [
+        ...payment.paymentAllocations,
+        { amount: 165000, paymentOriginalAmountMinor: 4520, charge: { currency: 'VES' } },
+      ],
+    })).toEqual({
+      mode: 'CROSS', originalConsumedMinor: 10000, originalRemainingMinor: 0,
+      functionalConsumedMinor: 365000, functionalRemainingMinor: 0,
+    });
+  });
+
+  it('fails closed for a legacy CROSS NULL original share', () => {
+    const payment = {
+      id: 'payment', amount: 10000, currency: 'USD', ...completeSnapshot,
+      paymentAllocations: [{
+        amount: 365000, paymentOriginalAmountMinor: null, charge: { currency: 'VES' },
+      }],
+    };
+    expect(classifyPaymentSideAllocations(payment)).toEqual({
+      kind: 'UNRESOLVED_LEGACY_CROSS',
+      aggregate: null,
+    });
+    expect(() => aggregatePaymentSideAllocations(payment)).toThrow(expect.objectContaining({ response: {
+      statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED',
+    } }));
   });
 
   it('keeps a pure SAME payment with a COMPLETE cross-capable snapshot APPROVED while an original remainder remains', async () => {
@@ -126,7 +186,7 @@ describe('payment allocation transaction semantics', () => {
     expect(update).toHaveBeenCalled();
   });
 
-  it('G: never nominally falls back for a historical cross-currency NULL original share', async () => {
+  it('G: fails closed for a historical cross-currency NULL original share', async () => {
     const { tx, update } = transaction({
       id: 'payment', amount: 10000, currency: 'USD', status: PaymentStatus.APPROVED,
       ...completeSnapshot,
@@ -135,7 +195,9 @@ describe('payment allocation transaction semantics', () => {
         charge: { currency: 'VES', status: ChargeStatus.PAID },
       }],
     });
-    await reconcilePaymentWhenConsumed(tx, 'payment');
+    await expect(reconcilePaymentWhenConsumed(tx, 'payment')).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+    });
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -239,6 +301,116 @@ describe('payment allocation transaction semantics', () => {
     expect(calls).toEqual(['lock', 'lock', 'delete', 'charge', 'payment']);
   });
 
+  it('progressively cleans a mixed ledger without deriving malformed capacity, then resumes canonical reconciliation', async () => {
+    const calls: string[] = [];
+    const allocations = [
+      { id: 'same-a', paymentId: 'payment', chargeId: 'same-charge-a', amount: 4000,
+        paymentOriginalAmountMinor: 4000, charge: { currency: 'USD', status: ChargeStatus.PAID } },
+      { id: 'same-b', paymentId: 'payment', chargeId: 'same-charge-b', amount: 10000,
+        paymentOriginalAmountMinor: 10000, charge: { currency: 'USD', status: ChargeStatus.PAID } },
+      { id: 'cross-a', paymentId: 'payment', chargeId: 'cross-charge-a', amount: 100000,
+        paymentOriginalAmountMinor: null, charge: { currency: 'VES', status: ChargeStatus.PAID } },
+      { id: 'cross-b', paymentId: 'payment', chargeId: 'cross-charge-b', amount: 265000,
+        paymentOriginalAmountMinor: null, charge: { currency: 'VES', status: ChargeStatus.PAID } },
+    ];
+    let paymentStatus = PaymentStatus.RECONCILED;
+    const tx = {
+      $queryRaw: jest.fn().mockImplementation(async () => { calls.push('lock'); return []; }),
+      paymentAllocation: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          const allocation = allocations.find((item) => item.id === where.id);
+          return allocation && (where.payment === undefined
+            ? { paymentId: allocation.paymentId, chargeId: allocation.chargeId }
+            : { id: allocation.id, paymentId: allocation.paymentId, chargeId: allocation.chargeId,
+                amount: allocation.amount });
+        }),
+        deleteMany: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          calls.push(`delete:${where.id}`);
+          const index = allocations.findIndex((item) => item.id === where.id);
+          if (index < 0) return { count: 0 };
+          allocations.splice(index, 1);
+          return { count: 1 };
+        }),
+      },
+      charge: {
+        findUnique: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => ({
+          id: where.id, amount: 10000,
+          status: ChargeStatus.PAID, paymentAllocations: [],
+        })),
+        update: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+          calls.push(`charge:${where.id}`);
+        }),
+      },
+      payment: {
+        findUnique: jest.fn().mockImplementation(async () => ({
+          id: 'payment', amount: 10000, currency: 'USD', status: paymentStatus, ...completeSnapshot,
+          paymentAllocations: allocations,
+        })),
+        update: jest.fn().mockImplementation(async ({ data }: { data: { status: PaymentStatus } }) => {
+          paymentStatus = data.status;
+          calls.push(`payment:${data.status}`);
+        }),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'same-a');
+    expect(allocations).toHaveLength(3);
+    expect(classifyPaymentSideAllocations({
+      id: 'payment', amount: 10000, currency: 'USD', ...completeSnapshot,
+      paymentAllocations: allocations,
+    })).toMatchObject({ kind: 'MIXED' });
+    expect(paymentStatus).toBe(PaymentStatus.APPROVED);
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'cross-a');
+    expect(allocations).toHaveLength(2);
+    expect(paymentStatus).toBe(PaymentStatus.APPROVED);
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'cross-b');
+    expect(allocations).toHaveLength(1);
+    expect(aggregatePaymentSideAllocations({
+      id: 'payment', amount: 10000, currency: 'USD', ...completeSnapshot,
+      paymentAllocations: allocations,
+    })).toMatchObject({ mode: 'SAME', originalRemainingMinor: 0 });
+    expect(paymentStatus).toBe(PaymentStatus.RECONCILED);
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'same-b');
+    expect(allocations).toHaveLength(0);
+    expect(paymentStatus).toBe(PaymentStatus.APPROVED);
+    expect(calls).toContain('payment:APPROVED');
+  });
+
+  it('derives canonical status after deleting the unresolved row from a mixed known CROSS ledger', async () => {
+    const known = { id: 'known', paymentId: 'payment', chargeId: 'known-charge', amount: 365000,
+      paymentOriginalAmountMinor: 10000, charge: { currency: 'VES', status: ChargeStatus.PAID } };
+    const unresolved = { id: 'unresolved', paymentId: 'payment', chargeId: 'legacy-charge', amount: 1,
+      paymentOriginalAmountMinor: null, charge: { currency: 'VES', status: ChargeStatus.PAID } };
+    const allocations = [known, unresolved];
+    const update = jest.fn();
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      paymentAllocation: {
+        findFirst: jest.fn().mockResolvedValueOnce({ paymentId: 'payment', chargeId: 'legacy-charge' })
+          .mockResolvedValueOnce({ id: 'unresolved', paymentId: 'payment', chargeId: 'legacy-charge', amount: 1 }),
+        deleteMany: jest.fn().mockImplementation(async () => { allocations.pop(); return { count: 1 }; }),
+      },
+      charge: { findUnique: jest.fn().mockResolvedValue({
+        id: 'legacy-charge', amount: 1, status: ChargeStatus.PAID, paymentAllocations: [],
+      }), update: jest.fn() },
+      payment: {
+        findUnique: jest.fn().mockImplementation(async () => ({
+          id: 'payment', amount: 10000, currency: 'USD', status: PaymentStatus.APPROVED,
+          ...completeSnapshot, paymentAllocations: allocations,
+        })),
+        update,
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'unresolved');
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: PaymentStatus.RECONCILED }),
+    }));
+  });
+
   it.each([
     { label: 'stale discovery', authoritative: null, deleted: 1 },
     { label: 'double delete', authoritative: { id: 'allocation', paymentId: 'payment', chargeId: 'charge', amount: 1 }, deleted: 0 },
@@ -281,6 +453,32 @@ describe('payment allocation transaction semantics', () => {
     }, 1)).rejects.toMatchObject({ response: {
       statusCode: 422, error: 'PAYMENT_FUNCTIONAL_AMOUNT_EXCEEDED',
     } });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects create when an existing legacy CROSS share is NULL without mutation', async () => {
+    const create = jest.fn();
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      payment: { findFirst: jest.fn().mockResolvedValue({
+        id: 'payment', amount: 10000, currency: 'USD', status: PaymentStatus.APPROVED,
+        ...completeSnapshot,
+        paymentAllocations: [{
+          chargeId: 'legacy-charge', amount: 100000, paymentOriginalAmountMinor: null,
+          charge: { currency: 'VES' },
+        }],
+      }) },
+      charge: { findFirst: jest.fn().mockResolvedValue({
+        id: 'new-charge', amount: 100000, currency: 'VES', paymentAllocations: [],
+      }) },
+      paymentAllocation: { create },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(createLockedAllocation(tx, {
+      tenantId: 'tenant', buildingId: 'building', paymentId: 'payment', chargeId: 'new-charge',
+    }, 100000)).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+    });
     expect(create).not.toHaveBeenCalled();
   });
 });

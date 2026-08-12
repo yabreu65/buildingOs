@@ -15,6 +15,7 @@ import {
   type FunctionalSnapshotFields,
 } from './functional-snapshot';
 import {
+  aggregatePaymentSideAllocations,
   assertPaymentAllocationCurrencyMode,
   createLockedAllocation,
   deleteLockedAllocation,
@@ -2258,8 +2259,27 @@ export class FinanzasService {
         status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
         canceledAt: null,
       },
-      include: {
-        paymentAllocations: true,
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        method: true,
+        status: true,
+        createdAt: true,
+        functionalAmountMinor: true,
+        functionalCurrencyCode: true,
+        exchangeRateId: true,
+        exchangeRateValue: true,
+        exchangeRateDirection: true,
+        exchangeRateEffectiveAt: true,
+        conversionDate: true,
+        paymentAllocations: {
+          select: {
+            amount: true,
+            paymentOriginalAmountMinor: true,
+            charge: { select: { currency: true } },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -2320,7 +2340,7 @@ export class FinanzasService {
         method: p.method,
         status: p.status,
         createdAt: p.createdAt,
-        allocated: p.paymentAllocations.reduce((sum, a) => sum + a.amount, 0),
+        allocated: aggregatePaymentSideAllocations(p).originalConsumedMinor,
       })),
       totals: {
         totalCharges,

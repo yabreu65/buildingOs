@@ -2014,7 +2014,11 @@ describe('FinanzasService', () => {
           ...toPaymentRecord(where.id),
           paymentAllocations: paymentState.paymentAllocations.map((allocation) => ({
             amount: allocation.amount,
-            charge: { status: chargeStates[allocation.chargeId]?.status ?? ChargeStatus.PENDING },
+            paymentOriginalAmountMinor: null,
+            charge: {
+              currency: chargeStates[allocation.chargeId]?.currency ?? paymentState.currency,
+              status: chargeStates[allocation.chargeId]?.status ?? ChargeStatus.PENDING,
+            },
           })),
         } as never;
       });
@@ -2427,6 +2431,9 @@ describe('FinanzasService', () => {
         membershipId,
         'Manual cancellation',
       );
+      const cancellationExpectation = expect(cancellation).rejects.toThrow(
+        'Cannot cancel payment with existing allocations. Remove allocations first.',
+      );
 
       await secondLockAttempted;
       expect(paymentLockAttempts).toBe(2);
@@ -2435,9 +2442,7 @@ describe('FinanzasService', () => {
       await expect(approval).resolves.toEqual(
         expect.objectContaining({ status: PaymentStatus.APPROVED }),
       );
-      await expect(cancellation).rejects.toThrow(
-        'Cannot cancel payment with existing allocations. Remove allocations first.',
-      );
+      await cancellationExpectation;
 
       expect(paymentStates[paymentId]).toEqual(
         expect.objectContaining({
@@ -3442,6 +3447,92 @@ describe('FinanzasService', () => {
       jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
       jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([] as never);
     };
+
+    const ledgerPayment = (overrides: Record<string, unknown> = {}) => ({
+      id: 'payment-1', amount: 10000, currency: 'USD', method: PaymentMethod.TRANSFER,
+      status: PaymentStatus.APPROVED, createdAt: new Date('2026-08-11T00:00:00.000Z'),
+      functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null, paymentAllocations: [], ...overrides,
+    });
+
+    it.each([
+      {
+        label: 'explicit SAME',
+        payment: ledgerPayment({ paymentAllocations: [{
+          amount: 4000, paymentOriginalAmountMinor: 4000, charge: { currency: 'USD' },
+        }] }),
+        allocated: 4000,
+      },
+      {
+        label: 'legacy SAME NULL',
+        payment: ledgerPayment({ paymentAllocations: [{
+          amount: 4000, paymentOriginalAmountMinor: null, charge: { currency: 'USD' },
+        }] }),
+        allocated: 4000,
+      },
+      {
+        label: 'CROSS original share',
+        payment: ledgerPayment({
+          ...completePaymentSnapshot,
+          functionalAmountMinor: 365000,
+          paymentAllocations: [2740, 2740].map((share) => ({
+            amount: 100000, paymentOriginalAmountMinor: share, charge: { currency: 'VES' },
+          })),
+        }),
+        allocated: 5480,
+      },
+    ])('reports $label allocation in Payment currency', async ({ payment, allocated }) => {
+      mockLedgerBase();
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([payment] as never);
+
+      const ledger = await service.getUnitLedger(
+        tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1',
+        { id: 'membership-1', tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never,
+      );
+
+      expect(ledger.payments).toEqual([expect.objectContaining({ allocated })]);
+      expect(prismaService.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId,
+          unitId,
+          status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
+        }),
+      }));
+    });
+
+    it('fails closed when the ledger encounters a legacy CROSS NULL share', async () => {
+      mockLedgerBase();
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([ledgerPayment({
+        ...completePaymentSnapshot,
+        functionalAmountMinor: 365000,
+        paymentAllocations: [{
+          amount: 365000, paymentOriginalAmountMinor: null, charge: { currency: 'VES' },
+        }],
+      })] as never);
+
+      await expect(service.getUnitLedger(
+        tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1',
+        { id: 'membership-1', tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never,
+      )).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
+      });
+    });
+
+    it('excludes SUBMITTED payments from accounting consumption', async () => {
+      mockLedgerBase();
+
+      await service.getUnitLedger(
+        tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1',
+        { id: 'membership-1', tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never,
+      );
+
+      expect(prismaService.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
+        }),
+      }));
+    });
 
     it('allows a tenant-scoped admin membership for the requested tenant', async () => {
       mockLedgerBase();
