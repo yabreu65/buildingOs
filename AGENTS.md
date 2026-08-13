@@ -29,6 +29,14 @@ gentle-ai review mode disable --scope clone
 
 This disables receipt-driven review only for this BuildingOS clone; it must never be applied automatically to other repositories (CocinaCore, JurisManager, etc.), which keep their own default mode.
 
+The versioned pre-commit gate is installed per clone with:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This sets repo-local `core.hooksPath` to `scripts/git-hooks`, wiring the safety gate (blocking) and the Gentle advisory wrapper (non-blocking). It is repo-local and never affects other repositories.
+
 ## Regla obligatoria: desarrollo local antes de staging
 
 Todo desarrollo en BuildingOS se realiza localmente antes de cualquier interacción con staging.
