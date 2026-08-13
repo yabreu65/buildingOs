@@ -73,9 +73,9 @@ describe('DashboardController admin summary access', () => {
   it('allows administrative roles with admin context and preserves the no-header compatible path', async () => {
     const summary: DashboardSummaryDto = {
       kpis: {
-        outstandingAmount: 1000,
-        collectedAmount: 200,
-        collectionRate: 20,
+        outstandingByCurrency: [{ currency: 'ARS', amountMinor: 1000 }],
+        collectedByCurrency: [{ currency: 'ARS', amountMinor: 200 }],
+        collectionRateByCurrency: [{ currency: 'ARS', rate: 20 }],
         delinquentUnits: 1,
       },
       queues: {

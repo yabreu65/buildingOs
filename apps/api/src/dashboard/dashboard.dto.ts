@@ -1,5 +1,6 @@
 import { IsOptional, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import type { CurrencyAmountBucket } from '../finanzas/charge-aggregation';
 
 export enum DashboardPeriod {
   CURRENT_MONTH = 'CURRENT_MONTH',
@@ -56,10 +57,15 @@ export interface BuildingAlert {
   riskScore: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
+export interface CollectionRateBucket {
+  readonly currency: string;
+  readonly rate: number;
+}
+
 export interface DashboardKpis {
-  outstandingAmount: number | null;
-  collectedAmount: number | null;
-  collectionRate: number | null;
+  outstandingByCurrency: CurrencyAmountBucket[];
+  collectedByCurrency: CurrencyAmountBucket[];
+  collectionRateByCurrency: CollectionRateBucket[];
   delinquentUnits: number | null;
 }
 

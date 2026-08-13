@@ -12,7 +12,7 @@ import {
   BuildingAlert,
 } from './dashboard.dto';
 import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
-import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
+import { calculateChargeOutstandingMinor, sumByCurrency } from '../finanzas/charge-aggregation';
 
 interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
@@ -179,10 +179,37 @@ export class DashboardService {
       };
     });
 
-    const totalChargesEmitted = chargesWithOutstanding.reduce((sum, item) => sum + item.charge.amount, 0);
-    const collected = chargesWithOutstanding.reduce((sum, item) => sum + item.allocated, 0);
-    const outstandingAmount = chargesWithOutstanding.reduce((sum, item) => sum + item.outstanding, 0);
-    const collectionRate = totalChargesEmitted > 0 ? collected / totalChargesEmitted : 0;
+    // Currency-safe buckets: every charge keeps its own Charge.currency.
+    const outstandingByCurrency = sumByCurrency(
+      chargesWithOutstanding.map((item) => ({
+        currency: item.charge.currency,
+        amountMinor: item.outstanding,
+      })),
+    );
+    // Collected is bounded by Charge.amount: an over-allocated charge can
+    // never produce collected > emitted. Same clamp contract as outstanding.
+    const collectedByCurrency = sumByCurrency(
+      chargesWithOutstanding.map((item) => ({
+        currency: item.charge.currency,
+        amountMinor: Math.max(0, item.charge.amount - item.outstanding),
+      })),
+    );
+    // Collection rate per currency: collected / emitted, both expressed in
+    // the same Charge.currency. Never a mixed-currency ratio.
+    const emittedByCurrency = new Map<string, number>();
+    for (const item of chargesWithOutstanding) {
+      emittedByCurrency.set(
+        item.charge.currency,
+        (emittedByCurrency.get(item.charge.currency) ?? 0) + item.charge.amount,
+      );
+    }
+    const collectionRateByCurrency = collectedByCurrency.map((bucket) => {
+      const emitted = emittedByCurrency.get(bucket.currency) ?? 0;
+      return {
+        currency: bucket.currency,
+        rate: emitted > 0 ? Math.round((bucket.amountMinor / emitted) * 1000) / 1000 : 0,
+      };
+    });
 
     // Delinquent units (units with outstanding > 0)
     const delinquentUnitsMap = new Map<string, number>();
@@ -194,9 +221,9 @@ export class DashboardService {
     }
 
     return {
-      outstandingAmount,
-      collectedAmount: collected,
-      collectionRate: Math.round(collectionRate * 1000) / 1000,
+      outstandingByCurrency,
+      collectedByCurrency,
+      collectionRateByCurrency,
       delinquentUnits: delinquentUnitsMap.size,
     };
   }

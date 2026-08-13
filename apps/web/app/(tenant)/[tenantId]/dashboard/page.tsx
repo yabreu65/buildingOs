@@ -13,12 +13,12 @@ import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
 import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
+import { formatCurrencyBuckets } from "@/features/dashboard/utils/currency-buckets";
 import { ticketDetailPath } from "@/shared/lib/routes";
 import {
   AlertCircle,
   CheckCircle,
   DollarSign,
-  Percent,
   Home,
   Users,
   Wrench,
@@ -270,9 +270,12 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const totalAccumulatedDebt = getTotalAccumulatedDebt(buildingAlerts);
   const quickActions = summary?.quickActions || [];
 
-  const cr = kpis?.collectionRate ?? 0;
-  const crColor = collectionRateColor(cr);
+  const cr = kpis?.collectionRateByCurrency && kpis.collectionRateByCurrency.length === 1
+    ? kpis.collectionRateByCurrency[0]!.rate
+    : null;
+  const crColor = cr != null ? collectionRateColor(cr) : 'bg-muted';
   const sev = delinquentSeverity(kpis?.delinquentUnits ?? 0);
+  const hasOutstanding = (kpis?.outstandingByCurrency ?? []).some((bucket) => bucket.amountMinor > 0);
 
   return (
     <div className="space-y-6">
@@ -355,11 +358,11 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
         <KPICard
           label="Saldo pendiente del período"
           subtitle="Lo que queda por cobrar del período seleccionado."
-          value={kpis?.outstandingAmount != null ? formatARS(kpis.outstandingAmount) : '$0'}
-          badge={kpis?.outstandingAmount != null && kpis.outstandingAmount > 0
-            ? { label: `${(kpis.delinquentUnits ?? 0)} unidades`, color: sev.text }
+          value={formatCurrencyBuckets(kpis?.outstandingByCurrency)}
+          badge={hasOutstanding
+            ? { label: `${(kpis?.delinquentUnits ?? 0)} unidades`, color: sev.text }
             : undefined}
-          color={kpis?.outstandingAmount != null && kpis.outstandingAmount > 0 ? 'text-orange-400' : 'text-green-400'}
+          color={hasOutstanding ? 'text-orange-400' : 'text-green-400'}
           icon={<DollarSign className="w-5 h-5 text-current" />}
           cta="Ver morosidad"
           onClick={() => router.push(`/${tenantId}/finanzas`)}
@@ -367,12 +370,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
         <KPICard
           label="Cobrado del período"
           subtitle="Monto cobrado o aplicado durante el período seleccionado."
-          value={kpis?.collectedAmount != null ? formatARS(kpis.collectedAmount) : '$0'}
-          subValue={
-            kpis?.collectedAmount != null && (kpis.outstandingAmount ?? 0) + kpis.collectedAmount > 0
-              ? `de ${formatARS((kpis.outstandingAmount || 0) + kpis.collectedAmount)}`
-              : undefined
-          }
+          value={formatCurrencyBuckets(kpis?.collectedByCurrency)}
           color="text-green-400"
           icon={<TrendingUp className="w-5 h-5 text-current" />}
           cta="Ver cobros"
@@ -381,20 +379,24 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
         <KPICard
           label="Tasa de cobranza del período"
           subtitle="Porcentaje cobrado sobre el total esperado del período."
-          value={kpis?.collectionRate != null ? formatPercentage(kpis.collectionRate) : '0%'}
-          badge={{ label: collectionRateLabel(cr), color: collectionRateIcon(cr).props.className || '' }}
-          color={cr >= 0.8 ? 'text-green-400' : cr >= 0.5 ? 'text-yellow-400' : 'text-red-400'}
-          icon={collectionRateIcon(cr)}
+          value={kpis?.collectionRateByCurrency && kpis.collectionRateByCurrency.length > 0
+            ? kpis.collectionRateByCurrency.map((entry) => `${entry.currency} ${formatPercentage(entry.rate)}`).join(' · ')
+            : '—'}
+          badge={cr != null ? { label: collectionRateLabel(cr), color: collectionRateIcon(cr).props.className || '' } : undefined}
+          color={cr == null ? 'text-green-400' : cr >= 0.8 ? 'text-green-400' : cr >= 0.5 ? 'text-yellow-400' : 'text-red-400'}
+          icon={collectionRateIcon(cr ?? 0)}
           cta="Ver finanzas"
           onClick={() => router.push(`/${tenantId}/finanzas`)}
         >
-          {/* Collection rate bar */}
-          <div className="mt-3 w-full bg-muted rounded-full h-2 overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${crColor}`}
-              style={{ width: `${Math.min(cr * 100, 100)}%` }}
-            />
-          </div>
+          {/* Collection rate bar: only meaningful for a single currency */}
+          {cr != null && (
+            <div className="mt-3 w-full bg-muted rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${crColor}`}
+                style={{ width: `${Math.min(cr * 100, 100)}%` }}
+              />
+            </div>
+          )}
         </KPICard>
         <KPICard
           label="Unidades morosas del período"
