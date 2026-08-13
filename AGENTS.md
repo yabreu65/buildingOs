@@ -12,6 +12,31 @@
 - Never say "listo" without validation, or clarify that validation was not performed.
 - GitHub Actions build, lint, test, and E2E jobs declared in `.github/workflows/` are preauthorized quality gates for CI alignment work. This does not authorize deploys, VPS access, staging, production, or remote migrations.
 
+## Gentle AI is advisory and non-blocking
+
+Gentle AI (including the repository AI-review gate) is **advisory and non-blocking**.
+
+- Its findings must be adjudicated independently; they are not auto-approvals.
+- An internal Gentle tool error (provider failure, history/context protection, receipt binding failure, reviewer execution failure, scope-changed, etc.) never blocks development, commit, push, PR, CI, or merge.
+- The normal quality gates remain **blocking and mandatory**: tests, typecheck, lint, build, E2E, and CI.
+- Gentle AI may return to `required` only after demonstrated stability; until then treat any Gentle failure as an advisory warning.
+
+The external `gentle-ai` CLI override is **clone-scoped, not global**: apply it per BuildingOS clone with
+
+```bash
+gentle-ai review mode disable --scope clone
+```
+
+This disables receipt-driven review only for this BuildingOS clone; it must never be applied automatically to other repositories (CocinaCore, JurisManager, etc.), which keep their own default mode.
+
+The versioned pre-commit gate is installed per clone with:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This sets repo-local `core.hooksPath` to `scripts/git-hooks`, wiring the safety gate (blocking) and the Gentle advisory wrapper (non-blocking). It is repo-local and never affects other repositories.
+
 ## Regla obligatoria: desarrollo local antes de staging
 
 Todo desarrollo en BuildingOS se realiza localmente antes de cualquier interacción con staging.
