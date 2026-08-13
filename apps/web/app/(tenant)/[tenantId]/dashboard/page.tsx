@@ -13,7 +13,7 @@ import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
 import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
-import { formatCurrencyBuckets } from "@/features/dashboard/utils/currency-buckets";
+import { formatCurrencyBuckets } from "@/shared/lib/format/currency-buckets";
 import { ticketDetailPath } from "@/shared/lib/routes";
 import {
   AlertCircle,

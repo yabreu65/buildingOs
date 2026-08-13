@@ -56,19 +56,28 @@ export interface ReportTicket {
   unit: { id: string; label: string | null; code: string } | null;
 }
 
+export interface CurrencyAmountBucket {
+  readonly currency: string;
+  readonly amountMinor: number;
+}
+
+export interface CollectionRateBucket {
+  readonly currency: string;
+  readonly rate: number;
+}
+
 export interface DelinquentUnit {
   unitId: string;
-  outstanding: number;
+  outstandingByCurrency: CurrencyAmountBucket[];
 }
 
 export interface FinanceReport {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: CurrencyAmountBucket[];
+  totalPaidByCurrency: CurrencyAmountBucket[];
+  totalOutstandingByCurrency: CurrencyAmountBucket[];
+  collectionRateByCurrency: CollectionRateBucket[];
   delinquentUnitsCount: number;
   delinquentUnits: DelinquentUnit[];
-  collectionRate: number;
-  currency: string;
 }
 
 export interface ChannelBreakdown {
@@ -95,7 +104,9 @@ export interface ActivityReport {
 // ============================================
 // Query String Builder
 // ============================================
-function buildQuery(params: Record<string, any>): string {
+function buildQuery(
+  params: Record<string, string | number | boolean | null | undefined>
+): string {
   const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '');
   if (entries.length === 0) return '';
   const qs = new URLSearchParams(

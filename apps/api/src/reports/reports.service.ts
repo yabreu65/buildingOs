@@ -2,6 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChargeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { CsvUtility, CsvExportResult } from './csv.utility';
+import {
+  calculateChargeOutstandingMinor,
+  type CurrencyAmountInput,
+} from '../finanzas/charge-aggregation';
+import {
+  CANONICAL_CURRENCIES,
+  isCanonicalCurrency,
+} from '@buildingos/contracts';
 
 export interface ReportFilters {
   buildingId?: string;
@@ -31,19 +39,35 @@ export interface TicketsReportData {
   }>;
 }
 
+/**
+ * Report-side currency bucket. `currency` is the reportable currency as
+ * stored on the charge (canonical USD/VES/ARS/COP, or a historical legacy
+ * currency such as UYU). Reportable currencies are never canonicalized —
+ * no conversion, no fallback — they are only labelled and aggregated in
+ * their own dimension.
+ */
+export interface ReportCurrencyAmountBucket {
+  readonly currency: string;
+  readonly amountMinor: number;
+}
+
 export interface DelinquentUnit {
   unitId: string;
-  outstanding: number;
+  outstandingByCurrency: ReportCurrencyAmountBucket[];
+}
+
+export interface CollectionRateBucket {
+  readonly currency: string;
+  readonly rate: number;
 }
 
 export interface FinanceReportData {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: ReportCurrencyAmountBucket[];
+  totalPaidByCurrency: ReportCurrencyAmountBucket[];
+  totalOutstandingByCurrency: ReportCurrencyAmountBucket[];
+  collectionRateByCurrency: CollectionRateBucket[];
   delinquentUnitsCount: number;
   delinquentUnits: DelinquentUnit[];
-  collectionRate: number;
-  currency: string;
 }
 
 export interface ChannelBreakdown {
@@ -65,6 +89,41 @@ export interface ActivityReportData {
   paymentsSubmitted: number;
   documentsUploaded: number;
   communicationsSent: number;
+}
+
+/**
+ * Deterministic report-side currency ordering: canonical currencies first
+ * in canonical order, then any legacy currency in lexicographic order.
+ * Never converts or compares values across currencies.
+ */
+function compareCurrencies(a: string, b: string): number {
+  if (isCanonicalCurrency(a)) {
+    return isCanonicalCurrency(b)
+      ? CANONICAL_CURRENCIES.indexOf(a) - CANONICAL_CURRENCIES.indexOf(b)
+      : -1;
+  }
+  return isCanonicalCurrency(b) ? 1 : a.localeCompare(b);
+}
+
+function aggregateBuckets(
+  totals: Map<string, { charges: number; paid: number; outstanding: number }>,
+  pick: (acc: { charges: number; paid: number; outstanding: number }) => number,
+): ReportCurrencyAmountBucket[] {
+  return Array.from(totals.entries())
+    .map(([currency, acc]) => ({ currency, amountMinor: pick(acc) }))
+    .sort((a, b) => compareCurrencies(a.currency, b.currency));
+}
+
+function aggregateBucketsFromEntries(
+  entries: readonly CurrencyAmountInput[],
+): ReportCurrencyAmountBucket[] {
+  const totals = new Map<string, number>();
+  for (const entry of entries) {
+    totals.set(entry.currency, (totals.get(entry.currency) ?? 0) + entry.amountMinor);
+  }
+  return Array.from(totals.entries())
+    .map(([currency, amountMinor]) => ({ currency, amountMinor }))
+    .sort((a, b) => compareCurrencies(a.currency, b.currency));
 }
 
 /**
@@ -238,57 +297,85 @@ export class ReportsService {
       },
     });
 
-    // Calculate totals using REAL allocations from APPROVED payments
-    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
-
-    const totalPaid = charges.reduce((sum, c) => {
-      const allocated = c.paymentAllocations.reduce((asum, a) => {
-        // Only count allocations from APPROVED payments
-        return asum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      return sum + allocated;
-    }, 0);
-
-    const totalOutstanding = totalCharges - totalPaid;
-
-    // Find delinquent units (filter by dueDate, not Charge.status)
+    // Currency-safe aggregation (charge-side, integer minor units).
+    // Per charge:
+    // - outstanding = charge.amount - effective allocations (clamped >= 0)
+    //   (effective = APPROVED | RECONCILED; SUBMITTED never reduces outstanding)
+    // - paid = charge.amount - outstanding (bounded: never exceeds charge.amount)
+    // Buckets are grouped by currency; currencies are never mixed or
+    // converted. Canonical currencies (USD/VES/ARS/COP) come first in
+    // canonical order; any historical legacy currency is reported in its
+    // own explicit bucket after canonical ones, in stable lexicographic
+    // order — no fallback, no loss, no write-side change.
+    const totalsByCurrency = new Map<string, { charges: number; paid: number; outstanding: number }>();
+    const delinquentByUnit = new Map<string, CurrencyAmountInput[]>();
+    const delinquentEarliestDue = new Map<string, Date>();
     const now = new Date();
-    const overdueCharges = charges.filter((c) => c.dueDate < now);
 
-    const delinquentByUnit = new Map<string, number>();
-    for (const charge of overdueCharges) {
-      // Calculate real outstanding from APPROVED payments only
-      const allocatedApproved = charge.paymentAllocations.reduce((sum, a) => {
-        return sum + (a.payment && a.payment.status === PaymentStatus.APPROVED ? a.amount : 0);
-      }, 0);
-      const outstanding = charge.amount - allocatedApproved;
+    for (const charge of charges) {
+      const outstanding = calculateChargeOutstandingMinor(charge);
+      const paid = charge.amount - outstanding;
 
-      // Only count if there's actual outstanding
-      if (outstanding > 0) {
-        delinquentByUnit.set(
-          charge.unitId,
-          (delinquentByUnit.get(charge.unitId) || 0) + outstanding
-        );
+      const acc = totalsByCurrency.get(charge.currency) ?? {
+        charges: 0,
+        paid: 0,
+        outstanding: 0,
+      };
+      acc.charges += charge.amount;
+      acc.paid += paid;
+      acc.outstanding += outstanding;
+      totalsByCurrency.set(charge.currency, acc);
+
+      if (charge.dueDate < now && outstanding > 0) {
+        const entries = delinquentByUnit.get(charge.unitId) ?? [];
+        entries.push({ currency: charge.currency, amountMinor: outstanding });
+        delinquentByUnit.set(charge.unitId, entries);
+
+        const earliest = delinquentEarliestDue.get(charge.unitId);
+        if (!earliest || charge.dueDate < earliest) {
+          delinquentEarliestDue.set(charge.unitId, charge.dueDate);
+        }
       }
     }
 
+    const totalChargesByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.charges);
+    const totalPaidByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.paid);
+    const totalOutstandingByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.outstanding);
+
+    const collectionRateByCurrency = Array.from(totalsByCurrency.entries())
+      .map(([currency, acc]) => ({
+        currency,
+        rate: acc.charges > 0 ? Math.round((acc.paid / acc.charges) * 100) : 0,
+      }))
+      .sort((a, b) => compareCurrencies(a.currency, b.currency));
+
+    // Delinquent units: dueDate < now with positive outstanding in at least
+    // one currency. Ordered by earliest delinquency (dueDate ASC), then by
+    // unitId ASC for determinism. This is a NON-monetary ordering: amounts
+    // in different currencies are never compared or summed. Top 10.
     const delinquentUnitsCount = delinquentByUnit.size;
+
     const delinquentUnits = Array.from(delinquentByUnit.entries())
-      .map(([unitId, outstanding]) => ({ unitId, outstanding }))
-      .sort((a, b) => b.outstanding - a.outstanding)
+      .map(([unitId, entries]) => ({
+        unitId,
+        outstandingByCurrency: aggregateBucketsFromEntries(entries),
+      }))
+      .sort((a, b) => {
+        const dueDiff =
+          delinquentEarliestDue.get(a.unitId)!.getTime() -
+          delinquentEarliestDue.get(b.unitId)!.getTime();
+        if (dueDiff !== 0) return dueDiff;
+        return a.unitId.localeCompare(b.unitId);
+      })
       .slice(0, 10);
 
-    const collectionRate =
-      totalCharges > 0 ? Math.round((totalPaid / totalCharges) * 100) : 0;
-
     return {
-      totalCharges,
-      totalPaid,
-      totalOutstanding,
+      totalChargesByCurrency,
+      totalPaidByCurrency,
+      totalOutstandingByCurrency,
+      collectionRateByCurrency,
       delinquentUnitsCount,
       delinquentUnits,
-      collectionRate,
-      currency: 'ARS',
     };
   }
 
@@ -468,7 +555,14 @@ export class ReportsService {
 
   /**
    * Export finance report to CSV
-   * Includes: building, totalCharges, totalPaid, outstanding, collectionRate, delinquent units list
+   * Includes one SUMMARY row per currency (never mixed) and one DELINQUENT
+   * row per (unit, currency) pair. Amounts use major units (cents / 100),
+   * preserving the existing CSV format.
+   *
+   * Column order keeps the seven historical columns
+   * (type,building,totalCharges,totalPaid,outstanding,collectionRate,currency)
+   * EXACTLY in their original positions and appends `unit` as the eighth
+   * column, minimizing positional breakage for existing consumers.
    */
   async exportFinance(
     tenantId: string,
@@ -477,7 +571,6 @@ export class ReportsService {
     // Get finance report data
     const report = await this.getFinanceReport(tenantId, filters);
 
-    // Build rows with building + delinquent units
     const rows: Array<{
       type: string;
       building: string;
@@ -486,34 +579,55 @@ export class ReportsService {
       outstanding: string;
       collectionRate: string;
       currency: string;
+      unit: string;
     }> = [];
 
-    // Row 1: Summary
-    rows.push({
-      type: 'SUMMARY',
-      building: filters.buildingId ? 'Filtered' : 'All Buildings',
-      totalCharges: CsvUtility.formatAmount(report.totalCharges),
-      totalPaid: CsvUtility.formatAmount(report.totalPaid),
-      outstanding: CsvUtility.formatAmount(report.totalOutstanding),
-      collectionRate: `${report.collectionRate.toFixed(2)}%`,
-      currency: report.currency,
-    });
-
-    // Rows 2+: Delinquent units
-    for (const unit of report.delinquentUnits) {
+    // Summary rows: one per currency with that currency's own totals
+    for (const bucket of report.totalChargesByCurrency) {
+      const paid = report.totalPaidByCurrency.find((b) => b.currency === bucket.currency);
+      const outstanding = report.totalOutstandingByCurrency.find(
+        (b) => b.currency === bucket.currency,
+      );
+      const rate = report.collectionRateByCurrency.find((b) => b.currency === bucket.currency);
       rows.push({
-        type: 'DELINQUENT',
-        building: '',
-        totalCharges: '',
-        totalPaid: '',
-        outstanding: CsvUtility.formatAmount(unit.outstanding),
-        collectionRate: '',
-        currency: unit.unitId,
+        type: 'SUMMARY',
+        building: filters.buildingId ? 'Filtered' : 'All Buildings',
+        totalCharges: CsvUtility.formatAmount(bucket.amountMinor),
+        totalPaid: CsvUtility.formatAmount(paid?.amountMinor ?? 0),
+        outstanding: CsvUtility.formatAmount(outstanding?.amountMinor ?? 0),
+        collectionRate: `${(rate?.rate ?? 0).toFixed(2)}%`,
+        currency: bucket.currency,
+        unit: '',
       });
     }
 
+    // Delinquent unit rows: one per (unit, currency) — single-currency amounts
+    for (const unit of report.delinquentUnits) {
+      for (const bucket of unit.outstandingByCurrency) {
+        rows.push({
+          type: 'DELINQUENT',
+          building: '',
+          totalCharges: '',
+          totalPaid: '',
+          outstanding: CsvUtility.formatAmount(bucket.amountMinor),
+          collectionRate: '',
+          currency: bucket.currency,
+          unit: unit.unitId,
+        });
+      }
+    }
+
     return CsvUtility.formatCsv(
-      ['type', 'building', 'totalCharges', 'totalPaid', 'outstanding', 'collectionRate', 'currency'],
+      [
+        'type',
+        'building',
+        'totalCharges',
+        'totalPaid',
+        'outstanding',
+        'collectionRate',
+        'currency',
+        'unit',
+      ],
       rows,
       CsvUtility.generateFilename('finance'),
     );

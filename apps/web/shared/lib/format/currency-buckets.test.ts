@@ -1,4 +1,4 @@
-import { formatCurrencyBuckets } from './currency-buckets';
+import { formatCurrencyBuckets, formatRateBuckets } from './currency-buckets';
 
 describe('formatCurrencyBuckets', () => {
   it('renders a single ARS bucket', () => {
@@ -38,5 +38,38 @@ describe('formatCurrencyBuckets', () => {
     expect(formatCurrencyBuckets([])).toBe('—');
     expect(formatCurrencyBuckets(null)).toBe('—');
     expect(formatCurrencyBuckets(undefined)).toBe('—');
+  });
+
+  it('renders a historical legacy currency (UYU) explicitly — display only', () => {
+    const result = formatCurrencyBuckets([{ currency: 'UYU', amountMinor: 500000 }]);
+    expect(result).toContain('UYU');
+    expect(result).toContain('5.000');
+  });
+
+  it('renders canonical and legacy buckets together without mixing', () => {
+    const result = formatCurrencyBuckets([
+      { currency: 'ARS', amountMinor: 10000 },
+      { currency: 'UYU', amountMinor: 500000 },
+    ]);
+    expect(result).toContain('100,00');
+    expect(result).toContain('UYU');
+    expect(result).toContain('5.000,00');
+    expect(result.split('·')).toHaveLength(2);
+  });
+});
+
+describe('formatRateBuckets', () => {
+  it('renders one rate per currency, never blended', () => {
+    const result = formatRateBuckets([
+      { currency: 'USD', rate: 40 },
+      { currency: 'ARS', rate: 13 },
+    ]);
+    expect(result).toBe('40% USD · 13% ARS');
+  });
+
+  it('renders empty buckets with an empty representation', () => {
+    expect(formatRateBuckets([])).toBe('—');
+    expect(formatRateBuckets(null)).toBe('—');
+    expect(formatRateBuckets(undefined)).toBe('—');
   });
 });
