@@ -3,6 +3,7 @@
 import { Card, Skeleton, ErrorState, EmptyState, Button } from '@/shared/components/ui';
 import { FinanceChartsPanel } from '@/features/finance/components';
 import { financeApi } from '@/features/finance/services/finance.api';
+import { formatCurrencyBuckets, formatRateBuckets } from '@/shared/lib/format/currency-buckets';
 import type { FinanceReport } from '../services/reports.api';
 
 interface SimpleTableProps {
@@ -43,14 +44,6 @@ interface FinanceReportProps {
   canExportReports?: boolean;
 }
 
-// Format amount from cents to display string
-function formatAmount(cents: number): string {
-  return (cents / 100).toLocaleString('es-AR', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 export function FinanceReportComponent({
   data,
   loading,
@@ -84,19 +77,27 @@ export function FinanceReportComponent({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="p-4">
           <div className="text-sm text-muted-foreground">Total Facturado</div>
-          <div className="text-2xl font-bold">${formatAmount(data.totalCharges)}</div>
+          <div className="text-2xl font-bold">
+            {formatCurrencyBuckets(data.totalChargesByCurrency)}
+          </div>
         </Card>
         <Card className="p-4">
           <div className="text-sm text-muted-foreground">Total Cobrado</div>
-          <div className="text-2xl font-bold text-green-600">${formatAmount(data.totalPaid)}</div>
+          <div className="text-2xl font-bold text-green-600">
+            {formatCurrencyBuckets(data.totalPaidByCurrency)}
+          </div>
         </Card>
         <Card className="p-4">
           <div className="text-sm text-muted-foreground">Pendiente</div>
-          <div className="text-2xl font-bold text-orange-600">${formatAmount(data.totalOutstanding)}</div>
+          <div className="text-2xl font-bold text-orange-600">
+            {formatCurrencyBuckets(data.totalOutstandingByCurrency)}
+          </div>
         </Card>
         <Card className="p-4">
           <div className="text-sm text-muted-foreground">Tasa de Cobranza</div>
-          <div className="text-2xl font-bold text-blue-600">{data.collectionRate}%</div>
+          <div className="text-2xl font-bold text-blue-600">
+            {formatRateBuckets(data.collectionRateByCurrency)}
+          </div>
         </Card>
       </div>
 
@@ -111,7 +112,7 @@ export function FinanceReportComponent({
             rows={data.delinquentUnits.map((item) => [
               item.unitId,
               <span key={item.unitId} className="text-orange-600 font-semibold">
-                ${formatAmount(item.outstanding)}
+                {formatCurrencyBuckets(item.outstandingByCurrency)}
               </span>,
             ])}
           />
