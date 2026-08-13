@@ -24,6 +24,7 @@ import {
   recalculateLockedCharge,
   reconcilePaymentWhenConsumed,
 } from './payment-allocation-transaction';
+import { calculateChargeOutstandingMinor } from './charge-aggregation';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
@@ -1484,15 +1485,7 @@ export class FinanzasService {
   }
 
   private calculateApprovedChargeOutstanding(charge: ChargeWithAllocations): number {
-    const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-      if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
-        return sum + allocation.amount;
-      }
-
-      return sum;
-    }, 0);
-
-    return Math.max(0, charge.amount - approvedAllocated);
+    return calculateChargeOutstandingMinor(charge);
   }
 
   private calculatePendingReservationAmount(
@@ -1896,7 +1889,7 @@ export class FinanzasService {
       return {
         charge: c,
         allocated,
-        outstanding: Math.max(0, c.amount - allocated),
+        outstanding: calculateChargeOutstandingMinor(c),
       };
     });
 
@@ -2297,7 +2290,7 @@ export class FinanzasService {
       return {
         charge,
         approvedAllocated,
-        outstanding: Math.max(0, charge.amount - approvedAllocated),
+        outstanding: calculateChargeOutstandingMinor(charge),
       };
     });
 
@@ -2755,7 +2748,7 @@ export class FinanzasService {
       return {
         charge: c,
         allocated,
-        outstanding: Math.max(0, c.amount - allocated),
+        outstanding: calculateChargeOutstandingMinor(c),
       };
     });
 
