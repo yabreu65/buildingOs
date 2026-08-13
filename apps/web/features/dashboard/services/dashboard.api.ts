@@ -30,6 +30,16 @@ export interface UnitWithoutResponsibleSummary {
   buildingName: string;
 }
 
+export interface CurrencyAmountBucket {
+  currency: string;
+  amountMinor: number;
+}
+
+export interface CollectionRateBucket {
+  currency: string;
+  rate: number;
+}
+
 export interface BuildingAlert {
   buildingId: string;
   buildingName: string;
@@ -40,9 +50,9 @@ export interface BuildingAlert {
 }
 
 export interface DashboardKpis {
-  outstandingAmount: number | null;
-  collectedAmount: number | null;
-  collectionRate: number | null;
+  outstandingByCurrency: CurrencyAmountBucket[];
+  collectedByCurrency: CurrencyAmountBucket[];
+  collectionRateByCurrency: CollectionRateBucket[];
   delinquentUnits: number | null;
 }
 
