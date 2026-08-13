@@ -56,6 +56,20 @@ describe('formatCurrencyBuckets', () => {
     expect(result).toContain('5.000,00');
     expect(result.split('·')).toHaveLength(2);
   });
+
+  it('renders malformed historical currency codes without throwing', () => {
+    const result = formatCurrencyBuckets([
+      { currency: 'US', amountMinor: 12345 },
+      { currency: '', amountMinor: 67890 },
+    ]);
+    expect(result).toContain('123,45 US');
+    expect(result).toContain('678,90');
+  });
+
+  it('renders a legacy code Intl accepts but is not canonical', () => {
+    const result = formatCurrencyBuckets([{ currency: 'FOO', amountMinor: 1000 }]);
+    expect(result).toContain('10,00');
+  });
 });
 
 describe('formatRateBuckets', () => {

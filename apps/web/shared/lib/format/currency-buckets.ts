@@ -1,4 +1,4 @@
-import { formatCurrency } from './money';
+import { formatCurrency, formatNumber } from './money';
 
 export interface DisplayCurrencyBucket {
   readonly currency: string;
@@ -8,6 +8,20 @@ export interface DisplayCurrencyBucket {
 export interface DisplayRateBucket {
   readonly currency: string;
   readonly rate: number;
+}
+
+/**
+ * Format a single bucket amount. Legacy report currencies such as UYU
+ * format normally; a malformed historical code (for example "US" or an
+ * empty string) must never throw while rendering the report — it is shown
+ * as a plain amount with its raw code instead.
+ */
+function formatBucketAmount(amountMinor: number, currency: string): string {
+  try {
+    return formatCurrency(amountMinor, currency);
+  } catch {
+    return currency ? `${formatNumber(amountMinor)} ${currency}` : formatNumber(amountMinor);
+  }
 }
 
 /**
@@ -21,9 +35,7 @@ export const formatCurrencyBuckets = (
   if (!buckets || buckets.length === 0) {
     return '—';
   }
-  return buckets
-    .map((bucket) => formatCurrency(bucket.amountMinor, bucket.currency))
-    .join(' · ');
+  return buckets.map((bucket) => formatBucketAmount(bucket.amountMinor, bucket.currency)).join(' · ');
 };
 
 /**
