@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentStatus } from '@prisma/client';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 
 export interface AssistantDebtAllocation {
   readonly amount: number;
@@ -15,14 +16,11 @@ export interface AssistantDebtCharge {
 @Injectable()
 export class AssistantDebtCalculatorService {
   /**
-   * Calculate outstanding debt for a single charge.
+   * Calculate outstanding debt for a single charge (Charge.currency, minor units).
+   * Delegates to the canonical Phase 3F charge-aggregation helper.
    */
   calculateChargeOutstanding(charge: AssistantDebtCharge): number {
-    const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-      return this.isApprovedAllocation(allocation) ? sum + allocation.amount : sum;
-    }, 0);
-
-    return Math.max(0, charge.amount - approvedAllocated);
+    return calculateChargeOutstandingMinor(charge);
   }
 
   /**
@@ -48,10 +46,5 @@ export class AssistantDebtCalculatorService {
     }
 
     return debtByUnit;
-  }
-
-  private isApprovedAllocation(allocation: AssistantDebtAllocation): boolean {
-    const status = allocation.payment?.status;
-    return status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED;
   }
 }

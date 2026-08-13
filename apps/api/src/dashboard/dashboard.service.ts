@@ -12,6 +12,7 @@ import {
   BuildingAlert,
 } from './dashboard.dto';
 import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 
 interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
@@ -174,7 +175,7 @@ export class DashboardService {
       return {
         charge,
         allocated: approvedAllocated,
-        outstanding: Math.max(0, charge.amount - approvedAllocated),
+        outstanding: calculateChargeOutstandingMinor(charge),
       };
     });
 
