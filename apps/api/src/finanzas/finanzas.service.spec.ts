@@ -3243,6 +3243,60 @@ describe('FinanzasService', () => {
       });
       expect(prismaService.$queryRaw).toHaveBeenCalledTimes(3);
     });
+
+    it('returns empty bucket arrays when PostgreSQL json_agg yields NULL over zero rows', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService, '$transaction').mockResolvedValue([
+        [],
+        [{ total: 0n }],
+        [
+          {
+            periodDebtByCurrency: null,
+            accumulatedDebtByCurrency: null,
+          },
+        ],
+      ] as never);
+
+      const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {
+        period: '2026-07',
+        page: 1,
+        pageSize: 25,
+      });
+
+      expect(result.items).toEqual([]);
+      expect(result.total).toBe(0);
+      expect(result.totalPages).toBe(0);
+      expect(result.totals.periodDebtByCurrency).toEqual([]);
+      expect(result.totals.accumulatedDebtByCurrency).toEqual([]);
+      expect(result.totals.periodDebtByCurrency).not.toBeNull();
+      expect(result.totals.accumulatedDebtByCurrency).not.toBeNull();
+    });
+
+    it('normalizes a partially null totals row to empty arrays (both sides)', async () => {
+      jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+      jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
+      jest.spyOn(prismaService, '$transaction').mockResolvedValue([
+        [],
+        [{ total: 0n }],
+        [
+          {
+            periodDebtByCurrency: [{ currency: 'ARS', amountMinor: 5000n }],
+            accumulatedDebtByCurrency: null,
+          },
+        ],
+      ] as never);
+
+      const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {
+        period: '2026-07',
+        page: 1,
+        pageSize: 25,
+      });
+
+      expect(result.totals.periodDebtByCurrency).toEqual([{ currency: 'ARS', amountMinor: 5000 }]);
+      expect(result.totals.accumulatedDebtByCurrency).toEqual([]);
+      expect(result.totals.accumulatedDebtByCurrency).not.toBeNull();
+    });
   });
 
   describe('getTenantFinancialSummary', () => {

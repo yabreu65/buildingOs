@@ -112,8 +112,8 @@ interface RawDelinquencyCountRow {
 }
 
 interface RawDelinquencyTotalsRow {
-  periodDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
-  accumulatedDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
+  periodDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }> | null;
+  accumulatedDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }> | null;
 }
 
 type ChargeWithAllocations = Prisma.ChargeGetPayload<{
@@ -2003,17 +2003,23 @@ export class FinanzasService {
       this.prisma.$queryRaw<RawDelinquencyTotalsRow[]>(Prisma.sql`
         ${baseQuery}
         SELECT
-          json_agg(
-            json_build_object(
-              'currency', currency,
-              'amountMinor', "periodDebt"
-            ) ORDER BY currency
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'currency', currency,
+                'amountMinor', "periodDebt"
+              ) ORDER BY currency
+            ),
+            '[]'::json
           ) AS "periodDebtByCurrency",
-          json_agg(
-            json_build_object(
-              'currency', currency,
-              'amountMinor', "accumulatedDebt"
-            ) ORDER BY currency
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'currency', currency,
+                'amountMinor', "accumulatedDebt"
+              ) ORDER BY currency
+            ),
+            '[]'::json
           ) AS "accumulatedDebtByCurrency"
         FROM (
           SELECT
@@ -2027,7 +2033,9 @@ export class FinanzasService {
     ]);
 
     const total = this.toSafeFinancialNumber(countRows[0]?.total ?? 0);
-    const totals = totalsRows[0] ?? { periodDebtByCurrency: [], accumulatedDebtByCurrency: [] };
+    const totals = totalsRows[0] ?? { periodDebtByCurrency: null, accumulatedDebtByCurrency: null };
+    const periodDebtByCurrency = totals.periodDebtByCurrency ?? [];
+    const accumulatedDebtByCurrency = totals.accumulatedDebtByCurrency ?? [];
 
     return {
       items: items.map((item) => this.mapDelinquencyItem(item)),
@@ -2036,11 +2044,11 @@ export class FinanzasService {
       total,
       totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
       totals: {
-        periodDebtByCurrency: totals.periodDebtByCurrency.map((bucket) => ({
+        periodDebtByCurrency: periodDebtByCurrency.map((bucket) => ({
           currency: bucket.currency,
           amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
         })),
-        accumulatedDebtByCurrency: totals.accumulatedDebtByCurrency.map((bucket) => ({
+        accumulatedDebtByCurrency: accumulatedDebtByCurrency.map((bucket) => ({
           currency: bucket.currency,
           amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
         })),
