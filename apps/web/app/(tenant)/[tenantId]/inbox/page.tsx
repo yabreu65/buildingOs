@@ -206,10 +206,7 @@ export default function InboxPage({ params }: InboxPageProps) {
                           )}
                         </div>
                         <p className="text-sm font-medium mt-1">
-                          {(payment.amount / 100).toLocaleString('pt-BR', {
-                            style: 'currency',
-                            currency: 'BRL',
-                          })}
+                          {formatCurrency(payment.amount, payment.currency)}
                         </p>
                         <p className="text-xs text-gray-500 mt-1">
                           {payment.method} •{' '}
