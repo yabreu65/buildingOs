@@ -439,7 +439,7 @@ test.describe('Resident finance oldest-first flow', () => {
     const summaryBefore = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryBefore.totalOutstandingByCurrency)).toBe(10000);
     expect(arsAmount(summaryBefore.totalPaidByCurrency)).toBe(0);
-    expect(summaryBefore.delinquentUnitsCount).toBe(1);
+    expect(summaryBefore.delinquentUnitsCount).toBe(0); // 3F5: overdue-only (Aug charge due 08-15)
 
     const firstPaymentProofFileId = await createPaymentProofDocument(
       page,
@@ -479,7 +479,7 @@ test.describe('Resident finance oldest-first flow', () => {
     const summarySubmitted = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summarySubmitted.totalOutstandingByCurrency)).toBe(10000);
     expect(arsAmount(summarySubmitted.totalPaidByCurrency)).toBe(0);
-    expect(summarySubmitted.delinquentUnitsCount).toBe(1);
+    expect(summarySubmitted.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     await adminPage.goto(`/${residentTenantId}/finanzas?tab=payments`);
     await expect(adminPage.getByRole('heading', { name: /finanzas del conjunto/i })).toBeVisible();
@@ -502,7 +502,7 @@ test.describe('Resident finance oldest-first flow', () => {
     const summaryApproved = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryApproved.totalOutstandingByCurrency)).toBe(10000);
     expect(arsAmount(summaryApproved.totalPaidByCurrency)).toBe(0);
-    expect(summaryApproved.delinquentUnitsCount).toBe(1);
+    expect(summaryApproved.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     const augustPaymentProofFileId = await createPaymentProofDocument(
       page,
@@ -544,7 +544,7 @@ test.describe('Resident finance oldest-first flow', () => {
     const summaryRejected = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryRejected.totalOutstandingByCurrency)).toBe(10000);
     expect(arsAmount(summaryRejected.totalPaidByCurrency)).toBe(0);
-    expect(summaryRejected.delinquentUnitsCount).toBe(1);
+    expect(summaryRejected.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     const delinquencyCount = await getTenantDelinquencyCount(adminPage, residentTenantId, buildingId);
     expect(delinquencyCount).toBe(1);
