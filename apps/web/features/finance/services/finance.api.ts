@@ -202,11 +202,10 @@ export interface UnitLedger {
   charges: Charge[];
   payments: Payment[];
   totals: {
-    totalCharges: number;
-    totalAllocated?: number;
-    totalPaid?: number;
-    balance: number;
-    currency?: string;
+    totalChargesByCurrency: CurrencyAmountBucket[];
+    totalPaidByCurrency: CurrencyAmountBucket[];
+    totalAllocatedByCurrency: CurrencyAmountBucket[];
+    balanceByCurrency: CurrencyAmountBucket[];
   };
 }
 

@@ -240,12 +240,13 @@ export class AssistantQueryExecutorsService {
       context.userRoles,
       context.userId,
     );
-    const outstanding = ledger.totals.balance;
-    const amountText = this.formatMoney(outstanding, ledger.totals.currency);
+    const balanceByCurrency = ledger.totals.balanceByCurrency;
+    const hasDebt = balanceByCurrency.some((b) => b.amountMinor > 0);
+    const amountText = this.formatBuckets(balanceByCurrency);
     return this.response(
-      outstanding > 0
+      hasDebt
         ? `La unidad ${resolved.displayCode} (${resolved.building.name}) tiene una deuda pendiente de ${amountText}.`
-        : `La unidad ${resolved.displayCode} (${resolved.building.name}) no tiene deuda pendiente. Saldo actual: ${amountText}.`,
+        : `La unidad ${resolved.displayCode} (${resolved.building.name}) no tiene deuda pendiente.`,
       'VIEW_PAYMENTS',
       resolved,
     );

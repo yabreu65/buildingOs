@@ -3400,6 +3400,317 @@ describe('FinanzasService', () => {
     });
   });
 
+  describe('getUnitLedger currency-safe totals (3F7)', () => {
+    const tenantId = 'tenant-1';
+    const buildingId = 'building-1';
+    const unitId = 'unit-1';
+
+    const mockLedgerBase = (charges: unknown[], payments: unknown[] = []) => {
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: unitId,
+        label: 'Apt 101',
+        buildingId,
+        building: { id: buildingId, name: 'B1' },
+      } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue(charges as never);
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue(payments as never);
+    };
+
+    const charge = (o: {
+      id?: string; amount: number; currency?: string; allocated?: number;
+      allocationStatus?: string; period?: string;
+    }) => ({
+      id: o.id || 'c-1',
+      unitId,
+      period: o.period || '2026-08',
+      concept: 'Exp',
+      amount: o.amount,
+      currency: o.currency || 'ARS',
+      type: ChargeStatus.PENDING ? 'COMMON_EXPENSE' : 'COMMON_EXPENSE',
+      status: 'PENDING',
+      dueDate: new Date('2026-08-15T00:00:00Z'),
+      canceledAt: null,
+      tenantId,
+      buildingId,
+      paymentAllocations: o.allocated !== undefined
+        ? [{ amount: o.allocated, payment: { status: o.allocationStatus || PaymentStatus.APPROVED } }]
+        : [],
+    });
+
+    it('single USD -> USD bucket only', async () => {
+      mockLedgerBase([charge({ amount: 10000, currency: 'USD' })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'USD', amountMinor: 10000 }]);
+      expect(ledger.totals.totalChargesByCurrency).toEqual([{ currency: 'USD', amountMinor: 10000 }]);
+      expect(ledger.totals.totalPaidByCurrency).toEqual([{ currency: 'USD', amountMinor: 0 }]);
+      expect(ledger.totals).not.toHaveProperty('balance');
+      expect(ledger.totals).not.toHaveProperty('currency');
+    });
+
+    it('single ARS -> ARS bucket only', async () => {
+      mockLedgerBase([charge({ amount: 2000000 })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 2000000 }]);
+    });
+
+    it('multi USD+ARS+COP -> separate buckets, canonical order, no mixed scalar', async () => {
+      mockLedgerBase([
+        charge({ amount: 10000, currency: 'USD' }),
+        charge({ amount: 2000000 }),
+        charge({ amount: 5000000, currency: 'COP' }),
+      ]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency.map((b) => b.currency)).toEqual(['USD', 'ARS', 'COP']);
+      expect(ledger.totals.balanceByCurrency).toEqual([
+        { currency: 'USD', amountMinor: 10000 },
+        { currency: 'ARS', amountMinor: 2000000 },
+        { currency: 'COP', amountMinor: 5000000 },
+      ]);
+    });
+
+    it('APPROVED reduces outstanding in the same currency', async () => {
+      mockLedgerBase([charge({ amount: 100000, allocated: 40000, allocationStatus: PaymentStatus.APPROVED })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 60000 }]);
+      expect(ledger.totals.totalPaidByCurrency).toEqual([{ currency: 'ARS', amountMinor: 40000 }]);
+    });
+
+    it('RECONCILED reduces outstanding', async () => {
+      mockLedgerBase([charge({ amount: 10000, allocated: 10000, allocationStatus: PaymentStatus.RECONCILED })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 0 }]);
+    });
+
+    it('SUBMITTED does not reduce outstanding', async () => {
+      mockLedgerBase([charge({ amount: 10000, allocated: 7000, allocationStatus: PaymentStatus.SUBMITTED })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 10000 }]);
+      expect(ledger.totals.totalPaidByCurrency).toEqual([{ currency: 'ARS', amountMinor: 0 }]);
+    });
+
+    it('over-allocation never produces negative outstanding balance', async () => {
+      mockLedgerBase([
+        charge({ amount: 10000, allocated: 15000, allocationStatus: PaymentStatus.APPROVED }),
+        charge({ amount: 5000, currency: 'USD' }),
+      ]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      // balanceByCurrency is OUTSTANDING_DEBT (clamped >= 0): ARS is 0,
+      // never negative, even with a legacy over-allocation; USD bucket is
+      // untouched and never mixed with ARS.
+      expect(ledger.totals.balanceByCurrency).toEqual([
+        { currency: 'USD', amountMinor: 5000 },
+        { currency: 'ARS', amountMinor: 0 },
+      ]);
+      // The informative allocation totals still reflect the effective
+      // allocations (15000 applied to the ARS charge).
+      expect(ledger.totals.totalAllocatedByCurrency).toEqual([
+        { currency: 'USD', amountMinor: 0 },
+        { currency: 'ARS', amountMinor: 15000 },
+      ]);
+    });
+
+    it('CROSS: payment in another currency never creates a bucket for the charge', async () => {
+      mockLedgerBase([charge({ amount: 100000, allocated: 40000, allocationStatus: PaymentStatus.APPROVED })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 60000 }]);
+      expect(ledger.totals.balanceByCurrency.some((b) => b.currency === 'USD')).toBe(false);
+    });
+
+    it('second currency does not alter the first bucket', async () => {
+      mockLedgerBase([
+        charge({ amount: 10000, currency: 'USD', allocated: 4000, allocationStatus: PaymentStatus.APPROVED }),
+        charge({ amount: 2000000, currency: 'ARS', allocated: 500000, allocationStatus: PaymentStatus.APPROVED }),
+      ]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([
+        { currency: 'USD', amountMinor: 6000 },
+        { currency: 'ARS', amountMinor: 1500000 },
+      ]);
+    });
+
+    it('empty ledger -> empty buckets', async () => {
+      mockLedgerBase([]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency).toEqual([]);
+      expect(ledger.totals.totalChargesByCurrency).toEqual([]);
+    });
+
+    it('amount scale: minor units preserved (12345)', async () => {
+      mockLedgerBase([charge({ amount: 12345, currency: 'USD' })]);
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+      expect(ledger.totals.balanceByCurrency[0]!.amountMinor).toBe(12345);
+    });
+  });
+
+  describe('getUnitLedger payment allocated semantics (3F7)', () => {
+    const tenantId = 'tenant-1';
+    const buildingId = 'building-1';
+    const unitId = 'unit-1';
+
+    const base = () => {
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: unitId,
+        label: 'Apt 101',
+        buildingId,
+        building: { id: buildingId, name: 'B1' },
+      } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
+    };
+
+    const payment = (o: Record<string, unknown>) => ({
+      id: 'payment-1', amount: 10000, currency: 'USD', method: PaymentMethod.TRANSFER,
+      status: PaymentStatus.APPROVED, createdAt: new Date('2026-08-11T00:00:00.000Z'),
+      functionalAmountMinor: 10000, functionalCurrencyCode: 'USD', exchangeRateId: null,
+      exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+      conversionDate: null, paymentAllocations: [], ...o,
+    });
+
+    it('A: same-currency payment -> allocated is a number', async () => {
+      base();
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([
+        payment({ paymentAllocations: [{ amount: 10000, paymentOriginalAmountMinor: 10000, charge: { currency: 'USD' } }] }),
+      ] as never);
+      const ledger = await service.getUnitLedger(tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1', { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never);
+      expect(ledger.payments[0]!.allocated).toBe(10000);
+    });
+
+    it('B: modern CROSS with complete snapshot -> allocated is a number', async () => {
+      base();
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([
+        payment({
+          amount: 5000,
+          currency: 'USD',
+          functionalAmountMinor: 182500,
+          functionalCurrencyCode: 'ARS',
+          exchangeRateId: 'rate-1',
+          exchangeRateValue: '36.5',
+          exchangeRateDirection: 'DIRECT',
+          exchangeRateEffectiveAt: new Date('2026-08-10T00:00:00Z'),
+          conversionDate: new Date('2026-08-10T00:00:00Z'),
+          paymentAllocations: [{ amount: 182500, paymentOriginalAmountMinor: 5000, charge: { currency: 'ARS' } }],
+        }),
+      ] as never);
+      const ledger = await service.getUnitLedger(tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1', { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never);
+      // originalConsumedMinor of the payment side (5000), not the charge-side amount.
+      expect(ledger.payments[0]!.allocated).toBe(5000);
+    });
+
+    it('C: legacy CROSS without snapshot -> allocated is null (UNKNOWN, never 0)', async () => {
+      base();
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([
+        payment({
+          paymentAllocations: [{ amount: 182500, paymentOriginalAmountMinor: null, charge: { currency: 'ARS' } }],
+        }),
+      ] as never);
+      const ledger = await service.getUnitLedger(tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1', { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never);
+      expect(ledger.payments[0]!.allocated).toBeNull();
+    });
+
+    it('D: balanceByCurrency stays correct by Charge.currency in the same ledger', async () => {
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue({
+        id: unitId, label: 'Apt 101', buildingId, building: { id: buildingId, name: 'B1' },
+      } as never);
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        { id: 'c1', unitId, period: '2026-08', concept: 'Exp', amount: 100000, currency: 'ARS', type: 'COMMON_EXPENSE', status: 'PENDING', dueDate: new Date(), canceledAt: null, tenantId, buildingId,
+          paymentAllocations: [{ amount: 40000, payment: { status: PaymentStatus.APPROVED } }] },
+      ] as never);
+      jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([
+        payment({ paymentAllocations: [{ amount: 182500, paymentOriginalAmountMinor: null, charge: { currency: 'ARS' } }] }),
+      ] as never);
+      const ledger = await service.getUnitLedger(tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1', { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never);
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'ARS', amountMinor: 60000 }]);
+      expect(ledger.payments[0]!.allocated).toBeNull();
+    });
+  });
+
   describe('getUnitLedger access control', () => {
     const tenantId = 'tenant-1';
     const buildingId = 'building-1';
@@ -3472,7 +3783,7 @@ describe('FinanzasService', () => {
       }));
     });
 
-    it('fails closed when the ledger encounters a legacy CROSS NULL share', async () => {
+    it('read-compatible: legacy CROSS NULL share is reported without crashing', async () => {
       mockLedgerBase();
       jest.spyOn(prismaService.payment, 'findMany').mockResolvedValue([ledgerPayment({
         ...completePaymentSnapshot,
@@ -3482,12 +3793,16 @@ describe('FinanzasService', () => {
         }],
       })] as never);
 
-      await expect(service.getUnitLedger(
+      // The ledger read path tolerates legacy CROSS payments whose side
+      // snapshot cannot be resolved: the payment is listed and its
+      // informational allocated amount is 0 (read compatibility; the write
+      // path keeps its strict fail-closed behavior).
+      const ledger = await service.getUnitLedger(
         tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1',
         { id: 'membership-1', tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] } as never,
-      )).rejects.toMatchObject({
-        response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
-      });
+      );
+      expect(ledger.payments[0]!.allocated).toBeNull();
+      expect(ledger.payments[0]!.id).toBe('payment-1');
     });
 
     it('excludes SUBMITTED payments from accounting consumption', async () => {
@@ -3525,8 +3840,10 @@ describe('FinanzasService', () => {
         ),
       ).resolves.toEqual(expect.objectContaining({
         totals: expect.objectContaining({
-          currency: 'ARS',
-          balance: 0,
+          balanceByCurrency: [],
+          totalChargesByCurrency: [],
+          totalPaidByCurrency: [],
+          totalAllocatedByCurrency: [],
         }),
       }));
 
@@ -3561,7 +3878,7 @@ describe('FinanzasService', () => {
         ),
       ).resolves.toEqual(expect.objectContaining({
         totals: expect.objectContaining({
-          balance: 0,
+          balanceByCurrency: [],
         }),
       }));
 
@@ -3631,7 +3948,7 @@ describe('FinanzasService', () => {
         ),
       ).resolves.toEqual(expect.objectContaining({
         totals: expect.objectContaining({
-          balance: 0,
+          balanceByCurrency: [],
         }),
       }));
     });
@@ -3689,7 +4006,7 @@ describe('FinanzasService', () => {
         ),
       ).resolves.toEqual(expect.objectContaining({
         totals: expect.objectContaining({
-          balance: 0,
+          balanceByCurrency: [],
         }),
       }));
 

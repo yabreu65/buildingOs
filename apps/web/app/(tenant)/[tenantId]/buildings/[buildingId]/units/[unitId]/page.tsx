@@ -22,7 +22,7 @@ import { DocumentList } from '@/features/buildings/components/documents';
 import { useDocumentsUnit } from '@/features/buildings/hooks/useDocumentsUnit';
 import { UnitFinanceTab } from '@/features/finance/components/UnitFinanceTab';
 import { useUnitLedger } from '@/features/finance/hooks/useUnitLedger';
-import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 import { Users, Mail, Phone, User, Trash2, Plus, Lock, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { ErrorBoundary } from '@/shared/components/error-boundary';
 import { AssignResidentModal } from './AssignResidentModal';
@@ -296,7 +296,7 @@ const UnitDashboardContent = ({
                 </div>
               </div>
             </div>
-          ) : ledger.totals.balance > 0 ? (
+          ) : (ledger.totals.balanceByCurrency ?? []).some((b) => b.amountMinor > 0) ? (
             <div className="space-y-3">
               <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
                 <div className="flex items-center gap-2">
@@ -304,14 +304,14 @@ const UnitDashboardContent = ({
                   <div>
                     <p className="text-xs text-muted-foreground">{t('finanzas.totalDebt')}</p>
                     <p className="text-2xl font-bold text-orange-600">
-                      {formatCurrency(ledger.totals.balance, ledger.totals.currency || 'USD')}
+                      {formatCurrencyBuckets(ledger.totals.balanceByCurrency)}
                     </p>
                   </div>
                 </div>
               </div>
-              {((ledger.totals.totalPaid ?? ledger.totals.totalAllocated ?? 0) > 0) && (
+              {((ledger.totals.totalPaidByCurrency ?? []).some((b) => b.amountMinor > 0)) && (
                 <p className="text-xs text-muted-foreground">
-                  {t('finanzas.paid')}: {formatCurrency(ledger.totals.totalPaid ?? ledger.totals.totalAllocated ?? 0, ledger.totals.currency || 'USD')}
+                  {t('finanzas.paid')}: {formatCurrencyBuckets(ledger.totals.totalPaidByCurrency)}
                 </p>
               )}
             </div>

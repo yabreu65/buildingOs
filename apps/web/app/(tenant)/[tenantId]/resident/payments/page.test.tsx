@@ -147,11 +147,10 @@ function makeLedger(overrides: Partial<Record<string, unknown>> = {}) {
     charges: [makeCharge()],
     payments: [],
     totals: {
-      balance: 9998,
-      currency: 'ARS',
-      totalCharges: 9998,
-      totalPaid: 0,
-      totalAllocated: 0,
+      balanceByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+      totalPaidByCurrency: [],
+      totalAllocatedByCurrency: [],
     },
     ...overrides,
   };
@@ -654,12 +653,11 @@ describe('ResidentPaymentsPage', () => {
         }),
       ],
       totals: {
-        balance: 9998,
-        currency: 'ARS',
-        totalCharges: 9998,
-        totalPaid: 0,
-        totalAllocated: 0,
-      },
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        },
     }));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -697,12 +695,11 @@ describe('ResidentPaymentsPage', () => {
         }),
       ],
       totals: {
-        balance: 9998,
-        currency: 'ARS',
-        totalCharges: 9998,
-        totalPaid: 0,
-        totalAllocated: 0,
-      },
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        },
     }));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -744,12 +741,11 @@ describe('ResidentPaymentsPage', () => {
             }),
           ],
           totals: {
-            balance: 10998,
-            currency: 'ARS',
-            totalCharges: 10998,
-            totalPaid: 0,
-            totalAllocated: 0,
-          },
+            balanceByCurrency: [{ currency: 'ARS', amountMinor: 10998 }],
+            totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 10998 }],
+            totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+            totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+            },
         }),
       );
     });
@@ -782,12 +778,11 @@ describe('ResidentPaymentsPage', () => {
         }),
       ],
       totals: {
-        balance: 9998,
-        currency: 'ARS',
-        totalCharges: 9998,
-        totalPaid: 0,
-        totalAllocated: 0,
-      },
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        },
     }));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -822,12 +817,11 @@ describe('ResidentPaymentsPage', () => {
             }),
           ],
           totals: {
-            balance: 9997,
-            currency: 'ARS',
-            totalCharges: 9997,
-            totalPaid: 1,
-            totalAllocated: 1,
-          },
+            balanceByCurrency: [{ currency: 'ARS', amountMinor: 9997 }],
+            totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9997 }],
+            totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 1 }],
+            totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 1 }],
+            },
         }),
       );
     });
@@ -859,12 +853,11 @@ describe('ResidentPaymentsPage', () => {
         }),
       ],
       totals: {
-        balance: 9998,
-        currency: 'ARS',
-        totalCharges: 9998,
-        totalPaid: 0,
-        totalAllocated: 0,
-      },
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 9998 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        },
     }));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -923,12 +916,11 @@ describe('ResidentPaymentsPage', () => {
         }),
       ],
       totals: {
-        balance: 7777,
-        currency: 'ARS',
-        totalCharges: 7777,
-        totalPaid: 0,
-        totalAllocated: 0,
-      },
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 7777 }],
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 7777 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+        },
     }));
     mockedListPayments.mockResolvedValueOnce([]);
 
@@ -1320,12 +1312,11 @@ describe('ResidentPaymentsPage', () => {
           }),
         ],
         totals: {
-          balance: 12498,
-          currency: 'ARS',
-          totalCharges: 12498,
-          totalPaid: 0,
-          totalAllocated: 0,
-        },
+          balanceByCurrency: [{ currency: 'ARS', amountMinor: 12498 }],
+          totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 12498 }],
+          totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          },
       }),
     );
     mockedListPayments.mockResolvedValueOnce([]);
@@ -1482,12 +1473,11 @@ describe('ResidentPaymentsPage', () => {
           }),
         ],
         totals: {
-          balance: 68750,
-          currency: 'ARS',
-          totalCharges: 68750,
-          totalPaid: 0,
-          totalAllocated: 0,
-        },
+          balanceByCurrency: [{ currency: 'ARS', amountMinor: 68750 }],
+          totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 68750 }],
+          totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          },
       }),
     );
     mockedListPayments.mockResolvedValueOnce([
@@ -1563,12 +1553,11 @@ describe('ResidentPaymentsPage', () => {
           }),
         ],
         totals: {
-          balance: 64850,
-          currency: 'ARS',
-          totalCharges: 64850,
-          totalPaid: 0,
-          totalAllocated: 0,
-        },
+          balanceByCurrency: [{ currency: 'ARS', amountMinor: 64850 }],
+          totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 64850 }],
+          totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          totalAllocatedByCurrency: [{ currency: 'ARS', amountMinor: 0 }],
+          },
       }),
     );
     mockedListPayments.mockResolvedValueOnce([
@@ -1602,5 +1591,37 @@ describe('ResidentPaymentsPage', () => {
     expect(screen.getByText('Historial de pagos')).toBeTruthy();
     expect(screen.getByRole('button', { name: /ver comprobante del pago de/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /ver recibo del pago de/i })).toBeTruthy();
+  });
+
+  it('each debt charge displays its own currency (multi USD+ARS, no silent fallback)', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(
+      makeLedger({
+        charges: [
+          makeCharge({ id: 'c-usd', amount: 10000, currency: 'USD', period: '2026-06', concept: 'Expensas Junio', dueDate: '2026-06-15' }),
+          makeCharge({ id: 'c-ars', amount: 2000000, currency: 'ARS', period: '2026-07', concept: 'Expensas Julio', dueDate: '2026-07-15' }),
+        ],
+      }),
+    );
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+    expect(await screen.findByText('Expensas Junio')).toBeTruthy();
+    expect(await screen.findByText('Expensas Julio')).toBeTruthy();
+    // Each charge renders its own currency (US$ for USD, $ for ARS);
+    // a single silent default currency would hide one of them.
+    const normalized = document.body.textContent ?? '';
+    // USD charge uses its own locale format (en-US: 100.00), ARS charge
+    // uses es-AR (20.000,00) — each debt carries its real currency.
+    expect(normalized).toContain('100.00');
+    expect(normalized).toContain('20.000,00');
+  });
+
+  it('empty ledger: no payment form is offered, so no silent ARS write default', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({ charges: [] }));
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+    expect(await screen.findByText('No tenés cargos pendientes por ahora.')).toBeTruthy();
+    // No payment amount/currency is invented for an empty balance.
+    const normalized = document.body.textContent ?? '';
+    expect(normalized).not.toContain('$ 0,00');
   });
 });

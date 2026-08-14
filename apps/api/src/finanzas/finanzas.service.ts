@@ -2049,12 +2049,6 @@ export class FinanzasService {
     userId?: string,
     membership?: AuthenticatedMembership,
   ): Promise<UnitLedgerDto> {
-    // Load tenant to get currency
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { currency: true },
-    });
-
     // 1. Validate unit belongs to tenant
     const unit = await this.prisma.unit.findFirst({
       where: {
@@ -2165,17 +2159,49 @@ export class FinanzasService {
       (item) => item.outstanding > 0,
     );
 
-    // TotalPaid = sum of ALL approved allocations (not just on outstanding charges)
-    const totalPaid = chargesWithApprovedAllocated.reduce(
-      (sum, item) => sum + item.approvedAllocated,
-      0,
+    // Per-currency charge-side aggregates. Each charge contributes to
+    // the bucket of its own currency (Charge.currency) — never mixed,
+    // never relabelled to a tenant/default currency.
+    //
+    // balanceByCurrency represents OUTSTANDING_DEBT per currency: it is
+    // derived from calculateChargeOutstandingMinor (clamped >= 0), never
+    // from charges - allocations, so legacy over-allocation can never
+    // produce a negative balance. totalAllocatedByCurrency keeps the
+    // informative effective allocation totals.
+    const totalsByCurrency = new Map<
+      string,
+      { charges: number; paid: number; balance: number }
+    >();
+    for (const item of chargesWithApprovedAllocated) {
+      const acc = totalsByCurrency.get(item.charge.currency) ?? {
+        charges: 0,
+        paid: 0,
+        balance: 0,
+      };
+      acc.charges += item.charge.amount;
+      acc.paid += item.approvedAllocated;
+      acc.balance += item.outstanding;
+      totalsByCurrency.set(item.charge.currency, acc);
+    }
+
+    const totalChargesByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.charges,
+      })),
     );
-    // TotalCharges = sum of ALL charge amounts
-    const totalCharges = chargesWithApprovedAllocated.reduce(
-      (sum, item) => sum + item.charge.amount,
-      0,
+    const totalPaidByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.paid,
+      })),
     );
-    const balance = totalCharges - totalPaid;
+    const balanceByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.balance,
+      })),
+    );
 
     return {
       unitId,
@@ -2200,16 +2226,37 @@ export class FinanzasService {
         method: p.method,
         status: p.status,
         createdAt: p.createdAt,
-        allocated: aggregatePaymentSideAllocations(p).originalConsumedMinor,
+        allocated: this.safePaymentSideAllocatedMinor(p),
       })),
       totals: {
-        totalCharges,
-        totalPaid,
-        totalAllocated: totalPaid,
-        balance,
-        currency: tenant.currency,
+        totalChargesByCurrency,
+        totalPaidByCurrency,
+        totalAllocatedByCurrency: totalPaidByCurrency,
+        balanceByCurrency,
       },
     };
+  }
+
+  /**
+   * Read-compatible payment-side allocated amount for the ledger.
+   * Legacy payments whose original/functional snapshot cannot be resolved
+   * (missing or inconsistent snapshot fields) must not crash the ledger
+   * read path: their informational allocated amount is reported as 0.
+   */
+  /**
+   * Read-compatible payment-side allocated amount for the ledger.
+   * Legacy payments whose original/functional snapshot cannot be resolved
+   * (PAYMENT_LEGACY_SNAPSHOT_REQUIRED) report null — the historical
+   * payment-side value is UNKNOWN, never a fabricated zero.
+   */
+  private safePaymentSideAllocatedMinor(
+    payment: Parameters<typeof aggregatePaymentSideAllocations>[0],
+  ): number | null {
+    try {
+      return aggregatePaymentSideAllocations(payment).originalConsumedMinor;
+    } catch {
+      return null;
+    }
   }
 
   private async assertUnitLedgerAccess(params: {

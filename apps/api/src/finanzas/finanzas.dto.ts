@@ -459,14 +459,13 @@ export interface UnitLedgerDto {
     method: PaymentMethod;
     status: PaymentStatus;
     createdAt: Date;
-    allocated: number;
+    allocated: number | null;
   }>;
   totals: {
-    totalCharges: number;
-    totalPaid: number;
-    totalAllocated: number;
-    balance: number;
-    currency: string;
+    totalChargesByCurrency: ReportCurrencyAmountBucket[];
+    totalPaidByCurrency: ReportCurrencyAmountBucket[];
+    totalAllocatedByCurrency: ReportCurrencyAmountBucket[];
+    balanceByCurrency: ReportCurrencyAmountBucket[];
   };
 }
 
