@@ -15,6 +15,11 @@ import {
 } from './tools.types';
 import { AssistantQueryParser } from './query-parser/assistant-query-parser';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import {
+  aggregateReportBuckets,
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from '../finanzas/currency-buckets';
 
 const TOOL_PERMISSION = {
   resolve_unit_ref: 'tools.resolve_unit_ref',
@@ -259,19 +264,17 @@ export class AssistantToolsService {
       },
     });
 
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
+    const outstandingByCurrency = this.debtCalculator.calculateOutstandingByCurrency(charges);
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
 
-    const answer = outstanding > 0
-      ? `La unidad ${unit.label ?? unit.code} (${unit.building.name}) tiene deuda pendiente de ${this.formatMoney(outstanding)}.`
+    const answer = hasDebt
+      ? `La unidad ${unit.label ?? unit.code} (${unit.building.name}) tiene deuda pendiente de ${this.formatBuckets(outstandingByCurrency)}.`
       : `La unidad ${unit.label ?? unit.code} (${unit.building.name}) no tiene deuda pendiente.`;
 
     return this.buildResponse(answer, 'summary', {
       unitId,
       debtStatus,
-      outstanding,
-      amount: outstanding,
-      overdueAmount: outstanding,
-      currency: 'ARS',
+      outstandingByCurrency,
       asOf: now.toISOString().slice(0, 10),
       status: 'operativo',
     });
@@ -368,7 +371,7 @@ export class AssistantToolsService {
       const towerName = lastPayment.building?.name ?? lastPayment.unit?.building?.name ?? 'N/A';
 
       return this.buildResponse(
-        `Último pago recibido: ${this.formatMoney(lastPayment.amount)} el ${paymentDateIso} (${towerName}, estado ${String(lastPayment.status).toLowerCase()}).`,
+        `Último pago recibido: ${this.formatMoney(lastPayment.amount, lastPayment.currency)} el ${paymentDateIso} (${towerName}, estado ${String(lastPayment.status).toLowerCase()}).`,
         'summary',
         {
           mode,
@@ -397,32 +400,54 @@ export class AssistantToolsService {
           unit: { select: { id: true, label: true, code: true, building: { select: { name: true } } } },
           paymentAllocations: { include: { payment: { select: { status: true } } } },
         },
-        take: 5000,
       });
 
-      const debtByUnit = new Map<string, { label: string; building: string; amount: number }>();
+      // Per-unit per-currency buckets; ordering is NON-monetary
+      // (earliest dueDate ASC, then unitId ASC).
+      const debtByUnit = new Map<
+        string,
+        {
+          label: string;
+          building: string;
+          earliestDue: Date;
+          entries: Array<{ currency: string; amountMinor: number }>;
+        }
+      >();
       for (const charge of charges) {
         const outstanding = this.debtCalculator.calculateChargeOutstanding(charge);
         if (outstanding <= 0) continue;
         const current = debtByUnit.get(charge.unitId) ?? {
           label: charge.unit?.label ?? charge.unit?.code ?? charge.unitId,
           building: charge.unit?.building?.name ?? 'N/A',
-          amount: 0,
+          earliestDue: charge.dueDate,
+          entries: [],
         };
-        current.amount += outstanding;
+        current.entries.push({ currency: charge.currency, amountMinor: outstanding });
+        if (charge.dueDate < current.earliestDue) {
+          current.earliestDue = charge.dueDate;
+        }
         debtByUnit.set(charge.unitId, current);
       }
 
       const top = [...debtByUnit.entries()]
-        .map(([unitId, info]) => ({ unitId, ...info }))
-        .sort((a, b) => b.amount - a.amount)
+        .map(([unitId, info]) => ({
+          unitId,
+          label: info.label,
+          building: info.building,
+          outstandingByCurrency: aggregateReportBuckets(info.entries),
+        }))
+        .sort((a, b) => {
+          const dueDiff = debtByUnit.get(a.unitId)!.earliestDue.getTime() - debtByUnit.get(b.unitId)!.earliestDue.getTime();
+          if (dueDiff !== 0) return dueDiff;
+          return a.unitId.localeCompare(b.unitId);
+        })
         .slice(0, ranking);
 
       return this.buildResponse(
         top.length === 0
           ? 'No hay unidades con deuda vencida.'
-          : `Top ${top.length} unidades con deuda vencida: ${top
-              .map((item) => `${item.label} (${item.building}) ${this.formatMoney(item.amount)}`)
+          : `Unidades con deuda vencida: ${top
+              .map((item) => `${item.label} (${item.building}) ${this.formatBuckets(item.outstandingByCurrency)}`)
               .join(' | ')}.`,
         top.length === 0 ? 'no_data' : 'list',
         { ranking, debtStatus: 'OVERDUE', top },
@@ -446,7 +471,7 @@ export class AssistantToolsService {
     const answer = rows.length === 0
       ? 'No hay pagos para ese filtro.'
       : `Pagos encontrados: ${rows
-          .map((row) => `${row.unit?.label ?? row.unit?.code ?? 'N/A'} (${row.unit?.building?.name ?? 'N/A'}) ${this.formatMoney(row.amount)}`)
+          .map((row) => `${row.unit?.label ?? row.unit?.code ?? 'N/A'} (${row.unit?.building?.name ?? 'N/A'}) ${this.formatMoney(row.amount, row.currency)}`)
           .join(' | ')}.`;
     return this.buildResponse(answer, rows.length === 0 ? 'no_data' : 'list', {
       ranking,
@@ -664,12 +689,27 @@ export class AssistantToolsService {
       .trim();
   }
 
-  private formatMoney(cents: number): string {
+  private formatMoney(cents: number, currency: string): string {
     return new Intl.NumberFormat('es-AR', {
       style: 'currency',
-      currency: 'ARS',
+      currency,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(cents / 100);
+  }
+
+  /**
+   * Render currency buckets as an explicit enumeration (canonical first,
+   * legacy after). Never produces a mixed nominal total.
+   */
+  private formatBuckets(
+    buckets: readonly ReportCurrencyAmountBucket[],
+  ): string {
+    if (!buckets || buckets.length === 0) {
+      return '—';
+    }
+    return buckets
+      .map((bucket) => formatCurrencySafe(bucket.amountMinor, bucket.currency))
+      .join(', ');
   }
 }

@@ -29,12 +29,13 @@ describe('ResponseFormatterService', () => {
       expect(result.answer).toContain('name');
     });
 
-    it('formats money with es-VE locale', () => {
+    it('does not guess a currency for money-like numbers without one', () => {
       const data = [{ id: '1', description: 'Test', amount: 10500 }];
       const result = service.formatV1(data, 'list_payments');
 
-      // es-VE format should show decimal places
-      expect(result.answer).toMatch(/\d+,\d{2}/);
+      // No VES/ARS fallback: the number is rendered plainly.
+      expect(result.answer).toContain('10500');
+      expect(result.answer).not.toMatch(/\d+,\d{2}/);
     });
 
     it('formats dates correctly', () => {
@@ -75,10 +76,10 @@ describe('ResponseFormatterService', () => {
     });
 
     it('includes overdue months for unit debt summaries', () => {
-      const data = { totalDebt: 2388869, overduePeriodCount: 3, currency: 'VES' };
+      const data = { outstandingByCurrency: [{ currency: 'VES', amountMinor: 2388869 }], overduePeriodCount: 3 };
       const result = service.formatV2(data, 'unit_debt', 0.9);
 
-      expect(result.summary).toContain('Deuda total');
+      expect(result.summary).toContain('Deuda pendiente');
       expect(result.summary).toContain('3 meses adeudados');
     });
 
@@ -115,11 +116,11 @@ describe('ResponseFormatterService', () => {
     });
 
     it('renders tenant_debt summaries as administration debt', () => {
-      const data = { totalDebt: 474568, currency: 'ARS' };
+      const data = { outstandingByCurrency: [{ currency: 'ARS', amountMinor: 474568 }] };
       const result = service.formatV2(data, 'tenant_debt', 0.9);
 
       expect(result.title).toBe('Tenant Debt');
-      expect(result.summary).toContain('Deuda total de la administración');
+      expect(result.summary).toContain('Deuda pendiente de la administración');
     });
   });
 

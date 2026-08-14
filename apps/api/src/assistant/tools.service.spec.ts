@@ -100,7 +100,7 @@ describe('AssistantToolsService', () => {
       building: { name: 'Torre A' },
     });
     prisma.charge.findMany.mockResolvedValue([
-      { id: 'c1', amount: 50000, paymentAllocations: [] },
+      { id: 'c1', amount: 50000, currency: 'ARS', paymentAllocations: [] },
     ]);
 
     const result = await service.executeTool(
@@ -115,8 +115,8 @@ describe('AssistantToolsService', () => {
 
     expect(result.responseType).toBe('summary');
     expect(result.metadata.unitId).toBe('u1');
-    expect(result.metadata.outstanding).toBe(50000);
-    expect(result.metadata.amount).toBe(50000);
+    expect(result.metadata.outstandingByCurrency).toEqual([{ currency: 'ARS', amountMinor: 50000 }]);
+    
     expect(result.metadata.asOf).toEqual(expect.any(String));
     expect(result.metadata.status).toBe('operativo');
   });

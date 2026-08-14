@@ -166,9 +166,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 50000,
-      totalOutstanding: 100000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -178,7 +178,7 @@ describe('AssistantQueryExecutorsService', () => {
 
     expect(policy.assertCanExecute).toHaveBeenCalledWith(expect.objectContaining({ buildingId: 'building-1' }));
     expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith('tenant-1', 'building-1', undefined);
-    expect(result?.answer).toContain('deuda pendiente total');
+    expect(result?.answer).toContain('tiene deuda pendiente:');
   });
 
   it('executes building_debt with relative-range periods and a labeled range response', async () => {
@@ -210,9 +210,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Torre El Parque' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 50000,
-      totalOutstanding: 100000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -248,9 +248,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 50000,
-      totalOutstanding: 100000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -275,9 +275,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 50000,
-      totalOutstanding: 100000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -321,9 +321,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Torre El Parque' }]);
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 50000,
-      totalOutstanding: 100000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -350,9 +350,9 @@ describe('AssistantQueryExecutorsService', () => {
       source: 'deterministic_rules',
     };
     finanzasService.getTenantFinancialSummary.mockResolvedValue({
-      totalCharges: 30000,
-      totalPaid: 14199,
-      totalOutstanding: 15801,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 30000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 14199 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 15801 }],
       delinquentUnitsCount: 2,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -392,9 +392,9 @@ describe('AssistantQueryExecutorsService', () => {
       source: 'deterministic_rules',
     };
     finanzasService.getTenantFinancialSummary.mockResolvedValue({
-      totalCharges: 200000,
-      totalPaid: 50000,
-      totalOutstanding: 150000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 200000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
       delinquentUnitsCount: 2,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -455,13 +455,13 @@ describe('AssistantQueryExecutorsService', () => {
     };
     prisma.building.findMany.mockResolvedValue([{ id: 'building-1', name: 'Edificio A' }]);
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 200000,
-      totalPaid: 50000,
-      totalOutstanding: 150000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 200000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
       delinquentUnitsCount: 2,
       topDelinquentUnits: [
-        { unitId: 'unit-1', unitLabel: 'Unidad 0101', buildingId: 'building-1', buildingName: 'Edificio A', outstanding: 90000 },
-        { unitId: 'unit-2', unitLabel: 'Unidad 0202', buildingId: 'building-1', buildingName: 'Edificio A', outstanding: 60000 },
+        { unitId: 'unit-1', unitLabel: 'Unidad 0101', buildingId: 'building-1', buildingName: 'Edificio A', outstandingByCurrency: [{ currency: 'ARS', amountMinor: 90000 }] },
+        { unitId: 'unit-2', unitLabel: 'Unidad 0202', buildingId: 'building-1', buildingName: 'Edificio A', outstandingByCurrency: [{ currency: 'ARS', amountMinor: 60000 }] },
       ],
       currency: 'ARS',
     });
@@ -469,7 +469,7 @@ describe('AssistantQueryExecutorsService', () => {
     const result = await service.execute({ tenantId: 'tenant-1', userId: 'operator-1', userRoles: ['OPERATOR'], plan });
 
     expect(finanzasService.getBuildingFinancialSummary).toHaveBeenCalledWith('tenant-1', 'building-1', undefined);
-    expect(result?.answer).toContain('Top deudores');
+    expect(result?.answer).toContain('Unidades con deuda pendiente');
     expect(result?.answer).toContain('Unidad 0101');
     expect(prisma.charge.findMany).not.toHaveBeenCalled();
   });
@@ -491,9 +491,9 @@ describe('AssistantQueryExecutorsService', () => {
     ]);
     prisma.unit.findMany.mockResolvedValue([{ id: 'unit-1', code: '0101', label: 'Unidad 0101' }]);
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 100000,
-      totalOutstanding: 50000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -525,9 +525,9 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.ticket.count.mockResolvedValue(1);
     prisma.ticket.findMany.mockResolvedValue([{ id: 'ticket-1', title: 'Ascensor', status: 'OPEN', priority: 'HIGH', unitId: null, createdAt: new Date() }]);
     finanzasService.getBuildingFinancialSummary.mockResolvedValue({
-      totalCharges: 160000,
-      totalPaid: 90000,
-      totalOutstanding: 70000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 160000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 90000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 70000 }],
       delinquentUnitsCount: 2,
       topDelinquentUnits: [],
       currency: 'ARS',

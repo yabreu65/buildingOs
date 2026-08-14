@@ -125,27 +125,36 @@ export interface PaymentAllocation {
   };
 }
 
+export interface CurrencyAmountBucket {
+  readonly currency: string;
+  readonly amountMinor: number;
+}
+
+export interface CollectionRateBucket {
+  readonly currency: string;
+  readonly rate: number;
+}
+
 export interface MonthlyTrendDto {
   period: string;
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
-  collectionRate: number;
+  totalChargesByCurrency: CurrencyAmountBucket[];
+  totalPaidByCurrency: CurrencyAmountBucket[];
+  totalOutstandingByCurrency: CurrencyAmountBucket[];
+  collectionRateByCurrency: CollectionRateBucket[];
 }
 
 export interface FinancialSummary {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: CurrencyAmountBucket[];
+  totalPaidByCurrency: CurrencyAmountBucket[];
+  totalOutstandingByCurrency: CurrencyAmountBucket[];
   delinquentUnitsCount: number;
   topDelinquentUnits: Array<{
     unitId: string;
     unitLabel: string;
     buildingId: string;
     buildingName: string;
-    outstanding: number;
+    outstandingByCurrency: CurrencyAmountBucket[];
   }>;
-  currency: string;
 }
 
 export type BuildingDelinquencyAging = 'ALL' | 'ONE_PERIOD' | 'TWO_TO_THREE_PERIODS' | 'MORE_THAN_THREE_PERIODS';

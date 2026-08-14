@@ -17,6 +17,7 @@ import {
 } from 'class-validator';
 import { ChargeType, ChargeStatus, PaymentStatus, PaymentMethod, RejectionReason } from '@prisma/client';
 import { CANONICAL_CURRENCIES } from '@buildingos/contracts';
+import type { ReportCurrencyAmountBucket } from './currency-buckets';
 import { IsStrictDateString } from './strict-date.decorator';
 import {
   BuildingChargeParamDto,
@@ -422,18 +423,17 @@ export interface PaymentDetailDto {
 }
 
 export interface FinancialSummaryDto {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: ReportCurrencyAmountBucket[];
+  totalPaidByCurrency: ReportCurrencyAmountBucket[];
+  totalOutstandingByCurrency: ReportCurrencyAmountBucket[];
   delinquentUnitsCount: number;
   topDelinquentUnits: Array<{
     unitId: string;
     unitLabel: string;
     buildingId: string;
     buildingName: string;
-    outstanding: number;
+    outstandingByCurrency: ReportCurrencyAmountBucket[];
   }>;
-  currency: string;
 }
 
 export interface UnitLedgerDto {
@@ -587,10 +587,10 @@ export interface BuildingDelinquencyResponseDto {
 
 export interface MonthlyTrendDto {
   period: string;           // "YYYY-MM"
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
-  collectionRate: number;   // 0-100
+  totalChargesByCurrency: ReportCurrencyAmountBucket[];
+  totalPaidByCurrency: ReportCurrencyAmountBucket[];
+  totalOutstandingByCurrency: ReportCurrencyAmountBucket[];
+  collectionRateByCurrency: Array<{ currency: string; rate: number }>; // 0-100
 }
 
 export class FinanceTrendQueryDto {

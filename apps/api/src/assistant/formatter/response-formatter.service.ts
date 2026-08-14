@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { StructuredResponse, ResponseType, SuggestedAction, IntentFilters } from '../intent-engine/intent.types';
 import { ChatResponse, SuggestedActionType } from '../ai.types';
+import {
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from '../../finanzas/currency-buckets';
 
 /**
  * Supported formatter types
@@ -235,10 +239,9 @@ export class ResponseFormatterService {
     }
 
     if (typeof value === 'number') {
-      // Check if it looks like a money amount (whole numbers >= 100)
-      if (Number.isInteger(value) && value >= 100) {
-        return this.formatMoney(value);
-      }
+      // Money amounts must carry their currency from their source; a
+      // number without a known currency is never formatted with a
+      // guessed/default currency (no VES/ARS fallback).
       return String(value);
     }
 
@@ -254,9 +257,25 @@ export class ResponseFormatterService {
   }
 
   /**
-   * Format money amount with es-VE locale
+   * Render currency buckets as an explicit enumeration (canonical first,
+   * legacy after). Never produces a mixed nominal total.
    */
-  private formatMoney(amountCents: number, currency = 'VES'): string {
+  private formatBuckets(
+    buckets: readonly ReportCurrencyAmountBucket[],
+  ): string {
+    if (!buckets || buckets.length === 0) {
+      return '—';
+    }
+    return buckets
+      .map((bucket) => formatCurrencySafe(bucket.amountMinor, bucket.currency))
+      .join(', ');
+  }
+
+  /**
+   * Format money amount with the explicitly provided currency.
+   * Never guesses a currency.
+   */
+  private formatMoney(amountCents: number, currency: string): string {
     const amount = amountCents / 100;
     try {
       return new Intl.NumberFormat('es-VE', { style: 'currency', currency }).format(amount);
@@ -290,8 +309,9 @@ export class ResponseFormatterService {
 
     for (const [key, value] of Object.entries(record)) {
       const label = this.formatLabel(key);
-      if (typeof value === 'number' && this.isMoneyField(key)) {
-        lines.push(`${label}: ${this.formatMoney(value)}`);
+      const currency = typeof record.currency === 'string' ? record.currency : undefined;
+      if (typeof value === 'number' && this.isMoneyField(key) && currency) {
+        lines.push(`${label}: ${this.formatMoney(value, currency)}`);
       } else if (typeof value === 'number') {
         lines.push(`${label}: ${value}`);
       } else {
@@ -373,11 +393,12 @@ export class ResponseFormatterService {
 
       switch (intent) {
         case 'unit_debt': {
-          const totalDebt = record.totalDebt as number;
-          const currency = (record.currency as string) || 'VES';
+          const buckets = record.outstandingByCurrency as ReportCurrencyAmountBucket[] | undefined;
           const overduePeriodCount = record.overduePeriodCount as number | undefined;
-          if (totalDebt !== undefined) {
-            const debtSummary = `Deuda total: ${this.formatMoney(totalDebt, currency)}`;
+          if (buckets !== undefined) {
+            const debtSummary = buckets.length > 0
+              ? `Deuda pendiente: ${this.formatBuckets(buckets)}`
+              : 'Sin deuda pendiente';
             if (overduePeriodCount !== undefined) {
               const periodLabel = overduePeriodCount === 1 ? 'mes adeudado' : 'meses adeudados';
               return `${debtSummary} (${overduePeriodCount} ${periodLabel})`;
@@ -388,19 +409,21 @@ export class ResponseFormatterService {
         }
 
         case 'building_debt': {
-          const totalDebt = record.totalDebt as number;
-          const currency = (record.currency as string) || 'VES';
-          if (totalDebt !== undefined) {
-            return `Deuda total: ${this.formatMoney(totalDebt, currency)}`;
+          const buckets = record.outstandingByCurrency as ReportCurrencyAmountBucket[] | undefined;
+          if (buckets !== undefined) {
+            return buckets.length > 0
+              ? `Deuda pendiente: ${this.formatBuckets(buckets)}`
+              : 'Sin deuda pendiente';
           }
           break;
         }
 
         case 'tenant_debt': {
-          const totalDebt = record.totalDebt as number;
-          const currency = (record.currency as string) || 'VES';
-          if (totalDebt !== undefined) {
-            return `Deuda total de la administración: ${this.formatMoney(totalDebt, currency)}`;
+          const buckets = record.outstandingByCurrency as ReportCurrencyAmountBucket[] | undefined;
+          if (buckets !== undefined) {
+            return buckets.length > 0
+              ? `Deuda pendiente de la administración: ${this.formatBuckets(buckets)}`
+              : 'La administración no tiene deuda pendiente';
           }
           break;
         }
@@ -477,7 +500,8 @@ export class ResponseFormatterService {
         case 'expenses_summary': {
           const totalExpenses = record.totalExpenses as number;
           if (totalExpenses !== undefined) {
-            return `Gastos totales: ${this.formatMoney(totalExpenses)}`;
+            const currency = typeof record.currency === 'string' ? record.currency : undefined;
+            return `Gastos totales: ${currency ? this.formatMoney(totalExpenses, currency) : String(totalExpenses)}`;
           }
           break;
         }
@@ -487,7 +511,9 @@ export class ResponseFormatterService {
           const expenses = record.expenses as number;
           if (income !== undefined && expenses !== undefined) {
             const diff = income - expenses;
-            return `Ingresos: ${this.formatMoney(income)} | Gastos: ${this.formatMoney(expenses)} | Diferencia: ${this.formatMoney(Math.abs(diff))} ${diff >= 0 ? '(superávit)' : '(déficit)'}`;
+            const currency = typeof record.currency === 'string' ? record.currency : undefined;
+            const fmt = (v: number) => (currency ? this.formatMoney(v, currency) : String(v));
+            return `Ingresos: ${fmt(income)} | Gastos: ${fmt(expenses)} | Diferencia: ${fmt(Math.abs(diff))} ${diff >= 0 ? '(superávit)' : '(déficit)'}`;
           }
           break;
         }

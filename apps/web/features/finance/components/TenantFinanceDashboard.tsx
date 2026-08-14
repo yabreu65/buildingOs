@@ -320,7 +320,6 @@ export const TenantFinanceDashboard = () => {
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList 
             tenantId={tenantId || ''} 
-            currency={summary?.currency || 'USD'}
             delinquent={summary?.topDelinquentUnits || []} 
             loading={loading} 
           />

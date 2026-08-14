@@ -3223,9 +3223,7 @@ describe('FinanzasService', () => {
       jest.spyOn(validators, 'isResidentOrOwner').mockReturnValue(true);
       jest.spyOn(validators, 'getUserUnitIds').mockResolvedValue(['unit-1']);
       jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([] as never);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([] as never);
-
-      await service.getTenantFinancialSummary('tenant-1', undefined, ['RESIDENT'], 'resident-1');
+            await service.getTenantFinancialSummary('tenant-1', undefined, ['RESIDENT'], 'resident-1');
 
       expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({
@@ -3244,19 +3242,11 @@ describe('FinanzasService', () => {
           buildingId: 'building-1',
           unitId: 'unit-1',
           amount: 1000,
+          dueDate: new Date('2020-01-01T00:00:00Z'),
           paymentAllocations: [],
         },
       ] as never);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
-        {
-          id: 'unit-1',
-          label: '0101',
-          buildingId: 'building-1',
-          building: { name: 'Edificio A' },
-        },
-      ] as never);
-
-      await service.getTenantFinancialSummary('tenant-1', {
+            await service.getTenantFinancialSummary('tenant-1', {
         periods: ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
       });
 
@@ -3280,19 +3270,11 @@ describe('FinanzasService', () => {
           buildingId: 'building-1',
           unitId: 'unit-1',
           amount: 1000,
+          dueDate: new Date('2020-01-01T00:00:00Z'),
           paymentAllocations: [],
         },
       ] as never);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
-        {
-          id: 'unit-1',
-          label: '0101',
-          buildingId: 'building-1',
-          building: { name: 'Edificio A' },
-        },
-      ] as never);
-
-      await service.getTenantFinancialSummary('tenant-1', '2026-06');
+            await service.getTenantFinancialSummary('tenant-1', '2026-06');
 
       expect(prismaService.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({
@@ -3310,6 +3292,8 @@ describe('FinanzasService', () => {
           buildingId: 'building-1',
           unitId: 'unit-paid',
           amount: 4_950_000,
+          currency: 'ARS',
+          dueDate: new Date('2020-01-01T00:00:00Z'),
           paymentAllocations: [
             {
               amount: 4_950_000,
@@ -3323,24 +3307,18 @@ describe('FinanzasService', () => {
           buildingId: 'building-1',
           unitId: 'unit-open',
           amount: 1_102_050_000,
+          currency: 'ARS',
+          dueDate: new Date('2020-01-01T00:00:00Z'),
+          unit: { id: 'unit-open', label: '0202', building: { id: 'building-1', name: 'Edificio A' } },
           paymentAllocations: [],
         },
       ] as never);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
-        {
-          id: 'unit-open',
-          label: '0202',
-          buildingId: 'building-1',
-          building: { name: 'Edificio A' },
-        },
-      ] as never);
-
-      const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
+            const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
 
       expect(result).toEqual({
-        totalCharges: 1_107_000_000,
-        totalPaid: 4_950_000,
-        totalOutstanding: 1_102_050_000,
+        totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 1_107_000_000 }],
+        totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 4_950_000 }],
+        totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 1_102_050_000 }],
         delinquentUnitsCount: 1,
         topDelinquentUnits: [
           {
@@ -3348,10 +3326,10 @@ describe('FinanzasService', () => {
             unitLabel: '0202',
             buildingId: 'building-1',
             buildingName: 'Edificio A',
-            outstanding: 1_102_050_000,
+            outstandingByCurrency: [{ currency: 'ARS', amountMinor: 1_102_050_000 }],
           },
         ],
-        currency: 'ARS',
+        
       });
     });
 
@@ -3364,6 +3342,8 @@ describe('FinanzasService', () => {
           buildingId: 'building-1',
           unitId: 'unit-mixed',
           amount: 10000,
+          currency: 'ARS',
+          dueDate: new Date('2020-01-01T00:00:00Z'),
           paymentAllocations: [
             {
               amount: 3000,
@@ -3384,20 +3364,11 @@ describe('FinanzasService', () => {
           ],
         },
       ] as never);
-      jest.spyOn(prismaService.unit, 'findMany').mockResolvedValue([
-        {
-          id: 'unit-mixed',
-          label: '0303',
-          buildingId: 'building-1',
-          building: { name: 'Edificio A' },
-        },
-      ] as never);
+            const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
 
-      const result = await service.getTenantFinancialSummary('tenant-1', '2026-07');
-
-      expect(result.totalCharges).toBe(10000);
-      expect(result.totalPaid).toBe(5000);
-      expect(result.totalOutstanding).toBe(5000);
+      expect(result.totalChargesByCurrency).toEqual([{ currency: 'ARS', amountMinor: 10000 }]);
+      expect(result.totalPaidByCurrency).toEqual([{ currency: 'ARS', amountMinor: 5000 }]);
+      expect(result.totalOutstandingByCurrency).toEqual([{ currency: 'ARS', amountMinor: 5000 }]);
       expect(result.delinquentUnitsCount).toBe(1);
     });
   });

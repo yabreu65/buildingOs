@@ -32,16 +32,31 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+const summaryJune = {
+  totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
+  totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 30000 }],
+  totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 70000 }],
+  delinquentUnitsCount: 1,
+  topDelinquentUnits: [] as never[],
+};
+
+const summaryJuly = {
+  totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 120000 }],
+  totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+  totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 70000 }],
+  delinquentUnitsCount: 1,
+  topDelinquentUnits: [] as never[],
+};
+
 describe('BuildingsFinanceSummary', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedGetFinancialSummary.mockResolvedValue({
-      totalCharges: 100000,
-      totalPaid: 30000,
-      totalOutstanding: 70000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 100000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 30000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 70000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
-      currency: 'ARS',
     });
   });
 
@@ -59,18 +74,17 @@ describe('BuildingsFinanceSummary', () => {
       expect(mockedGetFinancialSummary).toHaveBeenCalledWith('building-a', '2026-07');
     });
     expect(await screen.findByText('Torre Sur')).toBeTruthy();
-    expect(await screen.findByText('ARS 100.000')).toBeTruthy();
-    expect(await screen.findByText('ARS 30.000')).toBeTruthy();
-    expect(await screen.findByText('ARS 70.000')).toBeTruthy();
-    expect(await screen.findByText('30%')).toBeTruthy();
+    expect(await screen.findByText((content) => content.includes('1.000,00'))).toBeTruthy();
+    expect(await screen.findByText((content) => content.includes('300,00'))).toBeTruthy();
+    expect(await screen.findByText((content) => content.includes('700,00'))).toBeTruthy();
+    expect(await screen.findByText((content) => content.includes('30% ARS'))).toBeTruthy();
 
     mockedGetFinancialSummary.mockResolvedValueOnce({
-      totalCharges: 120000,
-      totalPaid: 50000,
-      totalOutstanding: 70000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 120000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 50000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 70000 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [],
-      currency: 'ARS',
     });
 
     rerender(
@@ -88,22 +102,8 @@ describe('BuildingsFinanceSummary', () => {
   });
 
   it('keeps the latest period summary when an older request resolves later', async () => {
-    const june = createDeferred<{
-      totalCharges: number;
-      totalPaid: number;
-      totalOutstanding: number;
-      delinquentUnitsCount: number;
-      topDelinquentUnits: never[];
-      currency: string;
-    }>();
-    const july = createDeferred<{
-      totalCharges: number;
-      totalPaid: number;
-      totalOutstanding: number;
-      delinquentUnitsCount: number;
-      topDelinquentUnits: never[];
-      currency: string;
-    }>();
+    const june = createDeferred<typeof summaryJune>();
+    const july = createDeferred<typeof summaryJuly>();
 
     mockedGetFinancialSummary
       .mockImplementationOnce(() => june.promise)
@@ -128,51 +128,23 @@ describe('BuildingsFinanceSummary', () => {
     );
 
     await act(async () => {
-      july.resolve({
-        totalCharges: 120000,
-        totalPaid: 50000,
-        totalOutstanding: 70000,
-        delinquentUnitsCount: 1,
-        topDelinquentUnits: [],
-        currency: 'ARS',
-      });
+      july.resolve(summaryJuly);
     });
 
-    expect(await screen.findByText('ARS 120.000')).toBeTruthy();
-    expect(screen.queryByText('ARS 100.000')).toBeNull();
+    expect(await screen.findByText((content) => content.includes('1.200,00'))).toBeTruthy();
+    expect(screen.queryByText((content) => content.includes('1.000,00'))).toBeNull();
 
     await act(async () => {
-      june.resolve({
-        totalCharges: 100000,
-        totalPaid: 30000,
-        totalOutstanding: 70000,
-        delinquentUnitsCount: 1,
-        topDelinquentUnits: [],
-        currency: 'ARS',
-      });
+      june.resolve(summaryJune);
     });
 
-    expect(screen.getByText('ARS 120.000')).toBeTruthy();
-    expect(screen.queryByText('ARS 100.000')).toBeNull();
+    expect(screen.getByText((content) => content.includes('1.200,00'))).toBeTruthy();
+    expect(screen.queryByText((content) => content.includes('1.000,00'))).toBeNull();
   });
 
   it('keeps a stale error from replacing a newer summary', async () => {
-    const june = createDeferred<{
-      totalCharges: number;
-      totalPaid: number;
-      totalOutstanding: number;
-      delinquentUnitsCount: number;
-      topDelinquentUnits: never[];
-      currency: string;
-    }>();
-    const july = createDeferred<{
-      totalCharges: number;
-      totalPaid: number;
-      totalOutstanding: number;
-      delinquentUnitsCount: number;
-      topDelinquentUnits: never[];
-      currency: string;
-    }>();
+    const june = createDeferred<typeof summaryJune>();
+    const july = createDeferred<typeof summaryJuly>();
 
     mockedGetFinancialSummary
       .mockImplementationOnce(() => june.promise)
@@ -197,23 +169,16 @@ describe('BuildingsFinanceSummary', () => {
     );
 
     await act(async () => {
-      july.resolve({
-        totalCharges: 120000,
-        totalPaid: 50000,
-        totalOutstanding: 70000,
-        delinquentUnitsCount: 1,
-        topDelinquentUnits: [],
-        currency: 'ARS',
-      });
+      july.resolve(summaryJuly);
     });
 
-    expect(await screen.findByText('ARS 120.000')).toBeTruthy();
+    expect(await screen.findByText((content) => content.includes('1.200,00'))).toBeTruthy();
 
     await act(async () => {
       june.reject(new Error('Periodo anterior falló'));
     });
 
-    expect(screen.getByText('ARS 120.000')).toBeTruthy();
+    expect(screen.getByText((content) => content.includes('1.200,00'))).toBeTruthy();
     expect(screen.queryByText(/Error al cargar datos/i)).toBeNull();
   });
 });

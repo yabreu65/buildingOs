@@ -1,5 +1,9 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from '../finanzas/currency-buckets';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, Prisma, UnitOccupantRole } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
@@ -2535,12 +2539,12 @@ export class AssistantService implements OnModuleInit {
       }),
     ]);
 
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
-
-    const amountText = this.formatMoney(outstanding, tenant.currency);
-    const answer = outstanding > 0
+    const outstandingByCurrency = this.debtCalculator.calculateOutstandingByCurrency(charges);
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
+    const amountText = this.formatBuckets(outstandingByCurrency);
+    const answer = hasDebt
       ? `La unidad ${displayCode} (${building.name}) tiene una deuda pendiente de ${amountText}.`
-      : `La unidad ${displayCode} (${building.name}) no tiene deuda pendiente. Saldo actual: ${amountText}.`;
+      : `La unidad ${displayCode} (${building.name}) no tiene deuda pendiente.`;
 
     return {
       answer,
@@ -2881,13 +2885,13 @@ export class AssistantService implements OnModuleInit {
       },
     });
 
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
+    const outstandingByCurrency = this.debtCalculator.calculateOutstandingByCurrency(charges);
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
+    const amountText = this.formatBuckets(outstandingByCurrency);
 
-    const amountText = this.formatMoney(outstanding, tenant.currency);
-
-    if (outstanding > 0) {
+    if (hasDebt) {
       return {
-        answer: `El edificio ${building.name} tiene una deuda total pendiente de ${amountText} distribuida entre ${units.length} unidades.`,
+        answer: `El edificio ${building.name} tiene deuda pendiente de ${amountText} distribuida entre ${units.length} unidades.`,
         suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
       };
     }
@@ -3115,13 +3119,25 @@ export class AssistantService implements OnModuleInit {
       },
     });
 
-    // Calcular deuda por unidad
+    // Deuda por unidad en buckets; orden NO monetario
+    // (earliest overdue dueDate ASC, luego unitId ASC).
     const unitDebts = this.debtCalculator.calculateOutstandingByUnit(charges);
+    const earliestByUnit = new Map<string, Date>();
+    for (const charge of charges) {
+      if (!charge.unitId) continue;
+      const current = earliestByUnit.get(charge.unitId);
+      if (!current || charge.dueDate < current) {
+        earliestByUnit.set(charge.unitId, charge.dueDate);
+      }
+    }
 
-    // Ordenar por deuda descendente y tomar top 10
     const sortedDebts = Array.from(unitDebts.entries())
-      .filter(([, debt]) => debt > 0)
-      .sort(([, a], [, b]) => b - a)
+      .filter(([, buckets]) => buckets.some((b) => b.amountMinor > 0))
+      .sort(([aId], [bId]) => {
+        const dueDiff = (earliestByUnit.get(aId)?.getTime() ?? 0) - (earliestByUnit.get(bId)?.getTime() ?? 0);
+        if (dueDiff !== 0) return dueDiff;
+        return aId.localeCompare(bId);
+      })
       .slice(0, 10);
 
     if (sortedDebts.length === 0) {
@@ -3131,16 +3147,14 @@ export class AssistantService implements OnModuleInit {
       };
     }
 
-    const debtorList = sortedDebts.map(([unitId, debt], i) => {
+    const debtorList = sortedDebts.map(([unitId, buckets], i) => {
       const unit = units.find((u) => u.id === unitId);
       const unitLabel = unit ? (unit.label || unit.code) : 'Desconocida';
-      return `${i + 1}. ${unitLabel}: ${this.formatMoney(debt, tenant.currency)}`;
+      return `${i + 1}. ${unitLabel}: ${this.formatBuckets(buckets)}`;
     }).join('\n');
 
-    const totalDebt = sortedDebts.reduce((sum, [, debt]) => sum + debt, 0);
-
     return {
-      answer: `Top deudores del edificio ${building.name} (deuda total: ${this.formatMoney(totalDebt, tenant.currency)}):\n${debtorList}`,
+      answer: `Unidades con deuda pendiente del edificio ${building.name} (${sortedDebts.length}):\n${debtorList}`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
@@ -3236,16 +3250,22 @@ export class AssistantService implements OnModuleInit {
 
     const unitIds = units.map((u) => u.id);
 
-    const outstanding = this.debtCalculator.calculateOutstanding(charges);
-
-    const avgDebt = units.length > 0 ? outstanding / units.length : 0;
+    const outstandingByCurrency = this.debtCalculator.calculateOutstandingByCurrency(charges);
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
+    // Promedio por moneda únicamente — nunca entre monedas.
+    const averageOutstandingByCurrency = hasDebt && units.length > 0
+      ? outstandingByCurrency.map((b) => ({
+          currency: b.currency,
+          amountMinor: Math.round(b.amountMinor / units.length),
+        }))
+      : [];
 
     return {
       answer: `Estadísticas del edificio ${building.name}:\n` +
         `- Unidades: ${units.length}\n` +
         `- Tickets abiertos: ${openTickets} de ${totalTickets} totales\n` +
-        `- Deuda total: ${this.formatMoney(outstanding, tenant.currency)}\n` +
-        `- Deuda promedio por unidad: ${this.formatMoney(Math.round(avgDebt), tenant.currency)}`,
+        `- Deuda: ${this.formatBuckets(outstandingByCurrency)}\n` +
+        `- Deuda promedio por unidad: ${this.formatBuckets(averageOutstandingByCurrency)}`,
       suggestedActions: [
         { type: 'VIEW_REPORTS', payload: { buildingId: building.id } },
         { type: 'VIEW_TICKETS', payload: { buildingId: building.id } },
@@ -3506,6 +3526,21 @@ export class AssistantService implements OnModuleInit {
     } catch {
       return `${amount.toFixed(2)} ${currency}`;
     }
+  }
+
+  /**
+   * Render currency buckets as an explicit enumeration (canonical first,
+   * legacy after). Never produces a mixed nominal total.
+   */
+  private formatBuckets(
+    buckets: readonly ReportCurrencyAmountBucket[],
+  ): string {
+    if (!buckets || buckets.length === 0) {
+      return '—';
+    }
+    return buckets
+      .map((bucket) => formatCurrencySafe(bucket.amountMinor, bucket.currency))
+      .join(', ');
   }
 
   /**

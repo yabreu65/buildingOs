@@ -2,6 +2,8 @@
  * Unified inbox response types
  */
 
+import type { ReportCurrencyAmountBucket } from '../finanzas/currency-buckets';
+
 export type TicketSummary = {
   id: string;
   buildingId: string;
@@ -42,7 +44,7 @@ export type DelinquentUnit = {
   buildingName: string;
   unitId: string;
   unitCode: string;
-  outstanding: number;
+  outstandingByCurrency: ReportCurrencyAmountBucket[];
 };
 
 export type AlertSummary = {

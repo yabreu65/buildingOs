@@ -21,6 +21,7 @@ export type SupportedFilter =
   | 'category'
   | 'sortField'
   | 'sortOrder'
+  | 'currency'
   | 'limit';
 
 /**
@@ -38,6 +39,7 @@ export interface IntentFilters {
   category?: string;
   sortField?: string;
   sortOrder?: 'asc' | 'desc';
+  currency?: string;
   limit?: number;
 }
 
