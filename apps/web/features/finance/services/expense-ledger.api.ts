@@ -687,18 +687,23 @@ export async function getVendorSuggestion(
 
 // ── Expense Reports ───────────────────────────────────────────────────────
 
+export interface CurrencyAmountBucket {
+  readonly currency: string;
+  readonly amountMinor: number;
+}
+
 export interface BuildingPeriodSummary {
   buildingId: string;
   buildingName: string;
-  buildingExpenses: number;
-  sharedPortion: number;
-  total: number;
+  buildingExpensesByCurrency: CurrencyAmountBucket[];
+  sharedPortionByCurrency: CurrencyAmountBucket[];
+  totalByCurrency: CurrencyAmountBucket[];
 }
 
 export interface ExpensePeriodReport {
   period: string;
-  totalTenant: number;
-  sharedTotal: number;
+  totalTenantByCurrency: CurrencyAmountBucket[];
+  sharedTotalByCurrency: CurrencyAmountBucket[];
   byBuilding: BuildingPeriodSummary[];
 }
 
@@ -721,27 +726,21 @@ export interface BuildingIncomeSection {
   buildingId: string;
   buildingName: string;
   entries: IncomeEntry[];
-  totalUSD: number;
-  totalVES: number;
-  totalPesos: number;
+  totalByCurrency: CurrencyAmountBucket[];
 }
 
 export interface ExpenseLineItem {
   itemNumber: number;
   date: string;
   description: string;
-  usdAmount: number;
-  vesAmount: number;
-  pesosAmount: number;
+  amountByCurrency: CurrencyAmountBucket[];
 }
 
 export interface BuildingExpenseSection {
   buildingId: string;
   buildingName: string;
   items: ExpenseLineItem[];
-  totalUSD: number;
-  totalVES: number;
-  totalPesos: number;
+  totalByCurrency: CurrencyAmountBucket[];
 }
 
 export interface AlicuotaRow {
@@ -760,6 +759,7 @@ export interface BuildingAlicuota {
   buildingName: string;
   rows: AlicuotaRow[];
   grandTotal: number;
+  baseCurrency: 'USD';
 }
 
 export interface NotasRevelatoriasReport {
@@ -769,9 +769,9 @@ export interface NotasRevelatoriasReport {
   periodLabel: string;
   buildingIncomes: BuildingIncomeSection[];
   commonExpenses: ExpenseLineItem[];
-  commonTotals: { usd: number; ves: number; pesos: number };
+  commonTotals: { byCurrency: CurrencyAmountBucket[] };
   buildingExpenses: BuildingExpenseSection[];
-  reservaLegal: { buildingName: string; usd: number; ves: number }[];
+  reservaLegal: { buildingName: string; byCurrency: CurrencyAmountBucket[] }[];
   alicuotas: BuildingAlicuota[];
 }
 

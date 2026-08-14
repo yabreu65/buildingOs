@@ -11,12 +11,11 @@ interface Props {
   tenantId: string;
 }
 
-function formatAmount(minor: number, currency = 'ARS') {
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0,
-  }).format(minor / 100);
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
+import type { CurrencyAmountBucket } from '../services/expense-ledger.api';
+
+function formatBuckets(buckets: CurrencyAmountBucket[] | undefined): string {
+  return formatCurrencyBuckets(buckets ?? []);
 }
 
 function formatPeriod(period: string) {
@@ -26,25 +25,33 @@ function formatPeriod(period: string) {
 }
 
 function exportCsv(reports: ExpensePeriodReport[]) {
+  // One row per (building, currency) — amounts are never mixed across
+  // currencies and every monetary row carries an explicit currency column.
   const rows: string[] = [
-    'Período,Edificio,Gastos propios,Porción comunes,Total',
+    'Período,Edificio,Currency,Gastos propios,Porción comunes,Total',
   ];
 
   for (const r of reports) {
     for (const b of r.byBuilding) {
-      rows.push(
-        [
-          r.period,
-          `"${b.buildingName}"`,
-          (b.buildingExpenses / 100).toFixed(2),
-          (b.sharedPortion / 100).toFixed(2),
-          (b.total / 100).toFixed(2),
-        ].join(','),
-      );
+      const currencies = new Set([
+        ...b.totalByCurrency.map((x) => x.currency),
+      ]);
+      for (const currency of currencies) {
+        const own = b.buildingExpensesByCurrency.find((x) => x.currency === currency);
+        const shared = b.sharedPortionByCurrency.find((x) => x.currency === currency);
+        const total = b.totalByCurrency.find((x) => x.currency === currency);
+        rows.push(
+          [
+            r.period,
+            `"${b.buildingName}"`,
+            currency,
+            ((own?.amountMinor ?? 0) / 100).toFixed(2),
+            ((shared?.amountMinor ?? 0) / 100).toFixed(2),
+            ((total?.amountMinor ?? 0) / 100).toFixed(2),
+          ].join(','),
+        );
+      }
     }
-    rows.push(
-      [r.period, '"TOTAL"', '', '', (r.totalTenant / 100).toFixed(2)].join(','),
-    );
   }
 
   const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
@@ -143,11 +150,11 @@ export function ExpenseHistoryReport({ tenantId }: Props) {
                 </div>
                 <div className="text-right">
                   <p className="font-semibold tabular-nums">
-                    {formatAmount(report.totalTenant)}
+                    {formatBuckets(report.totalTenantByCurrency)}
                   </p>
-                  {report.sharedTotal > 0 && (
+                  {report.sharedTotalByCurrency.length > 0 && (
                     <p className="text-xs text-muted-foreground">
-                      incl. {formatAmount(report.sharedTotal)} comunes
+                      incl. {formatBuckets(report.sharedTotalByCurrency)} comunes
                     </p>
                   )}
                 </div>
@@ -177,15 +184,15 @@ export function ExpenseHistoryReport({ tenantId }: Props) {
                         <tr key={b.buildingId} className="border-t hover:bg-muted/20">
                           <td className="px-4 py-2">{b.buildingName}</td>
                           <td className="px-4 py-2 text-right tabular-nums">
-                            {formatAmount(b.buildingExpenses)}
+                            {formatBuckets(b.buildingExpensesByCurrency)}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
-                            {b.sharedPortion > 0
-                              ? formatAmount(b.sharedPortion)
+                            {b.sharedPortionByCurrency.length > 0
+                              ? formatBuckets(b.sharedPortionByCurrency)
                               : '—'}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums font-medium">
-                            {formatAmount(b.total)}
+                            {formatBuckets(b.totalByCurrency)}
                           </td>
                         </tr>
                       ))}
@@ -195,7 +202,7 @@ export function ExpenseHistoryReport({ tenantId }: Props) {
                         <td className="px-4 py-2">Total</td>
                         <td colSpan={2} />
                         <td className="px-4 py-2 text-right tabular-nums">
-                          {formatAmount(report.totalTenant)}
+                          {formatBuckets(report.totalTenantByCurrency)}
                         </td>
                       </tr>
                     </tfoot>
