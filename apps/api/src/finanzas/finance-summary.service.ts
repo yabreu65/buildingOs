@@ -3,6 +3,13 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { EmailType } from '../email/email.types';
+import { calculateChargeOutstandingMinor } from './charge-aggregation';
+import {
+  aggregateReportBuckets,
+  compareReportCurrencies,
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from './currency-buckets';
 
 type ChargeWithUnitAndAllocations = Prisma.ChargeGetPayload<{
   include: {
@@ -49,50 +56,66 @@ export class FinanceSummaryService {
     const lastMonth = this.getLastMonth();
     let sentCount = 0;
 
-    // Get all tenants with their TENANT_ADMIN members
-    const tenants = await this.prisma.tenant.findMany({
-      include: {
-        tenantMembers: {
-          where: {
-            role: 'TENANT_ADMIN',
-            status: 'ACTIVE',
-            userId: { not: null },
-          },
-          include: {
-            user: { select: { id: true, email: true } },
-          },
+    // Get all TENANT-scoped TENANT_ADMIN memberships grouped by tenant.
+    // Roles live on MembershipRole[] (the RBAC source of truth); the
+    // parallel TenantMember table is not used here because it is
+    // stale/partial for admin roles. The finance summary is tenant-wide, so
+    // BUILDING/UNIT-scoped admins must never receive it.
+    const memberships = await this.prisma.membership.findMany({
+      where: {
+        roles: {
+          some: { role: 'TENANT_ADMIN', scopeType: 'TENANT' },
         },
+      },
+      include: {
+        tenant: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
       },
     });
 
-    for (const tenant of tenants) {
-      const tenantMembers = tenant.tenantMembers;
-      if (tenantMembers.length === 0) continue;
+    const adminsByTenant = new Map<
+      string,
+      { name: string; admins: Array<{ id: string; email: string | null }> }
+    >();
+    for (const membership of memberships) {
+      const entry = adminsByTenant.get(membership.tenantId);
+      if (entry) {
+        entry.admins.push(membership.user);
+      } else {
+        adminsByTenant.set(membership.tenantId, {
+          name: membership.tenant.name,
+          admins: [membership.user],
+        });
+      }
+    }
+
+    for (const [tenantId, { name: tenantName, admins }] of adminsByTenant) {
+      if (admins.length === 0) continue;
 
       try {
         // Get finance report for last month
-        const report = await this.generateFinanceReport(tenant.id, lastMonth);
+        const report = await this.generateFinanceReport(tenantId, lastMonth);
 
         // Generate HTML
-        const html = this.generateSummaryHtml(tenant.name, lastMonth, report);
+        const html = this.generateSummaryHtml(tenantName, lastMonth, report);
 
         // Send to all TENANT_ADMINs
-        for (const membership of tenantMembers) {
-          if (membership.user?.email) {
+        for (const admin of admins) {
+          if (admin.email) {
             try {
               await this.emailService.sendEmail(
                 {
-                  to: membership.user.email,
-                  subject: `${tenant.name} - Resumen Financiero ${this.formatMonth(lastMonth)}`,
+                  to: admin.email,
+                  subject: `${tenantName} - Resumen Financiero ${this.formatMonth(lastMonth)}`,
                   htmlBody: html,
-                  tenantId: tenant.id,
+                  tenantId,
                 },
                 EmailType.FINANCE_SUMMARY,
               );
               sentCount++;
             } catch (emailError) {
               this.logger.error(
-                `Failed to send email to ${membership.user.email} for tenant ${tenant.id}`,
+                `Failed to send email to ${admin.email} for tenant ${tenantId}`,
                 emailError instanceof Error ? emailError.stack : String(emailError),
               );
             }
@@ -100,11 +123,11 @@ export class FinanceSummaryService {
         }
 
         this.logger.log(
-          `Finance summary sent to ${tenantMembers.length} admins for tenant ${tenant.id}`,
+          `Finance summary sent to ${admins.length} admins for tenant ${tenantId}`,
         );
       } catch (error) {
         this.logger.error(
-          `Failed to generate/send finance summary for tenant ${tenant.id}`,
+          `Failed to generate/send finance summary for tenant ${tenantId}`,
           error instanceof Error ? error.stack : String(error),
         );
       }
@@ -115,15 +138,23 @@ export class FinanceSummaryService {
 
   /**
    * Generate finance report for a tenant in a given period
+   *
+   * Charge-side, currency-safe: every monetary aggregate is expressed in
+   * Charge.currency (integer minor units), grouped into explicit buckets.
+   * Currencies are never mixed, converted or summed; canonical currencies
+   * come first (USD, VES, ARS, COP), legacy reportable currencies after.
    */
   private async generateFinanceReport(
     tenantId: string,
     period: string,
   ): Promise<FinanceReport> {
-    // Get all charges for period with allocations
+    // Get all charges for the requested period with allocations
+    // (MONTHLY ACTIVITY: Charge.period is the accrual period authority —
+    // YYYY-MM, inherited from Liquidation.period on publication).
     const charges = await this.prisma.charge.findMany({
       where: {
         tenantId,
+        period,
         liquidationId: { not: null }, // Only published charges
         canceledAt: null,
       },
@@ -134,23 +165,60 @@ export class FinanceSummaryService {
       },
     });
 
-    // Calculate totals using REAL outstanding from allocations
-    const totalCharges = charges.reduce((sum, c) => sum + c.amount, 0);
-    const totalPaid = charges.reduce((sum, c) => {
-      const allocated = c.paymentAllocations.reduce((aSum, pa) => {
-        const status = pa.payment?.status;
-        if (status === 'APPROVED' || status === 'RECONCILED') {
-          return aSum + pa.amount;
-        }
-        return aSum;
-      }, 0);
-      return sum + allocated;
-    }, 0);
-    const totalOutstanding = Math.max(0, totalCharges - totalPaid);
-    const collectionRate =
-      totalCharges > 0 ? Math.round((totalPaid / totalCharges) * 100) : 0;
+    // Per-charge accounting (charge-side):
+    // - outstanding = charge.amount - effective allocations (clamped >= 0)
+    //   (effective = APPROVED | RECONCILED; SUBMITTED never reduces outstanding)
+    // - collected = charge.amount - outstanding (bounded by charge.amount)
+    const totalsByCurrency = new Map<
+      string,
+      { charges: number; paid: number; outstanding: number }
+    >();
 
-    // Get delinquent units (calculate from real allocations, not Charge.status)
+    for (const charge of charges) {
+      const outstanding = calculateChargeOutstandingMinor(charge);
+      const paid = charge.amount - outstanding;
+
+      const acc = totalsByCurrency.get(charge.currency) ?? {
+        charges: 0,
+        paid: 0,
+        outstanding: 0,
+      };
+      acc.charges += charge.amount;
+      acc.paid += paid;
+      acc.outstanding += outstanding;
+      totalsByCurrency.set(charge.currency, acc);
+    }
+
+    const totalChargesByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.charges,
+      })),
+    );
+    const totalPaidByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.paid,
+      })),
+    );
+    const totalOutstandingByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.outstanding,
+      })),
+    );
+
+    const collectionRateByCurrency = Array.from(totalsByCurrency.entries())
+      .map(([currency, acc]) => ({
+        currency,
+        rate: acc.charges > 0 ? Math.round((acc.paid / acc.charges) * 100) : 0,
+      }))
+      .sort((a, b) => compareReportCurrencies(a.currency, b.currency));
+
+    // CURRENT DELINQUENCY SNAPSHOT: overdue unpaid charges regardless of
+    // their accrual period (a June debt still unpaid must appear in the
+    // July email). No pre-limit: the full overdue set is needed so the
+    // delinquent unit count is exact.
     const allCharges = await this.prisma.charge.findMany({
       where: {
         tenantId,
@@ -169,74 +237,115 @@ export class FinanceSummaryService {
           include: { payment: true },
         },
       },
-      orderBy: { amount: 'desc' },
-      take: 100,
     });
 
-    // Calculate real outstanding from APPROVED/RECONCILED payments only
-    const unitDebtMap = new Map<
+    // Aggregate per unit with explicit per-currency buckets. Ordering is
+    // NON-monetary: earliest delinquency (dueDate ASC), then unitId ASC
+    // (3F3 rule) — amounts in different currencies are never compared or
+    // summed, and unitLabel is display-only (labels can repeat).
+    const unitEntries = new Map<
       string,
       {
         unit: ChargeWithUnitAndAllocations['unit'];
         buildingName: string;
-        outstanding: number;
+        earliestDue: Date;
+        entries: Array<{ currency: string; amountMinor: number }>;
       }
     >();
-    for (const charge of allCharges) {
-      const allocatedApproved = charge.paymentAllocations.reduce((sum, pa) => {
-        const status = pa.payment?.status;
-        if (status === 'APPROVED' || status === 'RECONCILED') {
-          return sum + pa.amount;
-        }
-        return sum;
-      }, 0);
-      const outstanding = charge.amount - allocatedApproved;
 
-      if (outstanding > 0) {
-        const existing = unitDebtMap.get(charge.unitId);
-        if (existing) {
-          existing.outstanding += outstanding;
-        } else {
-          unitDebtMap.set(charge.unitId, {
-            unit: charge.unit,
-            buildingName: charge.unit.building.name,
-            outstanding,
-          });
+    for (const charge of allCharges) {
+      const outstanding = calculateChargeOutstandingMinor(charge);
+      if (outstanding <= 0) continue;
+
+      const existing = unitEntries.get(charge.unitId);
+      if (existing) {
+        existing.entries.push({ currency: charge.currency, amountMinor: outstanding });
+        if (charge.dueDate < existing.earliestDue) {
+          existing.earliestDue = charge.dueDate;
         }
+      } else {
+        unitEntries.set(charge.unitId, {
+          unit: charge.unit,
+          buildingName: charge.unit.building.name,
+          earliestDue: charge.dueDate,
+          entries: [{ currency: charge.currency, amountMinor: outstanding }],
+        });
       }
     }
 
-    // Sort by outstanding and take top 10
-    const delinquentUnits = Array.from(unitDebtMap.values())
-      .sort((a, b) => b.outstanding - a.outstanding)
+    // Exact count over the complete unit map; preview capped at 10.
+    const delinquentUnitsCount = unitEntries.size;
+
+    const delinquentUnits = Array.from(unitEntries.values())
+      .sort((a, b) => {
+        const dueDiff = a.earliestDue.getTime() - b.earliestDue.getTime();
+        if (dueDiff !== 0) return dueDiff;
+        return a.unit.id.localeCompare(b.unit.id);
+      })
       .slice(0, 10)
       .map((item) => ({
         unitId: item.unit.id,
         unitLabel: item.unit.label || 'N/A',
         buildingName: item.buildingName,
-        outstanding: item.outstanding,
+        outstandingByCurrency: aggregateReportBuckets(item.entries),
       }));
 
     return {
-      totalCharges,
-      totalPaid,
-      totalOutstanding,
-      collectionRate,
-      delinquentUnitsCount: delinquentUnits.length,
+      totalChargesByCurrency,
+      totalPaidByCurrency,
+      totalOutstandingByCurrency,
+      collectionRateByCurrency,
+      delinquentUnitsCount,
       delinquentUnits,
     };
   }
 
   /**
    * Generate HTML email template
+   *
+   * Monetary values are rendered per currency bucket (canonical first,
+   * legacy after) using a safe formatter that never throws on malformed
+   * historical codes. All interpolated dynamic values (tenant, unit,
+   * building, currency) are HTML-escaped.
    */
   private generateSummaryHtml(
     tenantName: string,
     period: string,
     report: FinanceReport,
   ): string {
-    const formatCurrency = (cents: number): string =>
-      `$${(cents / 100).toFixed(2)}`;
+    const escapeHtml = (value: string): string =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const formatBuckets = (buckets: ReportCurrencyAmountBucket[]): string =>
+      buckets.length === 0
+        ? '—'
+        : buckets
+            .map(
+              (bucket) =>
+                `<div>${escapeHtml(formatCurrencySafe(bucket.amountMinor, bucket.currency))}</div>`,
+            )
+            .join('');
+
+    const formatRates = (
+      rates: FinanceReport['collectionRateByCurrency'],
+    ): string =>
+      rates.length === 0
+        ? '—'
+        : rates
+            .map(
+              (rate) =>
+                `<div>${rate.rate}% ${escapeHtml(rate.currency)}</div>`,
+            )
+            .join('');
+
+    const hasMovements = report.totalChargesByCurrency.length > 0;
+    const kpiClass = (buckets: ReportCurrencyAmountBucket[]): string =>
+      buckets.some((b) => b.amountMinor > 0) ? 'negative' : 'positive';
 
     return `
 <!DOCTYPE html>
@@ -287,7 +396,7 @@ export class FinanceSummaryService {
       margin-bottom: 10px;
     }
     .kpi-value {
-      font-size: 24px;
+      font-size: 18px;
       font-weight: bold;
       color: #1f2937;
     }
@@ -341,7 +450,7 @@ export class FinanceSummaryService {
 </head>
 <body>
   <div class="header">
-    <h1>${tenantName}</h1>
+    <h1>${escapeHtml(tenantName)}</h1>
     <p>Resumen Financiero • ${this.formatMonth(period)}</p>
   </div>
 
@@ -349,19 +458,19 @@ export class FinanceSummaryService {
     <div class="kpi-container">
       <div class="kpi">
         <div class="kpi-label">Total Facturado</div>
-        <div class="kpi-value">${formatCurrency(report.totalCharges)}</div>
+        <div class="kpi-value">${formatBuckets(report.totalChargesByCurrency)}</div>
       </div>
       <div class="kpi positive">
         <div class="kpi-label">Total Cobrado</div>
-        <div class="kpi-value">${formatCurrency(report.totalPaid)}</div>
+        <div class="kpi-value">${formatBuckets(report.totalPaidByCurrency)}</div>
       </div>
-      <div class="kpi ${report.totalOutstanding > 0 ? 'negative' : 'positive'}">
+      <div class="kpi ${hasMovements ? kpiClass(report.totalOutstandingByCurrency) : 'positive'}">
         <div class="kpi-label">Pendiente</div>
-        <div class="kpi-value">${formatCurrency(report.totalOutstanding)}</div>
+        <div class="kpi-value">${formatBuckets(report.totalOutstandingByCurrency)}</div>
       </div>
       <div class="kpi">
         <div class="kpi-label">Cobranza</div>
-        <div class="kpi-value">${report.collectionRate}%</div>
+        <div class="kpi-value">${formatRates(report.collectionRateByCurrency)}</div>
       </div>
     </div>
 
@@ -382,9 +491,9 @@ export class FinanceSummaryService {
           .map(
             (u) => `
         <tr>
-          <td><strong>${u.unitLabel}</strong></td>
-          <td>${u.buildingName}</td>
-          <td style="text-align: right; font-weight: 600; color: #ef4444;">${formatCurrency(u.outstanding)}</td>
+          <td><strong>${escapeHtml(u.unitLabel)}</strong></td>
+          <td>${escapeHtml(u.buildingName)}</td>
+          <td style="text-align: right; font-weight: 600; color: #ef4444;">${formatBuckets(u.outstandingByCurrency)}</td>
         </tr>
         `,
           )
@@ -435,15 +544,15 @@ export class FinanceSummaryService {
 }
 
 interface FinanceReport {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
-  collectionRate: number;
+  totalChargesByCurrency: ReportCurrencyAmountBucket[];
+  totalPaidByCurrency: ReportCurrencyAmountBucket[];
+  totalOutstandingByCurrency: ReportCurrencyAmountBucket[];
+  collectionRateByCurrency: Array<{ currency: string; rate: number }>;
   delinquentUnitsCount: number;
   delinquentUnits: Array<{
     unitId: string;
     unitLabel: string;
     buildingName: string;
-    outstanding: number;
+    outstandingByCurrency: ReportCurrencyAmountBucket[];
   }>;
 }

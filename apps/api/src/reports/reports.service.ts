@@ -2,14 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChargeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { CsvUtility, CsvExportResult } from './csv.utility';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 import {
-  calculateChargeOutstandingMinor,
-  type CurrencyAmountInput,
-} from '../finanzas/charge-aggregation';
-import {
-  CANONICAL_CURRENCIES,
-  isCanonicalCurrency,
-} from '@buildingos/contracts';
+  aggregateReportBuckets,
+  compareReportCurrencies,
+  type ReportCurrencyAmountBucket,
+  type ReportCurrencyInput,
+} from '../finanzas/currency-buckets';
 
 export interface ReportFilters {
   buildingId?: string;
@@ -37,18 +36,6 @@ export interface TicketsReportData {
     unitId: string | null;
     unit: { id: string; label: string | null; code: string } | null;
   }>;
-}
-
-/**
- * Report-side currency bucket. `currency` is the reportable currency as
- * stored on the charge (canonical USD/VES/ARS/COP, or a historical legacy
- * currency such as UYU). Reportable currencies are never canonicalized —
- * no conversion, no fallback — they are only labelled and aggregated in
- * their own dimension.
- */
-export interface ReportCurrencyAmountBucket {
-  readonly currency: string;
-  readonly amountMinor: number;
 }
 
 export interface DelinquentUnit {
@@ -89,41 +76,6 @@ export interface ActivityReportData {
   paymentsSubmitted: number;
   documentsUploaded: number;
   communicationsSent: number;
-}
-
-/**
- * Deterministic report-side currency ordering: canonical currencies first
- * in canonical order, then any legacy currency in lexicographic order.
- * Never converts or compares values across currencies.
- */
-function compareCurrencies(a: string, b: string): number {
-  if (isCanonicalCurrency(a)) {
-    return isCanonicalCurrency(b)
-      ? CANONICAL_CURRENCIES.indexOf(a) - CANONICAL_CURRENCIES.indexOf(b)
-      : -1;
-  }
-  return isCanonicalCurrency(b) ? 1 : a.localeCompare(b);
-}
-
-function aggregateBuckets(
-  totals: Map<string, { charges: number; paid: number; outstanding: number }>,
-  pick: (acc: { charges: number; paid: number; outstanding: number }) => number,
-): ReportCurrencyAmountBucket[] {
-  return Array.from(totals.entries())
-    .map(([currency, acc]) => ({ currency, amountMinor: pick(acc) }))
-    .sort((a, b) => compareCurrencies(a.currency, b.currency));
-}
-
-function aggregateBucketsFromEntries(
-  entries: readonly CurrencyAmountInput[],
-): ReportCurrencyAmountBucket[] {
-  const totals = new Map<string, number>();
-  for (const entry of entries) {
-    totals.set(entry.currency, (totals.get(entry.currency) ?? 0) + entry.amountMinor);
-  }
-  return Array.from(totals.entries())
-    .map(([currency, amountMinor]) => ({ currency, amountMinor }))
-    .sort((a, b) => compareCurrencies(a.currency, b.currency));
 }
 
 /**
@@ -308,7 +260,7 @@ export class ReportsService {
     // own explicit bucket after canonical ones, in stable lexicographic
     // order — no fallback, no loss, no write-side change.
     const totalsByCurrency = new Map<string, { charges: number; paid: number; outstanding: number }>();
-    const delinquentByUnit = new Map<string, CurrencyAmountInput[]>();
+    const delinquentByUnit = new Map<string, ReportCurrencyInput[]>();
     const delinquentEarliestDue = new Map<string, Date>();
     const now = new Date();
 
@@ -338,16 +290,31 @@ export class ReportsService {
       }
     }
 
-    const totalChargesByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.charges);
-    const totalPaidByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.paid);
-    const totalOutstandingByCurrency = aggregateBuckets(totalsByCurrency, (acc) => acc.outstanding);
+    const totalChargesByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.charges,
+      })),
+    );
+    const totalPaidByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.paid,
+      })),
+    );
+    const totalOutstandingByCurrency = aggregateReportBuckets(
+      Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+        currency,
+        amountMinor: acc.outstanding,
+      })),
+    );
 
     const collectionRateByCurrency = Array.from(totalsByCurrency.entries())
       .map(([currency, acc]) => ({
         currency,
         rate: acc.charges > 0 ? Math.round((acc.paid / acc.charges) * 100) : 0,
       }))
-      .sort((a, b) => compareCurrencies(a.currency, b.currency));
+      .sort((a, b) => compareReportCurrencies(a.currency, b.currency));
 
     // Delinquent units: dueDate < now with positive outstanding in at least
     // one currency. Ordered by earliest delinquency (dueDate ASC), then by
@@ -358,7 +325,7 @@ export class ReportsService {
     const delinquentUnits = Array.from(delinquentByUnit.entries())
       .map(([unitId, entries]) => ({
         unitId,
-        outstandingByCurrency: aggregateBucketsFromEntries(entries),
+        outstandingByCurrency: aggregateReportBuckets(entries),
       }))
       .sort((a, b) => {
         const dueDiff =
