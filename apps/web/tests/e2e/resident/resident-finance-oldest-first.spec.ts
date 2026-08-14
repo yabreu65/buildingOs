@@ -39,11 +39,10 @@ interface CreatedChargeResponse {
 
 interface UnitLedgerResponse {
   totals: {
-    totalCharges: number;
-    totalPaid: number;
-    totalAllocated: number;
-    balance: number;
-    currency: string;
+    totalChargesByCurrency: Array<{ currency: string; amountMinor: number }>;
+    totalPaidByCurrency: Array<{ currency: string; amountMinor: number }>;
+    totalAllocatedByCurrency: Array<{ currency: string; amountMinor: number }>;
+    balanceByCurrency: Array<{ currency: string; amountMinor: number }>;
   };
 }
 
@@ -450,7 +449,7 @@ test.describe('Resident finance oldest-first flow', () => {
     await expect(page.getByText('Cargos próximos')).toBeVisible();
 
     const residentLedgerBefore = await getUnitLedger(page, residentTenantId, unitId);
-    expect(residentLedgerBefore.totals.balance).toBe(30000);
+    expect(arsAmount(residentLedgerBefore.totals.balanceByCurrency)).toBe(30000);
     const summaryBefore = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryBefore.totalOutstandingByCurrency)).toBe(10000);
     expect(arsAmount(summaryBefore.totalPaidByCurrency)).toBe(0);
@@ -487,9 +486,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(submittedPayment.paymentAllocations.map((allocation) => allocation.amount)).toEqual([10000, 10000]);
 
     const residentLedgerSubmitted = await getUnitLedger(page, residentTenantId, unitId);
-    expect(residentLedgerSubmitted.totals.balance).toBe(30000);
-    expect(residentLedgerSubmitted.totals.totalPaid).toBe(0);
-    expect(residentLedgerSubmitted.totals.totalAllocated).toBe(0);
+    expect(arsAmount(residentLedgerSubmitted.totals.balanceByCurrency)).toBe(30000);
+    expect(arsAmount(residentLedgerSubmitted.totals.totalPaidByCurrency)).toBe(0);
+    expect(arsAmount(residentLedgerSubmitted.totals.totalAllocatedByCurrency)).toBe(0);
 
     const summarySubmitted = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summarySubmitted.totalOutstandingByCurrency)).toBe(10000);
@@ -510,9 +509,9 @@ test.describe('Resident finance oldest-first flow', () => {
     ]);
 
     const residentLedgerApproved = await getUnitLedger(page, residentTenantId, unitId);
-    expect(residentLedgerApproved.totals.balance).toBe(10000);
-    expect(residentLedgerApproved.totals.totalPaid).toBe(20000);
-    expect(residentLedgerApproved.totals.totalAllocated).toBe(20000);
+    expect(arsAmount(residentLedgerApproved.totals.balanceByCurrency)).toBe(10000);
+    expect(arsAmount(residentLedgerApproved.totals.totalPaidByCurrency)).toBe(20000);
+    expect(arsAmount(residentLedgerApproved.totals.totalAllocatedByCurrency)).toBe(20000);
 
     const summaryApproved = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryApproved.totalOutstandingByCurrency)).toBe(10000);
@@ -552,9 +551,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(rejectedAugustPayment.paymentAllocations).toHaveLength(0);
 
     const residentLedgerRejected = await getUnitLedger(page, residentTenantId, unitId);
-    expect(residentLedgerRejected.totals.balance).toBe(10000);
-    expect(residentLedgerRejected.totals.totalPaid).toBe(20000);
-    expect(residentLedgerRejected.totals.totalAllocated).toBe(20000);
+    expect(arsAmount(residentLedgerRejected.totals.balanceByCurrency)).toBe(10000);
+    expect(arsAmount(residentLedgerRejected.totals.totalPaidByCurrency)).toBe(20000);
+    expect(arsAmount(residentLedgerRejected.totals.totalAllocatedByCurrency)).toBe(20000);
 
     const summaryRejected = await getBuildingSummary(adminPage, residentTenantId, buildingId);
     expect(arsAmount(summaryRejected.totalOutstandingByCurrency)).toBe(10000);
