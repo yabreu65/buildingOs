@@ -6,6 +6,7 @@ import { Skeleton, EmptyState } from '@/shared/components/ui';
 import Button from '@/shared/components/ui/Button';
 import { useUnitLedger } from '../hooks/useUnitLedger';
 import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 import { DollarSign, TrendingUp, Calendar } from 'lucide-react';
 
 interface UnitFinanceTabProps {
@@ -92,7 +93,7 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
             <div>
               <p className="text-sm text-muted-foreground">Deuda Total</p>
               <p className="text-2xl font-bold text-orange-600">
-                {ledger.totals?.balance ? formatCurrency(ledger.totals.balance, ledger.totals.currency || 'USD') : '$0.00'}
+                {formatCurrencyBuckets(ledger.totals?.balanceByCurrency)}
               </p>
             </div>
             <DollarSign className="w-5 h-5 text-orange-600" />
@@ -104,10 +105,7 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
             <div>
               <p className="text-sm text-muted-foreground">Total Pagado</p>
               <p className="text-2xl font-bold text-green-600">
-                {(() => {
-                  const paid = ledger.totals?.totalPaid ?? ledger.totals?.totalAllocated;
-                  return paid ? formatCurrency(paid, ledger.totals?.currency || 'ARS') : '$0.00';
-                })()}
+                {formatCurrencyBuckets(ledger.totals?.totalPaidByCurrency)}
               </p>
             </div>
             <TrendingUp className="w-5 h-5 text-green-600" />

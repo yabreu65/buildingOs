@@ -25,6 +25,7 @@ import type { Ticket } from '../../../../../features/resident/api/resident-conte
 import Card from '../../../../../shared/components/ui/Card';
 import Skeleton from '../../../../../shared/components/ui/Skeleton';
 import { formatCurrency } from '../../../../../shared/lib/format/money';
+import { formatCurrencyBuckets } from '../../../../../shared/lib/format/currency-buckets';
 import { residentTicketDetailPath } from '../../../../../shared/lib/routes';
 
 function formatDate(dateStr: string | undefined): string {
@@ -149,8 +150,8 @@ const ResidentDashboardPage = () => {
   const buildingName = contextOptions?.buildings.find((b) => b.id === buildingId)?.name ?? null;
   const unitLabel = buildingId && unitId ? contextOptions?.unitsByBuilding[buildingId]?.find((u) => u.id === unitId)?.label ?? null : null;
 
-  const balance = ledger?.totals?.balance ?? 0;
-  const currency = ledger?.totals?.currency ?? 'ARS';
+  const balanceByCurrency = ledger?.totals?.balanceByCurrency ?? [];
+  const hasBalance = balanceByCurrency.some((b) => b.amountMinor > 0);
 
   const lastPayment = ledger?.payments
     ?.slice()
@@ -295,15 +296,15 @@ const ResidentDashboardPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KPICard
           label="Saldo pendiente"
-          value={balance > 0 ? formatCurrency(balance, currency) : formatCurrency(0, currency)}
-          color={balance > 0 ? "text-orange-600" : "text-green-600"}
-          icon={<DollarSign className={`w-5 h-5 ${balance > 0 ? "text-orange-600" : "text-green-600"}`} />}
-          cta={balance > 0 ? "Ver detalles" : undefined}
-          onClick={balance > 0 ? () => window.location.href = `/${tenantId}/resident/payments` : undefined}
+          value={hasBalance ? formatCurrencyBuckets(balanceByCurrency) : '—'}
+          color={hasBalance ? "text-orange-600" : "text-green-600"}
+          icon={<DollarSign className={`w-5 h-5 ${hasBalance ? "text-orange-600" : "text-green-600"}`} />}
+          cta={hasBalance ? "Ver detalles" : undefined}
+          onClick={hasBalance ? () => window.location.href = `/${tenantId}/resident/payments` : undefined}
         />
         <KPICard
           label="Último pago"
-          value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency ?? currency) : '—'}
+          value={lastPayment ? formatCurrency(lastPayment.amount, lastPayment.currency) : '—'}
           subValue={lastPayment ? formatDate(lastPayment.paidAt) : 'Sin pagos'}
           color="text-green-600"
           icon={<DollarSign className="w-5 h-5 text-green-600" />}
@@ -311,7 +312,7 @@ const ResidentDashboardPage = () => {
         <KPICard
           label="Próximo vencimiento"
           value={nextDueCharge ? formatDate(nextDueCharge.dueDate) : '—'}
-          subValue={nextDueCharge ? formatCurrency(nextDueCharge.amount, currency) : 'Sin cargos'}
+          subValue={nextDueCharge ? formatCurrency(nextDueCharge.amount, nextDueCharge.currency) : 'Sin cargos'}
           color="text-blue-600"
           icon={<AlertCircle className="w-5 h-5 text-blue-600" />}
         />

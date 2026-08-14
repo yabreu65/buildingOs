@@ -66,8 +66,10 @@ describe('AssistantQueryExecutorsService', () => {
     prisma.tenant.findUniqueOrThrow.mockResolvedValue({ currency: 'ARS' });
     finanzasService.getUnitLedger.mockResolvedValue({
       totals: {
-        balance: 75000,
-        currency: 'ARS',
+        balanceByCurrency: [{ currency: 'ARS', amountMinor: 75000 }],
+        totalChargesByCurrency: [],
+        totalPaidByCurrency: [],
+        totalAllocatedByCurrency: [],
       },
     });
 

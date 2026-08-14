@@ -57,9 +57,10 @@ function ledger(balance: number): UnitLedger {
   return {
     unitId: 'unit-1',
     totals: {
-      totalCharges: balance,
-      balance,
-      currency: 'ARS',
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: balance }],
+      totalPaidByCurrency: [],
+      totalAllocatedByCurrency: [],
+      balanceByCurrency: [{ currency: 'ARS', amountMinor: balance }],
     },
     charges: [],
     payments: [],
@@ -115,7 +116,7 @@ describe('useResidentLedger', () => {
     );
 
     await waitFor(() => {
-      expect(result.current.data?.totals.balance).toBe(1250);
+      expect(result.current.data?.totals.balanceByCurrency[0]?.amountMinor).toBe(1250);
     });
 
     expect(mockedGetResidentLedger).toHaveBeenCalledWith(
@@ -147,14 +148,14 @@ describe('useResidentLedger', () => {
     );
 
     await waitFor(() => {
-      expect(result.current.data?.totals.balance).toBe(100);
+      expect(result.current.data?.totals.balanceByCurrency[0]?.amountMinor).toBe(100);
     });
 
     mockedUseAuthSession.mockReturnValue(makeSession('user-2'));
     rerender();
 
     await waitFor(() => {
-      expect(result.current.data?.totals.balance).toBe(200);
+      expect(result.current.data?.totals.balanceByCurrency[0]?.amountMinor).toBe(200);
     });
 
     expect(mockedGetResidentLedger).toHaveBeenCalledTimes(2);
@@ -195,13 +196,13 @@ describe('useResidentLedger', () => {
     );
 
     await waitFor(() => {
-      expect(result.current.data?.totals.balance).toBe(300);
+      expect(result.current.data?.totals.balanceByCurrency[0]?.amountMinor).toBe(300);
     });
 
     rerender({ unitId: 'unit-2' });
 
     await waitFor(() => {
-      expect(result.current.data?.totals.balance).toBe(450);
+      expect(result.current.data?.totals.balanceByCurrency[0]?.amountMinor).toBe(450);
     });
 
     expect(mockedGetResidentLedger).toHaveBeenNthCalledWith(

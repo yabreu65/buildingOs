@@ -32,6 +32,7 @@ import Button from '@/shared/components/ui/Button';
 import Badge, { type BadgeVariant } from '@/shared/components/ui/Badge';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { formatCurrency, getLocaleForCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 
 const CIVIL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CIVIL_DATE_OR_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/;
@@ -856,15 +857,15 @@ export const ResidentPaymentsPage = () => {
           chargeIds: charges.map((charge) => charge.id),
           charges,
           totalMinor,
-          currency: charges[0]?.currency ?? ledger?.totals?.currency ?? 'ARS',
+          currency: charges[0]!.currency,
         }),
         chargeIds: charges.map((charge) => charge.id),
         charges,
         totalMinor,
-        currency: charges[0]?.currency ?? ledger?.totals?.currency ?? 'ARS',
+        currency: charges[0]!.currency,
       };
     })
-  ), [ledger?.totals?.currency, selectableCharges]);
+  ), [ledger?.totals?.balanceByCurrency, selectableCharges]);
   const selectedPaymentOption = useMemo(
     () => paymentOptions.find((option) => option.selectionKey === formData.selectedSelectionKey) ?? null,
     [formData.selectedSelectionKey, paymentOptions],
@@ -895,8 +896,8 @@ export const ResidentPaymentsPage = () => {
     setSubmitError('La deuda cambió. Seleccioná nuevamente los períodos antes de continuar.');
   }, [clearProofSelection, formData.selectedSelectionKey, selectedPaymentOption]);
 
-  const balance = ledger?.totals?.balance ?? 0;
-  const currency = ledger?.totals?.currency ?? 'ARS';
+  const balanceByCurrency = ledger?.totals?.balanceByCurrency ?? [];
+  const hasBalance = balanceByCurrency.some((b) => b.amountMinor > 0);
   const sortedRecentPayments = useMemo(
     () => payments
       .slice()
@@ -1431,13 +1432,13 @@ export const ResidentPaymentsPage = () => {
                 <div className="min-w-0 space-y-1">
                   <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Saldo pendiente</p>
                   <p className="text-[clamp(1.75rem,8vw,2rem)] font-bold leading-none tabular-nums text-foreground">
-                    {formatCurrency(balance, currency, getLocaleForCurrency(currency))}
+                    {formatCurrencyBuckets(balanceByCurrency)}
                   </p>
                   <p className="text-sm text-muted-foreground">
                   {selectableCharges.length} cargos elegibles
                   </p>
                 </div>
-                {balance > 0 ? (
+                {hasBalance ? (
                   <AlertCircle className="mt-1 text-orange-500" size={24} />
                 ) : (
                   <CheckCircle className="mt-1 text-green-500" size={24} />
@@ -1465,7 +1466,7 @@ export const ResidentPaymentsPage = () => {
                 </p>
                 {nextDueCharge ? (
                   <p className="text-sm text-muted-foreground">
-                    {formatCurrency(nextDueCharge.amount, currency, getLocaleForCurrency(currency))}
+                    {formatCurrency(nextDueCharge.amount, nextDueCharge.currency, getLocaleForCurrency(nextDueCharge.currency))}
                   </p>
                 ) : null}
               </Card>
@@ -1967,15 +1968,15 @@ export const ResidentPaymentsPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4">
           <div className="flex items-start gap-3">
-            {balance > 0 ? (
+            {hasBalance ? (
               <AlertCircle className="text-orange-500 mt-0.5" size={22} />
             ) : (
               <CheckCircle className="text-green-500 mt-0.5" size={22} />
             )}
             <div>
               <p className="text-sm font-medium text-muted-foreground">Saldo pendiente</p>
-              <p className={`text-2xl font-bold ${balance > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                {formatCurrency(balance, currency, getLocaleForCurrency(currency))}
+              <p className={`text-2xl font-bold ${hasBalance ? 'text-orange-600' : 'text-green-600'}`}>
+                {formatCurrencyBuckets(balanceByCurrency)}
               </p>
             </div>
           </div>
@@ -1991,7 +1992,7 @@ export const ResidentPaymentsPage = () => {
               </p>
               {nextDueCharge && (
                 <p className="text-xs text-muted-foreground">
-                  {formatCurrency(nextDueCharge.amount, currency, getLocaleForCurrency(currency))}
+                  {formatCurrency(nextDueCharge.amount, nextDueCharge.currency, getLocaleForCurrency(nextDueCharge.currency))}
                 </p>
               )}
             </div>
