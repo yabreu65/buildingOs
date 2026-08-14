@@ -1,22 +1,20 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import Card from '@/shared/components/ui/Card';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
-import EmptyState from '@/shared/components/ui/EmptyState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { AlertCircle, TrendingUp } from 'lucide-react';
-import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
+import type { CurrencyAmountBucket } from '@/features/finance/services/finance.api';
 
 interface TenantDelinquentUnitsListProps {
   tenantId: string;
-  currency?: string;
   delinquent: Array<{
     unitId: string;
     unitLabel: string;
     buildingId: string;
     buildingName: string;
-    outstanding: number;
+    outstandingByCurrency: CurrencyAmountBucket[];
   }>;
   loading: boolean;
 }
@@ -27,7 +25,6 @@ interface TenantDelinquentUnitsListProps {
  */
 export const TenantDelinquentUnitsList = ({ 
   tenantId, 
-  currency = 'USD', 
   delinquent, 
   loading 
 }: TenantDelinquentUnitsListProps) => {
@@ -46,8 +43,9 @@ export const TenantDelinquentUnitsList = ({
     );
   }
 
-  // Sort by outstanding amount descending to show highest debt first
-  const sortedDelinquent = [...delinquent].sort((a, b) => b.outstanding - a.outstanding);
+  // Ordering is provided by the backend (non-monetary: earliest dueDate
+  // then unitId). Never re-sort by amount across currencies.
+  const sortedDelinquent = delinquent;
 
   return (
     <div className="space-y-4">
@@ -101,7 +99,7 @@ export const TenantDelinquentUnitsList = ({
                 <TD className="px-4 py-4 text-center text-sm font-medium">
                   <div className="inline-flex items-center gap-1">
                     <span className="font-semibold text-red-600">
-                      {formatCurrency(item.outstanding, currency)}
+                      {formatCurrencyBuckets(item.outstandingByCurrency)}
                     </span>
                     <TrendingUp className="w-4 h-4 text-red-600" />
                   </div>

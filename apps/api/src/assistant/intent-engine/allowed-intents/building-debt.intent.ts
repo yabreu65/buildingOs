@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { ChargeStatus, Prisma } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
 import { AssistantDebtCalculatorService } from '../../assistant-debt-calculator.service';
+import { aggregateReportBuckets } from '../../../finanzas/currency-buckets';
 import { PeriodResolverService } from '../../period-resolver.service';
 import type { CanonicalFinancePeriod } from '../../finance-period.types';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
@@ -86,37 +87,57 @@ export const buildingDebtIntent: IntentDefinition = {
       }),
     ]);
 
-    // Group by unit and sum amounts
-    const unitDebts: Record<string, { unitCode: string; label: string; totalAmount: number; paidAmount: number; remainingDebt: number }> = {};
+    // Group by unit with per-currency buckets. Ordering is NON-monetary:
+    // earliest overdue dueDate ASC, then unitId ASC (3F rule) — amounts in
+    // different currencies are never compared or summed.
+    const unitDebts: Record<
+      string,
+      {
+        unitCode: string;
+        label: string;
+        earliestDue: Date;
+        entries: Array<{ currency: string; amountMinor: number }>;
+      }
+    > = {};
 
     for (const charge of charges) {
       const unitKey = charge.unitId;
       const remainingDebt = debtCalculator.calculateChargeOutstanding(charge);
-      const paidAmount = Math.max(0, charge.amount - remainingDebt);
+      if (remainingDebt <= 0) continue;
 
       if (!unitDebts[unitKey]) {
         unitDebts[unitKey] = {
           unitCode: charge.unit.code,
           label: charge.unit.label || charge.unit.code,
-          totalAmount: 0,
-          paidAmount: 0,
-          remainingDebt: 0,
+          earliestDue: charge.dueDate,
+          entries: [],
         };
       }
 
-      unitDebts[unitKey].totalAmount += charge.amount;
-      unitDebts[unitKey].paidAmount += paidAmount;
-      unitDebts[unitKey].remainingDebt += remainingDebt;
+      unitDebts[unitKey].entries.push({ currency: charge.currency, amountMinor: remainingDebt });
+      if (charge.dueDate < unitDebts[unitKey].earliestDue) {
+        unitDebts[unitKey].earliestDue = charge.dueDate;
+      }
     }
 
-    const totalDebt = debtCalculator.calculateOutstanding(charges);
+    const outstandingByCurrency = debtCalculator.calculateOutstandingByCurrency(charges);
 
     return {
       data: {
-        totalDebt,
-        currency: tenant.currency,
+        outstandingByCurrency,
         totalUnits: Object.keys(unitDebts).length,
-        byUnit: Object.values(unitDebts).sort((a, b) => b.remainingDebt - a.remainingDebt).slice(0, pagination?.limit || 20),
+        byUnit: Object.values(unitDebts)
+          .sort((a, b) => {
+            const dueDiff = a.earliestDue.getTime() - b.earliestDue.getTime();
+            if (dueDiff !== 0) return dueDiff;
+            return a.label.localeCompare(b.label);
+          })
+          .slice(0, pagination?.limit || 20)
+          .map((u) => ({
+            unitCode: u.unitCode,
+            label: u.label,
+            remainingDebtByCurrency: aggregateReportBuckets(u.entries),
+          })),
       },
     };
   },

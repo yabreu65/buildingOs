@@ -4,15 +4,16 @@ import { useState, useEffect, useRef } from 'react';
 import { financeApi } from '../services/finance.api';
 import { Skeleton } from '@/shared/components/ui';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
-import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
+import type { CurrencyAmountBucket, CollectionRateBucket } from '../services/finance.api';
 
 interface BuildingFinanceSummary {
   buildingId: string;
   buildingName: string;
-  totalCharges: number | null;
-  totalPaid: number | null;
-  totalOutstanding: number | null;
-  collectionRate: number | null;
+  totalChargesByCurrency: CurrencyAmountBucket[] | null;
+  totalPaidByCurrency: CurrencyAmountBucket[] | null;
+  totalOutstandingByCurrency: CurrencyAmountBucket[] | null;
+  collectionRateByCurrency: CollectionRateBucket[] | null;
   errorMessage?: string;
 }
 
@@ -23,14 +24,13 @@ interface BuildingsFinanceSummaryProps {
   buildingNames: Record<string, string>;
 }
 
-const formatPercentage = (val: number) => `${Math.round(val)}%`;
+
 
 export function BuildingsFinanceSummary({
   buildingIds,
   buildingNames,
   period,
 }: BuildingsFinanceSummaryProps) {
-  const { format } = useTenantCurrency();
   const [summaries, setSummaries] = useState<BuildingFinanceSummary[]>([]);
   const [loading, setLoading] = useState(buildingIds.length > 0);
   const [error, setError] = useState<Error | null>(null);
@@ -51,22 +51,28 @@ export function BuildingsFinanceSummary({
               return {
                 buildingId: bId,
                 buildingName: buildingNames[bId] || bId,
-                totalCharges: summary.totalCharges,
-                totalPaid: summary.totalPaid,
-                totalOutstanding: summary.totalOutstanding,
-                collectionRate:
-                  summary.totalCharges > 0
-                    ? (summary.totalPaid / summary.totalCharges) * 100
-                    : 0,
+                totalChargesByCurrency: summary.totalChargesByCurrency,
+                totalPaidByCurrency: summary.totalPaidByCurrency,
+                totalOutstandingByCurrency: summary.totalOutstandingByCurrency,
+                collectionRateByCurrency: summary.totalChargesByCurrency.map((bucket) => {
+                  const paid = summary.totalPaidByCurrency.find((b) => b.currency === bucket.currency);
+                  return {
+                    currency: bucket.currency,
+                    rate:
+                      bucket.amountMinor > 0
+                        ? (paid?.amountMinor ?? 0) / bucket.amountMinor
+                        : 0,
+                  };
+                }),
               };
             } catch {
               return {
                 buildingId: bId,
                 buildingName: buildingNames[bId] || bId,
-                totalCharges: null,
-                totalPaid: null,
-                totalOutstanding: null,
-                collectionRate: null,
+                totalChargesByCurrency: null,
+                totalPaidByCurrency: null,
+                totalOutstandingByCurrency: null,
+                collectionRateByCurrency: null,
                 errorMessage: 'No disponible',
               };
             }
@@ -132,9 +138,13 @@ export function BuildingsFinanceSummary({
     );
   }
 
-  const formatCurrencyValue = (value: number | null) =>
-    value === null ? '—' : format(value);
+  const formatBuckets = (value: CurrencyAmountBucket[] | null) =>
+    value === null ? '—' : formatCurrencyBuckets(value);
 
+  const formatRates = (value: CollectionRateBucket[] | null) =>
+    value === null
+      ? '—'
+      : value.map((r) => `${Math.round(r.rate * 100)}% ${r.currency}`).join(' · ');
   return (
     <div className="space-y-6">
       <div className="mb-4">
@@ -176,32 +186,16 @@ export function BuildingsFinanceSummary({
                   {summary.buildingName}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-gray-900">
-                  {formatCurrencyValue(summary.totalCharges)}
+                  {formatBuckets(summary.totalChargesByCurrency)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-green-600">
-                  {formatCurrencyValue(summary.totalPaid)}
+                  {formatBuckets(summary.totalPaidByCurrency)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium text-red-600">
-                  {formatCurrencyValue(summary.totalOutstanding)}
+                  {formatBuckets(summary.totalOutstandingByCurrency)}
                 </TD>
                 <TD className="px-6 py-4 text-right text-sm font-medium">
-                  {summary.collectionRate === null ? (
-                    <span className="text-gray-500">—</span>
-                  ) : (
-                    <div className="flex items-center">
-                      <div className="relative w-24 h-2.5 bg-gray-200 rounded-full">
-                        <div
-                          className="absolute left-0 h-full rounded-full bg-blue-600"
-                          style={{
-                            width: `${Math.min(summary.collectionRate, 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="ml-2 text-xs font-semibold text-gray-900">
-                        {formatPercentage(summary.collectionRate)}
-                      </span>
-                    </div>
-                  )}
+                  {formatRates(summary.collectionRateByCurrency)}
                 </TD>
               </TR>
             ))}

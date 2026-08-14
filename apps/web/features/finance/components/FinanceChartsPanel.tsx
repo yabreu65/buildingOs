@@ -15,6 +15,8 @@ import {
 } from 'recharts';
 import { useFinanceSummary } from '../hooks/useFinanceSummary';
 import { useFinanceTrend } from '../hooks/useFinanceTrend';
+import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import Card from '@/shared/components/ui/Card';
 
@@ -23,13 +25,9 @@ interface FinanceChartsPanelProps {
   period?: string;
 }
 
-// Format ARS currency (divide by 100, two decimals)
-const formatARS = (cents: number) =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
+// Format money with its explicit currency (minor units). Never guesses.
+const formatMoney = (cents: number, currency: string) =>
+  formatCurrency(cents, currency);
 
 const formatPercentage = (val: number) => `${Math.round(val)}%`;
 
@@ -44,22 +42,60 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
     useFinanceSummary(buildingId, period);
   const { data: trend, isPending: trendLoading, error: trendError } = useFinanceTrend(buildingId, 6);
 
+  // One bar-group per currency; currencies are never mixed in a bar.
   const barChartData = useMemo(() => {
     if (!summary) return [];
-    return [
-      {
-        name: 'Cargos vs Pagos',
-        Cargos: summary.totalCharges / 100,
-        Pagado: summary.totalPaid / 100,
-        Pendiente: summary.totalOutstanding / 100,
-      },
-    ];
+    return summary.totalChargesByCurrency.map((bucket) => {
+      const paid = summary.totalPaidByCurrency.find((b) => b.currency === bucket.currency);
+      const outstanding = summary.totalOutstandingByCurrency.find((b) => b.currency === bucket.currency);
+      return {
+        name: bucket.currency,
+        Cargos: bucket.amountMinor / 100,
+        Pagado: (paid?.amountMinor ?? 0) / 100,
+        Pendiente: (outstanding?.amountMinor ?? 0) / 100,
+      };
+    });
   }, [summary]);
 
-  const collectionRate = useMemo(() => {
-    if (!summary || summary.totalCharges === 0) return 0;
-    return (summary.totalPaid / summary.totalCharges) * 100;
+  const collectionRateByCurrency = useMemo(() => {
+    if (!summary) return [];
+    return summary.totalChargesByCurrency.map((bucket) => {
+      const paid = summary.totalPaidByCurrency.find((b) => b.currency === bucket.currency);
+      return {
+        currency: bucket.currency,
+        rate:
+          bucket.amountMinor > 0
+            ? ((paid?.amountMinor ?? 0) / bucket.amountMinor) * 100
+            : 0,
+      };
+    });
   }, [summary]);
+
+  // Trend rows: one series per currency for paid amounts.
+  const trendData = useMemo(() => {
+    if (!trend) return [];
+    const currencies = new Set<string>();
+    trend.forEach((t) =>
+      t.totalPaidByCurrency.forEach((b) => currencies.add(b.currency)),
+    );
+    return trend.map((t) => {
+      const row: Record<string, string | number> = { period: t.period };
+      for (const c of currencies) {
+        const paid = t.totalPaidByCurrency.find((b) => b.currency === c);
+        row[`paid_${c}`] = (paid?.amountMinor ?? 0) / 100;
+      }
+      return row;
+    });
+  }, [trend]);
+
+  const trendCurrencies = useMemo(() => {
+    if (!trend) return [];
+    const currencies = new Set<string>();
+    trend.forEach((t) =>
+      t.totalPaidByCurrency.forEach((b) => currencies.add(b.currency)),
+    );
+    return Array.from(currencies);
+  }, [trend]);
 
   if (summaryError || trendError) {
     const errorMessage = summaryError || trendError || 'Error al cargar gráficos';
@@ -111,7 +147,7 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
                 tick={{ fontSize: 12 }}
               />
               <Tooltip
-                formatter={(val) => formatARS((val as number) * 100)}
+                formatter={(val) => String(val)}
                 contentStyle={{
                   backgroundColor: '#fff',
                   border: '1px solid #e5e7eb',
@@ -136,15 +172,21 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-2xl font-bold text-gray-900">
-                  {formatPercentage(collectionRate)}
+                  {collectionRateByCurrency.length === 0
+                    ? '—'
+                    : collectionRateByCurrency
+                        .map((r) => formatPercentage(r.rate))
+                        .join(' · ')}
                 </span>
-                <span className="text-xs text-gray-500">cobrado</span>
+                <span className="text-xs text-gray-500">cobrado por moneda</span>
               </div>
-              <div className="h-3 w-full rounded-full bg-gray-200">
-                <div
-                  className="h-full rounded-full bg-green-500 transition-all"
-                  style={{ width: `${Math.min(collectionRate, 100)}%` }}
-                />
+              <div className="space-y-1 text-xs text-gray-500">
+                {collectionRateByCurrency.map((r) => (
+                  <div key={r.currency} className="flex justify-between">
+                    <span>{r.currency}</span>
+                    <span className="font-semibold text-gray-700">{formatPercentage(r.rate)}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -152,18 +194,18 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Cargos totales:</span>
-                <span className="font-semibold">{formatARS(summary.totalCharges)}</span>
+                <span className="font-semibold">{formatCurrencyBuckets(summary.totalChargesByCurrency)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Pagado:</span>
                 <span className="font-semibold text-green-600">
-                  {formatARS(summary.totalPaid)}
+                  {formatCurrencyBuckets(summary.totalPaidByCurrency)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Pendiente:</span>
                 <span className="font-semibold text-red-600">
-                  {formatARS(summary.totalOutstanding)}
+                  {formatCurrencyBuckets(summary.totalOutstandingByCurrency)}
                 </span>
               </div>
               <div className="border-t border-gray-200 pt-2">
@@ -185,7 +227,7 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
           Evolución últimos 6 meses
         </h3>
         <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={trend}>
+          <LineChart data={trendData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis
               dataKey="period"
@@ -195,11 +237,11 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
               height={80}
             />
             <YAxis
-              tickFormatter={(val) => `$${(val / 100000).toFixed(0)}k`}
+              tickFormatter={(val) => `${val.toLocaleString('es-AR')}`}
               tick={{ fontSize: 12 }}
             />
             <Tooltip
-              formatter={(val) => formatARS((val as number))}
+              formatter={(val) => String(val)}
               labelFormatter={(label) => `Período: ${label}`}
               contentStyle={{
                 backgroundColor: '#fff',
@@ -208,22 +250,17 @@ export function FinanceChartsPanel({ buildingId, period }: FinanceChartsPanelPro
               }}
             />
             <Legend />
-            <Line
-              type="monotone"
-              dataKey="totalPaid"
-              stroke="#10b981"
-              strokeWidth={2}
-              name="Pagado"
-              dot={{ r: 4 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="totalOutstanding"
-              stroke="#ef4444"
-              strokeWidth={2}
-              name="Pendiente"
-              dot={{ r: 4 }}
-            />
+            {trendCurrencies.map((c, i) => (
+              <Line
+                key={c}
+                type="monotone"
+                dataKey={`paid_${c}`}
+                stroke={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][i % 5]}
+                strokeWidth={2}
+                name={`Pagado ${c}`}
+                dot={{ r: 4 }}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>

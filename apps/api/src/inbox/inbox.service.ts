@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
+import { aggregateReportBuckets } from '../finanzas/currency-buckets';
 import {
   InboxSummaryResponse,
   TicketSummary,
@@ -261,7 +263,8 @@ export class InboxService {
 
   /**
    * Get delinquent units (units with past-due, unpaid charges)
-   * Sorted by outstanding amount descending
+   * NON-monetary ordering: earliest overdue dueDate ASC, then unitId ASC.
+   * Amounts in different currencies are never compared or summed.
    */
   private async getDelinquentUnits(
     tenantId: string,
@@ -287,44 +290,45 @@ export class InboxService {
       },
     });
 
-    // Calculate real outstanding per unit (only from APPROVED/RECONCILED payments)
-    const unitOutstanding: Record<
+    // Aggregate per unit with explicit per-currency buckets and the
+    // earliest delinquency date.
+    const unitOutstanding = new Map<
       string,
       {
         unit: ChargeWithInboxRelations['unit'];
         building: ChargeWithInboxRelations['building'];
-        amount: number;
+        earliestDue: Date;
+        entries: Array<{ currency: string; amountMinor: number }>;
       }
-    > = {};
+    >();
 
     for (const charge of chargesWithAllocations) {
-      const key = charge.unitId;
-      // Only count allocations from APPROVED or RECONCILED payments
-      const allocatedApproved = charge.paymentAllocations.reduce((sum, pa) => {
-        const paymentStatus = pa.payment?.status;
-        if (paymentStatus === 'APPROVED' || paymentStatus === 'RECONCILED') {
-          return sum + pa.amount;
-        }
-        return sum;
-      }, 0);
-      const outstanding = charge.amount - allocatedApproved;
+      const outstanding = calculateChargeOutstandingMinor(charge);
+      if (outstanding <= 0) continue;
 
-      // Only include charges with actual outstanding
-      if (outstanding > 0) {
-        if (!unitOutstanding[key]) {
-          unitOutstanding[key] = {
-            unit: charge.unit,
-            building: charge.building,
-            amount: 0,
-          };
+      const existing = unitOutstanding.get(charge.unitId);
+      if (existing) {
+        existing.entries.push({ currency: charge.currency, amountMinor: outstanding });
+        if (charge.dueDate < existing.earliestDue) {
+          existing.earliestDue = charge.dueDate;
         }
-        unitOutstanding[key].amount += outstanding;
+      } else {
+        unitOutstanding.set(charge.unitId, {
+          unit: charge.unit,
+          building: charge.building,
+          earliestDue: charge.dueDate,
+          entries: [{ currency: charge.currency, amountMinor: outstanding }],
+        });
       }
     }
 
-    // Sort by amount descending and return top 5
-    const sorted = Object.values(unitOutstanding)
-      .sort((a, b) => b.amount - a.amount)
+    // Non-monetary ordering (earliest dueDate ASC, then unitId ASC), top 5.
+    const sorted = Array.from(unitOutstanding.values())
+      .sort((a, b) => {
+        const dueDiff = a.earliestDue.getTime() - b.earliestDue.getTime();
+        if (dueDiff !== 0) return dueDiff;
+        return a.unit.id.localeCompare(b.unit.id);
+      })
       .slice(0, 5);
 
     return sorted.map((item) => ({
@@ -332,7 +336,7 @@ export class InboxService {
       buildingName: item.building.name,
       unitId: item.unit.id,
       unitCode: item.unit.code,
-      outstanding: item.amount,
+      outstandingByCurrency: aggregateReportBuckets(item.entries),
     }));
   }
 }

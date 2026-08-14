@@ -10,6 +10,10 @@ import type { CanonicalFinancePeriod, ResolvedFinancePeriod } from './finance-pe
 import { PeriodResolverService } from './period-resolver.service';
 import type { AssistantQueryExecutionContext } from './query-plan.types';
 import type { BuildingFinancialSummaryPeriodFilter } from '../finanzas/finanzas.service';
+import {
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from '../finanzas/currency-buckets';
 
 @Injectable()
 export class AssistantQueryExecutorsService {
@@ -390,16 +394,18 @@ export class AssistantQueryExecutorsService {
       building.id,
       periodResolution.filter,
     );
-    const outstanding = summary.totalOutstanding;
+    const outstandingByCurrency = summary.totalOutstandingByCurrency;
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
     const rangeLabel = periodResolution.resolved?.label;
+    const debtText = this.formatBuckets(outstandingByCurrency);
     return {
-      answer: outstanding > 0
+      answer: hasDebt
         ? rangeLabel
-          ? `Deuda de ${building.name}, ${rangeLabel}: ${this.formatMoney(outstanding, summary.currency)}.`
-          : `El edificio ${building.name} tiene una deuda pendiente total de ${this.formatMoney(outstanding, summary.currency)}.`
+          ? `Deuda de ${building.name}, ${rangeLabel}: ${debtText}.`
+          : `El edificio ${building.name} tiene deuda pendiente: ${debtText}.`
         : rangeLabel
-          ? `Deuda de ${building.name}, ${rangeLabel}: ${this.formatMoney(outstanding, summary.currency)}.`
-          : `El edificio ${building.name} no tiene deuda pendiente. Saldo actual: ${this.formatMoney(outstanding, summary.currency)}.`,
+          ? `Deuda de ${building.name}, ${rangeLabel}: sin deuda pendiente.`
+          : `El edificio ${building.name} no tiene deuda pendiente.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
@@ -422,15 +428,17 @@ export class AssistantQueryExecutorsService {
       context.tenantId,
       periodResolution.filter,
     );
-    const totalDebt = tenantDebt.totalOutstanding;
+    const outstandingByCurrency = tenantDebt.totalOutstandingByCurrency;
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
+    const debtText = this.formatBuckets(outstandingByCurrency);
     return {
-      answer: totalDebt > 0
+      answer: hasDebt
         ? periodResolution.resolved?.label
-          ? `Deuda global de la administración, ${periodResolution.resolved.label}: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
-          : `La administración tiene una deuda pendiente total de ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
+          ? `Deuda global de la administración, ${periodResolution.resolved.label}: ${debtText}.`
+          : `La administración tiene deuda pendiente: ${debtText}.`
         : periodResolution.resolved?.label
-          ? `Deuda global de la administración, ${periodResolution.resolved.label}: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`
-          : `La administración no tiene deuda pendiente. Saldo actual: ${this.formatMoney(totalDebt, tenantDebt.currency)}.`,
+          ? `Deuda global de la administración, ${periodResolution.resolved.label}: sin deuda pendiente.`
+          : `La administración no tiene deuda pendiente.`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: {} }],
     };
   }
@@ -465,11 +473,11 @@ export class AssistantQueryExecutorsService {
     }
 
     const debtorList = summary.topDelinquentUnits.map((unit, index) => {
-      return `${index + 1}. ${unit.unitLabel}: ${this.formatMoney(unit.outstanding, summary.currency)}`;
+      return `${index + 1}. ${unit.unitLabel}: ${this.formatBuckets(unit.outstandingByCurrency)}`;
     }).join('\n');
 
     return {
-      answer: `Top deudores del edificio ${building.name} (deuda total: ${this.formatMoney(summary.totalOutstanding, summary.currency)}):\n${debtorList}`,
+      answer: `Unidades con deuda pendiente del edificio ${building.name} (${summary.delinquentUnitsCount}):\n${debtorList}`,
       suggestedActions: [{ type: 'VIEW_PAYMENTS', payload: { buildingId: building.id } }],
     };
   }
@@ -617,10 +625,17 @@ export class AssistantQueryExecutorsService {
       ),
     ]);
 
-    const outstanding = summary.totalOutstanding;
-    const averageDebt = units.length > 0 ? Math.round(outstanding / units.length) : 0;
+    const outstandingByCurrency = summary.totalOutstandingByCurrency;
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
+    // Average is computed per currency only — never across currencies.
+    const averageOutstandingByCurrency = hasDebt && units.length > 0
+      ? outstandingByCurrency.map((bucket) => ({
+          currency: bucket.currency,
+          amountMinor: Math.round(bucket.amountMinor / units.length),
+        }))
+      : [];
     return {
-      answer: `Estadísticas del edificio ${building.name}:\n- Unidades: ${units.length}\n- Tickets abiertos: ${openTickets} de ${totalTickets} totales\n- Deuda total: ${this.formatMoney(outstanding, tenant.currency)}\n- Deuda promedio por unidad: ${this.formatMoney(averageDebt, tenant.currency)}`,
+      answer: `Estadísticas del edificio ${building.name}:\n- Unidades: ${units.length}\n- Tickets abiertos: ${openTickets} de ${totalTickets} totales\n- Deuda: ${this.formatBuckets(outstandingByCurrency)}\n- Deuda promedio por unidad: ${this.formatBuckets(averageOutstandingByCurrency)}`,
       suggestedActions: [
         { type: 'VIEW_REPORTS', payload: { buildingId: building.id } },
         { type: 'VIEW_TICKETS', payload: { buildingId: building.id } },
@@ -673,5 +688,20 @@ export class AssistantQueryExecutorsService {
     } catch {
       return `${amount.toFixed(2)} ${currency}`;
     }
+  }
+
+  /**
+   * Render currency buckets as an explicit enumeration (canonical first,
+   * legacy after). Never produces a mixed nominal total.
+   */
+  private formatBuckets(
+    buckets: readonly ReportCurrencyAmountBucket[],
+  ): string {
+    if (!buckets || buckets.length === 0) {
+      return '—';
+    }
+    return buckets
+      .map((bucket) => formatCurrencySafe(bucket.amountMinor, bucket.currency))
+      .join(', ');
   }
 }

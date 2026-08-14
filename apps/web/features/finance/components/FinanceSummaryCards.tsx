@@ -4,7 +4,7 @@ import Card from '@/shared/components/ui/Card';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import Button from '@/shared/components/ui/Button';
 import { FinancialSummary } from '../services/finance.api';
-import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 
 interface FinanceSummaryCardsProps {
   summary: FinancialSummary | null;
@@ -50,13 +50,10 @@ export function FinanceSummaryCards({
     );
   }
 
-  // Format currency using the standardized helper (amounts are stored in cents)
-  const formatCurrencyValue = (cents: number): string => formatCurrency(cents, summary.currency);
-
   const cards = [
     {
       label: 'Total cargado del período',
-      value: formatCurrencyValue(summary.totalCharges),
+      value: formatCurrencyBuckets(summary.totalChargesByCurrency),
       description: 'Suma de los cargos generados para el mes seleccionado.',
       color: 'text-blue-600 dark:text-blue-400',
       bgColor: 'bg-blue-50 dark:bg-blue-950/40',
@@ -64,7 +61,7 @@ export function FinanceSummaryCards({
     },
     {
       label: 'Total cobrado del período',
-      value: formatCurrencyValue(summary.totalPaid),
+      value: formatCurrencyBuckets(summary.totalPaidByCurrency),
       description: 'Pagos aplicados a los cargos del mes seleccionado.',
       color: 'text-green-600 dark:text-green-400',
       bgColor: 'bg-green-50 dark:bg-green-950/40',
@@ -72,7 +69,7 @@ export function FinanceSummaryCards({
     },
     {
       label: 'Saldo pendiente del período',
-      value: formatCurrencyValue(summary.totalOutstanding),
+      value: formatCurrencyBuckets(summary.totalOutstandingByCurrency),
       description: 'Deuda pendiente de los cargos del mes seleccionado.',
       color: 'text-orange-600 dark:text-orange-400',
       bgColor: 'bg-orange-50 dark:bg-orange-950/40',

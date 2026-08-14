@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useTenantCurrency } from '@/features/tenancy/hooks/useTenantBranding';
 import { useFinanceSummary } from '../hooks/useFinanceSummary';
 import { useCharges } from '../hooks/useCharges';
 import { usePaymentsReview, usePaymentHistory } from '../hooks/usePaymentsReview';
@@ -39,6 +40,7 @@ type TabType =
  * Displays KPI cards and three tabs: Pending Payments, Charges, Delinquent Units
  */
 export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps) {
+  const { currency: tenantCurrency } = useTenantCurrency();
   const [activeTab, setActiveTab] = useState<TabType>('rubros');
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
   const router = useRouter();
@@ -209,7 +211,7 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
             tenantId={tenantId}
             buildingId={buildingId}
             period={period}
-            currency={summary?.currency || 'ARS'}
+            currency={tenantCurrency}
           />
         )}
 

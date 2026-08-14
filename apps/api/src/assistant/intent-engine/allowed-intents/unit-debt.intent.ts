@@ -57,7 +57,7 @@ export const unitDebtIntent: IntentDefinition = {
       return { ...charge, remainingDebt };
     });
 
-    const totalDebt = debtCalculator.calculateOutstanding(charges);
+    const outstandingByCurrency = debtCalculator.calculateOutstandingByCurrency(charges);
     const overduePeriods = Array.from(
       new Set(
         chargesWithDebt
@@ -68,7 +68,7 @@ export const unitDebtIntent: IntentDefinition = {
 
     return {
       data: {
-        totalDebt,
+        outstandingByCurrency,
         overduePeriodCount: overduePeriods.length,
         overduePeriods,
         currency: tenant.currency,

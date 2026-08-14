@@ -25,6 +25,10 @@ import {
   reconcilePaymentWhenConsumed,
 } from './payment-allocation-transaction';
 import { calculateChargeOutstandingMinor } from './charge-aggregation';
+import {
+  aggregateReportBuckets,
+  type ReportCurrencyAmountBucket,
+} from './currency-buckets';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
 import type { Role, ScopedRole } from '@buildingos/contracts';
@@ -1826,143 +1830,6 @@ export class FinanzasService {
   // SUMMARY & DELINQUENCY OPERATIONS
   // ============================================================================
 
-  /**
-   * Get financial summary for a building
-   *
-   * Returns:
-   * - totalCharges: Sum of all active charges (not canceled)
-   * - totalPaid: Sum of approved payments allocated
-   * - totalOutstanding: totalCharges - totalPaid
-   * - delinquentUnitsCount: Units with PENDING/PARTIAL charges past due date
-   * - topDelinquentUnits: List of most delinquent units
-   */
-  async getBuildingFinancialSummary(
-    tenantId: string,
-    buildingId: string,
-    period?: string | BuildingFinancialSummaryPeriodFilter,
-  ): Promise<FinancialSummaryDto> {
-    // 1. Validate building
-    await this.validators.validateBuildingBelongsToTenant(
-      tenantId,
-      buildingId,
-    );
-
-    // Load tenant to get currency
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { currency: true },
-    });
-
-    // Build filters
-    const where: Prisma.ChargeWhereInput = {
-      tenantId,
-      buildingId,
-      canceledAt: null,
-    };
-
-    if (typeof period === 'string') {
-      where.period = period;
-    } else if (period?.periods?.length) {
-      where.period = { in: period.periods };
-    } else if (period?.period) {
-      where.period = period.period;
-    }
-
-    // 2. Get all charges and allocations
-    const charges = await this.prisma.charge.findMany({
-      where,
-      include: {
-        paymentAllocations: {
-          include: {
-            payment: true,
-          },
-        },
-      },
-    });
-
-    // 3. Calculate totals using approved/reconciled payments across ALL charges
-    const chargesAnnotated = charges.map((c) => {
-      const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
-      }, 0);
-
-      return {
-        charge: c,
-        allocated,
-        outstanding: calculateChargeOutstandingMinor(c),
-      };
-    });
-
-    // totalPaid = sum of ALL approved allocations across ALL charges
-    const totalPaid = chargesAnnotated.reduce(
-      (sum, item) => sum + item.allocated,
-      0,
-    );
-    // totalCharges = sum of ALL charge amounts
-    const totalCharges = chargesAnnotated.reduce(
-      (sum, item) => sum + item.charge.amount,
-      0,
-    );
-    const totalOutstanding = Math.max(0, totalCharges - totalPaid);
-
-    // Charges with outstanding > 0 for delinquent unit analysis
-    const chargesWithOutstanding = chargesAnnotated.filter(
-      (item) => item.outstanding > 0,
-    );
-
-    // 4. Find delinquent units by real outstanding
-    const delinquentCharges = chargesWithOutstanding;
-
-    const delinquentByUnit = new Map<string, number>();
-    for (const item of delinquentCharges) {
-      const charge = item.charge;
-      const outstanding = item.outstanding;
-      delinquentByUnit.set(
-        charge.unitId,
-        (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
-      );
-    }
-
-    // Get unit info for delinquent units
-    const unitIds = Array.from(delinquentByUnit.keys());
-    const units = await this.prisma.unit.findMany({
-      where: { id: { in: unitIds } },
-      include: { building: true },
-    });
-    const unitInfoMap = new Map(units.map(u => [u.id, { label: u.label, buildingId: u.buildingId, buildingName: u.building.name }]));
-
-    const delinquentUnitsCount = delinquentByUnit.size;
-    const topDelinquentUnits = Array.from(delinquentByUnit.entries())
-      .map(([unitId, outstanding]) => {
-        const info = unitInfoMap.get(unitId);
-        return {
-          unitId,
-          unitLabel: info?.label || unitId,
-          buildingId: info?.buildingId || '',
-          buildingName: info?.buildingName || '',
-          outstanding,
-        };
-      })
-      .sort((a, b) => b.outstanding - a.outstanding)
-      .slice(0, 10); // Top 10
-
-    return {
-      totalCharges,
-      totalPaid,
-      totalOutstanding,
-      delinquentUnitsCount,
-      topDelinquentUnits,
-      currency: tenant.currency,
-    };
-  }
-
-  /**
-   * Return a server-side paginated operational delinquency list for one building.
-   *
-   * A unit is included only when it has an outstanding balance for the selected
-   * period. Its accumulated balance and overdue-period count include only charges
-   * from that period or an earlier period.
-   */
   async getBuildingDelinquency(
     tenantId: string,
     buildingId: string,
@@ -2694,13 +2561,7 @@ export class FinanzasService {
     userRoles: string[] = [],
     userId?: string,
   ): Promise<FinancialSummaryDto> {
-    // Load tenant to get currency
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { currency: true },
-    });
-
-    // 1. Build where clause: ALL charges for this tenant (no buildingId filter)
+    // Build where clause: ALL charges for this tenant (no buildingId filter)
     const chargeWhere: Prisma.ChargeWhereInput = {
       tenantId,
       canceledAt: null,
@@ -2709,12 +2570,11 @@ export class FinanzasService {
       const unitIds = await this.validators.getUserUnitIds(tenantId, userId!);
       if (unitIds.length === 0) {
         return {
-          totalCharges: 0,
-          totalPaid: 0,
-          totalOutstanding: 0,
+          totalChargesByCurrency: [],
+          totalPaidByCurrency: [],
+          totalOutstandingByCurrency: [],
           delinquentUnitsCount: 0,
           topDelinquentUnits: [],
-          currency: tenant.currency,
         };
       }
       chargeWhere.unitId = { in: unitIds };
@@ -2727,93 +2587,145 @@ export class FinanzasService {
       chargeWhere.period = period.period;
     }
 
-    // 2. Get all charges (aggregate by status, sum amounts)
+    return this.computeFinancialSummary(chargeWhere);
+  }
+
+  async getBuildingFinancialSummary(
+    tenantId: string,
+    buildingId: string,
+    period?: string | BuildingFinancialSummaryPeriodFilter,
+  ): Promise<FinancialSummaryDto> {
+    // 1. Validate building
+    await this.validators.validateBuildingBelongsToTenant(
+      tenantId,
+      buildingId,
+    );
+
+    // Build filters
+    const where: Prisma.ChargeWhereInput = {
+      tenantId,
+      buildingId,
+      canceledAt: null,
+    };
+    if (typeof period === 'string') {
+      where.period = period;
+    } else if (period?.periods?.length) {
+      where.period = { in: period.periods };
+    } else if (period?.period) {
+      where.period = period.period;
+    }
+
+    return this.computeFinancialSummary(where);
+  }
+
+  /**
+   * Currency-safe charge-side summary: buckets per currency (canonical
+   * first, legacy after) and a deterministic NON-monetary delinquent list
+   * (earliest overdue dueDate ASC, then unitId ASC). Delinquency is a
+   * current snapshot (dueDate < now) — amounts in different currencies are
+   * never compared or summed.
+   */
+  private async computeFinancialSummary(
+    where: Prisma.ChargeWhereInput,
+  ): Promise<FinancialSummaryDto> {
     const charges = await this.prisma.charge.findMany({
-      where: chargeWhere,
+      where,
       include: {
-        paymentAllocations: {
-          include: {
-            payment: true,
+        unit: {
+          select: {
+            id: true,
+            label: true,
+            building: { select: { id: true, name: true } },
           },
+        },
+        paymentAllocations: {
+          include: { payment: { select: { status: true } } },
         },
       },
     });
 
-    // 3. Calculate totals using the original charge amount and the approved allocations
-    const chargesAnnotated = charges.map((c) => {
-      const allocated = c.paymentAllocations.reduce((asum, a) => {
-        return asum + (this.isEffectivePaymentStatus(a.payment?.status) ? a.amount : 0);
-      }, 0);
+    const totalsByCurrency = new Map<
+      string,
+      { charges: number; paid: number; outstanding: number }
+    >();
+    const delinquentByUnit = new Map<
+      string,
+      {
+        unitId: string;
+        unitLabel: string;
+        buildingId: string;
+        buildingName: string;
+        earliestDue: Date;
+        entries: Array<{ currency: string; amountMinor: number }>;
+      }
+    >();
+    const now = new Date();
 
-      return {
-        charge: c,
-        allocated,
-        outstanding: calculateChargeOutstandingMinor(c),
+    for (const charge of charges) {
+      const outstanding = calculateChargeOutstandingMinor(charge);
+      const paid = charge.amount - outstanding;
+
+      const acc = totalsByCurrency.get(charge.currency) ?? {
+        charges: 0,
+        paid: 0,
+        outstanding: 0,
       };
-    });
+      acc.charges += charge.amount;
+      acc.paid += paid;
+      acc.outstanding += outstanding;
+      totalsByCurrency.set(charge.currency, acc);
 
-    const totalCharges = chargesAnnotated.reduce(
-      (sum, item) => sum + item.charge.amount,
-      0,
-    );
-
-    const totalPaid = chargesAnnotated.reduce(
-      (sum, item) => sum + item.allocated,
-      0,
-    );
-
-    const totalOutstanding = Math.max(
-      0,
-      chargesAnnotated.reduce((sum, item) => sum + item.outstanding, 0),
-    );
-
-    const chargesWithOutstanding = chargesAnnotated.filter(
-      (item) => item.outstanding > 0,
-    );
-
-    // 4. Find delinquent units by real outstanding
-    const delinquentCharges = chargesWithOutstanding;
-
-    const delinquentByUnit = new Map<string, number>();
-    for (const item of delinquentCharges) {
-      const charge = item.charge;
-      const outstanding = item.outstanding;
-      delinquentByUnit.set(
-        charge.unitId,
-        (delinquentByUnit.get(charge.unitId) || 0) + outstanding,
-      );
+      if (charge.dueDate < now && outstanding > 0) {
+        const existing = delinquentByUnit.get(charge.unitId);
+        if (existing) {
+          existing.entries.push({ currency: charge.currency, amountMinor: outstanding });
+          if (charge.dueDate < existing.earliestDue) {
+            existing.earliestDue = charge.dueDate;
+          }
+        } else {
+          delinquentByUnit.set(charge.unitId, {
+            unitId: charge.unitId,
+            unitLabel: charge.unit?.label || charge.unitId,
+            buildingId: charge.unit?.building?.id || '',
+            buildingName: charge.unit?.building?.name || '',
+            earliestDue: charge.dueDate,
+            entries: [{ currency: charge.currency, amountMinor: outstanding }],
+          });
+        }
+      }
     }
 
-    // Get unit and building info for delinquent units
-    const unitIds = Array.from(delinquentByUnit.keys());
-    const units = await this.prisma.unit.findMany({
-      where: { id: { in: unitIds } },
-      include: { building: true },
-    });
-    const unitInfoMap = new Map(units.map(u => [u.id, { label: u.label, buildingId: u.buildingId, buildingName: u.building.name }]));
+    const bucket = (
+      pick: (acc: { charges: number; paid: number; outstanding: number }) => number,
+    ) =>
+      aggregateReportBuckets(
+        Array.from(totalsByCurrency.entries(), ([currency, acc]) => ({
+          currency,
+          amountMinor: pick(acc),
+        })),
+      );
 
-    const delinquentUnitsCount = delinquentByUnit.size;
-    const topDelinquentUnits = Array.from(delinquentByUnit.entries())
-      .map(([unitId, outstanding]) => {
-        const info = unitInfoMap.get(unitId);
-        return {
-          unitId,
-          unitLabel: info?.label || unitId,
-          buildingId: info?.buildingId || '',
-          buildingName: info?.buildingName || '',
-          outstanding,
-        };
+    const topDelinquentUnits = Array.from(delinquentByUnit.values())
+      .sort((a, b) => {
+        const dueDiff = a.earliestDue.getTime() - b.earliestDue.getTime();
+        if (dueDiff !== 0) return dueDiff;
+        return a.unitId.localeCompare(b.unitId);
       })
-      .sort((a, b) => b.outstanding - a.outstanding)
-      .slice(0, 10); // Top 10
+      .slice(0, 10)
+      .map((item) => ({
+        unitId: item.unitId,
+        unitLabel: item.unitLabel,
+        buildingId: item.buildingId,
+        buildingName: item.buildingName,
+        outstandingByCurrency: aggregateReportBuckets(item.entries),
+      }));
 
     return {
-      totalCharges,
-      totalPaid,
-      totalOutstanding,
-      delinquentUnitsCount,
+      totalChargesByCurrency: bucket((a) => a.charges),
+      totalPaidByCurrency: bucket((a) => a.paid),
+      totalOutstandingByCurrency: bucket((a) => a.outstanding),
+      delinquentUnitsCount: delinquentByUnit.size,
       topDelinquentUnits,
-      currency: tenant.currency,
     };
   }
 
@@ -2890,8 +2802,14 @@ export class FinanzasService {
       periods.push(`${year}-${month}`);
     }
 
-    // For each period, get summary
-    const trend: { period: string; totalCharges: number; totalPaid: number; totalOutstanding: number; collectionRate: number }[] = [];
+    // For each period, get summary (currency-safe buckets per period)
+    const trend: {
+      period: string;
+      totalChargesByCurrency: ReportCurrencyAmountBucket[];
+      totalPaidByCurrency: ReportCurrencyAmountBucket[];
+      totalOutstandingByCurrency: ReportCurrencyAmountBucket[];
+      collectionRateByCurrency: Array<{ currency: string; rate: number }>;
+    }[] = [];
     for (const period of periods) {
       let summary;
       if (buildingId) {
@@ -2900,16 +2818,23 @@ export class FinanzasService {
         summary = await this.getTenantFinancialSummary(tenantId, period);
       }
 
-      const collectionRate = summary.totalCharges > 0
-        ? (summary.totalPaid / summary.totalCharges) * 100
-        : 0;
-
       trend.push({
         period,
-        totalCharges: summary.totalCharges,
-        totalPaid: summary.totalPaid,
-        totalOutstanding: summary.totalOutstanding,
-        collectionRate: Math.round(collectionRate * 10) / 10, // 1 decimal
+        totalChargesByCurrency: summary.totalChargesByCurrency,
+        totalPaidByCurrency: summary.totalPaidByCurrency,
+        totalOutstandingByCurrency: summary.totalOutstandingByCurrency,
+        collectionRateByCurrency: summary.totalChargesByCurrency.map((bucket) => {
+          const paid = summary.totalPaidByCurrency.find(
+            (b) => b.currency === bucket.currency,
+          );
+          return {
+            currency: bucket.currency,
+            rate:
+              bucket.amountMinor > 0
+                ? Math.round(((paid?.amountMinor ?? 0) / bucket.amountMinor) * 1000) / 10
+                : 0,
+          };
+        }),
       });
     }
 

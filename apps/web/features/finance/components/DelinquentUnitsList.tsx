@@ -5,29 +5,28 @@ import Skeleton from '@/shared/components/ui/Skeleton';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import { Table, THead, TBody, TR, TH, TD } from '@/shared/components/ui/Table';
 import { AlertCircle } from 'lucide-react';
-import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
+import type { CurrencyAmountBucket } from '@/features/finance/services/finance.api';
 
 interface DelinquentUnit {
   unitId: string;
   unitLabel: string;
   buildingName: string;
-  outstanding: number;
+  outstandingByCurrency: CurrencyAmountBucket[];
 }
 
 interface DelinquentUnitsListProps {
   units: DelinquentUnit[];
   loading: boolean;
-  currency: string;
 }
 
 /**
- * DelinquentUnitsList: Display units with outstanding payments
- * NOTE: outstanding is in minor units (cents), formatCurrency handles conversion
+ * DelinquentUnitsList: Display units with outstanding payments per currency.
+ * Amounts are in minor units; each currency is shown explicitly.
  */
 export function DelinquentUnitsList({
   units,
   loading,
-  currency,
 }: DelinquentUnitsListProps) {
   if (!loading && units.length === 0) {
     return (
@@ -62,7 +61,7 @@ export function DelinquentUnitsList({
                 <TD className="font-medium text-sm">{unit.buildingName}</TD>
                 <TD className="font-medium">{unit.unitLabel}</TD>
                 <TD className="text-right font-semibold text-red-600">
-                  {formatCurrency(unit.outstanding, currency)}
+                  {formatCurrencyBuckets(unit.outstandingByCurrency)}
                 </TD>
               </TR>
             ))}

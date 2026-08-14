@@ -42,7 +42,7 @@ export type DelinquentUnit = {
   buildingName: string;
   unitId: string;
   unitCode: string;
-  outstanding: number;
+  outstandingByCurrency: Array<{ currency: string; amountMinor: number }>;
 };
 
 export type AlertSummary = {

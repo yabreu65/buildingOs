@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useAuth } from '@/features/auth/useAuth';
 import { useContextManager } from '@/features/context/useContext';
 import { useInboxSummary } from '@/features/inbox/useInboxSummary';
+import { formatCurrency } from '@/shared/lib/format/money';
 import { ContextSelector } from '@/features/context/components/ContextSelector';
 import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
@@ -323,13 +324,9 @@ export default function InboxPage({ params }: InboxPageProps) {
                                 {unit.buildingName} - {unit.unitCode}:
                               </span>
                               <span className="text-orange-600 ml-2">
-                                {(unit.outstanding / 100).toLocaleString(
-                                  'pt-BR',
-                                  {
-                                    style: 'currency',
-                                    currency: 'BRL',
-                                  },
-                                )}
+                                {unit.outstandingByCurrency
+                                  .map((b) => formatCurrency(b.amountMinor, b.currency))
+                                  .join(' · ')}
                               </span>
                             </div>
                           ))}

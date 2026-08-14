@@ -8,6 +8,10 @@ import { PaymentStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanzasService } from '../finanzas/finanzas.service';
 import {
+  formatCurrencySafe,
+  type ReportCurrencyAmountBucket,
+} from '../finanzas/currency-buckets';
+import {
   ASSISTANT_READ_ONLY_INTENTS,
   AssistantReadOnlyAction,
   AssistantReadOnlyIntentCode,
@@ -126,14 +130,12 @@ export class AssistantReadOnlyQueryService {
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
     const summary = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
-    const rows = summary.topDelinquentUnits
-      .map((item) => ({
-        unitId: item.unitId,
-        unitLabel: item.unitLabel,
-        buildingName: item.buildingName,
-        outstanding: item.outstanding,
-      }))
-      .sort((a, b) => b.outstanding - a.outstanding);
+    const rows = summary.topDelinquentUnits.map((item) => ({
+      unitId: item.unitId,
+      unitLabel: item.unitLabel,
+      buildingName: item.buildingName,
+      outstandingByCurrency: item.outstandingByCurrency,
+    }));
 
     if (rows.length === 0) {
       return {
@@ -154,12 +156,12 @@ export class AssistantReadOnlyQueryService {
       .slice(0, 5)
       .map(
         (row) =>
-          `${row.unitLabel} (${row.buildingName}): ${this.formatCurrency(row.outstanding)}`,
+          `${row.unitLabel} (${row.buildingName}): ${this.formatBuckets(row.outstandingByCurrency)}`,
       )
       .join(' | ');
 
     return {
-      answer: `Hay ${rows.length} unidades con deuda vencida. Top morosos: ${preview}.`,
+      answer: `Hay ${summary.delinquentUnitsCount} unidades con deuda vencida. Unidades con deuda pendiente: ${preview}.`,
       responseType: 'list',
       actions: [
         { key: 'open-charges', label: 'Open Charges' },
@@ -352,13 +354,10 @@ export class AssistantReadOnlyQueryService {
       this.finanzasService.getPaymentMetrics(context.tenantId, {}),
     ]);
 
-    const emitted = summary.totalCharges;
-    const outstanding = summary.totalOutstanding;
-    const collectedApplied = Math.max(0, emitted - outstanding);
     const pendingApprovals = metrics.backlogCount;
-    const collectionRate = emitted > 0 ? collectedApplied / emitted : 0;
+    const hasMovements = summary.totalChargesByCurrency.length > 0;
 
-    if (emitted === 0 && summary.totalPaid === 0) {
+    if (!hasMovements) {
       return {
         answer: `No hay movimientos de cobranzas para el período ${period}.`,
         responseType: 'no_data',
@@ -366,16 +365,27 @@ export class AssistantReadOnlyQueryService {
         metadata: {
           noData: true,
           period,
-          emitted,
-          collectedApplied,
-          outstanding,
+          emittedByCurrency: [],
+          collectedByCurrency: [],
+          outstandingByCurrency: [],
           pendingApprovals,
         },
       };
     }
 
+    const emittedByCurrency = summary.totalChargesByCurrency;
+    const collectedByCurrency = summary.totalPaidByCurrency;
+    const outstandingByCurrency = summary.totalOutstandingByCurrency;
+    const collectionRateByCurrency = emittedByCurrency.map((bucket) => {
+      const collected = collectedByCurrency.find((b) => b.currency === bucket.currency);
+      return {
+        currency: bucket.currency,
+        rate: bucket.amountMinor > 0 ? (collected?.amountMinor ?? 0) / bucket.amountMinor : 0,
+      };
+    });
+
     return {
-      answer: `Resumen ${period}: emitido ${this.formatCurrency(emitted)}, cobrado aplicado ${this.formatCurrency(collectedApplied)}, pendiente ${this.formatCurrency(outstanding)}, tasa de cobranza ${(collectionRate * 100).toFixed(1)}%, pagos pendientes de aprobación ${pendingApprovals}.`,
+      answer: `Resumen ${period}: emitido ${this.formatBuckets(emittedByCurrency)}, cobrado aplicado ${this.formatBuckets(collectedByCurrency)}, pendiente ${this.formatBuckets(outstandingByCurrency)}, tasa de cobranza ${collectionRateByCurrency.map((r) => `${(r.rate * 100).toFixed(1)}% ${r.currency}`).join(', ')}, pagos pendientes de aprobación ${pendingApprovals}.`,
       responseType: 'summary',
       actions: [
         { key: 'open-charges', label: 'Open Charges' },
@@ -383,12 +393,11 @@ export class AssistantReadOnlyQueryService {
       ],
       metadata: {
         period,
-        metricValue: Number((collectionRate * 100).toFixed(2)),
-        emitted,
-        collectedApplied,
-        outstanding,
+        emittedByCurrency,
+        collectedByCurrency,
+        outstandingByCurrency,
+        collectionRateByCurrency,
         pendingApprovals,
-        approvedTotal: summary.totalPaid,
       },
     };
   }
@@ -397,29 +406,28 @@ export class AssistantReadOnlyQueryService {
     context: AssistantReadOnlyQueryContext,
   ): Promise<ResolverResult> {
     const summary = await this.finanzasService.getTenantFinancialSummary(context.tenantId);
-    const totalDebt = summary.totalOutstanding;
+    const outstandingByCurrency = summary.totalOutstandingByCurrency;
+    const hasDebt = outstandingByCurrency.some((b) => b.amountMinor > 0);
 
-    if (totalDebt === 0) {
+    if (!hasDebt) {
       return {
         answer: 'La administración no tiene deuda pendiente.',
         responseType: 'no_data',
         actions: [{ key: 'open-charges', label: 'Open Charges' }],
         metadata: {
           noData: true,
-          totalDebt,
-          currency: summary.currency,
+          outstandingByCurrency: [],
           chargeCount: summary.delinquentUnitsCount,
         },
       };
     }
 
     return {
-      answer: `Deuda total de la administración: ${this.formatCurrency(totalDebt, summary.currency)}.`,
+      answer: `Deuda pendiente de la administración: ${this.formatBuckets(outstandingByCurrency)}.`,
       responseType: 'summary',
       actions: [{ key: 'open-charges', label: 'Open Charges' }],
       metadata: {
-        totalDebt,
-        currency: summary.currency,
+        outstandingByCurrency,
         chargeCount: summary.delinquentUnitsCount,
       },
     };
@@ -551,6 +559,21 @@ export class AssistantReadOnlyQueryService {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(cents / 100);
+  }
+
+  /**
+   * Render currency buckets as an explicit enumeration (canonical first,
+   * legacy after). Never produces a mixed nominal total.
+   */
+  private formatBuckets(
+    buckets: readonly ReportCurrencyAmountBucket[],
+  ): string {
+    if (!buckets || buckets.length === 0) {
+      return '—';
+    }
+    return buckets
+      .map((bucket) => formatCurrencySafe(bucket.amountMinor, bucket.currency))
+      .join(', ');
   }
 
   private toPeriod(date: Date): string {

@@ -2258,6 +2258,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 50000,
+      currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2277,6 +2278,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 100000,
+      currency: 'ARS',
           paymentAllocations: [
             { amount: 30000, payment: { status: PaymentStatus.APPROVED } },
           ],
@@ -2310,6 +2312,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 150000,
+      currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2328,6 +2331,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 0,
+      currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2678,8 +2682,8 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P26: responde "cuanto debe el edificio"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2695,7 +2699,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P27: responde "deuda de la torre"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2723,7 +2727,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P29: responde "cuanto adeuda el sector"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 75000, unitId: 'u1', paymentAllocations: [{ amount: 25000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 75000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 25000, payment: { status: PaymentStatus.APPROVED } }] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2738,7 +2742,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P30: responde "deuda del complejo"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 0, unitId: 'u1', paymentAllocations: [] },
+        { amount: 0, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2891,8 +2895,8 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P36: responde "quienes son los morosos"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2902,7 +2906,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Top deudores');
+      expect(result.answer).toContain('Unidades con deuda pendiente');
       expect(result.answer).toContain('Dpto 101');
       expect(result.answer).toContain('1.000');
       expect(result.answer).toContain('Dpto 102');
@@ -2911,7 +2915,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P37: responde "top deudores de la torre"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2921,13 +2925,13 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Top deudores');
+      expect(result.answer).toContain('Unidades con deuda pendiente');
     });
 
     it('P38: responde "ranking de deuda del bloque"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 150000, unitId: 'u1', paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.APPROVED } }] },
-        { amount: 80000, unitId: 'u2', paymentAllocations: [] },
+        { amount: 150000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 80000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2955,9 +2959,9 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P40: responde "morosos del complejo"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 300000, unitId: 'u1', paymentAllocations: [] },
-        { amount: 200000, unitId: 'u2', paymentAllocations: [] },
-        { amount: 100000, unitId: 'u3', paymentAllocations: [] },
+        { amount: 300000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u3', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2974,7 +2978,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P41: responde "deudores del edificio"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 50000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2984,12 +2988,12 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Top deudores');
+      expect(result.answer).toContain('Unidades con deuda pendiente');
     });
 
     it('P41-V1: matchea "atrasados"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 80000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 80000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2999,7 +3003,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Top deudores');
+      expect(result.answer).toContain('Unidades con deuda pendiente');
     });
 
     it('P41-V2: matchea "impagos"', async () => {
@@ -3033,8 +3037,8 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P42: responde "estadisticas del edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(2).mockResolvedValueOnce(5);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3046,7 +3050,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       expect(result).not.toBeNull();
       expect(result.answer).toContain('Unidades: 2');
       expect(result.answer).toContain('Tickets abiertos: 2 de 5 totales');
-      expect(result.answer).toContain('Deuda total');
+      expect(result.answer).toContain('Deuda:');
       expect(result.answer).toContain('Deuda promedio por unidad');
     });
 
@@ -3067,7 +3071,7 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P44: responde "resumen del bloque"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, unitId: 'u1', paymentAllocations: [{ amount: 100000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 100000, payment: { status: PaymentStatus.APPROVED } }] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3077,7 +3081,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Deuda total');
+      expect(result.answer).toContain('Deuda:');
     });
 
     it('P45: responde "informacion del edificio"', async () => {
@@ -3097,8 +3101,8 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P46: responde "datos del edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(5).mockResolvedValueOnce(10);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 300000, unitId: 'u1', paymentAllocations: [] },
-        { amount: 100000, unitId: 'u2', paymentAllocations: [] },
+        { amount: 300000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3108,7 +3112,7 @@ describe('AssistantService - Strict Operational Questions', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result.answer).toContain('Deuda total');
+      expect(result.answer).toContain('Deuda:');
       expect(result.answer).toContain('Deuda promedio por unidad');
     });
 
@@ -3129,7 +3133,7 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P47-V1: matchea "como viene el edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(2).mockResolvedValueOnce(8);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3140,7 +3144,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
       expect(result).not.toBeNull();
       expect(result.answer).toContain('Estadísticas del edificio');
-      expect(result.answer).toContain('Deuda total');
+      expect(result.answer).toContain('Deuda:');
     });
 
     it('P47-V2: matchea "cuentas del edificio"', async () => {
@@ -3479,7 +3483,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('building-level se evalua antes que unit-level para "deuda edificio A"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictOperationalQuestion(
@@ -3490,12 +3494,12 @@ describe('AssistantService - Strict Operational Questions', () => {
 
       expect(result).not.toBeNull();
       expect(result.answer).toContain('Edificio A');
-      expect(result.answer).toContain('deuda total');
+      expect(result.answer).toContain('deuda pendiente');
     });
 
     it('unit-level se usa para "deuda del depto 101 del Edificio A"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 50000, paymentAllocations: [] },
+        { amount: 50000, currency: 'ARS', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictOperationalQuestion(

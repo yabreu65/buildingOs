@@ -2,10 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { ChargeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
+import type { ReportCurrencyAmountBucket } from '../finanzas/currency-buckets';
 
 export interface TenantDebtSummary {
-  totalDebt: number;
-  currency: string;
+  outstandingByCurrency: ReportCurrencyAmountBucket[];
   chargeCount: number;
 }
 
@@ -14,34 +14,27 @@ export async function resolveTenantDebtSummary(
   debtCalculator: AssistantDebtCalculatorService,
   tenantId: string,
 ): Promise<TenantDebtSummary> {
-  const [tenant, charges] = await Promise.all([
-    prisma.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { currency: true },
-    }),
-    prisma.charge.findMany({
-      where: {
-        tenantId,
-        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
-        canceledAt: null,
-      },
-      include: {
-        paymentAllocations: {
-          include: {
-            payment: {
-              select: {
-                status: true,
-              },
+  const charges = await prisma.charge.findMany({
+    where: {
+      tenantId,
+      status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+      canceledAt: null,
+    },
+    include: {
+      paymentAllocations: {
+        include: {
+          payment: {
+            select: {
+              status: true,
             },
           },
         },
       },
-    }),
-  ]);
+    },
+  });
 
   return {
-    totalDebt: debtCalculator.calculateOutstanding(charges),
-    currency: tenant.currency,
+    outstandingByCurrency: debtCalculator.calculateOutstandingByCurrency(charges),
     chargeCount: charges.length,
   };
 }

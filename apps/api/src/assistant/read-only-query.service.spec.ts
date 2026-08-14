@@ -55,9 +55,9 @@ describe('AssistantReadOnlyQueryService', () => {
       roles: [{ role: 'TENANT_ADMIN' }],
     });
     finanzasService.getTenantFinancialSummary.mockResolvedValue({
-      totalCharges: 10000,
-      totalPaid: 2500,
-      totalOutstanding: 7500,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 10000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 2500 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 7500 }],
       delinquentUnitsCount: 1,
       topDelinquentUnits: [
         {
@@ -65,7 +65,7 @@ describe('AssistantReadOnlyQueryService', () => {
           unitLabel: 'A-101',
           buildingId: 'b-1',
           buildingName: 'Torre Norte',
-          outstanding: 7500,
+          outstandingByCurrency: [{ currency: 'ARS', amountMinor: 7500 }],
         },
       ],
       currency: 'ARS',
@@ -193,9 +193,9 @@ describe('AssistantReadOnlyQueryService', () => {
       roles: [{ role: 'TENANT_ADMIN' }],
     });
     finanzasService.getTenantFinancialSummary.mockResolvedValue({
-      totalCharges: 600000,
-      totalPaid: 125432,
-      totalOutstanding: 474568,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 600000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 125432 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 474568 }],
       delinquentUnitsCount: 18,
       topDelinquentUnits: [],
       currency: 'ARS',
@@ -222,7 +222,7 @@ describe('AssistantReadOnlyQueryService', () => {
     expect(finanzasService.getTenantFinancialSummary).toHaveBeenCalledWith('tenant-1');
     expect(result.metadata.intentCode).toBe('GET_TENANT_DEBT');
     expect(result.responseType).toBe('summary');
-    expect(result.answer).toContain('Deuda total de la administración');
+    expect(result.answer).toContain('Deuda pendiente de la administración:');
   });
 
   it('uses finance source of truth for collections summary without touching write paths', async () => {
@@ -232,9 +232,9 @@ describe('AssistantReadOnlyQueryService', () => {
       roles: [{ role: 'TENANT_ADMIN' }],
     });
     finanzasService.getTenantFinancialSummary.mockResolvedValue({
-      totalCharges: 150000,
-      totalPaid: 90000,
-      totalOutstanding: 60000,
+      totalChargesByCurrency: [{ currency: 'ARS', amountMinor: 150000 }],
+      totalPaidByCurrency: [{ currency: 'ARS', amountMinor: 90000 }],
+      totalOutstandingByCurrency: [{ currency: 'ARS', amountMinor: 60000 }],
       delinquentUnitsCount: 2,
       topDelinquentUnits: [],
       currency: 'ARS',

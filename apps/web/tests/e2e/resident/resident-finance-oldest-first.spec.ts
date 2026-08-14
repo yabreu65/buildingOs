@@ -8,6 +8,21 @@ const PRISMA = new PrismaClient();
 const TEST_REFERENCE = 'E2E-FIN-01';
 const FIAT_PERIODS = ['2026-06', '2026-07', '2026-08'] as const;
 
+/**
+ * Deterministic relative dates: overdue semantics (dueDate < now) must not
+ * depend on the calendar day the CI run happens. Delinquency is
+ * overdue-only, so fixtures that must be delinquent use a clear past date
+ * and fixtures that must NOT be delinquent use a clear future date with a
+ * wide margin (weeks, not minutes).
+ */
+function dateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+const pastDate = (daysAgo: number): string => dateOffset(-daysAgo);
+const futureDate = (daysFromNow: number): string => dateOffset(daysFromNow);
+
 interface ResidentContextResponse {
   activeBuildingId: string | null;
   activeUnitId: string | null;
@@ -33,11 +48,14 @@ interface UnitLedgerResponse {
 }
 
 interface FinancialSummaryResponse {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: Array<{ currency: string; amountMinor: number }>;
+  totalPaidByCurrency: Array<{ currency: string; amountMinor: number }>;
+  totalOutstandingByCurrency: Array<{ currency: string; amountMinor: number }>;
   delinquentUnitsCount: number;
-  currency: string;
+}
+
+function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
+  return (buckets ?? []).find((b) => b.currency === 'ARS')?.amountMinor ?? 0;
 }
 
 async function getMeContext(page: Page, tenantId: string): Promise<ResidentContextResponse> {
@@ -408,9 +426,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(adminTenantId).toBe(residentTenantId);
 
     const createdCharges = await Promise.all([
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-06', '2026-06-15', 'Expensas Junio 2026', 10000),
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-07', '2026-07-15', 'Expensas Julio 2026', 10000),
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-08', '2026-08-15', 'Expensas Agosto 2026', 10000),
+      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-06', pastDate(90), 'Expensas Junio 2026', 10000),
+      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-07', pastDate(60), 'Expensas Julio 2026', 10000),
+      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-08', futureDate(30), 'Expensas Agosto 2026', 10000),
     ]);
 
     expect(createdCharges.map((charge) => charge.period)).toEqual(['2026-06', '2026-07', '2026-08']);
@@ -421,7 +439,7 @@ test.describe('Resident finance oldest-first flow', () => {
       buildingId,
       otherUnit.id,
       '2026-09',
-      '2026-09-20',
+      futureDate(60),
       `${TEST_REFERENCE} - Expensas Unidad Vecina`,
       5000,
     );
@@ -434,9 +452,9 @@ test.describe('Resident finance oldest-first flow', () => {
     const residentLedgerBefore = await getUnitLedger(page, residentTenantId, unitId);
     expect(residentLedgerBefore.totals.balance).toBe(30000);
     const summaryBefore = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryBefore.totalOutstanding).toBe(10000);
-    expect(summaryBefore.totalPaid).toBe(0);
-    expect(summaryBefore.delinquentUnitsCount).toBe(1);
+    expect(arsAmount(summaryBefore.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryBefore.totalPaidByCurrency)).toBe(0);
+    expect(summaryBefore.delinquentUnitsCount).toBe(0); // 3F5: overdue-only (Aug charge due in the future)
 
     const firstPaymentProofFileId = await createPaymentProofDocument(
       page,
@@ -474,9 +492,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerSubmitted.totals.totalAllocated).toBe(0);
 
     const summarySubmitted = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summarySubmitted.totalOutstanding).toBe(10000);
-    expect(summarySubmitted.totalPaid).toBe(0);
-    expect(summarySubmitted.delinquentUnitsCount).toBe(1);
+    expect(arsAmount(summarySubmitted.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summarySubmitted.totalPaidByCurrency)).toBe(0);
+    expect(summarySubmitted.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     await adminPage.goto(`/${residentTenantId}/finanzas?tab=payments`);
     await expect(adminPage.getByRole('heading', { name: /finanzas del conjunto/i })).toBeVisible();
@@ -497,9 +515,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerApproved.totals.totalAllocated).toBe(20000);
 
     const summaryApproved = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryApproved.totalOutstanding).toBe(10000);
-    expect(summaryApproved.totalPaid).toBe(0);
-    expect(summaryApproved.delinquentUnitsCount).toBe(1);
+    expect(arsAmount(summaryApproved.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryApproved.totalPaidByCurrency)).toBe(0);
+    expect(summaryApproved.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     const augustPaymentProofFileId = await createPaymentProofDocument(
       page,
@@ -539,9 +557,9 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerRejected.totals.totalAllocated).toBe(20000);
 
     const summaryRejected = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryRejected.totalOutstanding).toBe(10000);
-    expect(summaryRejected.totalPaid).toBe(0);
-    expect(summaryRejected.delinquentUnitsCount).toBe(1);
+    expect(arsAmount(summaryRejected.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryRejected.totalPaidByCurrency)).toBe(0);
+    expect(summaryRejected.delinquentUnitsCount).toBe(0); // 3F5: overdue-only
 
     const delinquencyCount = await getTenantDelinquencyCount(adminPage, residentTenantId, buildingId);
     expect(delinquencyCount).toBe(1);
