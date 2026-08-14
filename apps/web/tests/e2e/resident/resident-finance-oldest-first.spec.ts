@@ -33,11 +33,14 @@ interface UnitLedgerResponse {
 }
 
 interface FinancialSummaryResponse {
-  totalCharges: number;
-  totalPaid: number;
-  totalOutstanding: number;
+  totalChargesByCurrency: Array<{ currency: string; amountMinor: number }>;
+  totalPaidByCurrency: Array<{ currency: string; amountMinor: number }>;
+  totalOutstandingByCurrency: Array<{ currency: string; amountMinor: number }>;
   delinquentUnitsCount: number;
-  currency: string;
+}
+
+function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
+  return (buckets ?? []).find((b) => b.currency === 'ARS')?.amountMinor ?? 0;
 }
 
 async function getMeContext(page: Page, tenantId: string): Promise<ResidentContextResponse> {
@@ -434,8 +437,8 @@ test.describe('Resident finance oldest-first flow', () => {
     const residentLedgerBefore = await getUnitLedger(page, residentTenantId, unitId);
     expect(residentLedgerBefore.totals.balance).toBe(30000);
     const summaryBefore = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryBefore.totalOutstanding).toBe(10000);
-    expect(summaryBefore.totalPaid).toBe(0);
+    expect(arsAmount(summaryBefore.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryBefore.totalPaidByCurrency)).toBe(0);
     expect(summaryBefore.delinquentUnitsCount).toBe(1);
 
     const firstPaymentProofFileId = await createPaymentProofDocument(
@@ -474,8 +477,8 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerSubmitted.totals.totalAllocated).toBe(0);
 
     const summarySubmitted = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summarySubmitted.totalOutstanding).toBe(10000);
-    expect(summarySubmitted.totalPaid).toBe(0);
+    expect(arsAmount(summarySubmitted.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summarySubmitted.totalPaidByCurrency)).toBe(0);
     expect(summarySubmitted.delinquentUnitsCount).toBe(1);
 
     await adminPage.goto(`/${residentTenantId}/finanzas?tab=payments`);
@@ -497,8 +500,8 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerApproved.totals.totalAllocated).toBe(20000);
 
     const summaryApproved = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryApproved.totalOutstanding).toBe(10000);
-    expect(summaryApproved.totalPaid).toBe(0);
+    expect(arsAmount(summaryApproved.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryApproved.totalPaidByCurrency)).toBe(0);
     expect(summaryApproved.delinquentUnitsCount).toBe(1);
 
     const augustPaymentProofFileId = await createPaymentProofDocument(
@@ -539,8 +542,8 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(residentLedgerRejected.totals.totalAllocated).toBe(20000);
 
     const summaryRejected = await getBuildingSummary(adminPage, residentTenantId, buildingId);
-    expect(summaryRejected.totalOutstanding).toBe(10000);
-    expect(summaryRejected.totalPaid).toBe(0);
+    expect(arsAmount(summaryRejected.totalOutstandingByCurrency)).toBe(10000);
+    expect(arsAmount(summaryRejected.totalPaidByCurrency)).toBe(0);
     expect(summaryRejected.delinquentUnitsCount).toBe(1);
 
     const delinquencyCount = await getTenantDelinquencyCount(adminPage, residentTenantId, buildingId);
