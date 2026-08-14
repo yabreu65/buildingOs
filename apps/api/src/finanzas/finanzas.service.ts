@@ -2015,7 +2015,14 @@ export class FinanzasService {
               'amountMinor', "accumulatedDebt"
             ) ORDER BY currency
           ) AS "accumulatedDebtByCurrency"
-        FROM unit_rows
+        FROM (
+          SELECT
+            currency,
+            SUM("periodDebt") AS "periodDebt",
+            SUM("accumulatedDebt") AS "accumulatedDebt"
+          FROM unit_rows
+          GROUP BY currency
+        ) AS totals_by_currency
       `),
     ]);
 
