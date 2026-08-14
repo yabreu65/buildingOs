@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import Card from '@/shared/components/ui/Card';
 import { Skeleton } from '@/shared/components/ui';
 import { useNotasRevelatorias } from '../hooks/useExpenseLedger';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 
 // react-pdf usa APIs del browser — importar solo en cliente
 const NotasRevelatoriasPDF = dynamic(
@@ -72,12 +73,14 @@ export function NotasRevelatoriasPanel({ tenantId }: Props) {
       {!isLoading && report && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
-            label="Ingresos totales (USD)"
-            value={`$${(report.buildingIncomes.reduce((s, b) => s + b.totalUSD, 0) / 100).toFixed(2)}`}
+            label="Ingresos totales"
+            value={formatCurrencyBuckets(
+              report.buildingIncomes.flatMap((b) => b.totalByCurrency),
+            )}
           />
           <StatCard
-            label="Gastos comunes (USD)"
-            value={`$${(report.commonTotals.usd / 100).toFixed(2)}`}
+            label="Gastos comunes"
+            value={formatCurrencyBuckets(report.commonTotals.byCurrency)}
           />
           <StatCard
             label="Notas registradas"

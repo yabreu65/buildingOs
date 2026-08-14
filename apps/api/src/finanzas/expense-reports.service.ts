@@ -1,6 +1,12 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanzasValidators } from './finanzas.validators';
+import {
+  aggregateReportBuckets,
+  compareReportCurrencies,
+  type ReportCurrencyAmountBucket,
+  type ReportCurrencyInput,
+} from './currency-buckets';
 
 // ── Types for Notas Revelatorias ──────────────────────────────────────────
 
@@ -14,27 +20,21 @@ export interface BuildingIncomeSection {
   buildingId: string;
   buildingName: string;
   entries: IncomeEntry[];
-  totalUSD: number;
-  totalVES: number;
-  totalPesos: number;
+  totalByCurrency: ReportCurrencyAmountBucket[];
 }
 
 export interface ExpenseLineItem {
   itemNumber: number;
   date: string;       // "2-Feb"
   description: string;
-  usdAmount: number;  // in minor units
-  vesAmount: number;
-  pesosAmount: number;
+  amountByCurrency: ReportCurrencyAmountBucket[]; // minor units, per currency
 }
 
 export interface BuildingExpenseSection {
   buildingId: string;
   buildingName: string;
   items: ExpenseLineItem[];
-  totalUSD: number;
-  totalVES: number;
-  totalPesos: number;
+  totalByCurrency: ReportCurrencyAmountBucket[];
 }
 
 export interface AlicuotaRow {
@@ -53,6 +53,11 @@ export interface BuildingAlicuota {
   buildingName: string;
   rows: AlicuotaRow[];
   grandTotal: number;  // USD minor — sum of all totalToRecaudar
+  // The Notas Revelatorias alícuota section is deliberately expressed in
+  // USD (document header: EXPRESADA DE DÓLARES AMERICANOS); non-USD
+  // expenses are reported separately (per-currency buckets) and liquidated
+  // per baseCurrency in their own liquidations.
+  baseCurrency: 'USD';
 }
 
 export interface NotasRevelatoriasReport {
@@ -62,13 +67,13 @@ export interface NotasRevelatoriasReport {
   periodLabel: string;  // "FEBRERO 2026"
   buildingIncomes: BuildingIncomeSection[];
   commonExpenses: ExpenseLineItem[];
-  commonTotals: { usd: number; ves: number; pesos: number };
+  commonTotals: { byCurrency: ReportCurrencyAmountBucket[] };
   buildingExpenses: BuildingExpenseSection[];
-  reservaLegal: { buildingName: string; usd: number; ves: number }[];
+  reservaLegal: { buildingName: string; byCurrency: ReportCurrencyAmountBucket[] }[];
   alicuotas: BuildingAlicuota[];
   // NEW: Ajustes retroactivos
   adjustments: AdjustmentLineItem[];
-  adjustmentTotals: { usd: number; ves: number; pesos: number };
+  adjustmentTotals: { byCurrency: ReportCurrencyAmountBucket[] };
 }
 
 export interface AdjustmentLineItem {
@@ -78,23 +83,21 @@ export interface AdjustmentLineItem {
   date: string;
   description: string;
   reason: string;
-  usdAmount: number;
-  vesAmount: number;
-  pesosAmount: number;
+  amountByCurrency: ReportCurrencyAmountBucket[];
 }
 
 export interface BuildingPeriodSummary {
   buildingId: string;
   buildingName: string;
-  buildingExpenses: number;  // BUILDING-scope only
-  sharedPortion: number;     // allocated share of TENANT_SHARED
-  total: number;
+  buildingExpensesByCurrency: ReportCurrencyAmountBucket[]; // BUILDING-scope only
+  sharedPortionByCurrency: ReportCurrencyAmountBucket[];    // allocated share of TENANT_SHARED
+  totalByCurrency: ReportCurrencyAmountBucket[];
 }
 
 export interface ExpensePeriodReport {
   period: string;            // YYYY-MM
-  totalTenant: number;       // sum of all building totals
-  sharedTotal: number;       // raw TENANT_SHARED expenses total
+  totalTenantByCurrency: ReportCurrencyAmountBucket[];   // per-currency totals
+  sharedTotalByCurrency: ReportCurrencyAmountBucket[];   // raw TENANT_SHARED per currency
   byBuilding: BuildingPeriodSummary[];
 }
 
@@ -113,19 +116,20 @@ export class ExpenseReportsService {
       throw new ForbiddenException('Solo administradores pueden ver reportes');
     }
 
-    // 1. BUILDING expenses grouped by period + building
+    // 1. BUILDING expenses grouped by period + building + CURRENCY
     const buildingRows = await this.prisma.expense.groupBy({
-      by: ['period', 'buildingId'],
+      by: ['period', 'buildingId', 'currencyCode'],
       where: { tenantId, status: 'VALIDATED', scopeType: 'BUILDING' },
       _sum: { amountMinor: true },
     });
 
-    // 2. TENANT_SHARED expenses with their allocations
+    // 2. TENANT_SHARED expenses with their allocations (per currency)
     const sharedExpenses = await this.prisma.expense.findMany({
       where: { tenantId, status: 'VALIDATED', scopeType: 'TENANT_SHARED' },
       select: {
         period: true,
         amountMinor: true,
+        currencyCode: true,
         allocations: {
           select: { buildingId: true, amountMinor: true, percentage: true },
         },
@@ -148,22 +152,28 @@ export class ExpenseReportsService {
     ].sort().reverse(); // newest first
 
     return periods.map((period): ExpensePeriodReport => {
-      // Building-scope rows for this period
+      // Building-scope rows for this period (per building + currency)
       const bRows = buildingRows.filter((r) => r.period === period);
 
       // Shared expenses for this period and their per-building allocations
       const sharedPeriod = sharedExpenses.filter((e) => e.period === period);
-      const sharedTotal = sharedPeriod.reduce((s, e) => s + e.amountMinor, 0);
+      const sharedTotalByCurrency = aggregateReportBuckets(
+        sharedPeriod.map((e) => ({ currency: e.currencyCode, amountMinor: e.amountMinor })),
+      );
 
-      const sharedByBuilding: Record<string, number> = {};
+      const sharedByBuilding = new Map<
+        string,
+        Array<{ currency: string; amountMinor: number }>
+      >();
       for (const exp of sharedPeriod) {
         for (const alloc of exp.allocations) {
           if (!alloc.buildingId) continue;
           const amount =
             alloc.amountMinor ??
             Math.floor(exp.amountMinor * ((alloc.percentage ?? 0) / 100));
-          sharedByBuilding[alloc.buildingId] =
-            (sharedByBuilding[alloc.buildingId] ?? 0) + amount;
+          const entries = sharedByBuilding.get(alloc.buildingId) ?? [];
+          entries.push({ currency: exp.currencyCode, amountMinor: amount });
+          sharedByBuilding.set(alloc.buildingId, entries);
         }
       }
 
@@ -171,26 +181,46 @@ export class ExpenseReportsService {
       const buildingIds = [
         ...new Set([
           ...bRows.map((r) => r.buildingId).filter(Boolean) as string[],
-          ...Object.keys(sharedByBuilding),
+          ...Array.from(sharedByBuilding.keys()),
         ]),
       ];
 
       const byBuilding = buildingIds.map((buildingId): BuildingPeriodSummary => {
-        const buildingExpenses =
-          bRows.find((r) => r.buildingId === buildingId)?._sum.amountMinor ?? 0;
-        const sharedPortion = sharedByBuilding[buildingId] ?? 0;
+        const buildingExpensesByCurrency = aggregateReportBuckets(
+          bRows
+            .filter((r) => r.buildingId === buildingId)
+            .map((r) => ({
+              currency: r.currencyCode,
+              amountMinor: r._sum.amountMinor ?? 0,
+            })),
+        );
+        const sharedPortionByCurrency = aggregateReportBuckets(
+          sharedByBuilding.get(buildingId) ?? [],
+        );
+        const totalByCurrency = aggregateReportBuckets([
+          ...buildingExpensesByCurrency.map((b) => ({
+            currency: b.currency,
+            amountMinor: b.amountMinor,
+          })),
+          ...sharedPortionByCurrency.map((b) => ({
+            currency: b.currency,
+            amountMinor: b.amountMinor,
+          })),
+        ]);
         return {
           buildingId,
           buildingName: buildingNames[buildingId] ?? buildingId,
-          buildingExpenses,
-          sharedPortion,
-          total: buildingExpenses + sharedPortion,
+          buildingExpensesByCurrency,
+          sharedPortionByCurrency,
+          totalByCurrency,
         };
       });
 
-      const totalTenant = byBuilding.reduce((s, b) => s + b.total, 0);
+      const totalTenantByCurrency = aggregateReportBuckets(
+        byBuilding.flatMap((b) => b.totalByCurrency.map((x) => ({ currency: x.currency, amountMinor: x.amountMinor }))),
+      );
 
-      return { period, totalTenant, sharedTotal, byBuilding };
+      return { period, totalTenantByCurrency, sharedTotalByCurrency, byBuilding };
     });
   }
 
@@ -267,9 +297,9 @@ export class ExpenseReportsService {
         buildingId: b.id,
         buildingName: b.name,
         entries,
-        totalUSD: this.sumByCurrency(bIncomes, 'USD'),
-        totalVES: this.sumByCurrency(bIncomes, 'VES'),
-        totalPesos: this.sumByCurrency(bIncomes, 'ARS'),
+        totalByCurrency: aggregateReportBuckets(
+          bIncomes.map((i) => ({ currency: i.currencyCode, amountMinor: i.amountMinor })),
+        ),
       };
     });
 
@@ -284,9 +314,9 @@ export class ExpenseReportsService {
           currencyCode: i.currencyCode,
           amountMinor: i.amountMinor,
         })),
-        totalUSD: this.sumByCurrency(tenantLevelIncomes, 'USD'),
-        totalVES: this.sumByCurrency(tenantLevelIncomes, 'VES'),
-        totalPesos: this.sumByCurrency(tenantLevelIncomes, 'ARS'),
+        totalByCurrency: aggregateReportBuckets(
+          tenantLevelIncomes.map((i) => ({ currency: i.currencyCode, amountMinor: i.amountMinor })),
+        ),
       });
     }
 
@@ -296,14 +326,12 @@ export class ExpenseReportsService {
       itemNumber: itemCounter++,
       date: this.formatDate(e.invoiceDate),
       description: e.description ?? '',
-      usdAmount: e.currencyCode === 'USD' ? e.amountMinor : 0,
-      vesAmount: e.currencyCode === 'VES' ? e.amountMinor : 0,
-      pesosAmount: !['USD', 'VES'].includes(e.currencyCode) ? e.amountMinor : 0,
+      amountByCurrency: [{ currency: e.currencyCode, amountMinor: e.amountMinor }],
     }));
     const commonTotals = {
-      usd: commonExps.filter((e) => e.currencyCode === 'USD').reduce((s, e) => s + e.amountMinor, 0),
-      ves: commonExps.filter((e) => e.currencyCode === 'VES').reduce((s, e) => s + e.amountMinor, 0),
-      pesos: commonExps.filter((e) => !['USD', 'VES'].includes(e.currencyCode)).reduce((s, e) => s + e.amountMinor, 0),
+      byCurrency: aggregateReportBuckets(
+        commonExps.map((e) => ({ currency: e.currencyCode, amountMinor: e.amountMinor })),
+      ),
     };
 
     // ── Building-specific expenses ─────────────────────────────────────────
@@ -313,17 +341,15 @@ export class ExpenseReportsService {
         itemNumber: itemCounter++,
         date: this.formatDate(e.invoiceDate),
         description: e.description ?? '',
-        usdAmount: e.currencyCode === 'USD' ? e.amountMinor : 0,
-        vesAmount: e.currencyCode === 'VES' ? e.amountMinor : 0,
-        pesosAmount: !['USD', 'VES'].includes(e.currencyCode) ? e.amountMinor : 0,
+        amountByCurrency: [{ currency: e.currencyCode, amountMinor: e.amountMinor }],
       }));
       return {
         buildingId: b.id,
         buildingName: b.name,
         items,
-        totalUSD: this.sumByCurrency(bExps, 'USD'),
-        totalVES: this.sumByCurrency(bExps, 'VES'),
-        totalPesos: this.sumByCurrency(bExps.filter((e) => !['USD', 'VES'].includes(e.currencyCode)), undefined),
+        totalByCurrency: aggregateReportBuckets(
+          bExps.map((e) => ({ currency: e.currencyCode, amountMinor: e.amountMinor })),
+        ),
       };
     });
 
@@ -331,15 +357,28 @@ export class ExpenseReportsService {
     const reservaLegal = buildings.map((b) => {
       const liq = liquidations.find((l) => l.buildingId === b.id);
       const totalMinor = liq?.totalAmountMinor ?? 0;
-      // Reserva = 10% of total alícuota
-      const reservaUSD = Math.floor(totalMinor * 0.1);
-      // For VES we take 10% of total VES building expenses
+      // Reserva = 10% of the liquidation total, expressed in the liquidation
+      // base currency (never relabelled to a different currency).
+      const reservaByCurrency: ReportCurrencyInput[] = [];
+      if (liq && totalMinor > 0) {
+        reservaByCurrency.push({
+          currency: liq.baseCurrency,
+          amountMinor: Math.floor(totalMinor * 0.1),
+        });
+      }
+      // VES reserve: 10% of total VES building expenses (+ shared share)
       const bVesTotal = buildingExps
         .filter((e) => e.buildingId === b.id && e.currencyCode === 'VES')
         .reduce((s, e) => s + e.amountMinor, 0);
       const sharedVes = commonExps.filter((e) => e.currencyCode === 'VES').reduce((s, e) => s + e.amountMinor, 0);
       const reservaVES = Math.floor((bVesTotal + sharedVes / Math.max(buildings.length, 1)) * 0.1);
-      return { buildingName: b.name, usd: reservaUSD, ves: reservaVES };
+      if (reservaVES > 0) {
+        reservaByCurrency.push({ currency: 'VES', amountMinor: reservaVES });
+      }
+      return {
+        buildingName: b.name,
+        byCurrency: aggregateReportBuckets(reservaByCurrency),
+      };
     });
 
     // ── Alícuotas per building ─────────────────────────────────────────────
@@ -372,7 +411,7 @@ export class ExpenseReportsService {
       });
 
       const grandTotal = rows.reduce((s, r) => s + r.totalToRecaudar, 0);
-      return { buildingId: b.id, buildingName: b.name, rows, grandTotal };
+      return { buildingId: b.id, buildingName: b.name, rows, grandTotal, baseCurrency: 'USD' as const };
     });
 
     // ── Ajustes / Retroactivos ───────────────────────────────────────────────
@@ -384,14 +423,16 @@ export class ExpenseReportsService {
       date: this.formatDate(adj.sourceInvoiceDate),
       description: `${adj.categoryId} - Ajuste por ${adj.sourcePeriod}`,
       reason: adj.reason,
-      usdAmount: adj.currencyCode === 'USD' ? adj.amountMinor : 0,
-      vesAmount: adj.currencyCode === 'VES' ? adj.amountMinor : 0,
-      pesosAmount: !['USD', 'VES'].includes(adj.currencyCode) ? adj.amountMinor : 0,
+      amountByCurrency: adj.currencyCode
+        ? [{ currency: adj.currencyCode, amountMinor: adj.amountMinor }]
+        : [],
     }));
     const adjustmentTotals = {
-      usd: adjustments.filter((a) => a.currencyCode === 'USD').reduce((s, a) => s + a.amountMinor, 0),
-      ves: adjustments.filter((a) => a.currencyCode === 'VES').reduce((s, a) => s + a.amountMinor, 0),
-      pesos: adjustments.filter((a) => !['USD', 'VES'].includes(a.currencyCode)).reduce((s, a) => s + a.amountMinor, 0),
+      byCurrency: aggregateReportBuckets(
+        adjustments
+          .filter((a) => a.currencyCode)
+          .map((a) => ({ currency: a.currencyCode as string, amountMinor: a.amountMinor })),
+      ),
     };
 
     return {
@@ -411,15 +452,6 @@ export class ExpenseReportsService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  private sumByCurrency(
-    records: { amountMinor: number; currencyCode?: string }[],
-    currency: string | undefined,
-  ): number {
-    return records
-      .filter((r) => (currency ? r.currencyCode === currency : true))
-      .reduce((s, r) => s + r.amountMinor, 0);
-  }
 
   private formatDate(date: Date | string): string {
     const d = new Date(date);

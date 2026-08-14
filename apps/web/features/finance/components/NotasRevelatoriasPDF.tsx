@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Document,
   Page,
@@ -8,7 +8,6 @@ import {
   View,
   StyleSheet,
   pdf,
-  Font,
 } from '@react-pdf/renderer';
 import type {
   NotasRevelatoriasReport,
@@ -80,14 +79,41 @@ const S = StyleSheet.create({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtUSD(minor: number): string {
+function fmt(minor: number, currency: string): string {
   if (!minor) return '-';
-  return (minor / 100).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  try {
+    return new Intl.NumberFormat('es-VE', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(minor / 100);
+  } catch {
+    return (minor / 100).toFixed(2) + ' ' + currency;
+  }
 }
 
-function fmtVES(minor: number): string {
-  if (!minor) return '-';
-  return (minor / 100).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const CURRENCY_LABEL: Record<string, string> = {
+  USD: 'DÓLARES',
+  VES: 'BOLÍVARES',
+};
+
+function currencyLabel(currency: string): string {
+  return CURRENCY_LABEL[currency] ?? currency;
+}
+
+function bucketAmount(
+  buckets: ReadonlyArray<{ currency: string; amountMinor: number }> | undefined,
+  currency: string,
+): number {
+  return buckets?.find((b) => b.currency === currency)?.amountMinor ?? 0;
+}
+
+// Dynamic per-currency column widths: description keeps a base width, the
+// remaining space is split among the currencies present.
+function currencyCols(currencies: string[]): Array<{ currency: string; width: string }> {
+  const per = Math.max(8, Math.floor((100 - 55) / Math.max(currencies.length, 1)));
+  return currencies.map((currency) => ({ currency, width: per + '%' }));
 }
 
 function nextMonth(period: string): string {
@@ -125,43 +151,44 @@ function IncomeTable({ report }: { report: NotasRevelatoriasReport }) {
   return (
     <>
       <Text style={S.sectionTitle}>INGRESOS ORDINARIOS</Text>
-      {report.buildingIncomes.map((building, idx) => (
-        <View key={building.buildingId}>
-          <Text style={S.notaTitle}>NOTA NRO {idx + 1}</Text>
-          <Text style={S.buildingTitle}>Ingresos {building.buildingName}</Text>
-          <View style={S.table}>
-            {/* Header */}
-            <View style={S.headerRow}>
-              <Text style={[S.cell, S.colIncomeDesc]} />
-              <Text style={[S.cellBold, S.colIncomeVES, S.center]}>BOLÍVARES</Text>
-              <Text style={[S.cellBold, S.colIncomeUSD, S.center]}>DÓLARES</Text>
-              <Text style={[S.cellBold, S.colIncomePesos, S.center]}>PESOS</Text>
-            </View>
-            {/* Rows */}
-            {building.entries.map((entry, i) => (
-              <View key={i} style={S.row}>
-                <Text style={[S.cell, S.colIncomeDesc]}>{entry.description}</Text>
-                <Text style={[S.cell, S.colIncomeVES]}>
-                  {entry.currencyCode === 'VES' ? fmtVES(entry.amountMinor) : '-'}
-                </Text>
-                <Text style={[S.cell, S.colIncomeUSD]}>
-                  {entry.currencyCode === 'USD' ? fmtUSD(entry.amountMinor) : '-'}
-                </Text>
-                <Text style={[S.cell, S.colIncomePesos]}>
-                  {!['USD', 'VES'].includes(entry.currencyCode) ? fmtUSD(entry.amountMinor) : '-'}
-                </Text>
+      {report.buildingIncomes.map((building, idx) => {
+        const currencies = building.totalByCurrency.map((b) => b.currency);
+        const cols = currencyCols(currencies);
+        return (
+          <View key={building.buildingId}>
+            <Text style={S.notaTitle}>NOTA NRO {idx + 1}</Text>
+            <Text style={S.buildingTitle}>Ingresos {building.buildingName}</Text>
+            <View style={S.table}>
+              <View style={S.headerRow}>
+                <Text style={[S.cellBold, S.colIncomeDesc]} />
+                {cols.map((c) => (
+                  <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }, S.center]}>
+                    {currencyLabel(c.currency)}
+                  </Text>
+                ))}
               </View>
-            ))}
-            {/* Total */}
-            <View style={S.totalRow}>
-              <Text style={[S.cellBold, S.colIncomeDesc]}>Total de Ingresos {building.buildingName}</Text>
-              <Text style={[S.cellBold, S.colIncomeVES]}>{fmtVES(building.totalVES)}</Text>
-              <Text style={[S.cellBold, S.colIncomeUSD]}>{fmtUSD(building.totalUSD)}</Text>
-              <Text style={[S.cellBold, S.colIncomePesos]}>{building.totalPesos ? fmtUSD(building.totalPesos) : '-'}</Text>
+              {building.entries.map((entry, i) => (
+                <View key={i} style={S.row}>
+                  <Text style={[S.cell, S.colIncomeDesc]}>{entry.description}</Text>
+                  {cols.map((c) => (
+                    <Text key={c.currency} style={[S.cell, { width: c.width, textAlign: 'right' }]}>
+                      {entry.currencyCode === c.currency ? fmt(entry.amountMinor, c.currency) : '-'}
+                    </Text>
+                  ))}
+                </View>
+              ))}
+              <View style={S.totalRow}>
+                <Text style={[S.cellBold, S.colIncomeDesc]}>Total de Ingresos {building.buildingName}</Text>
+                {cols.map((c) => (
+                  <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+                    {fmt(bucketAmount(building.totalByCurrency, c.currency), c.currency)}
+                  </Text>
+                ))}
+              </View>
             </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -172,9 +199,11 @@ function CommonExpensesTable({
   startNota,
 }: {
   items: ExpenseLineItem[];
-  totals: { usd: number; ves: number; pesos: number };
+  totals: { byCurrency: Array<{ currency: string; amountMinor: number }> };
   startNota: number;
 }) {
+  const currencies = totals.byCurrency.map((b) => b.currency);
+  const cols = currencyCols(currencies);
   return (
     <>
       <Text style={S.sectionTitle}>GASTOS</Text>
@@ -185,27 +214,35 @@ function CommonExpensesTable({
           <Text style={[S.cellBold, S.colNum, S.center]}>#</Text>
           <Text style={[S.cellBold, S.colDate, S.center]}>FECHA</Text>
           <Text style={[S.cellBold, S.colDesc]}>DESCRIPCIÓN</Text>
-          <Text style={[S.cellBold, S.colUSD]}>DÓLARES</Text>
-          <Text style={[S.cellBold, S.colVES]}>BOLÍVARES</Text>
-          <Text style={[S.cellBold, S.colPesos]}>PESOS</Text>
+          {cols.map((c) => (
+            <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+              {currencyLabel(c.currency)}
+            </Text>
+          ))}
         </View>
         {items.map((item) => (
           <View key={item.itemNumber} style={S.row}>
             <Text style={[S.cell, S.colNum, S.center]}>{item.itemNumber}</Text>
             <Text style={[S.cell, S.colDate]}>{item.date}</Text>
             <Text style={[S.cell, S.colDesc]}>{item.description}</Text>
-            <Text style={[S.cell, S.colUSD]}>{item.usdAmount ? fmtUSD(item.usdAmount) : '-'}</Text>
-            <Text style={[S.cell, S.colVES]}>{item.vesAmount ? fmtVES(item.vesAmount) : '-'}</Text>
-            <Text style={[S.cell, S.colPesos]}>{item.pesosAmount ? fmtUSD(item.pesosAmount) : '-'}</Text>
+            {cols.map((c) => (
+              <Text key={c.currency} style={[S.cell, { width: c.width, textAlign: 'right' }]}>
+                {bucketAmount(item.amountByCurrency, c.currency)
+                  ? fmt(bucketAmount(item.amountByCurrency, c.currency), c.currency)
+                  : '-'}
+              </Text>
+            ))}
           </View>
         ))}
         <View style={S.totalRow}>
           <Text style={[S.cellBold, S.colNum]} />
           <Text style={[S.cellBold, S.colDate]} />
           <Text style={[S.cellBold, S.colDesc]} />
-          <Text style={[S.cellBold, S.colUSD]}>{fmtUSD(totals.usd)}</Text>
-          <Text style={[S.cellBold, S.colVES]}>{fmtVES(totals.ves)}</Text>
-          <Text style={[S.cellBold, S.colPesos]}>{totals.pesos ? fmtUSD(totals.pesos) : '-'}</Text>
+          {cols.map((c) => (
+            <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+              {fmt(bucketAmount(totals.byCurrency, c.currency), c.currency)}
+            </Text>
+          ))}
         </View>
       </View>
     </>
@@ -222,40 +259,52 @@ function BuildingExpenseTables({
   return (
     <>
       <Text style={S.sectionTitle}>GASTOS PROPIOS</Text>
-      {buildings.map((b, idx) => (
-        <View key={b.buildingId}>
-          <Text style={S.sectionTitle}>GASTOS PROPIOS {b.buildingName.toUpperCase()}</Text>
-          <Text style={S.notaTitle}>NOTA NRO {startNota + idx}</Text>
-          <View style={S.table}>
-            <View style={S.headerRow}>
-              <Text style={[S.cellBold, S.colNum, S.center]}>#</Text>
-              <Text style={[S.cellBold, S.colDate, S.center]}>FECHA</Text>
-              <Text style={[S.cellBold, S.colDesc]}>DESCRIPCIÓN</Text>
-              <Text style={[S.cellBold, S.colUSD]}>DÓLARES</Text>
-              <Text style={[S.cellBold, S.colVES]}>BOLÍVARES</Text>
-              <Text style={[S.cellBold, S.colPesos]}>PESOS</Text>
-            </View>
-            {b.items.map((item) => (
-              <View key={item.itemNumber} style={S.row}>
-                <Text style={[S.cell, S.colNum, S.center]}>{item.itemNumber}</Text>
-                <Text style={[S.cell, S.colDate]}>{item.date}</Text>
-                <Text style={[S.cell, S.colDesc]}>{item.description}</Text>
-                <Text style={[S.cell, S.colUSD]}>{item.usdAmount ? fmtUSD(item.usdAmount) : '-'}</Text>
-                <Text style={[S.cell, S.colVES]}>{item.vesAmount ? fmtVES(item.vesAmount) : '-'}</Text>
-                <Text style={[S.cell, S.colPesos]}>{item.pesosAmount ? fmtUSD(item.pesosAmount) : '-'}</Text>
+      {buildings.map((b, idx) => {
+        const currencies = b.totalByCurrency.map((x) => x.currency);
+        const cols = currencyCols(currencies);
+        return (
+          <View key={b.buildingId}>
+            <Text style={S.sectionTitle}>GASTOS PROPIOS {b.buildingName.toUpperCase()}</Text>
+            <Text style={S.notaTitle}>NOTA NRO {startNota + idx}</Text>
+            <View style={S.table}>
+              <View style={S.headerRow}>
+                <Text style={[S.cellBold, S.colNum, S.center]}>#</Text>
+                <Text style={[S.cellBold, S.colDate, S.center]}>FECHA</Text>
+                <Text style={[S.cellBold, S.colDesc]}>DESCRIPCIÓN</Text>
+                {cols.map((c) => (
+                  <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+                    {currencyLabel(c.currency)}
+                  </Text>
+                ))}
               </View>
-            ))}
-            <View style={S.totalRow}>
-              <Text style={[S.cellBold, S.colNum]} />
-              <Text style={[S.cellBold, S.colDate]} />
-              <Text style={[S.cellBold, S.colDesc]} />
-              <Text style={[S.cellBold, S.colUSD]}>{fmtUSD(b.totalUSD)}</Text>
-              <Text style={[S.cellBold, S.colVES]}>{fmtVES(b.totalVES)}</Text>
-              <Text style={[S.cellBold, S.colPesos]}>{b.totalPesos ? fmtUSD(b.totalPesos) : '-'}</Text>
+              {b.items.map((item) => (
+                <View key={item.itemNumber} style={S.row}>
+                  <Text style={[S.cell, S.colNum, S.center]}>{item.itemNumber}</Text>
+                  <Text style={[S.cell, S.colDate]}>{item.date}</Text>
+                  <Text style={[S.cell, S.colDesc]}>{item.description}</Text>
+                  {cols.map((c) => (
+                    <Text key={c.currency} style={[S.cell, { width: c.width, textAlign: 'right' }]}>
+                      {bucketAmount(item.amountByCurrency, c.currency)
+                        ? fmt(bucketAmount(item.amountByCurrency, c.currency), c.currency)
+                        : '-'}
+                    </Text>
+                  ))}
+                </View>
+              ))}
+              <View style={S.totalRow}>
+                <Text style={[S.cellBold, S.colNum]} />
+                <Text style={[S.cellBold, S.colDate]} />
+                <Text style={[S.cellBold, S.colDesc]} />
+                {cols.map((c) => (
+                  <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+                    {fmt(bucketAmount(b.totalByCurrency, c.currency), c.currency)}
+                  </Text>
+                ))}
+              </View>
             </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -264,28 +313,33 @@ function ReservaLegalSection({
   reservaLegal,
   startNota,
 }: {
-  reservaLegal: { buildingName: string; usd: number; ves: number }[];
+  reservaLegal: Array<{ buildingName: string; byCurrency: Array<{ currency: string; amountMinor: number }> }>;
   startNota: number;
 }) {
   return (
     <>
       <Text style={S.sectionTitle}>RESERVA LEGAL</Text>
-      {reservaLegal.map((r, idx) => (
-        <View key={r.buildingName}>
-          <Text style={S.notaTitle}>NOTA NRO {startNota + idx}</Text>
-          <Text style={[S.buildingTitle, { textAlign: 'center' }]}>
-            RESERVA LEGAL {r.buildingName.toUpperCase()}
-          </Text>
-          <View style={[S.table, { marginBottom: 6 }]}>
-            <View style={S.totalRow}>
-              <Text style={[S.cellBold, S.colIncomeDesc]} />
-              <Text style={[S.cellBold, S.colIncomeVES]}>{fmtVES(r.ves)}</Text>
-              <Text style={[S.cellBold, S.colIncomeUSD]}>{fmtUSD(r.usd)}</Text>
-              <Text style={[S.cellBold, S.colIncomePesos]}>-</Text>
+      {reservaLegal.map((r, idx) => {
+        const cols = currencyCols(r.byCurrency.map((b) => b.currency));
+        return (
+          <View key={r.buildingName}>
+            <Text style={S.notaTitle}>NOTA NRO {startNota + idx}</Text>
+            <Text style={[S.buildingTitle, { textAlign: 'center' }]}>
+              RESERVA LEGAL {r.buildingName.toUpperCase()}
+            </Text>
+            <View style={[S.table, { marginBottom: 6 }]}>
+              <View style={S.totalRow}>
+                <Text style={[S.cellBold, S.colIncomeDesc]} />
+                {cols.map((c) => (
+                  <Text key={c.currency} style={[S.cellBold, { width: c.width, textAlign: 'right' }]}>
+                    {fmt(bucketAmount(r.byCurrency, c.currency), c.currency)}
+                  </Text>
+                ))}
+              </View>
             </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -322,11 +376,11 @@ function AlicuotaPage({
           <View key={row.categoryName} style={S.row}>
             <Text style={[S.cell, S.colAliCat]}>Alícuota {row.categoryName}</Text>
             <Text style={[S.cell, S.colAliCoef]}>{row.coefficient.toFixed(6)}</Text>
-            <Text style={[S.cell, S.colAliComunes]}>{fmtUSD(row.gastosComunesPerUnit)}</Text>
-            <Text style={[S.cell, S.colAliPropios]}>{fmtUSD(row.gastosPropiosPerUnit)}</Text>
-            <Text style={[S.cell, S.colAliReserva]}>{fmtUSD(row.reservaPerUnit)}</Text>
-            <Text style={[S.cell, S.colAliTotal]}>{fmtUSD(row.totalPerUnit)}</Text>
-            <Text style={[S.cell, S.colAliRecaudar]}>{fmtUSD(row.totalToRecaudar)}</Text>
+            <Text style={[S.cell, S.colAliComunes]}>{fmt(row.gastosComunesPerUnit, 'USD')}</Text>
+            <Text style={[S.cell, S.colAliPropios]}>{fmt(row.gastosPropiosPerUnit, 'USD')}</Text>
+            <Text style={[S.cell, S.colAliReserva]}>{fmt(row.reservaPerUnit, 'USD')}</Text>
+            <Text style={[S.cell, S.colAliTotal]}>{fmt(row.totalPerUnit, 'USD')}</Text>
+            <Text style={[S.cell, S.colAliRecaudar]}>{fmt(row.totalToRecaudar, 'USD')}</Text>
           </View>
         ))}
 
@@ -337,7 +391,7 @@ function AlicuotaPage({
           <Text style={[S.cellBold, S.colAliPropios]} />
           <Text style={[S.cellBold, S.colAliReserva]} />
           <Text style={[S.cellBold, S.colAliTotal]}>TOTAL ALÍCUOTA</Text>
-          <Text style={[S.cellBold, S.colAliRecaudar]}>{fmtUSD(building.grandTotal)}</Text>
+          <Text style={[S.cellBold, S.colAliRecaudar]}>{fmt(building.grandTotal, 'USD')}</Text>
         </View>
       </View>
 
