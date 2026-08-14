@@ -33,7 +33,7 @@ export function useCreateCharge(buildingId: string, period?: string, unitId?: st
       type: ChargeType;
       concept: string;
       amount: number;
-      currency?: string;
+      currency: string;
       period?: string;
       dueDate: string;
     }) => createCharge(buildingId, data),

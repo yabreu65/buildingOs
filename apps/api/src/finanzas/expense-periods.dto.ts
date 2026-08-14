@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsInt, IsPositive, IsDateString, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsPositive, IsDateString, Min, Max, IsIn } from 'class-validator';
 import { ExpensePeriodStatus } from '@prisma/client';
 import { BuildingParamDto } from '../common/dtos/params.dto';
+import { CANONICAL_CURRENCIES } from '@buildingos/contracts';
 
 // ============================================================================
 // EXPENSE PERIOD DTOs
@@ -21,9 +22,8 @@ export class CreateExpensePeriodDto {
   @IsPositive()
   totalToAllocate!: number; // In cents
 
-  @IsOptional()
-  @IsString()
-  currency?: string; // Default: ARS
+  @IsIn(CANONICAL_CURRENCIES, { message: 'currency must be one of USD, VES, ARS, or COP' })
+  currency!: string; // Explicit: no silent default (3G hardening)
 
   @IsDateString()
   dueDate!: string;

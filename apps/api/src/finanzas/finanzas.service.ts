@@ -102,8 +102,8 @@ interface RawDelinquencyRow {
   unitCode: string;
   unitLabel: string;
   responsibleName: string | null;
-  periodDebt: bigint | number | string;
-  accumulatedDebt: bigint | number | string;
+  periodDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
+  accumulatedDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
   overduePeriods: bigint | number | string;
 }
 
@@ -112,8 +112,8 @@ interface RawDelinquencyCountRow {
 }
 
 interface RawDelinquencyTotalsRow {
-  periodDebt: bigint | number | string;
-  accumulatedDebt: bigint | number | string;
+  periodDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
+  accumulatedDebtByCurrency: Array<{ currency: string; amountMinor: bigint | number | string }>;
 }
 
 type ChargeWithAllocations = Prisma.ChargeGetPayload<{
@@ -346,7 +346,7 @@ export class FinanzasService {
         type: dto.type,
         concept: dto.concept,
         amount: dto.amount,
-        currency: dto.currency || 'ARS',
+        currency: dto.currency,
         dueDate: new Date(dto.dueDate),
         status: ChargeStatus.PENDING,
         createdByMembershipId: dto.createdByMembershipId,
@@ -1862,6 +1862,7 @@ export class FinanzasService {
         SELECT
           charge."unitId",
           charge.period,
+          charge.currency,
           GREATEST(
             charge.amount - COALESCE(
               SUM(
@@ -1887,16 +1888,17 @@ export class FinanzasService {
           AND charge."buildingId" = ${buildingId}
           AND charge."canceledAt" IS NULL
           AND charge.period <= ${query.period}
-        GROUP BY charge.id, charge."unitId", charge.period, charge.amount
+        GROUP BY charge.id, charge."unitId", charge.period, charge.currency, charge.amount
       ),
       unit_debts AS (
         SELECT
           "unitId",
+          currency,
           SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) AS "periodDebt",
           SUM(outstanding) AS "accumulatedDebt",
           COUNT(DISTINCT period) FILTER (WHERE outstanding > 0) AS "overduePeriods"
         FROM charge_balances
-        GROUP BY "unitId"
+        GROUP BY "unitId", currency
         HAVING SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) > 0
       ),
       unit_rows AS (
@@ -1905,6 +1907,7 @@ export class FinanzasService {
           unit.code AS "unitCode",
           COALESCE(unit.label, unit.code) AS "unitLabel",
           responsible.name AS "responsibleName",
+          debt.currency,
           debt."periodDebt",
           debt."accumulatedDebt",
           debt."overduePeriods"
@@ -1928,9 +1931,48 @@ export class FinanzasService {
           LIMIT 1
         ) AS responsible ON TRUE
       ),
-      filtered_units AS (
-        SELECT *
+      unit_debts_per_currency AS (
+        SELECT
+          "unitId",
+          json_agg(
+            json_build_object(
+              'currency', currency,
+              'amountMinor', "periodDebt"
+            ) ORDER BY currency
+          ) AS "periodDebtByCurrency",
+          json_agg(
+            json_build_object(
+              'currency', currency,
+              'amountMinor', "accumulatedDebt"
+            ) ORDER BY currency
+          ) AS "accumulatedDebtByCurrency",
+          MAX("overduePeriods") AS "overduePeriods",
+          MAX(CASE WHEN currency = ${tenant.currency} THEN "periodDebt" ELSE 0 END) AS "periodDebtSort",
+          MAX(CASE WHEN currency = ${tenant.currency} THEN "accumulatedDebt" ELSE 0 END) AS "accumulatedDebtSort"
         FROM unit_rows
+        GROUP BY "unitId"
+      ),
+      filtered_units AS (
+        SELECT
+          rows."unitId",
+          rows."unitCode",
+          rows."unitLabel",
+          rows."responsibleName",
+          buckets."periodDebtByCurrency",
+          buckets."accumulatedDebtByCurrency",
+          buckets."overduePeriods",
+          buckets."periodDebtSort",
+          buckets."accumulatedDebtSort"
+        FROM (
+          SELECT DISTINCT
+            "unitId",
+            "unitCode",
+            "unitLabel",
+            "responsibleName"
+          FROM unit_rows
+        ) AS rows
+        INNER JOIN unit_debts_per_currency AS buckets
+          ON buckets."unitId" = rows."unitId"
         WHERE TRUE
         ${searchClause}
         ${agingClause}
@@ -1945,8 +1987,8 @@ export class FinanzasService {
           "unitCode",
           "unitLabel",
           "responsibleName",
-          "periodDebt",
-          "accumulatedDebt",
+          "periodDebtByCurrency",
+          "accumulatedDebtByCurrency",
           "overduePeriods"
         FROM filtered_units
         ORDER BY ${orderBy}
@@ -1961,14 +2003,24 @@ export class FinanzasService {
       this.prisma.$queryRaw<RawDelinquencyTotalsRow[]>(Prisma.sql`
         ${baseQuery}
         SELECT
-          COALESCE(SUM("periodDebt"), 0) AS "periodDebt",
-          COALESCE(SUM("accumulatedDebt"), 0) AS "accumulatedDebt"
-        FROM unit_debts
+          json_agg(
+            json_build_object(
+              'currency', currency,
+              'amountMinor', "periodDebt"
+            ) ORDER BY currency
+          ) AS "periodDebtByCurrency",
+          json_agg(
+            json_build_object(
+              'currency', currency,
+              'amountMinor', "accumulatedDebt"
+            ) ORDER BY currency
+          ) AS "accumulatedDebtByCurrency"
+        FROM unit_rows
       `),
     ]);
 
     const total = this.toSafeFinancialNumber(countRows[0]?.total ?? 0);
-    const totals = totalsRows[0] ?? { periodDebt: 0, accumulatedDebt: 0 };
+    const totals = totalsRows[0] ?? { periodDebtByCurrency: [], accumulatedDebtByCurrency: [] };
 
     return {
       items: items.map((item) => this.mapDelinquencyItem(item)),
@@ -1977,10 +2029,15 @@ export class FinanzasService {
       total,
       totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
       totals: {
-        periodDebt: this.toSafeFinancialNumber(totals.periodDebt),
-        accumulatedDebt: this.toSafeFinancialNumber(totals.accumulatedDebt),
+        periodDebtByCurrency: totals.periodDebtByCurrency.map((bucket) => ({
+          currency: bucket.currency,
+          amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
+        })),
+        accumulatedDebtByCurrency: totals.accumulatedDebtByCurrency.map((bucket) => ({
+          currency: bucket.currency,
+          amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
+        })),
       },
-      currency: tenant.currency,
     };
   }
 
@@ -1989,11 +2046,11 @@ export class FinanzasService {
   ): Prisma.Sql {
     switch (aging) {
       case BuildingDelinquencyAging.ONE_PERIOD:
-        return Prisma.sql`AND unit_rows."overduePeriods" = 1`;
+        return Prisma.sql`AND filtered_units."overduePeriods" = 1`;
       case BuildingDelinquencyAging.TWO_TO_THREE_PERIODS:
-        return Prisma.sql`AND unit_rows."overduePeriods" BETWEEN 2 AND 3`;
+        return Prisma.sql`AND filtered_units."overduePeriods" BETWEEN 2 AND 3`;
       case BuildingDelinquencyAging.MORE_THAN_THREE_PERIODS:
-        return Prisma.sql`AND unit_rows."overduePeriods" > 3`;
+        return Prisma.sql`AND filtered_units."overduePeriods" > 3`;
       case BuildingDelinquencyAging.ALL:
       case undefined:
         return Prisma.empty;
@@ -2006,8 +2063,8 @@ export class FinanzasService {
   ): Prisma.Sql {
     const direction = sortOrder === BuildingDelinquencySortOrder.ASC ? 'ASC' : 'DESC';
     const column = {
-      [BuildingDelinquencySortBy.ACCUMULATED_DEBT]: '"accumulatedDebt"',
-      [BuildingDelinquencySortBy.PERIOD_DEBT]: '"periodDebt"',
+      [BuildingDelinquencySortBy.ACCUMULATED_DEBT]: '"accumulatedDebtSort"',
+      [BuildingDelinquencySortBy.PERIOD_DEBT]: '"periodDebtSort"',
       [BuildingDelinquencySortBy.OVERDUE_PERIODS]: '"overduePeriods"',
       [BuildingDelinquencySortBy.UNIT]: '"unitLabel"',
     }[sortBy ?? BuildingDelinquencySortBy.ACCUMULATED_DEBT];
@@ -2021,8 +2078,14 @@ export class FinanzasService {
       unitCode: item.unitCode,
       unitLabel: item.unitLabel,
       responsibleName: item.responsibleName,
-      periodDebt: this.toSafeFinancialNumber(item.periodDebt),
-      accumulatedDebt: this.toSafeFinancialNumber(item.accumulatedDebt),
+      periodDebtByCurrency: item.periodDebtByCurrency.map((bucket) => ({
+        currency: bucket.currency,
+        amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
+      })),
+      accumulatedDebtByCurrency: item.accumulatedDebtByCurrency.map((bucket) => ({
+        currency: bucket.currency,
+        amountMinor: this.toSafeFinancialNumber(bucket.amountMinor),
+      })),
       overduePeriods: this.toSafeFinancialNumber(item.overduePeriods),
     };
   }

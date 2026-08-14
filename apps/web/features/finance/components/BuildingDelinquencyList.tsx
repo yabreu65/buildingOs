@@ -6,7 +6,7 @@ import Card from '@/shared/components/ui/Card';
 import EmptyState from '@/shared/components/ui/EmptyState';
 import Skeleton from '@/shared/components/ui/Skeleton';
 import { Table, TBody, TD, TH, THead, TR } from '@/shared/components/ui/Table';
-import { formatCurrency } from '@/shared/lib/format/money';
+import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 import { useBuildingDelinquency } from '../hooks/useBuildingDelinquency';
 import {
   type BuildingDelinquencyAging,
@@ -124,13 +124,13 @@ export function BuildingDelinquencyList({
         <Card className="p-4">
           <p className="text-sm text-muted-foreground">Pendiente del período</p>
           <p className="mt-1 text-xl font-semibold text-orange-600">
-            {formatCurrency(data?.totals.periodDebt ?? 0, data?.currency ?? 'ARS')}
+            {formatCurrencyBuckets(data?.totals.periodDebtByCurrency ?? [])}
           </p>
         </Card>
         <Card className="p-4">
           <p className="text-sm text-muted-foreground">Deuda acumulada hasta {getMonthLabel(period)}</p>
           <p className="mt-1 text-xl font-semibold text-red-600">
-            {formatCurrency(data?.totals.accumulatedDebt ?? 0, data?.currency ?? 'ARS')}
+            {formatCurrencyBuckets(data?.totals.accumulatedDebtByCurrency ?? [])}
           </p>
         </Card>
       </div>
@@ -219,8 +219,8 @@ export function BuildingDelinquencyList({
                     <TR key={item.unitId}>
                       <TD className="font-medium">{item.unitLabel}</TD>
                       <TD>{item.responsibleName ?? 'Sin responsable asignado'}</TD>
-                      <TD className="text-right text-orange-600">{formatCurrency(item.periodDebt, data.currency)}</TD>
-                      <TD className="text-right font-semibold text-red-600">{formatCurrency(item.accumulatedDebt, data.currency)}</TD>
+                      <TD className="text-right text-orange-600">{formatCurrencyBuckets(item.periodDebtByCurrency ?? [])}</TD>
+                      <TD className="text-right font-semibold text-red-600">{formatCurrencyBuckets(item.accumulatedDebtByCurrency ?? [])}</TD>
                       <TD className="text-right">{item.overduePeriods}</TD>
                       <TD className="text-right">
                         <Button

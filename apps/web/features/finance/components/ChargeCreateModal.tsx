@@ -12,6 +12,7 @@ interface ChargeFormData {
   concept: string;
   type: ChargeType;
   amount: number;
+  currency: string;
   dueDate: string;
 }
 
@@ -43,6 +44,7 @@ export function ChargeCreateModal({
     concept: '',
     type: ChargeType.COMMON_EXPENSE,
     amount: 0,
+    currency: 'ARS',
     dueDate: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -146,6 +148,21 @@ export function ChargeCreateModal({
               className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
             />
             {errors.amount && <p className="text-red-600 text-sm mt-1">{errors.amount}</p>}
+          </div>
+
+          <div>
+            <label htmlFor="charge-currency" className="block text-sm font-medium mb-1">Moneda</label>
+            <select
+              id="charge-currency"
+              value={formData.currency}
+              onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="ARS">ARS (Peso argentino)</option>
+              <option value="USD">USD (Dólar)</option>
+              <option value="VES">VES (Bolívar)</option>
+              <option value="COP">COP (Peso colombiano)</option>
+            </select>
           </div>
 
           <div>

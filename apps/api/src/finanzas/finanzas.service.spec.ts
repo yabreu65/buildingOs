@@ -3139,7 +3139,7 @@ describe('FinanzasService', () => {
   });
 
   describe('getBuildingDelinquency', () => {
-    it('returns a server-side page with period and accumulated debt totals', async () => {
+    it('returns a server-side page with per-currency period and accumulated debt buckets', async () => {
       jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
       jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
       jest.spyOn(prismaService, '$transaction').mockResolvedValue([
@@ -3149,13 +3149,30 @@ describe('FinanzasService', () => {
             unitCode: 'TS-01-07',
             unitLabel: 'Piso 01 - Apartamento 07',
             responsibleName: 'Ana Pérez',
-            periodDebt: 6900000n,
-            accumulatedDebt: 75420000n,
+            periodDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 6900000n },
+              { currency: 'USD', amountMinor: 2500n },
+            ],
+            accumulatedDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 75420000n },
+              { currency: 'USD', amountMinor: 10000n },
+            ],
             overduePeriods: 4n,
           },
         ],
         [{ total: 96n }],
-        [{ periodDebt: 565800000n, accumulatedDebt: 6426000000n }],
+        [
+          {
+            periodDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 565800000n },
+              { currency: 'USD', amountMinor: 25000n },
+            ],
+            accumulatedDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 6426000000n },
+              { currency: 'USD', amountMinor: 200000n },
+            ],
+          },
+        ],
       ] as never);
 
       const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {
@@ -3175,8 +3192,14 @@ describe('FinanzasService', () => {
             unitCode: 'TS-01-07',
             unitLabel: 'Piso 01 - Apartamento 07',
             responsibleName: 'Ana Pérez',
-            periodDebt: 6900000,
-            accumulatedDebt: 75420000,
+            periodDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 6900000 },
+              { currency: 'USD', amountMinor: 2500 },
+            ],
+            accumulatedDebtByCurrency: [
+              { currency: 'ARS', amountMinor: 75420000 },
+              { currency: 'USD', amountMinor: 10000 },
+            ],
             overduePeriods: 4,
           },
         ],
@@ -3185,10 +3208,15 @@ describe('FinanzasService', () => {
         total: 96,
         totalPages: 4,
         totals: {
-          periodDebt: 565800000,
-          accumulatedDebt: 6426000000,
+          periodDebtByCurrency: [
+            { currency: 'ARS', amountMinor: 565800000 },
+            { currency: 'USD', amountMinor: 25000 },
+          ],
+          accumulatedDebtByCurrency: [
+            { currency: 'ARS', amountMinor: 6426000000 },
+            { currency: 'USD', amountMinor: 200000 },
+          ],
         },
-        currency: 'ARS',
       });
     });
 
@@ -3198,7 +3226,7 @@ describe('FinanzasService', () => {
       jest.spyOn(prismaService, '$transaction').mockResolvedValue([
         [],
         [{ total: 0n }],
-        [{ periodDebt: 0n, accumulatedDebt: 0n }],
+        [{ periodDebtByCurrency: [], accumulatedDebtByCurrency: [] }],
       ] as never);
 
       const result = await service.getBuildingDelinquency('tenant-1', 'building-1', {

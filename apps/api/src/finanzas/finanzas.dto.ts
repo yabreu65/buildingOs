@@ -44,9 +44,8 @@ export class CreateChargeDto {
   @IsPositive()
   amount!: number; // In cents
 
-  @IsOptional()
   @IsIn(CANONICAL_CURRENCIES, { message: 'currency must be one of USD, VES, ARS, or COP' })
-  currency?: string; // Default: ARS
+  currency!: string; // Explicit: no silent default (3G hardening)
 
   @IsOptional()
   @IsString()
@@ -562,8 +561,8 @@ export interface BuildingDelinquencyItemDto {
   unitCode: string;
   unitLabel: string;
   responsibleName: string | null;
-  periodDebt: number;
-  accumulatedDebt: number;
+  periodDebtByCurrency: ReportCurrencyAmountBucket[];
+  accumulatedDebtByCurrency: ReportCurrencyAmountBucket[];
   overduePeriods: number;
 }
 
@@ -574,10 +573,9 @@ export interface BuildingDelinquencyResponseDto {
   total: number;
   totalPages: number;
   totals: {
-    periodDebt: number;
-    accumulatedDebt: number;
+    periodDebtByCurrency: ReportCurrencyAmountBucket[];
+    accumulatedDebtByCurrency: ReportCurrencyAmountBucket[];
   };
-  currency: string;
 }
 
 // ============================================================================
