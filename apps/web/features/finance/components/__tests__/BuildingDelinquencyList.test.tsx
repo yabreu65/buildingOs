@@ -25,16 +25,18 @@ function buildData(overrides: Partial<BuildingDelinquencyResponse> = {}): Buildi
       unitCode: `TS-01-${String(index + 1).padStart(2, '0')}`,
       unitLabel: `Apartamento ${index + 1}`,
       responsibleName: index === 0 ? 'Ana Pérez' : null,
-      periodDebt: 6900000,
-      accumulatedDebt: 75420000,
+      periodDebtByCurrency: [{ currency: 'ARS', amountMinor: 6900000 }],
+      accumulatedDebtByCurrency: [{ currency: 'ARS', amountMinor: 75420000 }],
       overduePeriods: 4,
     })),
     page: 1,
     pageSize: 25,
     total: 96,
     totalPages: 4,
-    totals: { periodDebt: 565800000, accumulatedDebt: 6426000000 },
-    currency: 'ARS',
+    totals: {
+      periodDebtByCurrency: [{ currency: 'ARS', amountMinor: 565800000 }],
+      accumulatedDebtByCurrency: [{ currency: 'ARS', amountMinor: 6426000000 }],
+    },
     ...overrides,
   };
 }

@@ -13,6 +13,7 @@ import {
   ExpenseResponseDto,
 } from './expense-ledger.dto';
 import { FinanzasValidators } from './finanzas.validators';
+import { CANONICAL_CURRENCIES, type CanonicalCurrency } from '@buildingos/contracts';
 import {
   MovementAllocationService,
   allocateFunctionalByLargestRemainder,
@@ -815,7 +816,7 @@ export class ExpensesService {
 
         // Validate currency
         const currencyCode = (row.moneda ?? 'USD').toUpperCase().trim();
-        if (!['USD', 'VES', 'ARS'].includes(currencyCode)) {
+        if (!CANONICAL_CURRENCIES.includes(currencyCode as CanonicalCurrency)) {
           throw new Error(`Moneda inválida: ${row.moneda}`);
         }
 

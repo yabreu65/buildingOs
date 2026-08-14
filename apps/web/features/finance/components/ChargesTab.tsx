@@ -37,6 +37,7 @@ export function ChargesTab({
     concept: string;
     type: ChargeType;
     amount: number;
+    currency: string;
     dueDate: string;
   }) => {
     await createMutation.mutateAsync(data);

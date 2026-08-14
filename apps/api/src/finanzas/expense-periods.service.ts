@@ -182,7 +182,7 @@ export class ExpensePeriodsService {
         year: dto.year,
         month: dto.month,
         totalToAllocate: dto.totalToAllocate,
-        currency: dto.currency || 'ARS',
+        currency: dto.currency,
         dueDate: new Date(dto.dueDate),
         concept: dto.concept,
         status: ExpensePeriodStatus.DRAFT,

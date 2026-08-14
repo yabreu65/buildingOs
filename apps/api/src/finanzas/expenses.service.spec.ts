@@ -86,6 +86,17 @@ describe('ExpensesService', () => {
               findFirst: jest.fn(),
               update: jest.fn(),
             },
+            building: {
+              findMany: jest.fn(),
+            },
+            expenseLedgerCategory: {
+              findMany: jest.fn(),
+              findFirst: jest.fn(),
+            },
+            vendor: {
+              findMany: jest.fn(),
+              findFirst: jest.fn(),
+            },
             tenant: {
               findFirst: jest.fn().mockResolvedValue({
                 id: 'tenant-1',
@@ -94,8 +105,6 @@ describe('ExpensesService', () => {
             },
             exchangeRate: { findFirst: jest.fn() },
             liquidation: { findFirst: jest.fn() },
-            expenseLedgerCategory: { findFirst: jest.fn() },
-            vendor: { findFirst: jest.fn() },
             unitGroup: { findFirst: jest.fn() },
             adjustment: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
           },
@@ -579,6 +588,60 @@ describe('ExpensesService', () => {
   });
 
   // ── BULK VALIDATION ────────────────────────────────────────────────────
+
+  describe('importExpensesFromExcel currency whitelist (3G)', () => {
+    const row = {
+      fecha: '10/08/2026',
+      descripcion: 'Impuesto municipal',
+      monto: 150000,
+      moneda: 'ARS',
+      edificio: 'Torre A',
+      categoria: 'impuestos',
+    };
+
+    beforeEach(() => {
+      (prisma.building.findMany as jest.Mock).mockResolvedValue([
+        { id: 'building-1', name: 'Torre A' },
+      ]);
+      (prisma.expenseLedgerCategory.findMany as jest.Mock).mockResolvedValue([
+        { id: 'category-1', name: 'impuestos' },
+      ]);
+      (prisma.vendor.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.expense.create as jest.Mock).mockResolvedValue({ id: 'expense-1' });
+    });
+
+    it('accepts COP as a canonical currency', async () => {
+      const result = await service.importExpensesFromExcel(
+        'tenant-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+        '2026-08',
+        [{ ...row, moneda: 'COP' }],
+      );
+
+      expect(result.successCount).toBe(1);
+      expect(prisma.expense.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ currencyCode: 'COP' }),
+        }),
+      );
+    });
+
+    it('rejects non-canonical currencies with a row error', async () => {
+      const result = await service.importExpensesFromExcel(
+        'tenant-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+        '2026-08',
+        [{ ...row, moneda: 'XYZ' }],
+      );
+
+      expect(result.successCount).toBe(0);
+      expect(result.failureCount).toBe(1);
+      expect(result.errors[0]).toMatchObject({ rowIndex: 1, reason: expect.stringContaining('Moneda inválida') });
+      expect(prisma.expense.create).not.toHaveBeenCalled();
+    });
+  });
 
   describe('validateExpenseFromBulk', () => {
     it('rejects bulk validation when expense has no vendor', async () => {

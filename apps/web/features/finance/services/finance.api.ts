@@ -176,8 +176,8 @@ export interface BuildingDelinquencyItem {
   unitCode: string;
   unitLabel: string;
   responsibleName: string | null;
-  periodDebt: number;
-  accumulatedDebt: number;
+  periodDebtByCurrency: CurrencyAmountBucket[];
+  accumulatedDebtByCurrency: CurrencyAmountBucket[];
   overduePeriods: number;
 }
 
@@ -188,10 +188,9 @@ export interface BuildingDelinquencyResponse {
   total: number;
   totalPages: number;
   totals: {
-    periodDebt: number;
-    accumulatedDebt: number;
+    periodDebtByCurrency: CurrencyAmountBucket[];
+    accumulatedDebtByCurrency: CurrencyAmountBucket[];
   };
-  currency: string;
 }
 
 export interface UnitLedger {
@@ -258,7 +257,7 @@ export async function createCharge(
     type: ChargeType;
     concept: string;
     amount: number;
-    currency?: string;
+    currency: string;
     period?: string;
     dueDate: string;
   }

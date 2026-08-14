@@ -27,8 +27,9 @@ describe('3E1 canonical currency DTOs', () => {
       expect(validate(CreateChargeDto, { ...base, currency })).toHaveLength(0);
     });
 
-    it('accepts absent currency (default ARS)', () => {
-      expect(validate(CreateChargeDto, base)).toHaveLength(0);
+    it('rejects absent currency (no silent default)', () => {
+      const errors = validate(CreateChargeDto, base);
+      expect(errors.map((error) => error.property)).toContain('currency');
     });
 
     it.each(['XYZ', 'eur', '', 'USDD'])('rejects non-canonical %s', (currency) => {
