@@ -191,6 +191,7 @@ export class InboxService {
       buildingName: p.building.name,
       unitCode: p.unit?.code,
       amount: p.amount,
+      currency: p.currency,
       method: p.method,
       status: p.status,
       createdAt: p.createdAt,

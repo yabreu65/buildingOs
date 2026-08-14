@@ -20,6 +20,7 @@ export type PaymentSummary = {
   buildingName: string;
   unitCode?: string | null;
   amount: number;
+  currency: string;
   method: string;
   status: string;
   createdAt: string;
