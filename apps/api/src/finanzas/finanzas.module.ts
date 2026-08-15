@@ -42,6 +42,8 @@ import { MulticurrencyController } from './multicurrency.controller';
 import { MulticurrencyService } from './multicurrency.service';
 import { CurrencyConversionService } from './currency-conversion.service';
 import { AppConfigModule } from '../config/config.module';
+import { FundsController } from './funds.controller';
+import { FundsService } from './funds.service';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -88,6 +90,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     TenantRecurringExpenseController,
     PaymentWebhookController,
     MulticurrencyController,
+    FundsController,
   ],
   providers: [
     FinanzasService,
@@ -129,6 +132,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     SignatureGuard,
     MulticurrencyService,
     CurrencyConversionService,
+    FundsService,
   ],
   exports: [
     FinanzasService,
@@ -147,6 +151,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     FinanceSummaryService,
     PaymentReceiptService,
     CurrencyConversionService,
+    FundsService,
   ],
 })
 export class FinanzasModule {}
