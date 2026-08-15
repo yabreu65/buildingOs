@@ -46,6 +46,8 @@ import { FundsController } from './funds.controller';
 import { FundsService } from './funds.service';
 import { IncomeApplicationsController } from './income-applications.controller';
 import { IncomeApplicationsService } from './income-applications.service';
+import { IncomePoliciesController } from './income-policies.controller';
+import { IncomePoliciesService } from './income-policies.service';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -94,6 +96,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     MulticurrencyController,
     FundsController,
     IncomeApplicationsController,
+    IncomePoliciesController,
   ],
   providers: [
     FinanzasService,
@@ -137,6 +140,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     CurrencyConversionService,
     FundsService,
     IncomeApplicationsService,
+    IncomePoliciesService,
   ],
   exports: [
     FinanzasService,
@@ -157,6 +161,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     CurrencyConversionService,
     FundsService,
     IncomeApplicationsService,
+    IncomePoliciesService,
   ],
 })
 export class FinanzasModule {}

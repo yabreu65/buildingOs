@@ -69,6 +69,7 @@ describe('IncomeApplicationsService', () => {
     income: { findFirst: jest.fn() },
     incomeApplication: { findMany: jest.fn(), create: jest.fn() },
     fund: { findMany: jest.fn() },
+    incomePolicy: { findUnique: jest.fn() },
     fundTransaction: { create: jest.fn() },
     $transaction: jest.fn(),
     $executeRaw: jest.fn(),
@@ -81,6 +82,7 @@ describe('IncomeApplicationsService', () => {
         incomeApplication: prismaValue.incomeApplication,
         fund: prismaValue.fund,
         fundTransaction: prismaValue.fundTransaction,
+        incomePolicy: prismaValue.incomePolicy,
         auditLog: { create: jest.fn() },
         $executeRaw: prismaValue.$executeRaw,
       }),
@@ -574,6 +576,141 @@ describe('IncomeApplicationsService', () => {
         ])),
       ).rejects.toThrow('FORCED_AUDIT_FAILURE');
       // el error se propaga → la transacción (mock) haría rollback real en PostgreSQL
+    });
+  });
+
+  // ── applyPolicy (FIN-05) ────────────────────────────────────────────────
+
+  describe('applyPolicy', () => {
+    const policyVersion = {
+      id: 'policy-version-1',
+      version: 1,
+      status: 'ACTIVE',
+      rules: [
+        { id: 'r1', destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, fundId: null, percentageBasisPoints: 7000 },
+        { id: 'r2', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', percentageBasisPoints: 3000 },
+      ],
+    };
+
+    beforeEach(() => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.incomePolicy.findUnique as jest.Mock).mockResolvedValue({
+        id: 'policy-1',
+        tenantId: 'tenant-1',
+        categoryId: 'cat-1',
+        versions: [policyVersion],
+      });
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: FundStatus.ACTIVE }]);
+      (prisma.incomeApplication.create as jest.Mock).mockImplementation(({ data }) =>
+        Promise.resolve(makeApplication({
+          id: 'app-' + data.destinationType + '-' + (data.fundId ?? 'nf'),
+          destinationType: data.destinationType,
+          fundId: data.fundId,
+          amountMinor: data.amountMinor,
+          policyVersionId: data.policyVersionId,
+          fundTransaction: data.destinationType === IncomeApplicationDestination.FUND ? { id: 'ft-' + data.fundId } : null,
+        })),
+      );
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue({ id: 'ft-1' });
+    });
+
+    it('applies a policy to a RECORDED income generating exact amounts', async () => {
+      const result = await service.applyPolicy('tenant-1', 'income-1', 'member-1', roles);
+
+      expect(result.totalAmountMinor).toBe(10000);
+      expect(prisma.incomeApplication.create).toHaveBeenCalledTimes(2);
+      expect(prisma.fundTransaction.create).toHaveBeenCalledTimes(1);
+      const calls = (prisma.incomeApplication.create as jest.Mock).mock.calls.map((c: [{ data: Record<string, unknown> }]) => c[0].data);
+      const fundCall = calls.find((d) => d.destinationType === 'FUND');
+      const offsetCall = calls.find((d) => d.destinationType === 'OFFSET_EXPENSES');
+      expect(fundCall?.amountMinor).toBe(3000);
+      expect(fundCall?.policyVersionId).toBe('policy-version-1');
+      expect(offsetCall?.amountMinor).toBe(7000);
+      expect(offsetCall?.policyVersionId).toBe('policy-version-1');
+    });
+
+    it('applies a 100% CARRY_FORWARD policy with no FundTransaction', async () => {
+      (prisma.incomePolicy.findUnique as jest.Mock).mockResolvedValue({
+        id: 'policy-1',
+        versions: [{ id: 'pv2', version: 1, status: 'ACTIVE', rules: [{ id: 'r1', destinationType: IncomeApplicationDestination.CARRY_FORWARD, fundId: null, percentageBasisPoints: 10000 }] }],
+      });
+      (prisma.incomeApplication.create as jest.Mock).mockImplementation(({ data }) =>
+        Promise.resolve(makeApplication({ id: 'app-carry', destinationType: data.destinationType, fundId: data.fundId, amountMinor: data.amountMinor, policyVersionId: data.policyVersionId })),
+      );
+
+      const result = await service.applyPolicy('tenant-1', 'income-1', 'member-1', roles);
+
+      expect(result.applications[0]!.amountMinor).toBe(10000);
+      expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a DRAFT income', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome({ status: IncomeStatus.DRAFT }));
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a VOID income', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome({ status: IncomeStatus.VOID }));
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when there is no ACTIVE policy for the category', async () => {
+      (prisma.incomePolicy.findUnique as jest.Mock).mockResolvedValue({ id: 'policy-1', versions: [] });
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(BadRequestException);
+    });
+
+    it('is idempotent when the existing plan equals the policy-generated plan', async () => {
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        makeApplication({ destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 }),
+        makeApplication({ id: 'app-2', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000, fundTransaction: { id: 'ft-1' } }),
+      ]);
+
+      const result = await service.applyPolicy('tenant-1', 'income-1', 'member-1', roles);
+
+      expect(result.applications).toHaveLength(2);
+      expect(prisma.incomeApplication.create).not.toHaveBeenCalled();
+      expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a conflicting existing plan', async () => {
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        makeApplication({ destinationType: IncomeApplicationDestination.CARRY_FORWARD, amountMinor: 10000 }),
+      ]);
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects when a small income makes a rule zero (rounding guard)', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome({ amountMinor: 1 }));
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(BadRequestException);
+    });
+
+    it('handles the 10001 rounding case deterministically (largest remainder)', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome({ amountMinor: 10001 }));
+      (prisma.incomeApplication.create as jest.Mock).mockImplementation(({ data }) =>
+        Promise.resolve(makeApplication({ id: 'app-x', destinationType: data.destinationType, fundId: data.fundId, amountMinor: data.amountMinor, policyVersionId: data.policyVersionId, fundTransaction: data.destinationType === IncomeApplicationDestination.FUND ? { id: 'ft-1' } : null })),
+      );
+
+      const result = await service.applyPolicy('tenant-1', 'income-1', 'member-1', roles);
+
+      const amounts = result.applications.map((a) => a.amountMinor).sort((x, y) => x - y);
+      expect(amounts).toEqual([3000, 7001]); // 7000.7→7000 + remainder 1 → 7001; 3000.3→3000
+      expect(result.totalAmountMinor).toBe(10001);
+    });
+
+    it('rejects when the policy references an archived fund at apply time', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: FundStatus.ARCHIVED }]);
+      await expect(service.applyPolicy('tenant-1', 'income-1', 'member-1', roles)).rejects.toThrow(BadRequestException);
+    });
+
+    it('persists policyVersionId provenance on the FundTransaction audit', async () => {
+      await service.applyPolicy('tenant-1', 'income-1', 'member-1', roles);
+
+      const txAuditCalls = (audit.createLogRequired as jest.Mock).mock.calls.filter(
+        (call: [{ action: string }]) => call[0].action === 'FUND_TRANSACTION_CREATE',
+      );
+      expect(txAuditCalls).toHaveLength(1);
+      expect(txAuditCalls[0]![0].metadata.policyVersionId).toBe('policy-version-1');
     });
   });
 });
