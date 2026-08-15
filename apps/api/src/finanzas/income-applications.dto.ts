@@ -1,11 +1,11 @@
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
-  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -30,7 +30,7 @@ export class IncomeApplicationInputDto {
 export class CreateIncomeApplicationsDto {
   @IsArray()
   @ArrayNotEmpty()
-  @Max(MAX_APPLICATIONS_PER_PLAN)
+  @ArrayMaxSize(MAX_APPLICATIONS_PER_PLAN)
   @ValidateNested({ each: true })
   @Type(() => IncomeApplicationInputDto)
   applications!: IncomeApplicationInputDto[];

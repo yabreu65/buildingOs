@@ -21,6 +21,7 @@ import {
 import {
   acquireFundLock,
 } from './fund-locks';
+import { assertSufficientFundBalance } from './fund-ledger';
 
 type FundWithBalance = Prisma.FundGetPayload<Record<string, never>> & {
   balancesByCurrency: Array<{ currency: string; amountMinor: number }>;
@@ -715,13 +716,8 @@ export class FundsService {
     currencyCode: string,
     amountMinor: number,
   ): Promise<void> {
-    const balances = await this.computeBalances(tx, tenantId, fundId);
-    const balance = balances.find((b) => b.currency === currencyCode)?.amountMinor ?? 0;
-    if (balance < amountMinor) {
-      throw new BadRequestException(
-        `Saldo insuficiente en ${currencyCode}: saldo ${balance}, débito solicitado ${amountMinor}`,
-      );
-    }
+    // Semántica FIN-02 compartida (fund-ledger.ts): balance = SUM(CREDIT)-SUM(DEBIT)
+    await assertSufficientFundBalance(tx, tenantId, fundId, currencyCode, amountMinor);
   }
 
   private async assertSameOperation(

@@ -470,4 +470,110 @@ describe('IncomeApplicationsService', () => {
       expect('fundId' in apps[0]!).toBe(false);
     });
   });
+
+  // ── Required FUND CREDIT audit (FIN-03R BLOCKER A) ─────────────────────
+
+  describe('required fund credit audit', () => {
+    beforeEach(() => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([]);
+    });
+
+    it('emits exactly one FUND_TRANSACTION_CREATE per FUND destination plus the plan audit', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: FundStatus.ACTIVE }]);
+      (prisma.incomeApplication.create as jest.Mock)
+        .mockResolvedValueOnce(makeApplication({ destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 }))
+        .mockResolvedValueOnce(
+          makeApplication({ id: 'app-x', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000, fundTransaction: { id: 'ft-x' } }),
+        );
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue({ id: 'ft-x' });
+
+      await service.createPlan('tenant-1', 'income-1', 'member-1', roles, plan([
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000 },
+      ]));
+
+      const calls = (audit.createLogRequired as jest.Mock).mock.calls.map(
+        (call: [{ action: string; entityId: string; metadata: Record<string, unknown> }]) => ({
+          action: call[0].action,
+          entityId: call[0].entityId,
+          metadata: call[0].metadata,
+        }),
+      );
+      expect(calls).toHaveLength(2);
+      const txAudit = calls.find((c) => c.action === 'FUND_TRANSACTION_CREATE');
+      expect(txAudit).toBeDefined();
+      expect(txAudit!.entityId).toBe('ft-x');
+      expect(txAudit!.metadata.fundId).toBe('fund-1');
+      expect(txAudit!.metadata.direction).toBe('CREDIT');
+      expect(txAudit!.metadata.amountMinor).toBe(3000);
+      expect(txAudit!.metadata.currencyCode).toBe('USD');
+      expect(txAudit!.metadata.idempotencyKey).toBe('income-application:app-x');
+      expect(txAudit!.metadata.incomeApplicationId).toBe('app-x');
+      const planAudit = calls.find((c) => c.action === 'INCOME_APPLICATIONS_CREATE');
+      expect(planAudit).toBeDefined();
+    });
+
+    it('emits 3 FUND_TRANSACTION_CREATE for a 3-FUND plan plus the plan audit', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([
+        { id: 'fund-1', status: FundStatus.ACTIVE },
+        { id: 'fund-2', status: FundStatus.ACTIVE },
+        { id: 'fund-3', status: FundStatus.ACTIVE },
+      ]);
+      (prisma.incomeApplication.create as jest.Mock)
+        .mockResolvedValueOnce(makeApplication({ id: 'a1', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000, fundTransaction: { id: 'ft1' } }))
+        .mockResolvedValueOnce(makeApplication({ id: 'a2', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-2', amountMinor: 3000, fundTransaction: { id: 'ft2' } }))
+        .mockResolvedValueOnce(makeApplication({ id: 'a3', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-3', amountMinor: 4000, fundTransaction: { id: 'ft3' } }));
+      (prisma.fundTransaction.create as jest.Mock)
+        .mockResolvedValueOnce({ id: 'ft1' })
+        .mockResolvedValueOnce({ id: 'ft2' })
+        .mockResolvedValueOnce({ id: 'ft3' });
+
+      await service.createPlan('tenant-1', 'income-1', 'member-1', roles, plan([
+        { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-2', amountMinor: 3000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-3', amountMinor: 4000 },
+      ]));
+
+      const actions = (audit.createLogRequired as jest.Mock).mock.calls.map(
+        (call: [{ action: string }]) => call[0].action,
+      );
+      expect(actions.filter((a) => a === 'FUND_TRANSACTION_CREATE')).toHaveLength(3);
+      expect(actions.filter((a) => a === 'INCOME_APPLICATIONS_CREATE')).toHaveLength(1);
+    });
+
+    it('does not emit FUND_TRANSACTION_CREATE audits on a same-plan retry', async () => {
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        makeApplication({ destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 }),
+        makeApplication({ id: 'app-2', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000, fundTransaction: { id: 'ft-1' } }),
+      ]);
+
+      await service.createPlan('tenant-1', 'income-1', 'member-1', roles, plan([
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000 },
+      ]));
+
+      expect(audit.createLogRequired).not.toHaveBeenCalled();
+      expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('rolls back everything when the required FUND_TRANSACTION_CREATE audit fails', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: FundStatus.ACTIVE }]);
+      (prisma.incomeApplication.create as jest.Mock)
+        .mockResolvedValueOnce(makeApplication({ destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 }))
+        .mockResolvedValueOnce(
+          makeApplication({ id: 'app-x', destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000, fundTransaction: { id: 'ft-x' } }),
+        );
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue({ id: 'ft-x' });
+      (audit.createLogRequired as jest.Mock).mockRejectedValue(new Error('FORCED_AUDIT_FAILURE'));
+
+      await expect(
+        service.createPlan('tenant-1', 'income-1', 'member-1', roles, plan([
+          { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+          { destinationType: IncomeApplicationDestination.FUND, fundId: 'fund-1', amountMinor: 3000 },
+        ])),
+      ).rejects.toThrow('FORCED_AUDIT_FAILURE');
+      // el error se propaga → la transacción (mock) haría rollback real en PostgreSQL
+    });
+  });
 });

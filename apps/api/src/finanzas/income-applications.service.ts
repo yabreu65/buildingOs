@@ -223,6 +223,30 @@ export class IncomeApplicationsService {
               incomeApplicationId: application.id,
             },
           });
+
+          // FIN-03R (BLOCKER A): cada CREDIT monetario requiere su propio audit
+          // FUND_TRANSACTION_CREATE dentro de la MISMA transacción. Si falla,
+          // rollback total (application + FundTransaction + plan).
+          await this.auditService.createLogRequired(
+            {
+              tenantId,
+              actorMembershipId: membershipId,
+              action: 'FUND_TRANSACTION_CREATE',
+              entityType: 'FundTransaction',
+              entityId: transaction.id,
+              metadata: {
+                fundId: app.fundId!,
+                direction: FundTransactionDirection.CREDIT,
+                amountMinor: app.amountMinor,
+                currencyCode: income.currencyCode,
+                occurredAt: income.receivedDate.toISOString(),
+                idempotencyKey: incomeApplicationFundTransactionKey(application.id),
+                incomeApplicationId: application.id,
+              },
+            },
+            tx,
+          );
+
           created.push({
             ...application,
             fundTransaction: { id: transaction.id },

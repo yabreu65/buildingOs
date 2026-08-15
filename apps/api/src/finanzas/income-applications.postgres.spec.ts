@@ -646,4 +646,263 @@ describePostgres('IncomeApplications PostgreSQL (FIN-03)', () => {
     const leftover = await observer.tenant.count({ where: { name: { startsWith: `${fixturePhase}-` } } });
     expect(leftover).toBe(0);
   }, 10000);
+
+  // ── FIN-03R BLOCKER A: real FUND_TRANSACTION_CREATE audits ─────────────
+
+  it('emits real FUND_TRANSACTION_CREATE audits for every application CREDIT', async () => {
+    const ctx = await fixture('real-credit-audit');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund1 = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F1 ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    const fund2 = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F2 ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+
+    const plan = await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 4000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund1.id, amountMinor: 3000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund2.id, amountMinor: 3000 },
+      ],
+    });
+
+    // INCOME_APPLICATIONS_CREATE = 1
+    expect(
+      await observer.auditLog.count({ where: { tenantId: ctx.tenant.id, action: 'INCOME_APPLICATIONS_CREATE', entityId: income.id } }),
+    ).toBe(1);
+
+    // FUND_TRANSACTION_CREATE = 2 (uno por CREDIT), con metadata exacta
+    const fundApps = plan.applications.filter((a) => a.destinationType === 'FUND');
+    expect(fundApps).toHaveLength(2);
+    for (const fundApp of fundApps) {
+      const audit = await observer.auditLog.findFirst({
+        where: { tenantId: ctx.tenant.id, action: 'FUND_TRANSACTION_CREATE', entityId: fundApp.fundTransactionId! },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(audit).not.toBeNull();
+      expect(audit!.entity).toBe('FundTransaction');
+      const metadata = audit!.metadata as Record<string, unknown>;
+      expect(metadata.direction).toBe('CREDIT');
+      expect(metadata.amountMinor).toBe(fundApp.amountMinor);
+      expect(metadata.currencyCode).toBe('USD');
+      expect(metadata.idempotencyKey).toBe(`income-application:${fundApp.id}`);
+      expect(metadata.incomeApplicationId).toBe(fundApp.id);
+    }
+  }, 30000);
+
+  // ── FIN-03R BLOCKER B: void balance/archive safety ──────────────────────
+
+  it('rejects void when the fund was spent (insufficient balance)', async () => {
+    const ctx = await fixture('void-spent');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
+      ],
+    });
+    // Gasto legítimo del CREDIT completo → balance 0
+    await fundsService.createTransaction(ctx.tenant.id, fund.id, ctx.membership.id, roles, {
+      direction: FundTransactionDirection.DEBIT,
+      amountMinor: 3000,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+
+    await expect(
+      incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles),
+    ).rejects.toThrow(/Saldo insuficiente|insuficiente/i);
+
+    // Income sigue RECORDED; ledger intacto (CREDIT original + DEBIT manual); sin reversal; balance 0
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    expect(incomeAfter.status).toBe(IncomeStatus.RECORDED);
+    const txs = await observer.fundTransaction.findMany({ where: { fundId: fund.id } });
+    expect(txs).toHaveLength(2);
+    expect(txs.filter((t) => t.direction === 'DEBIT' && t.reversalOfTransactionId !== null)).toHaveLength(0);
+    expect(await observer.auditLog.count({ where: { tenantId: ctx.tenant.id, action: 'INCOME_VOID' } })).toBe(0);
+    expect(await observer.auditLog.count({ where: { tenantId: ctx.tenant.id, action: 'FUND_TRANSACTION_REVERSE' } })).toBe(0);
+  }, 30000);
+
+  it('rejects void when the fund was partially spent', async () => {
+    const ctx = await fixture('void-partial');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
+      ],
+    });
+    await fundsService.createTransaction(ctx.tenant.id, fund.id, ctx.membership.id, roles, {
+      direction: FundTransactionDirection.DEBIT,
+      amountMinor: 2000,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+
+    await expect(
+      incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles),
+    ).rejects.toThrow(/Saldo insuficiente|insuficiente/i);
+
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    expect(incomeAfter.status).toBe(IncomeStatus.RECORDED);
+    const fundAfter = await fundsService.getFund(ctx.tenant.id, fund.id, roles);
+    expect(fundAfter.balancesByCurrency).toEqual([{ currency: 'USD', amountMinor: 1000 }]);
+  }, 30000);
+
+  it('rejects void when the fund is ARCHIVED', async () => {
+    const ctx = await fixture('void-archived');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
+      ],
+    });
+    // Llevar a cero y archivar: gastar el CREDIT de aplicación (balance 0),
+    // archivar el fund, y luego void → rechazado por ARCHIVED.
+    await fundsService.createTransaction(ctx.tenant.id, fund.id, ctx.membership.id, roles, {
+      direction: FundTransactionDirection.DEBIT,
+      amountMinor: 3000,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+    await fundsService.archiveFund(ctx.tenant.id, fund.id, ctx.membership.id, roles);
+
+    await expect(
+      incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles),
+    ).rejects.toThrow(/archivado/i);
+
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    expect(incomeAfter.status).toBe(IncomeStatus.RECORDED);
+    const txs = await observer.fundTransaction.count({ where: { fundId: fund.id } });
+    expect(txs).toBe(2); // CREDIT app + DEBIT manual (sin reversal de void)
+  }, 30000);
+
+  it('void succeeds when other valid credits keep the balance sufficient', async () => {
+    const ctx = await fixture('void-sufficient');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
+      ],
+    });
+    await fundsService.createTransaction(ctx.tenant.id, fund.id, ctx.membership.id, roles, {
+      direction: FundTransactionDirection.CREDIT,
+      amountMinor: 2000,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+
+    await incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles);
+
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    expect(incomeAfter.status).toBe(IncomeStatus.VOID);
+    const fundAfter = await fundsService.getFund(ctx.tenant.id, fund.id, roles);
+    expect(fundAfter.balancesByCurrency).toEqual([{ currency: 'USD', amountMinor: 2000 }]);
+  }, 30000);
+
+  it('void is all-or-nothing across multiple funds (one insufficient → reject everything)', async () => {
+    const ctx = await fixture('void-multi');
+    const income = await recordedIncome(ctx.tenant.id, 20000);
+    const fundA = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `FA ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    const fundB = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `FB ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fundA.id, amountMinor: 10000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fundB.id, amountMinor: 10000 },
+      ],
+    });
+    // Gastar completamente fundB → insuficiente para su reversal
+    await fundsService.createTransaction(ctx.tenant.id, fundB.id, ctx.membership.id, roles, {
+      direction: FundTransactionDirection.DEBIT,
+      amountMinor: 10000,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+
+    await expect(
+      incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles),
+    ).rejects.toThrow(/Saldo insuficiente|insuficiente/i);
+
+    // ALL OR NOTHING: ningún reversal en A ni B; Income RECORDED
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    expect(incomeAfter.status).toBe(IncomeStatus.RECORDED);
+    const reversalsA = await observer.fundTransaction.count({ where: { fundId: fundA.id, reversalOfTransactionId: { not: null } } });
+    const reversalsB = await observer.fundTransaction.count({ where: { fundId: fundB.id, reversalOfTransactionId: { not: null } } });
+    expect(reversalsA).toBe(0);
+    expect(reversalsB).toBe(0);
+  }, 30000);
+
+  // ── FIN-03R: void vs concurrent manual debit race ───────────────────────
+
+  it('serializes void vs concurrent manual debit (never negative, never partial void)', async () => {
+    const ctx = await fixture('void-debit-race');
+    const income = await recordedIncome(ctx.tenant.id, 10000);
+    const fund = await observer.fund.create({
+      data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `F ${Date.now()}`, createdByMembershipId: ctx.membership.id },
+    });
+    await appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, {
+      applications: [
+        { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+        { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
+      ],
+    });
+    const svcB = buildServices(clientB);
+
+    const [voidResult, debitResult] = await Promise.all([
+      incomesService.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
+      ),
+      svcB.funds.createTransaction(ctx.tenant.id, fund.id, ctx.membership.id, roles, {
+        direction: FundTransactionDirection.DEBIT,
+        amountMinor: 3000,
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+      }).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
+      ),
+    ]);
+
+    const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
+    const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+      FROM "FundTransaction" WHERE "fundId" = ${fund.id} AND "tenantId" = ${ctx.tenant.id}
+    `;
+    const balance = Number(balanceRows[0]?.total ?? 0);
+
+    // Nunca balance negativo
+    expect(balance).toBeGreaterThanOrEqual(0);
+
+    if (incomeAfter.status === IncomeStatus.VOID) {
+      // void ganó → reversal DEBIT aplicado → manual debit debió fallar (saldo 0)
+      expect(voidResult.ok).toBe(true);
+      expect(debitResult.ok).toBe(false);
+      expect(balance).toBe(0);
+    } else {
+      // manual debit ganó → void detecta insuficiente → Income RECORDED
+      expect(incomeAfter.status).toBe(IncomeStatus.RECORDED);
+      expect(voidResult.ok).toBe(false);
+      expect(balance).toBe(0);
+    }
+  }, 30000);
 });

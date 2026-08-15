@@ -46,7 +46,8 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
   const prismaValue = {
     income: { findFirst: jest.fn(), update: jest.fn() },
     incomeApplication: { findMany: jest.fn() },
-    fundTransaction: { create: jest.fn() },
+    fund: { findMany: jest.fn() },
+    fundTransaction: { create: jest.fn(), groupBy: jest.fn() },
     tenant: { findFirst: jest.fn() },
     exchangeRate: { findFirst: jest.fn() },
     expenseLedgerCategory: { findFirst: jest.fn() },
@@ -60,6 +61,7 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
       async (callback: (tx: unknown) => unknown) => callback({
         income: prismaValue.income,
         incomeApplication: prismaValue.incomeApplication,
+        fund: prismaValue.fund,
         fundTransaction: prismaValue.fundTransaction,
         tenant: prismaValue.tenant,
         exchangeRate: prismaValue.exchangeRate,
@@ -141,6 +143,10 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
 
   it('reverses FUND application CREDITs on void (ledger immutable, reversal created)', async () => {
     (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+    (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: 'ACTIVE' }]);
+    (prisma.fundTransaction.groupBy as jest.Mock)
+      .mockResolvedValueOnce([{ currencyCode: 'USD', _sum: { amountMinor: 3000 } }])
+      .mockResolvedValueOnce([]);
     (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
       {
         id: 'app-1',
@@ -181,6 +187,7 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
 
   it('does not double-reverse an already-reversed transaction', async () => {
     (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+    (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: 'ACTIVE' }]);
     (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
       {
         id: 'app-1',
