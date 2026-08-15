@@ -145,6 +145,15 @@ enum IncomeApplicationDestination {
   CARRY_FORWARD    // Clasifica dinero retenido para uso futuro
 }
 
+// ============================================================================
+// FINANZAS: IncomePolicy (política configurable por categoría — FIN-05)
+// ============================================================================
+
+enum IncomePolicyVersionStatus {
+  ACTIVE    // Versión current de la política
+  INACTIVE  // Versión histórica (permanece consultable)
+}
+
 enum LiquidationStatus {
   DRAFT
   REVIEWED
@@ -305,6 +314,8 @@ model Tenant {
   funds                 Fund[]
   fundTransactions      FundTransaction[]
   incomeApplications    IncomeApplication[]
+  incomePolicies        IncomePolicy[]
+  incomePolicyRules     IncomePolicyRule[]
 }
 
 model User {
@@ -380,6 +391,8 @@ model Membership {
   fundsArchived         Fund[]                @relation("FundArchivedBy")
   fundTransactionsCreated FundTransaction[]   @relation("FundTransactionCreatedBy")
   incomeApplicationsCreated IncomeApplication[] @relation("IncomeApplicationCreatedBy")
+  incomePoliciesCreated   IncomePolicy[]        @relation("IncomePolicyCreatedBy")
+  incomePolicyVersionsCreated IncomePolicyVersion[] @relation("IncomePolicyVersionCreatedBy")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -816,6 +829,9 @@ enum AuditAction {
   INCOME_VOID
   INCOME_ALLOCATION_CREATE
   INCOME_APPLICATIONS_CREATE
+  INCOME_POLICY_CREATE
+  INCOME_POLICY_VERSION_CREATE
+  INCOME_POLICY_DEACTIVATE
   // FUNDS (FIN-02)
   FUND_CREATE
   FUND_UPDATE
@@ -1843,6 +1859,7 @@ model ExpenseLedgerCategory {
   isActive     Boolean      @default(true)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+  incomePolicies       IncomePolicy[]
 
   tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   expenses             Expense[]
@@ -2048,9 +2065,71 @@ model IncomeApplication {
   fund       Fund?              @relation(fields: [fundId], references: [id], onDelete: Restrict)
   createdBy  Membership         @relation("IncomeApplicationCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   fundTransaction FundTransaction? @relation("FundTransactionIncomeApplication")
+  policyVersion IncomePolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, incomeId])
   @@index([tenantId, fundId])
+  @@index([tenantId, policyVersionId])
+
+  policyVersionId String? // FIN-05: provenance — versión de política que generó esta aplicación (null = manual)
+}
+
+// ============================================================================
+// FINANZAS: IncomePolicy + Version + Rule (configuración por categoría — FIN-05)
+// ============================================================================
+// La política define el plan DEFAULT propuesto para Incomes RECORDED futuros.
+// NO es verdad histórica: las IncomeApplications ya publicadas NO cambian
+// cuando la política cambia. Versiones inmutables preservan historia.
+// ============================================================================
+
+model IncomePolicy {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  categoryId            String   // ExpenseLedgerCategory (movementType = INCOME)
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant     Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category   ExpenseLedgerCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  createdBy  Membership?           @relation("IncomePolicyCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  versions   IncomePolicyVersion[]
+
+  @@unique([tenantId, categoryId])
+  @@index([tenantId])
+}
+
+model IncomePolicyVersion {
+  id                    String                     @id @default(cuid())
+  policyId              String
+  version               Int                        // 1, 2, 3...
+  status                IncomePolicyVersionStatus  @default(ACTIVE)
+  createdByMembershipId String?
+  createdAt             DateTime                   @default(now())
+
+  policy    IncomePolicy       @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  createdBy Membership?        @relation("IncomePolicyVersionCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  rules     IncomePolicyRule[]
+  applications IncomeApplication[]
+
+  @@unique([policyId, version])
+  @@index([policyId, status])
+}
+
+model IncomePolicyRule {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  versionId              String
+  destinationType        IncomeApplicationDestination
+  fundId                 String?  // Obligatorio solo si FUND
+  percentageBasisPoints  Int      // 100% = 10000 bp
+  createdAt              DateTime @default(now())
+
+  tenant    Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  version   IncomePolicyVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  fund      Fund?                 @relation(fields: [fundId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, versionId])
 }
 
 // ============================================================================
@@ -2151,6 +2230,7 @@ model Fund {
   archivedBy Membership?        @relation("FundArchivedBy", fields: [archivedByMembershipId], references: [id], onDelete: SetNull)
   transactions FundTransaction[]
   incomeApplications IncomeApplication[]
+  incomePolicyRules  IncomePolicyRule[]
 
   @@index([tenantId])
   @@index([tenantId, buildingId])

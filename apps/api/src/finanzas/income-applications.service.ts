@@ -123,173 +123,332 @@ export class IncomeApplicationsService {
         );
       }
 
-      // Plan existente → idempotencia
-      const existing = await this.loadApplicationsTx(tx, tenantId, incomeId);
-      if (existing.length > 0) {
-        const existingPlan = new Set(
-          existing.map((app) =>
-            canonicalKey({
-              destinationType: app.destinationType,
-              fundId: app.fundId,
-              amountMinor: app.amountMinor,
-            }),
-          ),
-        );
-        const requestedPlan = new Set(
-          plan.map((app) =>
-            canonicalKey({
-              destinationType: app.destinationType,
-              fundId: app.fundId ?? null,
-              amountMinor: app.amountMinor,
-            }),
-          ),
-        );
-
-        const samePlan =
-          existingPlan.size === requestedPlan.size &&
-          [...requestedPlan].every((key) => existingPlan.has(key));
-
-        if (samePlan) {
-          // Retry del mismo plan: devolver el plan existente, sin nuevas mutaciones.
-          return {
-            incomeId,
-            currencyCode: income.currencyCode,
-            totalAmountMinor: totalRequested,
-            applications: existing.map((app) => this.toDto(app)),
-          };
-        }
-        throw new ConflictException(
-          'Este ingreso ya tiene un plan de aplicaciones diferente',
-        );
-      }
-
-      // Adquirir locks de Funds en orden determinístico ANTES de validar el
-      // estado del fund: evita TOCTOU application vs archive (el archive puede
-      // cambiar ACTIVE→ARCHIVED mientras el plan espera el lock).
-      const fundIds = [...new Set(
-        plan
-          .filter((app) => app.destinationType === IncomeApplicationDestination.FUND)
-          .map((app) => app.fundId as string),
-      )].sort();
-      for (const fundId of fundIds) {
-        await acquireFundLock(tx, tenantId, fundId);
-      }
-
-      // Validar funds CON el lock tomado (estado estable).
-      const funds = await tx.fund.findMany({
-        where: { id: { in: fundIds }, tenantId },
-        select: { id: true, status: true },
+      // Camino interno compartido (FIN-05): misma publicación que apply-policy.
+      return this.publishPlanTx(tx, {
+        tenantId,
+        income,
+        membershipId,
+        plan: plan.map((app) => ({
+          destinationType: app.destinationType,
+          fundId: app.fundId ?? null,
+          amountMinor: app.amountMinor,
+        })),
+        totalAmountMinor: totalRequested,
+        policyVersionId: null,
       });
-      const fundById = new Map(funds.map((f) => [f.id, f]));
-      for (const fundId of fundIds) {
-        const fund = fundById.get(fundId);
-        if (!fund) {
-          throw new NotFoundException(`Fondo no encontrado o no pertenece al tenant: ${fundId}`);
-        }
-        if (fund.status !== FundStatus.ACTIVE) {
-          throw new BadRequestException(`El fondo está archivado: ${fundId}`);
-        }
+    });
+  }
+
+  // ── POST apply-policy (FIN-05) ──────────────────────────────────────────
+
+  async applyPolicy(
+    tenantId: string,
+    incomeId: string,
+    membershipId: string,
+    userRoles: string[],
+  ): Promise<IncomeApplicationPlanResponseDto> {
+    this.assertAdminOrOperator(userRoles, 'aplicar política de ingresos');
+
+    return this.prisma.$transaction(async (tx) => {
+      await acquireIncomeLock(tx, tenantId, incomeId);
+
+      const income = await tx.income.findFirst({
+        where: { id: incomeId, tenantId },
+      });
+      if (!income) {
+        throw new NotFoundException('Ingreso no encontrado o no pertenece al tenant');
+      }
+      if (income.status !== IncomeStatus.RECORDED) {
+        throw new BadRequestException(
+          `Solo se pueden aplicar políticas a ingresos RECORDED. Estado actual: ${income.status}`,
+        );
       }
 
-      // Crear aplicaciones + FundTransactions CREDIT (uno a uno)
-      const created: ApplicationRow[] = [];
-      for (const app of plan) {
-        const isFund = app.destinationType === IncomeApplicationDestination.FUND;
-        const application = await tx.incomeApplication.create({
-          data: {
-            tenantId,
-            incomeId,
-            destinationType: app.destinationType,
-            fundId: isFund ? app.fundId! : null,
-            amountMinor: app.amountMinor,
-            currencyCode: income.currencyCode,
-            createdByMembershipId: membershipId,
-          },
-        });
-
-        if (isFund) {
-          // El CREDIT del Fund: determinístico por applicationId (retry-safe).
-          const transaction = await tx.fundTransaction.create({
-            data: {
-              tenantId,
-              fundId: app.fundId!,
-              direction: FundTransactionDirection.CREDIT,
-              amountMinor: app.amountMinor,
-              currencyCode: income.currencyCode,
-              occurredAt: income.receivedDate,
-              description: `Aplicación de ingreso ${incomeId}`,
-              createdByMembershipId: membershipId,
-              idempotencyKey: incomeApplicationFundTransactionKey(application.id),
-              incomeApplicationId: application.id,
-            },
-          });
-
-          // FIN-03R (BLOCKER A): cada CREDIT monetario requiere su propio audit
-          // FUND_TRANSACTION_CREATE dentro de la MISMA transacción. Si falla,
-          // rollback total (application + FundTransaction + plan).
-          await this.auditService.createLogRequired(
-            {
-              tenantId,
-              actorMembershipId: membershipId,
-              action: 'FUND_TRANSACTION_CREATE',
-              entityType: 'FundTransaction',
-              entityId: transaction.id,
-              metadata: {
-                fundId: app.fundId!,
-                direction: FundTransactionDirection.CREDIT,
-                amountMinor: app.amountMinor,
-                currencyCode: income.currencyCode,
-                occurredAt: income.receivedDate.toISOString(),
-                idempotencyKey: incomeApplicationFundTransactionKey(application.id),
-                incomeApplicationId: application.id,
-              },
-            },
-            tx,
-          );
-
-          created.push({
-            ...application,
-            fundTransaction: { id: transaction.id },
-          });
-        } else {
-          created.push({ ...application, fundTransaction: null });
-        }
-      }
-
-      // Audit requerido del plan (atómico con la mutación)
-      await this.auditService.createLogRequired(
-        {
-          tenantId,
-          actorMembershipId: membershipId,
-          action: 'INCOME_APPLICATIONS_CREATE',
-          entityType: 'Income',
-          entityId: incomeId,
-          metadata: {
-            incomeId,
-            currencyCode: income.currencyCode,
-            totalAmountMinor: totalRequested,
-            applications: plan.map((app) => ({
-              destinationType: app.destinationType,
-              ...(app.fundId !== undefined && app.fundId !== null
-                ? { fundId: app.fundId }
-                : {}),
-              amountMinor: app.amountMinor,
-            })),
+      // Resolver la versión ACTIVE de la política de la categoría (tenant-scoped).
+      const policy = await tx.incomePolicy.findUnique({
+        where: { tenantId_categoryId: { tenantId, categoryId: income.categoryId } },
+        include: {
+          versions: {
+            where: { status: 'ACTIVE' },
+            include: { rules: true },
+            orderBy: { version: 'desc' },
+            take: 1,
           },
         },
-        tx,
+      });
+      if (!policy || policy.versions.length === 0) {
+        throw new BadRequestException('No existe una política ACTIVE para la categoría de este ingreso');
+      }
+      const version = policy.versions[0]!;
+
+      // Convertir reglas (basis points) a montos exactos (largest remainder determinístico).
+      const plan = this.allocatePolicyRules(
+        income.amountMinor,
+        version.rules.map((rule) => ({
+          destinationType: rule.destinationType,
+          fundId: rule.fundId,
+          percentageBasisPoints: rule.percentageBasisPoints,
+        })),
       );
 
-      return {
-        incomeId,
-        currencyCode: income.currencyCode,
-        totalAmountMinor: totalRequested,
-        applications: created.map((app) => this.toDto(app)),
-      };
+      // Camino interno compartido (FIN-05): misma publicación que manual plan,
+      // con provenance de la versión de política.
+      return this.publishPlanTx(tx, {
+        tenantId,
+        income,
+        membershipId,
+        plan,
+        totalAmountMinor: income.amountMinor,
+        policyVersionId: version.id,
+      });
     });
   }
 
   // ── Internos ─────────────────────────────────────────────────────────────
+
+  /**
+   * Camino interno compartido (FIN-03/FIN-05): publica un plan de aplicaciones
+   * con todas las invariantes (idempotencia, locks de Funds, CREDITs, audits).
+   * Usado por createPlan (manual) y applyPolicy (generado por política).
+   */
+  private async publishPlanTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      tenantId: string;
+      income: { id: string; amountMinor: number; currencyCode: string; receivedDate: Date; categoryId: string };
+      membershipId: string;
+      plan: Array<{ destinationType: IncomeApplicationDestination; fundId: string | null; amountMinor: number }>;
+      totalAmountMinor: number;
+      policyVersionId: string | null;
+    },
+  ): Promise<IncomeApplicationPlanResponseDto> {
+    const { tenantId, income, membershipId, plan, totalAmountMinor, policyVersionId } = params;
+    const incomeId = income.id;
+
+    // Plan existente → idempotencia (mismo canonical → retorna existente)
+    const existing = await this.loadApplicationsTx(tx, tenantId, incomeId);
+    if (existing.length > 0) {
+      const existingPlan = new Set(
+        existing.map((app) =>
+          canonicalKey({
+            destinationType: app.destinationType,
+            fundId: app.fundId,
+            amountMinor: app.amountMinor,
+          }),
+        ),
+      );
+      const requestedPlan = new Set(
+        plan.map((app) =>
+          canonicalKey({
+            destinationType: app.destinationType,
+            fundId: app.fundId ?? null,
+            amountMinor: app.amountMinor,
+          }),
+        ),
+      );
+
+      const samePlan =
+        existingPlan.size === requestedPlan.size &&
+        [...requestedPlan].every((key) => existingPlan.has(key));
+
+      if (samePlan) {
+        return {
+          incomeId,
+          currencyCode: income.currencyCode,
+          totalAmountMinor: totalAmountMinor,
+          applications: existing.map((app) => this.toDto(app)),
+        };
+      }
+      throw new ConflictException(
+        'Este ingreso ya tiene un plan de aplicaciones diferente',
+      );
+    }
+
+    // Adquirir locks de Funds en orden determinístico ANTES de validar el
+    // estado del fund: evita TOCTOU application vs archive.
+    const fundIds = [...new Set(
+      plan
+        .filter((app) => app.destinationType === IncomeApplicationDestination.FUND)
+        .map((app) => app.fundId as string),
+    )].sort();
+    for (const fundId of fundIds) {
+      await acquireFundLock(tx, tenantId, fundId);
+    }
+
+    // Validar funds CON el lock tomado (estado estable).
+    const funds = await tx.fund.findMany({
+      where: { id: { in: fundIds }, tenantId },
+      select: { id: true, status: true },
+    });
+    const fundById = new Map(funds.map((f) => [f.id, f]));
+    for (const fundId of fundIds) {
+      const fund = fundById.get(fundId);
+      if (!fund) {
+        throw new NotFoundException(`Fondo no encontrado o no pertenece al tenant: ${fundId}`);
+      }
+      if (fund.status !== FundStatus.ACTIVE) {
+        throw new BadRequestException(`El fondo está archivado: ${fundId}`);
+      }
+    }
+
+    // Crear aplicaciones + FundTransactions CREDIT (uno a uno)
+    const created: ApplicationRow[] = [];
+    for (const app of plan) {
+      const isFund = app.destinationType === IncomeApplicationDestination.FUND;
+      const application = await tx.incomeApplication.create({
+        data: {
+          tenantId,
+          incomeId,
+          destinationType: app.destinationType,
+          fundId: isFund ? app.fundId! : null,
+          amountMinor: app.amountMinor,
+          currencyCode: income.currencyCode,
+          createdByMembershipId: membershipId,
+          policyVersionId,
+        },
+      });
+
+      if (isFund) {
+        const transaction = await tx.fundTransaction.create({
+          data: {
+            tenantId,
+            fundId: app.fundId!,
+            direction: FundTransactionDirection.CREDIT,
+            amountMinor: app.amountMinor,
+            currencyCode: income.currencyCode,
+            occurredAt: income.receivedDate,
+            description: `Aplicación de ingreso ${incomeId}`,
+            createdByMembershipId: membershipId,
+            idempotencyKey: incomeApplicationFundTransactionKey(application.id),
+            incomeApplicationId: application.id,
+          },
+        });
+
+        await this.auditService.createLogRequired(
+          {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'FUND_TRANSACTION_CREATE',
+            entityType: 'FundTransaction',
+            entityId: transaction.id,
+            metadata: {
+              fundId: app.fundId!,
+              direction: FundTransactionDirection.CREDIT,
+              amountMinor: app.amountMinor,
+              currencyCode: income.currencyCode,
+              occurredAt: income.receivedDate.toISOString(),
+              idempotencyKey: incomeApplicationFundTransactionKey(application.id),
+              incomeApplicationId: application.id,
+              ...(policyVersionId !== null ? { policyVersionId } : {}),
+            },
+          },
+          tx,
+        );
+
+        created.push({
+          ...application,
+          fundTransaction: { id: transaction.id },
+        });
+      } else {
+        created.push({ ...application, fundTransaction: null });
+      }
+    }
+
+    // Audit requerido del plan (atómico con la mutación)
+    await this.auditService.createLogRequired(
+      {
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'INCOME_APPLICATIONS_CREATE',
+        entityType: 'Income',
+        entityId: incomeId,
+        metadata: {
+          incomeId,
+          currencyCode: income.currencyCode,
+          totalAmountMinor: totalAmountMinor,
+          ...(policyVersionId !== null ? { policyVersionId } : {}),
+          applications: plan.map((app) => ({
+            destinationType: app.destinationType,
+            ...(app.fundId !== undefined && app.fundId !== null
+              ? { fundId: app.fundId }
+              : {}),
+            amountMinor: app.amountMinor,
+          })),
+        },
+      },
+      tx,
+    );
+
+    return {
+      incomeId,
+      currencyCode: income.currencyCode,
+      totalAmountMinor: totalAmountMinor,
+      applications: created.map((app) => this.toDto(app)),
+    };
+  }
+
+  /**
+   * Convierte reglas (basis points) a montos minor exactos con largest
+   * remainder determinístico. Orden estable: destinationType, luego fundId.
+   * Rechaza si alguna regla genera 0 minor units (income demasiado pequeño).
+   */
+  private allocatePolicyRules(
+    amountMinor: number,
+    rules: Array<{ destinationType: IncomeApplicationDestination; fundId: string | null; percentageBasisPoints: number }>,
+  ): Array<{ destinationType: IncomeApplicationDestination; fundId: string | null; amountMinor: number }> {
+    // Orden canónico determinístico para tie-breaks estables.
+    const ordered = [...rules].sort((a, b) => {
+      if (a.destinationType !== b.destinationType) {
+        return a.destinationType.localeCompare(b.destinationType);
+      }
+      return (a.fundId ?? '').localeCompare(b.fundId ?? '');
+    });
+
+    const exact = ordered.map((rule) => ({
+      rule,
+      amount: Math.floor((amountMinor * rule.percentageBasisPoints) / 10000),
+      remainder: (amountMinor * rule.percentageBasisPoints) % 10000,
+    }));
+
+    const allocated = exact.reduce((sum, item) => sum + item.amount, 0);
+    const missing = amountMinor - allocated;
+
+    // Distribuir el remanente (menor a rules.length) por mayor remainder;
+    // tie-break por orden canónico (índice en `ordered`). Se muta el ORIGINAL
+    // en exact[] (no una copia) para que la suma final sea exacta.
+    const byRemainder = exact
+      .map((item, index) => ({ index }))
+      .sort((a, b) => exact[b.index]!.remainder - exact[a.index]!.remainder || a.index - b.index);
+
+    for (let i = 0; i < missing; i += 1) {
+      const target = byRemainder[i];
+      if (target) {
+        exact[target.index]!.amount += 1;
+      }
+    }
+
+    const result = exact.map((item) => {
+      const rule = item.rule;
+      if (item.amount <= 0) {
+        throw new BadRequestException(
+          'El monto del ingreso es demasiado pequeño para la política: una regla generaría 0 unidades',
+        );
+      }
+      return {
+        destinationType: rule.destinationType,
+        fundId: rule.fundId,
+        amountMinor: item.amount,
+      };
+    });
+
+    const total = result.reduce((sum, item) => sum + item.amountMinor, 0);
+    if (total !== amountMinor) {
+      throw new BadRequestException(
+        `Error de asignación: la suma generada (${total}) no coincide con ${amountMinor}`,
+      );
+    }
+    return result;
+  }
 
   private assertAdminOrOperator(userRoles: string[], action: string): void {
     if (!this.validators.isAdminOrOperator(userRoles)) {

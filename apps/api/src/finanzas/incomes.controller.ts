@@ -15,6 +15,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { IncomesService } from './incomes.service';
+import { IncomeApplicationsService } from './income-applications.service';
+import { IncomeApplicationPlanResponseDto } from './income-applications.dto';
 import {
   CreateIncomeDto,
   UpdateIncomeDto,
@@ -28,7 +30,10 @@ import {
 @Controller('tenants/:tenantId/finance/incomes')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class IncomesController {
-  constructor(private readonly incomesService: IncomesService) {}
+  constructor(
+    private readonly incomesService: IncomesService,
+    private readonly incomeApplicationsService: IncomeApplicationsService,
+  ) {}
 
   @Get()
   async listIncomes(
@@ -90,6 +95,19 @@ export class IncomesController {
     @Request() req: AuthenticatedRequest,
   ): Promise<IncomeResponseDto> {
     return this.incomesService.recordIncome(
+      req.tenantId!,
+      incomeId,
+      req.user.membershipId ?? '',
+      req.user.roles ?? [],
+    );
+  }
+
+  @Post(':incomeId/apply-policy')
+  async applyPolicy(
+    @Param('incomeId') incomeId: string,
+    @Request() req: AuthenticatedRequest,
+  ): Promise<IncomeApplicationPlanResponseDto> {
+    return this.incomeApplicationsService.applyPolicy(
       req.tenantId!,
       incomeId,
       req.user.membershipId ?? '',
