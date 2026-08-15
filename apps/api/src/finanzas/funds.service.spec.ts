@@ -40,6 +40,7 @@ const makeTransaction = (overrides: Record<string, unknown> = {}) => ({
   createdByMembershipId: 'member-1',
   idempotencyKey: null,
   reversalOfTransactionId: null,
+  incomeApplicationId: null,
   createdAt: new Date(),
   ...overrides,
 });
@@ -727,6 +728,47 @@ describe('FundsService', () => {
       await expect(
         service.reverseTransaction('tenant-1', 'fund-1', 'tx-other', 'member-1', roles),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects a generic reversal of a transaction owned by an IncomeApplication', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fundTransaction.findFirst as jest.Mock).mockResolvedValue(
+        makeTransaction({
+          direction: FundTransactionDirection.CREDIT,
+          amountMinor: 3000,
+          incomeApplicationId: 'app-1',
+        }),
+      );
+
+      await expect(
+        service.reverseTransaction('tenant-1', 'fund-1', 'tx-1', 'member-1', roles),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('still allows a generic reversal of a manual FundTransaction (no incomeApplicationId)', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fundTransaction.findFirst as jest.Mock).mockResolvedValue(
+        makeTransaction({
+          direction: FundTransactionDirection.CREDIT,
+          amountMinor: 50000,
+          incomeApplicationId: null,
+        }),
+      );
+      (prisma.fundTransaction.findUnique as jest.Mock).mockResolvedValue(null);
+      mockLedger([{ currencyCode: 'USD', amountMinor: 50000 }], []);
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue(
+        makeTransaction({
+          id: 'tx-reversal',
+          direction: FundTransactionDirection.DEBIT,
+          amountMinor: 50000,
+          reversalOfTransactionId: 'tx-1',
+        }),
+      );
+
+      const result = await service.reverseTransaction('tenant-1', 'fund-1', 'tx-1', 'member-1', roles);
+      expect(result.reversalOfTransactionId).toBe('tx-1');
+      expect(prisma.fundTransaction.create).toHaveBeenCalledTimes(1);
     });
 
     it('rejects a credit reversal (→ DEBIT) that would make the balance negative', async () => {

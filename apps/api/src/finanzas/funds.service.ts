@@ -18,17 +18,9 @@ import {
   ReverseFundTransactionDto,
   FundTransactionResponseDto,
 } from './funds.dto';
-
-const ADVISORY_LOCK_TAG = 'buildingos_fund_lock_v1';
-
-/**
- * Genera un advisory lock key estable por (tenantId, fundId).
- * Usado dentro de $transaction para serializar operaciones que leen/escriben
- * el ledger de un fondo (balance-guard bajo concurrencia).
- */
-function fundAdvisoryLockKey(tenantId: string, fundId: string): string {
-  return `${ADVISORY_LOCK_TAG}:${tenantId}:${fundId}`;
-}
+import {
+  acquireFundLock,
+} from './fund-locks';
 
 type FundWithBalance = Prisma.FundGetPayload<Record<string, never>> & {
   balancesByCurrency: Array<{ currency: string; amountMinor: number }>;
@@ -241,7 +233,7 @@ export class FundsService {
       // Mismo advisory lock que createTransaction/reverseTransaction: serializa
       // la transición ACTIVE→ARCHIVED contra mutaciones de saldo (evita
       // archivar un fondo con saldo no cero creado por un CREDIT concurrente).
-      await this.acquireFundLock(tx, tenantId, fundId);
+      await acquireFundLock(tx, tenantId, fundId);
 
       const fund = await tx.fund.findFirst({
         where: { id: fundId, tenantId },
@@ -339,7 +331,7 @@ export class FundsService {
     try {
       transaction = await this.prisma.$transaction(async (tx) => {
         // Advisory lock: serializa balance-guard y creación del movimiento
-        await this.acquireFundLock(tx, tenantId, fundId);
+        await acquireFundLock(tx, tenantId, fundId);
 
         const fund = await tx.fund.findFirst({
           where: { id: fundId, tenantId },
@@ -432,7 +424,7 @@ export class FundsService {
     this.assertAdminOrOperator(userRoles, 'reversar movimientos de fondos');
 
     return this.prisma.$transaction(async (tx) => {
-      await this.acquireFundLock(tx, tenantId, fundId);
+      await acquireFundLock(tx, tenantId, fundId);
 
       const fund = await tx.fund.findFirst({
         where: { id: fundId, tenantId },
@@ -452,6 +444,14 @@ export class FundsService {
       }
       if (original.reversalOfTransactionId !== null) {
         throw new ConflictException('No se puede reversar un movimiento que ya es una reversa');
+      }
+      // FIN-03: un FundTransaction gestionado por IncomeApplication NO puede
+      // reversarse por el endpoint genérico de Funds. Su reversa la controla
+      // voidIncome (void del Income). Evita desbalancear un plan publicado.
+      if (original.incomeApplicationId !== null) {
+        throw new ConflictException(
+          'Este movimiento pertenece a una aplicación de ingreso; reversar vía void del Income',
+        );
       }
 
       // Una transacción solo puede revertirse una vez (unique + check explícito)
@@ -706,16 +706,6 @@ export class FundsService {
       );
     }
     return result;
-  }
-
-  private async acquireFundLock(
-    tx: Prisma.TransactionClient,
-    tenantId: string,
-    fundId: string,
-  ): Promise<void> {
-    await tx.$executeRaw(
-      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${fundAdvisoryLockKey(tenantId, fundId)}, 0))`,
-    );
   }
 
   private async assertSufficientBalance(
