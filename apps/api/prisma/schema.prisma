@@ -147,6 +147,31 @@ enum LiquidationValuationMode {
   LEGACY_NOMINAL
 }
 
+// ============================================================================
+// FINANZAS: Funds (Fondos financieros del condominio — FIN-02)
+// ============================================================================
+
+enum FundScopeType {
+  TENANT    // Fondo a nivel tenant (compartido entre edificios)
+  BUILDING  // Fondo específico de un edificio
+}
+
+enum FundType {
+  RESERVE   // Fondo de reserva
+  SPECIAL   // Fondo específico (ascensores, emergencias, fachada, etc.)
+  OTHER     // Otros fondos personalizados
+}
+
+enum FundStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum FundTransactionDirection {
+  CREDIT    // Aumenta el saldo del fondo
+  DEBIT     // Disminuye el saldo del fondo
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -267,6 +292,8 @@ model Tenant {
   unitBalanceSnapshots  UnitBalanceMonthlySnapshot[]
   buildingBalanceSnapshots BuildingBalanceMonthlySnapshot[]
   exchangeRates         ExchangeRate[]
+  funds                 Fund[]
+  fundTransactions      FundTransaction[]
 }
 
 model User {
@@ -338,6 +365,9 @@ model Membership {
   aiActionEvents        AiActionEvent[]
   planChangeRequests    PlanChangeRequest[]   @relation("PlanRequestRequestedBy")
   exchangeRatesCreated  ExchangeRate[]        @relation("ExchangeRateCreatedBy")
+  fundsCreated          Fund[]                @relation("FundCreatedBy")
+  fundsArchived         Fund[]                @relation("FundArchivedBy")
+  fundTransactionsCreated FundTransaction[]   @relation("FundTransactionCreatedBy")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -474,6 +504,7 @@ model Building {
   unitGroupMembers    UnitGroupMember[]
   liquidations         Liquidation[]
   adjustments          Adjustment[]
+  funds                Fund[]
   unitAssociations     UnitAssociation[]
   balanceSnapshots     BuildingBalanceMonthlySnapshot[]
   unitBalanceSnapshots UnitBalanceMonthlySnapshot[]
@@ -772,6 +803,12 @@ enum AuditAction {
   INCOME_RECORD
   INCOME_VOID
   INCOME_ALLOCATION_CREATE
+  // FUNDS (FIN-02)
+  FUND_CREATE
+  FUND_UPDATE
+  FUND_ARCHIVE
+  FUND_TRANSACTION_CREATE
+  FUND_TRANSACTION_REVERSE
   // UNIT GROUPS & ALLOCATIONS
   UNIT_GROUP_CREATE
   UNIT_GROUP_DELETE
@@ -2041,6 +2078,67 @@ model UnitGroupMember {
   @@index([tenantId, buildingId])
   @@index([unitGroupId])
   @@index([unitId])
+}
+
+// ============================================================================
+// FINANZAS: Fund + FundTransaction (Ledger auditable por moneda — FIN-02)
+// ============================================================================
+// El saldo de un fondo NO se persiste como cifra mutable: se deriva siempre
+// de la suma del ledger (CREDIT suma, DEBIT resta) por moneda.
+// ============================================================================
+model Fund {
+  id                       String       @id @default(cuid())
+  tenantId                 String
+  buildingId               String?      // REQUIRED si scopeType=BUILDING; null si TENANT
+  scopeType                FundScopeType
+  type                     FundType
+  name                     String
+  description              String?
+  status                   FundStatus   @default(ACTIVE)
+  createdByMembershipId    String
+  archivedByMembershipId   String?
+  archivedAt               DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  building   Building?          @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  createdBy  Membership         @relation("FundCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  archivedBy Membership?        @relation("FundArchivedBy", fields: [archivedByMembershipId], references: [id], onDelete: SetNull)
+  transactions FundTransaction[]
+
+  @@index([tenantId])
+  @@index([tenantId, buildingId])
+  @@index([tenantId, status])
+  @@index([tenantId, scopeType])
+}
+
+model FundTransaction {
+  id                       String                    @id @default(cuid())
+  tenantId                 String
+  fundId                   String
+  direction                FundTransactionDirection
+  amountMinor              Int                       // Siempre > 0 (el signo lo da direction)
+  currencyCode             String                    // ISO: USD, VES, ARS, COP (contrato CANONICAL_CURRENCIES)
+  occurredAt               DateTime                  // Fecha económica del movimiento
+  description              String?
+  createdByMembershipId    String
+  idempotencyKey           String?                   // Retry-safe: (tenantId, idempotencyKey) único
+  reversalOfTransactionId  String?                   // Si es un reversal, referencia al movimiento original
+  createdAt                DateTime                  @default(now())
+
+  fund      Fund             @relation(fields: [fundId], references: [id], onDelete: Restrict)
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy Membership       @relation("FundTransactionCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reversalOf FundTransaction? @relation("FundTransactionReversal", fields: [reversalOfTransactionId], references: [id], onDelete: Restrict)
+  reversals  FundTransaction[] @relation("FundTransactionReversal")
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([reversalOfTransactionId])
+  @@index([tenantId, fundId])
+  @@index([tenantId, fundId, createdAt])
+  @@index([tenantId, fundId, currencyCode])
+  @@index([tenantId, currencyCode])
 }
 
 // ============================================================================
