@@ -383,7 +383,10 @@ describePostgres('IncomeApplications PostgreSQL (FIN-03)', () => {
     const planB = { applications: [{ destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 6000 }, { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 }, { destinationType: IncomeApplicationDestination.CARRY_FORWARD, amountMinor: 1000 }] };
 
     const [a, b] = await Promise.all([
-      appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, planA).then(() => ({ ok: true as const })),
+      appsService.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, planA).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, conflict: error instanceof NestConflictException }),
+      ),
       svcB.createPlan(ctx.tenant.id, income.id, ctx.membership.id, roles, planB).then(
         () => ({ ok: true as const }),
         (error: unknown) => ({ ok: false as const, conflict: error instanceof NestConflictException }),
@@ -489,7 +492,10 @@ describePostgres('IncomeApplications PostgreSQL (FIN-03)', () => {
           { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
           { destinationType: IncomeApplicationDestination.FUND, fundId: fund.id, amountMinor: 3000 },
         ],
-      }).then(() => ({ ok: true as const })),
+      }).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
+      ),
       svcB.incomes.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles).then(
         () => ({ ok: true as const }),
         (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
@@ -497,29 +503,33 @@ describePostgres('IncomeApplications PostgreSQL (FIN-03)', () => {
     ]);
 
     const incomeAfter = await observer.income.findUniqueOrThrow({ where: { id: income.id } });
-    const credits = await observer.fundTransaction.count({ where: { fundId: fund.id, direction: FundTransactionDirection.CREDIT } });
-    const debits = await observer.fundTransaction.count({ where: { fundId: fund.id, direction: FundTransactionDirection.DEBIT } });
-    const net = credits - debits;
+    const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+      FROM "FundTransaction" WHERE "fundId" = ${fund.id} AND "tenantId" = ${ctx.tenant.id}
+    `;
+    const balance = Number(balanceRows[0]?.total ?? 0);
 
-    // Outcome 1: plan primero → void reversa → VOID + net 0
-    // Outcome 2: void primero → plan rechaza → VOID + net 0
-    // Nunca: crédito efectivo posterior a VOID
+    // El lock del Income serializa. Quien corre segundo completa su operación:
+    // - plan primero → void corre después → reversa → Income VOID, balance 0
+    // - void primero → plan corre después → rechaza (RECORDED requerido) → Income VOID, balance 0
+    // Resultado SIEMPRE: Income VOID, balance 0, void ok, plan ok o rechazado.
     expect(incomeAfter.status).toBe(IncomeStatus.VOID);
-    if (net > 0) {
-      // Si quedó crédito sin reversar, el plan habría ganado Y void fallado:
-      // solo válido si el Income NO quedó VOID.
-      expect(planResult.ok).toBe(true);
-      expect(voidResult.ok).toBe(false);
+    expect(balance).toBe(0);
+    expect(voidResult.ok).toBe(true);
+    expect(balance).toBeGreaterThanOrEqual(0);
+
+    // Serializabilidad: si el plan ganó (ok), el CREDIT creado fue reversado por
+    // void (balance 0). Si el plan perdió, fue rechazado por estado VOID.
+    // Ambas ramas terminan en Income VOID + balance 0 (verificado arriba).
+    const txs = await observer.fundTransaction.findMany({ where: { fundId: fund.id } });
+    if (planResult.ok) {
+      // plan primero: CREDIT + reversal DEBIT (2 txs)
+      expect(txs).toHaveLength(2);
+      expect(txs[0]!.direction).toBe(FundTransactionDirection.CREDIT);
+      expect(txs[1]!.direction).toBe(FundTransactionDirection.DEBIT);
     } else {
-      expect(net).toBe(0);
-    }
-    // Invariante crítico: no puede haber CREDIT efectivo sin reversal con Income VOID
-    if (incomeAfter.status === IncomeStatus.VOID) {
-      const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
-        SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
-        FROM "FundTransaction" WHERE "fundId" = ${fund.id} AND "tenantId" = ${ctx.tenant.id}
-      `;
-      expect(Number(balanceRows[0]?.total ?? 0)).toBe(0);
+      // void primero: 0 txs (plan rechazado)
+      expect(txs).toHaveLength(0);
     }
   }, 30000);
 
