@@ -220,6 +220,11 @@ export class FundsService {
     this.assertAdminOrOperator(userRoles, 'archivar fondos');
 
     return this.prisma.$transaction(async (tx) => {
+      // Mismo advisory lock que createTransaction/reverseTransaction: serializa
+      // la transición ACTIVE→ARCHIVED contra mutaciones de saldo (evita
+      // archivar un fondo con saldo no cero creado por un CREDIT concurrente).
+      await this.acquireFundLock(tx, tenantId, fundId);
+
       const fund = await tx.fund.findFirst({
         where: { id: fundId, tenantId },
       });
@@ -312,27 +317,27 @@ export class FundsService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // Advisory lock: serializa balance-guard y creación del movimiento
-      await this.acquireFundLock(tx, tenantId, fundId);
+    let transaction: Prisma.FundTransactionGetPayload<Record<string, never>>;
+    try {
+      transaction = await this.prisma.$transaction(async (tx) => {
+        // Advisory lock: serializa balance-guard y creación del movimiento
+        await this.acquireFundLock(tx, tenantId, fundId);
 
-      const fund = await tx.fund.findFirst({
-        where: { id: fundId, tenantId },
-      });
-      if (!fund) {
-        throw new NotFoundException('Fondo no encontrado o no pertenece al tenant');
-      }
-      if (fund.status === FundStatus.ARCHIVED) {
-        throw new BadRequestException('No se pueden registrar movimientos en un fondo archivado');
-      }
+        const fund = await tx.fund.findFirst({
+          where: { id: fundId, tenantId },
+        });
+        if (!fund) {
+          throw new NotFoundException('Fondo no encontrado o no pertenece al tenant');
+        }
+        if (fund.status === FundStatus.ARCHIVED) {
+          throw new BadRequestException('No se pueden registrar movimientos en un fondo archivado');
+        }
 
-      if (dto.direction === FundTransactionDirection.DEBIT) {
-        await this.assertSufficientBalance(tx, tenantId, fundId, dto.currencyCode, dto.amountMinor);
-      }
+        if (dto.direction === FundTransactionDirection.DEBIT) {
+          await this.assertSufficientBalance(tx, tenantId, fundId, dto.currencyCode, dto.amountMinor);
+        }
 
-      let transaction: Prisma.FundTransactionGetPayload<Record<string, never>>;
-      try {
-        transaction = await tx.fundTransaction.create({
+        const created = await tx.fundTransaction.create({
           data: {
             tenantId,
             fundId,
@@ -345,51 +350,55 @@ export class FundsService {
             idempotencyKey: dto.idempotencyKey ?? null,
           },
         });
-      } catch (error) {
-        // Race de idempotencyKey (unique (tenantId, idempotencyKey)): otra
-        // request creó el movimiento entre el findUnique y el create.
-        if (
-          dto.idempotencyKey &&
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === 'P2002'
-        ) {
-          const existing = await tx.fundTransaction.findUnique({
-            where: {
-              tenantId_idempotencyKey: {
-                tenantId,
-                idempotencyKey: dto.idempotencyKey,
-              },
+
+        await this.auditService.createLogRequired(
+          {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'FUND_TRANSACTION_CREATE',
+            entityType: 'FundTransaction',
+            entityId: created.id,
+            metadata: {
+              fundId,
+              direction: dto.direction,
+              amountMinor: dto.amountMinor,
+              currencyCode: dto.currencyCode,
+              occurredAt: dto.occurredAt,
+              idempotencyKey: dto.idempotencyKey ?? null,
             },
-          });
-          if (existing) {
-            await this.assertSameOperation(existing, fundId, dto);
-            return this.toTransactionDto(existing);
-          }
-        }
-        throw error;
-      }
-
-      await this.auditService.createLogRequired(
-        {
-          tenantId,
-          actorMembershipId: membershipId,
-          action: 'FUND_TRANSACTION_CREATE',
-          entityType: 'FundTransaction',
-          entityId: transaction.id,
-          metadata: {
-            fundId,
-            direction: dto.direction,
-            amountMinor: dto.amountMinor,
-            currencyCode: dto.currencyCode,
-            occurredAt: dto.occurredAt,
-            idempotencyKey: dto.idempotencyKey ?? null,
           },
-        },
-        tx,
-      );
+          tx,
+        );
 
-      return this.toTransactionDto(transaction);
-    });
+        return created;
+      });
+    } catch (error) {
+      // Race de idempotencyKey (unique (tenantId, idempotencyKey)): otra request
+      // creó el movimiento entre el pre-check y el create. El unique violation
+      // aborta el tx PostgreSQL, así que NO se consulta con el mismo tx.
+      // Se deja el tx rollbackear y se consulta FUERA con this.prisma.
+      if (
+        dto.idempotencyKey &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const winner = await this.prisma.fundTransaction.findUnique({
+          where: {
+            tenantId_idempotencyKey: {
+              tenantId,
+              idempotencyKey: dto.idempotencyKey,
+            },
+          },
+        });
+        if (winner) {
+          await this.assertSameOperation(winner, fundId, dto);
+          return this.toTransactionDto(winner);
+        }
+      }
+      throw error;
+    }
+
+    return this.toTransactionDto(transaction);
   }
 
   async reverseTransaction(

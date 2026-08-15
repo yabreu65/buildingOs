@@ -1,4 +1,8 @@
 import { FundTransactionDirection, PrismaClient, TenantType } from '@prisma/client';
+import { FundsService } from './funds.service';
+import { AuditService } from '../audit/audit.service';
+import { FinanzasValidators } from './finanzas.validators';
+import { PrismaService } from '../prisma/prisma.service';
 
 const ACCEPTANCE_DATABASES = new Set(['buildingos_fin02_acceptance']);
 const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
@@ -13,9 +17,21 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
   let observer: PrismaClient;
   let firstClient: PrismaClient;
   let secondClient: PrismaClient;
+  let service: FundsService;
   const tenantIds: string[] = [];
   const userIds: string[] = [];
   const membershipIds: string[] = [];
+
+  /**
+   * Instancia FundsService real sobre un PrismaClient real de la DB de
+   * aceptación (gated). El auditoría es real: escribe AuditLog en el tenant.
+   */
+  function buildService(client: PrismaClient): FundsService {
+    const prisma = client as unknown as PrismaService;
+    const audit = new AuditService(prisma);
+    const validators = new FinanzasValidators(prisma);
+    return new FundsService(prisma, audit, validators);
+  }
 
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -27,6 +43,7 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
     if (database?.name !== expectedDatabaseName || !ACCEPTANCE_DATABASES.has(database.name)) {
       throw new Error(`Refusing destructive test database ${database?.name ?? 'unknown'}`);
     }
+    service = buildService(firstClient);
   });
 
   afterEach(async () => {
@@ -77,17 +94,6 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
       },
     });
     return { tenant, membership, fund };
-  }
-
-  async function waitUntilBlocked(pid: number): Promise<void> {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const [activity] = await observer.$queryRaw<Array<{ wait_event_type: string | null }>>`
-        SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}
-      `;
-      if (activity?.wait_event_type === 'Lock') return;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    throw new Error(`Backend ${pid} did not reach a database lock wait`);
   }
 
   async function waitUntilBlocked(pid: number): Promise<void> {
@@ -276,5 +282,219 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
       observer.building.delete({ where: { id: building.id } }),
     ).rejects.toThrow(/foreign key|Foreign key|constraint/);
     expect(await observer.fund.count({ where: { buildingId: building.id } })).toBe(1);
+  }, 20000);
+
+  it('serializes archiveFund against a concurrent CREDIT (never ARCHIVED with non-zero balance)', async () => {
+    const ctx = await fixture('archive-race');
+
+    // 5 iteraciones: el resultado permitido es serializable (archive gana → credit
+    // falla y balance 0; o credit gana → archive falla y balance 100). Prohibido:
+    // fund ARCHIVED con balance != 0.
+    for (let iteration = 0; iteration < 5; iteration += 1) {
+      const raceService = buildService(firstClient);
+      const creditService = buildService(secondClient);
+
+      const [archiveResult, creditResult] = await Promise.all([
+        raceService.archiveFund(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN']).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, message: error instanceof Error ? error.message : String(error) }),
+        ),
+        creditService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+          direction: FundTransactionDirection.CREDIT,
+          amountMinor: 100,
+          currencyCode: 'USD',
+          occurredAt: new Date().toISOString(),
+        }).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, message: error instanceof Error ? error.message : String(error) }),
+        ),
+      ]);
+
+      const fund = await observer.fund.findUniqueOrThrow({ where: { id: ctx.fund.id } });
+      const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+        SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+        FROM "FundTransaction" WHERE "fundId" = ${ctx.fund.id} AND "tenantId" = ${ctx.tenant.id}
+      `;
+      const balance = Number(balanceRows[0]?.total ?? 0);
+
+      const archiveWon = archiveResult.ok;
+      const creditWon = creditResult.ok;
+      if (archiveWon) {
+        // archive gana → credit debe fallar y balance 0
+        expect(fund.status).toBe('ARCHIVED');
+        expect(creditWon).toBe(false);
+        expect(balance).toBe(0);
+      } else {
+        // credit gana → archive falla (saldo != 0) y fund ACTIVE con balance 100
+        expect(fund.status).toBe('ACTIVE');
+        expect(creditWon).toBe(true);
+        expect(balance).toBe(100);
+      }
+      expect(archiveWon || creditWon).toBe(true);
+
+      // Reset para la siguiente iteración: restaurar fund ACTIVE con balance 0
+      // (el escenario original) borrando el ledger y el estado archivado.
+      await observer.fundTransaction.deleteMany({ where: { fundId: ctx.fund.id } });
+      await observer.fund.update({
+        where: { id: ctx.fund.id },
+        data: { status: 'ACTIVE', archivedAt: null, archivedByMembershipId: null },
+      });
+    }
+  }, 30000);
+
+  it('dedupes concurrent same-operation idempotencyKey (one persisted row, balance applied once)', async () => {
+    const ctx = await fixture('idem-same');
+    const firstService = buildService(firstClient);
+    const secondService = buildService(secondClient);
+    const key = `idem-same-${Date.now()}`;
+
+    const [a, b] = await Promise.all([
+      firstService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 50000,
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: key,
+      }).then((r) => ({ ok: true as const, id: r.id })),
+      secondService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 50000,
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: key,
+      }).then((r) => ({ ok: true as const, id: r.id })),
+    ]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(a.id).toBe(b.id);
+
+    const rowCount = await observer.fundTransaction.count({
+      where: { tenantId: ctx.tenant.id, fundId: ctx.fund.id, idempotencyKey: key },
+    });
+    expect(rowCount).toBe(1);
+
+    const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+      FROM "FundTransaction" WHERE "fundId" = ${ctx.fund.id} AND "tenantId" = ${ctx.tenant.id}
+    `;
+    expect(Number(balanceRows[0]?.total ?? 0)).toBe(50000);
+  }, 20000);
+
+  it('rejects concurrent different-operation on the same idempotencyKey (ConflictException)', async () => {
+    const ctx = await fixture('idem-diff');
+    const firstService = buildService(firstClient);
+    const secondService = buildService(secondClient);
+    const key = `idem-diff-${Date.now()}`;
+
+    const [a, b] = await Promise.all([
+      firstService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 50000,
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: key,
+      }).then((r) => ({ ok: true as const, id: r.id })),
+      secondService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 99999, // operación materialmente diferente
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: key,
+      }).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({
+          ok: false as const,
+          conflict: error instanceof Error && error.message.includes('idempotencyKey'),
+        }),
+      ),
+    ]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(false);
+    expect(b.conflict).toBe(true);
+
+    const rowCount = await observer.fundTransaction.count({
+      where: { tenantId: ctx.tenant.id, fundId: ctx.fund.id, idempotencyKey: key },
+    });
+    expect(rowCount).toBe(1);
+
+    const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+      FROM "FundTransaction" WHERE "fundId" = ${ctx.fund.id} AND "tenantId" = ${ctx.tenant.id}
+    `;
+    expect(Number(balanceRows[0]?.total ?? 0)).toBe(50000);
+  }, 20000);
+
+  it('enforces amountMinor > 0 at the database level', async () => {
+    const ctx = await fixture('amount-minor');
+    const base = {
+      tenantId: ctx.tenant.id,
+      fundId: ctx.fund.id,
+      direction: FundTransactionDirection.CREDIT,
+      currencyCode: 'USD',
+      occurredAt: new Date(),
+      createdByMembershipId: ctx.membership.id,
+    } as const;
+
+    await expect(
+      observer.fundTransaction.create({ data: { ...base, amountMinor: 0 } }),
+    ).rejects.toThrow(/check constraint|Check|amountMinor/);
+    await expect(
+      observer.fundTransaction.create({ data: { ...base, amountMinor: -1 } }),
+    ).rejects.toThrow(/check constraint|Check|amountMinor/);
+    await observer.fundTransaction.create({ data: { ...base, amountMinor: 1 } });
+    expect(
+      await observer.fundTransaction.count({ where: { fundId: ctx.fund.id } }),
+    ).toBe(1);
+  }, 20000);
+
+  it('enforces the fund scope invariant (TENANT⇒null, BUILDING⇒not-null) at the database level', async () => {
+    const ctx = await fixture('scope-invariant');
+
+    // TENANT con buildingId → rechazado por DB
+    const building = await observer.building.create({
+      data: { tenantId: ctx.tenant.id, name: `S-${Date.now()}`, alias: `S-${Date.now()}`, address: 'x' },
+    });
+    await expect(
+      observer.fund.create({
+        data: {
+          tenantId: ctx.tenant.id,
+          buildingId: building.id,
+          scopeType: 'TENANT',
+          type: 'RESERVE',
+          name: `Invalid TENANT ${Date.now()}`,
+          createdByMembershipId: ctx.membership.id,
+        },
+      }),
+    ).rejects.toThrow(/check constraint|Check|scope/);
+
+    // BUILDING sin buildingId → rechazado por DB
+    await expect(
+      observer.fund.create({
+        data: {
+          tenantId: ctx.tenant.id,
+          scopeType: 'BUILDING',
+          type: 'RESERVE',
+          name: `Invalid BUILDING ${Date.now()}`,
+          createdByMembershipId: ctx.membership.id,
+        },
+      }),
+    ).rejects.toThrow(/check constraint|Check|scope/);
+
+    // BUILDING con buildingId → permitido (fixture ya creó 1 fund TENANT)
+    await observer.fund.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        buildingId: building.id,
+        scopeType: 'BUILDING',
+        type: 'RESERVE',
+        name: `Valid BUILDING ${Date.now()}`,
+        createdByMembershipId: ctx.membership.id,
+      },
+    });
+    expect(
+      await observer.fund.count({ where: { tenantId: ctx.tenant.id } }),
+    ).toBe(2); // 1 fixture TENANT + 1 BUILDING válido
   }, 20000);
 });

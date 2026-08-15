@@ -54,7 +54,16 @@ CREATE TABLE "FundTransaction" (
     "reversalOfTransactionId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "FundTransaction_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "FundTransaction_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "FundTransaction_amountMinor_positive" CHECK ("amountMinor" > 0)
+);
+
+-- CheckConstraint Fund scope invariant (FIN-02Q)
+-- scopeType TENANT => buildingId NULL; scopeType BUILDING => buildingId NOT NULL
+ALTER TABLE "Fund" ADD CONSTRAINT "Fund_scope_building_invariant" CHECK (
+  ("scopeType" = 'TENANT' AND "buildingId" IS NULL)
+  OR
+  ("scopeType" = 'BUILDING' AND "buildingId" IS NOT NULL)
 );
 
 -- AddForeignKey Fund
