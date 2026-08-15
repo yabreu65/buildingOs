@@ -106,21 +106,45 @@ export class FundsService {
 
     let fund: Prisma.FundGetPayload<Record<string, never>>;
     try {
-      fund = await this.prisma.fund.create({
-        data: {
-          tenantId,
-          buildingId: dto.scopeType === 'BUILDING' ? dto.buildingId : null,
-          scopeType: dto.scopeType,
-          type: dto.type,
-          name: dto.name.trim(),
-          description: dto.description?.trim() || null,
-          status: FundStatus.ACTIVE,
-          createdByMembershipId: membershipId,
-        },
+      // Fund.create + FUND_CREATE audit en la MISMA transacción (ALL OR NOTHING).
+      // Si el audit falla, el Fund no persiste.
+      fund = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.fund.create({
+          data: {
+            tenantId,
+            buildingId: dto.scopeType === 'BUILDING' ? dto.buildingId : null,
+            scopeType: dto.scopeType,
+            type: dto.type,
+            name: dto.name.trim(),
+            description: dto.description?.trim() || null,
+            status: FundStatus.ACTIVE,
+            createdByMembershipId: membershipId,
+          },
+        });
+
+        await this.auditService.createLogRequired(
+          {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'FUND_CREATE',
+            entityType: 'Fund',
+            entityId: created.id,
+            metadata: {
+              scopeType: dto.scopeType,
+              buildingId: created.buildingId,
+              type: dto.type,
+              name: created.name,
+            },
+          },
+          tx,
+        );
+
+        return created;
       });
     } catch (error) {
       // Race de nombre activo (unique parcial Fund_active_name_*): otra request
       // creó un fondo activo con el mismo nombre normalizado en el mismo scope.
+      // El unique violation aborta el tx; se captura FUERA de la transacción.
       if (this.isActiveNameUniqueViolation(error)) {
         throw new ConflictException(
           'Ya existe un fondo activo con el mismo nombre en este alcance',
@@ -128,23 +152,6 @@ export class FundsService {
       }
       throw error;
     }
-
-    await this.auditService.createLogRequired(
-      {
-        tenantId,
-        actorMembershipId: membershipId,
-        action: 'FUND_CREATE',
-        entityType: 'Fund',
-        entityId: fund.id,
-        metadata: {
-          scopeType: dto.scopeType,
-          buildingId: fund.buildingId,
-          type: dto.type,
-          name: fund.name,
-        },
-      },
-      this.prisma,
-    );
 
     return this.toFundDto(fund, []);
   }
@@ -177,14 +184,35 @@ export class FundsService {
 
     let updated: Prisma.FundGetPayload<Record<string, never>>;
     try {
-      updated = await this.prisma.fund.update({
-        where: { id: fund.id },
-        data: {
-          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-          ...(dto.description !== undefined
-            ? { description: dto.description?.trim() || null }
-            : {}),
-        },
+      // fund.update + FUND_UPDATE audit en la MISMA transacción (ALL OR NOTHING).
+      // Si el audit falla, name/description hacen rollback.
+      updated = await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.fund.update({
+          where: { id: fund.id },
+          data: {
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            ...(dto.description !== undefined
+              ? { description: dto.description?.trim() || null }
+              : {}),
+          },
+        });
+
+        await this.auditService.createLogRequired(
+          {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'FUND_UPDATE',
+            entityType: 'Fund',
+            entityId: fund.id,
+            metadata: {
+              before: { name: fund.name },
+              after: { name: changed.name },
+            },
+          },
+          tx,
+        );
+
+        return changed;
       });
     } catch (error) {
       if (this.isActiveNameUniqueViolation(error)) {
@@ -194,18 +222,6 @@ export class FundsService {
       }
       throw error;
     }
-
-    await this.auditService.createLogRequired(
-      {
-        tenantId,
-        actorMembershipId: membershipId,
-        action: 'FUND_UPDATE',
-        entityType: 'Fund',
-        entityId: fund.id,
-        metadata: { before: { name: fund.name }, after: { name: updated.name } },
-      },
-      this.prisma,
-    );
 
     const balances = await this.loadBalancesForFunds(tenantId, [updated.id]);
     return this.toFundDto(updated, balances.get(updated.id) ?? []);

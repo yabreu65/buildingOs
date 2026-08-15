@@ -806,5 +806,76 @@ describe('FundsService', () => {
         expect.anything(),
       );
     });
+
+    it('createFund writes FUND_CREATE audit with the transaction client', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.create as jest.Mock).mockResolvedValue(makeFund());
+
+      await service.createFund('tenant-1', 'member-1', roles, {
+        scopeType: 'TENANT',
+        type: 'RESERVE',
+        name: 'Fondo de reserva',
+      });
+
+      expect(audit.createLogRequired).toHaveBeenCalledTimes(1);
+      expect(audit.createLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'FUND_CREATE', entityId: 'fund-1' }),
+        expect.anything(),
+      );
+    });
+
+    it('createFund propagates the error when the required audit fails', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.create as jest.Mock).mockResolvedValue(makeFund());
+      (audit.createLogRequired as jest.Mock).mockRejectedValue(
+        new Error('FORCED_AUDIT_FAILURE'),
+      );
+
+      await expect(
+        service.createFund('tenant-1', 'member-1', roles, {
+          scopeType: 'TENANT',
+          type: 'RESERVE',
+          name: 'Fondo de reserva',
+        }),
+      ).rejects.toThrow('FORCED_AUDIT_FAILURE');
+      // el fund.create se ejecutó dentro del tx, pero el error debe propagarse
+      // (el rollback real lo demuestra el test PostgreSQL)
+    });
+
+    it('updateFund writes FUND_UPDATE audit with the transaction client', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.update as jest.Mock).mockResolvedValue(
+        makeFund({ name: 'Nuevo nombre' }),
+      );
+      mockLedger([], []);
+
+      await service.updateFund('tenant-1', 'fund-1', 'member-1', roles, {
+        name: 'Nuevo nombre',
+      });
+
+      expect(audit.createLogRequired).toHaveBeenCalledTimes(1);
+      expect(audit.createLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'FUND_UPDATE' }),
+        expect.anything(),
+      );
+    });
+
+    it('updateFund propagates the error when the required audit fails', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.update as jest.Mock).mockResolvedValue(
+        makeFund({ name: 'Nuevo nombre' }),
+      );
+      (audit.createLogRequired as jest.Mock).mockRejectedValue(
+        new Error('FORCED_AUDIT_FAILURE'),
+      );
+
+      await expect(
+        service.updateFund('tenant-1', 'fund-1', 'member-1', roles, {
+          name: 'Nuevo nombre',
+        }),
+      ).rejects.toThrow('FORCED_AUDIT_FAILURE');
+    });
   });
 });

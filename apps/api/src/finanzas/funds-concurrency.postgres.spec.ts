@@ -33,6 +33,21 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
     return new FundsService(prisma, audit, validators);
   }
 
+  /**
+   * Igual que buildService pero con un AuditService cuyo createLogRequired
+   * lanza un error controlado (para probar rollback real de la transacción).
+   */
+  function buildServiceWithFailingAudit(client: PrismaClient): FundsService {
+    const prisma = client as unknown as PrismaService;
+    const audit = {
+      createLogRequired: async () => {
+        throw new Error('FORCED_AUDIT_FAILURE');
+      },
+    } as unknown as AuditService;
+    const validators = new FinanzasValidators(prisma);
+    return new FundsService(prisma, audit, validators);
+  }
+
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
     observer = new PrismaClient();
@@ -386,23 +401,33 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
     const firstService = buildService(firstClient);
     const secondService = buildService(secondClient);
     const key = `idem-diff-${Date.now()}`;
+    const firstAmount = 50000;
+    const secondAmount = 99999; // operación materialmente diferente
 
+    // La carrera es indeterminada: exactamente UNO persiste y el otro recibe
+    // ConflictException (sin importar quién gane).
     const [a, b] = await Promise.all([
       firstService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
         direction: FundTransactionDirection.CREDIT,
-        amountMinor: 50000,
-        currencyCode: 'USD',
-        occurredAt: new Date().toISOString(),
-        idempotencyKey: key,
-      }).then((r) => ({ ok: true as const, id: r.id })),
-      secondService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
-        direction: FundTransactionDirection.CREDIT,
-        amountMinor: 99999, // operación materialmente diferente
+        amountMinor: firstAmount,
         currencyCode: 'USD',
         occurredAt: new Date().toISOString(),
         idempotencyKey: key,
       }).then(
-        () => ({ ok: true as const }),
+        (r) => ({ ok: true as const, id: r.id, amount: firstAmount }),
+        (error: unknown) => ({
+          ok: false as const,
+          conflict: error instanceof Error && error.message.includes('idempotencyKey'),
+        }),
+      ),
+      secondService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: secondAmount,
+        currencyCode: 'USD',
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: key,
+      }).then(
+        (r) => ({ ok: true as const, id: r.id, amount: secondAmount }),
         (error: unknown) => ({
           ok: false as const,
           conflict: error instanceof Error && error.message.includes('idempotencyKey'),
@@ -410,20 +435,24 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
       ),
     ]);
 
-    expect(a.ok).toBe(true);
-    expect(b.ok).toBe(false);
-    expect(b.conflict).toBe(true);
+    const winners = [a, b].filter((r) => r.ok);
+    const losers = [a, b].filter((r) => !r.ok);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0]!.conflict).toBe(true);
 
     const rowCount = await observer.fundTransaction.count({
       where: { tenantId: ctx.tenant.id, fundId: ctx.fund.id, idempotencyKey: key },
     });
     expect(rowCount).toBe(1);
 
+    // El balance refleja exactamente el monto de la operación ganadora.
     const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
       SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
       FROM "FundTransaction" WHERE "fundId" = ${ctx.fund.id} AND "tenantId" = ${ctx.tenant.id}
     `;
-    expect(Number(balanceRows[0]?.total ?? 0)).toBe(50000);
+    const balance = Number(balanceRows[0]?.total ?? 0);
+    expect([firstAmount, secondAmount]).toContain(balance);
   }, 20000);
 
   it('enforces amountMinor > 0 at the database level', async () => {
@@ -496,5 +525,51 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
     expect(
       await observer.fund.count({ where: { tenantId: ctx.tenant.id } }),
     ).toBe(2); // 1 fixture TENANT + 1 BUILDING válido
+  }, 20000);
+
+  it('rolls back Fund creation when the required FUND_CREATE audit fails', async () => {
+    const ctx = await fixture('audit-create-rollback');
+    const failingService = buildServiceWithFailingAudit(firstClient);
+    const name = `Audit Rollback ${Date.now()}`;
+
+    await expect(
+      failingService.createFund(ctx.tenant.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        scopeType: 'TENANT',
+        type: 'RESERVE',
+        name,
+      }),
+    ).rejects.toThrow('FORCED_AUDIT_FAILURE');
+
+    // El Fund NO debe persistir: rollback real del create dentro del tx.
+    const count = await observer.fund.count({
+      where: { tenantId: ctx.tenant.id, name },
+    });
+    expect(count).toBe(0);
+  }, 20000);
+
+  it('rolls back Fund metadata changes when the required FUND_UPDATE audit fails', async () => {
+    const ctx = await fixture('audit-update-rollback');
+    const originalName = `Reserva original ${Date.now()}`;
+    const fund = await observer.fund.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        scopeType: 'TENANT',
+        type: 'RESERVE',
+        name: originalName,
+        createdByMembershipId: ctx.membership.id,
+      },
+    });
+
+    const failingService = buildServiceWithFailingAudit(firstClient);
+    await expect(
+      failingService.updateFund(ctx.tenant.id, fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+        name: 'Reserva modificada',
+      }),
+    ).rejects.toThrow('FORCED_AUDIT_FAILURE');
+
+    // El name original debe persistir: rollback real del update dentro del tx.
+    const after = await observer.fund.findUniqueOrThrow({ where: { id: fund.id } });
+    expect(after.name).toBe(originalName);
+    expect(after.name).not.toBe('Reserva modificada');
   }, 20000);
 });
