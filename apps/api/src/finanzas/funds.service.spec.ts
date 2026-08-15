@@ -878,4 +878,93 @@ describe('FundsService', () => {
       ).rejects.toThrow('FORCED_AUDIT_FAILURE');
     });
   });
+
+  // ── Audit metadata null contract (FIN-02T) ──────────────────────────────
+
+  describe('audit metadata null contract', () => {
+    /** Devuelve el metadata del primer createLogRequired invocado. */
+    function lastAuditMetadata(): Record<string, unknown> {
+      expect(audit.createLogRequired).toHaveBeenCalledTimes(1);
+      const call = (audit.createLogRequired as jest.Mock).mock.calls[0] as [
+        { metadata: Record<string, unknown> },
+      ];
+      return call[0].metadata;
+    }
+
+    it('omits buildingId from FUND_CREATE metadata for a TENANT fund (property absent)', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.create as jest.Mock).mockResolvedValue(
+        makeFund({ buildingId: null, scopeType: 'TENANT' }),
+      );
+
+      await service.createFund('tenant-1', 'member-1', roles, {
+        scopeType: 'TENANT',
+        type: 'RESERVE',
+        name: 'Fondo de reserva',
+      });
+
+      const metadata = lastAuditMetadata();
+      expect('buildingId' in metadata).toBe(false);
+      expect(metadata.scopeType).toBe('TENANT');
+      expect(metadata.type).toBe('RESERVE');
+      expect(metadata.name).toBe('Fondo de reserva');
+    });
+
+    it('includes buildingId in FUND_CREATE metadata for a BUILDING fund', async () => {
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.fund.create as jest.Mock).mockResolvedValue(
+        makeFund({ buildingId: 'building-1', scopeType: 'BUILDING' }),
+      );
+
+      await service.createFund('tenant-1', 'member-1', roles, {
+        scopeType: 'BUILDING',
+        buildingId: 'building-1',
+        type: 'SPECIAL',
+        name: 'Fondo ascensores',
+      });
+
+      const metadata = lastAuditMetadata();
+      expect('buildingId' in metadata).toBe(true);
+      expect(metadata.buildingId).toBe('building-1');
+    });
+
+    it('omits idempotencyKey from FUND_TRANSACTION_CREATE metadata when absent', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      mockLedger([], []);
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue(
+        makeTransaction({ idempotencyKey: null }),
+      );
+
+      await service.createTransaction('tenant-1', 'fund-1', 'member-1', roles, {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 50000,
+        currencyCode: 'USD',
+        occurredAt: '2026-08-14T00:00:00.000Z',
+      });
+
+      const metadata = lastAuditMetadata();
+      expect('idempotencyKey' in metadata).toBe(false);
+      expect(metadata.amountMinor).toBe(50000);
+    });
+
+    it('includes idempotencyKey in FUND_TRANSACTION_CREATE metadata when provided', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      mockLedger([], []);
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue(
+        makeTransaction({ idempotencyKey: 'fin02t-key' }),
+      );
+
+      await service.createTransaction('tenant-1', 'fund-1', 'member-1', roles, {
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 50000,
+        currencyCode: 'USD',
+        occurredAt: '2026-08-14T00:00:00.000Z',
+        idempotencyKey: 'fin02t-key',
+      });
+
+      const metadata = lastAuditMetadata();
+      expect('idempotencyKey' in metadata).toBe(true);
+      expect(metadata.idempotencyKey).toBe('fin02t-key');
+    });
+  });
 });
