@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { FundStatus, FundTransactionDirection, IncomeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -14,6 +15,11 @@ import {
   UpdateIncomeDto,
   IncomeResponseDto,
 } from './expense-ledger.dto';
+import {
+  acquireFundLock,
+  acquireIncomeLock,
+} from './fund-locks';
+import { assertSufficientFundBalance } from './fund-ledger';
 
 @Injectable()
 export class IncomesService {
@@ -380,35 +386,159 @@ export class IncomesService {
       throw new ForbiddenException('Solo administradores pueden anular ingresos');
     }
 
-    const income = await this.prisma.income.findFirst({
-      where: { id: incomeId, tenantId },
-      include: { category: true },
+    return this.prisma.$transaction(async (tx) => {
+      // Lock del Income: serializa void contra creación de plan de aplicaciones.
+      await acquireIncomeLock(tx, tenantId, incomeId);
+
+      const income = await tx.income.findFirst({
+        where: { id: incomeId, tenantId },
+        include: { category: true },
+      });
+      if (!income) {
+        throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
+      }
+
+      // Idempotencia: un Income ya VOID se devuelve sin nuevas mutaciones.
+      if (income.status === IncomeStatus.VOID) {
+        return this.toDto(income as unknown as Parameters<typeof this.toDto>[0]);
+      }
+
+      // Reversar automáticamente los FundTransactions CREDIT generados por
+      // IncomeApplication FUND (ledger inmutable: reversa nueva, original intacto).
+      const applications = await tx.incomeApplication.findMany({
+        where: { tenantId, incomeId },
+        include: { fundTransaction: true },
+      });
+
+      const fundIds = [...new Set(
+        applications
+          .map((app) => app.fundId)
+          .filter((fundId): fundId is string => fundId !== null),
+      )].sort();
+
+      // Adquirir locks de Funds en orden determinístico ANTES de validar estado.
+      for (const fundId of fundIds) {
+        await acquireFundLock(tx, tenantId, fundId);
+      }
+
+      // FIN-03R (BLOCKER B): validar cada Fund CON el lock tomado.
+      // ARCHIVED no acepta nuevos movimientos (FIN-02) → rechazar el void completo.
+      if (fundIds.length > 0) {
+        const funds = await tx.fund.findMany({
+          where: { id: { in: fundIds }, tenantId },
+          select: { id: true, status: true },
+        });
+        const fundById = new Map(funds.map((f) => [f.id, f]));
+        for (const fundId of fundIds) {
+          const fund = fundById.get(fundId);
+          if (!fund) {
+            throw new NotFoundException(`Fondo no encontrado o no pertenece al tenant: ${fundId}`);
+          }
+          if (fund.status !== FundStatus.ACTIVE) {
+            throw new BadRequestException(
+              `No se puede anular el ingreso: el fondo está archivado (${fundId})`,
+            );
+          }
+        }
+      }
+
+      // Pre-validar saldo suficiente para TODOS los reversals DEBIT antes de
+      // escribir cualquiera (all-or-nothing: sin reversals parciales).
+      for (const app of applications) {
+        const txRow = app.fundTransaction;
+        if (!txRow || txRow.reversalOfTransactionId !== null) {
+          continue; // sin CREDIT asociado o ya reversado (no duplicar)
+        }
+        const reversalDirection =
+          txRow.direction === FundTransactionDirection.CREDIT
+            ? FundTransactionDirection.DEBIT
+            : FundTransactionDirection.CREDIT;
+        if (reversalDirection === FundTransactionDirection.DEBIT) {
+          await assertSufficientFundBalance(
+            tx,
+            tenantId,
+            txRow.fundId,
+            txRow.currencyCode,
+            txRow.amountMinor,
+          );
+        }
+      }
+
+      let fundReversalCount = 0;
+      for (const app of applications) {
+        const txRow = app.fundTransaction;
+        if (!txRow || txRow.reversalOfTransactionId !== null) {
+          continue; // sin CREDIT asociado o ya reversado (no duplicar)
+        }
+        const reversalDirection =
+          txRow.direction === FundTransactionDirection.CREDIT
+            ? FundTransactionDirection.DEBIT
+            : FundTransactionDirection.CREDIT;
+
+        const reversal = await tx.fundTransaction.create({
+          data: {
+            tenantId,
+            fundId: txRow.fundId,
+            direction: reversalDirection,
+            amountMinor: txRow.amountMinor,
+            currencyCode: txRow.currencyCode,
+            occurredAt: new Date(),
+            description: `Void de ingreso ${incomeId} (aplicación ${app.id})`,
+            createdByMembershipId: membershipId,
+            reversalOfTransactionId: txRow.id,
+          },
+        });
+        fundReversalCount += 1;
+
+        await this.auditService.createLogRequired(
+          {
+            tenantId,
+            actorMembershipId: membershipId,
+            action: 'FUND_TRANSACTION_REVERSE',
+            entityType: 'FundTransaction',
+            entityId: reversal.id,
+            metadata: {
+              fundId: txRow.fundId,
+              originalTransactionId: txRow.id,
+              direction: reversalDirection,
+              amountMinor: txRow.amountMinor,
+              currencyCode: txRow.currencyCode,
+            },
+          },
+          tx,
+        );
+      }
+
+      const updated = await tx.income.update({
+        where: { id: incomeId },
+        data: {
+          status: 'VOID',
+          voidedByMembershipId: membershipId,
+          voidedAt: new Date(),
+        },
+        include: { category: true },
+      });
+
+      // INCOME_VOID required en la misma transacción cuando hay efectos financieros.
+      await this.auditService.createLogRequired(
+        {
+          tenantId,
+          actorMembershipId: membershipId,
+          action: 'INCOME_VOID',
+          entityType: 'Income',
+          entityId: incomeId,
+          metadata: {
+            previousStatus: income.status,
+            newStatus: 'VOID',
+            applicationCount: applications.length,
+            ...(fundReversalCount > 0 ? { fundReversalCount } : {}),
+          },
+        },
+        tx,
+      );
+
+      return this.toDto(updated);
     });
-
-    if (!income) {
-      throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
-    }
-
-    const updated = await this.prisma.income.update({
-      where: { id: incomeId },
-      data: {
-        status: 'VOID',
-        voidedByMembershipId: membershipId,
-        voidedAt: new Date(),
-      },
-      include: { category: true },
-    });
-
-    void this.auditService.createLog({
-      tenantId,
-      actorMembershipId: membershipId,
-      action: 'INCOME_VOID',
-      entityType: 'Income',
-      entityId: incomeId,
-      metadata: { previousStatus: income.status, newStatus: 'VOID' },
-    });
-
-    return this.toDto(updated);
   }
 
   private toDto(income: {

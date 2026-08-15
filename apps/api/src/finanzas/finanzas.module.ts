@@ -44,6 +44,8 @@ import { CurrencyConversionService } from './currency-conversion.service';
 import { AppConfigModule } from '../config/config.module';
 import { FundsController } from './funds.controller';
 import { FundsService } from './funds.service';
+import { IncomeApplicationsController } from './income-applications.controller';
+import { IncomeApplicationsService } from './income-applications.service';
 
 import { VendorPreferenceController } from './vendor-preference.controller';
 import { VendorPreferenceService } from './vendor-preference.service';
@@ -91,6 +93,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     PaymentWebhookController,
     MulticurrencyController,
     FundsController,
+    IncomeApplicationsController,
   ],
   providers: [
     FinanzasService,
@@ -133,6 +136,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     MulticurrencyService,
     CurrencyConversionService,
     FundsService,
+    IncomeApplicationsService,
   ],
   exports: [
     FinanzasService,
@@ -152,6 +156,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     PaymentReceiptService,
     CurrencyConversionService,
     FundsService,
+    IncomeApplicationsService,
   ],
 })
 export class FinanzasModule {}

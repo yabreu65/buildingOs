@@ -135,6 +135,16 @@ enum IncomeDestination {
   SPECIAL_FUND       // Fase 2
 }
 
+// ============================================================================
+// FINANZAS: IncomeApplication (qué se hace con el dinero — FIN-03)
+// ============================================================================
+
+enum IncomeApplicationDestination {
+  OFFSET_EXPENSES  // Clasifica para reducir gastos en una futura FIN-06
+  FUND             // Genera CREDIT real en FundTransaction
+  CARRY_FORWARD    // Clasifica dinero retenido para uso futuro
+}
+
 enum LiquidationStatus {
   DRAFT
   REVIEWED
@@ -294,6 +304,7 @@ model Tenant {
   exchangeRates         ExchangeRate[]
   funds                 Fund[]
   fundTransactions      FundTransaction[]
+  incomeApplications    IncomeApplication[]
 }
 
 model User {
@@ -368,6 +379,7 @@ model Membership {
   fundsCreated          Fund[]                @relation("FundCreatedBy")
   fundsArchived         Fund[]                @relation("FundArchivedBy")
   fundTransactionsCreated FundTransaction[]   @relation("FundTransactionCreatedBy")
+  incomeApplicationsCreated IncomeApplication[] @relation("IncomeApplicationCreatedBy")
 
   @@unique([userId, tenantId])
   @@index([tenantId])
@@ -803,6 +815,7 @@ enum AuditAction {
   INCOME_RECORD
   INCOME_VOID
   INCOME_ALLOCATION_CREATE
+  INCOME_APPLICATIONS_CREATE
   // FUNDS (FIN-02)
   FUND_CREATE
   FUND_UPDATE
@@ -2007,6 +2020,37 @@ model Income {
   @@index([tenantId, scopeType])
   @@index([tenantId, destination])
   @@index([tenantId, exchangeRateId])
+
+  applications IncomeApplication[]
+}
+
+// ============================================================================
+// FINANZAS: IncomeApplication (Plan explícito de qué se hace con un Income)
+// ============================================================================
+// RESPONDE: ¿qué se hace con el dinero?
+// (MovementAllocation responde ¿a qué building/scope pertenece el movimiento?)
+// Plan inmutable tras publicación: NO PATCH / NO DELETE individual.
+// SUM(amountMinor) == Income.amountMinor EXACTO (minor units enteras).
+// ============================================================================
+model IncomeApplication {
+  id                       String                       @id @default(cuid())
+  tenantId                 String
+  incomeId                 String
+  destinationType          IncomeApplicationDestination
+  fundId                   String?                      // Obligatorio solo si FUND
+  amountMinor              Int                          // En centavos, positivo
+  currencyCode             String                       // Siempre = Income.currencyCode
+  createdByMembershipId    String
+  createdAt                DateTime                     @default(now())
+
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  income     Income             @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  fund       Fund?              @relation(fields: [fundId], references: [id], onDelete: Restrict)
+  createdBy  Membership         @relation("IncomeApplicationCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  fundTransaction FundTransaction? @relation("FundTransactionIncomeApplication")
+
+  @@index([tenantId, incomeId])
+  @@index([tenantId, fundId])
 }
 
 // ============================================================================
@@ -2106,6 +2150,7 @@ model Fund {
   createdBy  Membership         @relation("FundCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   archivedBy Membership?        @relation("FundArchivedBy", fields: [archivedByMembershipId], references: [id], onDelete: SetNull)
   transactions FundTransaction[]
+  incomeApplications IncomeApplication[]
 
   @@index([tenantId])
   @@index([tenantId, buildingId])
@@ -2132,6 +2177,9 @@ model FundTransaction {
   createdBy Membership       @relation("FundTransactionCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reversalOf FundTransaction? @relation("FundTransactionReversal", fields: [reversalOfTransactionId], references: [id], onDelete: Restrict)
   reversals  FundTransaction[] @relation("FundTransactionReversal")
+  incomeApplication IncomeApplication? @relation("FundTransactionIncomeApplication", fields: [incomeApplicationId], references: [id], onDelete: Restrict)
+
+  incomeApplicationId String? @unique // 1:1 — transacción gestionada por IncomeApplication (voidIncome controla su reversa)
 
   @@unique([tenantId, idempotencyKey])
   @@unique([reversalOfTransactionId])
