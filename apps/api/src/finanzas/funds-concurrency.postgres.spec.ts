@@ -572,4 +572,105 @@ describePostgres('Funds ledger PostgreSQL concurrency', () => {
     expect(after.name).toBe(originalName);
     expect(after.name).not.toBe('Reserva modificada');
   }, 20000);
+
+  // ── Real AuditService metadata contract (FIN-02T) ───────────────────────
+
+  it('FUND_CREATE with real AuditService succeeds for a TENANT fund and omits buildingId', async () => {
+    const ctx = await fixture('real-audit-tenant');
+    const realService = buildService(firstClient); // AuditService REAL
+
+    const fund = await realService.createFund(ctx.tenant.id, ctx.membership.id, ['TENANT_ADMIN'], {
+      scopeType: 'TENANT',
+      type: 'RESERVE',
+      name: `Fondo TENANT ${Date.now()}`,
+    });
+
+    expect(fund.status).toBe('ACTIVE');
+    expect(await observer.fund.count({ where: { tenantId: ctx.tenant.id } })).toBe(2); // fixture + nuevo
+
+    const auditLog = await observer.auditLog.findFirst({
+      where: { tenantId: ctx.tenant.id, action: 'FUND_CREATE', entityId: fund.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    const metadata = auditLog!.metadata as Record<string, unknown>;
+    expect('buildingId' in metadata).toBe(false);
+    expect(metadata.scopeType).toBe('TENANT');
+    expect(metadata.type).toBe('RESERVE');
+    expect(metadata.name).toBe(fund.name);
+  }, 20000);
+
+  it('FUND_CREATE with real AuditService includes buildingId for a BUILDING fund', async () => {
+    const ctx = await fixture('real-audit-building');
+    const building = await observer.building.create({
+      data: { tenantId: ctx.tenant.id, name: `B-${Date.now()}`, alias: `B-${Date.now()}`, address: 'x' },
+    });
+    const realService = buildService(firstClient);
+
+    const fund = await realService.createFund(ctx.tenant.id, ctx.membership.id, ['TENANT_ADMIN'], {
+      scopeType: 'BUILDING',
+      buildingId: building.id,
+      type: 'RESERVE',
+      name: `Fondo BUILDING ${Date.now()}`,
+    });
+
+    expect(fund.buildingId).toBe(building.id);
+    const auditLog = await observer.auditLog.findFirst({
+      where: { tenantId: ctx.tenant.id, action: 'FUND_CREATE', entityId: fund.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    const metadata = auditLog!.metadata as Record<string, unknown>;
+    expect(metadata.buildingId).toBe(building.id);
+  }, 20000);
+
+  it('FUND_TRANSACTION_CREATE without idempotencyKey omits it from metadata (real AuditService)', async () => {
+    const ctx = await fixture('real-audit-no-key');
+    const realService = buildService(firstClient);
+
+    await realService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+      direction: FundTransactionDirection.CREDIT,
+      amountMinor: 100,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+    });
+
+    expect(await observer.fundTransaction.count({ where: { fundId: ctx.fund.id } })).toBe(1);
+    const balanceRows = await observer.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN "amountMinor" ELSE -"amountMinor" END), 0) AS total
+      FROM "FundTransaction" WHERE "fundId" = ${ctx.fund.id} AND "tenantId" = ${ctx.tenant.id}
+    `;
+    expect(Number(balanceRows[0]?.total ?? 0)).toBe(100);
+
+    const auditLog = await observer.auditLog.findFirst({
+      where: { tenantId: ctx.tenant.id, action: 'FUND_TRANSACTION_CREATE' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    const metadata = auditLog!.metadata as Record<string, unknown>;
+    expect('idempotencyKey' in metadata).toBe(false);
+    expect(metadata.amountMinor).toBe(100);
+  }, 20000);
+
+  it('FUND_TRANSACTION_CREATE with idempotencyKey keeps it in metadata (real AuditService)', async () => {
+    const ctx = await fixture('real-audit-with-key');
+    const realService = buildService(firstClient);
+    const key = `fin02t-real-audit-${Date.now()}`;
+
+    await realService.createTransaction(ctx.tenant.id, ctx.fund.id, ctx.membership.id, ['TENANT_ADMIN'], {
+      direction: FundTransactionDirection.CREDIT,
+      amountMinor: 100,
+      currencyCode: 'USD',
+      occurredAt: new Date().toISOString(),
+      idempotencyKey: key,
+    });
+
+    const auditLog = await observer.auditLog.findFirst({
+      where: { tenantId: ctx.tenant.id, action: 'FUND_TRANSACTION_CREATE' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    const metadata = auditLog!.metadata as Record<string, unknown>;
+    expect(metadata.idempotencyKey).toBe(key);
+  }, 20000);
 });

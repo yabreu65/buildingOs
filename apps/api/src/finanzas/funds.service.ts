@@ -131,7 +131,9 @@ export class FundsService {
             entityId: created.id,
             metadata: {
               scopeType: dto.scopeType,
-              buildingId: created.buildingId,
+              ...(created.buildingId !== null
+                ? { buildingId: created.buildingId }
+                : {}),
               type: dto.type,
               name: created.name,
             },
@@ -380,7 +382,9 @@ export class FundsService {
               amountMinor: dto.amountMinor,
               currencyCode: dto.currencyCode,
               occurredAt: dto.occurredAt,
-              idempotencyKey: dto.idempotencyKey ?? null,
+              ...(dto.idempotencyKey !== undefined && dto.idempotencyKey !== null
+                ? { idempotencyKey: dto.idempotencyKey }
+                : {}),
             },
           },
           tx,
