@@ -52,6 +52,7 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
     exchangeRate: { findFirst: jest.fn() },
     expenseLedgerCategory: { findFirst: jest.fn() },
     unitGroup: { findFirst: jest.fn() },
+    liquidationIncomeOffset: { findMany: jest.fn() },
     $transaction: jest.fn(),
     $executeRaw: jest.fn(),
   };
@@ -67,6 +68,7 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
         exchangeRate: prismaValue.exchangeRate,
         expenseLedgerCategory: prismaValue.expenseLedgerCategory,
         unitGroup: prismaValue.unitGroup,
+        liquidationIncomeOffset: prismaValue.liquidationIncomeOffset,
         auditLog: { create: jest.fn() },
         $executeRaw: prismaValue.$executeRaw,
       }),
@@ -76,6 +78,7 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     (prismaValue.fundTransaction.create as jest.Mock).mockReset();
+    (prismaValue.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue([]);
     mockTransaction();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -208,5 +211,104 @@ describe('IncomesService voidIncome atomicity (FIN-03)', () => {
 
     expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
     expect(audit.createLogRequired).toHaveBeenCalledTimes(1); // solo INCOME_VOID
+  });
+
+  describe('FIN-06 void safety (LiquidationIncomeOffset references)', () => {
+    const referencedBy = (status: string) => [
+      { liquidation: { id: 'liq-1', status, period: '2026-08' } },
+    ];
+
+    it('rejects void when a DRAFT liquidation references an OFFSET', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue(
+        referencedBy('DRAFT'),
+      );
+
+      await expect(
+        service.voidIncome('tenant-1', 'income-1', 'member-1', roles),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.incomeApplication.findMany).not.toHaveBeenCalled();
+      expect(prisma.income.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects void when a REVIEWED liquidation references an OFFSET', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue(
+        referencedBy('REVIEWED'),
+      );
+
+      await expect(
+        service.voidIncome('tenant-1', 'income-1', 'member-1', roles),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects void when a PUBLISHED liquidation references an OFFSET', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue(
+        referencedBy('PUBLISHED'),
+      );
+
+      await expect(
+        service.voidIncome('tenant-1', 'income-1', 'member-1', roles),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects the whole void when OFFSET is published even if FUND would be reversible (all-or-nothing)', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue(
+        referencedBy('PUBLISHED'),
+      );
+
+      await expect(
+        service.voidIncome('tenant-1', 'income-1', 'member-1', roles),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.fundTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('allows void when the only referencing liquidation is CANCELED', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue(
+        referencedBy('CANCELED'),
+      );
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.income.update as jest.Mock).mockResolvedValue(makeIncome({ status: IncomeStatus.VOID }));
+
+      const result = await service.voidIncome('tenant-1', 'income-1', 'member-1', roles);
+
+      expect(result.status).toBe('VOID');
+      expect(audit.createLogRequired).toHaveBeenCalledTimes(1); // INCOME_VOID
+    });
+
+    it('allows void when no liquidation references exist (FUND-only income unchanged)', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.liquidationIncomeOffset.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        {
+          id: 'app-fund',
+          fundId: 'fund-1',
+          fundTransaction: {
+            id: 'ft-1',
+            fundId: 'fund-1',
+            direction: FundTransactionDirection.CREDIT,
+            amountMinor: 3000,
+            currencyCode: 'USD',
+            reversalOfTransactionId: null,
+          },
+        },
+      ]);
+      (prisma.fund.findMany as jest.Mock).mockResolvedValue([{ id: 'fund-1', status: 'ACTIVE' }]);
+      (prisma.fundTransaction.groupBy as jest.Mock)
+        .mockResolvedValueOnce([{ currencyCode: 'USD', _sum: { amountMinor: 3000 } }])
+        .mockResolvedValueOnce([]);
+      (prisma.fundTransaction.create as jest.Mock).mockResolvedValue({ id: 'ft-rev' });
+      (prisma.income.update as jest.Mock).mockResolvedValue(makeIncome({ status: IncomeStatus.VOID }));
+
+      await service.voidIncome('tenant-1', 'income-1', 'member-1', roles);
+
+      expect(prisma.fundTransaction.create).toHaveBeenCalledTimes(1);
+      expect(prisma.income.update).toHaveBeenCalled();
+    });
   });
 });

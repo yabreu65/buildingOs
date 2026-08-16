@@ -2,6 +2,7 @@ import { BadRequestException, UnprocessableEntityException } from '@nestjs/commo
 import {
   assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
+  buildLiquidationPublicationSnapshotV3,
   distributeLiquidationAmountByLargestRemainder,
   parseLiquidationPublicationSnapshot,
 } from './liquidation-publication-snapshot';
@@ -441,6 +442,151 @@ describe('liquidation publication snapshot', () => {
 
       const parsed = parseLiquidationPublicationSnapshot(legacyV1);
       expect(parsed).toMatchObject({ version: 1, totalAmountMinor: 50 });
+    });
+  });
+
+  describe('publication snapshot v3 (FIN-06)', () => {
+    const v3Input = {
+      liquidationId: 'liq-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      period: '2026-08',
+      baseCurrency: 'ARS',
+      totalAmountMinor: 3000,
+      totalsByCurrency: { ARS: 10000 },
+      grossExpenseAmountMinor: 10000,
+      adjustmentAmountMinor: 0,
+      preIncomeAmountMinor: 10000,
+      incomeOffsetAmountMinor: 7000,
+      netDistributableAmountMinor: 3000,
+      incomeOffsetsByCurrency: { ARS: 7000 },
+      valuationMode: 'LEGACY_NOMINAL' as const,
+      expenses: [
+        {
+          expenseId: 'exp-1',
+          categoryName: 'Maintenance',
+          vendorName: null,
+          amountMinor: 10000,
+          currencyCode: 'ARS',
+          invoiceDate: '2026-08-05T00:00:00.000Z',
+          description: null,
+          type: 'EXPENSE' as const,
+        },
+      ],
+      incomeOffsets: [
+        {
+          incomeId: 'income-1',
+          incomeApplicationId: 'app-offset-1',
+          categoryId: 'cat-1',
+          categoryName: 'Parrillera',
+          policyVersionId: 'pv-1',
+          scopeType: 'BUILDING',
+          currencyCode: 'ARS',
+          applicationAmountMinor: 7000,
+          buildingAmountMinor: 7000,
+          valuedAmountMinor: 7000,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+          receivedDate: '2026-08-10T00:00:00.000Z',
+          period: '2026-08',
+        },
+      ],
+      allocations: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 3000 },
+      ],
+      dueDate: new Date('2026-09-10T00:00:00.000Z'),
+      publishedAt: new Date('2026-08-16T00:00:00.000Z'),
+    };
+
+    it('builds version 3 with income offsets and reconciliation', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
+
+      expect(snapshot).toMatchObject({
+        version: 3,
+        valuationMode: 'LEGACY_NOMINAL',
+        grossExpenseAmountMinor: 10000,
+        incomeOffsetAmountMinor: 7000,
+        netDistributableAmountMinor: 3000,
+        totalAmountMinor: 3000,
+      });
+      expect(snapshot.incomeOffsets).toHaveLength(1);
+      expect(snapshot.incomeOffsets[0]).toMatchObject({
+        incomeApplicationId: 'app-offset-1',
+        policyVersionId: 'pv-1',
+        valuedAmountMinor: 7000,
+      });
+    });
+
+    it('parses version 3 back with full provenance', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+
+      expect(parsed).toMatchObject({
+        version: 3,
+        grossExpenseAmountMinor: 10000,
+        preIncomeAmountMinor: 10000,
+        incomeOffsetAmountMinor: 7000,
+        netDistributableAmountMinor: 3000,
+        totalAmountMinor: 3000,
+      });
+      expect(parsed?.incomeOffsets[0]).toMatchObject({
+        incomeId: 'income-1',
+        policyVersionId: 'pv-1',
+        applicationAmountMinor: 7000,
+      });
+    });
+
+    it('rejects v3 when expense sources do not match pre-income', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          grossExpenseAmountMinor: 9000,
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when income offsets do not match the offset total', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          incomeOffsetAmountMinor: 6000,
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when allocations do not match the net total', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          allocations: [
+            { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 3001 },
+          ],
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when total differs from net distributable', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          totalAmountMinor: 3001,
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('parses a tampered v3 total as invalid', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
+      const tampered = {
+        ...snapshot,
+        totalAmountMinor: 4000,
+        netDistributableAmountMinor: 4000,
+      };
+
+      expect(() => parseLiquidationPublicationSnapshot(tampered)).toThrow(BadRequestException);
     });
   });
 });

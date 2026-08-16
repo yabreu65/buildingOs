@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import {
   createLiquidationWorkflowDependencies,
   createLiquidationDraftRecord,
@@ -244,7 +245,6 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
       prisma as unknown as PrismaService,
       auditService,
       validators,
-      notificationsService,
       new LiquidationPublicationUseCase(
         createLiquidationWorkflowDependencies({
           prisma: prisma as unknown as PrismaService,
@@ -253,6 +253,7 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           notificationsService,
         }),
       ),
+      new LiquidationIncomeOffsetsService(prisma as unknown as PrismaService),
     );
   }
 

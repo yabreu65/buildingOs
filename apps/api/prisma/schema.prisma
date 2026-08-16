@@ -295,6 +295,7 @@ model Tenant {
   movementAllocations      MovementAllocation[]
   unitGroups               UnitGroup[]
   liquidations             Liquidation[]
+  liquidationIncomeOffsets LiquidationIncomeOffset[]
   adjustments              Adjustment[]
   tenantMembers         TenantMember[]
   tenantInvitations     TenantInvitation[]
@@ -2066,6 +2067,7 @@ model IncomeApplication {
   createdBy  Membership         @relation("IncomeApplicationCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   fundTransaction FundTransaction? @relation("FundTransactionIncomeApplication")
   policyVersion IncomePolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+  liquidationOffsets LiquidationIncomeOffset[]
 
   @@index([tenantId, incomeId])
   @@index([tenantId, fundId])
@@ -2281,7 +2283,7 @@ model Liquidation {
   status                   LiquidationStatus @default(DRAFT)
   valuationMode            LiquidationValuationMode? // NULL = histórico pre-3D / legacy
   baseCurrency             String            // Moneda base de liquidación
-  totalAmountMinor         Int               // Total en centavos derivado de gastos VALIDATED
+  totalAmountMinor         Int               // Neto distributable (gross + adjustments - income offsets)
   totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
   expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
   publicationSnapshot      Json?             // Immutable snapshot persisted when published
@@ -2297,14 +2299,54 @@ model Liquidation {
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
+  // FIN-06: desglose financiero del neto distributable (nullable = legacy pre-FIN-06)
+  grossExpenseAmountMinor    Int?   // Valor de expenses (nominal o funcional según valuationMode)
+  adjustmentAmountMinor      Int?   // Valor de adjustments (mismo criterio)
+  preIncomeAmountMinor       Int?   // gross + adjustments
+  incomeOffsetAmountMinor    Int?   // IncomeApplications OFFSET_EXPENSES elegibles (valorado)
+  netDistributableAmountMinor Int?  // preIncome - incomeOffset (debe ser == totalAmountMinor)
+  incomeOffsetSnapshot       Json?  // FIN-06: fuentes OFFSET congeladas al crear el draft
+  incomeOffsetsByCurrency    Json?  // FIN-06: { baseCurrency: totalOffsetValued }
+
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   charges  Charge[]
+  incomeOffsets LiquidationIncomeOffset[]
 
   @@index([tenantId, buildingId, period, status])
   @@index([tenantId, buildingId])
   @@index([tenantId, status])
   @@index([tenantId, buildingId, chargePeriod, status])
+}
+
+// ============================================================================
+// FINANZAS: LiquidationIncomeOffset (FIN-06)
+// Referencia relacional entre una Liquidation y las IncomeApplications
+// OFFSET_EXPENSES que redujeron su neto distributable.
+// Proporciona void-safety: un Income con OFFSET referenciado por una
+// liquidación activa/publicada no puede anularse (la historia ya se distribuyó).
+// ============================================================================
+model LiquidationIncomeOffset {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  liquidationId        String
+  incomeApplicationId  String
+  buildingId           String
+  originalAmountMinor  Int      // Porción de la aplicación en su moneda original asignada al building
+  currencyCode         String   // Moneda original de la aplicación
+  valuedAmountMinor    Int      // Porción valorada (funcional o nominal) asignada al building
+  baseCurrency         String   // Moneda base de la liquidación
+  createdAt            DateTime @default(now())
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liquidation       Liquidation       @relation(fields: [liquidationId], references: [id], onDelete: Cascade)
+  incomeApplication IncomeApplication @relation(fields: [incomeApplicationId], references: [id], onDelete: Cascade)
+
+  @@unique([liquidationId, incomeApplicationId])
+  @@index([tenantId])
+  @@index([incomeApplicationId])
+  @@index([liquidationId])
+  @@index([tenantId, liquidationId])
 }
 
 // ============================================================================

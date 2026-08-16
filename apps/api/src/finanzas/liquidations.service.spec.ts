@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -111,6 +112,17 @@ describe('LiquidationsService', () => {
       adjustment: {
         findMany: jest.fn().mockResolvedValue([]),
       },
+      income: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      incomeApplication: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      liquidationIncomeOffset: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
       unit: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
@@ -149,6 +161,7 @@ describe('LiquidationsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LiquidationsService,
+        LiquidationIncomeOffsetsService,
         {
           provide: LiquidationPublicationUseCase,
           inject: [PrismaService, AuditService, FinanzasValidators, NotificationsService],
@@ -929,7 +942,7 @@ describe('LiquidationsService', () => {
         entityType: 'Liquidation',
         entityId: 'liq-1',
         metadata: expect.objectContaining({
-          snapshotVersion: 1,
+          snapshotVersion: 2,
           dueDate: '2026-06-10',
         }),
       }),
@@ -1043,5 +1056,228 @@ describe('LiquidationsService', () => {
         'disabled',
       ),
     ).rejects.toThrow('No se encontró una membresía válida para el tenant');
+  });
+
+  describe('FIN-06 createDraft with income offsets', () => {
+    const offsetIncome = {
+      id: 'income-1',
+      buildingId: 'building-1',
+      period: '2026-05',
+      scopeType: 'BUILDING',
+      status: 'RECORDED',
+      functionalAmountMinor: null,
+      functionalCurrencyCode: null,
+      exchangeRateId: null,
+      exchangeRateValue: null,
+      exchangeRateDirection: null,
+      exchangeRateEffectiveAt: null,
+      conversionDate: null,
+      receivedDate: new Date('2026-05-10T00:00:00.000Z'),
+      categoryId: 'cat-1',
+      category: { name: 'Parrillera' },
+      allocations: [],
+      applications: [
+        {
+          id: 'app-offset-1',
+          destinationType: 'OFFSET_EXPENSES',
+          amountMinor: 7000,
+          currencyCode: 'ARS',
+          policyVersionId: 'pv-1',
+        },
+      ],
+    };
+
+    function mockExpenses(totalAmountMinor: number) {
+      tx.liquidation.findFirst.mockResolvedValueOnce(null);
+      tx.expense.findMany
+        .mockResolvedValueOnce([
+          {
+            id: 'exp-1',
+            amountMinor: totalAmountMinor,
+            currencyCode: 'ARS',
+            invoiceDate: new Date('2026-05-01T00:00:00.000Z'),
+            description: null,
+            category: { name: 'Water' },
+            vendor: { name: 'Vendor' },
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      tx.adjustment.findMany.mockResolvedValueOnce([]);
+      tx.unit.findMany.mockResolvedValueOnce([
+        { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+        { id: 'unit-2', code: '1B', label: '1B', unitCategory: null },
+      ]);
+    }
+
+    function mockOffsetIncome(income: unknown) {
+      const record = income as { id: string; status?: string; period?: string };
+      // collectEligibleOffsets hace dos findMany sobre income:
+      // 1. selección inicial (with applications include)
+      // 2. revalidación post-lock (solo id/status/period)
+      tx.income.findMany
+        .mockResolvedValueOnce([income])
+        .mockResolvedValueOnce([
+          {
+            id: record.id,
+            status: record.status ?? 'RECORDED',
+            period: record.period ?? '2026-05',
+          },
+        ]);
+    }
+
+    it('reduces the net distributable by eligible OFFSET applications', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome(offsetIncome);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([]);
+      (tx.liquidation.create as jest.Mock).mockResolvedValue({
+        ...baseLiquidation,
+        status: 'DRAFT',
+        totalAmountMinor: 3000,
+        grossExpenseAmountMinor: 10000,
+        adjustmentAmountMinor: 0,
+        preIncomeAmountMinor: 10000,
+        incomeOffsetAmountMinor: 7000,
+        netDistributableAmountMinor: 3000,
+        publicationSnapshot: null,
+      });
+
+      await service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      });
+
+      expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          totalAmountMinor: 3000,
+          grossExpenseAmountMinor: 10000,
+          adjustmentAmountMinor: 0,
+          preIncomeAmountMinor: 10000,
+          incomeOffsetAmountMinor: 7000,
+          netDistributableAmountMinor: 3000,
+        }),
+      }));
+      expect(tx.liquidationIncomeOffset.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            incomeApplicationId: 'app-offset-1',
+            buildingId: 'building-1',
+            originalAmountMinor: 7000,
+            valuedAmountMinor: 7000,
+            baseCurrency: 'ARS',
+          }),
+        ],
+        skipDuplicates: true,
+      });
+    });
+
+    it('rejects the draft when offsets exceed the pre-income total', async () => {
+      mockExpenses(5000);
+      mockOffsetIncome(offsetIncome);
+
+      await expect(service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      })).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_OFFSETS_EXCEED_GROSS',
+        },
+      });
+
+      expect(tx.liquidation.create).not.toHaveBeenCalled();
+      expect(tx.liquidationIncomeOffset.createMany).not.toHaveBeenCalled();
+    });
+
+    it('ignores FUND and CARRY_FORWARD applications (no net reduction)', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome({
+        ...offsetIncome,
+        applications: [
+          { id: 'app-fund', destinationType: 'FUND', amountMinor: 10000, currencyCode: 'ARS', policyVersionId: null },
+        ],
+      });
+
+      await service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      });
+
+      expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          totalAmountMinor: 10000,
+          incomeOffsetAmountMinor: 0,
+        }),
+      }));
+    });
+
+    it('rejects cross-currency nominal offsets', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome({
+        ...offsetIncome,
+        applications: [
+          { id: 'app-usd', destinationType: 'OFFSET_EXPENSES', amountMinor: 1000, currencyCode: 'USD', policyVersionId: null },
+        ],
+      });
+
+      await expect(service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      })).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_OFFSET_CURRENCY_MISMATCH',
+        },
+      });
+    });
+
+    it('ignores OFFSET from a VOID income (not eligible)', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome({ ...offsetIncome, status: 'VOID' });
+
+      await service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      });
+
+      expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          totalAmountMinor: 10000,
+          incomeOffsetAmountMinor: 0,
+        }),
+      }));
+    });
+
+    it('ignores OFFSET from another period', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome({ ...offsetIncome, period: '2026-04' });
+
+      await service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      });
+
+      expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          totalAmountMinor: 10000,
+          incomeOffsetAmountMinor: 0,
+        }),
+      }));
+    });
+
+    it('supports exact zero net (offset == pre-income)', async () => {
+      mockExpenses(10000);
+      mockOffsetIncome({
+        ...offsetIncome,
+        applications: [
+          { id: 'app-offset-1', destinationType: 'OFFSET_EXPENSES', amountMinor: 10000, currencyCode: 'ARS', policyVersionId: null },
+        ],
+      });
+
+      await service.createDraft('tenant-1', 'member-1', {
+        buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+      });
+
+      expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          totalAmountMinor: 0,
+          incomeOffsetAmountMinor: 10000,
+          netDistributableAmountMinor: 0,
+        }),
+      }));
+    });
   });
 });

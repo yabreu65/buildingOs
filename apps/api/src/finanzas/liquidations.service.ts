@@ -33,6 +33,13 @@ import {
   requireFinanceMembership,
   reviewLiquidationRecord,
 } from './liquidation-publication.use-case';
+import {
+  buildIncomeOffsetExceedsGrossError,
+} from './income-offset-allocation';
+import {
+  LiquidationIncomeOffsetsService,
+  type IncomeOffsetSnapshotItem,
+} from './liquidation-income-offsets.service';
 
 interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   expenseId: string;
@@ -84,6 +91,7 @@ export class LiquidationsService {
     private readonly auditService: AuditService,
     private readonly validators: FinanzasValidators,
     private readonly publicationUseCase: LiquidationPublicationUseCase,
+    private readonly incomeOffsetsService: LiquidationIncomeOffsetsService,
   ) {}
 
   private expenseAccountingPeriodWhere(period: string): {
@@ -424,13 +432,43 @@ export class LiquidationsService {
         valuationMode,
       );
 
+      // ── FIN-06: Income offsets (IncomeApplication OFFSET_EXPENSES) ──────
+      // Valuación: LEGACY_NOMINAL exige moneda == baseCurrency; FUNCTIONAL usa
+      // el snapshot funcional congelado del Income (nunca FX live).
+      const incomeOffsets = await this.incomeOffsetsService.collectEligibleOffsets(tx, {
+        tenantId,
+        buildingId: dto.buildingId,
+        period: dto.period,
+        valuationMode,
+        baseCurrency: dto.baseCurrency,
+      });
+
       const billableUnits = await tx.unit.findMany({
         where: { tenantId, buildingId: dto.buildingId, isBillable: true },
         include: { unitCategory: { select: { coefficient: true, id: true } } },
         orderBy: { code: 'asc' },
       });
 
-      const totalAmountMinor = sumValuationAmounts(valuationSources, valuationMode);
+      // Desglose financiero (mismo criterio de valuación que el total actual).
+      const grossExpenseAmountMinor = sumValuationAmounts(
+        valuationSources.filter((source) => source.type === 'EXPENSE'),
+        valuationMode,
+      );
+      const adjustmentAmountMinor = sumValuationAmounts(
+        valuationSources.filter((source) => source.type === 'ADJUSTMENT'),
+        valuationMode,
+      );
+      const preIncomeAmountMinor = grossExpenseAmountMinor + adjustmentAmountMinor;
+      const incomeOffsetAmountMinor = incomeOffsets.incomeOffsetAmountMinor;
+
+      if (incomeOffsetAmountMinor > preIncomeAmountMinor) {
+        throw buildIncomeOffsetExceedsGrossError({
+          incomeOffsetAmountMinor,
+          preIncomeAmountMinor,
+        });
+      }
+
+      const totalAmountMinor = preIncomeAmountMinor - incomeOffsetAmountMinor;
       const chargesPreview = this.calculateDistribution(
         billableUnits,
         totalAmountMinor,
@@ -450,6 +488,14 @@ export class LiquidationsService {
         expenseSnapshot: expenseSnapshotItems,
         unitCount: billableUnits.length,
         generatedByMembershipId: membership.id,
+        grossExpenseAmountMinor,
+        adjustmentAmountMinor,
+        preIncomeAmountMinor,
+        incomeOffsetAmountMinor,
+        netDistributableAmountMinor: totalAmountMinor,
+        incomeOffsetSnapshot: incomeOffsets.items as IncomeOffsetSnapshotItem[],
+        incomeOffsetsByCurrency: incomeOffsets.incomeOffsetsByCurrency,
+        createIncomeOffsetReferences: incomeOffsets.references,
       });
 
       return this.toDetailDto(created, {
@@ -727,6 +773,11 @@ export class LiquidationsService {
     publishedAt: Date | null;
     canceledAt: Date | null;
     createdAt: Date;
+    grossExpenseAmountMinor?: number | null;
+    adjustmentAmountMinor?: number | null;
+    preIncomeAmountMinor?: number | null;
+    incomeOffsetAmountMinor?: number | null;
+    netDistributableAmountMinor?: number | null;
   }): LiquidationResponseDto {
     const totalsByCurrency = parseTotalsByCurrency(liq.totalsByCurrency);
 
@@ -747,6 +798,11 @@ export class LiquidationsService {
       publishedAt: liq.publishedAt,
       canceledAt: liq.canceledAt,
       createdAt: liq.createdAt,
+      grossExpenseAmountMinor: liq.grossExpenseAmountMinor ?? null,
+      adjustmentAmountMinor: liq.adjustmentAmountMinor ?? null,
+      preIncomeAmountMinor: liq.preIncomeAmountMinor ?? null,
+      incomeOffsetAmountMinor: liq.incomeOffsetAmountMinor ?? null,
+      netDistributableAmountMinor: liq.netDistributableAmountMinor ?? null,
     };
   }
 

@@ -10,6 +10,7 @@ import {
   LiquidationPublicationUseCase,
 } from './liquidation-publication.use-case';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 
 describe('FinanzasModule wiring', () => {
   it('registers LiquidationPublicationUseCase in module metadata and resolves the same Nest-managed instance inside LiquidationsService', async () => {
@@ -76,6 +77,17 @@ describe('FinanzasModule wiring', () => {
             ),
         },
         LiquidationsService,
+        {
+          provide: LiquidationIncomeOffsetsService,
+          useValue: {
+            collectEligibleOffsets: jest.fn().mockResolvedValue({
+              items: [],
+              references: [],
+              incomeOffsetAmountMinor: 0,
+              incomeOffsetsByCurrency: {},
+            }),
+          },
+        },
       ],
     }).compile();
 

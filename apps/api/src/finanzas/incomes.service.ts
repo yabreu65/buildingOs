@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
@@ -401,6 +402,35 @@ export class IncomesService {
       // Idempotencia: un Income ya VOID se devuelve sin nuevas mutaciones.
       if (income.status === IncomeStatus.VOID) {
         return this.toDto(income as unknown as Parameters<typeof this.toDto>[0]);
+      }
+
+      // ── FIN-06: void-safety de IncomeApplications OFFSET usadas ──────────
+      // Una IncomeApplication OFFSET referenciada por una liquidación
+      // DRAFT/REVIEWED/PUBLISHED no puede desaparecer con el void del Income:
+      // la historia ya se distribuyó o está comprometida en un draft.
+      const offsetReferences = await tx.liquidationIncomeOffset.findMany({
+        where: {
+          tenantId,
+          incomeApplication: { incomeId },
+        },
+        select: {
+          liquidation: {
+            select: { id: true, status: true, period: true },
+          },
+        },
+      });
+
+      const blockingReferences = offsetReferences.filter(
+        (reference) => reference.liquidation !== null && reference.liquidation.status !== 'CANCELED',
+      );
+
+      if (blockingReferences.length > 0) {
+        const statuses = [...new Set(blockingReferences.map((r) => r.liquidation!.status))];
+        const message =
+          statuses.includes('PUBLISHED')
+            ? `No se puede anular el ingreso: una liquidación publicada ya distribuyó sus offsets (${blockingReferences.length}); la corrección requiere compensación/ajuste, no void destructivo`
+            : `No se puede anular el ingreso: sus offsets están referenciados por ${blockingReferences.length} liquidación(es) activa(s) (${statuses.join(', ')}); cancelá la liquidación primero`;
+        throw new ConflictException(message);
       }
 
       // Reversar automáticamente los FundTransactions CREDIT generados por

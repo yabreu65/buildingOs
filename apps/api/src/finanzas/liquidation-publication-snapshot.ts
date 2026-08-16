@@ -58,9 +58,54 @@ export interface LiquidationPublicationSnapshotV2 {
   publishedAt: string;
 }
 
+export interface PublishedIncomeOffsetSnapshot {
+  incomeId: string;
+  incomeApplicationId: string;
+  categoryId: string;
+  categoryName: string | null;
+  policyVersionId: string | null;
+  scopeType: string;
+  currencyCode: string;
+  applicationAmountMinor: number;
+  buildingAmountMinor: number;
+  valuedAmountMinor: number;
+  functionalCurrencyCode: string | null;
+  exchangeRateId: string | null;
+  exchangeRateValue: string | null;
+  exchangeRateDirection: string | null;
+  exchangeRateEffectiveAt: string | null;
+  conversionDate: string | null;
+  receivedDate: string;
+  period: string;
+}
+
+export interface LiquidationPublicationSnapshotV3 {
+  version: 3;
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
+  liquidationId: string;
+  tenantId: string;
+  buildingId: string;
+  period: string;
+  baseCurrency: string;
+  totalAmountMinor: number;
+  totalsByCurrency: Record<string, number>;
+  grossExpenseAmountMinor: number;
+  adjustmentAmountMinor: number;
+  preIncomeAmountMinor: number;
+  incomeOffsetAmountMinor: number;
+  netDistributableAmountMinor: number;
+  incomeOffsetsByCurrency: Record<string, number>;
+  expenses: readonly PublishedExpenseSnapshot[];
+  incomeOffsets: readonly PublishedIncomeOffsetSnapshot[];
+  allocations: readonly PublishedAllocationSnapshot[];
+  dueDate: string;
+  publishedAt: string;
+}
+
 export type LiquidationPublicationSnapshot =
   | LiquidationPublicationSnapshotV1
-  | LiquidationPublicationSnapshotV2;
+  | LiquidationPublicationSnapshotV2
+  | LiquidationPublicationSnapshotV3;
 
 export interface BuildLiquidationPublicationSnapshotInput {
   liquidationId: string;
@@ -207,6 +252,140 @@ export function buildLiquidationPublicationSnapshot(
   });
 }
 
+export interface BuildLiquidationPublicationSnapshotV3Input {
+  liquidationId: string;
+  tenantId: string;
+  buildingId: string;
+  period: string;
+  baseCurrency: string;
+  totalAmountMinor: number;
+  totalsByCurrency: Record<string, number>;
+  grossExpenseAmountMinor: number;
+  adjustmentAmountMinor: number;
+  preIncomeAmountMinor: number;
+  incomeOffsetAmountMinor: number;
+  netDistributableAmountMinor: number;
+  incomeOffsetsByCurrency: Record<string, number>;
+  expenses: readonly PublishedExpenseSnapshot[];
+  incomeOffsets: readonly PublishedIncomeOffsetSnapshot[];
+  allocations: readonly PublishedAllocationSnapshot[];
+  dueDate: Date;
+  publishedAt: Date;
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
+}
+
+/**
+ * FIN-06 snapshot V3: incluye income offsets congelados y el desglose
+ * gross + adjustments - offsets = net distributable.
+ */
+export function buildLiquidationPublicationSnapshotV3(
+  input: BuildLiquidationPublicationSnapshotV3Input,
+): Prisma.InputJsonObject {
+  assertSafeIntegerNonNegative(input.totalAmountMinor, 'totalAmountMinor');
+  assertSafeIntegerNonNegative(input.grossExpenseAmountMinor, 'grossExpenseAmountMinor');
+  assertSafeIntegerNonNegative(input.incomeOffsetAmountMinor, 'incomeOffsetAmountMinor');
+  assertSafeIntegerNonNegative(input.netDistributableAmountMinor, 'netDistributableAmountMinor');
+  assertNonEmpty(input.liquidationId, 'liquidationId');
+  assertNonEmpty(input.tenantId, 'tenantId');
+  assertNonEmpty(input.buildingId, 'buildingId');
+  assertNonEmpty(input.period, 'period');
+  assertNonEmpty(input.baseCurrency, 'baseCurrency');
+  assertIsoDate(input.dueDate, 'dueDate');
+  assertIsoDate(input.publishedAt, 'publishedAt');
+
+  const totalsByCurrency = normalizeTotalsByCurrency(input.totalsByCurrency);
+  const expenses = input.expenses.map(normalizeExpenseSnapshot);
+  const allocations = input.allocations.map(normalizeAllocationSnapshot);
+  const incomeOffsets = input.incomeOffsets.map(normalizeIncomeOffsetSnapshot);
+  const expenseTotalsByCurrency = sumByCurrency(expenses);
+  const allocationTotal = allocations.reduce(
+    (sum, allocation) =>
+      safeAddMinor(sum, allocation.amountMinor, 'allocations.totalAmountMinor'),
+    0,
+  );
+  const valuedTotal =
+    input.valuationMode === 'FUNCTIONAL'
+      ? sumFunctionalAmount(expenses, input.valuationMode)
+      : expenseTotalsByCurrency[input.baseCurrency];
+
+  if (valuedTotal === undefined) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot must include the base currency total',
+    );
+  }
+
+  const preIncomeAmountMinor = input.grossExpenseAmountMinor + input.adjustmentAmountMinor;
+  const netDistributable =
+    preIncomeAmountMinor - input.incomeOffsetAmountMinor;
+
+  if (preIncomeAmountMinor !== input.preIncomeAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot pre-income total is inconsistent',
+    );
+  }
+
+  if (netDistributable !== input.netDistributableAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot net distributable is inconsistent',
+    );
+  }
+
+  if (netDistributable !== input.totalAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot total must equal net distributable',
+    );
+  }
+
+  if (valuedTotal !== preIncomeAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot expense sources must match pre-income total',
+    );
+  }
+
+  if (allocationTotal !== input.totalAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot allocations must match the liquidation total',
+    );
+  }
+
+  const incomeOffsetValuedTotal = incomeOffsets.reduce(
+    (sum, offset) =>
+      safeAddMinor(sum, offset.valuedAmountMinor, 'incomeOffsets.valuedAmountMinor'),
+    0,
+  );
+
+  if (incomeOffsetValuedTotal !== input.incomeOffsetAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot income offsets must match the offset total',
+    );
+  }
+
+  assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
+
+  return createJsonObject({
+    version: 3,
+    valuationMode: input.valuationMode,
+    liquidationId: input.liquidationId,
+    tenantId: input.tenantId,
+    buildingId: input.buildingId,
+    period: input.period,
+    baseCurrency: input.baseCurrency,
+    totalAmountMinor: input.totalAmountMinor,
+    totalsByCurrency,
+    grossExpenseAmountMinor: input.grossExpenseAmountMinor,
+    adjustmentAmountMinor: input.adjustmentAmountMinor,
+    preIncomeAmountMinor,
+    incomeOffsetAmountMinor: input.incomeOffsetAmountMinor,
+    netDistributableAmountMinor: input.netDistributableAmountMinor,
+    incomeOffsetsByCurrency: normalizeTotalsByCurrency(input.incomeOffsetsByCurrency),
+    expenses: createJsonArray(expenses.map(toExpenseJsonObject)),
+    incomeOffsets: createJsonArray(incomeOffsets.map(toIncomeOffsetJsonObject)),
+    allocations: createJsonArray(allocations.map(toAllocationJsonObject)),
+    dueDate: input.dueDate.toISOString(),
+    publishedAt: input.publishedAt.toISOString(),
+  });
+}
+
 export function distributeLiquidationAmountByLargestRemainder(
   units: readonly LiquidationDistributionUnit[],
   totalAmountMinor: number,
@@ -329,7 +508,7 @@ export function parseLiquidationPublicationSnapshot(
     throw new BadRequestException('Liquidation publication snapshot is invalid');
   }
 
-  if (value.version !== 1 && value.version !== 2) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
     throw new BadRequestException('Liquidation publication snapshot version is invalid');
   }
 
@@ -343,9 +522,9 @@ export function parseLiquidationPublicationSnapshot(
   const dueDate = parseIsoDateString(value.dueDate, 'dueDate');
   const publishedAt = parseIsoDateString(value.publishedAt, 'publishedAt');
   const valuationMode =
-    value.version === 2
-      ? parseValuationMode(value.valuationMode)
-      : ('LEGACY_NOMINAL' as const);
+    value.version === 1
+      ? ('LEGACY_NOMINAL' as const)
+      : parseValuationMode(value.valuationMode);
 
   if (!Array.isArray(value.expenses)) {
     throw new BadRequestException('Liquidation publication snapshot expenses are invalid');
@@ -374,12 +553,6 @@ export function parseLiquidationPublicationSnapshot(
     );
   }
 
-  if (valuedTotal !== totalAmountMinor) {
-    throw new BadRequestException(
-      'Liquidation publication snapshot totals must match the liquidation total',
-    );
-  }
-
   if (allocationTotal !== totalAmountMinor) {
     throw new BadRequestException(
       'Liquidation publication snapshot allocations must match the liquidation total',
@@ -387,6 +560,99 @@ export function parseLiquidationPublicationSnapshot(
   }
 
   assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
+
+  if (value.version === 3) {
+    const grossExpenseAmountMinor = parseSafeIntegerNonNegative(
+      value.grossExpenseAmountMinor,
+      'grossExpenseAmountMinor',
+    );
+    const adjustmentAmountMinor = parseSafeIntegerNonNegative(
+      value.adjustmentAmountMinor,
+      'adjustmentAmountMinor',
+    );
+    const preIncomeAmountMinor = parseSafeIntegerNonNegative(
+      value.preIncomeAmountMinor,
+      'preIncomeAmountMinor',
+    );
+    const incomeOffsetAmountMinor = parseSafeIntegerNonNegative(
+      value.incomeOffsetAmountMinor,
+      'incomeOffsetAmountMinor',
+    );
+    const netDistributableAmountMinor = parseSafeIntegerNonNegative(
+      value.netDistributableAmountMinor,
+      'netDistributableAmountMinor',
+    );
+
+    if (grossExpenseAmountMinor + adjustmentAmountMinor !== preIncomeAmountMinor) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot pre-income total is inconsistent',
+      );
+    }
+
+    if (preIncomeAmountMinor - incomeOffsetAmountMinor !== netDistributableAmountMinor) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot net distributable is inconsistent',
+      );
+    }
+
+    if (netDistributableAmountMinor !== totalAmountMinor) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot total must equal net distributable',
+      );
+    }
+
+    if (valuedTotal !== preIncomeAmountMinor) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot expense sources must match pre-income total',
+      );
+    }
+
+    if (!Array.isArray(value.incomeOffsets)) {
+      throw new BadRequestException('Liquidation publication snapshot incomeOffsets are invalid');
+    }
+
+    const incomeOffsets = value.incomeOffsets.map(parseIncomeOffsetSnapshot);
+    const incomeOffsetValuedTotal = incomeOffsets.reduce(
+      (sum, offset) =>
+        safeAddMinor(sum, offset.valuedAmountMinor, 'incomeOffsets.valuedAmountMinor'),
+      0,
+    );
+
+    if (incomeOffsetValuedTotal !== incomeOffsetAmountMinor) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot income offsets must match the offset total',
+      );
+    }
+
+    return {
+      version: 3,
+      valuationMode,
+      liquidationId,
+      tenantId,
+      buildingId,
+      period,
+      baseCurrency,
+      totalAmountMinor,
+      totalsByCurrency,
+      grossExpenseAmountMinor,
+      adjustmentAmountMinor,
+      preIncomeAmountMinor,
+      incomeOffsetAmountMinor,
+      netDistributableAmountMinor,
+      incomeOffsetsByCurrency: parseTotalsByCurrency(value.incomeOffsetsByCurrency),
+      expenses,
+      incomeOffsets,
+      allocations,
+      dueDate,
+      publishedAt,
+    };
+  }
+
+  if (valuedTotal !== totalAmountMinor) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot totals must match the liquidation total',
+    );
+  }
 
   if (valuationMode === 'LEGACY_NOMINAL') {
     return {
@@ -506,6 +772,132 @@ function normalizeExpenseSnapshot(value: PublishedExpenseSnapshot): PublishedExp
     ...(value.conversionDate !== null && value.conversionDate !== undefined
       ? { conversionDate: value.conversionDate }
       : {}),
+  };
+}
+
+function normalizeIncomeOffsetSnapshot(
+  value: PublishedIncomeOffsetSnapshot,
+): PublishedIncomeOffsetSnapshot {
+  assertNonEmpty(value.incomeId, 'incomeId');
+  assertNonEmpty(value.incomeApplicationId, 'incomeApplicationId');
+  assertNonEmpty(value.currencyCode, 'currencyCode');
+  assertNonEmpty(value.scopeType, 'scopeType');
+  assertSafeIntegerNonNegative(value.applicationAmountMinor, 'applicationAmountMinor');
+  assertSafeIntegerNonNegative(value.buildingAmountMinor, 'buildingAmountMinor');
+  assertSafeIntegerNonNegative(value.valuedAmountMinor, 'valuedAmountMinor');
+  parseIsoDateString(value.receivedDate, 'receivedDate');
+  assertNonEmpty(value.period, 'period');
+  if (value.policyVersionId !== null) {
+    assertNonEmpty(value.policyVersionId, 'policyVersionId');
+  }
+  if (value.categoryId) {
+    assertNonEmpty(value.categoryId, 'categoryId');
+  }
+
+  return value;
+}
+
+function toIncomeOffsetJsonObject(value: PublishedIncomeOffsetSnapshot): Prisma.InputJsonObject {
+  return createJsonObject({
+    incomeId: value.incomeId,
+    incomeApplicationId: value.incomeApplicationId,
+    categoryId: value.categoryId,
+    categoryName: value.categoryName,
+    policyVersionId: value.policyVersionId,
+    scopeType: value.scopeType,
+    currencyCode: value.currencyCode,
+    applicationAmountMinor: value.applicationAmountMinor,
+    buildingAmountMinor: value.buildingAmountMinor,
+    valuedAmountMinor: value.valuedAmountMinor,
+    functionalCurrencyCode: value.functionalCurrencyCode,
+    exchangeRateId: value.exchangeRateId,
+    exchangeRateValue: value.exchangeRateValue,
+    exchangeRateDirection: value.exchangeRateDirection,
+    exchangeRateEffectiveAt: value.exchangeRateEffectiveAt,
+    conversionDate: value.conversionDate,
+    receivedDate: value.receivedDate,
+    period: value.period,
+  });
+}
+
+function parseIncomeOffsetSnapshot(value: unknown): PublishedIncomeOffsetSnapshot {
+  if (!isPlainObject(value)) {
+    throw new BadRequestException('Liquidation publication snapshot income offset is invalid');
+  }
+
+  const incomeId = parseNonEmptyString(value.incomeId, 'incomeId');
+  const incomeApplicationId = parseNonEmptyString(value.incomeApplicationId, 'incomeApplicationId');
+  const categoryId = value.categoryId === null || value.categoryId === undefined
+    ? ''
+    : parseNonEmptyString(value.categoryId, 'categoryId');
+  const categoryName =
+    value.categoryName === null || value.categoryName === undefined
+      ? null
+      : parseNullableString(value.categoryName, 'categoryName');
+  const policyVersionId =
+    value.policyVersionId === null || value.policyVersionId === undefined
+      ? null
+      : parseNullableString(value.policyVersionId, 'policyVersionId');
+  const scopeType = parseNonEmptyString(value.scopeType, 'scopeType');
+  const currencyCode = parseNonEmptyString(value.currencyCode, 'currencyCode');
+  const applicationAmountMinor = parseSafeIntegerNonNegative(
+    value.applicationAmountMinor,
+    'applicationAmountMinor',
+  );
+  const buildingAmountMinor = parseSafeIntegerNonNegative(
+    value.buildingAmountMinor,
+    'buildingAmountMinor',
+  );
+  const valuedAmountMinor = parseSafeIntegerNonNegative(
+    value.valuedAmountMinor,
+    'valuedAmountMinor',
+  );
+  const functionalCurrencyCode =
+    value.functionalCurrencyCode === null || value.functionalCurrencyCode === undefined
+      ? null
+      : parseNullableString(value.functionalCurrencyCode, 'functionalCurrencyCode');
+  const exchangeRateId =
+    value.exchangeRateId === null || value.exchangeRateId === undefined
+      ? null
+      : parseNullableString(value.exchangeRateId, 'exchangeRateId');
+  const exchangeRateValue =
+    value.exchangeRateValue === null || value.exchangeRateValue === undefined
+      ? null
+      : parseNullableString(String(value.exchangeRateValue), 'exchangeRateValue');
+  const exchangeRateDirection =
+    value.exchangeRateDirection === null || value.exchangeRateDirection === undefined
+      ? null
+      : parseNullableString(value.exchangeRateDirection, 'exchangeRateDirection');
+  const exchangeRateEffectiveAt =
+    value.exchangeRateEffectiveAt === null || value.exchangeRateEffectiveAt === undefined
+      ? null
+      : parseIsoDateString(value.exchangeRateEffectiveAt, 'exchangeRateEffectiveAt');
+  const conversionDate =
+    value.conversionDate === null || value.conversionDate === undefined
+      ? null
+      : parseIsoDateString(value.conversionDate, 'conversionDate');
+  const receivedDate = parseIsoDateString(value.receivedDate, 'receivedDate');
+  const period = parseNonEmptyString(value.period, 'period');
+
+  return {
+    incomeId,
+    incomeApplicationId,
+    categoryId,
+    categoryName,
+    policyVersionId,
+    scopeType,
+    currencyCode,
+    applicationAmountMinor,
+    buildingAmountMinor,
+    valuedAmountMinor,
+    functionalCurrencyCode,
+    exchangeRateId,
+    exchangeRateValue,
+    exchangeRateDirection,
+    exchangeRateEffectiveAt,
+    conversionDate,
+    receivedDate,
+    period,
   };
 }
 
