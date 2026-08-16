@@ -651,5 +651,75 @@ describe('liquidation publication snapshot', () => {
       const snapshot = buildLiquidationPublicationSnapshotV3(zeroInput);
       expect(snapshot).toMatchObject({ version: 3, totalAmountMinor: 10000 });
     });
+
+    // ── FIN-04R: legacyDestination provenance en V3 ────────────────────────
+
+    it('persists legacyDestination in new V3 snapshots', () => {
+      const legacyInput = {
+        ...v3Input,
+        incomeOffsets: [
+          {
+            ...v3Input.incomeOffsets[0]!,
+            policyVersionId: null,
+            legacyDestination: 'APPLY_TO_EXPENSES',
+          },
+        ],
+      };
+
+      const snapshot = buildLiquidationPublicationSnapshotV3(legacyInput);
+      expect(snapshot.incomeOffsets[0]).toMatchObject({
+        policyVersionId: null,
+        legacyDestination: 'APPLY_TO_EXPENSES',
+      });
+
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+      expect(parsed?.incomeOffsets[0]).toMatchObject({
+        policyVersionId: null,
+        legacyDestination: 'APPLY_TO_EXPENSES',
+      });
+    });
+
+    it('normalizes missing legacyDestination to null (manual/policy V3)', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
+      expect(snapshot.incomeOffsets[0]).toMatchObject({
+        policyVersionId: 'pv-1',
+        legacyDestination: null,
+      });
+    });
+
+    it('parses an old V3 snapshot without legacyDestination field as null', () => {
+      // V3 histórico de pre-FIN-04: sin campo legacyDestination.
+      const oldStyle = {
+        ...v3Input,
+        incomeOffsets: [
+          {
+            incomeId: 'income-1',
+            incomeApplicationId: 'app-offset-1',
+            categoryId: 'cat-1',
+            categoryName: 'Parrillera',
+            policyVersionId: null,
+            scopeType: 'BUILDING',
+            currencyCode: 'ARS',
+            applicationAmountMinor: 7000,
+            buildingAmountMinor: 7000,
+            valuedAmountMinor: 7000,
+            functionalCurrencyCode: null,
+            exchangeRateId: null,
+            exchangeRateValue: null,
+            exchangeRateDirection: null,
+            exchangeRateEffectiveAt: null,
+            conversionDate: null,
+            receivedDate: '2026-08-10T00:00:00.000Z',
+            period: '2026-08',
+          },
+        ],
+      };
+
+      const snapshot = buildLiquidationPublicationSnapshotV3(oldStyle);
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+      expect(parsed?.incomeOffsets[0]).toMatchObject({
+        legacyDestination: null,
+      });
+    });
   });
 });

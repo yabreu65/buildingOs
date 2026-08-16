@@ -64,6 +64,7 @@ export interface PublishedIncomeOffsetSnapshot {
   categoryId: string;
   categoryName: string | null;
   policyVersionId: string | null;
+  legacyDestination: string | null; // FIN-04: provenance legacy (null = manual/policy)
   scopeType: string;
   currencyCode: string;
   applicationAmountMinor: number;
@@ -832,7 +833,10 @@ function normalizeIncomeOffsetSnapshot(
     assertNonEmpty(value.categoryId, 'categoryId');
   }
 
-  return value;
+  return {
+    ...value,
+    legacyDestination: value.legacyDestination ?? null,
+  };
 }
 
 function toIncomeOffsetJsonObject(value: PublishedIncomeOffsetSnapshot): Prisma.InputJsonObject {
@@ -842,6 +846,7 @@ function toIncomeOffsetJsonObject(value: PublishedIncomeOffsetSnapshot): Prisma.
     categoryId: value.categoryId,
     categoryName: value.categoryName,
     policyVersionId: value.policyVersionId,
+    legacyDestination: value.legacyDestination ?? null,
     scopeType: value.scopeType,
     currencyCode: value.currencyCode,
     applicationAmountMinor: value.applicationAmountMinor,
@@ -916,6 +921,11 @@ function parseIncomeOffsetSnapshot(value: unknown): PublishedIncomeOffsetSnapsho
       : parseIsoDateString(value.conversionDate, 'conversionDate');
   const receivedDate = parseIsoDateString(value.receivedDate, 'receivedDate');
   const period = parseNonEmptyString(value.period, 'period');
+  // FIN-04R: V3 histórico sin field → null (backward compatible).
+  const legacyDestination =
+    value.legacyDestination === null || value.legacyDestination === undefined
+      ? null
+      : parseNullableString(value.legacyDestination, 'legacyDestination');
 
   return {
     incomeId,
@@ -923,6 +933,7 @@ function parseIncomeOffsetSnapshot(value: unknown): PublishedIncomeOffsetSnapsho
     categoryId,
     categoryName,
     policyVersionId,
+    legacyDestination,
     scopeType,
     currencyCode,
     applicationAmountMinor,

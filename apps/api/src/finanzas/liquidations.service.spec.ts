@@ -9,6 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -163,6 +164,14 @@ describe('LiquidationsService', () => {
       providers: [
         LiquidationsService,
         LiquidationIncomeOffsetsService,
+        {
+          provide: LegacyIncomeBackfillService,
+          useValue: {
+            materializeForLiquidation: jest.fn().mockResolvedValue(undefined),
+            preview: jest.fn().mockResolvedValue([]),
+            apply: jest.fn().mockResolvedValue([]),
+          },
+        },
         {
           provide: LiquidationPublicationUseCase,
           inject: [PrismaService, AuditService, FinanzasValidators, NotificationsService],

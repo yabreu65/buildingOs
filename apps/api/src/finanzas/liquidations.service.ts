@@ -40,6 +40,7 @@ import {
   LiquidationIncomeOffsetsService,
   type IncomeOffsetSnapshotItem,
 } from './liquidation-income-offsets.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 
 interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   expenseId: string;
@@ -92,6 +93,7 @@ export class LiquidationsService {
     private readonly validators: FinanzasValidators,
     private readonly publicationUseCase: LiquidationPublicationUseCase,
     private readonly incomeOffsetsService: LiquidationIncomeOffsetsService,
+    private readonly legacyBackfillService: LegacyIncomeBackfillService,
   ) {}
 
   private expenseAccountingPeriodWhere(period: string): {
@@ -431,6 +433,17 @@ export class LiquidationsService {
         dto.baseCurrency,
         valuationMode,
       );
+
+      // ── FIN-04: materializar legacy APPLY_TO_EXPENSES antes de congelar ──
+      // Dentro de la MISMA transacción: si el draft falla después, la
+      // application legacy y sus audits hacen rollback con la tx.
+      await this.legacyBackfillService.materializeForLiquidation({
+        tx,
+        tenantId,
+        buildingId: dto.buildingId,
+        period: dto.period,
+        membershipId: membership.id,
+      });
 
       // ── FIN-06: Income offsets (IncomeApplication OFFSET_EXPENSES) ──────
       // Valuación: LEGACY_NOMINAL exige moneda == baseCurrency; FUNCTIONAL usa

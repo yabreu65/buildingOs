@@ -724,6 +724,7 @@ export class LiquidationPublicationUseCase {
                 amountMinor: true,
                 currencyCode: true,
                 policyVersionId: true,
+                legacyDestination: true,
                 income: { select: { id: true, status: true, period: true } },
               },
             });
@@ -756,6 +757,8 @@ export class LiquidationPublicationUseCase {
                 application.amountMinor !== snapshot.applicationAmountMinor ||
                 application.currencyCode !== snapshot.currencyCode ||
                 application.policyVersionId !== snapshot.policyVersionId ||
+                (application.legacyDestination ?? null) !==
+                  (snapshot.legacyDestination ?? null) ||
                 application.income === null ||
                 application.income.id !== snapshot.incomeId ||
                 application.income.status !== 'RECORDED' ||
@@ -1467,6 +1470,7 @@ function parseIncomeOffsetSnapshotItems(value: unknown): PublishedIncomeOffsetSn
       categoryId: nullableString('categoryId') ?? '',
       categoryName: nullableString('categoryName'),
       policyVersionId: nullableString('policyVersionId'),
+      legacyDestination: nullableString('legacyDestination'),
       scopeType: requiredString('scopeType'),
       currencyCode: requiredString('currencyCode'),
       applicationAmountMinor: requiredInt('applicationAmountMinor'),

@@ -833,6 +833,7 @@ enum AuditAction {
   INCOME_POLICY_CREATE
   INCOME_POLICY_VERSION_CREATE
   INCOME_POLICY_DEACTIVATE
+  INCOME_LEGACY_BACKFILL // FIN-04: materialización explícita o automática de destino legacy
   // FUNDS (FIN-02)
   FUND_CREATE
   FUND_UPDATE
@@ -2074,6 +2075,7 @@ model IncomeApplication {
   @@index([tenantId, policyVersionId])
 
   policyVersionId String? // FIN-05: provenance — versión de política que generó esta aplicación (null = manual)
+  legacyDestination IncomeDestination? // FIN-04: provenance — destino legacy que materializó esta aplicación (null = manual/policy)
 }
 
 // ============================================================================

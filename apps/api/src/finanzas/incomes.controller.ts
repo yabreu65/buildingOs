@@ -11,11 +11,16 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { IncomesService } from './incomes.service';
+import { IncomeApplicationsService } from './income-applications.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
+import {
+  LegacyBackfillApplyDto,
+  LegacyBackfillPreviewQueryDto,
+} from './legacy-income-backfill.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
-import { IncomesService } from './incomes.service';
-import { IncomeApplicationsService } from './income-applications.service';
 import { IncomeApplicationPlanResponseDto } from './income-applications.dto';
 import {
   CreateIncomeDto,
@@ -33,7 +38,39 @@ export class IncomesController {
   constructor(
     private readonly incomesService: IncomesService,
     private readonly incomeApplicationsService: IncomeApplicationsService,
+    private readonly legacyBackfillService: LegacyIncomeBackfillService,
   ) {}
+
+  /**
+   * FIN-04: rutas estáticas ANTES de :incomeId para evitar shadowing.
+   */
+  @Get('legacy-backfill/preview')
+  async previewLegacyBackfill(
+    @Query() query: LegacyBackfillPreviewQueryDto,
+    @Request() req?: AuthenticatedRequest,
+  ) {
+    return this.legacyBackfillService.preview(
+      req!.tenantId!,
+      req!.user.membershipId ?? '',
+      {
+        period: query.period,
+        categoryId: query.categoryId,
+        destination: query.destination,
+      },
+    );
+  }
+
+  @Post('legacy-backfill/apply')
+  async applyLegacyBackfill(
+    @Body() dto: LegacyBackfillApplyDto,
+    @Request() req?: AuthenticatedRequest,
+  ) {
+    return this.legacyBackfillService.apply(
+      req!.tenantId!,
+      req!.user.membershipId ?? '',
+      dto.items,
+    );
+  }
 
   @Get()
   async listIncomes(
