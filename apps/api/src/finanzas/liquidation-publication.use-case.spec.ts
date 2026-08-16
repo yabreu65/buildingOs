@@ -54,6 +54,8 @@ describe('LiquidationPublicationUseCase', () => {
     unit: { findMany: jest.Mock };
     charge: { findMany: jest.Mock; createMany: jest.Mock };
     auditLog: { create: jest.Mock };
+    liquidationIncomeOffset: { findMany: jest.Mock; count: jest.Mock };
+    incomeApplication: { findMany: jest.Mock };
   };
   let deps: LiquidationWorkflowDependencies;
   let useCase: LiquidationPublicationUseCase;
@@ -91,6 +93,13 @@ describe('LiquidationPublicationUseCase', () => {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
       auditLog: { create: jest.fn().mockResolvedValue(undefined) },
+      liquidationIncomeOffset: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      incomeApplication: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
 
     deps = {
@@ -504,6 +513,263 @@ describe('LiquidationPublicationUseCase', () => {
         },
       });
       expect(tx.charge.createMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('FIN-06 income offset publication', () => {
+    const incomeOffsetLiquidation = {
+      ...baseLiquidation,
+      period: '2026-08',
+      totalAmountMinor: 3000,
+      totalsByCurrency: { ARS: 10000 },
+      expenseSnapshot: [
+        {
+          expenseId: 'exp-1',
+          categoryName: 'Water',
+          vendorName: null,
+          amountMinor: 10000,
+          currencyCode: 'ARS',
+          invoiceDate: '2026-08-05T00:00:00.000Z',
+          description: null,
+          type: 'EXPENSE',
+        },
+      ],
+      grossExpenseAmountMinor: 10000,
+      adjustmentAmountMinor: 0,
+      preIncomeAmountMinor: 10000,
+      incomeOffsetAmountMinor: 7000,
+      netDistributableAmountMinor: 3000,
+      incomeOffsetSnapshot: [
+        {
+          incomeId: 'income-1',
+          incomeApplicationId: 'app-offset-1',
+          categoryId: 'cat-1',
+          categoryName: 'Parrillera',
+          policyVersionId: 'pv-1',
+          scopeType: 'BUILDING',
+          currencyCode: 'ARS',
+          applicationAmountMinor: 7000,
+          buildingAmountMinor: 7000,
+          valuedAmountMinor: 7000,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+          receivedDate: '2026-08-10T00:00:00.000Z',
+          period: '2026-08',
+        },
+      ],
+      incomeOffsetsByCurrency: { ARS: 7000 },
+    };
+
+    const validReference = {
+      incomeApplicationId: 'app-offset-1',
+      buildingId: 'building-1',
+      originalAmountMinor: 7000,
+      currencyCode: 'ARS',
+      valuedAmountMinor: 7000,
+      baseCurrency: 'ARS',
+    };
+
+    const validApplication = {
+      id: 'app-offset-1',
+      incomeId: 'income-1',
+      destinationType: 'OFFSET_EXPENSES',
+      amountMinor: 7000,
+      currencyCode: 'ARS',
+      policyVersionId: 'pv-1',
+      income: {
+        id: 'income-1',
+        status: 'RECORDED',
+        period: '2026-08',
+      },
+    };
+
+    it('publishes an income-offset liquidation with a version 3 snapshot and no zero charges', async () => {
+      tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
+      tx.liquidation.findFirst
+        .mockResolvedValueOnce(incomeOffsetLiquidation)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...incomeOffsetLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-16T00:00:00.000Z'),
+        });
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([validApplication]);
+
+      const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
+        dueDate: '2026-09-10',
+      });
+
+      expect(result.status).toBe('PUBLISHED');
+      expect(deps.createAuditLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            snapshotVersion: 3,
+            incomeOffsetAmountMinor: 7000,
+            incomeOffsetCount: 1,
+          }),
+        }),
+        tx,
+      );
+      const publishedSnapshot = tx.liquidation.updateMany.mock.calls[0]![0]!.data
+        .publicationSnapshot as Record<string, unknown>;
+      expect(publishedSnapshot.version).toBe(3);
+      expect(publishedSnapshot.incomeOffsetAmountMinor).toBe(7000);
+      expect(publishedSnapshot.netDistributableAmountMinor).toBe(3000);
+      expect(tx.charge.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({ amount: 1500, unitId: 'unit-1', liquidationId: 'liq-1' }),
+        ]),
+      });
+    });
+
+    it('publishes a zero-net liquidation without creating positive charges', async () => {
+      const zeroNetLiquidation = {
+        ...incomeOffsetLiquidation,
+        totalAmountMinor: 0,
+        incomeOffsetAmountMinor: 10000,
+        netDistributableAmountMinor: 0,
+        incomeOffsetSnapshot: [
+          {
+            ...incomeOffsetLiquidation.incomeOffsetSnapshot[0],
+            valuedAmountMinor: 10000,
+            buildingAmountMinor: 10000,
+            applicationAmountMinor: 10000,
+          },
+        ],
+        incomeOffsetsByCurrency: { ARS: 10000 },
+      };
+
+      tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
+      tx.liquidation.findFirst
+        .mockResolvedValueOnce(zeroNetLiquidation)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...zeroNetLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-16T00:00:00.000Z'),
+        });
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([
+        {
+          ...validReference,
+          originalAmountMinor: 10000,
+          valuedAmountMinor: 10000,
+        },
+      ]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([
+        { ...validApplication, amountMinor: 10000 },
+      ]);
+
+      const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
+        dueDate: '2026-09-10',
+      });
+
+      expect(result.status).toBe('PUBLISHED');
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
+      // FIN-06R: zero-net audit debe reportar chargesCount = 0 (sin cargos reales)
+      // y allocationCount = 2 (unidades del building).
+      expect(deps.createAuditLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            chargesCount: 0,
+            allocationCount: 2,
+            snapshotVersion: 3,
+          }),
+        }),
+        tx,
+      );
+    });
+
+    it('rejects publication when the offset source drifted from the draft snapshot', async () => {
+      tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
+      tx.liquidation.findFirst
+        .mockResolvedValueOnce(incomeOffsetLiquidation)
+        .mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([
+        { ...validApplication, destinationType: 'FUND' },
+      ]);
+
+      await expect(
+        useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-09-10' }),
+      ).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+        },
+      });
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects publication when the income is no longer RECORDED', async () => {
+      tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
+      tx.liquidation.findFirst
+        .mockResolvedValueOnce(incomeOffsetLiquidation)
+        .mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([
+        { ...validApplication, income: { id: 'income-1', status: 'VOID', period: '2026-08' } },
+      ]);
+
+      await expect(
+        useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-09-10' }),
+      ).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+        },
+      });
+    });
+
+    it('rejects publication when the expense sources do not match pre-income', async () => {
+      tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
+      const drifted = {
+        ...incomeOffsetLiquidation,
+        expenseSnapshot: [
+          {
+            expenseId: 'exp-1',
+            categoryName: 'Water',
+            vendorName: null,
+            amountMinor: 9999,
+            currencyCode: 'ARS',
+            invoiceDate: '2026-08-05T00:00:00.000Z',
+            description: null,
+            type: 'EXPENSE',
+          },
+        ],
+      };
+
+      tx.liquidation.findFirst.mockResolvedValueOnce(drifted).mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([validApplication]);
+
+      await expect(
+        useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-09-10' }),
+      ).rejects.toMatchObject({
+        response: {
+          statusCode: 422,
+          error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
+        },
+      });
     });
   });
 });

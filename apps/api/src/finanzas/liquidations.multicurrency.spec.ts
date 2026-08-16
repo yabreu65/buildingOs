@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnprocessableEntityException } from '@nestjs/common';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -203,6 +204,17 @@ describe('LiquidationsService multicurrency valuation', () => {
                 jest.fn(),
               ),
             ),
+        },
+        {
+          provide: LiquidationIncomeOffsetsService,
+          useValue: {
+            collectEligibleOffsets: jest.fn().mockResolvedValue({
+              items: [],
+              references: [],
+              incomeOffsetAmountMinor: 0,
+              incomeOffsetsByCurrency: {},
+            }),
+          },
         },
       ],
     }).compile();

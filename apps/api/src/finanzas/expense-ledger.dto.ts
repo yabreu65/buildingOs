@@ -294,6 +294,12 @@ export interface LiquidationResponseDto {
   publishedAt: Date | null;
   canceledAt: Date | null;
   createdAt: Date;
+  // FIN-06: desglose read-only del neto distributable (solo drafts FIN-06)
+  grossExpenseAmountMinor?: number | null;
+  adjustmentAmountMinor?: number | null;
+  preIncomeAmountMinor?: number | null;
+  incomeOffsetAmountMinor?: number | null;
+  netDistributableAmountMinor?: number | null;
 }
 
 export interface LiquidationDetailDto extends LiquidationResponseDto {

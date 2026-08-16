@@ -23,6 +23,7 @@ import { ExpenseLedgerCategoriesService } from './expense-ledger-categories.serv
 import { ExpensesService } from './expenses.service';
 import { IncomesService } from './incomes.service';
 import { LiquidationsService } from './liquidations.service';
+import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { LiquidationEngineController } from './liquidation-engine.controller';
 import { MovementAllocationService } from './movement-allocation.service';
@@ -125,6 +126,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
         ),
     },
     LiquidationsService,
+    LiquidationIncomeOffsetsService,
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
@@ -151,6 +153,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     ExpensesService,
     IncomesService,
     LiquidationsService,
+    LiquidationIncomeOffsetsService,
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,

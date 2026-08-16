@@ -15,7 +15,9 @@ import { FinanzasValidators } from './finanzas.validators';
 import {
   assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
+  buildLiquidationPublicationSnapshotV3,
   type PublishedExpenseSnapshot,
+  type PublishedIncomeOffsetSnapshot,
 } from './liquidation-publication-snapshot';
 import {
   type LiquidationResponseDto,
@@ -151,9 +153,19 @@ type LiquidationRecord = {
   publishedAt: Date | null;
   canceledAt: Date | null;
   createdAt: Date;
+  grossExpenseAmountMinor: number | null;
+  adjustmentAmountMinor: number | null;
+  preIncomeAmountMinor: number | null;
+  incomeOffsetAmountMinor: number | null;
+  netDistributableAmountMinor: number | null;
+  incomeOffsetSnapshot: unknown;
+  incomeOffsetsByCurrency: unknown;
 };
 
-type LiquidationResponseRecord = Omit<LiquidationRecord, 'expenseSnapshot' | 'publicationSnapshot'>;
+type LiquidationResponseRecord = Omit<
+  LiquidationRecord,
+  'expenseSnapshot' | 'publicationSnapshot' | 'incomeOffsetSnapshot' | 'incomeOffsetsByCurrency'
+>;
 
 export interface DraftLiquidationInput {
   readonly tenantId: string;
@@ -167,6 +179,22 @@ export interface DraftLiquidationInput {
   readonly expenseSnapshot: Prisma.InputJsonArray;
   readonly unitCount: number;
   readonly generatedByMembershipId: string;
+  // FIN-06: desglose del neto distributable (opcional = legacy pre-FIN-06)
+  readonly grossExpenseAmountMinor?: number;
+  readonly adjustmentAmountMinor?: number;
+  readonly preIncomeAmountMinor?: number;
+  readonly incomeOffsetAmountMinor?: number;
+  readonly netDistributableAmountMinor?: number;
+  readonly incomeOffsetSnapshot?: Prisma.InputJsonArray;
+  readonly incomeOffsetsByCurrency?: Prisma.InputJsonObject;
+  readonly createIncomeOffsetReferences?: ReadonlyArray<{
+    incomeApplicationId: string;
+    buildingId: string;
+    originalAmountMinor: number;
+    currencyCode: string;
+    valuedAmountMinor: number;
+    baseCurrency: string;
+  }>;
 }
 
 export async function requireFinanceMembership(
@@ -225,6 +253,11 @@ export function toLiquidationResponseDto(
     publishedAt: liquidation.publishedAt,
     canceledAt: liquidation.canceledAt,
     createdAt: liquidation.createdAt,
+    grossExpenseAmountMinor: liquidation.grossExpenseAmountMinor ?? null,
+    adjustmentAmountMinor: liquidation.adjustmentAmountMinor ?? null,
+    preIncomeAmountMinor: liquidation.preIncomeAmountMinor ?? null,
+    incomeOffsetAmountMinor: liquidation.incomeOffsetAmountMinor ?? null,
+    netDistributableAmountMinor: liquidation.netDistributableAmountMinor ?? null,
   };
 }
 
@@ -349,6 +382,13 @@ export async function createLiquidationDraftRecord(
   deps: Pick<LiquidationWorkflowDependencies, 'createAuditLogRequired'>,
   input: DraftLiquidationInput,
 ): Promise<LiquidationRecord> {
+  const isFin06Input =
+    input.grossExpenseAmountMinor !== undefined ||
+    input.adjustmentAmountMinor !== undefined ||
+    input.preIncomeAmountMinor !== undefined ||
+    input.incomeOffsetAmountMinor !== undefined ||
+    input.netDistributableAmountMinor !== undefined;
+
   const liquidation = await tx.liquidation.create({
     data: {
       tenantId: input.tenantId,
@@ -362,8 +402,43 @@ export async function createLiquidationDraftRecord(
       expenseSnapshot: input.expenseSnapshot,
       unitCount: input.unitCount,
       generatedByMembershipId: input.generatedByMembershipId,
+      grossExpenseAmountMinor: input.grossExpenseAmountMinor ?? null,
+      adjustmentAmountMinor: input.adjustmentAmountMinor ?? null,
+      preIncomeAmountMinor: input.preIncomeAmountMinor ?? null,
+      incomeOffsetAmountMinor: input.incomeOffsetAmountMinor ?? null,
+      netDistributableAmountMinor: input.netDistributableAmountMinor ?? null,
+      // FIN-06R2: los drafts del motor FIN-06 persisten SIEMPRE los JSON,
+      // incluso vacíos ([] / {}), para clasificarse como FIN-06 en publish.
+      // Solo liquidaciones históricas pre-FIN-06 mantienen null.
+      ...(isFin06Input
+        ? {
+            incomeOffsetSnapshot: (input.incomeOffsetSnapshot ??
+              []) as Prisma.InputJsonArray,
+            incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ??
+              {}) as Prisma.InputJsonObject,
+          }
+        : {}),
     },
   });
+
+  // FIN-06: referencias relacionales de las aplicaciones OFFSET usadas
+  // (void-safety + provenance; una por liquidación/aplicación).
+  // Sin skipDuplicates: una referencia duplicada es un bug financiero y debe
+  // hacer rollback (el unique de la DB es la última barrera).
+  if (input.createIncomeOffsetReferences && input.createIncomeOffsetReferences.length > 0) {
+    await tx.liquidationIncomeOffset.createMany({
+      data: input.createIncomeOffsetReferences.map((reference) => ({
+        tenantId: input.tenantId,
+        liquidationId: liquidation.id,
+        incomeApplicationId: reference.incomeApplicationId,
+        buildingId: reference.buildingId,
+        originalAmountMinor: reference.originalAmountMinor,
+        currencyCode: reference.currencyCode,
+        valuedAmountMinor: reference.valuedAmountMinor,
+        baseCurrency: reference.baseCurrency,
+      })),
+    });
+  }
 
   await deps.createAuditLogRequired(
     {
@@ -378,6 +453,24 @@ export async function createLiquidationDraftRecord(
         totalAmountMinor: input.totalAmountMinor,
         baseCurrency: input.baseCurrency,
         expenseCount: input.expenseSnapshot.length,
+        ...(input.grossExpenseAmountMinor !== undefined
+          ? { grossExpenseAmountMinor: input.grossExpenseAmountMinor }
+          : {}),
+        ...(input.adjustmentAmountMinor !== undefined
+          ? { adjustmentAmountMinor: input.adjustmentAmountMinor }
+          : {}),
+        ...(input.preIncomeAmountMinor !== undefined
+          ? { preIncomeAmountMinor: input.preIncomeAmountMinor }
+          : {}),
+        ...(input.incomeOffsetAmountMinor !== undefined
+          ? { incomeOffsetAmountMinor: input.incomeOffsetAmountMinor }
+          : {}),
+        ...(input.netDistributableAmountMinor !== undefined
+          ? { netDistributableAmountMinor: input.netDistributableAmountMinor }
+          : {}),
+        ...(input.incomeOffsetSnapshot !== undefined
+          ? { incomeOffsetCount: input.incomeOffsetSnapshot.length }
+          : {}),
       },
     },
     tx,
@@ -521,6 +614,225 @@ export class LiquidationPublicationUseCase {
             valuationMode,
           );
 
+          // FIN-06R2: clasificación por PRESENCIA del modelo FIN-06, nunca por
+          // offset > 0. Un draft FIN-06 legítimo puede tener offset 0, y una
+          // row corrompida a offset 0 no debe degradarse a legacy/V2.
+          // `!= null` trata null y undefined como ausencia (legacy).
+          const hasFin06Summary =
+            current.grossExpenseAmountMinor != null ||
+            current.adjustmentAmountMinor != null ||
+            current.preIncomeAmountMinor != null ||
+            current.incomeOffsetAmountMinor != null ||
+            current.netDistributableAmountMinor != null;
+          const hasFin06JsonArtifacts =
+            current.incomeOffsetSnapshot != null ||
+            current.incomeOffsetsByCurrency != null;
+
+          // FIN-06R3: las referencias relacionales también clasifican FIN-06.
+          // Una row corrompida a summary+JSON null pero con LiquidationIncomeOffset
+          // rows NO puede degradarse a legacy.
+          const fin06ReferenceCount = await tx.liquidationIncomeOffset.count({
+            where: { tenantId, liquidationId },
+          });
+          const hasFin06RelationalArtifacts = fin06ReferenceCount > 0;
+
+          const isFin06Liquidation =
+            hasFin06Summary || hasFin06JsonArtifacts || hasFin06RelationalArtifacts;
+
+          let incomeOffsetReferences: Array<{
+            incomeApplicationId: string;
+            buildingId: string;
+            originalAmountMinor: number;
+            currencyCode: string;
+            valuedAmountMinor: number;
+            baseCurrency: string;
+          }> = [];
+
+          if (isFin06Liquidation) {
+            // Contrato FIN-06 completo: todos los summary fields presentes.
+            if (
+              current.grossExpenseAmountMinor === null ||
+              current.adjustmentAmountMinor === null ||
+              current.preIncomeAmountMinor === null ||
+              current.incomeOffsetAmountMinor === null ||
+              current.netDistributableAmountMinor === null
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'La liquidación posee evidencia FIN-06 pero su resumen está incompleto; no se publica',
+              });
+            }
+
+            // FIN-06R: reconciliación EXACTA snapshot ↔ relations ↔ current.
+            const snapshotOffsets = parseIncomeOffsetSnapshotItems(
+              current.incomeOffsetSnapshot,
+            );
+            const snapshotByApplicationId = new Map(
+              snapshotOffsets.map((offset) => [offset.incomeApplicationId, offset]),
+            );
+
+            incomeOffsetReferences = await tx.liquidationIncomeOffset.findMany({
+              where: { tenantId, liquidationId },
+              select: {
+                incomeApplicationId: true,
+                buildingId: true,
+                originalAmountMinor: true,
+                currencyCode: true,
+                valuedAmountMinor: true,
+                baseCurrency: true,
+              },
+            });
+
+            const referenceByApplicationId = new Map(
+              incomeOffsetReferences.map((reference) => [
+                reference.incomeApplicationId,
+                reference,
+              ]),
+            );
+
+            // Cardinalidad: snapshot count == reference count == unique IDs.
+            const snapshotIds = snapshotOffsets.map((offset) => offset.incomeApplicationId);
+            const referenceIds = incomeOffsetReferences.map(
+              (reference) => reference.incomeApplicationId,
+            );
+            const snapshotIdSet = new Set(snapshotIds);
+            const referenceIdSet = new Set(referenceIds);
+
+            if (
+              snapshotIds.length !== snapshotIdSet.size ||
+              referenceIds.length !== referenceIdSet.size ||
+              snapshotIdSet.size !== referenceIdSet.size ||
+              ![...snapshotIdSet].every((id) => referenceIdSet.has(id))
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'El snapshot de income offsets no reconcilia cardinalidad con las referencias; no se publica',
+              });
+            }
+
+            const applicationIds = referenceIds;
+            const applications = await tx.incomeApplication.findMany({
+              where: { tenantId, id: { in: applicationIds } },
+              select: {
+                id: true,
+                incomeId: true,
+                destinationType: true,
+                amountMinor: true,
+                currencyCode: true,
+                policyVersionId: true,
+                income: { select: { id: true, status: true, period: true } },
+              },
+            });
+            const applicationById = new Map(applications.map((app) => [app.id, app]));
+
+            let relationalValuedTotal = 0;
+
+            for (const reference of incomeOffsetReferences) {
+              const snapshot = snapshotByApplicationId.get(reference.incomeApplicationId);
+              const application = applicationById.get(reference.incomeApplicationId);
+
+              if (!snapshot || !application) {
+                throw new UnprocessableEntityException({
+                  statusCode: 422,
+                  error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                  message: `La fuente de income offset ${reference.incomeApplicationId} no reconcilia; no se publica`,
+                });
+              }
+
+              // Equality estricta contra el snapshot (no comparaciones parciales).
+              if (
+                snapshot.incomeApplicationId !== reference.incomeApplicationId ||
+                snapshot.buildingAmountMinor !== reference.originalAmountMinor ||
+                snapshot.valuedAmountMinor !== reference.valuedAmountMinor ||
+                snapshot.currencyCode !== reference.currencyCode ||
+                snapshot.period !== current.period ||
+                reference.buildingId !== current.buildingId ||
+                reference.baseCurrency !== current.baseCurrency ||
+                application.destinationType !== 'OFFSET_EXPENSES' ||
+                application.amountMinor !== snapshot.applicationAmountMinor ||
+                application.currencyCode !== snapshot.currencyCode ||
+                application.policyVersionId !== snapshot.policyVersionId ||
+                application.income === null ||
+                application.income.id !== snapshot.incomeId ||
+                application.income.status !== 'RECORDED' ||
+                application.income.period !== current.period
+              ) {
+                throw new UnprocessableEntityException({
+                  statusCode: 422,
+                  error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                  message: `La fuente de income offset ${reference.incomeApplicationId} cambió desde el draft; no se publica`,
+                });
+              }
+
+              relationalValuedTotal += reference.valuedAmountMinor;
+            }
+
+            // Reconciliación relacional del total valorado.
+            if (relationalValuedTotal !== current.incomeOffsetAmountMinor) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'La suma valorada de referencias no coincide con el total de income offsets; no se publica',
+              });
+            }
+
+            const snapshotValuedTotal = snapshotOffsets.reduce(
+              (sum, offset) => sum + offset.valuedAmountMinor,
+              0,
+            );
+            if (snapshotValuedTotal !== current.incomeOffsetAmountMinor) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'La suma valorada del snapshot no coincide con el total de income offsets; no se publica',
+              });
+            }
+
+            // FIN-06R: incomeOffsetsByCurrency debe reconciliar exactamente a
+            // { baseCurrency: incomeOffsetAmountMinor } cuando offset > 0.
+            if (current.incomeOffsetsByCurrency === null) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'incomeOffsetsByCurrency falta en una liquidación FIN-06; no se publica',
+              });
+            }
+            const incomeOffsetsByCurrency = parseTotalsByCurrency(
+              current.incomeOffsetsByCurrency,
+            );
+            if (current.incomeOffsetAmountMinor > 0) {
+              const expected = {
+                [current.baseCurrency]: current.incomeOffsetAmountMinor,
+              };
+              const isExact =
+                Object.keys(incomeOffsetsByCurrency).length === 1 &&
+                incomeOffsetsByCurrency[current.baseCurrency] ===
+                  expected[current.baseCurrency];
+              if (!isExact) {
+                throw new UnprocessableEntityException({
+                  statusCode: 422,
+                  error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                  message:
+                    'incomeOffsetsByCurrency no reconcilia con el total de income offsets; no se publica',
+                });
+              }
+            } else if (Object.keys(incomeOffsetsByCurrency).length > 0) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'incomeOffsetsByCurrency no es consistente con offset cero; no se publica',
+              });
+            }
+          }
+
           const valuedSourceTotal =
             valuationMode === 'FUNCTIONAL'
               ? publicationExpenses.reduce(
@@ -529,10 +841,32 @@ export class LiquidationPublicationUseCase {
                 )
               : publicationExpenses.reduce((sum, expense) => sum + expense.amountMinor, 0);
 
-          if (
-            !Number.isSafeInteger(valuedSourceTotal) ||
-            valuedSourceTotal !== current.totalAmountMinor
-          ) {
+          if (!Number.isSafeInteger(valuedSourceTotal)) {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
+              message:
+                'El snapshot de fuentes de la liquidación no reconcilia con su total; no se publica',
+            });
+          }
+
+          // FIN-06: gross + adjustments = preIncome; preIncome - offsets = net.
+          if (isFin06Liquidation) {
+            if (
+              valuedSourceTotal !== current.preIncomeAmountMinor ||
+              (current.preIncomeAmountMinor ?? 0) -
+                (current.incomeOffsetAmountMinor ?? 0) !==
+                current.totalAmountMinor ||
+              current.totalAmountMinor !== current.netDistributableAmountMinor
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
+                message:
+                  'El desglose FIN-06 de la liquidación no reconcilia (preIncome/offsets/net); no se publica',
+              });
+            }
+          } else if (valuedSourceTotal !== current.totalAmountMinor) {
             throw new UnprocessableEntityException({
               statusCode: 422,
               error: 'LIQUIDATION_PUBLICATION_SOURCE_DRIFT',
@@ -563,25 +897,62 @@ export class LiquidationPublicationUseCase {
             current.buildingId,
           );
 
-          const publicationSnapshot = buildLiquidationPublicationSnapshot({
-            liquidationId: current.id,
-            tenantId,
-            buildingId: current.buildingId,
-            period: current.period,
-            valuationMode,
-            baseCurrency: current.baseCurrency,
-            totalAmountMinor: current.totalAmountMinor,
-            totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
-            expenses: publicationExpenses,
-            allocations: distribution.map((item) => ({
-              unitId: item.unitId,
-              unitCode: item.unitCode,
-              unitLabel: item.unitLabel,
-              amountMinor: item.amountMinor,
-            })),
-            dueDate,
-            publishedAt: now,
-          });
+          let publicationSnapshot: Prisma.InputJsonObject;
+          let snapshotVersion: number;
+
+          if (isFin06Liquidation) {
+            const incomeOffsets = parseIncomeOffsetSnapshotItems(
+              current.incomeOffsetSnapshot,
+            );
+            publicationSnapshot = buildLiquidationPublicationSnapshotV3({
+              liquidationId: current.id,
+              tenantId,
+              buildingId: current.buildingId,
+              period: current.period,
+              valuationMode,
+              baseCurrency: current.baseCurrency,
+              totalAmountMinor: current.totalAmountMinor,
+              totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
+              grossExpenseAmountMinor: current.grossExpenseAmountMinor as number,
+              adjustmentAmountMinor: current.adjustmentAmountMinor as number,
+              preIncomeAmountMinor: current.preIncomeAmountMinor as number,
+              incomeOffsetAmountMinor: current.incomeOffsetAmountMinor as number,
+              netDistributableAmountMinor: current.netDistributableAmountMinor as number,
+              incomeOffsetsByCurrency: parseTotalsByCurrency(current.incomeOffsetsByCurrency),
+              expenses: publicationExpenses,
+              incomeOffsets,
+              allocations: distribution.map((item) => ({
+                unitId: item.unitId,
+                unitCode: item.unitCode,
+                unitLabel: item.unitLabel,
+                amountMinor: item.amountMinor,
+              })),
+              dueDate,
+              publishedAt: now,
+            });
+            snapshotVersion = 3;
+          } else {
+            publicationSnapshot = buildLiquidationPublicationSnapshot({
+              liquidationId: current.id,
+              tenantId,
+              buildingId: current.buildingId,
+              period: current.period,
+              valuationMode,
+              baseCurrency: current.baseCurrency,
+              totalAmountMinor: current.totalAmountMinor,
+              totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
+              expenses: publicationExpenses,
+              allocations: distribution.map((item) => ({
+                unitId: item.unitId,
+                unitCode: item.unitCode,
+                unitLabel: item.unitLabel,
+                amountMinor: item.amountMinor,
+              })),
+              dueDate,
+              publishedAt: now,
+            });
+            snapshotVersion = 2;
+          }
 
           const duplicatePublished = await tx.liquidation.findFirst({
             where: {
@@ -601,18 +972,21 @@ export class LiquidationPublicationUseCase {
           }
 
           const concept = `Expensas comunes ${current.period}`;
-          const expectedCharges = distribution.map((distributionItem) => ({
-            tenantId,
-            buildingId: current.buildingId,
-            unitId: distributionItem.unitId,
-            period: current.period,
-            type: 'COMMON_EXPENSE' as const,
-            concept,
-            amount: distributionItem.amountMinor,
-            currency: current.baseCurrency,
-            dueDate,
-            liquidationId,
-          }));
+          const expectedCharges =
+            current.totalAmountMinor === 0
+              ? []
+              : distribution.map((distributionItem) => ({
+                  tenantId,
+                  buildingId: current.buildingId,
+                  unitId: distributionItem.unitId,
+                  period: current.period,
+                  type: 'COMMON_EXPENSE' as const,
+                  concept,
+                  amount: distributionItem.amountMinor,
+                  currency: current.baseCurrency,
+                  dueDate,
+                  liquidationId,
+                }));
 
           const existingCharges = await tx.charge.findMany({
             where: {
@@ -663,7 +1037,7 @@ export class LiquidationPublicationUseCase {
                 );
               }
             }
-          } else {
+          } else if (expectedCharges.length > 0) {
             await tx.charge.createMany({
               data: expectedCharges.map((charge) => ({
                 ...charge,
@@ -720,12 +1094,23 @@ export class LiquidationPublicationUseCase {
               metadata: {
                 period: current.period,
                 buildingId: current.buildingId,
-                chargesCount: distribution.length,
+                chargesCount: expectedCharges.length,
+                allocationCount: distribution.length,
                 totalAmountMinor: current.totalAmountMinor,
                 baseCurrency: current.baseCurrency,
-                snapshotVersion: 1,
+                snapshotVersion,
                 dueDate: dueDate.toISOString().slice(0, 10),
                 publishedAt: now.toISOString(),
+                ...(isFin06Liquidation
+                  ? {
+                      grossExpenseAmountMinor: current.grossExpenseAmountMinor,
+                      adjustmentAmountMinor: current.adjustmentAmountMinor,
+                      preIncomeAmountMinor: current.preIncomeAmountMinor,
+                      incomeOffsetAmountMinor: current.incomeOffsetAmountMinor,
+                      netDistributableAmountMinor: current.netDistributableAmountMinor,
+                      incomeOffsetCount: incomeOffsetReferences.length,
+                    }
+                  : {}),
               },
             },
             tx,
@@ -987,6 +1372,114 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
       exchangeRateDirection: parsedExchangeRateDirection,
       exchangeRateEffectiveAt: parsedExchangeRateEffectiveAt,
       conversionDate: parsedConversionDate,
+    };
+  });
+}
+
+function parseIncomeOffsetSnapshotItems(value: unknown): PublishedIncomeOffsetSnapshot[] {
+  if (!Array.isArray(value)) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+      message: 'El snapshot de income offsets de la liquidación es inválido; no se publica',
+    });
+  }
+
+  return value.map((item, index) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+        message: `Income offset snapshot item ${index} es inválido`,
+      });
+    }
+
+    const snapshot = item as Record<string, unknown>;
+    const incomeId = snapshot.incomeId;
+    const incomeApplicationId = snapshot.incomeApplicationId;
+    const categoryId = snapshot.categoryId;
+    const categoryName = snapshot.categoryName;
+    const policyVersionId = snapshot.policyVersionId;
+    const scopeType = snapshot.scopeType;
+    const currencyCode = snapshot.currencyCode;
+    const applicationAmountMinor = snapshot.applicationAmountMinor;
+    const buildingAmountMinor = snapshot.buildingAmountMinor;
+    const valuedAmountMinor = snapshot.valuedAmountMinor;
+    const functionalCurrencyCode = snapshot.functionalCurrencyCode;
+    const exchangeRateId = snapshot.exchangeRateId;
+    const exchangeRateValue = snapshot.exchangeRateValue;
+    const exchangeRateDirection = snapshot.exchangeRateDirection;
+    const exchangeRateEffectiveAt = snapshot.exchangeRateEffectiveAt;
+    const conversionDate = snapshot.conversionDate;
+    const receivedDate = snapshot.receivedDate;
+    const period = snapshot.period;
+
+    const requiredString = (fieldName: string): string => {
+      if (typeof snapshot[fieldName] !== 'string' || (snapshot[fieldName] as string).length === 0) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+          message: `Income offset snapshot item ${index} tiene ${fieldName} inválido`,
+        });
+      }
+      return snapshot[fieldName] as string;
+    };
+
+    const requiredInt = (fieldName: string): number => {
+      const value = snapshot[fieldName];
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+          message: `Income offset snapshot item ${index} tiene ${fieldName} inválido`,
+        });
+      }
+      return value;
+    };
+
+    const nullableString = (fieldName: string): string | null => {
+      const value = snapshot[fieldName];
+      if (value === null || value === undefined) {
+        return null;
+      }
+      return requiredString(fieldName);
+    };
+
+    const nullableIsoDate = (fieldName: string): string | null => {
+      const value = snapshot[fieldName];
+      if (value === null || value === undefined) {
+        return null;
+      }
+      const parsed = new Date(String(value));
+      if (Number.isNaN(parsed.getTime())) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+          message: `Income offset snapshot item ${index} tiene ${fieldName} inválido`,
+        });
+      }
+      return parsed.toISOString();
+    };
+
+    return {
+      incomeId: requiredString('incomeId'),
+      incomeApplicationId: requiredString('incomeApplicationId'),
+      categoryId: nullableString('categoryId') ?? '',
+      categoryName: nullableString('categoryName'),
+      policyVersionId: nullableString('policyVersionId'),
+      scopeType: requiredString('scopeType'),
+      currencyCode: requiredString('currencyCode'),
+      applicationAmountMinor: requiredInt('applicationAmountMinor'),
+      buildingAmountMinor: requiredInt('buildingAmountMinor'),
+      valuedAmountMinor: requiredInt('valuedAmountMinor'),
+      functionalCurrencyCode: nullableString('functionalCurrencyCode'),
+      exchangeRateId: nullableString('exchangeRateId'),
+      exchangeRateValue: nullableString('exchangeRateValue'),
+      exchangeRateDirection: nullableString('exchangeRateDirection'),
+      exchangeRateEffectiveAt: nullableIsoDate('exchangeRateEffectiveAt'),
+      conversionDate: nullableIsoDate('conversionDate'),
+      receivedDate: requiredString('receivedDate'),
+      period: requiredString('period'),
     };
   });
 }
