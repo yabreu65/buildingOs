@@ -340,7 +340,7 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     expect(second.id).not.toBe(first.id);
   });
 
-  it('publishes through the real PostgreSQL transaction, writes snapshot V1, audit, and charges', async () => {
+  it('publishes through the real PostgreSQL transaction, writes snapshot V2, audit, and charges', async () => {
     const ctx = await createFinanceContext('publish');
     const reviewed = await createDraftAndReview({
       tenantId: ctx.tenant.id,
@@ -366,7 +366,8 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     expect(persisted.status).toBe('PUBLISHED');
     expect(persisted.publicationSnapshot).toEqual(
       expect.objectContaining({
-        version: 1,
+        version: 2,
+        valuationMode: 'LEGACY_NOMINAL',
         liquidationId: reviewed.id,
         dueDate: '2026-10-10T00:00:00.000Z',
       }),
