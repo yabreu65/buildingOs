@@ -24,6 +24,7 @@ import { ExpensesService } from './expenses.service';
 import { IncomesService } from './incomes.service';
 import { LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { LiquidationEngineService } from './liquidation-engine.service';
 import { LiquidationEngineController } from './liquidation-engine.controller';
 import { MovementAllocationService } from './movement-allocation.service';
@@ -127,6 +128,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     },
     LiquidationsService,
     LiquidationIncomeOffsetsService,
+    LegacyIncomeBackfillService,
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,
@@ -154,6 +156,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
     IncomesService,
     LiquidationsService,
     LiquidationIncomeOffsetsService,
+    LegacyIncomeBackfillService,
     MovementAllocationService,
     UnitGroupService,
     LiquidationEngineService,

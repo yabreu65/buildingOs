@@ -9,6 +9,7 @@ import {
   FundStatus,
   FundTransactionDirection,
   IncomeApplicationDestination,
+  IncomeDestination,
   IncomeStatus,
   Prisma,
 } from '@prisma/client';
@@ -204,6 +205,54 @@ export class IncomeApplicationsService {
     });
   }
 
+  /**
+   * FIN-04: publica un plan de materialización legacy reutilizando el publisher
+   * compartido (mismas invariantes: income lock, fund locks, CREDITs, audits,
+   * idempotencia). legacyDestination marca la provenance; el CREDIT de Fund usa
+   * fundTransactionOccurredAt (= Income.receivedDate para backfill histórico).
+   */
+  async publishLegacyBackfillPlan(
+    tx: Prisma.TransactionClient,
+    params: {
+      tenantId: string;
+      incomeId: string;
+      membershipId: string;
+      legacyDestination: IncomeDestination;
+      plan: Array<{ destinationType: IncomeApplicationDestination; fundId: string | null; amountMinor: number }>;
+      fundTransactionOccurredAt?: Date;
+    },
+  ): Promise<IncomeApplicationPlanResponseDto> {
+    const income = await tx.income.findFirst({
+      where: { id: params.incomeId, tenantId: params.tenantId },
+    });
+    if (!income) {
+      throw new NotFoundException(`Ingreso no encontrado: ${params.incomeId}`);
+    }
+    const totalAmountMinor = params.plan.reduce((sum, app) => sum + app.amountMinor, 0);
+    if (totalAmountMinor !== income.amountMinor) {
+      throw new BadRequestException(
+        `La suma de aplicaciones (${totalAmountMinor}) debe ser exactamente ${income.amountMinor}`,
+      );
+    }
+
+    return this.publishPlanTx(tx, {
+      tenantId: params.tenantId,
+      income: {
+        id: income.id,
+        amountMinor: income.amountMinor,
+        currencyCode: income.currencyCode,
+        receivedDate: income.receivedDate,
+        categoryId: income.categoryId,
+      },
+      membershipId: params.membershipId,
+      plan: params.plan,
+      totalAmountMinor,
+      policyVersionId: null,
+      legacyDestination: params.legacyDestination,
+      fundTransactionOccurredAt: params.fundTransactionOccurredAt ?? income.receivedDate,
+    });
+  }
+
   // ── Internos ─────────────────────────────────────────────────────────────
 
   /**
@@ -220,9 +269,13 @@ export class IncomeApplicationsService {
       plan: Array<{ destinationType: IncomeApplicationDestination; fundId: string | null; amountMinor: number }>;
       totalAmountMinor: number;
       policyVersionId: string | null;
+      legacyDestination?: IncomeDestination | null; // FIN-04
+      fundTransactionOccurredAt?: Date; // FIN-04: por defecto income.receivedDate
     },
   ): Promise<IncomeApplicationPlanResponseDto> {
     const { tenantId, income, membershipId, plan, totalAmountMinor, policyVersionId } = params;
+    const legacyDestination = params.legacyDestination ?? null;
+    const fundTransactionOccurredAt = params.fundTransactionOccurredAt ?? income.receivedDate;
     const incomeId = income.id;
 
     // Plan existente → idempotencia (mismo canonical → retorna existente)
@@ -305,6 +358,7 @@ export class IncomeApplicationsService {
           currencyCode: income.currencyCode,
           createdByMembershipId: membershipId,
           policyVersionId,
+          legacyDestination,
         },
       });
 
@@ -316,7 +370,7 @@ export class IncomeApplicationsService {
             direction: FundTransactionDirection.CREDIT,
             amountMinor: app.amountMinor,
             currencyCode: income.currencyCode,
-            occurredAt: income.receivedDate,
+            occurredAt: fundTransactionOccurredAt,
             description: `Aplicación de ingreso ${incomeId}`,
             createdByMembershipId: membershipId,
             idempotencyKey: incomeApplicationFundTransactionKey(application.id),
@@ -336,7 +390,7 @@ export class IncomeApplicationsService {
               direction: FundTransactionDirection.CREDIT,
               amountMinor: app.amountMinor,
               currencyCode: income.currencyCode,
-              occurredAt: income.receivedDate.toISOString(),
+              occurredAt: fundTransactionOccurredAt.toISOString(),
               idempotencyKey: incomeApplicationFundTransactionKey(application.id),
               incomeApplicationId: application.id,
               ...(policyVersionId !== null ? { policyVersionId } : {}),
@@ -367,6 +421,7 @@ export class IncomeApplicationsService {
           currencyCode: income.currencyCode,
           totalAmountMinor: totalAmountMinor,
           ...(policyVersionId !== null ? { policyVersionId } : {}),
+          ...(legacyDestination !== null ? { legacyDestination } : {}),
           applications: plan.map((app) => ({
             destinationType: app.destinationType,
             ...(app.fundId !== undefined && app.fundId !== null

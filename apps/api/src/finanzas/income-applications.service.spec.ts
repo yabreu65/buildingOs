@@ -9,6 +9,7 @@ import {
   FundStatus,
   FundTransactionDirection,
   IncomeApplicationDestination,
+  IncomeDestination,
   IncomeStatus,
   Prisma,
 } from '@prisma/client';
@@ -711,6 +712,170 @@ describe('IncomeApplicationsService', () => {
       );
       expect(txAuditCalls).toHaveLength(1);
       expect(txAuditCalls[0]![0].metadata.policyVersionId).toBe('policy-version-1');
+    });
+  });
+
+  describe('FIN-04 publishLegacyBackfillPlan', () => {
+    const legacyIncome = {
+      id: 'income-legacy',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      period: '2026-08',
+      scopeType: 'BUILDING',
+      status: 'RECORDED',
+      destination: 'APPLY_TO_EXPENSES',
+      amountMinor: 5000,
+      currencyCode: 'USD',
+      receivedDate: new Date('2026-08-10T00:00:00.000Z'),
+      categoryId: 'cat-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    it('APPLY legacy creates an OFFSET application with legacyDestination provenance', async () => {
+      (prismaValue.income.findFirst as jest.Mock).mockResolvedValue(legacyIncome);
+      (prismaValue.incomeApplication.findMany as jest.Mock).mockResolvedValue([]);
+      (prismaValue.incomeApplication.create as jest.Mock).mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'app-legacy', ...data }),
+      );
+
+      await service.publishLegacyBackfillPlan(
+        prismaValue as unknown as Parameters<typeof service.publishLegacyBackfillPlan>[0],
+        {
+          tenantId: 'tenant-1',
+          incomeId: 'income-legacy',
+          membershipId: 'member-1',
+          legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+          plan: [
+            {
+              destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
+              fundId: null,
+              amountMinor: 5000,
+            },
+          ],
+        },
+      );
+
+      expect(prismaValue.incomeApplication.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
+            fundId: null,
+            amountMinor: 5000,
+            currencyCode: 'USD',
+            policyVersionId: null,
+            legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+          }),
+        }),
+      );
+    });
+
+    it('RESERVE legacy creates a FUND application with fundTransactionOccurredAt = receivedDate', async () => {
+      (prismaValue.income.findFirst as jest.Mock).mockResolvedValue(legacyIncome);
+      (prismaValue.incomeApplication.findMany as jest.Mock).mockResolvedValue([]);
+      (prismaValue.incomeApplication.create as jest.Mock).mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'app-fund', ...data }),
+      );
+      (prismaValue.fundTransaction.create as jest.Mock).mockResolvedValue({
+        id: 'ft-1',
+        fundId: 'fund-1',
+        direction: FundTransactionDirection.CREDIT,
+        amountMinor: 5000,
+        currencyCode: 'USD',
+        occurredAt: legacyIncome.receivedDate,
+      });
+
+      await service.publishLegacyBackfillPlan(
+        prismaValue as unknown as Parameters<typeof service.publishLegacyBackfillPlan>[0],
+        {
+          tenantId: 'tenant-1',
+          incomeId: 'income-legacy',
+          membershipId: 'member-1',
+          legacyDestination: IncomeDestination.RESERVE_FUND,
+          plan: [
+            {
+              destinationType: IncomeApplicationDestination.FUND,
+              fundId: 'fund-1',
+              amountMinor: 5000,
+            },
+          ],
+        },
+      );
+
+      expect(prismaValue.incomeApplication.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            destinationType: IncomeApplicationDestination.FUND,
+            fundId: 'fund-1',
+            legacyDestination: IncomeDestination.RESERVE_FUND,
+          }),
+        }),
+      );
+      expect(prismaValue.fundTransaction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            occurredAt: legacyIncome.receivedDate, // recibido, no hoy
+            incomeApplicationId: 'app-fund',
+          }),
+        }),
+      );
+    });
+
+    it('rejects a plan whose sum does not match the income amount', async () => {
+      (prismaValue.income.findFirst as jest.Mock).mockResolvedValue(legacyIncome);
+
+      await expect(
+        service.publishLegacyBackfillPlan(
+          prismaValue as unknown as Parameters<typeof service.publishLegacyBackfillPlan>[0],
+          {
+            tenantId: 'tenant-1',
+            incomeId: 'income-legacy',
+            membershipId: 'member-1',
+            legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+            plan: [
+              {
+                destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
+                fundId: null,
+                amountMinor: 4000,
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prismaValue.incomeApplication.create).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent when the same legacy plan already exists', async () => {
+      (prismaValue.income.findFirst as jest.Mock).mockResolvedValue(legacyIncome);
+      (prismaValue.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        makeApplication({
+          destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
+          amountMinor: 5000,
+          currencyCode: 'USD',
+        }),
+      ]);
+
+      const result = await service.publishLegacyBackfillPlan(
+        prismaValue as unknown as Parameters<typeof service.publishLegacyBackfillPlan>[0],
+        {
+          tenantId: 'tenant-1',
+          incomeId: 'income-legacy',
+          membershipId: 'member-1',
+          legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+          plan: [
+            {
+              destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
+              fundId: null,
+              amountMinor: 5000,
+            },
+          ],
+        },
+      );
+
+      expect(result.applications).toHaveLength(1);
+      expect(prismaValue.incomeApplication.create).not.toHaveBeenCalled();
     });
   });
 });

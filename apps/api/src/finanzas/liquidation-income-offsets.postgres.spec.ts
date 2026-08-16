@@ -19,6 +19,7 @@ import { LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { IncomesService } from './incomes.service';
 import { IncomeApplicationsService } from './income-applications.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { FundsService } from './funds.service';
 import { CurrencyConversionService } from './currency-conversion.service';
 import { MovementAllocationService } from './movement-allocation.service';
@@ -73,6 +74,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
         validators,
         useCase,
         new LiquidationIncomeOffsetsService(prisma),
+        new LegacyIncomeBackfillService(prisma, audit, validators, new IncomeApplicationsService(prisma, audit, validators)),
       ),
       incomes: new IncomesService(
         prisma,

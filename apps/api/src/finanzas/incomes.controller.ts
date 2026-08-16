@@ -11,11 +11,13 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { IncomeDestination } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
 import { AuthenticatedRequest } from '../common/types/request.types';
 import { IncomesService } from './incomes.service';
 import { IncomeApplicationsService } from './income-applications.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { IncomeApplicationPlanResponseDto } from './income-applications.dto';
 import {
   CreateIncomeDto,
@@ -33,7 +35,43 @@ export class IncomesController {
   constructor(
     private readonly incomesService: IncomesService,
     private readonly incomeApplicationsService: IncomeApplicationsService,
+    private readonly legacyBackfillService: LegacyIncomeBackfillService,
   ) {}
+
+  /**
+   * FIN-04: rutas estáticas ANTES de :incomeId para evitar shadowing.
+   */
+  @Get('legacy-backfill/preview')
+  async previewLegacyBackfill(
+    @Query('period') period?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('destination') destination?: IncomeDestination,
+    @Request() req?: AuthenticatedRequest,
+  ) {
+    return this.legacyBackfillService.preview(
+      req!.tenantId!,
+      req!.user.membershipId ?? '',
+      req!.user.roles ?? [],
+      {
+        period,
+        categoryId,
+        destination,
+      },
+    );
+  }
+
+  @Post('legacy-backfill/apply')
+  async applyLegacyBackfill(
+    @Body() dto: { items: Array<{ incomeId: string; fundId?: string | null }> },
+    @Request() req?: AuthenticatedRequest,
+  ) {
+    return this.legacyBackfillService.apply(
+      req!.tenantId!,
+      req!.user.membershipId ?? '',
+      req!.user.roles ?? [],
+      dto.items,
+    );
+  }
 
   @Get()
   async listIncomes(

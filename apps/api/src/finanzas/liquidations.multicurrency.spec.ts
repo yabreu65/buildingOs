@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnprocessableEntityException } from '@nestjs/common';
 import { LiquidationsService } from './liquidations.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -214,6 +215,12 @@ describe('LiquidationsService multicurrency valuation', () => {
               incomeOffsetAmountMinor: 0,
               incomeOffsetsByCurrency: {},
             }),
+          },
+        },
+        {
+          provide: LegacyIncomeBackfillService,
+          useValue: {
+            materializeForLiquidation: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],

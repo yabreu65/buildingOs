@@ -13,6 +13,8 @@ import { FinanzasValidators } from './finanzas.validators';
 import { ResidentAccessService } from '../resident-access/resident-access.service';
 import { LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
+import { IncomeApplicationsService } from './income-applications.service';
 import {
   createLiquidationWorkflowDependencies,
   createLiquidationDraftRecord,
@@ -254,6 +256,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
         }),
       ),
       new LiquidationIncomeOffsetsService(prisma as unknown as PrismaService),
+      new LegacyIncomeBackfillService(
+        prisma as unknown as PrismaService,
+        auditService,
+        validators,
+        new IncomeApplicationsService(prisma as unknown as PrismaService, auditService, validators),
+      ),
     );
   }
 

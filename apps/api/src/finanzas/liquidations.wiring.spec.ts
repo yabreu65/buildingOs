@@ -11,6 +11,7 @@ import {
 } from './liquidation-publication.use-case';
 import { LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
+import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 
 describe('FinanzasModule wiring', () => {
   it('registers LiquidationPublicationUseCase in module metadata and resolves the same Nest-managed instance inside LiquidationsService', async () => {
@@ -86,6 +87,12 @@ describe('FinanzasModule wiring', () => {
               incomeOffsetAmountMinor: 0,
               incomeOffsetsByCurrency: {},
             }),
+          },
+        },
+        {
+          provide: LegacyIncomeBackfillService,
+          useValue: {
+            materializeForLiquidation: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],
