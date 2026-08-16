@@ -624,11 +624,20 @@ export class LiquidationPublicationUseCase {
             current.preIncomeAmountMinor != null ||
             current.incomeOffsetAmountMinor != null ||
             current.netDistributableAmountMinor != null;
-          const hasFin06Artifacts =
+          const hasFin06JsonArtifacts =
             current.incomeOffsetSnapshot != null ||
             current.incomeOffsetsByCurrency != null;
 
-          const isFin06Liquidation = hasFin06Summary || hasFin06Artifacts;
+          // FIN-06R3: las referencias relacionales también clasifican FIN-06.
+          // Una row corrompida a summary+JSON null pero con LiquidationIncomeOffset
+          // rows NO puede degradarse a legacy.
+          const fin06ReferenceCount = await tx.liquidationIncomeOffset.count({
+            where: { tenantId, liquidationId },
+          });
+          const hasFin06RelationalArtifacts = fin06ReferenceCount > 0;
+
+          const isFin06Liquidation =
+            hasFin06Summary || hasFin06JsonArtifacts || hasFin06RelationalArtifacts;
 
           let incomeOffsetReferences: Array<{
             incomeApplicationId: string;

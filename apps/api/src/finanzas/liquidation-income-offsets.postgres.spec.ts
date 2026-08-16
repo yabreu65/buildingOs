@@ -1778,4 +1778,85 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } }),
     ).toMatchObject({ status: 'REVIEWED' });
   }, 30000);
+
+  // ── R3. Relational references classify FIN-06 (final bypass closure) ────
+
+  it('R3.A. all summary+JSON null with LiquidationIncomeOffset rows remaining is rejected, never legacy', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    // Corrupción TOTAL del modelo FIN-06 salvo las referencias relacionales:
+    // summary todo NULL + JSON todo NULL. La rama legacy del CHECK lo permite,
+    // pero las LiquidationIncomeOffset rows deben clasificar como FIN-06.
+    const { reviewed } = await corruptAndReview(setup, {
+      grossExpenseAmountMinor: null,
+      adjustmentAmountMinor: null,
+      preIncomeAmountMinor: null,
+      incomeOffsetAmountMinor: null,
+      netDistributableAmountMinor: null,
+      incomeOffsetSnapshot: null,
+      incomeOffsetsByCurrency: null,
+    });
+
+    // Confirmar que la referencia relacional sigue existiendo.
+    const refCount = await observer.liquidationIncomeOffset.count({
+      where: { tenantId: setup.ctx.tenant.id },
+    });
+    expect(refCount).toBeGreaterThan(0);
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    // V2 imposible: la row sigue REVIEWED, sin snapshot ni cargos.
+    const row = await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } });
+    expect(row.status).toBe('REVIEWED');
+    expect(row.publicationSnapshot).toBeNull();
+    expect(await observer.charge.count({ where: { liquidationId: reviewed.id } })).toBe(0);
+  }, 30000);
+
+  it('R3.B. true legacy liquidation (no summary, no JSON, no refs) keeps historical V1/V2 behavior', async () => {
+    const ctx = await fixture('r3-legacy-control');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+
+    // Legacy: crear el draft y vaciar el modelo FIN-06 (todo null, sin refs).
+    const draft = await liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+      buildingId: buildingA.id,
+      period: '2026-08',
+      baseCurrency: 'ARS',
+    });
+    await observer.liquidation.update({
+      where: { id: draft.id },
+      data: {
+        grossExpenseAmountMinor: null,
+        adjustmentAmountMinor: null,
+        preIncomeAmountMinor: null,
+        incomeOffsetAmountMinor: null,
+        netDistributableAmountMinor: null,
+        incomeOffsetSnapshot: null,
+        incomeOffsetsByCurrency: null,
+      },
+    });
+    expect(
+      await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } }),
+    ).toBe(0);
+
+    const reviewed = await liquidations.reviewLiquidation(ctx.tenant.id, draft.id, ctx.membership.id);
+    const published = await liquidations.publishLiquidation(ctx.tenant.id, reviewed.id, ctx.membership.id, {
+      dueDate: '2026-09-10',
+    });
+
+    expect(published.status).toBe('PUBLISHED');
+    const row = await observer.liquidation.findUniqueOrThrow({ where: { id: published.id } });
+    const snapshot = row.publicationSnapshot as unknown as { version: number };
+    // Legacy sin evidencia FIN-06 → V2 (histórico).
+    expect(snapshot.version).toBe(2);
+    expect(await observer.charge.count({ where: { liquidationId: published.id } })).toBe(2);
+  }, 30000);
 });

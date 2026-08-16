@@ -54,7 +54,7 @@ describe('LiquidationPublicationUseCase', () => {
     unit: { findMany: jest.Mock };
     charge: { findMany: jest.Mock; createMany: jest.Mock };
     auditLog: { create: jest.Mock };
-    liquidationIncomeOffset: { findMany: jest.Mock };
+    liquidationIncomeOffset: { findMany: jest.Mock; count: jest.Mock };
     incomeApplication: { findMany: jest.Mock };
   };
   let deps: LiquidationWorkflowDependencies;
@@ -95,6 +95,7 @@ describe('LiquidationPublicationUseCase', () => {
       auditLog: { create: jest.fn().mockResolvedValue(undefined) },
       liquidationIncomeOffset: {
         findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
       },
       incomeApplication: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -598,6 +599,7 @@ describe('LiquidationPublicationUseCase', () => {
           status: 'PUBLISHED',
           publishedAt: new Date('2026-08-16T00:00:00.000Z'),
         });
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
       tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
       tx.incomeApplication.findMany.mockResolvedValueOnce([validApplication]);
 
@@ -656,6 +658,7 @@ describe('LiquidationPublicationUseCase', () => {
           status: 'PUBLISHED',
           publishedAt: new Date('2026-08-16T00:00:00.000Z'),
         });
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
       tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([
         {
           ...validReference,
@@ -694,6 +697,7 @@ describe('LiquidationPublicationUseCase', () => {
       tx.liquidation.findFirst
         .mockResolvedValueOnce(incomeOffsetLiquidation)
         .mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
       tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
       tx.incomeApplication.findMany.mockResolvedValueOnce([
         { ...validApplication, destinationType: 'FUND' },
@@ -717,6 +721,7 @@ describe('LiquidationPublicationUseCase', () => {
       tx.liquidation.findFirst
         .mockResolvedValueOnce(incomeOffsetLiquidation)
         .mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
       tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
       tx.incomeApplication.findMany.mockResolvedValueOnce([
         { ...validApplication, income: { id: 'income-1', status: 'VOID', period: '2026-08' } },
@@ -753,6 +758,7 @@ describe('LiquidationPublicationUseCase', () => {
       };
 
       tx.liquidation.findFirst.mockResolvedValueOnce(drifted).mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
       tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
       tx.incomeApplication.findMany.mockResolvedValueOnce([validApplication]);
 

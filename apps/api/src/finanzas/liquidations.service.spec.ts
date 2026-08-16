@@ -121,6 +121,7 @@ describe('LiquidationsService', () => {
       liquidationIncomeOffset: {
         findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
+        count: jest.fn().mockResolvedValue(0),
       },
       $executeRaw: jest.fn().mockResolvedValue(undefined),
       unit: {
