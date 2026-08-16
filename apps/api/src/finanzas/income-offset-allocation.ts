@@ -1,5 +1,5 @@
 import { UnprocessableEntityException } from '@nestjs/common';
-import { IncomeApplicationDestination, MovementScope } from '@prisma/client';
+import { IncomeApplicationDestination, MovementScope, Prisma } from '@prisma/client';
 
 /**
  * FIN-06: helpers puros para valuar y distribuir IncomeApplications
@@ -7,10 +7,14 @@ import { IncomeApplicationDestination, MovementScope } from '@prisma/client';
  *
  * Principios:
  * - Sin FX live: se usa únicamente el snapshot congelado del Income (record).
- * - Sin float drift: todas las distribuciones usan integer largest remainder.
+ * - Aritmética EXACTA: todas las distribuciones usan Prisma.Decimal
+ *   (mul/div con ROUND_DOWN + largest remainder), nunca Number multiplication
+ *   sobre productos que pueden exceder Number.MAX_SAFE_INTEGER.
  * - MovementAllocation decide A QUÉ building pertenece el movimiento;
  *   IncomeApplication decide QUÉ se hace con el dinero.
  * - SUM(building shares de una aplicación) == application.amountMinor.
+ * - Fail-closed: un OFFSET elegible sin snapshot funcional convergente
+ *   NUNCA se omite silenciosamente → 422.
  */
 
 export const LIQUIDATION_INCOME_OFFSET_CURRENCY_MISMATCH =
@@ -50,9 +54,10 @@ export interface BuildingAllocationWeight {
 
 /**
  * Distribuye un total en minor units entre buckets usando weights enteros
- * con largest remainder determinístico (tie-break: buildingId).
+ * con largest remainder y aritmética decimal EXACTA (tie-break: buildingId).
  *
- * Garantías: SUM(resultado) === total; enteros; determinístico.
+ * Garantías: SUM(resultado) === total; enteros; determinístico; sin
+ * multiplicación Number que pierda precisión sobre MAX_SAFE_INTEGER.
  */
 export function distributeMinorByWeights(
   total: number,
@@ -69,9 +74,8 @@ export function distributeMinorByWeights(
   const sortedWeights = [...weights]
     .filter((weight) => weight.amountMinor > 0)
     .sort((a, b) => a.buildingId.localeCompare(b.buildingId));
-  const totalWeight = sortedWeights.reduce((sum, weight) => sum + weight.amountMinor, 0);
 
-  if (totalWeight <= 0) {
+  if (sortedWeights.length === 0) {
     if (total === 0) {
       return weights
         .map((weight) => ({ buildingId: weight.buildingId, amountMinor: 0 }))
@@ -80,22 +84,39 @@ export function distributeMinorByWeights(
     throw new Error('distributeMinorByWeights requires positive weights for a positive total');
   }
 
-  const raw = sortedWeights.map((weight) => ({
-    buildingId: weight.buildingId,
-    exact: (total * weight.amountMinor) / totalWeight,
-    floor: Math.floor((total * weight.amountMinor) / totalWeight),
-    fraction: 0,
-  }));
-  raw.forEach((item) => {
-    item.fraction = item.exact - item.floor;
+  const totalDecimal = new Prisma.Decimal(total);
+  const weightDecimals = sortedWeights.map((weight) => new Prisma.Decimal(weight.amountMinor));
+  const totalWeight = weightDecimals.reduce(
+    (sum, weight) => sum.add(weight),
+    new Prisma.Decimal(0),
+  );
+
+  if (totalWeight.isZero()) {
+    throw new Error('distributeMinorByWeights requires positive weights for a positive total');
+  }
+
+  // Largest remainder con aritmética decimal exacta.
+  const raw = sortedWeights.map((weight) => {
+    const exact = totalDecimal.mul(weight.amountMinor).div(totalWeight);
+    const floor = exact.toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
+    return {
+      buildingId: weight.buildingId,
+      floor: floor.toNumber(),
+      fraction: exact.sub(floor),
+    };
   });
 
   let allocated = raw.reduce((sum, item) => sum + item.floor, 0);
   const remainder = total - allocated;
 
+  if (!Number.isSafeInteger(remainder) || remainder < 0) {
+    throw new Error('distributeMinorByWeights failed to reconcile (remainder)');
+  }
+
   const winners = [...raw]
     .sort((a, b) => {
-      if (b.fraction !== a.fraction) return b.fraction - a.fraction;
+      const fractionComparison = b.fraction.comparedTo(a.fraction);
+      if (fractionComparison !== 0) return fractionComparison;
       return a.buildingId.localeCompare(b.buildingId);
     })
     .slice(0, remainder);
@@ -160,7 +181,7 @@ export function resolveIncomeOffsetBuildingShare(params: {
 
 /**
  * Deriva el functional amount minor de CADA IncomeApplication
- * proporcionalmente a application.amountMinor (integer largest remainder).
+ * proporcionalmente a application.amountMinor (largest remainder EXACTO).
  *
  * Garantía: SUM(applicationFunctionalValues) === incomeFunctionalAmountMinor.
  */
@@ -184,22 +205,30 @@ export function deriveApplicationFunctionalValues(params: {
     throw new Error('deriveApplicationFunctionalValues requires positive application amounts');
   }
 
-  const raw = sorted.map((app) => ({
-    applicationId: app.id,
-    exact: (incomeFunctionalAmountMinor * app.amountMinor) / totalAmount,
-    floor: Math.floor((incomeFunctionalAmountMinor * app.amountMinor) / totalAmount),
-    fraction: 0,
-  }));
-  raw.forEach((item) => {
-    item.fraction = item.exact - item.floor;
+  const totalDecimal = new Prisma.Decimal(incomeFunctionalAmountMinor);
+  const totalAmountDecimal = new Prisma.Decimal(totalAmount);
+
+  const raw = sorted.map((app) => {
+    const exact = totalDecimal.mul(app.amountMinor).div(totalAmountDecimal);
+    const floor = exact.toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
+    return {
+      applicationId: app.id,
+      floor: floor.toNumber(),
+      fraction: exact.sub(floor),
+    };
   });
 
   let allocated = raw.reduce((sum, item) => sum + item.floor, 0);
   const remainder = incomeFunctionalAmountMinor - allocated;
 
+  if (!Number.isSafeInteger(remainder) || remainder < 0) {
+    throw new Error('deriveApplicationFunctionalValues failed to reconcile (remainder)');
+  }
+
   const winners = [...raw]
     .sort((a, b) => {
-      if (b.fraction !== a.fraction) return b.fraction - a.fraction;
+      const fractionComparison = b.fraction.comparedTo(a.fraction);
+      if (fractionComparison !== 0) return fractionComparison;
       return a.applicationId.localeCompare(b.applicationId);
     })
     .slice(0, remainder);
@@ -221,11 +250,46 @@ export function deriveApplicationFunctionalValues(params: {
 }
 
 /**
+ * Fail-closed: valida que el snapshot funcional del Income OFFSET converja a
+ * la moneda base de la liquidación. Un OFFSET elegible sin snapshot funcional
+ * válido NUNCA se omite silenciosamente.
+ */
+export function assertFunctionalSnapshotForLiquidation(params: {
+  incomeId: string;
+  functionalAmountMinor: number | null;
+  functionalCurrencyCode: string | null;
+  baseCurrency: string;
+}): void {
+  const { incomeId, functionalAmountMinor, functionalCurrencyCode, baseCurrency } = params;
+
+  if (
+    functionalAmountMinor === null ||
+    functionalAmountMinor === undefined ||
+    functionalAmountMinor <= 0
+  ) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED,
+      message: `El ingreso ${incomeId} no posee un snapshot funcional válido (${baseCurrency}); no se puede valuar su OFFSET`,
+    });
+  }
+
+  if (functionalCurrencyCode !== baseCurrency) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED,
+      message: `El ingreso ${incomeId} está en ${functionalCurrencyCode ?? 'null'}, ` +
+        `se esperaba la moneda funcional (${baseCurrency}); no se puede valuar su OFFSET`,
+    });
+  }
+}
+
+/**
  * Valida el modo de valuación de una IncomeApplication OFFSET respecto a la
  * liquidación y devuelve el monto valorado que reduce el neto distributable.
  *
  * LEGACY_NOMINAL: currencyCode === baseCurrency (si difiere → mismatch).
- * FUNCTIONAL: usa el snapshot funcional congelado del Income.
+ * FUNCTIONAL: usa el snapshot funcional congelado del Income (fail-closed).
  */
 export function valueIncomeOffsetForLiquidation(params: {
   application: {
@@ -254,6 +318,7 @@ export function valueIncomeOffsetForLiquidation(params: {
 
   if (
     application.functionalAmountMinor === null ||
+    application.functionalAmountMinor <= 0 ||
     application.functionalCurrencyCode !== baseCurrency
   ) {
     throw new UnprocessableEntityException({

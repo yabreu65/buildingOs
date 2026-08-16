@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { IncomeApplicationDestination, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  assertFunctionalSnapshotForLiquidation,
   deriveApplicationFunctionalValues,
   distributeMinorByWeights,
   resolveIncomeOffsetBuildingShare,
@@ -117,16 +118,24 @@ export function computeIncomeOffsetsForLiquidation(
       continue;
     }
 
+    // Fail-closed (FIN-06R): en modo FUNCTIONAL, un income con OFFSET elegible
+    // debe poseer snapshot funcional convergente; si no → 422. El dinero
+    // elegible NUNCA desaparece silenciosamente.
+    if (params.valuationMode === 'FUNCTIONAL') {
+      assertFunctionalSnapshotForLiquidation({
+        incomeId: income.id,
+        functionalAmountMinor: income.functionalAmountMinor,
+        functionalCurrencyCode: income.functionalCurrencyCode,
+        baseCurrency: params.baseCurrency,
+      });
+    }
+
     // Valuación funcional por aplicación (todas las apps del income, incl.
     // FUND/CARRY) para reconciliar exactamente a income.functionalAmountMinor.
     let functionalByApplicationId = new Map<string, number>();
-    if (
-      params.valuationMode === 'FUNCTIONAL' &&
-      income.functionalAmountMinor !== null &&
-      income.functionalAmountMinor > 0
-    ) {
+    if (params.valuationMode === 'FUNCTIONAL') {
       const derived = deriveApplicationFunctionalValues({
-        incomeFunctionalAmountMinor: income.functionalAmountMinor,
+        incomeFunctionalAmountMinor: income.functionalAmountMinor as number,
         applications: income.applications,
       });
       functionalByApplicationId = new Map(
@@ -160,11 +169,16 @@ export function computeIncomeOffsetsForLiquidation(
         const applicationFunctionalValue = functionalByApplicationId.get(application.id);
 
         if (applicationFunctionalValue === undefined || applicationFunctionalValue <= 0) {
-          continue; // sin snapshot funcional convergente → no valora
+          // Fail-closed: nunca omitir silenciosamente una aplicación elegible.
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+            message: `La aplicación OFFSET ${application.id} no posee valor funcional válido`,
+          });
         }
 
         // Distribuir el valor funcional de la aplicación entre buildings con
-        // los mismos weights (largest remainder determinístico).
+        // los mismos weights (largest remainder determinístico exacto).
         const functionalShares =
           allocationWeights.length > 0
             ? distributeMinorByWeights(applicationFunctionalValue, allocationWeights)

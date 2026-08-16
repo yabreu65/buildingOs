@@ -360,6 +360,25 @@ export function buildLiquidationPublicationSnapshotV3(
     );
   }
 
+  // FIN-06R: incomeOffsetsByCurrency debe reconciliar exactamente a
+  // { baseCurrency: incomeOffsetAmountMinor } cuando offset > 0.
+  const incomeOffsetsByCurrency = normalizeTotalsByCurrency(input.incomeOffsetsByCurrency);
+  if (input.incomeOffsetAmountMinor > 0) {
+    const expected = { [input.baseCurrency]: input.incomeOffsetAmountMinor };
+    const isExact =
+      Object.keys(incomeOffsetsByCurrency).length === 1 &&
+      incomeOffsetsByCurrency[input.baseCurrency] === expected[input.baseCurrency];
+    if (!isExact) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot incomeOffsetsByCurrency must match the offset total in base currency',
+      );
+    }
+  } else if (Object.keys(incomeOffsetsByCurrency).length > 0) {
+    throw new BadRequestException(
+      'Liquidation publication snapshot incomeOffsetsByCurrency must be empty for zero offsets',
+    );
+  }
+
   assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
 
   return createJsonObject({
@@ -377,7 +396,7 @@ export function buildLiquidationPublicationSnapshotV3(
     preIncomeAmountMinor,
     incomeOffsetAmountMinor: input.incomeOffsetAmountMinor,
     netDistributableAmountMinor: input.netDistributableAmountMinor,
-    incomeOffsetsByCurrency: normalizeTotalsByCurrency(input.incomeOffsetsByCurrency),
+    incomeOffsetsByCurrency,
     expenses: createJsonArray(expenses.map(toExpenseJsonObject)),
     incomeOffsets: createJsonArray(incomeOffsets.map(toIncomeOffsetJsonObject)),
     allocations: createJsonArray(allocations.map(toAllocationJsonObject)),
@@ -624,6 +643,25 @@ export function parseLiquidationPublicationSnapshot(
       );
     }
 
+    // FIN-06R: incomeOffsetsByCurrency debe reconciliar exactamente a
+    // { baseCurrency: incomeOffsetAmountMinor } cuando offset > 0.
+    const incomeOffsetsByCurrency = parseTotalsByCurrency(value.incomeOffsetsByCurrency);
+    if (incomeOffsetAmountMinor > 0) {
+      const expected = { [baseCurrency]: incomeOffsetAmountMinor };
+      const isExact =
+        Object.keys(incomeOffsetsByCurrency).length === 1 &&
+        incomeOffsetsByCurrency[baseCurrency] === expected[baseCurrency];
+      if (!isExact) {
+        throw new BadRequestException(
+          'Liquidation publication snapshot incomeOffsetsByCurrency must match the offset total in base currency',
+        );
+      }
+    } else if (Object.keys(incomeOffsetsByCurrency).length > 0) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot incomeOffsetsByCurrency must be empty for zero offsets',
+      );
+    }
+
     return {
       version: 3,
       valuationMode,
@@ -639,7 +677,7 @@ export function parseLiquidationPublicationSnapshot(
       preIncomeAmountMinor,
       incomeOffsetAmountMinor,
       netDistributableAmountMinor,
-      incomeOffsetsByCurrency: parseTotalsByCurrency(value.incomeOffsetsByCurrency),
+      incomeOffsetsByCurrency,
       expenses,
       incomeOffsets,
       allocations,

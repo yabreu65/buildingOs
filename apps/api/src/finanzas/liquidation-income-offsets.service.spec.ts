@@ -352,23 +352,57 @@ describe('computeIncomeOffsetsForLiquidation (FIN-06)', () => {
     expect(result.items[0]!.valuedAmountMinor).toBe(1050);
   });
 
-  it('FUNCTIONAL: missing functional snapshot yields no offset', () => {
-    const result = computeIncomeOffsetsForLiquidation(
-      [
-        makeIncome({
-          functionalAmountMinor: null,
-          applications: [makeApplication()],
-        }),
-      ],
-      {
-        ...params,
-        valuationMode: 'FUNCTIONAL',
-        baseCurrency: 'ARS',
-      },
-    );
+  it('FUNCTIONAL: missing functional snapshot raises 422 (fail-closed)', () => {
+    const action = () =>
+      computeIncomeOffsetsForLiquidation(
+        [
+          makeIncome({
+            functionalAmountMinor: null,
+            applications: [makeApplication()],
+          }),
+        ],
+        {
+          ...params,
+          valuationMode: 'FUNCTIONAL',
+          baseCurrency: 'ARS',
+        },
+      );
 
-    expect(result.items).toEqual([]);
-    expect(result.incomeOffsetAmountMinor).toBe(0);
+    expect(action).toThrow();
+    try {
+      action();
+    } catch (error) {
+      expect((error as { getResponse(): { error: string } }).getResponse().error).toBe(
+        'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+      );
+    }
+  });
+
+  it('FUNCTIONAL: valid functional amount but currency mismatch raises 422 (fail-closed)', () => {
+    const action = () =>
+      computeIncomeOffsetsForLiquidation(
+        [
+          makeIncome({
+            functionalAmountMinor: 2500,
+            functionalCurrencyCode: 'USD',
+            applications: [makeApplication()],
+          }),
+        ],
+        {
+          ...params,
+          valuationMode: 'FUNCTIONAL',
+          baseCurrency: 'ARS',
+        },
+      );
+
+    expect(action).toThrow();
+    try {
+      action();
+    } catch (error) {
+      expect((error as { getResponse(): { error: string } }).getResponse().error).toBe(
+        'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+      );
+    }
   });
 
   it('LEGACY_NOMINAL: cross-currency offset raises currency mismatch', () => {

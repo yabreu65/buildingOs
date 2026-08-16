@@ -574,9 +574,11 @@ describe('LiquidationPublicationUseCase', () => {
 
     const validApplication = {
       id: 'app-offset-1',
+      incomeId: 'income-1',
       destinationType: 'OFFSET_EXPENSES',
       amountMinor: 7000,
       currencyCode: 'ARS',
+      policyVersionId: 'pv-1',
       income: {
         id: 'income-1',
         status: 'RECORDED',
@@ -671,6 +673,18 @@ describe('LiquidationPublicationUseCase', () => {
 
       expect(result.status).toBe('PUBLISHED');
       expect(tx.charge.createMany).not.toHaveBeenCalled();
+      // FIN-06R: zero-net audit debe reportar chargesCount = 0 (sin cargos reales)
+      // y allocationCount = 2 (unidades del building).
+      expect(deps.createAuditLogRequired).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            chargesCount: 0,
+            allocationCount: 2,
+            snapshotVersion: 3,
+          }),
+        }),
+        tx,
+      );
     });
 
     it('rejects publication when the offset source drifted from the draft snapshot', async () => {
@@ -720,6 +734,8 @@ describe('LiquidationPublicationUseCase', () => {
 
     it('rejects publication when the expense sources do not match pre-income', async () => {
       tx.liquidation.findFirst.mockReset();
+      tx.liquidationIncomeOffset.findMany.mockReset();
+      tx.incomeApplication.findMany.mockReset();
       const drifted = {
         ...incomeOffsetLiquidation,
         expenseSnapshot: [
@@ -737,6 +753,8 @@ describe('LiquidationPublicationUseCase', () => {
       };
 
       tx.liquidation.findFirst.mockResolvedValueOnce(drifted).mockResolvedValueOnce(null);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([validReference]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([validApplication]);
 
       await expect(
         useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-09-10' }),

@@ -588,5 +588,68 @@ describe('liquidation publication snapshot', () => {
 
       expect(() => parseLiquidationPublicationSnapshot(tampered)).toThrow(BadRequestException);
     });
+
+    it('rejects v3 when incomeOffsetsByCurrency does not match the offset total', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          incomeOffsetsByCurrency: { ARS: 6000 },
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when incomeOffsetsByCurrency uses a wrong currency', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          incomeOffsetsByCurrency: { USD: 7000 },
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when incomeOffsetsByCurrency has an extra currency', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          incomeOffsetsByCurrency: { ARS: 7000, USD: 100 },
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('rejects v3 when incomeOffsetsByCurrency is non-empty for zero offsets', () => {
+      expect(() =>
+        buildLiquidationPublicationSnapshotV3({
+          ...v3Input,
+          incomeOffsetAmountMinor: 0,
+          netDistributableAmountMinor: 10000,
+          incomeOffsetsByCurrency: { ARS: 1 },
+        }),
+      ).toThrow(BadRequestException);
+    });
+
+    it('parses a tampered v3 incomeOffsetsByCurrency as invalid', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
+      const tampered = { ...snapshot, incomeOffsetsByCurrency: { ARS: 1 } };
+
+      expect(() => parseLiquidationPublicationSnapshot(tampered)).toThrow(BadRequestException);
+    });
+
+    it('accepts empty incomeOffsetsByCurrency for zero offsets', () => {
+      const zeroInput = {
+        ...v3Input,
+        adjustmentAmountMinor: 0,
+        incomeOffsetAmountMinor: 0,
+        netDistributableAmountMinor: 10000,
+        totalAmountMinor: 10000,
+        incomeOffsetsByCurrency: {},
+        incomeOffsets: [],
+        allocations: [
+          { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 10000 },
+        ],
+      };
+
+      const snapshot = buildLiquidationPublicationSnapshotV3(zeroInput);
+      expect(snapshot).toMatchObject({ version: 3, totalAmountMinor: 10000 });
+    });
   });
 });

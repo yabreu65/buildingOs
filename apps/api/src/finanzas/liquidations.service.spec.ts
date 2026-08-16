@@ -1165,7 +1165,6 @@ describe('LiquidationsService', () => {
             baseCurrency: 'ARS',
           }),
         ],
-        skipDuplicates: true,
       });
     });
 

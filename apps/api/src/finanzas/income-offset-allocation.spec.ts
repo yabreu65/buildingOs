@@ -75,6 +75,40 @@ describe('income-offset-allocation (FIN-06)', () => {
         distributeMinorByWeights(-1, [{ buildingId: 'a', amountMinor: 1 }]),
       ).toThrow();
     });
+
+    it('handles intermediate products above MAX_SAFE_INTEGER exactly', () => {
+      // total * weight = 2_000_000_000 * 2_000_000_000 > MAX_SAFE_INTEGER
+      const result = distributeMinorByWeights(2_000_000_000, [
+        { buildingId: 'a', amountMinor: 1_500_000_000 },
+        { buildingId: 'b', amountMinor: 1_500_000_000 },
+        { buildingId: 'c', amountMinor: 1 },
+      ]);
+
+      const sum = result.reduce((acc, item) => acc + item.amountMinor, 0);
+      expect(sum).toBe(2_000_000_000);
+      // expected exact: a = floor(2e9 * 1.5e9 / 3.000000001e9) = 999_999_999 (remainder .66)
+      // b = 999_999_999, c = floor(0.66) = 0 → remainder 2 → a, b
+      expect(result).toEqual([
+        { buildingId: 'a', amountMinor: 1_000_000_000 },
+        { buildingId: 'b', amountMinor: 1_000_000_000 },
+        { buildingId: 'c', amountMinor: 0 },
+      ]);
+    });
+
+    it('is stable across 10 repeated large-value runs', () => {
+      const weights = [
+        { buildingId: 'a', amountMinor: 2_000_000_000 },
+        { buildingId: 'b', amountMinor: 2_000_000_000 },
+      ];
+      const runs = Array.from({ length: 10 }, () =>
+        distributeMinorByWeights(3_000_000_001, weights),
+      );
+
+      for (const run of runs) {
+        expect(run).toEqual(runs[0]);
+        expect(run.reduce((acc, item) => acc + item.amountMinor, 0)).toBe(3_000_000_001);
+      }
+    });
   });
 
   describe('deriveApplicationFunctionalValues', () => {
@@ -122,6 +156,47 @@ describe('income-offset-allocation (FIN-06)', () => {
 
       expect(first).toEqual(second);
       expect(first.map((item) => item.applicationId)).toEqual(['a', 'z']);
+    });
+
+    it('handles intermediate products above MAX_SAFE_INTEGER exactly', () => {
+      // totalFunctional * weight = 2_000_000_000 * 1_500_000_001 > MAX_SAFE_INTEGER
+      const result = deriveApplicationFunctionalValues({
+        incomeFunctionalAmountMinor: 2_000_000_000,
+        applications: [
+          { id: 'a', amountMinor: 1_500_000_001 },
+          { id: 'b', amountMinor: 1_499_999_999 },
+        ],
+      });
+
+      const sum = result.reduce((acc, item) => acc + item.functionalAmountMinor, 0);
+      expect(sum).toBe(2_000_000_000);
+      // expected exact: a = floor(2e9 * 1500000001 / 3000000000) = floor(1000000000.66...) = 1000000000
+      // b = floor(2e9 * 1499999999 / 3e9) = floor(999999999.33...) = 999999999 → remainder 1 → a
+      expect(result).toEqual([
+        { applicationId: 'a', functionalAmountMinor: 1_000_000_001 },
+        { applicationId: 'b', functionalAmountMinor: 999_999_999 },
+      ]);
+    });
+
+    it('is stable across 10 repeated large-value runs', () => {
+      const applications = [
+        { id: 'x', amountMinor: 2_000_000_000 },
+        { id: 'y', amountMinor: 2_000_000_000 },
+        { id: 'z', amountMinor: 1 },
+      ];
+      const runs = Array.from({ length: 10 }, () =>
+        deriveApplicationFunctionalValues({
+          incomeFunctionalAmountMinor: 3_000_000_001,
+          applications,
+        }),
+      );
+
+      for (const run of runs) {
+        expect(run).toEqual(runs[0]);
+        expect(run.reduce((acc, item) => acc + item.functionalAmountMinor, 0)).toBe(
+          3_000_000_001,
+        );
+      }
     });
   });
 

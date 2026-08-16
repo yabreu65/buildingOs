@@ -412,6 +412,8 @@ export async function createLiquidationDraftRecord(
 
   // FIN-06: referencias relacionales de las aplicaciones OFFSET usadas
   // (void-safety + provenance; una por liquidación/aplicación).
+  // Sin skipDuplicates: una referencia duplicada es un bug financiero y debe
+  // hacer rollback (el unique de la DB es la última barrera).
   if (input.createIncomeOffsetReferences && input.createIncomeOffsetReferences.length > 0) {
     await tx.liquidationIncomeOffset.createMany({
       data: input.createIncomeOffsetReferences.map((reference) => ({
@@ -424,7 +426,6 @@ export async function createLiquidationDraftRecord(
         valuedAmountMinor: reference.valuedAmountMinor,
         baseCurrency: reference.baseCurrency,
       })),
-      skipDuplicates: true,
     });
   }
 
@@ -632,8 +633,14 @@ export class LiquidationPublicationUseCase {
               });
             }
 
-            // Validación de integridad de sources mediante las referencias
-            // relacionales (protege contra corrupción / cambios manuales).
+            // FIN-06R: reconciliación EXACTA snapshot ↔ relations ↔ current.
+            const snapshotOffsets = parseIncomeOffsetSnapshotItems(
+              current.incomeOffsetSnapshot,
+            );
+            const snapshotByApplicationId = new Map(
+              snapshotOffsets.map((offset) => [offset.incomeApplicationId, offset]),
+            );
+
             incomeOffsetReferences = await tx.liquidationIncomeOffset.findMany({
               where: { tenantId, liquidationId },
               select: {
@@ -646,34 +653,81 @@ export class LiquidationPublicationUseCase {
               },
             });
 
-            const applicationIds = incomeOffsetReferences.map(
-              (reference) => reference.incomeApplicationId,
+            const referenceByApplicationId = new Map(
+              incomeOffsetReferences.map((reference) => [
+                reference.incomeApplicationId,
+                reference,
+              ]),
             );
 
+            // Cardinalidad: snapshot count == reference count == unique IDs.
+            const snapshotIds = snapshotOffsets.map((offset) => offset.incomeApplicationId);
+            const referenceIds = incomeOffsetReferences.map(
+              (reference) => reference.incomeApplicationId,
+            );
+            const snapshotIdSet = new Set(snapshotIds);
+            const referenceIdSet = new Set(referenceIds);
+
+            if (
+              snapshotIds.length !== snapshotIdSet.size ||
+              referenceIds.length !== referenceIdSet.size ||
+              snapshotIdSet.size !== referenceIdSet.size ||
+              ![...snapshotIdSet].every((id) => referenceIdSet.has(id))
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'El snapshot de income offsets no reconcilia cardinalidad con las referencias; no se publica',
+              });
+            }
+
+            const applicationIds = referenceIds;
             const applications = await tx.incomeApplication.findMany({
               where: { tenantId, id: { in: applicationIds } },
               select: {
                 id: true,
+                incomeId: true,
                 destinationType: true,
                 amountMinor: true,
                 currencyCode: true,
+                policyVersionId: true,
                 income: { select: { id: true, status: true, period: true } },
               },
             });
-
             const applicationById = new Map(applications.map((app) => [app.id, app]));
 
+            let relationalValuedTotal = 0;
+
             for (const reference of incomeOffsetReferences) {
+              const snapshot = snapshotByApplicationId.get(reference.incomeApplicationId);
               const application = applicationById.get(reference.incomeApplicationId);
 
+              if (!snapshot || !application) {
+                throw new UnprocessableEntityException({
+                  statusCode: 422,
+                  error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                  message: `La fuente de income offset ${reference.incomeApplicationId} no reconcilia; no se publica`,
+                });
+              }
+
+              // Equality estricta contra el snapshot (no comparaciones parciales).
               if (
-                !application ||
+                snapshot.incomeApplicationId !== reference.incomeApplicationId ||
+                snapshot.buildingAmountMinor !== reference.originalAmountMinor ||
+                snapshot.valuedAmountMinor !== reference.valuedAmountMinor ||
+                snapshot.currencyCode !== reference.currencyCode ||
+                snapshot.period !== current.period ||
+                reference.buildingId !== current.buildingId ||
+                reference.baseCurrency !== current.baseCurrency ||
                 application.destinationType !== 'OFFSET_EXPENSES' ||
+                application.amountMinor !== snapshot.applicationAmountMinor ||
+                application.currencyCode !== snapshot.currencyCode ||
+                application.policyVersionId !== snapshot.policyVersionId ||
                 application.income === null ||
+                application.income.id !== snapshot.incomeId ||
                 application.income.status !== 'RECORDED' ||
-                application.income.period !== current.period ||
-                application.amountMinor < reference.originalAmountMinor ||
-                application.currencyCode !== reference.currencyCode
+                application.income.period !== current.period
               ) {
                 throw new UnprocessableEntityException({
                   statusCode: 422,
@@ -681,6 +735,61 @@ export class LiquidationPublicationUseCase {
                   message: `La fuente de income offset ${reference.incomeApplicationId} cambió desde el draft; no se publica`,
                 });
               }
+
+              relationalValuedTotal += reference.valuedAmountMinor;
+            }
+
+            // Reconciliación relacional del total valorado.
+            if (relationalValuedTotal !== current.incomeOffsetAmountMinor) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'La suma valorada de referencias no coincide con el total de income offsets; no se publica',
+              });
+            }
+
+            const snapshotValuedTotal = snapshotOffsets.reduce(
+              (sum, offset) => sum + offset.valuedAmountMinor,
+              0,
+            );
+            if (snapshotValuedTotal !== current.incomeOffsetAmountMinor) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'La suma valorada del snapshot no coincide con el total de income offsets; no se publica',
+              });
+            }
+
+            // FIN-06R: incomeOffsetsByCurrency debe reconciliar exactamente a
+            // { baseCurrency: incomeOffsetAmountMinor } cuando offset > 0.
+            const incomeOffsetsByCurrency = parseTotalsByCurrency(
+              current.incomeOffsetsByCurrency,
+            );
+            if (current.incomeOffsetAmountMinor > 0) {
+              const expected = {
+                [current.baseCurrency]: current.incomeOffsetAmountMinor,
+              };
+              const isExact =
+                Object.keys(incomeOffsetsByCurrency).length === 1 &&
+                incomeOffsetsByCurrency[current.baseCurrency] ===
+                  expected[current.baseCurrency];
+              if (!isExact) {
+                throw new UnprocessableEntityException({
+                  statusCode: 422,
+                  error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                  message:
+                    'incomeOffsetsByCurrency no reconcilia con el total de income offsets; no se publica',
+                });
+              }
+            } else if (Object.keys(incomeOffsetsByCurrency).length > 0) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'incomeOffsetsByCurrency no es consistente con offset cero; no se publica',
+              });
             }
           }
 
@@ -945,7 +1054,8 @@ export class LiquidationPublicationUseCase {
               metadata: {
                 period: current.period,
                 buildingId: current.buildingId,
-                chargesCount: distribution.length,
+                chargesCount: expectedCharges.length,
+                allocationCount: distribution.length,
                 totalAmountMinor: current.totalAmountMinor,
                 baseCurrency: current.baseCurrency,
                 snapshotVersion,

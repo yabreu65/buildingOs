@@ -345,6 +345,103 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     ).rejects.toThrow();
   }, 20000);
 
+  // ── A2. DB summary invariants (FIN-06R hardening migration) ─────────────
+
+  const summaryBase = {
+    tenantId: '',
+    buildingId: '',
+    period: '2026-08',
+    baseCurrency: 'ARS',
+    totalAmountMinor: 5000,
+    totalsByCurrency: { ARS: 10000 },
+    expenseSnapshot: [],
+    unitCount: 1,
+    generatedByMembershipId: '',
+    grossExpenseAmountMinor: 10000,
+    adjustmentAmountMinor: 0,
+    preIncomeAmountMinor: 10000,
+    incomeOffsetAmountMinor: 5000,
+    netDistributableAmountMinor: 5000,
+  };
+
+  async function createSummaryLiquidation(overrides: Record<string, unknown>) {
+    const ctx = await fixture('db-summary');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    return observer.liquidation.create({
+      data: {
+        ...summaryBase,
+        tenantId: ctx.tenant.id,
+        buildingId: buildingA.id,
+        generatedByMembershipId: ctx.membership.id,
+        ...overrides,
+      },
+    });
+  }
+
+  it('A2.1 legacy row with all FIN-06 fields null is allowed', async () => {
+    const liq = await createSummaryLiquidation({
+      grossExpenseAmountMinor: null,
+      adjustmentAmountMinor: null,
+      preIncomeAmountMinor: null,
+      incomeOffsetAmountMinor: null,
+      netDistributableAmountMinor: null,
+    });
+
+    expect(liq.id).toBeDefined();
+  }, 20000);
+
+  it('A2.2 valid FIN-06 equation is allowed', async () => {
+    const liq = await createSummaryLiquidation({});
+    expect(liq.id).toBeDefined();
+  }, 20000);
+
+  it('A2.3 negative gross is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ grossExpenseAmountMinor: -1 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.4 negative offset is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ incomeOffsetAmountMinor: -5 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.5 negative net is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ netDistributableAmountMinor: -5 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.6 gross + adjustment != preIncome is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ preIncomeAmountMinor: 9000 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.7 preIncome - offset != net is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ netDistributableAmountMinor: 4000 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.8 net != totalAmountMinor is rejected', async () => {
+    await expect(
+      createSummaryLiquidation({ totalAmountMinor: 4000 }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
+  it('A2.9 partial FIN-06 summary fields are rejected', async () => {
+    await expect(
+      createSummaryLiquidation({
+        grossExpenseAmountMinor: null,
+        adjustmentAmountMinor: null,
+        preIncomeAmountMinor: null,
+        incomeOffsetAmountMinor: null,
+      }),
+    ).rejects.toThrow(/check constraint|Check/);
+  }, 20000);
+
   it('B. FK/delete lifecycle: tenant hard-delete removes offset references', async () => {
     const ctx = await fixture('fk-delete');
     const buildingA = await building(ctx.tenant.id, 'A');
@@ -690,6 +787,270 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     });
     expect(second.incomeOffsetAmountMinor).toBe(1750);
   }, 30000);
+
+  // ── H2. FUNCTIONAL fail-closed matrix (FIN-06R) ─────────────────────────
+
+  async function setupFunctionalFailClosed(ctx: { tenant: { id: string }; membership: { id: string } }) {
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 2500, {
+      functionalAmountMinor: 2500,
+      functionalCurrencyCode: 'ARS',
+    });
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      buildingId: buildingA.id,
+      currencyCode: 'USD',
+    });
+    return { buildingA, income };
+  }
+
+  it('H2.B. FUNCTIONAL: functionalAmountMinor NULL → 422, no liquidation, no references', async () => {
+    const ctx = await fixture('func-null-amount');
+    const { buildingA, income } = await setupFunctionalFailClosed(ctx);
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    await expect(
+      liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+        buildingId: buildingA.id,
+        period: '2026-08',
+        baseCurrency: 'ARS',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED' },
+    });
+
+    expect(await observer.liquidation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+    expect(await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  }, 30000);
+
+  it('H2.C. FUNCTIONAL: functionalCurrencyCode NULL → 422, no liquidation, no references', async () => {
+    const ctx = await fixture('func-null-currency');
+    const { buildingA, income } = await setupFunctionalFailClosed(ctx);
+    await observer.income.update({
+      where: { id: income.id },
+      data: { functionalAmountMinor: 2500, functionalCurrencyCode: null },
+    });
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    await expect(
+      liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+        buildingId: buildingA.id,
+        period: '2026-08',
+        baseCurrency: 'ARS',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED' },
+    });
+
+    expect(await observer.liquidation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+    expect(await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  }, 30000);
+
+  it('H2.D. FUNCTIONAL: functionalCurrencyCode != baseCurrency → 422, no liquidation, no references', async () => {
+    const ctx = await fixture('func-mismatch');
+    const { buildingA, income } = await setupFunctionalFailClosed(ctx);
+    await observer.income.update({
+      where: { id: income.id },
+      data: { functionalAmountMinor: 2500, functionalCurrencyCode: 'USD' },
+    });
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    await expect(
+      liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+        buildingId: buildingA.id,
+        period: '2026-08',
+        baseCurrency: 'ARS',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED' },
+    });
+
+    expect(await observer.liquidation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+    expect(await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  }, 30000);
+
+  // ── T2. Source drift matrix (FIN-06R) ───────────────────────────────────
+
+  async function setupDriftDraft() {
+    const ctx = await fixture('drift-matrix');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      buildingId: buildingA.id,
+    });
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000 },
+    ]);
+    const { reviewed } = await createLiquidationFlow(ctx.tenant.id, buildingA.id, ctx.membership.id);
+    const reference = await observer.liquidationIncomeOffset.findFirstOrThrow({
+      where: { tenantId: ctx.tenant.id },
+    });
+    const snapshot = (
+      await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } })
+    ).incomeOffsetSnapshot as unknown as Array<Record<string, unknown>>;
+    return { ctx, buildingA, income, reviewed, reference, snapshot };
+  }
+
+  const driftMatrixCases: Array<{
+    label: string;
+    mutate: (ctx: Awaited<ReturnType<typeof setupDriftDraft>>) => Promise<void>;
+  }> = [
+    {
+      label: '1. application destination OFFSET → CARRY',
+      mutate: async ({ ctx, income }) => {
+        await observer.incomeApplication.updateMany({
+          where: { incomeId: income.id },
+          data: { destinationType: IncomeApplicationDestination.CARRY_FORWARD },
+        });
+      },
+    },
+    {
+      label: '2. application amount changes',
+      mutate: async ({ ctx, income }) => {
+        await observer.incomeApplication.updateMany({
+          where: { incomeId: income.id },
+          data: { amountMinor: 6500 },
+        });
+      },
+    },
+    {
+      label: '3. application currency changes',
+      mutate: async ({ ctx, income }) => {
+        await observer.incomeApplication.updateMany({
+          where: { incomeId: income.id },
+          data: { currencyCode: 'USD' },
+        });
+      },
+    },
+    {
+      label: '4. parent Income status changes',
+      mutate: async ({ income }) => {
+        await observer.income.update({
+          where: { id: income.id },
+          data: { status: IncomeStatus.VOID },
+        });
+      },
+    },
+    {
+      label: '5. reference valuedAmount changes',
+      mutate: async ({ reference }) => {
+        await observer.liquidationIncomeOffset.update({
+          where: { id: reference.id },
+          data: { valuedAmountMinor: 6500 },
+        });
+      },
+    },
+    {
+      label: '6. reference originalAmount changes',
+      mutate: async ({ reference }) => {
+        await observer.liquidationIncomeOffset.update({
+          where: { id: reference.id },
+          data: { originalAmountMinor: 6500 },
+        });
+      },
+    },
+    {
+      label: '7. reference baseCurrency changes',
+      mutate: async ({ reference }) => {
+        await observer.liquidationIncomeOffset.update({
+          where: { id: reference.id },
+          data: { baseCurrency: 'USD' },
+        });
+      },
+    },
+    {
+      label: '8. reference buildingId changes',
+      mutate: async ({ ctx, reference, buildingA }) => {
+        const other = await building(ctx.tenant.id, 'OTHER');
+        await observer.liquidationIncomeOffset.update({
+          where: { id: reference.id },
+          data: { buildingId: other.id },
+        });
+      },
+    },
+    {
+      label: '9. delete a reference row',
+      mutate: async ({ reference }) => {
+        await observer.liquidationIncomeOffset.delete({ where: { id: reference.id } });
+      },
+    },
+    {
+      label: '10. alter snapshot applicationAmountMinor',
+      mutate: async ({ ctx, reviewed, reference, snapshot }) => {
+        const updated = [...snapshot];
+        updated[0] = { ...updated[0]!, applicationAmountMinor: 6500 };
+        await observer.liquidation.update({
+          where: { id: reviewed.id },
+          data: { incomeOffsetSnapshot: updated as never },
+        });
+      },
+    },
+    {
+      label: '11. alter snapshot valuedAmountMinor',
+      mutate: async ({ ctx, reviewed, reference, snapshot }) => {
+        const updated = [...snapshot];
+        updated[0] = { ...updated[0]!, valuedAmountMinor: 6500 };
+        await observer.liquidation.update({
+          where: { id: reviewed.id },
+          data: { incomeOffsetSnapshot: updated as never },
+        });
+      },
+    },
+    {
+      label: '12. alter snapshot policyVersionId',
+      mutate: async ({ ctx, reviewed, reference, snapshot }) => {
+        const updated = [...snapshot];
+        updated[0] = { ...updated[0]!, policyVersionId: 'corrupted-pv' };
+        await observer.liquidation.update({
+          where: { id: reviewed.id },
+          data: { incomeOffsetSnapshot: updated as never },
+        });
+      },
+    },
+    {
+      label: '13. alter incomeOffsetsByCurrency',
+      mutate: async ({ ctx, reviewed }) => {
+        await observer.liquidation.update({
+          where: { id: reviewed.id },
+          data: { incomeOffsetsByCurrency: { ARS: 1 } as never },
+        });
+      },
+    },
+  ];
+
+  it.each(driftMatrixCases)(
+    'T2. source drift — $label → 422 LIQUIDATION_INCOME_SOURCE_DRIFT, liquidation stays REVIEWED',
+    async ({ mutate }) => {
+      const setup = await setupDriftDraft();
+      await mutate(setup);
+
+      await expect(
+        liquidations.publishLiquidation(setup.ctx.tenant.id, setup.reviewed.id, setup.ctx.membership.id, {
+          dueDate: '2026-09-10',
+        }),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+      });
+
+      expect(
+        await observer.liquidation.findUniqueOrThrow({ where: { id: setup.reviewed.id } }),
+      ).toMatchObject({ status: 'REVIEWED' });
+    },
+    30000,
+  );
 
   it('J. multiple offset incomes sum exactly with individual provenance', async () => {
     const ctx = await fixture('multiple-offsets');
