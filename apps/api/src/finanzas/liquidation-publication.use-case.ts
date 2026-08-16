@@ -382,6 +382,13 @@ export async function createLiquidationDraftRecord(
   deps: Pick<LiquidationWorkflowDependencies, 'createAuditLogRequired'>,
   input: DraftLiquidationInput,
 ): Promise<LiquidationRecord> {
+  const isFin06Input =
+    input.grossExpenseAmountMinor !== undefined ||
+    input.adjustmentAmountMinor !== undefined ||
+    input.preIncomeAmountMinor !== undefined ||
+    input.incomeOffsetAmountMinor !== undefined ||
+    input.netDistributableAmountMinor !== undefined;
+
   const liquidation = await tx.liquidation.create({
     data: {
       tenantId: input.tenantId,
@@ -400,12 +407,16 @@ export async function createLiquidationDraftRecord(
       preIncomeAmountMinor: input.preIncomeAmountMinor ?? null,
       incomeOffsetAmountMinor: input.incomeOffsetAmountMinor ?? null,
       netDistributableAmountMinor: input.netDistributableAmountMinor ?? null,
-      ...(input.incomeOffsetSnapshot && input.incomeOffsetSnapshot.length > 0
-        ? { incomeOffsetSnapshot: input.incomeOffsetSnapshot as Prisma.InputJsonArray }
-        : {}),
-      ...(input.incomeOffsetsByCurrency &&
-      Object.keys(input.incomeOffsetsByCurrency).length > 0
-        ? { incomeOffsetsByCurrency: input.incomeOffsetsByCurrency as Prisma.InputJsonObject }
+      // FIN-06R2: los drafts del motor FIN-06 persisten SIEMPRE los JSON,
+      // incluso vacíos ([] / {}), para clasificarse como FIN-06 en publish.
+      // Solo liquidaciones históricas pre-FIN-06 mantienen null.
+      ...(isFin06Input
+        ? {
+            incomeOffsetSnapshot: (input.incomeOffsetSnapshot ??
+              []) as Prisma.InputJsonArray,
+            incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ??
+              {}) as Prisma.InputJsonObject,
+          }
         : {}),
     },
   });
@@ -603,10 +614,21 @@ export class LiquidationPublicationUseCase {
             valuationMode,
           );
 
-          // FIN-06: liquidación con income offsets → snapshot V3.
-          const isIncomeOffsetLiquidation =
-            current.incomeOffsetAmountMinor !== null &&
-            current.incomeOffsetAmountMinor > 0;
+          // FIN-06R2: clasificación por PRESENCIA del modelo FIN-06, nunca por
+          // offset > 0. Un draft FIN-06 legítimo puede tener offset 0, y una
+          // row corrompida a offset 0 no debe degradarse a legacy/V2.
+          // `!= null` trata null y undefined como ausencia (legacy).
+          const hasFin06Summary =
+            current.grossExpenseAmountMinor != null ||
+            current.adjustmentAmountMinor != null ||
+            current.preIncomeAmountMinor != null ||
+            current.incomeOffsetAmountMinor != null ||
+            current.netDistributableAmountMinor != null;
+          const hasFin06Artifacts =
+            current.incomeOffsetSnapshot != null ||
+            current.incomeOffsetsByCurrency != null;
+
+          const isFin06Liquidation = hasFin06Summary || hasFin06Artifacts;
 
           let incomeOffsetReferences: Array<{
             incomeApplicationId: string;
@@ -617,19 +639,20 @@ export class LiquidationPublicationUseCase {
             baseCurrency: string;
           }> = [];
 
-          if (isIncomeOffsetLiquidation) {
+          if (isFin06Liquidation) {
+            // Contrato FIN-06 completo: todos los summary fields presentes.
             if (
-              current.preIncomeAmountMinor === null ||
               current.grossExpenseAmountMinor === null ||
               current.adjustmentAmountMinor === null ||
-              current.netDistributableAmountMinor === null ||
-              current.incomeOffsetSnapshot === null
+              current.preIncomeAmountMinor === null ||
+              current.incomeOffsetAmountMinor === null ||
+              current.netDistributableAmountMinor === null
             ) {
               throw new UnprocessableEntityException({
                 statusCode: 422,
                 error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
                 message:
-                  'La liquidación con income offsets carece del snapshot FIN-06; no se publica',
+                  'La liquidación posee evidencia FIN-06 pero su resumen está incompleto; no se publica',
               });
             }
 
@@ -764,6 +787,14 @@ export class LiquidationPublicationUseCase {
 
             // FIN-06R: incomeOffsetsByCurrency debe reconciliar exactamente a
             // { baseCurrency: incomeOffsetAmountMinor } cuando offset > 0.
+            if (current.incomeOffsetsByCurrency === null) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_INCOME_SOURCE_DRIFT',
+                message:
+                  'incomeOffsetsByCurrency falta en una liquidación FIN-06; no se publica',
+              });
+            }
             const incomeOffsetsByCurrency = parseTotalsByCurrency(
               current.incomeOffsetsByCurrency,
             );
@@ -811,7 +842,7 @@ export class LiquidationPublicationUseCase {
           }
 
           // FIN-06: gross + adjustments = preIncome; preIncome - offsets = net.
-          if (isIncomeOffsetLiquidation) {
+          if (isFin06Liquidation) {
             if (
               valuedSourceTotal !== current.preIncomeAmountMinor ||
               (current.preIncomeAmountMinor ?? 0) -
@@ -860,7 +891,7 @@ export class LiquidationPublicationUseCase {
           let publicationSnapshot: Prisma.InputJsonObject;
           let snapshotVersion: number;
 
-          if (isIncomeOffsetLiquidation) {
+          if (isFin06Liquidation) {
             const incomeOffsets = parseIncomeOffsetSnapshotItems(
               current.incomeOffsetSnapshot,
             );
@@ -1061,7 +1092,7 @@ export class LiquidationPublicationUseCase {
                 snapshotVersion,
                 dueDate: dueDate.toISOString().slice(0, 10),
                 publishedAt: now.toISOString(),
-                ...(isIncomeOffsetLiquidation
+                ...(isFin06Liquidation
                   ? {
                       grossExpenseAmountMinor: current.grossExpenseAmountMinor,
                       adjustmentAmountMinor: current.adjustmentAmountMinor,

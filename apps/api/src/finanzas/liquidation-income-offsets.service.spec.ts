@@ -459,4 +459,98 @@ describe('computeIncomeOffsetsForLiquidation (FIN-06)', () => {
     expect(result.incomeOffsetAmountMinor).toBe(0);
     expect(result.incomeOffsetsByCurrency).toEqual({});
   });
+
+  describe('FIN-06R2 building eligibility before FUNCTIONAL validation', () => {
+    const functionalParams = {
+      ...params,
+      valuationMode: 'FUNCTIONAL' as const,
+      baseCurrency: 'ARS',
+    };
+
+    it('CASE A: unrelated BUILDING income with invalid FUNCTIONAL snapshot does not block', () => {
+      const result = computeIncomeOffsetsForLiquidation(
+        [
+          makeIncome({
+            buildingId: 'building-b',
+            functionalAmountMinor: null,
+            applications: [makeApplication()],
+          }),
+        ],
+        functionalParams,
+      );
+
+      expect(result.items).toEqual([]);
+      expect(result.incomeOffsetAmountMinor).toBe(0);
+    });
+
+    it('CASE B: TENANT_SHARED income allocated only to another building with invalid FUNCTIONAL snapshot does not block', () => {
+      const result = computeIncomeOffsetsForLiquidation(
+        [
+          makeIncome({
+            buildingId: null,
+            scopeType: 'TENANT_SHARED',
+            functionalAmountMinor: null,
+            allocations: [{ buildingId: 'building-b', amountMinor: 10000 }],
+            applications: [makeApplication()],
+          }),
+        ],
+        functionalParams,
+      );
+
+      expect(result.items).toEqual([]);
+      expect(result.incomeOffsetAmountMinor).toBe(0);
+    });
+
+    it('CASE C: TENANT_SHARED income with share > 0 in this building and invalid snapshot raises 422', () => {
+      const action = () =>
+        computeIncomeOffsetsForLiquidation(
+          [
+            makeIncome({
+              buildingId: null,
+              scopeType: 'TENANT_SHARED',
+              functionalAmountMinor: null,
+              allocations: [
+                { buildingId: 'building-a', amountMinor: 6000 },
+                { buildingId: 'building-b', amountMinor: 4000 },
+              ],
+              applications: [makeApplication()],
+            }),
+          ],
+          functionalParams,
+        );
+
+      expect(action).toThrow();
+      try {
+        action();
+      } catch (error) {
+        expect((error as { getResponse(): { error: string } }).getResponse().error).toBe(
+          'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+        );
+      }
+    });
+
+    it('CASE D: BUILDING income with share > 0 and functional currency mismatch raises 422', () => {
+      const action = () =>
+        computeIncomeOffsetsForLiquidation(
+          [
+            makeIncome({
+              buildingId: 'building-a',
+              functionalAmountMinor: 2500,
+              functionalCurrencyCode: 'USD',
+              applications: [makeApplication()],
+            }),
+          ],
+          functionalParams,
+        );
+
+      expect(action).toThrow();
+      try {
+        action();
+      } catch (error) {
+        expect((error as { getResponse(): { error: string } }).getResponse().error).toBe(
+          'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+        );
+      }
+    });
+  });
 });

@@ -1111,18 +1111,17 @@ describe('LiquidationsService', () => {
 
     function mockOffsetIncome(income: unknown) {
       const record = income as { id: string; status?: string; period?: string };
-      // collectEligibleOffsets hace dos findMany sobre income:
-      // 1. selección inicial (with applications include)
-      // 2. revalidación post-lock (solo id/status/period)
+      // collectEligibleOffsets (FIN-06R2):
+      // 1. query inicial SOLO de IDs candidatos
+      // 2. reload COMPLETO post-lock (income + applications + allocations)
       tx.income.findMany
-        .mockResolvedValueOnce([income])
-        .mockResolvedValueOnce([
-          {
-            id: record.id,
-            status: record.status ?? 'RECORDED',
-            period: record.period ?? '2026-05',
-          },
-        ]);
+        .mockResolvedValueOnce([{ id: record.id }])
+        .mockResolvedValueOnce(
+          (record.status ?? 'RECORDED') === 'RECORDED' &&
+            (record.period ?? '2026-05') === '2026-05'
+            ? [income]
+            : [],
+        );
     }
 
     it('reduces the net distributable by eligible OFFSET applications', async () => {

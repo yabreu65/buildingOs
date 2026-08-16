@@ -1478,4 +1478,304 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     const leftover = await observer.tenant.count({ where: { name: { startsWith: `${fixturePhase}-` } } });
     expect(leftover).toBe(0);
   }, 10000);
+
+  // ── R2. Building eligibility before FUNCTIONAL validation (PG) ──────────
+
+  it('R2.A. unrelated BUILDING income with invalid FUNCTIONAL snapshot does not block this building', async () => {
+    const ctx = await fixture('r2-building-isolation');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 2500, {
+      functionalAmountMinor: 2500,
+      functionalCurrencyCode: 'ARS',
+    });
+    const incCat = await incomeCategory(ctx.tenant.id);
+    // Income en Building B con OFFSET y snapshot funcional NULL (inválido).
+    const incomeB = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      buildingId: buildingB.id,
+      currencyCode: 'USD',
+      functionalAmountMinor: null,
+    });
+    await createOffsetApplications(ctx.tenant.id, incomeB.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    const { draft } = await createLiquidationFlow(ctx.tenant.id, buildingA.id, ctx.membership.id);
+
+    expect(draft.incomeOffsetAmountMinor).toBe(0);
+    expect(draft.totalAmountMinor).toBe(2500);
+  }, 30000);
+
+  it('R2.B. TENANT_SHARED income allocated only to Building B with invalid snapshot does not block Building A', async () => {
+    const ctx = await fixture('r2-shared-isolation');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 2500, {
+      functionalAmountMinor: 2500,
+      functionalCurrencyCode: 'ARS',
+    });
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      scopeType: MovementScope.TENANT_SHARED,
+      currencyCode: 'USD',
+      functionalAmountMinor: null,
+    });
+    await allocateIncome(ctx.tenant.id, income.id, [
+      { buildingId: buildingB.id, amountMinor: 10000 },
+    ]);
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    const { draft } = await createLiquidationFlow(ctx.tenant.id, buildingA.id, ctx.membership.id);
+
+    expect(draft.incomeOffsetAmountMinor).toBe(0);
+    expect(draft.totalAmountMinor).toBe(2500);
+  }, 30000);
+
+  it('R2.C. TENANT_SHARED income with Building A share > 0 and invalid snapshot rejects 422', async () => {
+    const ctx = await fixture('r2-shared-relevant');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 2500, {
+      functionalAmountMinor: 2500,
+      functionalCurrencyCode: 'ARS',
+    });
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      scopeType: MovementScope.TENANT_SHARED,
+      currencyCode: 'USD',
+      functionalAmountMinor: null,
+    });
+    await allocateIncome(ctx.tenant.id, income.id, [
+      { buildingId: buildingA.id, amountMinor: 6000 },
+      { buildingId: buildingB.id, amountMinor: 4000 },
+    ]);
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 7000, currencyCode: 'USD' },
+    ]);
+
+    await expect(
+      liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+        buildingId: buildingA.id,
+        period: '2026-08',
+        baseCurrency: 'ARS',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED' },
+    });
+
+    expect(await observer.liquidation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  }, 30000);
+
+  // ── R2. Zero-offset V3 lifecycle ─────────────────────────────────────────
+
+  it('R2.D. zero-offset FIN-06 draft publishes V3 with empty offsets and correct audit', async () => {
+    const ctx = await fixture('r2-zero-offset-v3');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+
+    const { draft, reviewed } = await createLiquidationFlow(ctx.tenant.id, buildingA.id, ctx.membership.id);
+
+    expect(draft.grossExpenseAmountMinor).toBe(10000);
+    expect(draft.adjustmentAmountMinor).toBe(0);
+    expect(draft.preIncomeAmountMinor).toBe(10000);
+    expect(draft.incomeOffsetAmountMinor).toBe(0);
+    expect(draft.netDistributableAmountMinor).toBe(10000);
+    expect(draft.totalAmountMinor).toBe(10000);
+
+    const draftRow = await observer.liquidation.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(draftRow.incomeOffsetSnapshot).toEqual([]);
+    expect(draftRow.incomeOffsetsByCurrency).toEqual({});
+
+    const published = await liquidations.publishLiquidation(ctx.tenant.id, reviewed.id, ctx.membership.id, {
+      dueDate: '2026-09-10',
+    });
+    expect(published.status).toBe('PUBLISHED');
+
+    const row = await observer.liquidation.findUniqueOrThrow({ where: { id: published.id } });
+    const snapshot = row.publicationSnapshot as unknown as {
+      version: number;
+      incomeOffsets: unknown[];
+      incomeOffsetsByCurrency: Record<string, number>;
+      totalAmountMinor: number;
+    };
+    expect(snapshot.version).toBe(3);
+    expect(snapshot.incomeOffsets).toEqual([]);
+    expect(snapshot.incomeOffsetsByCurrency).toEqual({});
+    expect(snapshot.totalAmountMinor).toBe(10000);
+
+    const charges = await observer.charge.findMany({ where: { liquidationId: published.id } });
+    expect(charges).toHaveLength(2);
+    expect(charges.reduce((sum, c) => sum + c.amount, 0)).toBe(10000);
+
+    const audit = await observer.auditLog.findFirst({
+      where: { tenantId: ctx.tenant.id, action: 'LIQUIDATION_PUBLISH' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(audit).not.toBeNull();
+    const metadata = audit!.metadata as Record<string, unknown>;
+    expect(metadata.snapshotVersion).toBe(3);
+    expect(metadata.incomeOffsetCount).toBe(0);
+  }, 30000);
+
+  // ── R2. Tamper bypass / classification tests ─────────────────────────────
+
+  async function setupFin06WithOffsets() {
+    const ctx = await fixture('r2-tamper');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await recordedIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      buildingId: buildingA.id,
+    });
+    await createOffsetApplications(ctx.tenant.id, income.id, [
+      { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 3000 },
+    ]);
+    // Draft en estado DRAFT (inmutable solo desde REVIEWED por trigger de la DB).
+    const draft = await liquidations.createDraft(ctx.tenant.id, ctx.membership.id, {
+      buildingId: buildingA.id,
+      period: '2026-08',
+      baseCurrency: 'ARS',
+    });
+    expect(draft.incomeOffsetAmountMinor).toBe(3000);
+    const reference = await observer.liquidationIncomeOffset.findFirstOrThrow({
+      where: { tenantId: ctx.tenant.id },
+    });
+    expect(reference).toBeDefined();
+    return { ctx, buildingA, draft, reference };
+  }
+
+  async function corruptAndReview(setup: Awaited<ReturnType<typeof setupFin06WithOffsets>>, data: Record<string, unknown>) {
+    await observer.liquidation.update({
+      where: { id: setup.draft.id },
+      data,
+    });
+    const reviewed = await liquidations.reviewLiquidation(setup.ctx.tenant.id, setup.draft.id, setup.ctx.membership.id);
+    return { ...setup, reviewed };
+  }
+
+  it('R2.E. offset→0 consistent tamper (equation-valid) is rejected, never V2', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    // Corrupción CONSISTENTE: offset 0, net 10000, total 10000 (equations OK).
+    const { reviewed } = await corruptAndReview(setup, {
+      incomeOffsetAmountMinor: 0,
+      netDistributableAmountMinor: 10000,
+      totalAmountMinor: 10000,
+    });
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    const row = await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } });
+    expect(row.status).toBe('REVIEWED');
+    expect(row.publicationSnapshot).toBeNull();
+    expect(await observer.charge.count({ where: { liquidationId: reviewed.id } })).toBe(0);
+  }, 30000);
+
+  it('R2.F. all-summary-null with artifacts intact is rejected, never legacy', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    // Todos los summary FIN-06 a NULL (la rama legacy-null del CHECK permite esto),
+    // pero los artifacts (snapshot JSON + relational refs) permanecen.
+    const { reviewed } = await corruptAndReview(setup, {
+      grossExpenseAmountMinor: null,
+      adjustmentAmountMinor: null,
+      preIncomeAmountMinor: null,
+      incomeOffsetAmountMinor: null,
+      netDistributableAmountMinor: null,
+    });
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    expect(
+      await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } }),
+    ).toMatchObject({ status: 'REVIEWED' });
+  }, 30000);
+
+  it('R2.G. missing incomeOffsetSnapshot artifact is rejected', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    const { reviewed } = await corruptAndReview(setup, { incomeOffsetSnapshot: null });
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    expect(
+      await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } }),
+    ).toMatchObject({ status: 'REVIEWED' });
+  }, 30000);
+
+  it('R2.H. missing incomeOffsetsByCurrency artifact is rejected', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    const { reviewed } = await corruptAndReview(setup, { incomeOffsetsByCurrency: null });
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    expect(
+      await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } }),
+    ).toMatchObject({ status: 'REVIEWED' });
+  }, 30000);
+
+  it('R2.I. zero-offset with unexpected reference or snapshot items is rejected', async () => {
+    const setup = await setupFin06WithOffsets();
+
+    // Draft legítimo con offset 3000, pero corrompemos el summary a offset 0
+    // manteniendo snapshot con items y reference: debe rechazar.
+    const { reviewed } = await corruptAndReview(setup, {
+      incomeOffsetAmountMinor: 0,
+      netDistributableAmountMinor: 10000,
+      totalAmountMinor: 10000,
+    });
+
+    await expect(
+      liquidations.publishLiquidation(setup.ctx.tenant.id, reviewed.id, setup.ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    expect(
+      await observer.liquidation.findUniqueOrThrow({ where: { id: reviewed.id } }),
+    ).toMatchObject({ status: 'REVIEWED' });
+  }, 30000);
 });

@@ -118,9 +118,40 @@ export function computeIncomeOffsetsForLiquidation(
       continue;
     }
 
-    // Fail-closed (FIN-06R): en modo FUNCTIONAL, un income con OFFSET elegible
-    // debe poseer snapshot funcional convergente; si no → 422. El dinero
-    // elegible NUNCA desaparece silenciosamente.
+    const allocationWeights: BuildingAllocationWeight[] = income.allocations
+      .filter((allocation) => allocation.amountMinor !== null && allocation.amountMinor > 0)
+      .map((allocation) => ({
+        buildingId: allocation.buildingId,
+        amountMinor: allocation.amountMinor as number,
+      }));
+
+    // FIN-06R2: la elegibilidad del building se determina ANTES de la
+    // validación funcional. Un Income cuyos OFFSET no participan en este
+    // building (share 0 en todos) se ignora para esta liquidación, aunque su
+    // snapshot funcional esté dañado: el dinero de otro building no puede
+    // bloquear esta liquidación.
+    const buildingShares = offsetApplications.map((application) => ({
+      application,
+      buildingAmountMinor: resolveIncomeOffsetBuildingShare({
+        applicationAmountMinor: application.amountMinor,
+        applicationScopeType: income.scopeType,
+        incomeBuildingId: income.buildingId,
+        liquidationBuildingId: params.buildingId,
+        allocationWeights,
+      }),
+    }));
+
+    const relevantApplications = buildingShares.filter(
+      (entry) => entry.buildingAmountMinor > 0,
+    );
+
+    if (relevantApplications.length === 0) {
+      continue; // este income no participa en el building de la liquidación
+    }
+
+    // Fail-closed (FIN-06R): SOLO cuando el income realmente participa en este
+    // building, en modo FUNCTIONAL, el snapshot funcional debe converger;
+    // si no → 422. El dinero elegible NUNCA desaparece silenciosamente.
     if (params.valuationMode === 'FUNCTIONAL') {
       assertFunctionalSnapshotForLiquidation({
         incomeId: income.id,
@@ -143,26 +174,7 @@ export function computeIncomeOffsetsForLiquidation(
       );
     }
 
-    const allocationWeights: BuildingAllocationWeight[] = income.allocations
-      .filter((allocation) => allocation.amountMinor !== null && allocation.amountMinor > 0)
-      .map((allocation) => ({
-        buildingId: allocation.buildingId,
-        amountMinor: allocation.amountMinor as number,
-      }));
-
-    for (const application of offsetApplications) {
-      const buildingAmountMinor = resolveIncomeOffsetBuildingShare({
-        applicationAmountMinor: application.amountMinor,
-        applicationScopeType: income.scopeType,
-        incomeBuildingId: income.buildingId,
-        liquidationBuildingId: params.buildingId,
-        allocationWeights,
-      });
-
-      if (buildingAmountMinor <= 0) {
-        continue; // la aplicación no pertenece a este building
-      }
-
+    for (const { application, buildingAmountMinor } of relevantApplications) {
       let valuedAmountMinor: number;
 
       if (params.valuationMode === 'FUNCTIONAL') {
@@ -259,15 +271,16 @@ export class LiquidationIncomeOffsetsService {
 
   /**
    * Selecciona los Incomes con OFFSET elegibles para el draft, toma los income
-   * locks en orden determinístico y revalida después del lock
-   * (race void vs draft → serializable; void que gana excluye el income).
+   * locks en orden determinístico y RE-CARGA el estado completo DESPUÉS del
+   * lock (race void vs draft → serializable; void que gana excluye el income;
+   * sin estado stale pre-lock).
    */
   async collectEligibleOffsets(
     tx: Prisma.TransactionClient,
     params: ComputeIncomeOffsetsInput,
   ): Promise<LiquidationIncomeOffsetsResult> {
-    // 1. Incomes RECORDED del período con al menos una aplicación OFFSET.
-    const incomes = await tx.income.findMany({
+    // 1. Query inicial SOLO para descubrir incomeIds candidatos.
+    const candidateIds = await tx.income.findMany({
       where: {
         tenantId: params.tenantId,
         period: params.period,
@@ -278,6 +291,35 @@ export class LiquidationIncomeOffsetsService {
             destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
           },
         },
+      },
+      select: { id: true },
+    });
+
+    const incomeIds = candidateIds.map((income) => income.id).sort();
+
+    if (incomeIds.length === 0) {
+      return {
+        items: [],
+        references: [],
+        incomeOffsetAmountMinor: 0,
+        incomeOffsetsByCurrency: {},
+      };
+    }
+
+    // 2. Income locks en orden determinístico por incomeId (void vs draft).
+    for (const incomeId of incomeIds) {
+      await acquireIncomeLock(tx, params.tenantId, incomeId);
+    }
+
+    // 3. POST-LOCK: cargar el estado COMPLETO necesario (income + status +
+    //    period + scope + building + snapshot funcional + category +
+    //    allocations + applications). Nunca calcular sobre lectura pre-lock.
+    const reloaded = await tx.income.findMany({
+      where: {
+        tenantId: params.tenantId,
+        id: { in: incomeIds },
+        status: 'RECORDED',
+        period: params.period,
       },
       include: {
         category: { select: { name: true } },
@@ -298,35 +340,8 @@ export class LiquidationIncomeOffsetsService {
       },
     });
 
-    if (incomes.length === 0) {
-      return {
-        items: [],
-        references: [],
-        incomeOffsetAmountMinor: 0,
-        incomeOffsetsByCurrency: {},
-      };
-    }
-
-    // 2. Income locks en orden determinístico por incomeId (void vs draft).
-    const incomeIds = incomes.map((income) => income.id).sort();
-    for (const incomeId of incomeIds) {
-      await acquireIncomeLock(tx, params.tenantId, incomeId);
-    }
-
-    // 3. Revalidación post-lock: income debe seguir RECORDED con el mismo período.
-    const lockedIncomes = await tx.income.findMany({
-      where: { tenantId: params.tenantId, id: { in: incomeIds } },
-      select: { id: true, status: true, period: true },
-    });
-    const incomeById = new Map(lockedIncomes.map((income) => [income.id, income]));
-
-    const revalidated = incomes.filter((income) => {
-      const locked = incomeById.get(income.id);
-      return locked !== undefined && locked.status === 'RECORDED' && locked.period === params.period;
-    });
-
     return computeIncomeOffsetsForLiquidation(
-      revalidated as unknown as IncomeWithApplications[],
+      reloaded as unknown as IncomeWithApplications[],
       params,
     );
   }
