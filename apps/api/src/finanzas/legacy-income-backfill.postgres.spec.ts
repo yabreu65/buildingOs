@@ -59,14 +59,14 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     );
     const appsSvc = new IncomeApplicationsService(prisma, audit, validators);
     return {
-      backfill: new LegacyIncomeBackfillService(prisma, audit, validators, appsSvc),
+      backfill: new LegacyIncomeBackfillService(prisma, audit, appsSvc),
       liquidations: new LiquidationsService(
         prisma,
         audit,
         validators,
         useCase,
         new LiquidationIncomeOffsetsService(prisma),
-        new LegacyIncomeBackfillService(prisma, audit, validators, appsSvc),
+        new LegacyIncomeBackfillService(prisma, audit, appsSvc),
       ),
       incomes: new IncomesService(prisma, audit, validators, new MovementAllocationService(prisma, audit, validators), new CurrencyConversionService(prisma)),
       apps: appsSvc,
@@ -312,7 +312,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       amountMinor: 1000,
       destination: IncomeDestination.APPLY_TO_EXPENSES,
     });
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]);
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]);
     expect(result[0]!.status).toBe('MIGRATED');
 
     await observer.tenant.delete({ where: { id: ctx.tenant.id } });
@@ -502,13 +502,13 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     });
 
     // Backfill explícito → conflicto (draft A activo del mismo período).
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: legacy.id }]);
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: legacy.id }]);
     expect(result[0]!.status).toBe('LIQUIDATION_CONFLICT');
     expect(await observer.incomeApplication.count({ where: { incomeId: legacy.id } })).toBe(0);
 
     // Cancelar el draft → ahora sí puede materializarse.
     await liquidations.cancelLiquidation(ctx.tenant.id, draftA.id, ctx.membership.id);
-    const after = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: legacy.id }]);
+    const after = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: legacy.id }]);
     expect(after[0]!.status).toBe('MIGRATED');
   }, 30000);
 
@@ -529,7 +529,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       buildingId: buildingA.id,
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: legacy.id }]);
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: legacy.id }]);
     expect(result[0]!.status).toBe('LIQUIDATION_CONFLICT');
     expect(await observer.incomeApplication.count({ where: { incomeId: legacy.id } })).toBe(0);
   }, 30000);
@@ -572,7 +572,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `R ${Date.now()}`, createdByMembershipId: ctx.membership.id },
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
       { incomeId: income.id, fundId: fund.id },
     ]);
     expect(result[0]!.status).toBe('MIGRATED');
@@ -607,7 +607,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     expect(actionSet.has('INCOME_LEGACY_BACKFILL')).toBe(true);
 
     // Retry idempotente.
-    const retry = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [
+    const retry = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
       { incomeId: income.id, fundId: fund.id },
     ]);
     expect(retry[0]!.status).toBe('ALREADY_MIGRATED');
@@ -626,7 +626,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'SPECIAL', name: `S ${Date.now()}`, createdByMembershipId: ctx.membership.id },
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
       { incomeId: income.id, fundId: fund.id },
     ]);
     expect(result[0]!.status).toBe('MIGRATED');
@@ -646,7 +646,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       data: { tenantId: ctx.tenant.id, scopeType: 'TENANT', type: 'SPECIAL', name: `W ${Date.now()}`, createdByMembershipId: ctx.membership.id },
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
       { incomeId: income.id, fundId: fund.id },
     ]);
     expect(result[0]!.status).toBe('INVALID_FUND');
@@ -672,7 +672,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       },
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
       { incomeId: income.id, fundId: fund.id },
     ]);
     expect(result[0]!.status).toBe('INVALID_FUND');
@@ -690,7 +690,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       data: { tenantId: ctxB.tenant.id, scopeType: 'TENANT', type: 'RESERVE', name: `X ${Date.now()}`, createdByMembershipId: ctxB.membership.id },
     });
 
-    const result = await backfill.apply(ctxA.tenant.id, ctxA.membership.id, roles, [
+    const result = await backfill.apply(ctxA.tenant.id, ctxA.membership.id, [
       { incomeId: income.id, fundId: fundB.id },
     ]);
     expect(result[0]!.status).toBe('INVALID_FUND');
@@ -704,8 +704,8 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       destination: IncomeDestination.APPLY_TO_EXPENSES,
     });
 
-    const first = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]);
-    const second = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]);
+    const first = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]);
+    const second = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]);
 
     expect(first[0]!.status).toBe('MIGRATED');
     expect(second[0]!.status).toBe('ALREADY_MIGRATED');
@@ -721,8 +721,8 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     });
 
     const [a, b] = await Promise.all([
-      backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]),
-      backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]),
+      backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]),
+      backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]),
     ]);
 
     expect(await observer.incomeApplication.count({ where: { incomeId: income.id } })).toBe(1);
@@ -742,7 +742,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       applications: [{ destinationType: IncomeApplicationDestination.CARRY_FORWARD, amountMinor: 3000 }],
     });
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]);
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]);
     expect(result[0]!.status).toBe('ALREADY_HAS_PLAN');
     expect(await observer.incomeApplication.count({ where: { incomeId: income.id } })).toBe(1);
     const app = await observer.incomeApplication.findFirstOrThrow({ where: { incomeId: income.id } });
@@ -784,7 +784,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
 
     await incomes.voidIncome(ctx.tenant.id, income.id, ctx.membership.id, roles);
 
-    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: income.id }]);
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: income.id }]);
     expect(result[0]!.status).toBe('NOT_RECORDED');
     expect(await observer.incomeApplication.count({ where: { incomeId: income.id } })).toBe(0);
   }, 30000);
@@ -893,8 +893,8 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
       destination: IncomeDestination.APPLY_TO_EXPENSES,
       buildingId: buildingA.id,
     });
-    await backfill.preview(ctx.tenant.id, ctx.membership.id, roles, {});
-    const applyResult = await backfill.apply(ctx.tenant.id, ctx.membership.id, roles, [{ incomeId: legacy.id }]);
+    await backfill.preview(ctx.tenant.id, ctx.membership.id, {});
+    const applyResult = await backfill.apply(ctx.tenant.id, ctx.membership.id, [{ incomeId: legacy.id }]);
     expect(applyResult[0]!.status).toBe('LIQUIDATION_CONFLICT');
 
     // Nada mutó: snapshot, total, charges intactos.
@@ -917,7 +917,7 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     const previewA = await backfill.preview(ctxA.tenant.id, ctxA.membership.id, roles, {});
     expect(previewA).toHaveLength(0);
 
-    const applyB = await backfill.apply(ctxB.tenant.id, ctxB.membership.id, roles, [{ incomeId: incomeB.id }]);
+    const applyB = await backfill.apply(ctxB.tenant.id, ctxB.membership.id, [{ incomeId: incomeB.id }]);
     expect(applyB[0]!.status).toBe('MIGRATED');
     expect(await observer.incomeApplication.count({ where: { tenantId: ctxA.tenant.id } })).toBe(0);
   }, 30000);
@@ -926,4 +926,248 @@ describePostgres('FIN-04 legacy income backfill (PostgreSQL)', () => {
     const leftover = await observer.tenant.count({ where: { name: { startsWith: `${fixturePhase}-` } } });
     expect(leftover).toBe(0);
   }, 10000);
+
+  // ── FIN-04R: building isolation for lazy materialization ────────────────
+
+  it('R1.A. legacy BUILDING income B is not materialized by draft A', async () => {
+    const ctx = await fixture('r1-a');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const incomeB = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 3000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      buildingId: buildingB.id,
+    });
+
+    const draft = await createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id);
+
+    expect(draft.incomeOffsetAmountMinor).toBe(0);
+    expect(await observer.incomeApplication.count({ where: { incomeId: incomeB.id } })).toBe(0);
+    expect(
+      await observer.auditLog.count({
+        where: { tenantId: ctx.tenant.id, action: 'INCOME_LEGACY_BACKFILL' },
+      }),
+    ).toBe(0);
+  }, 30000);
+
+  it('R1.B. historical conflict of unrelated building B does not block draft A', async () => {
+    const ctx = await fixture('r1-b');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    await units(ctx.tenant.id, buildingB.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    await validatedExpense(ctx.tenant.id, buildingB.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+
+    // Building B ya tiene liquidation PUBLISHED.
+    const draftB = await createDraftFor(ctx.tenant.id, buildingB.id, ctx.membership.id);
+    const reviewedB = await liquidations.reviewLiquidation(ctx.tenant.id, draftB.id, ctx.membership.id);
+    await liquidations.publishLiquidation(ctx.tenant.id, reviewedB.id, ctx.membership.id, { dueDate: '2026-09-10' });
+
+    // Income legacy de B (después de publicar B).
+    const incomeB = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 3000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      buildingId: buildingB.id,
+    });
+
+    // Draft A debe funcionar sin conflicto histórico de B.
+    const draftA = await createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id);
+    expect(draftA.incomeOffsetAmountMinor).toBe(0);
+    expect(await observer.incomeApplication.count({ where: { incomeId: incomeB.id } })).toBe(0);
+  }, 30000);
+
+  it('R1.C. shared income allocated only to B is not materialized by draft A', async () => {
+    const ctx = await fixture('r1-c');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    await units(ctx.tenant.id, buildingB.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    await validatedExpense(ctx.tenant.id, buildingB.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+
+    // B publicada antes del shared.
+    const draftB = await createDraftFor(ctx.tenant.id, buildingB.id, ctx.membership.id);
+    const reviewedB = await liquidations.reviewLiquidation(ctx.tenant.id, draftB.id, ctx.membership.id);
+    await liquidations.publishLiquidation(ctx.tenant.id, reviewedB.id, ctx.membership.id, { dueDate: '2026-09-10' });
+
+    const shared = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      scopeType: MovementScope.TENANT_SHARED,
+    });
+    await allocateIncome(ctx.tenant.id, shared.id, [
+      { buildingId: buildingB.id, amountMinor: 10000 },
+    ]);
+
+    // Draft A: el shared no participa en A → no materializa, sin conflicto.
+    const draftA = await createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id);
+    expect(draftA.incomeOffsetAmountMinor).toBe(0);
+    expect(await observer.incomeApplication.count({ where: { incomeId: shared.id } })).toBe(0);
+  }, 30000);
+
+  it('R1.D. shared income with positive A share + B published → 422 conflict for A', async () => {
+    const ctx = await fixture('r1-d');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    await units(ctx.tenant.id, buildingB.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    await validatedExpense(ctx.tenant.id, buildingB.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+
+    const draftB = await createDraftFor(ctx.tenant.id, buildingB.id, ctx.membership.id);
+    const reviewedB = await liquidations.reviewLiquidation(ctx.tenant.id, draftB.id, ctx.membership.id);
+    await liquidations.publishLiquidation(ctx.tenant.id, reviewedB.id, ctx.membership.id, { dueDate: '2026-09-10' });
+
+    const shared = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      scopeType: MovementScope.TENANT_SHARED,
+    });
+    await allocateIncome(ctx.tenant.id, shared.id, [
+      { buildingId: buildingA.id, amountMinor: 6000 },
+      { buildingId: buildingB.id, amountMinor: 4000 },
+    ]);
+
+    await expect(createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id)).rejects.toMatchObject({
+      response: { statusCode: 422, error: LEGACY_BACKFILL_LIQUIDATION_CONFLICT },
+    });
+    expect(await observer.incomeApplication.count({ where: { incomeId: shared.id } })).toBe(0);
+  }, 30000);
+
+  it('R1.E. allocation amountMinor = 0 does not make the building relevant', async () => {
+    const ctx = await fixture('r1-e');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+
+    // A ya publicada.
+    const draftA = await createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id);
+    const reviewedA = await liquidations.reviewLiquidation(ctx.tenant.id, draftA.id, ctx.membership.id);
+    await liquidations.publishLiquidation(ctx.tenant.id, reviewedA.id, ctx.membership.id, { dueDate: '2026-09-10' });
+
+    const shared = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      scopeType: MovementScope.TENANT_SHARED,
+    });
+    // Allocation A = 0 (no relevante), B > 0.
+    await observer.movementAllocation.createMany({
+      data: [
+        { tenantId: ctx.tenant.id, incomeId: shared.id, buildingId: buildingA.id, amountMinor: 0 },
+      ],
+    });
+
+    // Explicit backfill: A no cuenta como relevante (allocation 0) → sin conflicto.
+    const result = await backfill.apply(ctx.tenant.id, ctx.membership.id, [
+      { incomeId: shared.id },
+    ]);
+    expect(result[0]!.status).toBe('MIGRATED');
+    expect(await observer.incomeApplication.count({ where: { incomeId: shared.id } })).toBe(1);
+  }, 30000);
+
+  it('R1.F. lazy provenance: legacyDestination frozen in snapshot; tamper → drift', async () => {
+    const ctx = await fixture('r1-f');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    await units(ctx.tenant.id, buildingA.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 10000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+    const income = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 3000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      buildingId: buildingA.id,
+    });
+
+    const draft = await createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id);
+    expect(draft.incomeOffsetAmountMinor).toBe(3000);
+
+    // Snapshot congelado con legacyDestination = APPLY_TO_EXPENSES.
+    const row = await observer.liquidation.findUniqueOrThrow({ where: { id: draft.id } });
+    const snapshot = row.incomeOffsetSnapshot as unknown as Array<{ legacyDestination: string | null; policyVersionId: string | null }>;
+    expect(snapshot[0]!.legacyDestination).toBe('APPLY_TO_EXPENSES');
+    expect(snapshot[0]!.policyVersionId).toBeNull();
+
+    // Review + tamper de provenance en DB disposable → publish drift.
+    await liquidations.reviewLiquidation(ctx.tenant.id, draft.id, ctx.membership.id);
+    await observer.incomeApplication.updateMany({
+      where: { incomeId: income.id },
+      data: { legacyDestination: null },
+    });
+
+    await expect(
+      liquidations.publishLiquidation(ctx.tenant.id, draft.id, ctx.membership.id, {
+        dueDate: '2026-09-10',
+      }),
+    ).rejects.toMatchObject({
+      response: { statusCode: 422, error: 'LIQUIDATION_INCOME_SOURCE_DRIFT' },
+    });
+
+    expect(
+      await observer.liquidation.findUniqueOrThrow({ where: { id: draft.id } }),
+    ).toMatchObject({ status: 'REVIEWED' });
+    expect(await observer.charge.count({ where: { liquidationId: draft.id } })).toBe(0);
+  }, 30000);
+
+  it('R1.G. multi-income concurrent drafts: deterministic locks, no deadlock, one app per income', async () => {
+    const ctx = await fixture('r1-g');
+    const buildingA = await building(ctx.tenant.id, 'A');
+    const buildingB = await building(ctx.tenant.id, 'B');
+    await units(ctx.tenant.id, buildingA.id);
+    await units(ctx.tenant.id, buildingB.id);
+    const expCat = await expenseCategory(ctx.tenant.id);
+    await validatedExpense(ctx.tenant.id, buildingA.id, expCat.id, 20000);
+    await validatedExpense(ctx.tenant.id, buildingB.id, expCat.id, 20000);
+    const incCat = await incomeCategory(ctx.tenant.id);
+
+    // Dos shared incomes legacy relevantes para A y B.
+    const shared1 = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 10000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      scopeType: MovementScope.TENANT_SHARED,
+    });
+    await allocateIncome(ctx.tenant.id, shared1.id, [
+      { buildingId: buildingA.id, amountMinor: 6000 },
+      { buildingId: buildingB.id, amountMinor: 4000 },
+    ]);
+    const shared2 = await legacyIncome(ctx.tenant.id, ctx.membership.id, incCat.id, {
+      amountMinor: 5000,
+      destination: IncomeDestination.APPLY_TO_EXPENSES,
+      scopeType: MovementScope.TENANT_SHARED,
+    });
+    await allocateIncome(ctx.tenant.id, shared2.id, [
+      { buildingId: buildingA.id, amountMinor: 3000 },
+      { buildingId: buildingB.id, amountMinor: 2000 },
+    ]);
+
+    // 10 repeticiones concurrentes de drafts A y B.
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const [draftA, draftB] = await Promise.all([
+        createDraftFor(ctx.tenant.id, buildingA.id, ctx.membership.id),
+        createDraftFor(ctx.tenant.id, buildingB.id, ctx.membership.id),
+      ]);
+
+      expect(draftA.incomeOffsetAmountMinor).toBe(9000); // 6000 + 3000
+      expect(draftB.incomeOffsetAmountMinor).toBe(6000); // 4000 + 2000
+
+      await liquidations.cancelLiquidation(ctx.tenant.id, draftA.id, ctx.membership.id);
+      await liquidations.cancelLiquidation(ctx.tenant.id, draftB.id, ctx.membership.id);
+    }
+
+    // Cada income tiene exactamente UNA aplicación legacy.
+    expect(await observer.incomeApplication.count({ where: { incomeId: shared1.id } })).toBe(1);
+    expect(await observer.incomeApplication.count({ where: { incomeId: shared2.id } })).toBe(1);
+  }, 60000);
 });

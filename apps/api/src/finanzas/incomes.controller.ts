@@ -11,13 +11,16 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { IncomeDestination } from '@prisma/client';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
-import { AuthenticatedRequest } from '../common/types/request.types';
 import { IncomesService } from './incomes.service';
 import { IncomeApplicationsService } from './income-applications.service';
 import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
+import {
+  LegacyBackfillApplyDto,
+  LegacyBackfillPreviewQueryDto,
+} from './legacy-income-backfill.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantAccessGuard } from '../tenancy/tenant-access.guard';
+import { AuthenticatedRequest } from '../common/types/request.types';
 import { IncomeApplicationPlanResponseDto } from './income-applications.dto';
 import {
   CreateIncomeDto,
@@ -43,32 +46,28 @@ export class IncomesController {
    */
   @Get('legacy-backfill/preview')
   async previewLegacyBackfill(
-    @Query('period') period?: string,
-    @Query('categoryId') categoryId?: string,
-    @Query('destination') destination?: IncomeDestination,
+    @Query() query: LegacyBackfillPreviewQueryDto,
     @Request() req?: AuthenticatedRequest,
   ) {
     return this.legacyBackfillService.preview(
       req!.tenantId!,
       req!.user.membershipId ?? '',
-      req!.user.roles ?? [],
       {
-        period,
-        categoryId,
-        destination,
+        period: query.period,
+        categoryId: query.categoryId,
+        destination: query.destination,
       },
     );
   }
 
   @Post('legacy-backfill/apply')
   async applyLegacyBackfill(
-    @Body() dto: { items: Array<{ incomeId: string; fundId?: string | null }> },
+    @Body() dto: LegacyBackfillApplyDto,
     @Request() req?: AuthenticatedRequest,
   ) {
     return this.legacyBackfillService.apply(
       req!.tenantId!,
       req!.user.membershipId ?? '',
-      req!.user.roles ?? [],
       dto.items,
     );
   }

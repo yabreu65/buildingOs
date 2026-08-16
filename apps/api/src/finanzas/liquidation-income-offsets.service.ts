@@ -29,6 +29,7 @@ export interface IncomeOffsetSnapshotItem extends Prisma.InputJsonObject {
   categoryId: string;
   categoryName: string | null;
   policyVersionId: string | null;
+  legacyDestination: string | null; // FIN-04: provenance legacy (null = manual/policy)
   scopeType: string;
   currencyCode: string;
   applicationAmountMinor: number;
@@ -84,6 +85,7 @@ interface IncomeWithApplications {
     amountMinor: number;
     currencyCode: string;
     policyVersionId: string | null;
+    legacyDestination: string | null; // FIN-04
   }>;
 }
 
@@ -225,6 +227,7 @@ export function computeIncomeOffsetsForLiquidation(
         categoryId: income.categoryId,
         categoryName: income.category?.name ?? null,
         policyVersionId: application.policyVersionId,
+        legacyDestination: application.legacyDestination ?? null,
         scopeType: income.scopeType,
         currencyCode: application.currencyCode,
         applicationAmountMinor: application.amountMinor,
@@ -335,6 +338,7 @@ export class LiquidationIncomeOffsetsService {
             amountMinor: true,
             currencyCode: true,
             policyVersionId: true,
+            legacyDestination: true,
           },
         },
       },

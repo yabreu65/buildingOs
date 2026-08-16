@@ -78,7 +78,12 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
 
   beforeEach(async () => {
     prisma = {
-      membership: { findFirst: jest.fn().mockResolvedValue({ id: membershipId }) },
+      membership: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: membershipId,
+          roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }],
+        }),
+      },
       income: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
       incomeApplication: {
         count: jest.fn().mockResolvedValue(0),
@@ -99,7 +104,6 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
         LegacyIncomeBackfillService,
         { provide: PrismaService, useValue: prisma },
         { provide: AuditService, useValue: audit },
-        { provide: FinanzasValidators, useValue: validators },
         { provide: IncomeApplicationsService, useValue: applicationsService },
       ],
     }).compile();
@@ -107,11 +111,18 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     service = module.get(LegacyIncomeBackfillService);
   });
 
+  function setMembershipRoles(rolesList: Array<{ role: string; scopeType: string }>) {
+    (prisma.membership.findFirst as jest.Mock).mockResolvedValue({
+      id: membershipId,
+      roles: rolesList,
+    });
+  }
+
   // ── Classification / preview ────────────────────────────────────────────
 
   it('classifies APPLY_TO_EXPENSES without applications as AUTO_MAPPABLE_OFFSET', async () => {
     prisma.income.findMany.mockResolvedValue([makeIncome()]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result).toHaveLength(1);
     expect(result[0]!.classification).toBe('AUTO_MAPPABLE_OFFSET');
@@ -121,7 +132,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     prisma.income.findMany.mockResolvedValue([
       makeIncome({ destination: IncomeDestination.RESERVE_FUND }),
     ]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result[0]!.classification).toBe('REQUIRES_RESERVE_FUND');
   });
@@ -130,7 +141,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     prisma.income.findMany.mockResolvedValue([
       makeIncome({ destination: IncomeDestination.SPECIAL_FUND }),
     ]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result[0]!.classification).toBe('REQUIRES_SPECIAL_FUND');
   });
@@ -140,7 +151,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     prisma.incomeApplication.groupBy.mockResolvedValue([
       { incomeId: 'income-1', _count: { _all: 1 } },
     ]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result[0]!.classification).toBe('ALREADY_HAS_PLAN');
   });
@@ -150,7 +161,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       makeIncome({ status: IncomeStatus.DRAFT }),
       makeIncome({ id: 'income-2', status: IncomeStatus.VOID }),
     ]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result.map((item) => item.classification)).toEqual(['NOT_RECORDED', 'NOT_RECORDED']);
   });
@@ -160,26 +171,48 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     prisma.liquidation.findMany.mockResolvedValue([
       { buildingId: 'building-1', status: 'DRAFT' },
     ]);
-    const result = await service.preview('tenant-1', membershipId, roles, {});
+    const result = await service.preview('tenant-1', membershipId, {});
 
     expect(result[0]!.classification).toBe('LIQUIDATION_CONFLICT');
   });
 
   it('preview performs zero writes', async () => {
     prisma.income.findMany.mockResolvedValue([makeIncome()]);
-    await service.preview('tenant-1', membershipId, roles, {});
+    await service.preview('tenant-1', membershipId, {});
 
     expect(applicationsService.publishLegacyBackfillPlan).not.toHaveBeenCalled();
     expect(audit.createLogRequired).not.toHaveBeenCalled();
   });
 
-  it('rejects non-admin roles', async () => {
-    validators.isAdminOrOperator.mockReturnValue(false);
+  it.each([
+    ['TENANT_OWNER TENANT-scoped', [{ role: 'TENANT_OWNER', scopeType: 'TENANT' }], true],
+    ['TENANT_ADMIN TENANT-scoped', [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }], true],
+    ['OPERATOR TENANT-scoped', [{ role: 'OPERATOR', scopeType: 'TENANT' }], false],
+    ['RESIDENT TENANT-scoped', [{ role: 'RESIDENT', scopeType: 'TENANT' }], false],
+    ['BUILDING-scoped TENANT_ADMIN only', [{ role: 'TENANT_ADMIN', scopeType: 'BUILDING' }], false],
+    ['UNIT-scoped TENANT_ADMIN only', [{ role: 'TENANT_ADMIN', scopeType: 'UNIT' }], false],
+    ['cross-tenant membership', [], false],
+  ])(
+    'RBAC: %s → %s',
+    async (_label, rolesList, allowed) => {
+      prisma.income.findMany.mockResolvedValue([makeIncome()]);
+      setMembershipRoles(rolesList as Array<{ role: string; scopeType: string }>);
 
-    await expect(service.preview('tenant-1', membershipId, ['RESIDENT'], {})).rejects.toThrow(
-      ForbiddenException,
-    );
-    await expect(service.apply('tenant-1', membershipId, ['RESIDENT'], [])).rejects.toThrow(
+      if (allowed) {
+        const result = await service.preview('tenant-1', membershipId, {});
+        expect(result).toHaveLength(1);
+      } else {
+        await expect(service.preview('tenant-1', membershipId, {})).rejects.toThrow(
+          ForbiddenException,
+        );
+      }
+    },
+  );
+
+  it('rejects a membership from another tenant', async () => {
+    (prisma.membership.findFirst as jest.Mock).mockResolvedValue(null);
+
+    await expect(service.preview('tenant-1', membershipId, {})).rejects.toThrow(
       ForbiddenException,
     );
   });
@@ -194,7 +227,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       applications: [{ id: 'app-1', destinationType: 'OFFSET_EXPENSES' }],
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -223,7 +256,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
 
   it('RESERVE_FUND requires an explicit fundId (REQUIRES_FUND)', async () => {
     setupTx({ destination: IncomeDestination.RESERVE_FUND });
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -233,7 +266,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
 
   it('SPECIAL_FUND requires an explicit fundId (REQUIRES_FUND)', async () => {
     setupTx({ destination: IncomeDestination.SPECIAL_FUND });
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -248,7 +281,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       type: FundType.SPECIAL,
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1', fundId: 'fund-1' },
     ]);
 
@@ -263,7 +296,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       type: FundType.RESERVE,
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1', fundId: 'fund-1' },
     ]);
 
@@ -278,7 +311,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       type: FundType.RESERVE,
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1', fundId: 'fund-1' },
     ]);
 
@@ -289,7 +322,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     setupTx({ destination: IncomeDestination.RESERVE_FUND });
     prisma.fund.findFirst.mockResolvedValue(null);
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1', fundId: 'fund-other-tenant' },
     ]);
 
@@ -309,7 +342,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       applications: [{ id: 'app-1', destinationType: 'FUND' }],
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1', fundId: 'fund-1' },
     ]);
 
@@ -335,7 +368,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     tx.incomeApplication.count.mockResolvedValue(1);
     tx.incomeApplication.findFirst.mockResolvedValue({ id: 'app-1' });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -348,7 +381,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     tx.incomeApplication.count.mockResolvedValue(1);
     tx.incomeApplication.findFirst.mockResolvedValue(null);
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -357,7 +390,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
 
   it('DRAFT income apply returns NOT_RECORDED', async () => {
     setupTx({ status: IncomeStatus.DRAFT });
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -366,7 +399,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
 
   it('VOID income apply returns NOT_RECORDED (never revived)', async () => {
     setupTx({ status: IncomeStatus.VOID });
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -377,7 +410,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
   it('unknown income returns NOT_FOUND', async () => {
     const tx = setupTx();
     tx.income.findFirst.mockResolvedValue(null);
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-x' },
     ]);
 
@@ -390,7 +423,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       { buildingId: 'building-1', status: 'PUBLISHED' },
     ]);
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -409,7 +442,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
       applications: [{ id: 'app-1', destinationType: 'OFFSET_EXPENSES' }],
     });
 
-    const result = await service.apply('tenant-1', membershipId, roles, [
+    const result = await service.apply('tenant-1', membershipId, [
       { incomeId: 'income-1' },
     ]);
 
@@ -417,11 +450,11 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
   });
 
   it('rejects empty batch and batches over the limit', async () => {
-    await expect(service.apply('tenant-1', membershipId, roles, [])).rejects.toThrow(
+    await expect(service.apply('tenant-1', membershipId, [])).rejects.toThrow(
       BadRequestException,
     );
     const big = Array.from({ length: 101 }, (_, i) => ({ incomeId: `income-${i}` }));
-    await expect(service.apply('tenant-1', membershipId, roles, big)).rejects.toThrow(
+    await expect(service.apply('tenant-1', membershipId, big)).rejects.toThrow(
       BadRequestException,
     );
   });
@@ -435,7 +468,7 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     });
     const items = [{ incomeId: 'b' }, { incomeId: 'a' }];
 
-    const result = await service.apply('tenant-1', membershipId, roles, items);
+    const result = await service.apply('tenant-1', membershipId, items);
 
     expect(result.map((r) => r.incomeId)).toEqual(['a', 'b']);
   });
@@ -484,7 +517,9 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
   it('lazy skips income that gained applications concurrently (plan authoritative)', async () => {
     const tx = setupTx();
     tx.income.findMany.mockResolvedValue([makeIncome()]);
-    tx.incomeApplication.count.mockResolvedValue(1);
+    tx.incomeApplication.groupBy.mockResolvedValue([
+      { incomeId: 'income-1', _count: { _all: 1 } },
+    ]);
 
     await service.materializeForLiquidation({
       tx: tx as unknown as Prisma.TransactionClient,
@@ -538,9 +573,14 @@ describe('LegacyIncomeBackfillService (FIN-04)', () => {
     const tx = setupTx();
     const reserve = makeIncome({ id: 'r', destination: IncomeDestination.RESERVE_FUND });
     const special = makeIncome({ id: 's', destination: IncomeDestination.SPECIAL_FUND });
-    tx.income.findMany.mockResolvedValue([reserve, special]);
-    tx.income.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
-      Promise.resolve([reserve, special].find((income) => income.id === where.id) ?? null),
+    // El discovery filtra por destination APPLY; el mock respeta el filtro.
+    tx.income.findMany.mockImplementation(
+      ({ where }: { where?: { destination?: IncomeDestination } }) =>
+        Promise.resolve(
+          [reserve, special].filter(
+            (income) => income.destination === where?.destination,
+          ),
+        ),
     );
 
     await service.materializeForLiquidation({

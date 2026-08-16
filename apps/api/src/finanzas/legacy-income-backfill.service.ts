@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,10 +12,10 @@ import {
   IncomeDestination,
   IncomeStatus,
   Prisma,
+  ScopeType,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { FinanzasValidators } from './finanzas.validators';
 import { IncomeApplicationsService } from './income-applications.service';
 import { acquireIncomeLock } from './fund-locks';
 
@@ -30,6 +29,10 @@ import { acquireIncomeLock } from './fund-locks';
  * - Nunca un OFFSET sintético en memoria: la Liquidación consume rows reales.
  * - Historical safety: no materializar si una liquidation no-cancelada relevante
  *   del mismo período ya existe (el snapshot se habría congelado sin el income).
+ * - FIN-04R: la materialización lazy es building-targeted (nunca materializa
+ *   incomes de otros buildings ni shared con share 0); los income locks se
+ *   adquieren en orden determinístico global; el backfill explícito exige
+ *   membresía real TENANT-scoped TENANT_OWNER/TENANT_ADMIN.
  */
 
 export type LegacyBackfillClassification =
@@ -53,7 +56,7 @@ export type LegacyBackfillItemStatus =
 
 export const LEGACY_BACKFILL_LIQUIDATION_CONFLICT = 'LEGACY_INCOME_BACKFILL_LIQUIDATION_CONFLICT';
 
-const MAX_BACKFILL_BATCH = 100;
+export const MAX_BACKFILL_BATCH = 100;
 
 interface BackfillCandidate {
   income: {
@@ -92,13 +95,40 @@ export class LegacyIncomeBackfillService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
-    private readonly validators: FinanzasValidators,
     private readonly applicationsService: IncomeApplicationsService,
   ) {}
 
-  private assertAdmin(roles: string[], action: string): void {
-    if (!this.validators.isAdminOrOperator(roles)) {
-      throw new ForbiddenException(`Solo administradores pueden ${action}`);
+  /**
+   * FIN-04R RBAC estricto: backfill explícito tenant-wide exige membresía REAL
+   * con rol TENANT-scoped TENANT_OWNER o TENANT_ADMIN.
+   * OPERATOR / RESIDENT / BUILDING-scoped admin / UNIT-scoped / otro tenant → 403.
+   */
+  private async assertExplicitBackfillAdminMembership(
+    tenantId: string,
+    membershipId: string,
+  ): Promise<void> {
+    const membership = await this.prisma.membership.findFirst({
+      where: { id: membershipId, tenantId },
+      select: {
+        id: true,
+        roles: { select: { role: true, scopeType: true } },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('No se encontró una membresía válida para el tenant');
+    }
+
+    const allowed = membership.roles.some(
+      (role) =>
+        role.scopeType === ScopeType.TENANT &&
+        (role.role === 'TENANT_OWNER' || role.role === 'TENANT_ADMIN'),
+    );
+
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Solo administradores con rol de tenant pueden ejecutar el backfill de ingresos legacy',
+      );
     }
   }
 
@@ -106,11 +136,15 @@ export class LegacyIncomeBackfillService {
    * Detección de conflictos históricos: si existe una liquidation no-cancelada
    * (DRAFT/REVIEWED/PUBLISHED) para un building/period relevante del income,
    * la materialización se bloquea (el snapshot previo quedó sin el offset).
+   *
+   * FIN-04R: para shared, solo allocations con amountMinor > 0 cuentan como
+   * relevantes (una allocation 0/NULL no genera conflicto ni relevance).
    */
   private async hasRelevantLiquidationConflict(
     tx: Prisma.TransactionClient,
     tenantId: string,
     income: BackfillCandidate['income'],
+    allocations?: ReadonlyArray<{ buildingId: string; amountMinor: number | null }>,
   ): Promise<{ conflicted: boolean; buildingIds: string[] }> {
     const relevantBuildings: string[] = [];
 
@@ -119,15 +153,17 @@ export class LegacyIncomeBackfillService {
         relevantBuildings.push(income.buildingId);
       }
     } else {
-      // TENANT_SHARED / UNIT_GROUP: usar MovementAllocation persistida.
-      const allocations = await tx.movementAllocation.findMany({
-        where: { tenantId, incomeId: income.id },
-        select: { buildingId: true },
-      });
-      relevantBuildings.push(...allocations.map((allocation) => allocation.buildingId));
+      // TENANT_SHARED / UNIT_GROUP: solo allocations con amountMinor > 0.
+      const source = allocations ?? (await this.loadAllocations(tx, tenantId, income.id));
+      for (const allocation of source) {
+        if (allocation.amountMinor !== null && allocation.amountMinor > 0) {
+          relevantBuildings.push(allocation.buildingId);
+        }
+      }
     }
 
-    if (relevantBuildings.length === 0) {
+    const uniqueBuildings = [...new Set(relevantBuildings)].sort();
+    if (uniqueBuildings.length === 0) {
       return { conflicted: false, buildingIds: [] };
     }
 
@@ -135,7 +171,7 @@ export class LegacyIncomeBackfillService {
       where: {
         tenantId,
         period: income.period,
-        buildingId: { in: relevantBuildings },
+        buildingId: { in: uniqueBuildings },
         status: { in: ['DRAFT', 'REVIEWED', 'PUBLISHED'] },
       },
       select: { buildingId: true, status: true },
@@ -143,22 +179,36 @@ export class LegacyIncomeBackfillService {
 
     return {
       conflicted: conflictedLiquidations.length > 0,
-      buildingIds: relevantBuildings,
+      buildingIds: uniqueBuildings,
     };
+  }
+
+  private async loadAllocations(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    incomeId: string,
+  ): Promise<Array<{ buildingId: string; amountMinor: number | null }>> {
+    return tx.movementAllocation.findMany({
+      where: { tenantId, incomeId },
+      select: { buildingId: true, amountMinor: true },
+    });
   }
 
   private async loadCandidates(
     tx: Prisma.TransactionClient,
     tenantId: string,
     filters: { period?: string; categoryId?: string; destination?: IncomeDestination },
+    incomeIds?: string[],
   ): Promise<BackfillCandidate[]> {
     const incomes = await tx.income.findMany({
       where: {
         tenantId,
+        ...(incomeIds ? { id: { in: incomeIds } } : {}),
         ...(filters.period ? { period: filters.period } : {}),
         ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
         ...(filters.destination ? { destination: filters.destination } : {}),
       },
+      orderBy: { id: 'asc' }, // FIN-04R: orden determinístico en discovery
       select: {
         id: true,
         tenantId: true,
@@ -174,9 +224,14 @@ export class LegacyIncomeBackfillService {
       },
     });
 
+    if (incomes.length === 0) {
+      return [];
+    }
+
+    const ids = incomes.map((income) => income.id);
     const applicationCounts = await tx.incomeApplication.groupBy({
       by: ['incomeId'],
-      where: { tenantId },
+      where: { tenantId, incomeId: { in: ids } }, // FIN-04R: limitar a candidatos
       _count: { _all: true },
     });
     const countByIncome = new Map(
@@ -222,17 +277,9 @@ export class LegacyIncomeBackfillService {
   async preview(
     tenantId: string,
     membershipId: string,
-    roles: string[],
     filters: { period?: string; categoryId?: string; destination?: IncomeDestination },
   ): Promise<LegacyBackfillPreviewItem[]> {
-    this.assertAdmin(roles, 'previsualizar backfill de ingresos legacy');
-    const membership = await this.prisma.membership.findFirst({
-      where: { id: membershipId, tenantId },
-      select: { id: true },
-    });
-    if (!membership) {
-      throw new ForbiddenException('No se encontró una membresía válida para el tenant');
-    }
+    await this.assertExplicitBackfillAdminMembership(tenantId, membershipId);
 
     const candidates = await this.loadCandidates(this.prisma, tenantId, filters);
     const result: LegacyBackfillPreviewItem[] = [];
@@ -270,11 +317,14 @@ export class LegacyIncomeBackfillService {
   async apply(
     tenantId: string,
     membershipId: string,
-    roles: string[],
     items: Array<{ incomeId: string; fundId?: string | null }>,
   ): Promise<Array<{ incomeId: string; status: LegacyBackfillItemStatus; fundId?: string | null }>> {
-    this.assertAdmin(roles, 'ejecutar backfill de ingresos legacy');
+    await this.assertExplicitBackfillAdminMembership(tenantId, membershipId);
 
+    // Defense in depth: nunca items.length TypeError.
+    if (!Array.isArray(items) || items === null || items === undefined) {
+      throw new BadRequestException('El lote de backfill debe ser un array');
+    }
     if (items.length === 0) {
       throw new BadRequestException('El lote de backfill está vacío');
     }
@@ -282,6 +332,11 @@ export class LegacyIncomeBackfillService {
       throw new BadRequestException(
         `El lote máximo es ${MAX_BACKFILL_BATCH} items (recibido: ${items.length})`,
       );
+    }
+    for (const item of items) {
+      if (!item || typeof item.incomeId !== 'string' || item.incomeId.trim().length === 0) {
+        throw new BadRequestException('Cada item de backfill requiere incomeId no vacío');
+      }
     }
 
     // Orden determinístico por incomeId.
@@ -389,6 +444,14 @@ export class LegacyIncomeBackfillService {
         fundTransactionOccurredAt: income.receivedDate,
       });
 
+      // FIN-04R: el mapping legacy siempre produce exactamente UNA aplicación.
+      const [application] = published.applications;
+      if (!application) {
+        throw new Error(
+          `Legacy backfill invariant violation: se esperaba exactamente 1 aplicación para ${incomeId}`,
+        );
+      }
+
       await this.auditService.createLogRequired(
         {
           tenantId,
@@ -399,8 +462,8 @@ export class LegacyIncomeBackfillService {
           metadata: {
             incomeId,
             legacyDestination: destination,
-            applicationId: published.applications[0]?.id ?? null,
-            destinationType: published.applications[0]?.destinationType ?? null,
+            applicationId: application.id,
+            destinationType: application.destinationType,
             amountMinor: income.amountMinor,
             currencyCode: income.currencyCode,
             mode: 'EXPLICIT_BACKFILL',
@@ -419,8 +482,13 @@ export class LegacyIncomeBackfillService {
   /**
    * Auto-materialización para Liquidation (createDraft): materializa incomes
    * legacy APPLY_TO_EXPENSES sin applications dentro de la MISMA transacción.
-   * Los conflictos históricos bloquean; si createDraft falla después, todo
-   * (application + audits) hace rollback con la tx.
+   *
+   * FIN-04R:
+   * - Solo candidates RELEVANTES para el building objetivo (BUILDING con el
+   *   building exacto; shared con allocation > 0 hacia ese building).
+   * - Discovery determinístico (orderBy id) + locks en orden ASC global.
+   * - Reload completo post-lock; relevance recalculada post-lock.
+   * - Un candidate con share 0 en el building objetivo se SKIP (no materializa).
    */
   async materializeForLiquidation(params: {
     tx: Prisma.TransactionClient;
@@ -431,40 +499,59 @@ export class LegacyIncomeBackfillService {
   }): Promise<void> {
     const { tx, tenantId, buildingId, period, membershipId } = params;
 
-    const candidates = await this.loadCandidates(tx, tenantId, {
+    // 1. Discovery de candidate IDs relevantes para el building objetivo.
+    const relevantIncomeIds = await this.discoverRelevantCandidateIds(
+      tx,
+      tenantId,
+      buildingId,
       period,
-      destination: 'APPLY_TO_EXPENSES' as IncomeDestination,
-    });
+    );
+
+    if (relevantIncomeIds.length === 0) {
+      return;
+    }
+
+    // 2. Locks en orden determinístico ASC (evita deadlock por orden variable).
+    for (const incomeId of relevantIncomeIds) {
+      await acquireIncomeLock(tx, tenantId, incomeId);
+    }
+
+    // 3. Reload completo POST-LOCK.
+    const candidates = await this.loadCandidates(
+      tx,
+      tenantId,
+      { period, destination: IncomeDestination.APPLY_TO_EXPENSES },
+      relevantIncomeIds,
+    );
 
     for (const candidate of candidates) {
       const { income, applicationsCount } = candidate;
       if (income.status !== IncomeStatus.RECORDED || applicationsCount > 0) {
         continue; // applications existentes son autoritativas
       }
-
-      // Income lock en orden determinístico (race void/plan vs lazy).
-      await acquireIncomeLock(tx, tenantId, income.id);
-
-      // Reload post-lock: estado fresco.
-      const reloaded = await tx.income.findFirst({
-        where: { id: income.id, tenantId, status: IncomeStatus.RECORDED },
-      });
-      if (!reloaded) {
-        continue; // void ganó la carrera
-      }
-      // Defensivo: solo se auto-materializa APPLY_TO_EXPENSES (el filtro de la
-      // query ya lo restringe; esto protege contra cualquier desviación).
-      if (reloaded.destination !== IncomeDestination.APPLY_TO_EXPENSES) {
+      // Defensivo: solo APPLY_TO_EXPENSES se auto-materializa (el discovery ya
+      // filtra; esto protege contra cualquier desviación del filtro).
+      if (income.destination !== IncomeDestination.APPLY_TO_EXPENSES) {
         continue; // RESERVE/SPECIAL nunca se auto-materializan
       }
-      const reloadedCount = await tx.incomeApplication.count({
-        where: { tenantId, incomeId: income.id },
-      });
-      if (reloadedCount > 0) {
-        continue; // plan concurrente ganó → autoritativo
+
+      // 4. Relevancia post-lock (nunca stale pre-lock).
+      const allocations = await this.loadAllocations(tx, tenantId, income.id);
+      const hasPositiveShareInTrigger = this.hasPositiveShareInBuilding(
+        income,
+        allocations,
+        buildingId,
+      );
+      if (!hasPositiveShareInTrigger) {
+        continue; // share 0 en el building objetivo → no materializa
       }
 
-      const conflict = await this.hasRelevantLiquidationConflict(tx, tenantId, reloaded);
+      const conflict = await this.hasRelevantLiquidationConflict(
+        tx,
+        tenantId,
+        income,
+        allocations,
+      );
       if (conflict.conflicted) {
         throw new UnprocessableEntityException({
           statusCode: 422,
@@ -475,7 +562,7 @@ export class LegacyIncomeBackfillService {
         });
       }
 
-      await this.applicationsService.publishLegacyBackfillPlan(tx, {
+      const published = await this.applicationsService.publishLegacyBackfillPlan(tx, {
         tenantId,
         incomeId: income.id,
         membershipId,
@@ -484,10 +571,18 @@ export class LegacyIncomeBackfillService {
           {
             destinationType: IncomeApplicationDestination.OFFSET_EXPENSES,
             fundId: null,
-            amountMinor: reloaded.amountMinor,
+            amountMinor: income.amountMinor,
           },
         ],
       });
+
+      // FIN-04R: exactamente una aplicación; audit con applicationId exacto.
+      const [application] = published.applications;
+      if (!application) {
+        throw new Error(
+          `Legacy lazy materialization invariant violation: se esperaba 1 aplicación para ${income.id}`,
+        );
+      }
 
       await this.auditService.createLogRequired(
         {
@@ -498,12 +593,13 @@ export class LegacyIncomeBackfillService {
           entityId: income.id,
           metadata: {
             incomeId: income.id,
-            legacyDestination: 'APPLY_TO_EXPENSES',
-            destinationType: 'OFFSET_EXPENSES',
-            amountMinor: reloaded.amountMinor,
-            currencyCode: reloaded.currencyCode,
+            legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+            applicationId: application.id,
+            destinationType: application.destinationType,
+            amountMinor: income.amountMinor,
+            currencyCode: income.currencyCode,
             mode: 'LIQUIDATION_AUTO_MATERIALIZE',
-            incomeReceivedDate: reloaded.receivedDate.toISOString(),
+            incomeReceivedDate: income.receivedDate.toISOString(),
             triggerBuildingId: buildingId,
             period: income.period,
           },
@@ -511,5 +607,72 @@ export class LegacyIncomeBackfillService {
         tx,
       );
     }
+  }
+
+  /**
+   * Descubre SOLO incomes legacy APPLY relevantes para el building objetivo:
+   * - BUILDING: income.buildingId == trigger building.
+   * - TENANT_SHARED / UNIT_GROUP: existe MovementAllocation con amountMinor > 0
+   *   hacia el trigger building.
+   * Retorna IDs ordenados ASC.
+   */
+  private async discoverRelevantCandidateIds(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    buildingId: string,
+    period: string,
+  ): Promise<string[]> {
+    const incomes = await tx.income.findMany({
+      where: {
+        tenantId,
+        period,
+        status: IncomeStatus.RECORDED,
+        destination: IncomeDestination.APPLY_TO_EXPENSES,
+      },
+      orderBy: { id: 'asc' },
+      select: { id: true, scopeType: true, buildingId: true },
+    });
+
+    const buildingIds = incomes
+      .filter((income) => income.scopeType === 'BUILDING' && income.buildingId === buildingId)
+      .map((income) => income.id);
+
+    const sharedIds = incomes
+      .filter((income) => income.scopeType !== 'BUILDING')
+      .map((income) => income.id);
+
+    const relevantSharedIds: string[] = [];
+    if (sharedIds.length > 0) {
+      const allocations = await tx.movementAllocation.findMany({
+        where: {
+          tenantId,
+          incomeId: { in: sharedIds },
+          buildingId,
+          amountMinor: { gt: 0 },
+        },
+        select: { incomeId: true },
+      });
+      relevantSharedIds.push(
+        ...allocations.map((allocation) => allocation.incomeId as string),
+      );
+    }
+
+    return [...new Set([...buildingIds, ...relevantSharedIds])].sort();
+  }
+
+  private hasPositiveShareInBuilding(
+    income: BackfillCandidate['income'],
+    allocations: ReadonlyArray<{ buildingId: string; amountMinor: number | null }>,
+    buildingId: string,
+  ): boolean {
+    if (income.scopeType === 'BUILDING') {
+      return income.buildingId === buildingId;
+    }
+    return allocations.some(
+      (allocation) =>
+        allocation.buildingId === buildingId &&
+        allocation.amountMinor !== null &&
+        allocation.amountMinor > 0,
+    );
   }
 }

@@ -28,16 +28,14 @@ describe('IncomesController legacy-backfill routes (FIN-04)', () => {
 
   it('routes GET legacy-backfill/preview to the backfill service, not :incomeId', async () => {
     const result = await controller.previewLegacyBackfill(
-      '2026-08',
-      'cat-1',
-      IncomeDestination.APPLY_TO_EXPENSES,
+      { period: '2026-08', categoryId: 'cat-1', destination: IncomeDestination.APPLY_TO_EXPENSES },
       {
         tenantId: 'tenant-1',
         user: { membershipId: 'member-1', roles: ['TENANT_ADMIN'] },
       } as never,
     );
 
-    expect(backfill.preview).toHaveBeenCalledWith('tenant-1', 'member-1', ['TENANT_ADMIN'], {
+    expect(backfill.preview).toHaveBeenCalledWith('tenant-1', 'member-1', {
       period: '2026-08',
       categoryId: 'cat-1',
       destination: IncomeDestination.APPLY_TO_EXPENSES,
@@ -55,19 +53,22 @@ describe('IncomesController legacy-backfill routes (FIN-04)', () => {
       } as never,
     );
 
-    expect(backfill.apply).toHaveBeenCalledWith('tenant-1', 'member-1', ['TENANT_ADMIN'], [
+    expect(backfill.apply).toHaveBeenCalledWith('tenant-1', 'member-1', [
       { incomeId: 'income-1' },
     ]);
     expect(result).toEqual([{ incomeId: 'income-1', status: 'MIGRATED' }]);
   });
 
   it('passes undefined filters when not provided', async () => {
-    await controller.previewLegacyBackfill(undefined, undefined, undefined, {
-      tenantId: 'tenant-1',
-      user: { membershipId: 'member-1', roles: ['TENANT_ADMIN'] },
-    } as never);
+    await controller.previewLegacyBackfill(
+      { period: undefined, categoryId: undefined, destination: undefined },
+      {
+        tenantId: 'tenant-1',
+        user: { membershipId: 'member-1', roles: ['TENANT_ADMIN'] },
+      } as never,
+    );
 
-    expect(backfill.preview).toHaveBeenCalledWith('tenant-1', 'member-1', ['TENANT_ADMIN'], {
+    expect(backfill.preview).toHaveBeenCalledWith('tenant-1', 'member-1', {
       period: undefined,
       categoryId: undefined,
       destination: undefined,
