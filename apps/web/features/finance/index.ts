@@ -22,6 +22,17 @@ export { usePaymentsReview } from './hooks/usePaymentsReview';
 export { useAllocation } from './hooks/useAllocation';
 export { useUnitLedger } from './hooks/useUnitLedger';
 export { useTenantFinanceSummary } from './hooks/useTenantFinanceSummary';
+export * from './hooks/useFunds';
+export * from './hooks/useIncomeApplications';
+export * from './hooks/useIncomePolicies';
+export * from './hooks/useLegacyIncomeBackfill';
+export * from './hooks/useFinanceSettings';
+export { financeKeyFamilies, financeKeys } from './hooks/finance-query-keys';
 
 // Export service types and API
 export * from './services/finance.api';
+export * from './contracts';
+export * from './services/funds.api';
+export * from './services/income-applications.api';
+export * from './services/income-policies.api';
+export * from './services/legacy-backfill.api';

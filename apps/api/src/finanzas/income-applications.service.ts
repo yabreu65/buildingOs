@@ -575,6 +575,8 @@ export class IncomeApplicationsService {
     amountMinor: number;
     currencyCode: string;
     fundTransactionId: string | null;
+    policyVersionId: string | null;
+    legacyDestination: IncomeDestination | null;
     createdAt: Date;
   } {
     return {
@@ -586,6 +588,8 @@ export class IncomeApplicationsService {
       amountMinor: app.amountMinor,
       currencyCode: app.currencyCode,
       fundTransactionId: app.fundTransaction?.id ?? null,
+      policyVersionId: app.policyVersionId,
+      legacyDestination: app.legacyDestination,
       createdAt: app.createdAt,
     };
   }

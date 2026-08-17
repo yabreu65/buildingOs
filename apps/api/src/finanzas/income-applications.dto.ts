@@ -10,7 +10,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { IncomeApplicationDestination } from '@prisma/client';
+import { IncomeApplicationDestination, IncomeDestination } from '@prisma/client';
 
 export const MAX_APPLICATIONS_PER_PLAN = 20;
 
@@ -45,6 +45,10 @@ export interface IncomeApplicationResponseDto {
   amountMinor: number;
   currencyCode: string;
   fundTransactionId: string | null;
+  /** Immutable provenance for policy-created applications. */
+  policyVersionId: string | null;
+  /** Immutable provenance for FIN-04 legacy backfill applications. */
+  legacyDestination: IncomeDestination | null;
   createdAt: Date;
 }
 
