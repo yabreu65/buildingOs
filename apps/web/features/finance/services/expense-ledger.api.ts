@@ -1,4 +1,5 @@
 import { apiClient } from '@/shared/lib/http/client';
+import { assertLiquidationV3Summary } from '../contracts/finance-guards';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +67,17 @@ export interface Income {
   status: IncomeStatus;
   createdAt: string;
   updatedAt: string;
+  // FIN-07A: metadata multicurrency/scope (backend toDto)
+  scopeType?: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
+  unitGroupId?: string | null;
+  destination?: 'APPLY_TO_EXPENSES' | 'RESERVE_FUND' | 'SPECIAL_FUND';
+  functionalAmountMinor?: number | null;
+  functionalCurrencyCode?: string | null;
+  exchangeRateId?: string | null;
+  exchangeRateValue?: string | null;
+  exchangeRateDirection?: string | null;
+  exchangeRateEffectiveAt?: string | null;
+  conversionDate?: string | null;
 }
 
 export interface LiquidationExpenseItem {
@@ -101,6 +113,12 @@ export interface Liquidation {
   publishedAt: string | null;
   canceledAt: string | null;
   createdAt: string;
+  // FIN-06 V3: resumen del neto distributable (nullable = histórico V1/V2)
+  grossExpenseAmountMinor?: number | null;
+  adjustmentAmountMinor?: number | null;
+  preIncomeAmountMinor?: number | null;
+  incomeOffsetAmountMinor?: number | null;
+  netDistributableAmountMinor?: number | null;
 }
 
 export interface LiquidationDetail extends Liquidation {
@@ -473,20 +491,24 @@ export async function listLiquidations(
   if (params.period) qs.append('period', params.period);
 
   const queryStr = qs.toString();
-  return apiClient<Liquidation[]>({
+  const liquidations = await apiClient<Liquidation[]>({
     path: `/tenants/${tenantId}/finance/liquidations${queryStr ? '?' + queryStr : ''}`,
     method: 'GET',
   });
+  liquidations.forEach(assertLiquidationV3Summary);
+  return liquidations;
 }
 
 export async function getLiquidation(
   tenantId: string,
   liquidationId: string,
 ): Promise<LiquidationDetail> {
-  return apiClient<LiquidationDetail>({
+  const liquidation = await apiClient<LiquidationDetail>({
     path: `/tenants/${tenantId}/finance/liquidations/${liquidationId}`,
     method: 'GET',
   });
+  assertLiquidationV3Summary(liquidation);
+  return liquidation;
 }
 
 export async function createLiquidationDraft(
@@ -572,6 +594,11 @@ export interface CreateIncomeData {
   receivedDate: string;
   description?: string;
   attachmentFileKey?: string;
+  // FIN-07A: scope/allocations según backend (FIN-04)
+  scopeType?: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
+  destination?: 'APPLY_TO_EXPENSES' | 'RESERVE_FUND' | 'SPECIAL_FUND';
+  unitGroupId?: string;
+  allocations?: Array<{ buildingId: string; amountMinor?: number; percentage?: number }>;
 }
 
 export async function createIncome(

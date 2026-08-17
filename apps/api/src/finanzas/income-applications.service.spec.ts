@@ -141,6 +141,27 @@ describe('IncomeApplicationsService', () => {
     });
   });
 
+  describe('response provenance', () => {
+    it('returns immutable policy and legacy provenance with an application plan', async () => {
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(makeIncome());
+      (prisma.incomeApplication.findMany as jest.Mock).mockResolvedValue([
+        makeApplication({
+          policyVersionId: null,
+          legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+        }),
+      ]);
+
+      await expect(service.getPlan('tenant-1', 'income-1', roles)).resolves.toMatchObject({
+        applications: [
+          expect.objectContaining({
+            policyVersionId: null,
+            legacyDestination: IncomeDestination.APPLY_TO_EXPENSES,
+          }),
+        ],
+      });
+    });
+  });
+
   // ── Lifecycle guards ────────────────────────────────────────────────────
 
   describe('lifecycle guards', () => {
