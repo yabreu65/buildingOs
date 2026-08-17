@@ -26,6 +26,7 @@ export * from './hooks/useFunds';
 export * from './hooks/useIncomeApplications';
 export * from './hooks/useIncomePolicies';
 export * from './hooks/useLegacyIncomeBackfill';
+export * from './hooks/useFinanceSettings';
 export { financeKeyFamilies, financeKeys } from './hooks/finance-query-keys';
 
 // Export service types and API

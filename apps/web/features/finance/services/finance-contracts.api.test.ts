@@ -57,7 +57,7 @@ describe('FIN-07A finance contract APIs', () => {
       id: 'application-1', tenantId: 'tenant-1', incomeId: 'income-1',
       destinationType: 'OFFSET_EXPENSES', fundId: null, amountMinor: 1200,
       currencyCode: 'VES', fundTransactionId: null, policyVersionId: null,
-      legacyDestination: 'APPLY_TO_EXPENSES',
+      legacyDestination: 'APPLY_TO_EXPENSES', createdAt: '2026-08-01T00:00:00.000Z',
     };
     mockedApiClient.mockResolvedValueOnce({
       incomeId: 'income-1', currencyCode: 'VES', totalAmountMinor: 1200, applications: [application],

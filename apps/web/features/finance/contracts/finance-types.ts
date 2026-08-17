@@ -127,6 +127,7 @@ export interface MovementAllocationInput {
   buildingId: string;
   amountMinor?: number;
   percentage?: number;
+  currencyCode?: string;
 }
 
 export interface CreateIncomeData {
@@ -147,7 +148,10 @@ export interface CreateIncomeData {
 export interface UpdateIncomeData {
   amountMinor?: number;
   currencyCode?: string;
+  receivedDate?: string;
+  categoryId?: string;
   description?: string;
+  attachmentFileKey?: string;
 }
 
 // ── IncomeApplication (FIN-03/05/04) ───────────────────────────────────────
@@ -248,9 +252,9 @@ export interface LegacyBackfillPreviewItem {
   incomeId: string;
   period: string;
   categoryId: string;
-  scopeType: string;
+  scopeType: IncomeScopeType;
   buildingId: string | null;
-  status: string;
+  status: IncomeStatus;
   destination: IncomeDestination;
   amountMinor: number;
   currencyCode: string;
@@ -285,7 +289,7 @@ export interface IncomeOffsetSnapshotItem {
   categoryName: string | null;
   policyVersionId: string | null;
   legacyDestination: IncomeDestination | null; // FIN-04 provenance
-  scopeType: string;
+  scopeType: IncomeScopeType;
   currencyCode: string;
   applicationAmountMinor: number;
   buildingAmountMinor: number;
@@ -301,11 +305,54 @@ export interface IncomeOffsetSnapshotItem {
 }
 
 export interface LiquidationV3Summary {
-  grossExpenseAmountMinor: number | null;
-  adjustmentAmountMinor: number | null;
-  preIncomeAmountMinor: number | null;
-  incomeOffsetAmountMinor: number | null;
-  netDistributableAmountMinor: number | null;
-  incomeOffsetSnapshot?: IncomeOffsetSnapshotItem[] | null;
-  incomeOffsetsByCurrency?: Record<string, number> | null;
+  grossExpenseAmountMinor?: number | null;
+  adjustmentAmountMinor?: number | null;
+  preIncomeAmountMinor?: number | null;
+  incomeOffsetAmountMinor?: number | null;
+  netDistributableAmountMinor?: number | null;
+}
+
+// Income offset snapshots are FIN-07C foundation only. The current
+// liquidation read contract does not expose them.
+
+export interface LiquidationExpenseItem {
+  id: string;
+  categoryName: string;
+  vendorName: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  invoiceDate: string;
+  description: string | null;
+}
+
+export interface LiquidationChargePreview {
+  unitId: string;
+  unitCode: string;
+  unitLabel: string | null;
+  amountMinor: number;
+}
+
+export interface Liquidation extends LiquidationV3Summary {
+  id: string;
+  tenantId: string;
+  buildingId: string;
+  period: string;
+  chargePeriod?: string | null;
+  status: LiquidationStatus;
+  valuationMode?: LiquidationValuationMode | null;
+  baseCurrency: string;
+  totalAmountMinor: number;
+  totalsByCurrency: Record<string, number>;
+  unitCount: number;
+  generatedAt: string;
+  reviewedAt: string | null;
+  publishedAt: string | null;
+  canceledAt: string | null;
+  createdAt: string;
+}
+
+export interface LiquidationDetail extends Liquidation {
+  publicationSnapshotStatus: 'AVAILABLE' | 'LEGACY';
+  expenses: LiquidationExpenseItem[];
+  chargesPreview: LiquidationChargePreview[];
 }

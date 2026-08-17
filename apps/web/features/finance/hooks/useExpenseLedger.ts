@@ -36,6 +36,7 @@ import {
   CreateTenantRecurringExpenseData,
   ListIncomesParams,
   CreateIncomeData,
+  UpdateIncomeData,
   createAdjustment,
   validateAdjustment,
   listAdjustments,
@@ -376,7 +377,7 @@ export function useUpdateIncome(tenantId: string) {
       data,
     }: {
       incomeId: string;
-      data: Partial<CreateIncomeData>;
+      data: UpdateIncomeData;
     }) => updateIncome(tenantId, incomeId, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });

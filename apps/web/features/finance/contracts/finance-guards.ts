@@ -23,9 +23,32 @@ import type {
 
 const DESTINATIONS = new Set(['OFFSET_EXPENSES', 'FUND', 'CARRY_FORWARD']);
 const LEGACY_DESTINATIONS = new Set(['APPLY_TO_EXPENSES', 'RESERVE_FUND', 'SPECIAL_FUND']);
+const POLICY_STATUSES = new Set(['ACTIVE', 'INACTIVE']);
+const INCOME_SCOPES = new Set(['BUILDING', 'TENANT_SHARED', 'UNIT_GROUP']);
+const INCOME_STATUSES = new Set(['DRAFT', 'RECORDED', 'VOID']);
+const LEGACY_CLASSIFICATIONS = new Set([
+  'AUTO_MAPPABLE_OFFSET', 'REQUIRES_RESERVE_FUND', 'REQUIRES_SPECIAL_FUND',
+  'ALREADY_HAS_PLAN', 'NOT_RECORDED', 'LIQUIDATION_CONFLICT',
+]);
+const LEGACY_RESULT_STATUSES = new Set([
+  'MIGRATED', 'ALREADY_MIGRATED', 'ALREADY_HAS_PLAN', 'REQUIRES_FUND',
+  'INVALID_FUND', 'LIQUIDATION_CONFLICT', 'NOT_RECORDED', 'NOT_FOUND', 'INVALID_INCOME',
+]);
 
 export function isNonNegativeInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isPositiveSafeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
 }
 
 export function isDestination(value: unknown): value is IncomeApplicationDestination {
@@ -44,7 +67,7 @@ export function isFundBalance(value: unknown): value is FundBalance {
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value) &&
-    typeof (value as FundBalance).currency === 'string' &&
+    isNonEmptyString((value as FundBalance).currency) &&
     isNonNegativeInt((value as FundBalance).amountMinor)
   );
 }
@@ -80,8 +103,8 @@ export function isFundTransaction(value: unknown): value is FundTransaction {
     typeof transaction.tenantId === 'string' &&
     typeof transaction.fundId === 'string' &&
     ['CREDIT', 'DEBIT'].includes(String(transaction.direction)) &&
-    typeof transaction.currencyCode === 'string' &&
-    isNonNegativeInt(transaction.amountMinor)
+    isNonEmptyString(transaction.currencyCode) &&
+    isPositiveSafeInt(transaction.amountMinor)
   );
 }
 
@@ -94,24 +117,28 @@ export function isIncomeApplication(value: unknown): value is IncomeApplication 
     return false;
   }
   const app = value as Record<string, unknown>;
-  if (typeof app.id !== 'string' || typeof app.incomeId !== 'string') {
+  if (
+    !isNonEmptyString(app.id) ||
+    !isNonEmptyString(app.tenantId) ||
+    !isNonEmptyString(app.incomeId) ||
+    !isNonEmptyString(app.currencyCode) ||
+    !isNonEmptyString(app.createdAt)
+  ) {
     return false;
   }
   if (!isDestination(app.destinationType)) {
     return false;
   }
-  if (!isNonNegativeInt(app.amountMinor) || typeof app.currencyCode !== 'string') {
+  if (!isPositiveSafeInt(app.amountMinor) || !isNullableString(app.fundId) || !isNullableString(app.fundTransactionId)) {
     return false;
   }
   const policyVersionId = app.policyVersionId;
   const legacyDestination = app.legacyDestination;
-  if (policyVersionId !== null && policyVersionId !== undefined && typeof policyVersionId !== 'string') {
+  if (!isNullableString(policyVersionId)) {
     return false;
   }
   if (
-    legacyDestination !== null &&
-    legacyDestination !== undefined &&
-    !isLegacyDestination(legacyDestination)
+    legacyDestination !== null && !isLegacyDestination(legacyDestination)
   ) {
     return false;
   }
@@ -119,6 +146,8 @@ export function isIncomeApplication(value: unknown): value is IncomeApplication 
   if (policyVersionId != null && legacyDestination != null) {
     return false;
   }
+  if (app.destinationType === 'FUND' && !isNonEmptyString(app.fundId)) return false;
+  if (app.destinationType !== 'FUND' && app.fundId !== null) return false;
   return true;
 }
 
@@ -146,52 +175,56 @@ export function isIncomeApplicationPlan(value: unknown): value is IncomeApplicat
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const plan = value as Record<string, unknown>;
   return (
-    typeof plan.incomeId === 'string' &&
-    typeof plan.currencyCode === 'string' &&
-    isNonNegativeInt(plan.totalAmountMinor) &&
+    isNonEmptyString(plan.incomeId) &&
+    isNonEmptyString(plan.currencyCode) &&
+    isPositiveSafeInt(plan.totalAmountMinor) &&
     Array.isArray(plan.applications) &&
     plan.applications.every(isIncomeApplication)
+  );
+}
+
+export function isIncomePolicyVersion(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const version = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(version.id) &&
+    isPositiveSafeInt(version.version) &&
+    typeof version.status === 'string' && POLICY_STATUSES.has(version.status) &&
+    Array.isArray(version.rules) && version.rules.every(isIncomePolicyRule) &&
+    isNonEmptyString(version.createdAt)
   );
 }
 
 export function isIncomePolicy(value: unknown): value is IncomePolicy {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const policy = value as Record<string, unknown>;
-  if (typeof policy.id !== 'string' || typeof policy.tenantId !== 'string' || typeof policy.categoryId !== 'string') {
+  if (!isNonEmptyString(policy.id) || !isNonEmptyString(policy.tenantId) || !isNonEmptyString(policy.categoryId)) {
     return false;
   }
   const versions = policy.versions;
   if (!Array.isArray(versions)) return false;
-  return versions.every((version) => {
-    if (typeof version !== 'object' || version === null || Array.isArray(version)) return false;
-    const record = version as Record<string, unknown>;
-    return (
-      typeof record.id === 'string' &&
-      isNonNegativeInt(record.version) &&
-      ['ACTIVE', 'INACTIVE'].includes(String(record.status)) &&
-      Array.isArray(record.rules) &&
-      record.rules.every(isIncomePolicyRule)
-    );
-  });
+  return (policy.currentVersion === null || isIncomePolicyVersion(policy.currentVersion)) && versions.every(isIncomePolicyVersion);
 }
 
 export function isLegacyBackfillPreviewItem(value: unknown): value is LegacyBackfillPreviewItem {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   return (
-    typeof item.incomeId === 'string' &&
-    typeof item.period === 'string' &&
-    typeof item.categoryId === 'string' &&
-    typeof item.currencyCode === 'string' &&
-    isNonNegativeInt(item.amountMinor) &&
-    isLegacyDestination(item.destination)
+    isNonEmptyString(item.incomeId) && isNonEmptyString(item.period) &&
+    isNonEmptyString(item.categoryId) && INCOME_SCOPES.has(String(item.scopeType)) &&
+    isNullableString(item.buildingId) && INCOME_STATUSES.has(String(item.status)) &&
+    isLegacyDestination(item.destination) && isPositiveSafeInt(item.amountMinor) &&
+    isNonEmptyString(item.currencyCode) && isNonNegativeInt(item.applicationsCount) &&
+    LEGACY_CLASSIFICATIONS.has(String(item.classification)) &&
+    (item.relevantBuildings === undefined || (Array.isArray(item.relevantBuildings) && item.relevantBuildings.every(isNonEmptyString)))
   );
 }
 
 export function isLegacyBackfillApplyResultItem(value: unknown): value is LegacyBackfillApplyResultItem {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  return typeof item.incomeId === 'string' && typeof item.status === 'string';
+  return isNonEmptyString(item.incomeId) && LEGACY_RESULT_STATUSES.has(String(item.status)) &&
+    (item.fundId === undefined || isNullableString(item.fundId));
 }
 
 function assertFinancialResponse(condition: boolean, responseName: string): asserts condition {
@@ -254,24 +287,30 @@ export function isIncomeOffsetSnapshotItem(value: unknown): value is IncomeOffse
     return false;
   }
   const item = value as Record<string, unknown>;
-  if (typeof item.incomeId !== 'string' || typeof item.incomeApplicationId !== 'string') {
+  if (!isNonEmptyString(item.incomeId) || !isNonEmptyString(item.incomeApplicationId) || !isNonEmptyString(item.categoryId)) {
     return false;
   }
-  if (!isNonNegativeInt(item.applicationAmountMinor) || !isNonNegativeInt(item.valuedAmountMinor)) {
+  if (
+    !isNullableString(item.categoryName) || !INCOME_SCOPES.has(String(item.scopeType)) ||
+    !isNonEmptyString(item.currencyCode) || !isPositiveSafeInt(item.applicationAmountMinor) ||
+    !isPositiveSafeInt(item.buildingAmountMinor) || !isPositiveSafeInt(item.valuedAmountMinor) ||
+    !isNullableString(item.functionalCurrencyCode) || !isNullableString(item.exchangeRateId) ||
+    !isNullableString(item.exchangeRateValue) || !isNullableString(item.exchangeRateDirection) ||
+    !isNullableString(item.exchangeRateEffectiveAt) || !isNullableString(item.conversionDate) ||
+    !isNonEmptyString(item.receivedDate)
+  ) {
     return false;
   }
-  if (typeof item.period !== 'string') {
+  if (typeof item.period !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(item.period)) {
     return false;
   }
   const policyVersionId = item.policyVersionId;
-  if (policyVersionId !== null && policyVersionId !== undefined && typeof policyVersionId !== 'string') {
+  if (!isNullableString(policyVersionId)) {
     return false;
   }
   const legacyDestination = item.legacyDestination;
   if (
-    legacyDestination !== null &&
-    legacyDestination !== undefined &&
-    !isLegacyDestination(legacyDestination)
+    legacyDestination !== null && !isLegacyDestination(legacyDestination)
   ) {
     return false;
   }
@@ -294,33 +333,13 @@ export function isLiquidationV3Summary(value: unknown): value is LiquidationV3Su
     'incomeOffsetAmountMinor',
     'netDistributableAmountMinor',
   ] as const;
-  for (const field of fields) {
-    const fieldValue = summary[field];
-    if (fieldValue === null || fieldValue === undefined) {
-      continue; // legacy V1/V2: null aceptado
-    }
-    if (!isNonNegativeInt(fieldValue)) {
-      return false;
-    }
-  }
-  const snapshot = summary.incomeOffsetSnapshot;
-  if (snapshot !== null && snapshot !== undefined) {
-    if (!Array.isArray(snapshot) || !snapshot.every(isIncomeOffsetSnapshotItem)) {
-      return false;
-    }
-  }
-  const byCurrency = summary.incomeOffsetsByCurrency;
-  if (byCurrency !== null && byCurrency !== undefined) {
-    if (typeof byCurrency !== 'object' || Array.isArray(byCurrency)) {
-      return false;
-    }
-    for (const amount of Object.values(byCurrency as Record<string, unknown>)) {
-      if (!isNonNegativeInt(amount)) {
-        return false;
-      }
-    }
-  }
-  return true;
+  const values = fields.map((field) => summary[field]);
+  const isLegacy = values.every((entry) => entry === null || entry === undefined);
+  if (isLegacy) return true;
+  if (!values.every(isNonNegativeInt)) return false;
+  const [gross, adjustment, preIncome, offset, net] = values as number[];
+  if (!Number.isSafeInteger(gross + adjustment) || gross + adjustment !== preIncome) return false;
+  return Number.isSafeInteger(preIncome - offset) && preIncome - offset === net;
 }
 
 /** Reject malformed FIN-06 fields while accepting historical V1/V2 nulls. */

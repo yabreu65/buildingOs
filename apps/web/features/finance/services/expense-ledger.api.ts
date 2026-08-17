@@ -1,12 +1,29 @@
 import { apiClient } from '@/shared/lib/http/client';
 import { assertLiquidationV3Summary } from '../contracts/finance-guards';
+import type {
+  CreateIncomeData,
+  Income,
+  Liquidation,
+  LiquidationDetail,
+  UpdateIncomeData,
+} from '../contracts/finance-types';
+
+export type {
+  CreateIncomeData,
+  Income,
+  Liquidation,
+  LiquidationChargePreview,
+  LiquidationDetail,
+  LiquidationExpenseItem,
+  LiquidationStatus,
+  LiquidationValuationMode,
+  MovementAllocationInput,
+  UpdateIncomeData,
+} from '../contracts/finance-types';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type ExpenseStatus = 'DRAFT' | 'VALIDATED' | 'VOID';
-export type IncomeStatus = 'DRAFT' | 'RECORDED' | 'VOID';
-export type LiquidationStatus = 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
-export type LiquidationValuationMode = 'FUNCTIONAL' | 'LEGACY_NOMINAL';
 export type CatalogScope = 'BUILDING' | 'CONDOMINIUM_COMMON';
 
 export interface ExpenseLedgerCategory {
@@ -50,80 +67,6 @@ export interface Expense {
   conversionDate?: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface Income {
-  id: string;
-  tenantId: string;
-  buildingId: string | null;
-  period: string;
-  categoryId: string;
-  categoryName: string;
-  amountMinor: number;
-  currencyCode: string;
-  receivedDate: string;
-  description: string | null;
-  attachmentFileKey: string | null;
-  status: IncomeStatus;
-  createdAt: string;
-  updatedAt: string;
-  // FIN-07A: metadata multicurrency/scope (backend toDto)
-  scopeType?: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
-  unitGroupId?: string | null;
-  destination?: 'APPLY_TO_EXPENSES' | 'RESERVE_FUND' | 'SPECIAL_FUND';
-  functionalAmountMinor?: number | null;
-  functionalCurrencyCode?: string | null;
-  exchangeRateId?: string | null;
-  exchangeRateValue?: string | null;
-  exchangeRateDirection?: string | null;
-  exchangeRateEffectiveAt?: string | null;
-  conversionDate?: string | null;
-}
-
-export interface LiquidationExpenseItem {
-  id: string;
-  categoryName: string;
-  vendorName: string | null;
-  amountMinor: number;
-  currencyCode: string;
-  invoiceDate: string;
-  description: string | null;
-}
-
-export interface LiquidationChargePreview {
-  unitId: string;
-  unitCode: string;
-  unitLabel: string | null;
-  amountMinor: number;
-}
-
-export interface Liquidation {
-  id: string;
-  tenantId: string;
-  buildingId: string;
-  period: string;
-  status: LiquidationStatus;
-  valuationMode?: LiquidationValuationMode | null;
-  baseCurrency: string;
-  totalAmountMinor: number;
-  totalsByCurrency: Record<string, number>;
-  unitCount: number;
-  generatedAt: string;
-  reviewedAt: string | null;
-  publishedAt: string | null;
-  canceledAt: string | null;
-  createdAt: string;
-  // FIN-06 V3: resumen del neto distributable (nullable = histórico V1/V2)
-  grossExpenseAmountMinor?: number | null;
-  adjustmentAmountMinor?: number | null;
-  preIncomeAmountMinor?: number | null;
-  incomeOffsetAmountMinor?: number | null;
-  netDistributableAmountMinor?: number | null;
-}
-
-export interface LiquidationDetail extends Liquidation {
-  expenses: LiquidationExpenseItem[];
-  chargesPreview: LiquidationChargePreview[];
 }
 
 export interface BulkValidateExpensesResult {
@@ -515,21 +458,25 @@ export async function createLiquidationDraft(
   tenantId: string,
   data: { buildingId: string; period: string; baseCurrency: string },
 ): Promise<LiquidationDetail> {
-  return apiClient<LiquidationDetail, typeof data>({
+  const liquidation = await apiClient<LiquidationDetail, typeof data>({
     path: `/tenants/${tenantId}/finance/liquidations/draft`,
     method: 'POST',
     body: data,
   });
+  assertLiquidationV3Summary(liquidation);
+  return liquidation;
 }
 
 export async function reviewLiquidation(
   tenantId: string,
   liquidationId: string,
 ): Promise<Liquidation> {
-  return apiClient<Liquidation>({
+  const liquidation = await apiClient<Liquidation>({
     path: `/tenants/${tenantId}/finance/liquidations/${liquidationId}/review`,
     method: 'POST',
   });
+  assertLiquidationV3Summary(liquidation);
+  return liquidation;
 }
 
 export async function publishLiquidation(
@@ -537,21 +484,25 @@ export async function publishLiquidation(
   liquidationId: string,
   data: { dueDate: string },
 ): Promise<Liquidation> {
-  return apiClient<Liquidation, typeof data>({
+  const liquidation = await apiClient<Liquidation, typeof data>({
     path: `/tenants/${tenantId}/finance/liquidations/${liquidationId}/publish`,
     method: 'POST',
     body: data,
   });
+  assertLiquidationV3Summary(liquidation);
+  return liquidation;
 }
 
 export async function cancelLiquidation(
   tenantId: string,
   liquidationId: string,
 ): Promise<Liquidation> {
-  return apiClient<Liquidation>({
+  const liquidation = await apiClient<Liquidation>({
     path: `/tenants/${tenantId}/finance/liquidations/${liquidationId}/cancel`,
     method: 'POST',
   });
+  assertLiquidationV3Summary(liquidation);
+  return liquidation;
 }
 
 // ── Incomes API ────────────────────────────────────────────────────────────
@@ -585,22 +536,6 @@ export async function getIncome(tenantId: string, incomeId: string): Promise<Inc
   });
 }
 
-export interface CreateIncomeData {
-  buildingId?: string;
-  period: string;
-  categoryId: string;
-  amountMinor: number;
-  currencyCode: string;
-  receivedDate: string;
-  description?: string;
-  attachmentFileKey?: string;
-  // FIN-07A: scope/allocations según backend (FIN-04)
-  scopeType?: 'BUILDING' | 'TENANT_SHARED' | 'UNIT_GROUP';
-  destination?: 'APPLY_TO_EXPENSES' | 'RESERVE_FUND' | 'SPECIAL_FUND';
-  unitGroupId?: string;
-  allocations?: Array<{ buildingId: string; amountMinor?: number; percentage?: number }>;
-}
-
 export async function createIncome(
   tenantId: string,
   data: CreateIncomeData,
@@ -615,9 +550,9 @@ export async function createIncome(
 export async function updateIncome(
   tenantId: string,
   incomeId: string,
-  data: Partial<CreateIncomeData>,
+  data: UpdateIncomeData,
 ): Promise<Income> {
-  return apiClient<Income, Partial<CreateIncomeData>>({
+  return apiClient<Income, UpdateIncomeData>({
     path: `/tenants/${tenantId}/finance/incomes/${incomeId}`,
     method: 'PATCH',
     body: data,

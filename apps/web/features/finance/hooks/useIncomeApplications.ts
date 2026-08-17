@@ -21,12 +21,15 @@ export function useCreateIncomeApplicationPlan(tenantId: string, incomeId: strin
   return useMutation({
     mutationFn: (data: CreateIncomeApplicationPlanData) =>
       createIncomeApplicationPlan(tenantId, incomeId, data),
-    onSuccess: () => {
+    onSuccess: (plan) => {
       void queryClient.invalidateQueries({
         queryKey: financeKeys.incomeApplications(tenantId, incomeId),
       });
       void queryClient.invalidateQueries({ queryKey: financeKeys.income(tenantId, incomeId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      if (plan.applications.some((application) => application.destinationType === 'FUND')) {
+        void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
+      }
     },
   });
 }
@@ -35,12 +38,15 @@ export function useApplyIncomePolicy(tenantId: string, incomeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => applyIncomePolicy(tenantId, incomeId),
-    onSuccess: () => {
+    onSuccess: (plan) => {
       void queryClient.invalidateQueries({
         queryKey: financeKeys.incomeApplications(tenantId, incomeId),
       });
       void queryClient.invalidateQueries({ queryKey: financeKeys.income(tenantId, incomeId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      if (plan.applications.some((application) => application.destinationType === 'FUND')) {
+        void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
+      }
     },
   });
 }

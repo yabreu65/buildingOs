@@ -7,6 +7,8 @@ import {
   listTenantRecurringExpenses,
   createTenantRecurringExpense,
   updateTenantRecurringExpense,
+  createIncome,
+  updateIncome,
 } from './expense-ledger.api';
 
 jest.mock('@/shared/lib/http/client', () => ({
@@ -67,6 +69,21 @@ describe('expense ledger liquidation API', () => {
         baseCurrency: 'ARS',
       }),
     ).rejects.toThrow('network down');
+  });
+
+  it('guards every liquidation mutation response', async () => {
+    const invalidPartialSummary = { grossExpenseAmountMinor: 10000 };
+    mockedApiClient.mockResolvedValueOnce(invalidPartialSummary);
+    await expect(createLiquidationDraft('tenant-1', {
+      buildingId: 'building-1', period: '2026-07', baseCurrency: 'ARS',
+    })).rejects.toThrow('Invalid liquidation V3 summary response');
+
+    mockedApiClient.mockResolvedValueOnce(invalidPartialSummary);
+    await expect(reviewLiquidation('tenant-1', 'liq-1')).rejects.toThrow('Invalid liquidation V3 summary response');
+    mockedApiClient.mockResolvedValueOnce(invalidPartialSummary);
+    await expect(publishLiquidation('tenant-1', 'liq-1', { dueDate: '2026-08-10' })).rejects.toThrow('Invalid liquidation V3 summary response');
+    mockedApiClient.mockResolvedValueOnce(invalidPartialSummary);
+    await expect(cancelLiquidation('tenant-1', 'liq-1')).rejects.toThrow('Invalid liquidation V3 summary response');
   });
 });
 
@@ -142,5 +159,32 @@ describe('tenant recurring expenses API', () => {
 
     const calls = mockedApiClient.mock.calls.map((call) => call[0]);
     expect(calls.every((call) => !String(call.path).startsWith('/buildings/'))).toBe(true);
+  });
+});
+
+describe('income write contracts', () => {
+  beforeEach(() => {
+    mockedApiClient.mockReset();
+    mockedApiClient.mockResolvedValue({});
+  });
+
+  it('transports allocation currencyCode with the exact create contract', async () => {
+    const payload = {
+      period: '2026-08', categoryId: 'category-1', amountMinor: 1000, currencyCode: 'COP',
+      receivedDate: '2026-08-16', scopeType: 'TENANT_SHARED' as const,
+      allocations: [{ buildingId: 'building-1', amountMinor: 1000, currencyCode: 'COP' }],
+    };
+    await createIncome('tenant-1', payload);
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/finance/incomes', method: 'POST', body: payload,
+    });
+  });
+
+  it('sends only UpdateIncomeDto fields through PATCH', async () => {
+    const payload = { amountMinor: 1000, currencyCode: 'VES', receivedDate: '2026-08-16', categoryId: 'category-2', description: 'Adjusted', attachmentFileKey: 'file-1' };
+    await updateIncome('tenant-1', 'income-1', payload);
+    expect(mockedApiClient).toHaveBeenCalledWith({
+      path: '/tenants/tenant-1/finance/incomes/income-1', method: 'PATCH', body: payload,
+    });
   });
 });

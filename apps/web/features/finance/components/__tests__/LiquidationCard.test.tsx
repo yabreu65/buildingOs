@@ -87,6 +87,7 @@ function buildDetail(
 
   return {
     ...liquidation,
+    publicationSnapshotStatus: 'AVAILABLE',
     totalAmountMinor: overrides.totalAmountMinor ?? liquidation.totalAmountMinor,
     expenses:
       overrides.expenses ??
