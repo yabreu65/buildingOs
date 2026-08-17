@@ -1,5 +1,6 @@
 import {
   isFundTransaction,
+  isFund,
   isIncomeApplication,
   isIncomeOffsetSnapshotItem,
   isIncomePolicy,
@@ -23,12 +24,23 @@ describe('FIN-07AR finance guards', () => {
     expect(isIncomeApplication({ ...application, destinationType: 'FUND', fundId: null })).toBe(false);
   });
 
+  it('requires complete Fund and FundTransaction response structures', () => {
+    const fund = { id: 'fund', tenantId: 'tenant', buildingId: null, scopeType: 'TENANT', type: 'RESERVE', name: 'Reserve', description: null, status: 'ACTIVE', balancesByCurrency: [], createdAt: '2026-08-01', archivedAt: null };
+    expect(isFund(fund)).toBe(true);
+    expect(isFund({ ...fund, scopeType: 'BUILDING' })).toBe(false);
+    expect(isFund({ ...fund, createdAt: undefined })).toBe(false);
+    expect(isFundTransaction({ id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP', occurredAt: '2026-08-01', description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01' })).toBe(true);
+    expect(isFundTransaction({ id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP' })).toBe(false);
+  });
+
   it('rejects malformed policy versions and basis points', () => {
-    const policy = { id: 'policy', tenantId: 'tenant', categoryId: 'category', currentVersion: null, versions: [{ id: 'version', version: 1, status: 'ACTIVE', createdAt: '2026-08-01', rules: [{ destinationType: 'FUND', fundId: 'fund', percentageBasisPoints: 10000 }] }] };
+    const policy = { id: 'policy', tenantId: 'tenant', categoryId: 'category', currentVersion: null, versions: [{ id: 'version', version: 1, status: 'ACTIVE', createdAt: '2026-08-01', rules: [{ id: 'rule', destinationType: 'FUND', fundId: 'fund', percentageBasisPoints: 10000 }] }] };
     expect(isIncomePolicy({ ...policy, currentVersion: { version: 0 } })).toBe(false);
     expect(isIncomePolicy({ ...policy, versions: [{ ...policy.versions[0], version: 0 }] })).toBe(false);
     expect(isIncomePolicy({ ...policy, versions: [{ ...policy.versions[0], status: 'UNKNOWN' }] })).toBe(false);
     expect(isIncomePolicy({ ...policy, versions: [{ ...policy.versions[0], rules: [{ destinationType: 'FUND', fundId: 'fund', percentageBasisPoints: '1' }] }] })).toBe(false);
+    expect(isIncomePolicy({ ...policy, versions: [{ ...policy.versions[0], rules: [{ ...policy.versions[0].rules[0], fundId: null }] }] })).toBe(false);
+    expect(isIncomePolicy({ ...policy, versions: [{ ...policy.versions[0], rules: [{ ...policy.versions[0].rules[0], destinationType: 'OFFSET_EXPENSES', fundId: 'fund' }] }] })).toBe(false);
   });
 
   it('rejects unknown legacy classifications and result statuses', () => {

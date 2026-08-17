@@ -77,11 +77,11 @@ export function isFund(value: unknown): value is Fund {
     return false;
   }
   const fund = value as Record<string, unknown>;
-  if (typeof fund.id !== 'string' || typeof fund.tenantId !== 'string') {
+  if (!isNonEmptyString(fund.id) || !isNonEmptyString(fund.tenantId)) {
     return false;
   }
   if (
-    typeof fund.name !== 'string' ||
+    !isNonEmptyString(fund.name) || !isNullableString(fund.buildingId) || !isNullableString(fund.description) ||
     !['TENANT', 'BUILDING'].includes(String(fund.scopeType)) ||
     !['RESERVE', 'SPECIAL', 'OTHER'].includes(String(fund.type)) ||
     !['ACTIVE', 'ARCHIVED'].includes(String(fund.status))
@@ -91,6 +91,9 @@ export function isFund(value: unknown): value is Fund {
   if (!Array.isArray(fund.balancesByCurrency)) {
     return false;
   }
+  if (!isNonEmptyString(fund.createdAt) || !isNullableString(fund.archivedAt)) return false;
+  if (fund.scopeType === 'TENANT' && fund.buildingId !== null) return false;
+  if (fund.scopeType === 'BUILDING' && !isNonEmptyString(fund.buildingId)) return false;
   // Fail-closed: cada balance debe ser válido; un balance inválido invalida el Fund.
   return fund.balancesByCurrency.every(isFundBalance);
 }
@@ -99,12 +102,17 @@ export function isFundTransaction(value: unknown): value is FundTransaction {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const transaction = value as Record<string, unknown>;
   return (
-    typeof transaction.id === 'string' &&
-    typeof transaction.tenantId === 'string' &&
-    typeof transaction.fundId === 'string' &&
+    isNonEmptyString(transaction.id) &&
+    isNonEmptyString(transaction.tenantId) &&
+    isNonEmptyString(transaction.fundId) &&
     ['CREDIT', 'DEBIT'].includes(String(transaction.direction)) &&
     isNonEmptyString(transaction.currencyCode) &&
-    isPositiveSafeInt(transaction.amountMinor)
+    isPositiveSafeInt(transaction.amountMinor) &&
+    isNonEmptyString(transaction.occurredAt) &&
+    isNullableString(transaction.description) &&
+    isNullableString(transaction.idempotencyKey) &&
+    isNullableString(transaction.reversalOfTransactionId) &&
+    isNonEmptyString(transaction.createdAt)
   );
 }
 
@@ -160,15 +168,26 @@ export function isIncomePolicyRule(value: unknown): value is IncomePolicyRule {
     return false;
   }
   const rule = value as Record<string, unknown>;
-  if (!isDestination(rule.destinationType)) {
+  if (!isNonEmptyString(rule.id) || !isDestination(rule.destinationType) || !isNullableString(rule.fundId)) {
     return false;
   }
   return (
     typeof rule.percentageBasisPoints === 'number' &&
     Number.isSafeInteger(rule.percentageBasisPoints) &&
     (rule.percentageBasisPoints as number) >= 1 &&
-    (rule.percentageBasisPoints as number) <= 10000
+    (rule.percentageBasisPoints as number) <= 10000 &&
+    (rule.destinationType === 'FUND' ? isNonEmptyString(rule.fundId) : rule.fundId === null)
   );
+}
+
+function hasFullPercentageAllocation(rules: unknown[]): boolean {
+  let total = 0;
+  for (const rule of rules) {
+    const amount = (rule as IncomePolicyRule).percentageBasisPoints;
+    if (!Number.isSafeInteger(total + amount)) return false;
+    total += amount;
+  }
+  return total === 10000;
 }
 
 export function isIncomeApplicationPlan(value: unknown): value is IncomeApplicationPlan {
@@ -190,7 +209,8 @@ export function isIncomePolicyVersion(value: unknown): boolean {
     isNonEmptyString(version.id) &&
     isPositiveSafeInt(version.version) &&
     typeof version.status === 'string' && POLICY_STATUSES.has(version.status) &&
-    Array.isArray(version.rules) && version.rules.every(isIncomePolicyRule) &&
+    Array.isArray(version.rules) && version.rules.length > 0 && version.rules.every(isIncomePolicyRule) &&
+    hasFullPercentageAllocation(version.rules) &&
     isNonEmptyString(version.createdAt)
   );
 }

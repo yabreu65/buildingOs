@@ -32,6 +32,7 @@ export const financeKeys = {
     query?: { period?: string; categoryId?: string; destination?: string },
   ) =>
     ['finance', tenantId, 'legacy-backfill', 'preview', query ?? {}] as const,
+  financeSettings: (tenantId: string) => ['finance', tenantId, 'settings'] as const,
 
   liquidations: (tenantId: string, query?: { buildingId?: string; period?: string }) =>
     ['finance', tenantId, 'liquidations', query ?? {}] as const,
@@ -46,5 +47,6 @@ export const financeKeyFamilies = {
   funds: (tenantId: string) => ['finance', tenantId, 'funds'] as const,
   incomes: (tenantId: string) => ['finance', tenantId, 'incomes'] as const,
   incomePolicies: (tenantId: string) => ['finance', tenantId, 'income-policies'] as const,
+  legacyBackfill: (tenantId: string) => ['finance', tenantId, 'legacy-backfill'] as const,
   liquidations: (tenantId: string) => ['finance', tenantId, 'liquidations'] as const,
 };

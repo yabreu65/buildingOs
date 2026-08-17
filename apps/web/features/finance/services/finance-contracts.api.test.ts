@@ -18,6 +18,7 @@ describe('FIN-07A finance contract APIs', () => {
         id: 'fund-1', tenantId: 'tenant-1', buildingId: null, scopeType: 'TENANT',
         type: 'RESERVE', name: 'Reserve', description: null, status: 'ACTIVE',
         balancesByCurrency: [{ currency: 'COP', amountMinor: 1000 }, { currency: 'ARS', amountMinor: 2000 }],
+        createdAt: '2026-08-01T00:00:00.000Z', archivedAt: null,
       },
     ]);
 
@@ -34,7 +35,8 @@ describe('FIN-07A finance contract APIs', () => {
   it('sends the optional reversal reason and rejects malformed fund transactions', async () => {
     mockedApiClient.mockResolvedValueOnce({
       id: 'transaction-2', tenantId: 'tenant-1', fundId: 'fund-1', direction: 'DEBIT',
-      amountMinor: 100, currencyCode: 'USD',
+      amountMinor: 100, currencyCode: 'USD', occurredAt: '2026-08-01T00:00:00.000Z',
+      description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01T00:00:00.000Z',
     });
 
     await reverseFundTransaction('tenant-1', 'fund-1', 'transaction-1', { reason: 'Duplicate entry' });
@@ -45,7 +47,8 @@ describe('FIN-07A finance contract APIs', () => {
 
     mockedApiClient.mockResolvedValueOnce({
       id: 'transaction-3', tenantId: 'tenant-1', fundId: 'fund-1', direction: 'CREDIT',
-      amountMinor: 1.5, currencyCode: 'USD',
+      amountMinor: 1.5, currencyCode: 'USD', occurredAt: '2026-08-01T00:00:00.000Z',
+      description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01T00:00:00.000Z',
     });
     await expect(createFundTransaction('tenant-1', 'fund-1', {
       direction: 'CREDIT', amountMinor: 100, currencyCode: 'USD', occurredAt: '2026-08-16',

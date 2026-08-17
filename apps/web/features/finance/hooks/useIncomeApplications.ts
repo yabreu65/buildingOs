@@ -25,8 +25,9 @@ export function useCreateIncomeApplicationPlan(tenantId: string, incomeId: strin
       void queryClient.invalidateQueries({
         queryKey: financeKeys.incomeApplications(tenantId, incomeId),
       });
-      void queryClient.invalidateQueries({ queryKey: financeKeys.income(tenantId, incomeId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
       if (plan.applications.some((application) => application.destinationType === 'FUND')) {
         void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
       }
@@ -42,8 +43,9 @@ export function useApplyIncomePolicy(tenantId: string, incomeId: string) {
       void queryClient.invalidateQueries({
         queryKey: financeKeys.incomeApplications(tenantId, incomeId),
       });
-      void queryClient.invalidateQueries({ queryKey: financeKeys.income(tenantId, incomeId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
       if (plan.applications.some((application) => application.destinationType === 'FUND')) {
         void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
       }

@@ -7,6 +7,7 @@ import { applyIncomePolicy, createIncomeApplicationPlan } from '../services/inco
 import { useCreateFundTransaction } from './useFunds';
 import { useApplyLegacyIncomeBackfill } from './useLegacyIncomeBackfill';
 import { useApplyIncomePolicy, useCreateIncomeApplicationPlan } from './useIncomeApplications';
+import { financeKeys } from './finance-query-keys';
 
 jest.mock('../services/funds.api', () => ({ createFundTransaction: jest.fn() }));
 jest.mock('../services/legacy-backfill.api', () => ({ applyLegacyIncomeBackfill: jest.fn() }));
@@ -80,6 +81,10 @@ describe('FIN-07A finance hooks', () => {
   it('invalidates tenant funds for a manual plan that creates a FUND credit', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateQueries = jest.spyOn(queryClient, 'invalidateQueries');
+    const incomeKey = financeKeys.incomes('tenant-a', { period: '2026-08' });
+    const liquidationKey = financeKeys.liquidations('tenant-a', { period: '2026-08' });
+    queryClient.setQueryData(incomeKey, []);
+    queryClient.setQueryData(liquidationKey, []);
     mockedCreateIncomeApplicationPlan.mockResolvedValue(fundPlan as never);
     const { result } = renderHook(() => useCreateIncomeApplicationPlan('tenant-a', 'income-1'), {
       wrapper: createWrapper(queryClient),
@@ -90,6 +95,9 @@ describe('FIN-07A finance hooks', () => {
     });
 
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['finance', 'tenant-a', 'funds'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['finance', 'tenant-a', 'legacy-backfill'] });
+    expect(queryClient.getQueryState(incomeKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(liquidationKey)?.isInvalidated).toBe(true);
     expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['finance', 'tenant-b', 'funds'] });
   });
 

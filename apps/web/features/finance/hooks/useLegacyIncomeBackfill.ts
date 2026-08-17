@@ -26,9 +26,7 @@ export function useApplyLegacyIncomeBackfill(tenantId: string) {
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
       void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
-      void queryClient.invalidateQueries({
-        queryKey: ['finance', tenantId, 'legacy-backfill'] as const,
-      });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
     },
   });
 }

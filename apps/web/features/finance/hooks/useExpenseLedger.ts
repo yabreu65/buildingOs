@@ -42,6 +42,7 @@ import {
   listAdjustments,
   ListAdjustmentsParams,
 } from '../services/expense-ledger.api';
+import { financeKeyFamilies, financeKeys } from './finance-query-keys';
 
 // ── ExpenseLedgerCategories hooks ──────────────────────────────────────────
 
@@ -273,7 +274,7 @@ export function useLiquidations(
   params: { buildingId?: string; period?: string } = {},
 ) {
   return useQuery({
-    queryKey: ['liquidations', tenantId, params],
+    queryKey: financeKeys.liquidations(tenantId, params),
     queryFn: () => listLiquidations(tenantId, params),
     staleTime: 2 * 60 * 1000,
     enabled: !!tenantId,
@@ -287,7 +288,7 @@ export function useLiquidationDetail(
   enabled = true,
 ) {
   return useQuery({
-    queryKey: ['liquidation', tenantId, liquidationId],
+    queryKey: financeKeys.liquidation(tenantId, liquidationId),
     queryFn: () => getLiquidation(tenantId, liquidationId),
     staleTime: 2 * 60 * 1000,
     enabled: !!tenantId && !!liquidationId && enabled,
@@ -299,8 +300,9 @@ export function useCreateLiquidationDraft(tenantId: string) {
   return useMutation({
     mutationFn: (data: { buildingId: string; period: string; baseCurrency: string }) =>
       createLiquidationDraft(tenantId, data),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
+    onSuccess: (liquidation) => {
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeys.liquidation(tenantId, liquidation.id) });
     },
   });
 }
@@ -310,9 +312,9 @@ export function useReviewLiquidation(tenantId: string) {
   return useMutation({
     mutationFn: (liquidationId: string) => reviewLiquidation(tenantId, liquidationId),
     onSuccess: (_, liquidationId) => {
-      void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
       void queryClient.invalidateQueries({
-        queryKey: ['liquidation', tenantId, liquidationId],
+        queryKey: financeKeys.liquidation(tenantId, liquidationId),
       });
     },
   });
@@ -328,8 +330,9 @@ export function usePublishLiquidation(tenantId: string) {
       liquidationId: string;
       dueDate: string;
     }) => publishLiquidation(tenantId, liquidationId, { dueDate }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
+    onSuccess: (_, { liquidationId }) => {
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeys.liquidation(tenantId, liquidationId) });
       // También invalidar charges ya que se crearon nuevos
       void queryClient.invalidateQueries({ queryKey: ['charges'] });
     },
@@ -340,8 +343,9 @@ export function useCancelLiquidation(tenantId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (liquidationId: string) => cancelLiquidation(tenantId, liquidationId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['liquidations', tenantId] });
+    onSuccess: (_, liquidationId) => {
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.liquidations(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeys.liquidation(tenantId, liquidationId) });
       void queryClient.invalidateQueries({ queryKey: ['charges'] });
     },
   });
@@ -351,7 +355,7 @@ export function useCancelLiquidation(tenantId: string) {
 
 export function useIncomes(tenantId: string, params: ListIncomesParams = {}) {
   return useQuery({
-    queryKey: ['incomes', tenantId, params],
+    queryKey: financeKeys.incomes(tenantId, params),
     queryFn: () => listIncomes(tenantId, params),
     staleTime: 2 * 60 * 1000,
     enabled: !!tenantId,
@@ -364,7 +368,8 @@ export function useCreateIncome(tenantId: string) {
   return useMutation({
     mutationFn: (data: CreateIncomeData) => createIncome(tenantId, data),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
     },
   });
 }
@@ -380,7 +385,8 @@ export function useUpdateIncome(tenantId: string) {
       data: UpdateIncomeData;
     }) => updateIncome(tenantId, incomeId, data),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
     },
   });
 }
@@ -390,7 +396,8 @@ export function useRecordIncome(tenantId: string) {
   return useMutation({
     mutationFn: (incomeId: string) => recordIncome(tenantId, incomeId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
     },
   });
 }
@@ -400,7 +407,9 @@ export function useVoidIncome(tenantId: string) {
   return useMutation({
     mutationFn: (incomeId: string) => voidIncome(tenantId, incomeId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['incomes', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.incomes(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.legacyBackfill(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: financeKeyFamilies.funds(tenantId) });
     },
   });
 }
