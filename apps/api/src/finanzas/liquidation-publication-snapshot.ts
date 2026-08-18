@@ -1,5 +1,12 @@
 import { BadRequestException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import {
+  assertIsoDateString,
+  assertNonEmptyString,
+  assertSafeIntegerNonNegative as assertSafeNonNegativeValue,
+  isPlainObject,
+  parseIncomeOffsetSnapshotItem,
+} from './liquidation-income-offset-snapshot';
 
 export interface PublishedExpenseSnapshot {
   expenseId: string;
@@ -817,26 +824,9 @@ function normalizeExpenseSnapshot(value: PublishedExpenseSnapshot): PublishedExp
 function normalizeIncomeOffsetSnapshot(
   value: PublishedIncomeOffsetSnapshot,
 ): PublishedIncomeOffsetSnapshot {
-  assertNonEmpty(value.incomeId, 'incomeId');
-  assertNonEmpty(value.incomeApplicationId, 'incomeApplicationId');
-  assertNonEmpty(value.currencyCode, 'currencyCode');
-  assertNonEmpty(value.scopeType, 'scopeType');
-  assertSafeIntegerNonNegative(value.applicationAmountMinor, 'applicationAmountMinor');
-  assertSafeIntegerNonNegative(value.buildingAmountMinor, 'buildingAmountMinor');
-  assertSafeIntegerNonNegative(value.valuedAmountMinor, 'valuedAmountMinor');
-  parseIsoDateString(value.receivedDate, 'receivedDate');
-  assertNonEmpty(value.period, 'period');
-  if (value.policyVersionId !== null) {
-    assertNonEmpty(value.policyVersionId, 'policyVersionId');
-  }
-  if (value.categoryId) {
-    assertNonEmpty(value.categoryId, 'categoryId');
-  }
-
-  return {
-    ...value,
-    legacyDestination: value.legacyDestination ?? null,
-  };
+  // FIN-07CR4: único normalizador autoritativo (mismo primitivo que la lectura).
+  // El builder de publicación siempre escribe items que satisfacen el contrato.
+  return parseIncomeOffsetSnapshotItem(value, 'incomeOffset') as PublishedIncomeOffsetSnapshot;
 }
 
 function toIncomeOffsetJsonObject(value: PublishedIncomeOffsetSnapshot): Prisma.InputJsonObject {
@@ -864,90 +854,9 @@ function toIncomeOffsetJsonObject(value: PublishedIncomeOffsetSnapshot): Prisma.
 }
 
 function parseIncomeOffsetSnapshot(value: unknown): PublishedIncomeOffsetSnapshot {
-  if (!isPlainObject(value)) {
-    throw new BadRequestException('Liquidation publication snapshot income offset is invalid');
-  }
-
-  const incomeId = parseNonEmptyString(value.incomeId, 'incomeId');
-  const incomeApplicationId = parseNonEmptyString(value.incomeApplicationId, 'incomeApplicationId');
-  const categoryId = value.categoryId === null || value.categoryId === undefined
-    ? ''
-    : parseNonEmptyString(value.categoryId, 'categoryId');
-  const categoryName =
-    value.categoryName === null || value.categoryName === undefined
-      ? null
-      : parseNullableString(value.categoryName, 'categoryName');
-  const policyVersionId =
-    value.policyVersionId === null || value.policyVersionId === undefined
-      ? null
-      : parseNullableString(value.policyVersionId, 'policyVersionId');
-  const scopeType = parseNonEmptyString(value.scopeType, 'scopeType');
-  const currencyCode = parseNonEmptyString(value.currencyCode, 'currencyCode');
-  const applicationAmountMinor = parseSafeIntegerNonNegative(
-    value.applicationAmountMinor,
-    'applicationAmountMinor',
-  );
-  const buildingAmountMinor = parseSafeIntegerNonNegative(
-    value.buildingAmountMinor,
-    'buildingAmountMinor',
-  );
-  const valuedAmountMinor = parseSafeIntegerNonNegative(
-    value.valuedAmountMinor,
-    'valuedAmountMinor',
-  );
-  const functionalCurrencyCode =
-    value.functionalCurrencyCode === null || value.functionalCurrencyCode === undefined
-      ? null
-      : parseNullableString(value.functionalCurrencyCode, 'functionalCurrencyCode');
-  const exchangeRateId =
-    value.exchangeRateId === null || value.exchangeRateId === undefined
-      ? null
-      : parseNullableString(value.exchangeRateId, 'exchangeRateId');
-  const exchangeRateValue =
-    value.exchangeRateValue === null || value.exchangeRateValue === undefined
-      ? null
-      : parseNullableString(String(value.exchangeRateValue), 'exchangeRateValue');
-  const exchangeRateDirection =
-    value.exchangeRateDirection === null || value.exchangeRateDirection === undefined
-      ? null
-      : parseNullableString(value.exchangeRateDirection, 'exchangeRateDirection');
-  const exchangeRateEffectiveAt =
-    value.exchangeRateEffectiveAt === null || value.exchangeRateEffectiveAt === undefined
-      ? null
-      : parseIsoDateString(value.exchangeRateEffectiveAt, 'exchangeRateEffectiveAt');
-  const conversionDate =
-    value.conversionDate === null || value.conversionDate === undefined
-      ? null
-      : parseIsoDateString(value.conversionDate, 'conversionDate');
-  const receivedDate = parseIsoDateString(value.receivedDate, 'receivedDate');
-  const period = parseNonEmptyString(value.period, 'period');
-  // FIN-04R: V3 histórico sin field → null (backward compatible).
-  const legacyDestination =
-    value.legacyDestination === null || value.legacyDestination === undefined
-      ? null
-      : parseNullableString(value.legacyDestination, 'legacyDestination');
-
-  return {
-    incomeId,
-    incomeApplicationId,
-    categoryId,
-    categoryName,
-    policyVersionId,
-    legacyDestination,
-    scopeType,
-    currencyCode,
-    applicationAmountMinor,
-    buildingAmountMinor,
-    valuedAmountMinor,
-    functionalCurrencyCode,
-    exchangeRateId,
-    exchangeRateValue,
-    exchangeRateDirection,
-    exchangeRateEffectiveAt,
-    conversionDate,
-    receivedDate,
-    period,
-  };
+  // FIN-07CR4: mismo parseo/normalización autoritativo que el camino de lectura
+  // y que el write del builder (sin definición divergente campo a campo).
+  return parseIncomeOffsetSnapshotItem(value, 'incomeOffset') as PublishedIncomeOffsetSnapshot;
 }
 
 function normalizeAllocationSnapshot(value: PublishedAllocationSnapshot): PublishedAllocationSnapshot {
@@ -1219,11 +1128,8 @@ function assertCurrencyTotalsMatch(
 }
 
 function parseNonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
-
-  return value;
+  assertNonEmptyString(value, `Liquidation publication snapshot ${field} is invalid`);
+  return value as string;
 }
 
 function parseNullableString(value: unknown, field: string): string | null {
@@ -1235,24 +1141,13 @@ function parseNullableString(value: unknown, field: string): string | null {
 }
 
 function parseSafeIntegerNonNegative(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
-
-  return value;
+  assertSafeNonNegativeValue(value, `Liquidation publication snapshot ${field} is invalid`);
+  return value as number;
 }
 
 function parseIsoDateString(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
-
-  return parsed.toISOString();
+  assertIsoDateString(value, `Liquidation publication snapshot ${field} is invalid`);
+  return new Date(value as string).toISOString();
 }
 
 function assertIsoDate(value: Date, field: string): void {
@@ -1262,19 +1157,11 @@ function assertIsoDate(value: Date, field: string): void {
 }
 
 function assertNonEmpty(value: string | null | undefined, field: string): void {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
+  assertNonEmptyString(value, `Liquidation publication snapshot ${field} is invalid`);
 }
 
 function assertSafeIntegerNonNegative(value: number, field: string): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new BadRequestException(`Liquidation publication snapshot ${field} is invalid`);
-  }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  assertSafeNonNegativeValue(value, `Liquidation publication snapshot ${field} is invalid`);
 }
 
 function createJsonObject<T extends Prisma.InputJsonObject>(value: T): T {

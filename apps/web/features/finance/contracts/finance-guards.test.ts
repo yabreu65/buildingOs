@@ -5,6 +5,8 @@ import {
   isIncomeOffsetSnapshotItem,
   isIncomePolicy,
   isLiquidationV3Summary,
+  parseIncomeOffsetsByCurrency,
+  parseIncomeOffsetSnapshot,
   parseLegacyBackfillPreview,
   parseLegacyBackfillResults,
 } from './finance-guards';
@@ -76,5 +78,36 @@ describe('FIN-07AR finance guards', () => {
     expect(isFinanceCurrency('USD')).toBe(true);
     expect(isFinanceCurrency('VES')).toBe(true);
     expect(isFinanceCurrency('ARS')).toBe(true);
+  });
+
+  it('parses income offsets by currency as separate entries (never a nominal total)', () => {
+    expect(parseIncomeOffsetsByCurrency(null)).toBeNull();
+    expect(parseIncomeOffsetsByCurrency(undefined)).toBeNull();
+    expect(parseIncomeOffsetsByCurrency({ USD: 5000, COP: 8000000 })).toEqual({
+      USD: 5000,
+      COP: 8000000,
+    });
+    // {} es válido: V3 moderna con cero offsets.
+    expect(parseIncomeOffsetsByCurrency({})).toEqual({});
+    expect(() => parseIncomeOffsetsByCurrency({ USD: -1 })).toThrow();
+    expect(() => parseIncomeOffsetsByCurrency({ USD: '5000' })).toThrow();
+    expect(() => parseIncomeOffsetsByCurrency([{ USD: 5000 }])).toThrow();
+  });
+
+  it('parses the frozen income offset snapshot array (or null for V1/V2)', () => {
+    const item = {
+      incomeId: 'income', incomeApplicationId: 'app', categoryId: 'cat', categoryName: null,
+      policyVersionId: null, legacyDestination: 'APPLY_TO_EXPENSES', scopeType: 'BUILDING',
+      currencyCode: 'USD', applicationAmountMinor: 1, buildingAmountMinor: 1, valuedAmountMinor: 1,
+      functionalCurrencyCode: null, exchangeRateId: null, exchangeRateValue: null,
+      exchangeRateDirection: null, exchangeRateEffectiveAt: null, conversionDate: null,
+      receivedDate: '2026-08-01', period: '2026-08',
+    };
+    expect(parseIncomeOffsetSnapshot(null)).toBeNull();
+    expect(parseIncomeOffsetSnapshot([item])).toHaveLength(1);
+    expect(() => parseIncomeOffsetSnapshot('nope')).toThrow();
+    expect(() =>
+      parseIncomeOffsetSnapshot([{ ...item, incomeApplicationId: undefined }]),
+    ).toThrow();
   });
 });

@@ -8,6 +8,8 @@ import { IncomesTab } from './IncomesTab';
 import * as useExpenseLedger from '../hooks/useExpenseLedger';
 import * as useFundsModule from '../hooks/useFunds';
 import * as useIncomeApplicationsModule from '../hooks/useIncomeApplications';
+import * as useEffectiveRoleModule from '@/features/tenancy/hooks/useEffectiveRole';
+import * as useLegacyIncomeBackfillModule from '../hooks/useLegacyIncomeBackfill';
 
 jest.mock('../hooks/useExpenseLedger', () => ({
   useIncomes: jest.fn(),
@@ -25,6 +27,15 @@ jest.mock('../hooks/useIncomeApplications', () => ({
   useIncomeApplicationPlan: jest.fn(),
   useApplyIncomePolicy: jest.fn(),
   useCreateIncomeApplicationPlan: jest.fn(),
+}));
+
+jest.mock('../hooks/useLegacyIncomeBackfill', () => ({
+  useLegacyIncomeBackfillPreview: jest.fn(),
+  useApplyLegacyIncomeBackfill: jest.fn(),
+}));
+
+jest.mock('@/features/tenancy/hooks/useEffectiveRole', () => ({
+  useHasAnyRoleInTenant: jest.fn(),
 }));
 
 jest.mock('@/shared/lib/format/money', () => ({
@@ -47,6 +58,9 @@ const mockedUseFunds = jest.mocked(useFundsModule.useFunds);
 const mockedUseIncomeApplicationPlan = jest.mocked(useIncomeApplicationsModule.useIncomeApplicationPlan);
 const mockedUseApplyIncomePolicy = jest.mocked(useIncomeApplicationsModule.useApplyIncomePolicy);
 const mockedUseCreateIncomeApplicationPlan = jest.mocked(useIncomeApplicationsModule.useCreateIncomeApplicationPlan);
+const mockedUseHasAnyRoleInTenant = jest.mocked(useEffectiveRoleModule.useHasAnyRoleInTenant);
+const mockedUseLegacyIncomeBackfillPreview = jest.mocked(useLegacyIncomeBackfillModule.useLegacyIncomeBackfillPreview);
+const mockedUseApplyLegacyIncomeBackfill = jest.mocked(useLegacyIncomeBackfillModule.useApplyLegacyIncomeBackfill);
 
 const makeIncome = (overrides: Record<string, unknown> = {}) => ({
   id: 'income-1',
@@ -104,6 +118,8 @@ function renderIncomesTab(incomes: ReturnType<typeof makeIncome>[], plan?: unkno
   } as never);
   mockedUseApplyIncomePolicy.mockReturnValue({ mutateAsync: jest.fn(), isPending: false } as never);
   mockedUseCreateIncomeApplicationPlan.mockReturnValue({ mutateAsync: jest.fn(), isPending: false } as never);
+  mockedUseLegacyIncomeBackfillPreview.mockReturnValue({ data: [], isPending: false, error: null } as never);
+  mockedUseApplyLegacyIncomeBackfill.mockReturnValue({ mutateAsync: jest.fn(), isPending: false, error: null } as never);
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(
@@ -314,5 +330,42 @@ describe('IncomesTab plan state machine (FIN-07BR3)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
     expect(screen.getByText(/Registrá este ingreso antes de definir su plan/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Guardar plan manual/ })).toBeNull();
+  });
+});
+
+describe('IncomesTab legacy backfill RBAC (FIN-07CR2)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it.each([
+    ['TENANT_OWNER', true],
+    ['TENANT_ADMIN', true],
+    ['OPERATOR', false],
+    ['RESIDENT', false],
+  ])('shows the migration control only for tenant-level OWNER/ADMIN (%s)', (_role, visible) => {
+    mockedUseHasAnyRoleInTenant.mockReturnValue(visible as never);
+    renderIncomesTab([makeIncome({ status: 'RECORDED' })]);
+    const control = screen.queryByRole('button', { name: 'Migración histórica' });
+    expect(control !== null).toBe(visible);
+  });
+
+  it('hides the migration control when the membership cannot prove tenant scope (scoped admin)', () => {
+    mockedUseHasAnyRoleInTenant.mockReturnValue(false as never);
+    renderIncomesTab([makeIncome({ status: 'RECORDED' })]);
+    expect(screen.queryByRole('button', { name: 'Migración histórica' })).toBeNull();
+  });
+
+  it('keeps the panel closed for denied memberships even if toggle state was set', () => {
+    mockedUseHasAnyRoleInTenant.mockReturnValue(false as never);
+    renderIncomesTab([makeIncome({ status: 'RECORDED' })]);
+    expect(screen.queryByText(/Migración de ingresos legacy/)).toBeNull();
+  });
+
+  it('opens the panel for a tenant-level admin', () => {
+    mockedUseHasAnyRoleInTenant.mockReturnValue(true as never);
+    renderIncomesTab([makeIncome({ status: 'RECORDED' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Migración histórica' }));
+    expect(screen.getByText(/No hay ingresos históricos pendientes de migración/)).toBeTruthy();
   });
 });

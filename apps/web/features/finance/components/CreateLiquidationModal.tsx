@@ -5,6 +5,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { X, Loader2, Plus } from 'lucide-react';
 import { useCreateLiquidationDraft } from '../hooks/useExpenseLedger';
+import { liquidationDomainErrorMessage } from '../utils/liquidation-domain-error';
 
 interface Building {
   readonly id: string;
@@ -95,7 +96,7 @@ export function CreateLiquidationModal({
       setError('');
       onSuccess?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al crear la liquidación');
+      setError(liquidationDomainErrorMessage(err, 'Error al crear la liquidación'));
     }
   };
 

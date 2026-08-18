@@ -300,6 +300,37 @@ export interface LiquidationResponseDto {
   preIncomeAmountMinor?: number | null;
   incomeOffsetAmountMinor?: number | null;
   netDistributableAmountMinor?: number | null;
+  // FIN-07C: detalle read-only de offsets de ingresos congelados (solo V3).
+  // null/undefined = liquidación histórica (pre-FIN-06) sin offsets.
+  incomeOffsetsByCurrency?: Record<string, number> | null;
+  incomeOffsetSnapshot?: LiquidationIncomeOffsetSnapshotItemDto[] | null;
+}
+
+/**
+ * FIN-07C: snapshot congelado de un offset de ingreso (espejo del JSON
+ * persistido en `Liquidation.incomeOffsetSnapshot`). No se deriva de datos
+ * live; es dato financiero histórico.
+ */
+export interface LiquidationIncomeOffsetSnapshotItemDto {
+  incomeId: string;
+  incomeApplicationId: string;
+  categoryId: string;
+  categoryName: string | null;
+  policyVersionId: string | null;
+  legacyDestination: string | null;
+  scopeType: string;
+  currencyCode: string;
+  applicationAmountMinor: number;
+  buildingAmountMinor: number;
+  valuedAmountMinor: number;
+  functionalCurrencyCode: string | null;
+  exchangeRateId: string | null;
+  exchangeRateValue: string | null;
+  exchangeRateDirection: string | null;
+  exchangeRateEffectiveAt: string | null;
+  conversionDate: string | null;
+  receivedDate: string;
+  period: string;
 }
 
 export interface LiquidationDetailDto extends LiquidationResponseDto {

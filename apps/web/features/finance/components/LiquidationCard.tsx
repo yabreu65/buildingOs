@@ -13,6 +13,8 @@ import {
   useCancelLiquidation,
 } from '../hooks/useExpenseLedger';
 import { LiquidationPublishModal } from './LiquidationPublishModal';
+import { LiquidationV3Breakdown } from './LiquidationV3Breakdown';
+import { liquidationDomainErrorMessage } from '../utils/liquidation-domain-error';
 
 interface LiquidationCardProps {
   tenantId: string;
@@ -83,8 +85,8 @@ export function LiquidationCard({
       await reviewMutation.mutateAsync(liquidation.id);
       toast('Liquidación marcada como revisada', 'success');
       onRefresh();
-    } catch {
-      toast('Error al revisar la liquidación', 'error');
+    } catch (err: unknown) {
+      toast(liquidationDomainErrorMessage(err, 'Error al revisar la liquidación'), 'error');
     }
   };
 
@@ -94,8 +96,7 @@ export function LiquidationCard({
       toast('Liquidación cancelada', 'success');
       onRefresh();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error al cancelar';
-      toast(msg, 'error');
+      toast(liquidationDomainErrorMessage(err, 'Error al cancelar'), 'error');
     }
   };
 
@@ -243,6 +244,8 @@ export function LiquidationCard({
             </div>
           ) : resolvedDetail ? (
             <>
+              <LiquidationV3Breakdown liquidation={resolvedDetail} />
+
               <div className="space-y-2">
                 <h4 className="text-xs font-semibold uppercase text-muted-foreground">
                   Gastos incluidos
