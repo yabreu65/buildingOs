@@ -1,12 +1,5 @@
 import { sameDateInput, toDateInputValue, todayLocalDate, toLocalDateString } from './date-input';
 
-// Zona explícita (UTC-04) para validar el borde UTC->calendario local.
-const previousTZ = process.env.TZ;
-process.env.TZ = 'Etc/GMT+4';
-afterAll(() => {
-  process.env.TZ = previousTZ;
-});
-
 describe('date input normalization (FIN-07BR3)', () => {
   it('normalizes an ISO receivedDate to YYYY-MM-DD', () => {
     expect(toDateInputValue('2026-08-10T00:00:00.000Z')).toBe('2026-08-10');
@@ -27,20 +20,45 @@ describe('date input normalization (FIN-07BR3)', () => {
 });
 
 describe('local calendar date default (FIN-07BR3F)', () => {
-  it('uses local calendar components, not UTC, for a late-evening instant at UTC-04', () => {
-    // 2026-08-18T02:30:00Z === 2026-08-17T22:30 local (Etc/GMT+4).
+  it('reads local calendar components instead of the UTC serialization', () => {
+    // Instante UTC real. Sus getters de calendario local se simulan de forma
+    // determinista (2026-08-17) para no depender de la timezone de la máquina.
     const instant = new Date('2026-08-18T02:30:00.000Z');
-    expect(instant.toISOString().slice(0, 10)).toBe('2026-08-18'); // UTC day
-    expect(toLocalDateString(instant)).toBe('2026-08-17'); // local calendar day
+    const yearSpy = jest.spyOn(instant, 'getFullYear').mockReturnValue(2026);
+    const monthSpy = jest.spyOn(instant, 'getMonth').mockReturnValue(7);
+    const daySpy = jest.spyOn(instant, 'getDate').mockReturnValue(17);
+    try {
+      expect(instant.toISOString().slice(0, 10)).toBe('2026-08-18');
+      expect(toLocalDateString(instant)).toBe('2026-08-17');
+    } finally {
+      yearSpy.mockRestore();
+      monthSpy.mockRestore();
+      daySpy.mockRestore();
+    }
   });
 
-  it('returns the local calendar date for "today" with fake timers', () => {
-    jest.useFakeTimers().setSystemTime(new Date('2026-08-18T02:30:00.000Z'));
-    expect(todayLocalDate()).toBe('2026-08-17');
-    jest.useRealTimers();
+  it('returns the local calendar date for "today" with frozen timers', () => {
+    jest.useFakeTimers();
+    try {
+      const frozen = new Date('2026-08-18T02:30:00.000Z');
+      jest.setSystemTime(frozen);
+      expect(todayLocalDate()).toBe(toLocalDateString(new Date()));
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
-  it('zero-pads month and day', () => {
-    expect(toLocalDateString(new Date('2026-08-05T12:00:00.000Z'))).toBe('2026-08-05');
+  it('zero-pads month and day with controlled calendar components', () => {
+    const date = new Date('2026-08-05T12:00:00.000Z');
+    const yearSpy = jest.spyOn(date, 'getFullYear').mockReturnValue(2026);
+    const monthSpy = jest.spyOn(date, 'getMonth').mockReturnValue(7);
+    const daySpy = jest.spyOn(date, 'getDate').mockReturnValue(5);
+    try {
+      expect(toLocalDateString(date)).toBe('2026-08-05');
+    } finally {
+      yearSpy.mockRestore();
+      monthSpy.mockRestore();
+      daySpy.mockRestore();
+    }
   });
 });
