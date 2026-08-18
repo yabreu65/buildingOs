@@ -36,7 +36,7 @@ describe('FIN-07A finance contract APIs', () => {
     mockedApiClient.mockResolvedValueOnce({
       id: 'transaction-2', tenantId: 'tenant-1', fundId: 'fund-1', direction: 'DEBIT',
       amountMinor: 100, currencyCode: 'USD', occurredAt: '2026-08-01T00:00:00.000Z',
-      description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01T00:00:00.000Z',
+      description: null, idempotencyKey: null, reversalOfTransactionId: null, incomeApplicationId: null, createdAt: '2026-08-01T00:00:00.000Z',
     });
 
     await reverseFundTransaction('tenant-1', 'fund-1', 'transaction-1', { reason: 'Duplicate entry' });
@@ -77,6 +77,16 @@ describe('FIN-07A finance contract APIs', () => {
     await expect(getIncomeApplicationPlan('tenant-1', 'income-1')).rejects.toThrow(
       'Invalid income application plan response',
     );
+  });
+
+  it('accepts an empty plan before its first application', async () => {
+    mockedApiClient.mockResolvedValueOnce({
+      incomeId: 'income-1', currencyCode: 'VES', totalAmountMinor: 0, applications: [],
+    });
+
+    await expect(getIncomeApplicationPlan('tenant-1', 'income-1')).resolves.toEqual({
+      incomeId: 'income-1', currencyCode: 'VES', totalAmountMinor: 0, applications: [],
+    });
   });
 
   it('rejects malformed legacy preview monetary amounts', async () => {

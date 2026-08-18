@@ -112,6 +112,7 @@ export function isFundTransaction(value: unknown): value is FundTransaction {
     isNullableString(transaction.description) &&
     isNullableString(transaction.idempotencyKey) &&
     isNullableString(transaction.reversalOfTransactionId) &&
+    isNullableString(transaction.incomeApplicationId) &&
     isNonEmptyString(transaction.createdAt)
   );
 }
@@ -196,7 +197,7 @@ export function isIncomeApplicationPlan(value: unknown): value is IncomeApplicat
   return (
     isNonEmptyString(plan.incomeId) &&
     isNonEmptyString(plan.currencyCode) &&
-    isPositiveSafeInt(plan.totalAmountMinor) &&
+    isNonNegativeInt(plan.totalAmountMinor) &&
     Array.isArray(plan.applications) &&
     plan.applications.every(isIncomeApplication)
   );

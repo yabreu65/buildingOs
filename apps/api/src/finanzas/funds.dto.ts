@@ -149,5 +149,6 @@ export interface FundTransactionResponseDto {
   description: string | null;
   idempotencyKey: string | null;
   reversalOfTransactionId: string | null;
+  incomeApplicationId: string | null;
   createdAt: Date;
 }

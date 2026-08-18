@@ -33,6 +33,8 @@ export const financeKeys = {
   ) =>
     ['finance', tenantId, 'legacy-backfill', 'preview', query ?? {}] as const,
   financeSettings: (tenantId: string) => ['finance', tenantId, 'settings'] as const,
+  unitGroups: (tenantId: string, buildingId: string) =>
+    ['finance', tenantId, 'unit-groups', buildingId] as const,
 
   liquidations: (tenantId: string, query?: { buildingId?: string; period?: string }) =>
     ['finance', tenantId, 'liquidations', query ?? {}] as const,

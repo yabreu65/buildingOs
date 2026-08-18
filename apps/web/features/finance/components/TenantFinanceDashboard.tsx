@@ -26,8 +26,11 @@ import { getDownloadUrl } from '@/features/buildings/services/documents.api';
 import { FileText, Loader2 } from 'lucide-react';
 import { useToast } from '@/shared/components/ui/Toast';
 import { MulticurrencySettings } from './MulticurrencySettings';
+import { IncomesTab } from './IncomesTab';
+import { FundsTab } from './FundsTab';
+import { IncomePoliciesTab } from './IncomePoliciesTab';
 
-type Tab = 'overview' | 'rubros' | 'expenses' | 'recurring' | 'payments' | 'charges' | 'delinquent' | 'reports' | 'notas' | 'settings';
+type Tab = 'overview' | 'rubros' | 'expenses' | 'recurring' | 'payments' | 'charges' | 'incomes' | 'funds' | 'policies' | 'delinquent' | 'reports' | 'notas' | 'settings';
 
 interface Params {
   tenantId: string;
@@ -45,7 +48,7 @@ export const TenantFinanceDashboard = () => {
   const searchParams = useSearchParams();
   const tenantId = params?.tenantId;
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'recurring', 'payments', 'charges', 'delinquent', 'reports', 'notas', 'settings'];
+  const allowedTabs: readonly Tab[] = ['overview', 'rubros', 'expenses', 'recurring', 'payments', 'charges', 'incomes', 'funds', 'policies', 'delinquent', 'reports', 'notas', 'settings'];
   const activeTab = (() => {
     const tabParam = searchParams.get('tab');
     if (tabParam && allowedTabs.includes(tabParam as Tab)) {
@@ -177,7 +180,10 @@ export const TenantFinanceDashboard = () => {
                 { id: 'rubros', label: 'Rubros' },
                 { id: 'recurring', label: 'Reglas recurrentes' },
                 { id: 'payments', label: `Pagos (${payments.length})` },
-                { id: 'charges', label: 'Cargos' },
+                 { id: 'charges', label: 'Cargos' },
+                 { id: 'incomes', label: 'Ingresos' },
+                 { id: 'funds', label: 'Fondos' },
+                 { id: 'policies', label: 'Políticas de ingreso' },
                 { id: 'delinquent', label: `Morosos (${summary?.delinquentUnitsCount || 0})` },
                 { id: 'reports', label: 'Historial de gastos' },
                  { id: 'notas', label: 'Notas Revelatorias' },
@@ -317,6 +323,9 @@ export const TenantFinanceDashboard = () => {
         {activeTab === 'charges' && (
           <TenantChargesTab tenantId={tenantId || ''} buildingNames={buildingNames} />
         )}
+        {activeTab === 'incomes' && <IncomesTab tenantId={tenantId || ''} period={period} />}
+        {activeTab === 'funds' && <FundsTab tenantId={tenantId || ''} />}
+        {activeTab === 'policies' && <IncomePoliciesTab tenantId={tenantId || ''} />}
         {activeTab === 'delinquent' && (
           <TenantDelinquentUnitsList 
             tenantId={tenantId || ''} 

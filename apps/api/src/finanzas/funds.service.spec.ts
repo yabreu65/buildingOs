@@ -797,6 +797,28 @@ describe('FundsService', () => {
 
   // ── Tenant isolation ────────────────────────────────────────────────────
 
+  describe('transaction DTO provenance', () => {
+    it('exposes incomeApplicationId=null for a manual transaction', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fundTransaction.findMany as jest.Mock).mockResolvedValue([
+        makeTransaction({ incomeApplicationId: null }),
+      ]);
+
+      const result = await service.listTransactions('tenant-1', 'fund-1', roles);
+      expect(result[0]!.incomeApplicationId).toBeNull();
+    });
+
+    it('exposes incomeApplicationId for an IncomeApplication-owned transaction', async () => {
+      (prisma.fund.findFirst as jest.Mock).mockResolvedValue(makeFund());
+      (prisma.fundTransaction.findMany as jest.Mock).mockResolvedValue([
+        makeTransaction({ incomeApplicationId: 'app-1' }),
+      ]);
+
+      const result = await service.listTransactions('tenant-1', 'fund-1', roles);
+      expect(result[0]!.incomeApplicationId).toBe('app-1');
+    });
+  });
+
   describe('tenant isolation', () => {
     it('never queries without tenantId scope', async () => {
       (prisma.fund.findMany as jest.Mock).mockResolvedValue([]);

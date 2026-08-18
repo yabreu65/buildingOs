@@ -29,8 +29,16 @@ describe('FIN-07AR finance guards', () => {
     expect(isFund(fund)).toBe(true);
     expect(isFund({ ...fund, scopeType: 'BUILDING' })).toBe(false);
     expect(isFund({ ...fund, createdAt: undefined })).toBe(false);
-    expect(isFundTransaction({ id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP', occurredAt: '2026-08-01', description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01' })).toBe(true);
+    expect(isFundTransaction({ id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP', occurredAt: '2026-08-01', description: null, idempotencyKey: null, reversalOfTransactionId: null, incomeApplicationId: null, createdAt: '2026-08-01' })).toBe(true);
     expect(isFundTransaction({ id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP' })).toBe(false);
+  });
+
+  it('accepts incomeApplicationId string|null and rejects malformed provenance', () => {
+    const base = { id: 'tx', tenantId: 'tenant', fundId: 'fund', direction: 'CREDIT', amountMinor: 1, currencyCode: 'COP', occurredAt: '2026-08-01', description: null, idempotencyKey: null, reversalOfTransactionId: null, createdAt: '2026-08-01' };
+    expect(isFundTransaction({ ...base, incomeApplicationId: null })).toBe(true);
+    expect(isFundTransaction({ ...base, incomeApplicationId: 'app-1' })).toBe(true);
+    expect(isFundTransaction({ ...base, incomeApplicationId: undefined })).toBe(false);
+    expect(isFundTransaction({ ...base, incomeApplicationId: 123 })).toBe(false);
   });
 
   it('rejects malformed policy versions and basis points', () => {

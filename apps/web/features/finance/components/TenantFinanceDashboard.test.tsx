@@ -111,6 +111,18 @@ jest.mock('./TenantRecurringExpensesTab', () => ({
   ),
 }));
 
+jest.mock('./IncomesTab', () => ({
+  IncomesTab: () => <div>Incomes tab</div>,
+}));
+
+jest.mock('./FundsTab', () => ({
+  FundsTab: () => <div>Funds tab</div>,
+}));
+
+jest.mock('./IncomePoliciesTab', () => ({
+  IncomePoliciesTab: () => <div>Income policies tab</div>,
+}));
+
 jest.mock('@/shared/lib/format/money', () => ({
   formatCurrency: (value: number) => `$${value.toLocaleString('es-AR')}`,
 }));
@@ -221,5 +233,16 @@ describe('TenantFinanceDashboard', () => {
     render(<TenantFinanceDashboard />);
 
     expect(screen.queryByTestId('tenant-recurring-tab')).toBeNull();
+  });
+
+  it.each([
+    ['incomes', 'Incomes tab'],
+    ['funds', 'Funds tab'],
+    ['policies', 'Income policies tab'],
+  ])('selects the %s finance tab from the query string', (tab, expectedContent) => {
+    searchParams = new URLSearchParams(`tab=${tab}`);
+    render(<TenantFinanceDashboard />);
+
+    expect(screen.getByText(expectedContent)).toBeTruthy();
   });
 });

@@ -1,4 +1,15 @@
 import { apiClient } from '@/shared/lib/http/client';
+import type { UnitGroupOption } from '../contracts/finance-types';
+
+function isUnitGroupOption(value: unknown): value is UnitGroupOption {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const group = value as Record<string, unknown>;
+  return (
+    typeof group.id === 'string' && typeof group.buildingId === 'string' &&
+    typeof group.name === 'string' && (group.description === null || typeof group.description === 'string') &&
+    typeof group.memberCount === 'number' && Number.isSafeInteger(group.memberCount) && group.memberCount >= 0
+  );
+}
 
 interface CreateUnitGroupPayload {
   readonly buildingId: string;
@@ -44,7 +55,7 @@ export const unitGroupApi = {
         description: payload.description?.trim(),
         unitIds: payload.unitIds.map((unitId) => requirePathSegment('unitId', unitId)),
       },
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
   },
 
@@ -56,23 +67,27 @@ export const unitGroupApi = {
     const groupSegment = requirePathSegment('groupId', groupId);
     return apiClient({
       path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}`,
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
   },
 
   /**
    * List unit groups for tenant (optionally filtered by building)
    */
-  async list(tenantId: string, buildingId?: string) {
+  async list(tenantId: string, buildingId?: string): Promise<UnitGroupOption[]> {
     const tenantSegment = requirePathSegment('tenantId', tenantId);
     const params = new URLSearchParams();
     const normalizedBuildingId = optionalQueryValue('buildingId', buildingId);
     if (normalizedBuildingId) params.append('buildingId', normalizedBuildingId);
     const query = params.toString();
-    return apiClient({
+    const groups = await apiClient<unknown>({
       path: `/tenants/${tenantSegment}/unit-groups${query ? `?${query}` : ''}`,
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
+    if (!Array.isArray(groups) || !groups.every(isUnitGroupOption)) {
+      throw new TypeError('Invalid unit group list response');
+    }
+    return groups;
   },
 
   /**
@@ -86,7 +101,7 @@ export const unitGroupApi = {
       path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}/members/${unitSegment}`,
       method: 'POST',
       body: { unitId: unitId.trim() },
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
   },
 
@@ -100,7 +115,7 @@ export const unitGroupApi = {
     return apiClient({
       path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}/members/${unitSegment}`,
       method: 'DELETE',
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
   },
 
@@ -113,7 +128,7 @@ export const unitGroupApi = {
     return apiClient({
       path: `/tenants/${tenantSegment}/unit-groups/${groupSegment}`,
       method: 'DELETE',
-      headers: { 'tenant-id': tenantId.trim() },
+      headers: { 'x-tenant-id': tenantId.trim() },
     });
   },
 };
