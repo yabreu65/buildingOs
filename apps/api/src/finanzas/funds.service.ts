@@ -770,6 +770,7 @@ export class FundsService {
       description: transaction.description,
       idempotencyKey: transaction.idempotencyKey,
       reversalOfTransactionId: transaction.reversalOfTransactionId,
+      incomeApplicationId: transaction.incomeApplicationId,
       createdAt: transaction.createdAt,
     };
   }

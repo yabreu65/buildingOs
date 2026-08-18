@@ -1,13 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Loader2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { CANONICAL_CURRENCIES } from '@buildingos/contracts';
+import { Loader2, X } from 'lucide-react';
 import Button from '@/shared/components/ui/Button';
+import { useBuildings } from '@/features/buildings/hooks';
 import { useToast } from '@/shared/components/ui/Toast';
-import {
-  useCreateIncome,
-  useExpenseLedgerCategories,
-} from '../hooks/useExpenseLedger';
+import { useCreateIncome, useExpenseLedgerCategories } from '../hooks/useExpenseLedger';
+import { useFinanceSettings } from '../hooks/useFinanceSettings';
+import { financeKeys } from '../hooks/finance-query-keys';
+import { unitGroupApi } from '../services/liquidation.api';
+import type { IncomeScopeType, MovementAllocationInput } from '../contracts';
+import { decimalToAmountMinor, sumAmountMinor } from '../utils/money-input';
+import { resolveDefaultCurrency } from '../utils/currency-default';
+import { todayLocalDate } from '../utils/date-input';
 
 interface IncomeCreateModalProps {
   tenantId: string;
@@ -17,195 +24,106 @@ interface IncomeCreateModalProps {
   onCreated: () => void;
 }
 
-const CURRENCIES = ['ARS', 'VES', 'USD'];
+interface AllocationDraft {
+  buildingId: string;
+  amount: string;
+}
 
-export function IncomeCreateModal({
-  tenantId,
-  buildingId,
-  period,
-  onClose,
-  onCreated,
-}: IncomeCreateModalProps) {
+export function IncomeCreateModal({ tenantId, buildingId, period, onClose, onCreated }: IncomeCreateModalProps) {
   const { toast } = useToast();
-  const { data: allCategories = [] } = useExpenseLedgerCategories(tenantId);
+  const { buildings, loading: buildingsLoading } = useBuildings(tenantId);
+  const { data: categories = [], isLoading: categoriesLoading } = useExpenseLedgerCategories(tenantId);
+  const { data: financeSettings } = useFinanceSettings(tenantId);
   const createMutation = useCreateIncome(tenantId);
-  const categoryFieldId = 'income-create-category';
-  const amountFieldId = 'income-create-amount';
-  const currencyFieldId = 'income-create-currency';
-  const receivedDateFieldId = 'income-create-received-date';
-  const descriptionFieldId = 'income-create-description';
+  const [scopeType, setScopeType] = useState<IncomeScopeType>('BUILDING');
+  const [selectedBuildingId, setSelectedBuildingId] = useState(buildingId ?? '');
+  const [unitGroupId, setUnitGroupId] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [explicitCurrency, setExplicitCurrency] = useState<string | null>(null);
+  const currencyCode = explicitCurrency ?? resolveDefaultCurrency(financeSettings?.functionalCurrency, CANONICAL_CURRENCIES);
+  const [receivedDate, setReceivedDate] = useState(() => todayLocalDate());
+  const [description, setDescription] = useState('');
+  const [allocationDrafts, setAllocationDrafts] = useState<AllocationDraft[]>([]);
 
-  // Filtrar solo categorías de INGRESOS
-  const categories = allCategories.filter((c) => c.movementType === 'INCOME');
-
-  const [form, setForm] = useState({
-    categoryId: '',
-    amountMinor: '',
-    currencyCode: 'ARS',
-    receivedDate: new Date().toISOString().split('T')[0] ?? '',
-    description: '',
+  const groupsQuery = useQuery({
+    queryKey: financeKeys.unitGroups(tenantId, selectedBuildingId),
+    queryFn: () => unitGroupApi.list(tenantId, selectedBuildingId),
+    enabled: scopeType === 'UNIT_GROUP' && Boolean(selectedBuildingId),
   });
+  const incomeCategories = categories.filter((category) => category.movementType === 'INCOME' && category.isActive);
+  const amountMinor = decimalToAmountMinor(amount);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const syncAllocations = () => {
+    setAllocationDrafts(buildings.map((building) => ({ buildingId: building.id, amount: '' })));
+  };
 
-    const amountMinor = Math.round(parseFloat(form.amountMinor) * 100);
-    if (isNaN(amountMinor) || amountMinor <= 0) {
-      toast('El monto debe ser un número positivo', 'error');
-      return;
-    }
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!amountMinor) return toast('Ingresá un monto positivo con hasta dos decimales.', 'error');
+    if (!categoryId) return toast('Seleccioná un rubro de ingreso.', 'error');
+    if (scopeType === 'BUILDING' && !selectedBuildingId) return toast('Seleccioná un edificio.', 'error');
+    if (scopeType === 'UNIT_GROUP' && (!selectedBuildingId || !unitGroupId)) return toast('Seleccioná el edificio y grupo de unidades.', 'error');
 
-    if (!form.categoryId) {
-      toast('Debes seleccionar un rubro de ingreso', 'error');
-      return;
+    let allocations: MovementAllocationInput[] | undefined;
+    if (scopeType !== 'BUILDING') {
+      const parsed = allocationDrafts.map((allocation) => ({
+        buildingId: allocation.buildingId,
+        amountMinor: decimalToAmountMinor(allocation.amount),
+      }));
+      if (parsed.length === 0 || parsed.some((allocation) => !allocation.amountMinor)) {
+        return toast('Asigná un importe positivo a cada edificio incluido.', 'error');
+      }
+      const total = sumAmountMinor(parsed.map((allocation) => allocation.amountMinor!));
+      if (total !== amountMinor) return toast('La suma de asignaciones debe coincidir exactamente con el ingreso.', 'error');
+      allocations = parsed.map((allocation) => ({ ...allocation, amountMinor: allocation.amountMinor!, currencyCode }));
     }
 
     try {
       await createMutation.mutateAsync({
-        buildingId: buildingId || undefined,
         period,
-        categoryId: form.categoryId,
+        categoryId,
         amountMinor,
-        currencyCode: form.currencyCode,
-        receivedDate: form.receivedDate,
-        description: form.description || undefined,
+        currencyCode,
+        receivedDate,
+        description: description.trim() || undefined,
+        scopeType,
+        buildingId: scopeType === 'BUILDING' ? selectedBuildingId : undefined,
+        unitGroupId: scopeType === 'UNIT_GROUP' ? unitGroupId : undefined,
+        allocations,
       });
-
-      toast('Ingreso registrado', 'success');
+      toast('Ingreso creado como borrador.', 'success');
       onCreated();
       onClose();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error al registrar el ingreso';
-      toast(msg, 'error');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'No pudimos crear el ingreso.', 'error');
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background rounded-xl shadow-xl w-full max-w-md p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Registrar Ingreso</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Cerrar diálogo de registrar ingreso"
-            className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor={categoryFieldId} className="block text-sm font-medium mb-1">
-              Rubro <span className="text-red-500">*</span>
-            </label>
-            <select
-              id={categoryFieldId}
-              required
-              value={form.categoryId}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, categoryId: e.target.value }))
-              }
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              <option value="">Seleccioná un rubro de ingreso</option>
-              {categories
-                .filter((c) => c.isActive)
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor={amountFieldId} className="block text-sm font-medium mb-1">
-                Monto <span className="text-red-500">*</span>
-              </label>
-              <input
-                id={amountFieldId}
-                type="number"
-                required
-                step="0.01"
-                min="0.01"
-                placeholder="0.00"
-                value={form.amountMinor}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, amountMinor: e.target.value }))
-                }
-                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
-            <div>
-              <label htmlFor={currencyFieldId} className="block text-sm font-medium mb-1">Moneda</label>
-              <select
-                id={currencyFieldId}
-                value={form.currencyCode}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, currencyCode: e.target.value }))
-                }
-                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              >
-                {CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor={receivedDateFieldId} className="block text-sm font-medium mb-1">
-              Fecha de Recepción <span className="text-red-500">*</span>
-            </label>
-            <input
-              id={receivedDateFieldId}
-              type="date"
-              required
-              value={form.receivedDate}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, receivedDate: e.target.value }))
-              }
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-          </div>
-
-          <div>
-            <label htmlFor={descriptionFieldId} className="block text-sm font-medium mb-1">
-              Descripción (opcional)
-            </label>
-            <textarea
-              id={descriptionFieldId}
-              placeholder="Ej: Cuota extraordinaria pagada por..."
-              value={form.description}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, description: e.target.value }))
-              }
-              rows={3}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              Cancelar
-            </Button>
-            <Button
-              type="submit"
-              disabled={createMutation.isPending}
-            >
-              {createMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-1" />
-              ) : null}
-              Registrar
-            </Button>
-          </div>
-        </form>
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="income-create-title">
+    <div className="max-h-[95vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-background p-6 shadow-xl">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div><h2 id="income-create-title" className="text-lg font-semibold">Registrar ingreso</h2><p className="text-sm text-muted-foreground">El plan de aplicaciones define el uso financiero final.</p></div>
+        <button type="button" onClick={onClose} aria-label="Cerrar diálogo de ingreso" className="rounded p-1 hover:bg-muted"><X className="h-5 w-5" /></button>
       </div>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-sm font-medium">Rubro<select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="">Seleccioná un rubro</option>{incomeCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+          <label className="text-sm font-medium">Período<input required type="month" value={period} readOnly className="mt-1 w-full rounded border bg-muted p-2" /></label>
+          <label className="text-sm font-medium">Monto<input required inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} className="mt-1 w-full rounded border p-2" /></label>
+          <label className="text-sm font-medium">Moneda<select value={currencyCode} onChange={(event) => setExplicitCurrency(event.target.value)} className="mt-1 w-full rounded border p-2">{CANONICAL_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
+          <label className="text-sm font-medium">Fecha recibida<input required type="date" value={receivedDate} onChange={(event) => setReceivedDate(event.target.value)} className="mt-1 w-full rounded border p-2" /></label>
+          <label className="text-sm font-medium">Alcance<select value={scopeType} onChange={(event) => { const next = event.target.value as IncomeScopeType; setScopeType(next); setUnitGroupId(''); if (next !== 'BUILDING') syncAllocations(); }} className="mt-1 w-full rounded border p-2"><option value="BUILDING">Edificio</option><option value="TENANT_SHARED">Compartido del conjunto</option><option value="UNIT_GROUP">Grupo de unidades</option></select></label>
+        </div>
+        <p className="text-xs text-muted-foreground">Moneda funcional: {financeSettings?.functionalCurrency ?? 'cargando'}. Es contexto contable, no una lista de monedas permitidas.</p>
+        <label className="block text-sm font-medium">Edificio<select required={scopeType !== 'TENANT_SHARED'} value={selectedBuildingId} onChange={(event) => { setSelectedBuildingId(event.target.value); setUnitGroupId(''); }} className="mt-1 w-full rounded border p-2"><option value="">{scopeType === 'TENANT_SHARED' ? 'No aplica al ingreso compartido' : 'Seleccioná un edificio'}</option>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
+        {scopeType === 'UNIT_GROUP' && <label className="block text-sm font-medium">Grupo de unidades<select required value={unitGroupId} onChange={(event) => setUnitGroupId(event.target.value)} className="mt-1 w-full rounded border p-2" disabled={groupsQuery.isLoading || !selectedBuildingId}><option value="">{groupsQuery.isLoading ? 'Cargando grupos...' : 'Seleccioná un grupo'}</option>{groupsQuery.data?.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.memberCount} unidades)</option>)}</select>{groupsQuery.error && <span className="text-xs text-red-700">No pudimos cargar grupos: {groupsQuery.error instanceof Error ? groupsQuery.error.message : 'Error desconocido'}</span>}</label>}
+        {scopeType !== 'BUILDING' && <div className="rounded border p-3"><div className="mb-2 flex items-center justify-between"><p className="text-sm font-medium">Asignaciones por edificio</p><Button type="button" variant="secondary" size="sm" onClick={syncAllocations}>Cargar edificios</Button></div>{allocationDrafts.length === 0 ? <p className="text-sm text-muted-foreground">Cargá los edificios para asignar importes exactos.</p> : <div className="space-y-2">{allocationDrafts.map((allocation, index) => <label key={allocation.buildingId} className="flex items-center gap-2 text-sm"><span className="min-w-0 flex-1 truncate">{buildings.find((building) => building.id === allocation.buildingId)?.name ?? allocation.buildingId}</span><input inputMode="decimal" placeholder="0.00" value={allocation.amount} onChange={(event) => setAllocationDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} className="w-28 rounded border p-2" /></label>)}</div>}</div>}
+        <label className="block text-sm font-medium">Descripción<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+        {(categoriesLoading || buildingsLoading) && <p className="text-sm text-muted-foreground">Cargando datos del formulario...</p>}
+        {createMutation.error && <p className="text-sm text-red-700">{createMutation.error.message}</p>}
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Crear borrador</Button></div>
+      </form>
     </div>
-  );
+  </div>;
 }

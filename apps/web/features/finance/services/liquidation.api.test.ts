@@ -29,7 +29,7 @@ function listSourceFiles(directory: string): string[] {
 
 describe('legacy liquidation cleanup', () => {
   beforeEach(() => {
-    mockedApiClient.mockResolvedValue({});
+    mockedApiClient.mockResolvedValue([]);
   });
 
   it('does not leave active code importing the legacy liquidation hook or API', () => {
@@ -54,8 +54,16 @@ describe('legacy liquidation cleanup', () => {
 
     expect(mockedApiClient).toHaveBeenCalledWith({
       path: '/tenants/tenant-1/unit-groups?buildingId=building-1',
-      headers: { 'tenant-id': 'tenant-1' },
+      headers: { 'x-tenant-id': 'tenant-1' },
     });
+  });
+
+  it('rejects an invalid unit group list response', async () => {
+    mockedApiClient.mockResolvedValueOnce({});
+
+    await expect(unitGroupApi.list('tenant-1', 'building-1')).rejects.toThrow(
+      'Invalid unit group list response',
+    );
   });
 
   it('keeps allocationApi available with unchanged request behavior', async () => {
@@ -84,7 +92,7 @@ describe('legacy liquidation cleanup', () => {
         description: 'Main block',
         unitIds: ['unit-1', 'unit-2'],
       },
-      headers: { 'tenant-id': 'tenant-1' },
+      headers: { 'x-tenant-id': 'tenant-1' },
     });
   });
 

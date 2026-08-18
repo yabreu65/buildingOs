@@ -72,6 +72,7 @@ export interface FundTransaction {
   description: string | null;
   idempotencyKey: string | null;
   reversalOfTransactionId: string | null;
+  incomeApplicationId: string | null;
   createdAt: string;
 }
 
@@ -128,6 +129,14 @@ export interface MovementAllocationInput {
   amountMinor?: number;
   percentage?: number;
   currencyCode?: string;
+}
+
+export interface UnitGroupOption {
+  id: string;
+  buildingId: string;
+  name: string;
+  description: string | null;
+  memberCount: number;
 }
 
 export interface CreateIncomeData {

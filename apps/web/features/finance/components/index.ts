@@ -21,3 +21,6 @@ export { RecurringExpensesTab } from './RecurringExpensesTab';
 export { RecurringExpenseModal } from './RecurringExpenseModal';
 export { TenantRecurringExpensesTab } from './TenantRecurringExpensesTab';
 export { TenantRecurringExpenseModal } from './TenantRecurringExpenseModal';
+export { IncomesTab } from './IncomesTab';
+export { FundsTab } from './FundsTab';
+export { IncomePoliciesTab } from './IncomePoliciesTab';
