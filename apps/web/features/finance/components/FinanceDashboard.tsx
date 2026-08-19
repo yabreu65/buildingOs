@@ -136,15 +136,15 @@ export function FinanceDashboard({ buildingId, tenantId }: FinanceDashboardProps
   return (
     <div className="space-y-6">
       {/* Header with period selector */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Finanzas del edificio</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Todo lo que ves aquí corresponde al edificio actual y al período seleccionado.
           </p>
         </div>
-        <div>
-          <label htmlFor={periodInputId} className="text-sm font-medium text-gray-600 mr-2">Período:</label>
+        <div className="flex items-center gap-2">
+          <label htmlFor={periodInputId} className="text-sm font-medium text-gray-600">Período:</label>
           <input
             id={periodInputId}
             type="month"
