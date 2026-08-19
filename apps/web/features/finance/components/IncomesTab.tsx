@@ -9,9 +9,11 @@ import { formatCurrency } from '@/shared/lib/format/money';
 import { useExpenseLedgerCategories, useIncomes, useRecordIncome, useUpdateIncome, useVoidIncome } from '../hooks/useExpenseLedger';
 import { useApplyIncomePolicy, useCreateIncomeApplicationPlan, useIncomeApplicationPlan } from '../hooks/useIncomeApplications';
 import { useFunds } from '../hooks/useFunds';
+import { useHasAnyRoleInTenant } from '@/features/tenancy/hooks/useEffectiveRole';
 import type { CreateIncomeApplicationInput, Income, IncomeApplication, IncomeApplicationDestination, UpdateIncomeData } from '../contracts';
 import { FinanceDialog } from './FinanceDialog';
 import { IncomeCreateModal } from './IncomeCreateModal';
+import { LegacyBackfillPanel } from './LegacyBackfillPanel';
 import { decimalToAmountMinor, minorToDecimalString, sumAmountMinor } from '../utils/money-input';
 import { incomeApplicationProvenance, type IncomeApplicationProvenanceOrigin } from '../utils/income-application-provenance';
 import { sameDateInput, toDateInputValue } from '../utils/date-input';
@@ -36,7 +38,13 @@ export function IncomesTab({ tenantId, period }: IncomesTabProps) {
   const [categoryId, setCategoryId] = useState('');
   const [status, setStatus] = useState<'ALL' | Income['status']>('ALL');
   const [showCreate, setShowCreate] = useState(false);
+  const [showBackfill, setShowBackfill] = useState(false);
   const [planIncome, setPlanIncome] = useState<Income | null>(null);
+  // FIN-07CR2: el backfill legacy exige TENANT_OWNER/TENANT_ADMIN con alcance
+  // de inquilino. `useHasAnyRoleInTenant` consulta `membership.roles`, que el
+  // backend construye SOLO con roles scopeType=TENANT: un OPERATOR o un admin
+  // con alcance BUILDING/UNIT no califican. Fail-closed: sin sesión/rol -> oculto.
+  const canUseLegacyBackfill = useHasAnyRoleInTenant(tenantId, ['TENANT_OWNER', 'TENANT_ADMIN']);
   const [editingIncome, setEditingIncome] = useState<Income | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ income: Income; action: 'record' | 'void' } | null>(null);
   const { data: incomes = [], isPending, error } = useIncomes(tenantId, { period, categoryId: categoryId || undefined });
@@ -66,8 +74,16 @@ export function IncomesTab({ tenantId, period }: IncomesTabProps) {
           <h3 className="text-lg font-semibold">Ingresos</h3>
           <p className="text-sm text-muted-foreground">Los borradores se registran antes de definir un plan de aplicaciones inmutable.</p>
         </div>
-        <Button type="button" onClick={() => setShowCreate(true)} className="gap-2"><Plus className="h-4 w-4" />Registrar ingreso</Button>
+        <div className="flex gap-2">
+          {canUseLegacyBackfill && (
+            <Button type="button" variant="secondary" onClick={() => setShowBackfill((v) => !v)} className="gap-2" aria-expanded={showBackfill}>
+              {showBackfill ? 'Ocultar migración histórica' : 'Migración histórica'}
+            </Button>
+          )}
+          <Button type="button" onClick={() => setShowCreate(true)} className="gap-2"><Plus className="h-4 w-4" />Registrar ingreso</Button>
+        </div>
       </div>
+      {canUseLegacyBackfill && showBackfill && <LegacyBackfillPanel tenantId={tenantId} />}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm font-medium">Rubro
           <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="mt-1 w-full rounded border p-2">

@@ -358,6 +358,10 @@ export interface Liquidation extends LiquidationV3Summary {
   publishedAt: string | null;
   canceledAt: string | null;
   createdAt: string;
+  // FIN-07C: offsets de ingresos congelados (solo V3).
+  // null/undefined = liquidación histórica (pre-FIN-06) sin offsets.
+  incomeOffsetsByCurrency?: Record<string, number> | null;
+  incomeOffsetSnapshot?: IncomeOffsetSnapshotItem[] | null;
 }
 
 export interface LiquidationDetail extends Liquidation {

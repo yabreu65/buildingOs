@@ -367,3 +367,36 @@ export function isLiquidationV3Summary(value: unknown): value is LiquidationV3Su
 export function assertLiquidationV3Summary(value: unknown): void {
   assertFinancialResponse(isLiquidationV3Summary(value), 'liquidation V3 summary');
 }
+
+/**
+ * FIN-07C: mapa { currency: valuedMinor } de offsets congelados.
+ * Nunca colapsar a un nominal único entre monedas distintas.
+ *
+ * `{}` es válido: una liquidación V3 moderna puede tener CERO offsets
+ * (gross > 0, incomeOffset = 0, snapshot = [], byCurrency = {}).
+ * null/undefined solo representan registros históricos pre-FIN-06.
+ */
+export function isIncomeOffsetsByCurrency(value: unknown): value is Record<string, number> {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  return entries.every(
+    ([currency, amount]) =>
+      currency.length > 0 && isNonNegativeInt(amount),
+  );
+}
+
+export function parseIncomeOffsetsByCurrency(value: unknown): Record<string, number> | null {
+  if (value === null || value === undefined) return null;
+  assertFinancialResponse(isIncomeOffsetsByCurrency(value), 'income offsets by currency');
+  return value as Record<string, number>;
+}
+
+export function parseIncomeOffsetSnapshot(value: unknown): IncomeOffsetSnapshotItem[] | null {
+  if (value === null || value === undefined) return null;
+  assertFinancialResponse(
+    Array.isArray(value) && value.every(isIncomeOffsetSnapshotItem),
+    'liquidation income offset snapshot',
+  );
+  return value;
+}

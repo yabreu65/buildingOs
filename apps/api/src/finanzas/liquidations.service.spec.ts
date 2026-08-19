@@ -282,6 +282,355 @@ describe('LiquidationsService', () => {
     ]);
   });
 
+  it('maps FIN-07C income offset snapshot and per-currency totals', async () => {
+    prisma.liquidation.findMany.mockResolvedValueOnce([
+      {
+        ...baseLiquidation,
+        incomeOffsetsByCurrency: { ARS: 1500 },
+        incomeOffsetSnapshot: [
+          {
+            incomeId: 'income-1',
+            incomeApplicationId: 'app-1',
+            categoryId: 'cat-1',
+            categoryName: 'Alquiler',
+            policyVersionId: null,
+            legacyDestination: null,
+            scopeType: 'BUILDING',
+            currencyCode: 'ARS',
+            applicationAmountMinor: 1500,
+            buildingAmountMinor: 1500,
+            valuedAmountMinor: 1500,
+            functionalCurrencyCode: null,
+            exchangeRateId: null,
+            exchangeRateValue: null,
+            exchangeRateDirection: null,
+            exchangeRateEffectiveAt: null,
+            conversionDate: null,
+            receivedDate: '2026-05-01',
+            period: '2026-05',
+          },
+        ],
+      },
+    ]);
+
+    const [liquidation] = await service.listLiquidations('tenant-1', 'member-1', {});
+
+    expect(liquidation.incomeOffsetsByCurrency).toEqual({ ARS: 1500 });
+    expect(liquidation.incomeOffsetSnapshot).toHaveLength(1);
+    expect(liquidation.incomeOffsetSnapshot?.[0]?.categoryName).toBe('Alquiler');
+  });
+
+  it('maps null income offset fields for historical liquidations', async () => {
+    prisma.liquidation.findMany.mockResolvedValueOnce([baseLiquidation]);
+
+    const [liquidation] = await service.listLiquidations('tenant-1', 'member-1', {});
+
+    expect(liquidation.incomeOffsetsByCurrency).toBeNull();
+    expect(liquidation.incomeOffsetSnapshot).toBeNull();
+  });
+
+  it('accepts a valid zero-offset V3 liquidation (empty maps, non-null)', async () => {
+    prisma.liquidation.findMany.mockResolvedValueOnce([
+      {
+        ...baseLiquidation,
+        grossExpenseAmountMinor: 10000,
+        adjustmentAmountMinor: 0,
+        preIncomeAmountMinor: 10000,
+        incomeOffsetAmountMinor: 0,
+        netDistributableAmountMinor: 10000,
+        incomeOffsetSnapshot: [],
+        incomeOffsetsByCurrency: {},
+      },
+    ]);
+
+    const [liquidation] = await service.listLiquidations('tenant-1', 'member-1', {});
+
+    expect(liquidation.incomeOffsetsByCurrency).toEqual({});
+    expect(liquidation.incomeOffsetSnapshot).toEqual([]);
+  });
+
+  it('fails closed on malformed incomeOffsetsByCurrency instead of downgrading to null', async () => {
+    prisma.liquidation.findMany.mockResolvedValueOnce([
+      { ...baseLiquidation, incomeOffsetsByCurrency: ['ARS', 1500] },
+    ]);
+
+    await expect(
+      service.listLiquidations('tenant-1', 'member-1', {}),
+    ).rejects.toThrow('Liquidation incomeOffsetsByCurrency is invalid');
+  });
+
+  it('fails closed on malformed incomeOffsetSnapshot instead of downgrading to null', async () => {
+    prisma.liquidation.findMany.mockResolvedValueOnce([
+      {
+        ...baseLiquidation,
+        incomeOffsetSnapshot: [{ incomeId: 'income-1' }],
+      },
+    ]);
+
+    await expect(
+      service.listLiquidations('tenant-1', 'member-1', {}),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  // ==========================================================================
+  // FIN-07CR3: read-contract hardening del snapshot de ingresos (maq. A–V)
+  // ==========================================================================
+
+  const V3_OFFSET_ITEM = {
+    incomeId: 'income-1',
+    incomeApplicationId: 'app-1',
+    categoryId: 'cat-1',
+    categoryName: 'Alquiler',
+    policyVersionId: null,
+    legacyDestination: null,
+    scopeType: 'BUILDING',
+    currencyCode: 'ARS',
+    applicationAmountMinor: 1500,
+    buildingAmountMinor: 1500,
+    valuedAmountMinor: 1500,
+    functionalCurrencyCode: null,
+    exchangeRateId: null,
+    exchangeRateValue: null,
+    exchangeRateDirection: null,
+    exchangeRateEffectiveAt: null,
+    conversionDate: null,
+    receivedDate: '2026-05-01',
+    period: '2026-05',
+  };
+
+  const V3_LIQUIDATION = {
+    ...baseLiquidation,
+    grossExpenseAmountMinor: 10000,
+    adjustmentAmountMinor: 0,
+    preIncomeAmountMinor: 10000,
+    incomeOffsetAmountMinor: 1500,
+    netDistributableAmountMinor: 8500,
+    incomeOffsetsByCurrency: { ARS: 1500 },
+    incomeOffsetSnapshot: [V3_OFFSET_ITEM],
+  };
+
+  async function listWith(liquidation: Record<string, unknown>) {
+    prisma.liquidation.findMany.mockResolvedValueOnce([liquidation as never]);
+    return service.listLiquidations('tenant-1', 'member-1', {});
+  }
+
+  it('A. accepts a historical record (summary null, artifacts null)', async () => {
+    const [liquidation] = await listWith(baseLiquidation);
+    expect(liquidation.grossExpenseAmountMinor).toBeNull();
+    expect(liquidation.incomeOffsetSnapshot).toBeNull();
+    expect(liquidation.incomeOffsetsByCurrency).toBeNull();
+  });
+
+  it('B. accepts a zero-offset V3 (summary present, [] and {})', async () => {
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetAmountMinor: 0,
+      netDistributableAmountMinor: 10000,
+      incomeOffsetSnapshot: [],
+      incomeOffsetsByCurrency: {},
+    });
+    expect(liquidation.incomeOffsetSnapshot).toEqual([]);
+    expect(liquidation.incomeOffsetsByCurrency).toEqual({});
+  });
+
+  it('C. accepts a valid full V3 snapshot unchanged', async () => {
+    const [liquidation] = await listWith(V3_LIQUIDATION);
+    expect(liquidation.incomeOffsetSnapshot?.[0]).toMatchObject({
+      incomeId: 'income-1',
+      applicationAmountMinor: 1500,
+      buildingAmountMinor: 1500,
+      valuedAmountMinor: 1500,
+    });
+  });
+
+  it.each([
+    ['D. buildingAmountMinor = "bad"', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, buildingAmountMinor: 'bad' }] }],
+    ['E. valuedAmountMinor = "bad"', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, valuedAmountMinor: 'bad' }] }],
+    ['F. negative application amount', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, applicationAmountMinor: -500 }] }],
+    ['G. currencyCode numeric', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, currencyCode: 123 }] }],
+    ['G2. currencyCode empty', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, currencyCode: '' }] }],
+    ['H. baseCurrency numeric', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, baseCurrency: 123 }] }],
+    ['H2. baseCurrency empty', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, baseCurrency: '' }] }],
+    ['I. scopeType INVALID', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, scopeType: 'INVALID' }] }],
+    ['J. buildingId numeric (invalid relation)', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, buildingId: 7 }] }],
+    ['K. period malformed (numeric)', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, period: 123 }] }],
+    ['L. receivedDate malformed', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, receivedDate: 'not-a-date' }] }],
+    ['M. provenance shape invalid', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, legacyDestination: 42 }] }],
+    ['N. functional FX conversionDate malformed', { ...V3_LIQUIDATION, incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, exchangeRateEffectiveAt: 'garbage', functionalCurrencyCode: 'ARS' }] }],
+  ])('%s => fails closed', async (_name, liquidation) => {
+    await expect(listWith(liquidation)).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  it.each([
+    ['O. empty currency key ""', { '': 100 }],
+    ['P. whitespace-only key', { ' ': 100 }],
+  ])('%s => fails closed', async (_name, byCurrency) => {
+    await expect(
+      listWith({ ...V3_LIQUIDATION, incomeOffsetsByCurrency: byCurrency }),
+    ).rejects.toThrow('Liquidation incomeOffsetsByCurrency');
+  });
+
+  it.each([
+    ['Q. string amount', { ARS: '1500' }],
+    ['R. unsafe integer', { ARS: Number.MAX_SAFE_INTEGER + 2 }],
+    ['S. negative amount', { ARS: -1 }],
+  ])('%s => fails closed', async (_name, byCurrency) => {
+    await expect(
+      listWith({ ...V3_LIQUIDATION, incomeOffsetsByCurrency: byCurrency }),
+    ).rejects.toThrow('Liquidation incomeOffsetsByCurrency');
+  });
+
+  it('T. modern summary present + snapshot null => fails', async () => {
+    await expect(
+      listWith({ ...V3_LIQUIDATION, incomeOffsetSnapshot: null }),
+    ).rejects.toThrow('Liquidation V3 is missing incomeOffset snapshot artifacts');
+  });
+
+  it('U. modern summary present + byCurrency null => fails', async () => {
+    await expect(
+      listWith({ ...V3_LIQUIDATION, incomeOffsetsByCurrency: null }),
+    ).rejects.toThrow('Liquidation V3 is missing incomeOffset snapshot artifacts');
+  });
+
+  it('V. control: summary all null + artifacts null => still accepted', async () => {
+    const [liquidation] = await listWith(baseLiquidation);
+    expect(liquidation.incomeOffsetSnapshot).toBeNull();
+    expect(liquidation.incomeOffsetsByCurrency).toBeNull();
+  });
+
+  it('W. partially populated summary => rejected (no silent historical downgrade)', async () => {
+    await expect(
+      listWith({
+        ...baseLiquidation,
+        grossExpenseAmountMinor: 10000,
+        incomeOffsetAmountMinor: null,
+      }),
+    ).rejects.toThrow('Liquidation V3 summary fields are partially populated');
+  });
+
+  // ==========================================================================
+  // FIN-07CR4: cierre del contrato del item (categoryId, legacyDestination,
+  // period, montos estrictamente positivos, nullables normalizados)
+  // ==========================================================================
+
+  it('rejects categoryId empty string', async () => {
+    await expect(
+      listWith({
+        ...V3_LIQUIDATION,
+        incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, categoryId: '' }],
+      }),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  it('normalizes missing categoryId to empty string (historical contract)', async () => {
+    const { categoryId: _omit, ...withoutCategoryId } = V3_OFFSET_ITEM;
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetSnapshot: [withoutCategoryId],
+    });
+    expect(liquidation.incomeOffsetSnapshot?.[0]?.categoryId).toBe('');
+  });
+
+  it.each([
+    ['APPLY_TO_EXPENSES', 'APPLY_TO_EXPENSES'],
+    ['RESERVE_FUND', 'RESERVE_FUND'],
+    ['SPECIAL_FUND', 'SPECIAL_FUND'],
+  ])('accepts valid legacyDestination %s', async (_name, legacyDestination) => {
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, legacyDestination }],
+    });
+    expect(liquidation.incomeOffsetSnapshot?.[0]?.legacyDestination).toBe(legacyDestination);
+  });
+
+  it('rejects arbitrary legacyDestination string', async () => {
+    await expect(
+      listWith({
+        ...V3_LIQUIDATION,
+        incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, legacyDestination: 'NONSENSE' }],
+      }),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  it('normalizes missing legacyDestination to null', async () => {
+    const { legacyDestination: _omit, ...withoutLegacy } = V3_OFFSET_ITEM;
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetSnapshot: [withoutLegacy],
+    });
+    expect(liquidation.incomeOffsetSnapshot?.[0]?.legacyDestination).toBeNull();
+  });
+
+  it.each([
+    ['period "abc"', 'abc'],
+    ['period "2026-13"', '2026-13'],
+    ['period "26-05"', '26-05'],
+  ])('rejects malformed %s', async (_name, period) => {
+    await expect(
+      listWith({
+        ...V3_LIQUIDATION,
+        incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, period }],
+      }),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  it('accepts valid period "2026-05"', async () => {
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, period: '2026-05' }],
+    });
+    expect(liquidation.incomeOffsetSnapshot?.[0]?.period).toBe('2026-05');
+  });
+
+  it.each([
+    ['applicationAmountMinor = 0', 'applicationAmountMinor'],
+    ['buildingAmountMinor = 0', 'buildingAmountMinor'],
+    ['valuedAmountMinor = 0', 'valuedAmountMinor'],
+  ])('rejects zero item amount %s', async (_name, field) => {
+    await expect(
+      listWith({
+        ...V3_LIQUIDATION,
+        incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, [field]: 0 }],
+      }),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
+  it('normalizes missing historical nullable fields to null', async () => {
+    const {
+      categoryName: _a,
+      policyVersionId: _b,
+      functionalCurrencyCode: _c,
+      exchangeRateId: _d,
+      exchangeRateValue: _e,
+      exchangeRateDirection: _f,
+      exchangeRateEffectiveAt: _g,
+      conversionDate: _h,
+      ...onlyRequired
+    } = V3_OFFSET_ITEM;
+    const [liquidation] = await listWith({
+      ...V3_LIQUIDATION,
+      incomeOffsetSnapshot: [onlyRequired],
+    });
+    const item = liquidation.incomeOffsetSnapshot?.[0];
+    expect(item?.categoryName).toBeNull();
+    expect(item?.policyVersionId).toBeNull();
+    expect(item?.functionalCurrencyCode).toBeNull();
+    expect(item?.exchangeRateId).toBeNull();
+    expect(item?.exchangeRateValue).toBeNull();
+    expect(item?.exchangeRateDirection).toBeNull();
+    expect(item?.exchangeRateEffectiveAt).toBeNull();
+    expect(item?.conversionDate).toBeNull();
+  });
+
+  it('rejects wrong-type nullable field (categoryName numeric)', async () => {
+    await expect(
+      listWith({
+        ...V3_LIQUIDATION,
+        incomeOffsetSnapshot: [{ ...V3_OFFSET_ITEM, categoryName: 42 }],
+      }),
+    ).rejects.toThrow('Liquidation incomeOffsetSnapshot');
+  });
+
   it('creates one charge per billable unit when publishing', async () => {
     tx.liquidation.findFirst
       .mockResolvedValueOnce({ ...baseLiquidation, status: 'REVIEWED' })

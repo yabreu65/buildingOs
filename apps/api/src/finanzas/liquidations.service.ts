@@ -40,6 +40,11 @@ import {
   LiquidationIncomeOffsetsService,
   type IncomeOffsetSnapshotItem,
 } from './liquidation-income-offsets.service';
+import {
+  classifyLiquidationV3Summary,
+  parseIncomeOffsetsByCurrency,
+  parseIncomeOffsetSnapshot,
+} from './liquidation-income-offset-snapshot';
 import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 
 interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
@@ -791,8 +796,38 @@ export class LiquidationsService {
     preIncomeAmountMinor?: number | null;
     incomeOffsetAmountMinor?: number | null;
     netDistributableAmountMinor?: number | null;
+    incomeOffsetsByCurrency?: unknown;
+    incomeOffsetSnapshot?: unknown;
   }): LiquidationResponseDto {
     const totalsByCurrency = parseTotalsByCurrency(liq.totalsByCurrency);
+
+    const grossExpenseAmountMinor = liq.grossExpenseAmountMinor ?? null;
+    const adjustmentAmountMinor = liq.adjustmentAmountMinor ?? null;
+    const preIncomeAmountMinor = liq.preIncomeAmountMinor ?? null;
+    const incomeOffsetAmountMinor = liq.incomeOffsetAmountMinor ?? null;
+    const netDistributableAmountMinor = liq.netDistributableAmountMinor ?? null;
+    const incomeOffsetsByCurrency = parseIncomeOffsetsByCurrency(liq.incomeOffsetsByCurrency);
+    const incomeOffsetSnapshot = parseIncomeOffsetSnapshot(liq.incomeOffsetSnapshot);
+
+    // FIN-07CR3: consistencia de artefactos. Una fila V3 (resumen FIN-06 presente
+    // completo) NO puede degradarse a representación histórica: exige snapshot y
+    // byCurrency NO nulos. Histórico (los 5 campos ausentes) sigue aceptado.
+    // Presencia parcial del resumen = corrupción (fail-closed).
+    const summaryKind = classifyLiquidationV3Summary({
+      grossExpenseAmountMinor,
+      adjustmentAmountMinor,
+      preIncomeAmountMinor,
+      incomeOffsetAmountMinor,
+      netDistributableAmountMinor,
+    });
+    if (
+      summaryKind === 'V3' &&
+      (incomeOffsetsByCurrency === null || incomeOffsetSnapshot === null)
+    ) {
+      throw new BadRequestException(
+        'Liquidation V3 is missing incomeOffset snapshot artifacts',
+      );
+    }
 
     return {
       id: liq.id,
@@ -811,11 +846,13 @@ export class LiquidationsService {
       publishedAt: liq.publishedAt,
       canceledAt: liq.canceledAt,
       createdAt: liq.createdAt,
-      grossExpenseAmountMinor: liq.grossExpenseAmountMinor ?? null,
-      adjustmentAmountMinor: liq.adjustmentAmountMinor ?? null,
-      preIncomeAmountMinor: liq.preIncomeAmountMinor ?? null,
-      incomeOffsetAmountMinor: liq.incomeOffsetAmountMinor ?? null,
-      netDistributableAmountMinor: liq.netDistributableAmountMinor ?? null,
+      grossExpenseAmountMinor,
+      adjustmentAmountMinor,
+      preIncomeAmountMinor,
+      incomeOffsetAmountMinor,
+      netDistributableAmountMinor,
+      incomeOffsetsByCurrency,
+      incomeOffsetSnapshot,
     };
   }
 
@@ -833,6 +870,8 @@ export class LiquidationsService {
       totalsByCurrency: unknown;
       expenseSnapshot: unknown;
       publicationSnapshot: unknown;
+      incomeOffsetsByCurrency?: unknown;
+      incomeOffsetSnapshot?: unknown;
       unitCount: number;
       generatedAt: Date;
       reviewedAt: Date | null;

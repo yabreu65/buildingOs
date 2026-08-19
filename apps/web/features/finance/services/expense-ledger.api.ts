@@ -1,5 +1,9 @@
 import { apiClient } from '@/shared/lib/http/client';
-import { assertLiquidationV3Summary } from '../contracts/finance-guards';
+import {
+  assertLiquidationV3Summary,
+  parseIncomeOffsetSnapshot,
+  parseIncomeOffsetsByCurrency,
+} from '../contracts/finance-guards';
 import type {
   CreateIncomeData,
   Income,
@@ -439,7 +443,7 @@ export async function listLiquidations(
     method: 'GET',
   });
   liquidations.forEach(assertLiquidationV3Summary);
-  return liquidations;
+  return liquidations.map(normalizeLiquidationIncomeOffsets);
 }
 
 export async function getLiquidation(
@@ -451,7 +455,24 @@ export async function getLiquidation(
     method: 'GET',
   });
   assertLiquidationV3Summary(liquidation);
-  return liquidation;
+  return normalizeLiquidationIncomeOffsets(liquidation);
+}
+
+/**
+ * FIN-07C: valida y normaliza los campos read-only de offsets congelados.
+ * null/undefined (histórico V1/V2) se aceptan; valores malformados se rechazan
+ * (fail-closed) en lugar de silenciarse.
+ */
+function normalizeLiquidationIncomeOffsets<T extends Liquidation>(liquidation: T): T {
+  return {
+    ...liquidation,
+    incomeOffsetsByCurrency: parseIncomeOffsetsByCurrency(
+      (liquidation as { incomeOffsetsByCurrency?: unknown }).incomeOffsetsByCurrency,
+    ),
+    incomeOffsetSnapshot: parseIncomeOffsetSnapshot(
+      (liquidation as { incomeOffsetSnapshot?: unknown }).incomeOffsetSnapshot,
+    ),
+  };
 }
 
 export async function createLiquidationDraft(

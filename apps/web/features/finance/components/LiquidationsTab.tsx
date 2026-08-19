@@ -9,6 +9,7 @@ import {
   useCreateLiquidationDraft,
 } from '../hooks/useExpenseLedger';
 import { LiquidationCard } from './LiquidationCard';
+import { liquidationDomainErrorMessage } from '../utils/liquidation-domain-error';
 
 interface LiquidationsTabProps {
   tenantId: string;
@@ -49,9 +50,7 @@ export function LiquidationsTab({
       toast('Borrador de liquidación creado', 'success');
       void refetch();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : 'Error al crear la liquidación';
-      toast(msg, 'error');
+      toast(liquidationDomainErrorMessage(err, 'Error al crear la liquidación'), 'error');
     } finally {
       setCreating(false);
     }
