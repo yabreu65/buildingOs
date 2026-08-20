@@ -13,6 +13,8 @@ export interface BrowserObservability {
   readonly consoleWarnings: string[];
   /** HTTP responses with status >= 500 */
   readonly http5xx: Array<{ url: string; status: number; statusText: string }>;
+  /** Post-login HTTP responses with status 401. */
+  readonly http401: Array<{ url: string; statusText: string }>;
   /** Remove all event listeners. Must be called in test cleanup. */
   detach(): void;
 }
@@ -25,6 +27,7 @@ export interface BrowserObservability {
  * - console.error messages
  * - console warnings for diagnostic reporting
  * - HTTP responses with status >= 500
+ * - post-login HTTP 401 responses
  *
  * The caller MUST call `detach()` in test cleanup (test.afterEach or
  * test.afterAll) to remove listeners and avoid leaks.
@@ -42,6 +45,7 @@ export function attachBrowserObservability(page: Page): BrowserObservability {
   const consoleErrors: string[] = [];
   const consoleWarnings: string[] = [];
   const http5xx: Array<{ url: string; status: number; statusText: string }> = [];
+  const http401: Array<{ url: string; statusText: string }> = [];
 
   const onPageError = (error: Error) => {
     pageErrors.push(error.message);
@@ -64,6 +68,12 @@ export function attachBrowserObservability(page: Page): BrowserObservability {
         statusText: response.statusText(),
       });
     }
+    if (status === 401) {
+      http401.push({
+        url: response.url(),
+        statusText: response.statusText(),
+      });
+    }
   };
 
   page.on('pageerror', onPageError);
@@ -77,6 +87,7 @@ export function attachBrowserObservability(page: Page): BrowserObservability {
     consoleErrors,
     consoleWarnings,
     http5xx,
+    http401,
     detach() {
       if (detached) return;
       detached = true;
