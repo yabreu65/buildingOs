@@ -52,6 +52,8 @@ export {
   expectVisibleInViewport,
 } from './responsive';
 
+export { acquireFin07dMutationLock } from './finance-mutation-lock';
+
 // Re-export existing helpers for convenience
 export { login, logout, TEST_USERS, type TestUser } from './auth';
 export { ROUTES, navigateTo, clickNavLink } from './navigation';

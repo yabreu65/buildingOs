@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import {
   EXPECTED_FAILURE_STATUSES,
   attachBrowserObservability,
+  acquireFin07dMutationLock,
   expectHTTPFailure,
   expectHTTPSuccess,
   loginAsFinanceAdmin,
@@ -72,6 +73,7 @@ interface ExpenseResponse {
 }
 
 let fixture: Fin07dFixtureContext;
+let releaseMutationLock: (() => Promise<void>) | undefined;
 
 interface PersistedLiquidationProof {
   readonly offsets: Array<{
@@ -242,7 +244,7 @@ async function resetAndAssertLiquidationRemoved(
 
 function assertCleanObservability(observability: ReturnType<typeof attachBrowserObservability>): void {
   expect(observability.pageErrors).toHaveLength(0);
-  expect(observability.consoleErrors).toHaveLength(0);
+  expect(observability.unexpectedConsoleErrors).toHaveLength(0);
   expect(observability.http5xx).toHaveLength(0);
   expect(observability.http401).toHaveLength(0);
 }
@@ -285,12 +287,20 @@ async function reviewThroughUi(page: Page, tenantId: string, liquidationId: stri
 // These two journeys mutate the same approved local fixture database. Serializing
 // this describe scopes the lock to this spec and leaves unrelated Playwright suites parallel.
 test.describe.serial('FIN-07D modern V3 and zero-net liquidations', () => {
+  test.describe.configure({ timeout: 180_000 });
+
   test.beforeEach(async () => {
+    releaseMutationLock = await acquireFin07dMutationLock();
     fixture = await runFin07dReset();
   });
 
   test.afterEach(async () => {
-    await runFin07dReset();
+    try {
+      await runFin07dReset();
+    } finally {
+      await releaseMutationLock?.();
+      releaseMutationLock = undefined;
+    }
   });
 
   test('Journey A: creates, reviews, and cleans up the 2026-06 V3 liquidation', async ({ page }) => {

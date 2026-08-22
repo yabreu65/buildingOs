@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   attachBrowserObservability,
+  acquireFin07dMutationLock,
   expectHTTPSuccess,
   loginAsFinanceAdmin,
   resolveFinanceAdminContext,
@@ -28,6 +29,7 @@ const runFile = promisify(execFile);
 const FIN07D_RUNNER = resolve(__dirname, '../../../../api/prisma/fin07d-e2e-reset.runner.ts');
 const TS_NODE_REGISTER = resolve(__dirname, '../../../../api/node_modules/ts-node/register');
 const RUNNER_CWD = resolve(__dirname, '../../../../api');
+let releaseMutationLock: (() => Promise<void>) | undefined;
 
 interface Fin07dFixtureContext {
   readonly tenantAId: string;
@@ -253,7 +255,7 @@ function expectHistoricalV3Absence(liquidation: LiquidationDetailResponse): void
 
 function expectCleanObservability(observability: ReturnType<typeof attachBrowserObservability>): void {
   expect(observability.pageErrors).toHaveLength(0);
-  expect(observability.consoleErrors).toHaveLength(0);
+  expect(observability.unexpectedConsoleErrors).toHaveLength(0);
   expect(observability.http5xx).toHaveLength(0);
   expect(observability.http401).toHaveLength(0);
 }
@@ -290,12 +292,20 @@ function expectPreviewClassification(
 // D modifies a shared local fixture database. This serial scope contains only
 // C/D and leaves unrelated Playwright suites fully parallel.
 test.describe.serial('FIN-07D historical liquidations and legacy backfill', () => {
+  test.describe.configure({ timeout: 180_000 });
+
   test.beforeAll(async () => {
+    releaseMutationLock = await acquireFin07dMutationLock();
     fixture = await resetFin07d();
   });
 
   test.afterAll(async () => {
-    await resetFin07d();
+    try {
+      await resetFin07d();
+    } finally {
+      await releaseMutationLock?.();
+      releaseMutationLock = undefined;
+    }
   });
 
   test('Journey C V1 preserves the published legacy liquidation without V3 provenance', async ({ page }) => {

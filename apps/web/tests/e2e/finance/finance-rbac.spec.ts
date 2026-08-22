@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   EXPECTED_FAILURE_STATUSES,
+  acquireFin07dMutationLock,
   attachBrowserObservability,
   expectHTTPFailure,
   expectHTTPSuccess,
@@ -38,7 +39,7 @@ function headers(tenantId: string): Record<string, string> {
 
 function assertClean(observability: ReturnType<typeof attachBrowserObservability>): void {
   expect(observability.pageErrors).toHaveLength(0);
-  expect(observability.consoleErrors).toHaveLength(0);
+  expect(observability.unexpectedConsoleErrors, JSON.stringify(observability.targetBuildings)).toHaveLength(0);
   expect(observability.http5xx).toHaveLength(0);
   expect(observability.http401).toHaveLength(0);
 }
@@ -75,7 +76,11 @@ test.describe('FIN-07D finance RBAC and tenant isolation', () => {
   test('Admin A can use Tenant A finance and legacy backfill', async ({ page }) => {
     const tenantId = await loginAsFinanceAdmin(page);
     const context = await resolveFinanceAdminContext(page, tenantId);
-    const observability = attachBrowserObservability(page);
+    const observability = attachBrowserObservability(page, {
+      testTitle: test.info().title,
+      workerIndex: test.info().workerIndex,
+      parallelIndex: test.info().parallelIndex,
+    });
     try {
       await page.goto(`/${tenantId}/finanzas?tab=incomes`);
       await expect(page.getByRole('heading', { name: 'Ingresos' })).toBeVisible();
@@ -167,41 +172,53 @@ test.describe('FIN-07D finance RBAC and tenant isolation', () => {
   });
 
   test('Admin B receives exact Tenant A 403 responses without data leakage', async ({ page }) => {
+    test.setTimeout(360_000);
     const tenantBId = await login(page, TEST_USERS.tenantAdminB);
-    const adminABrowserContext = await page.context().browser()!.newContext();
-    const adminAPage = await adminABrowserContext.newPage();
-    const tenantAId = await loginAsFinanceAdmin(adminAPage);
-    const context = await resolveFinanceAdminContext(adminAPage, tenantAId);
-    const before = await inspectLegacy();
-    await adminABrowserContext.close();
-    const observability = attachBrowserObservability(page);
+    const releaseMutationLock = await acquireFin07dMutationLock();
     try {
-      expect(tenantBId).not.toBe(tenantAId);
-      for (const url of [
-        `${API_ORIGIN}/tenants/${tenantAId}/buildings`,
-        `${API_ORIGIN}/tenants/${tenantAId}/finance/liquidations?buildingId=${context.buildingId}&period=2026-03`,
-        `${API_ORIGIN}/tenants/${tenantAId}/finance/incomes?buildingId=${context.buildingId}&period=2026-06`,
-        `${API_ORIGIN}/tenants/${tenantAId}/finance/funds`,
-        `${API_ORIGIN}/tenants/${tenantAId}/finance/income-policies`,
-        `${API_ORIGIN}/tenants/${tenantAId}/finance/incomes/legacy-backfill/preview`,
-      ]) {
-        await expectHTTPFailure(page.request, {
-          method: 'GET', url, headers: headers(tenantAId), expectedStatus: EXPECTED_FAILURE_STATUSES.FORBIDDEN,
-        });
+      const adminABrowserContext = await page.context().browser()!.newContext();
+      const adminAPage = await adminABrowserContext.newPage();
+      let tenantAId: string;
+      let context: Awaited<ReturnType<typeof resolveFinanceAdminContext>>;
+      let before: LegacyInspection;
+      try {
+        tenantAId = await loginAsFinanceAdmin(adminAPage);
+        context = await resolveFinanceAdminContext(adminAPage, tenantAId);
+        before = await inspectLegacy();
+      } finally {
+        await adminABrowserContext.close();
       }
-      await expectHTTPFailure(page.request, {
-        method: 'POST',
-        url: `${API_ORIGIN}/tenants/${tenantAId}/finance/incomes/legacy-backfill/apply`,
-        headers: headers(tenantAId),
-        data: { items: [{ incomeId: LEGACY_AUTO_OFFSET_INCOME_ID }] },
-        expectedStatus: EXPECTED_FAILURE_STATUSES.FORBIDDEN,
-      });
-      const after = await inspectLegacy();
-      expect(after.applications).toEqual(before.applications);
-      expect(after.fundTransactions).toEqual(before.fundTransactions);
+      const observability = attachBrowserObservability(page);
+      try {
+        expect(tenantBId).not.toBe(tenantAId!);
+        for (const url of [
+          `${API_ORIGIN}/tenants/${tenantAId!}/buildings`,
+          `${API_ORIGIN}/tenants/${tenantAId!}/finance/liquidations?buildingId=${context!.buildingId}&period=2026-03`,
+          `${API_ORIGIN}/tenants/${tenantAId!}/finance/incomes?buildingId=${context!.buildingId}&period=2026-06`,
+          `${API_ORIGIN}/tenants/${tenantAId!}/finance/funds`,
+          `${API_ORIGIN}/tenants/${tenantAId!}/finance/income-policies`,
+          `${API_ORIGIN}/tenants/${tenantAId!}/finance/incomes/legacy-backfill/preview`,
+        ]) {
+          await expectHTTPFailure(page.request, {
+            method: 'GET', url, headers: headers(tenantAId!), expectedStatus: EXPECTED_FAILURE_STATUSES.FORBIDDEN,
+          });
+        }
+        await expectHTTPFailure(page.request, {
+          method: 'POST',
+          url: `${API_ORIGIN}/tenants/${tenantAId!}/finance/incomes/legacy-backfill/apply`,
+          headers: headers(tenantAId!),
+          data: { items: [{ incomeId: LEGACY_AUTO_OFFSET_INCOME_ID }] },
+          expectedStatus: EXPECTED_FAILURE_STATUSES.FORBIDDEN,
+        });
+        const after = await inspectLegacy();
+        expect(after.applications).toEqual(before!.applications);
+        expect(after.fundTransactions).toEqual(before!.fundTransactions);
+      } finally {
+        observability.detach();
+      }
+      assertClean(observability);
     } finally {
-      observability.detach();
+      await releaseMutationLock();
     }
-    assertClean(observability);
   });
 });

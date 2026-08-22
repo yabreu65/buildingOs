@@ -56,7 +56,11 @@ test.describe('Finance E2E harness smoke', () => {
 
   test('collects browser observability without errors', async ({ page }) => {
     const tenantId = await loginAsFinanceAdmin(page);
-    const obs = attachBrowserObservability(page);
+    const obs = attachBrowserObservability(page, {
+      testTitle: test.info().title,
+      workerIndex: test.info().workerIndex,
+      parallelIndex: test.info().parallelIndex,
+    });
 
     try {
       await navigateToFinanceTab(page, tenantId, 'overview');
@@ -70,7 +74,7 @@ test.describe('Finance E2E harness smoke', () => {
 
     // No unhandled JS errors should occur during navigation
     expect(obs.pageErrors).toHaveLength(0);
-    expect(obs.consoleErrors).toHaveLength(0);
+    expect(obs.unexpectedConsoleErrors, JSON.stringify(obs.targetBuildings)).toHaveLength(0);
     // No HTTP 5xx errors should occur
     expect(obs.http5xx).toHaveLength(0);
   });

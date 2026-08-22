@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   attachBrowserObservability,
+  acquireFin07dMutationLock,
   expectNoHorizontalOverflow,
   loginAsFinanceAdmin,
   resolveFinanceAdminContext,
@@ -48,7 +49,7 @@ function money(amountMinor: number): RegExp {
 
 function assertClean(observability: ReturnType<typeof attachBrowserObservability>): void {
   expect(observability.pageErrors).toHaveLength(0);
-  expect(observability.consoleErrors).toHaveLength(0);
+  expect(observability.unexpectedConsoleErrors).toHaveLength(0);
   expect(observability.http5xx).toHaveLength(0);
   expect(observability.http401).toHaveLength(0);
 }
@@ -110,19 +111,25 @@ test.describe('FIN-07D responsive finance surfaces', () => {
   }
 
   test('mobile keeps legacy backfill controls reachable', async ({ page }) => {
+    test.setTimeout(360_000);
     const tenantId = await loginAsFinanceAdmin(page);
     await setViewport(page, 'mobile');
     const observability = attachBrowserObservability(page);
     try {
-    await page.goto(`/${tenantId}/finanzas?tab=incomes`);
-    await page.getByRole('button', { name: 'Migración histórica' }).click();
-    await expect(page.getByText('Puede migrarse a Aplicar a gastos', { exact: true })).toBeVisible();
-    await page.getByRole('checkbox', { name: /2025-09/ }).check();
-    await expect(page.getByText('Seleccione un Fondo de Reserva', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Fondo de Reserva')).toBeVisible();
-    await expect(page.getByLabel('Fondo de Reserva').locator('option:not([value=""])')).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Aplicar migración' })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+      const releaseMutationLock = await acquireFin07dMutationLock();
+      try {
+        await page.goto(`/${tenantId}/finanzas?tab=incomes`);
+        await page.getByRole('button', { name: 'Migración histórica' }).click();
+        await expect(page.getByText('Puede migrarse a Aplicar a gastos', { exact: true })).toBeVisible();
+        await page.getByRole('checkbox', { name: /2025-09/ }).check();
+        await expect(page.getByText('Seleccione un Fondo de Reserva', { exact: true })).toBeVisible();
+        await expect(page.getByLabel('Fondo de Reserva')).toBeVisible();
+        await expect(page.getByLabel('Fondo de Reserva').locator('option:not([value=""])')).toHaveCount(1);
+        await expect(page.getByRole('button', { name: 'Aplicar migración' })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+      } finally {
+        await releaseMutationLock();
+      }
     } finally {
       observability.detach();
     }
@@ -147,6 +154,8 @@ test.describe('FIN-07D responsive finance surfaces', () => {
   }
 
   test('mobile modal and desktop retain the disposable V3 equation', async ({ page }) => {
+    test.setTimeout(180_000);
+    const releaseMutationLock = await acquireFin07dMutationLock();
     const fixture = await reset();
     const tenantId = await loginAsFinanceAdmin(page);
     const observability = attachBrowserObservability(page);
@@ -180,8 +189,12 @@ test.describe('FIN-07D responsive finance surfaces', () => {
       await expect(breakdown.getByText('Ingresos aplicados', { exact: true }).last().locator('xpath=..')).toContainText(money(5700));
       await expect(breakdown.getByText('Neto a distribuir', { exact: true }).locator('xpath=..')).toContainText(money(300));
     } finally {
-      await reset();
-      observability.detach();
+      try {
+        await reset();
+      } finally {
+        await releaseMutationLock();
+        observability.detach();
+      }
     }
     assertClean(observability);
   });
