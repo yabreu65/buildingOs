@@ -79,6 +79,7 @@ export const FIN07D_HISTORICAL_V1_PERIOD = '2026-03';
 export const FIN07D_HISTORICAL_V2_PERIOD = '2026-02';
 export const FIN07D_HISTORICAL_V1_TOTAL = 500_000; // minor ARS
 export const FIN07D_HISTORICAL_V2_TOTAL = 420_000; // minor ARS
+const FIN07D_HISTORICAL_UNIT_CODES = ['A1-101', 'A1-102', 'A1-103', 'A1-104', 'A1-105'] as const;
 
 export const FIN07D_RESERVE_FUND_NAME = '[FIN07D:E2E] Fondo Reserva';
 export const FIN07D_SPECIAL_FUND_NAME = '[FIN07D:E2E] Fondo Especial';
@@ -1039,7 +1040,7 @@ export async function ensureHistoricalV1V2Liquidations(input: {
 
   // Query deterministic units for building A1
   const units = await prisma.unit.findMany({
-    where: { tenantId, buildingId: buildingA1Id },
+    where: { tenantId, buildingId: buildingA1Id, code: { in: [...FIN07D_HISTORICAL_UNIT_CODES] } },
     orderBy: { code: 'asc' },
     select: { id: true, code: true },
   });

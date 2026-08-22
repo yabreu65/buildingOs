@@ -376,31 +376,48 @@ async function main(): Promise<void> {
       throw new Error('FIN07D reset probe could not create its disposable marker');
     }
 
-    const afterFirstReset = await resetFin07dMutableState(prisma);
-    const [registeredCount, unregisteredCount, remainingMarkerCount] = await Promise.all([
-      prisma.liquidation.count({ where: { id: registeredId } }),
-      prisma.liquidation.count({ where: { id: unregisteredId } }),
-      prisma.income.count({
-        where: {
-          tenantId: before.tenantAId,
-          description: { startsWith: FIN07D_MUTABLE_MARKER },
-        },
-      }),
-    ]);
-    if (registeredCount !== 0) {
-      throw new Error('FIN07D reset probe retained the registered liquidation');
-    }
-    if (unregisteredCount !== 1) {
-      throw new Error('FIN07D reset probe deleted the unregistered liquidation');
-    }
-    if (remainingMarkerCount !== 0) {
-      throw new Error('FIN07D reset probe left disposable mutable state behind');
-    }
-    if (
-      afterFirstReset.historicalV1LiquidationId !== before.historicalV1LiquidationId ||
-      afterFirstReset.historicalV2LiquidationId !== before.historicalV2LiquidationId
-    ) {
-      throw new Error('FIN07D reset probe changed immutable historical liquidations');
+    const extraUnit = await prisma.unit.create({
+      data: {
+        tenantId: before.tenantAId,
+        buildingId: before.buildingA1Id,
+        code: `FIN07D-PROBE-${randomBytes(8).toString('hex')}`,
+        label: 'FIN07D extra unit isolation probe',
+        unitType: 'APARTMENT',
+        occupancyStatus: 'OCCUPIED',
+        m2: 99,
+      },
+      select: { id: true },
+    });
+    let afterFirstReset: Awaited<ReturnType<typeof resetFin07dMutableState>>;
+    try {
+      afterFirstReset = await resetFin07dMutableState(prisma);
+      const [registeredCount, unregisteredCount, remainingMarkerCount] = await Promise.all([
+        prisma.liquidation.count({ where: { id: registeredId } }),
+        prisma.liquidation.count({ where: { id: unregisteredId } }),
+        prisma.income.count({
+          where: {
+            tenantId: before.tenantAId,
+            description: { startsWith: FIN07D_MUTABLE_MARKER },
+          },
+        }),
+      ]);
+      if (registeredCount !== 0) {
+        throw new Error('FIN07D reset probe retained the registered liquidation');
+      }
+      if (unregisteredCount !== 1) {
+        throw new Error('FIN07D reset probe deleted the unregistered liquidation');
+      }
+      if (remainingMarkerCount !== 0) {
+        throw new Error('FIN07D reset probe left disposable mutable state behind');
+      }
+      if (
+        afterFirstReset.historicalV1LiquidationId !== before.historicalV1LiquidationId ||
+        afterFirstReset.historicalV2LiquidationId !== before.historicalV2LiquidationId
+      ) {
+        throw new Error('FIN07D reset probe changed immutable historical liquidations');
+      }
+    } finally {
+      await prisma.unit.delete({ where: { id: extraUnit.id } });
     }
     if ((await readFin07dMutableLiquidations(databaseUrl)).includes(registeredId)) {
       throw new Error('FIN07D reset probe left a stale registered liquidation ID');
