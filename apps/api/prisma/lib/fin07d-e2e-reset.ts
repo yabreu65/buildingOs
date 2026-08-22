@@ -46,6 +46,7 @@ const ZERO_NET_EXPENSE_DESCRIPTION = '[FIN07D:ZERO_NET] Expense A1 5000';
 const ZERO_NET_INCOME_DESCRIPTION = '[FIN07D:ZERO_NET] Income BUILDING A1 5000';
 
 export const FIN07D_MUTABLE_MARKER = '[FIN07D:E2E:MUTABLE]';
+const FIN07D_DISPOSABLE_UNIT_PREFIX = 'E2E-';
 
 interface ResetEnvironment {
   readonly [key: string]: string | undefined;
@@ -487,6 +488,18 @@ export async function resetFin07dMutableState(
     }
     if (disposableIncomeIds.length > 0) {
       await tx.income.deleteMany({ where: { id: { in: disposableIncomeIds } } });
+    }
+
+    const disposableUnits = await tx.unit.findMany({
+      where: {
+        tenantId: baseline.tenantAId,
+        buildingId: baseline.buildingA1Id,
+        code: { startsWith: FIN07D_DISPOSABLE_UNIT_PREFIX },
+      },
+      select: { id: true },
+    });
+    if (disposableUnits.length > 0) {
+      await tx.unit.deleteMany({ where: { id: { in: disposableUnits.map((unit) => unit.id) } } });
     }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 

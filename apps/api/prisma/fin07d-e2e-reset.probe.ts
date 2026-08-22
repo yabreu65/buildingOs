@@ -380,7 +380,7 @@ async function main(): Promise<void> {
       data: {
         tenantId: before.tenantAId,
         buildingId: before.buildingA1Id,
-        code: `FIN07D-PROBE-${randomBytes(8).toString('hex')}`,
+        code: `E2E-FIN07D-PROBE-${randomBytes(8).toString('hex')}`,
         label: 'FIN07D extra unit isolation probe',
         unitType: 'APARTMENT',
         occupancyStatus: 'OCCUPIED',
@@ -410,6 +410,10 @@ async function main(): Promise<void> {
       if (remainingMarkerCount !== 0) {
         throw new Error('FIN07D reset probe left disposable mutable state behind');
       }
+      const extraUnitCount = await prisma.unit.count({ where: { id: extraUnit.id } });
+      if (extraUnitCount !== 0) {
+        throw new Error('FIN07D reset probe left an E2E-created unit behind');
+      }
       if (
         afterFirstReset.historicalV1LiquidationId !== before.historicalV1LiquidationId ||
         afterFirstReset.historicalV2LiquidationId !== before.historicalV2LiquidationId
@@ -417,7 +421,7 @@ async function main(): Promise<void> {
         throw new Error('FIN07D reset probe changed immutable historical liquidations');
       }
     } finally {
-      await prisma.unit.delete({ where: { id: extraUnit.id } });
+      await prisma.unit.deleteMany({ where: { id: extraUnit.id } });
     }
     if ((await readFin07dMutableLiquidations(databaseUrl)).includes(registeredId)) {
       throw new Error('FIN07D reset probe left a stale registered liquidation ID');
