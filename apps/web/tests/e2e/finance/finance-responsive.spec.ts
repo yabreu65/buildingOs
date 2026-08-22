@@ -156,10 +156,11 @@ test.describe('FIN-07D responsive finance surfaces', () => {
   test('mobile modal and desktop retain the disposable V3 equation', async ({ page }) => {
     test.setTimeout(180_000);
     const releaseMutationLock = await acquireFin07dMutationLock();
-    const fixture = await reset();
-    const tenantId = await loginAsFinanceAdmin(page);
-    const observability = attachBrowserObservability(page);
+    let observability: ReturnType<typeof attachBrowserObservability> | undefined;
     try {
+      const fixture = await reset();
+      const tenantId = await loginAsFinanceAdmin(page);
+      observability = attachBrowserObservability(page);
       await setViewport(page, 'mobile');
       await page.goto(`/${tenantId}/buildings/${fixture.buildingA1Id}/finance?period=2026-06`);
       await page.getByRole('button', { name: 'Liquidaciones' }).click();
@@ -193,8 +194,11 @@ test.describe('FIN-07D responsive finance surfaces', () => {
         await reset();
       } finally {
         await releaseMutationLock();
-        observability.detach();
+        observability?.detach();
       }
+    }
+    if (!observability) {
+      throw new Error('FIN07D responsive observability was not initialized');
     }
     assertClean(observability);
   });

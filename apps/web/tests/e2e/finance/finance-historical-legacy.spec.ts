@@ -296,7 +296,13 @@ test.describe.serial('FIN-07D historical liquidations and legacy backfill', () =
 
   test.beforeAll(async () => {
     releaseMutationLock = await acquireFin07dMutationLock();
-    fixture = await resetFin07d();
+    try {
+      fixture = await resetFin07d();
+    } catch (error: unknown) {
+      await releaseMutationLock();
+      releaseMutationLock = undefined;
+      throw error;
+    }
   });
 
   test.afterAll(async () => {

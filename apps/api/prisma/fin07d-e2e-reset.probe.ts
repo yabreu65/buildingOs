@@ -37,6 +37,12 @@ function expectGuardRejection(
   throw new Error(`FIN07D reset guard did not reject ${expectedMessage}`);
 }
 
+function expectGuardAcceptance(
+  environment: Parameters<typeof assertSafeFin07dResetEnvironment>[0],
+): void {
+  assertSafeFin07dResetEnvironment(environment);
+}
+
 async function expectAsyncRejection(
   action: () => Promise<unknown>,
   expectedMessage: RegExp,
@@ -209,6 +215,45 @@ async function expectRegisteredLiquidationRefusal(
 }
 
 async function main(): Promise<void> {
+  expectGuardAcceptance({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://localhost:5434/buildingos',
+    FIN07D_E2E_RESET: '1',
+  });
+  expectGuardAcceptance({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://127.0.0.1:5434/buildingos',
+    FIN07D_E2E_RESET: '1',
+  });
+  expectGuardAcceptance({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://localhost:5432/buildingos_test',
+    FIN07D_E2E_RESET: '1',
+  });
+  expectGuardRejection({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://localhost:5432/buildingos',
+    FIN07D_E2E_RESET: '1',
+  }, /unknown database target/);
+  expectGuardRejection({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://localhost:5434/buildingos_test',
+    FIN07D_E2E_RESET: '1',
+  }, /unknown database target/);
+  expectGuardRejection({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://localhost:5432/otra_db',
+    FIN07D_E2E_RESET: '1',
+  }, /unknown database target/);
+  expectGuardRejection({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://database.example.com:5432/buildingos_test',
+    FIN07D_E2E_RESET: '1',
+  }, /non-local database host/);
+  expectGuardRejection({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://localhost:5432/buildingos_test',
+  }, /requires FIN07D_E2E_RESET=1/);
   expectGuardRejection({
     NODE_ENV: 'production',
     DATABASE_URL: 'postgresql://localhost:5434/buildingos',

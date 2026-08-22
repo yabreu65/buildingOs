@@ -291,7 +291,13 @@ test.describe.serial('FIN-07D modern V3 and zero-net liquidations', () => {
 
   test.beforeEach(async () => {
     releaseMutationLock = await acquireFin07dMutationLock();
-    fixture = await runFin07dReset();
+    try {
+      fixture = await runFin07dReset();
+    } catch (error: unknown) {
+      await releaseMutationLock();
+      releaseMutationLock = undefined;
+      throw error;
+    }
   });
 
   test.afterEach(async () => {

@@ -28,9 +28,10 @@ const RESET_OPT_IN = 'FIN07D_E2E_RESET';
 const ALLOWED_NODE_ENVS = new Set(['development', 'test']);
 const ALLOWED_URL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const ALLOWED_SERVER_ADDRESSES = new Set(['127.0.0.1', '::1']);
-const EXPECTED_DATABASE = 'buildingos';
-const EXPECTED_PORT = 5434;
-const ALLOWED_CONNECTED_PORTS = new Set([5432, EXPECTED_PORT]);
+const ALLOWED_DATABASE_TARGETS = [
+  { database: 'buildingos', urlPort: 5434, serverPort: 5432 },
+  { database: 'buildingos_test', urlPort: 5432, serverPort: 5432 },
+] as const;
 
 const TENANT_A_NAME = 'Test Tenant A';
 const TENANT_B_NAME = 'Test Tenant B';
@@ -103,6 +104,18 @@ function requiredEnvironmentValue(value: string | undefined, name: string): stri
   return normalized;
 }
 
+function isAllowedUrlTarget(database: string, port: number): boolean {
+  return ALLOWED_DATABASE_TARGETS.some(
+    (target) => target.database === database && target.urlPort === port,
+  );
+}
+
+function isAllowedConnectedTarget(database: string, port: number): boolean {
+  return ALLOWED_DATABASE_TARGETS.some(
+    (target) => target.database === database && target.serverPort === port,
+  );
+}
+
 export function assertSafeFin07dResetEnvironment(environment: ResetEnvironment): URL {
   if (environment[RESET_OPT_IN] !== '1') {
     throw new Error(`FIN07D reset requires ${RESET_OPT_IN}=1`);
@@ -123,7 +136,7 @@ export function assertSafeFin07dResetEnvironment(environment: ResetEnvironment):
   if (!ALLOWED_URL_HOSTS.has(databaseUrl.hostname.toLowerCase())) {
     throw new Error('FIN07D reset refuses a non-local database host');
   }
-  if (database !== EXPECTED_DATABASE || port !== EXPECTED_PORT) {
+  if (!isAllowedUrlTarget(database, port)) {
     throw new Error('FIN07D reset refuses an unknown database target');
   }
 
@@ -143,9 +156,8 @@ async function assertConnectedDatabase(prisma: PrismaClient): Promise<void> {
     throw new Error('FIN07D reset could not inspect the active database connection');
   }
   if (
-    connection.database !== EXPECTED_DATABASE ||
     connection.port === null ||
-    !ALLOWED_CONNECTED_PORTS.has(connection.port)
+    !isAllowedConnectedTarget(connection.database, connection.port)
   ) {
     throw new Error('FIN07D reset connected to an unexpected database');
   }
