@@ -14,6 +14,7 @@ import {
 } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { buildSeedExpenseSnapshotItem, ensureSeedPublishedLiquidation } from "./lib/seed-liquidation-workflow";
+import { FIN07D_NORMAL_V3_PERIOD, ensureSeedFinanceFixture } from "./lib/seed-finance-fixture";
 
 const prisma = new PrismaClient();
 
@@ -630,6 +631,41 @@ async function main() {
     },
   });
   console.log(`✅ Finances: Liquidation + ${unitsA1.length} charges + 1 payment created`);
+
+  // ============================================================================
+  // FINANCE FIXTURE (FIN-07D Phase 2A): NORMAL_V3 preconditions
+  // ============================================================================
+  const fixtureFinanceResult = await ensureSeedFinanceFixture({
+    prisma,
+    tenantId: tenantA.id,
+    adminMembershipId: adminMembershipA.id,
+    adminRoles: ["TENANT_ADMIN"],
+    buildingA1Id: buildingA1.id,
+    buildingA2Id: buildingA2.id,
+    baseCurrency: "ARS",
+  });
+  console.log(
+    `✅ Finance fixture (NORMAL_V3, ${FIN07D_NORMAL_V3_PERIOD}): income BUILDING ${fixtureFinanceResult.incomeBuildingId} (${fixtureFinanceResult.incomeBuildingCreated ? 'created' : 'reused'}), ` +
+      `income TENANT_SHARED ${fixtureFinanceResult.incomeSharedId} (${fixtureFinanceResult.incomeSharedCreated ? 'created' : 'reused'}), ` +
+      `expense ${fixtureFinanceResult.expenseId} (${fixtureFinanceResult.expenseCreated ? 'created' : 'reused'}), ` +
+      `fund RESERVE ${fixtureFinanceResult.reserveFundId} (${fixtureFinanceResult.reserveFundCreated ? 'created' : 'reused'}), ` +
+      `fund SPECIAL ${fixtureFinanceResult.specialFundId} (${fixtureFinanceResult.specialFundCreated ? 'created' : 'reused'}), ` +
+      `policy ${fixtureFinanceResult.policyId} version ${fixtureFinanceResult.policyActiveVersionId} (${fixtureFinanceResult.policyCreated ? 'created' : 'reused'}), ` +
+      `ZERO_NET expense ${fixtureFinanceResult.zeroNetExpenseId} (${fixtureFinanceResult.zeroNetExpenseCreated ? 'created' : 'reused'}), ` +
+      `ZERO_NET income ${fixtureFinanceResult.zeroNetIncomeId} (${fixtureFinanceResult.zeroNetIncomeCreated ? 'created' : 'reused'})`,
+  );
+  console.log(
+    `✅ Historical V1/V2 fixture: V1=${fixtureFinanceResult.historicalV1LiquidationId} (${fixtureFinanceResult.historicalV1Created ? 'created' : 'reused'}, ${fixtureFinanceResult.historicalV1ChargeCount} charges), ` +
+      `V2=${fixtureFinanceResult.historicalV2LiquidationId} (${fixtureFinanceResult.historicalV2Created ? 'created' : 'reused'}, ${fixtureFinanceResult.historicalV2ChargeCount} charges)`,
+  );
+  console.log(
+    `✅ Legacy Income Backfill fixture: ` +
+      `AUTO_OFFSET=${fixtureFinanceResult.legacyBackfillAutoOffsetIncomeId} (${fixtureFinanceResult.legacyBackfillAutoOffsetCreated ? 'created' : 'reused'}), ` +
+      `ALREADY_PLAN=${fixtureFinanceResult.legacyBackfillAlreadyPlanIncomeId} (${fixtureFinanceResult.legacyBackfillAlreadyPlanCreated ? 'created' : 'reused'}, app ${fixtureFinanceResult.legacyBackfillAlreadyPlanApplicationCreated ? 'created' : 'reused'}), ` +
+      `RESERVE=${fixtureFinanceResult.legacyBackfillReserveFundIncomeId} (${fixtureFinanceResult.legacyBackfillReserveFundCreated ? 'created' : 'reused'}), ` +
+      `SPECIAL=${fixtureFinanceResult.legacyBackfillSpecialFundIncomeId} (${fixtureFinanceResult.legacyBackfillSpecialFundCreated ? 'created' : 'reused'}), ` +
+      `CONFLICT=${fixtureFinanceResult.legacyBackfillConflictIncomeId} (${fixtureFinanceResult.legacyBackfillConflictCreated ? 'created' : 'reused'}, liq ${fixtureFinanceResult.legacyBackfillConflictLiquidationCreated ? 'created' : 'reused'})`,
+  );
 
   // ============================================================================
   // RESIDENT COMMUNICATIONS & TICKETS
