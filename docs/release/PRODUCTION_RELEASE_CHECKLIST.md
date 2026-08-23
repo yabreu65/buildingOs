@@ -4,6 +4,11 @@ Use this checklist before every production deployment.
 
 ## Pre-release gates
 
+- [ ] `docs/release/PRODUCTION_DEPLOY_RUNBOOK.md` reviewed
+- [ ] PROD-00 target SHA and expected current checkout SHA recorded
+- [ ] `scripts/verify-production-migration-baseline.sh` passed read-only
+- [ ] Exact production custom dump restored successfully into an isolated temporary database
+- [ ] Pending migrations rehearsed with `prisma migrate deploy` on that restored copy
 - [ ] `npm run lint:ci`
 - [ ] `npm run build:ci`
 - [ ] `npm run test:ci`
@@ -21,6 +26,10 @@ Use this checklist before every production deployment.
 - [ ] No volume changes planned for this release
 - [ ] No shared postgres or redis container changes planned without approval
 - [ ] Database backup taken and verified
+- [ ] Previous API/Web image digests captured
+- [ ] Rollback compatibility is SAFE or rollback is explicitly unavailable
+- [ ] GitHub Environment `production` approval completed
+- [ ] Target SHA repeated exactly in `sha` and `approved_sha`
 - [ ] Rollback owner and rollback command documented
 - [ ] Deployment target and maintenance window confirmed
 
@@ -54,6 +63,9 @@ Use this checklist before every production deployment.
 - [ ] Rollback owner and rollback command documented
 - [ ] No production migration was run without a backup-confirmed plan
 - [ ] No destructive SQL was run against production
+- [ ] No direct `_prisma_migrations` update or unsupported `migrate resolve` was used
+- [ ] API/Web images have exact SHA tags and OCI revision labels
+- [ ] Only API/Web were recreated
 
 ## Readiness and observability
 

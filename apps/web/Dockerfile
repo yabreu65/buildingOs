@@ -35,6 +35,13 @@ RUN npm run build -w apps/web
 # ---- Stage 2: Runtime ----
 FROM node:20-alpine
 
+ARG BUILD_REVISION
+ARG BUILD_VERSION
+LABEL org.opencontainers.image.source="https://github.com/yabreu65/buildingOs" \
+      org.opencontainers.image.revision="$BUILD_REVISION" \
+      org.opencontainers.image.version="$BUILD_VERSION" \
+      org.opencontainers.image.title="BuildingOS Web"
+
 WORKDIR /app
 
 # Install curl for healthchecks

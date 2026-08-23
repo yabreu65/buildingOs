@@ -70,6 +70,13 @@ CMD ["migrate", "deploy", "--schema", "apps/api/prisma/schema.prisma"]
 # ---- Stage 4: Runtime ----
 FROM node:20-alpine AS runtime
 
+ARG BUILD_REVISION
+ARG BUILD_VERSION
+LABEL org.opencontainers.image.source="https://github.com/yabreu65/buildingOs" \
+      org.opencontainers.image.revision="$BUILD_REVISION" \
+      org.opencontainers.image.version="$BUILD_VERSION" \
+      org.opencontainers.image.title="BuildingOS API"
+
 WORKDIR /app
 
 # Install curl and openssl for healthchecks and Prisma engine

@@ -1,0 +1,111 @@
+name: Deploy production exact SHA
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact 40-character main commit SHA to deploy
+        required: true
+        type: string
+      approved_sha:
+        description: Repeat the explicitly approved SHA
+        required: true
+        type: string
+      expected_current_sha:
+        description: Production checkout SHA observed during preflight
+        required: true
+        type: string
+
+concurrency:
+  group: production-operations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy approved SHA to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      DEPLOY_SHA: ${{ inputs.sha }}
+      APPROVED_SHA: ${{ inputs.approved_sha }}
+      EXPECTED_CURRENT_SHA: ${{ inputs.expected_current_sha }}
+      SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT || '22' }}
+      API_HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL }}
+      API_READYZ_URL: ${{ vars.PRODUCTION_API_READYZ_URL }}
+      WEB_LOGIN_URL: ${{ vars.PRODUCTION_WEB_LOGIN_URL }}
+    steps:
+      - name: Checkout trusted production control
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate approved target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEPLOY_SHA" == "$APPROVED_SHA" ]]
+          git cat-file -e "$DEPLOY_SHA^{commit}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" FETCH_HEAD
+          test -x scripts/deploy-production.sh
+          test -x scripts/verify-production-migration-baseline.sh
+          test -f infra/docker/docker-compose.production.yml
+
+      - name: Run trusted production deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ -n "$API_HEALTH_URL" && -n "$API_READYZ_URL" && -n "$WEB_LOGIN_URL" ]]
+
+          install -d -m 700 "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/production-key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/production-known-hosts.XXXXXX")"
+          cleanup() { rm -f "$key_file" "$known_hosts_file"; }
+          trap cleanup EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(
+            -i "$key_file"
+            -o UserKnownHostsFile="$known_hosts_file"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+            -p "$SSH_PORT"
+          )
+          remote_args=()
+          for arg in "$DEPLOY_SHA" "$APPROVED_SHA" "$EXPECTED_CURRENT_SHA" "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "bash -s -- ${remote_args[*]}" < scripts/deploy-production.sh
+
+      - name: Record workflow evidence
+        shell: bash
+        run: |
+          {
+            echo "### Production deployment"
+            echo "- target SHA: \`$DEPLOY_SHA\`"
+            echo "- expected previous checkout SHA: \`$EXPECTED_CURRENT_SHA\`"
+            echo "- GitHub environment: \`production\`"
+            echo "- workflow run: \`$GITHUB_RUN_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
