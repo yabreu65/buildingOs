@@ -54,10 +54,14 @@ Require at least one reviewer. Do not store production credentials as repository
 - API and Web on `pawtech_public` plus `pawtech_internal`;
 - existing MinIO route and volume, with its current images pinned by digest;
 - dedicated migration profile;
-- storage initializer isolated behind the `storage-init` profile;
+- private-bucket initializer isolated behind the `storage-init` profile;
 - no PostgreSQL or Redis service recreation.
 
 Real values remain in `/opt/pawtech/env/`. The versioned Compose contains no credential defaults.
+
+The legacy ignored file `infra/docker/.env` may remain in the production checkout only while the root `.dockerignore` excludes nested `.env` files. Any other ignored environment file or sensitive artifact blocks deployment.
+
+Before the first controlled promotion, run the `storage-init` profile under separate production approval. It preserves the existing bucket and explicitly removes the legacy anonymous-download policy with `mc anonymous set none`; verify private access before continuing.
 
 ## Audited Prisma baseline
 
@@ -114,6 +118,8 @@ migration_count=<verified-count>
 Store receipts under `/opt/pawtech/apps/buildingos/compatibility/` with mode `0600`; never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
 
 Rollback does not check out old source or rebuild old images. It tags the captured digests locally, recreates only API/Web, verifies the unchanged migration count, then runs health smoke.
+
+Immediately before rollback, the script also requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If users have created any such data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
 
 ## Post-deploy smoke
 

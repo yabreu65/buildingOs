@@ -113,12 +113,13 @@ validate_toc() {
 
 cleanup_failed_temporary_restore() {
   local rc=$?
+  trap - EXIT
   if [[ "$CREATED_DATABASE" == true && "$TARGET_DATABASE" =~ $TEMP_DATABASE_PATTERN ]]; then
     run_dropdb >/dev/null 2>&1 || true
   fi
   exit "$rc"
 }
-trap cleanup_failed_temporary_restore ERR
+trap cleanup_failed_temporary_restore EXIT
 
 if [[ -n "$POSTGRES_CONTAINER" ]]; then
   command -v docker >/dev/null || fail "docker is required"
@@ -144,5 +145,5 @@ else
 fi)"
 [[ "$table_count" =~ ^[1-9][0-9]*$ ]] || fail "Restore verification found no public tables"
 
-trap - ERR
+trap - EXIT
 printf 'Custom PostgreSQL restore verified: database=%s tables=%s\n' "$TARGET_DATABASE" "$table_count"
