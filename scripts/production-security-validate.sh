@@ -7,7 +7,7 @@ readonly BACKUP_SCRIPT_SHA256='3cbf2bf191bd9a06e7bbf831848cfa2816cd80fca980593f8
 readonly BACKUP_SCRIPT_OWNER='yoryi'
 readonly BACKUP_SCRIPT_GROUP='yoryi'
 readonly BACKUP_SCRIPT_MODE='0775'
-readonly ROLLBACK_RECEIPT_VERSION='rollback-compatibility-receipt.v1'
+readonly ROLLBACK_RECEIPT_VERSION='rollback-compatibility-receipt.v2'
 readonly PRODUCTION_ROLLBACK_PROTECTED_DIR='/opt/pawtech/apps/buildingos/compatibility'
 readonly PRODUCTION_ROLLBACK_EXPECTED_OWNER='yoryi'
 readonly PRODUCTION_ROLLBACK_EXPECTED_GROUP='yoryi'
@@ -201,6 +201,18 @@ resolve_rollback_security_context() {
   fi
 }
 
+validate_rollback_protected_directory() {
+  local owner group mode
+
+  require_canonical_directory_without_symlinks "$ROLLBACK_SECURITY_PROTECTED_DIR" 'Rollback protected directory'
+  owner="$(file_owner "$ROLLBACK_SECURITY_PROTECTED_DIR")" || security_fail 'Unable to read rollback protected directory owner'
+  group="$(file_group "$ROLLBACK_SECURITY_PROTECTED_DIR")" || security_fail 'Unable to read rollback protected directory group'
+  mode="0$(file_mode "$ROLLBACK_SECURITY_PROTECTED_DIR")" || security_fail 'Unable to read rollback protected directory mode'
+  [[ "$owner" == "$ROLLBACK_SECURITY_EXPECTED_OWNER" ]] || security_fail 'Rollback protected directory owner mismatch'
+  [[ "$group" == "$ROLLBACK_SECURITY_EXPECTED_GROUP" ]] || security_fail 'Rollback protected directory group mismatch'
+  [[ "$mode" == '0700' ]] || security_fail 'Rollback protected directory mode must be exactly 0700'
+}
+
 validate_canonical_timestamp() {
   local timestamp="$1"
   local parsed
@@ -311,7 +323,7 @@ validate_rollback_receipt() {
   local expected_previous_sha="$3"
   local expected_api_digest="$4"
   local expected_web_digest="$5"
-  local receipt_parent receipt_name body receipt_id timestamp status target_sha previous_sha api_digest web_digest migration_count
+  local receipt_parent receipt_name body receipt_id timestamp compatibility target_sha previous_sha api_digest web_digest migration_count
   local -a lines=()
 
   [[ "$expected_target_sha" =~ ^[0-9a-f]{40}$ && "$expected_previous_sha" =~ ^[0-9a-f]{40}$ ]] \
@@ -320,7 +332,7 @@ validate_rollback_receipt() {
     || security_fail "Receipt digest arguments must be immutable SHA-256 digests"
 
   resolve_rollback_security_context
-  require_canonical_directory_without_symlinks "$ROLLBACK_SECURITY_PROTECTED_DIR" 'Rollback protected directory'
+  validate_rollback_protected_directory
   [[ "$receipt" == /* && "$receipt" != *'//'* && "$receipt" != *'/./'* && "$receipt" != *'/../'* && "$receipt" != */. && "$receipt" != */.. ]] \
     || security_fail "Compatibility receipt path is not lexically canonical"
   receipt_parent="${receipt%/*}"
@@ -338,11 +350,11 @@ validate_rollback_receipt() {
   while IFS= read -r line; do
     lines+=("$line")
   done <<< "$body"
-  [[ "${#lines[@]}" -eq 9 ]] || security_fail "Compatibility receipt must contain exactly nine ordered v1 fields"
-  [[ "${lines[0]}" == "version=$ROLLBACK_RECEIPT_VERSION" ]] || security_fail "Compatibility receipt version mismatch"
+  [[ "${#lines[@]}" -eq 9 ]] || security_fail "Compatibility receipt must contain exactly nine ordered v2 fields"
+  [[ "${lines[0]}" == "receipt_version=$ROLLBACK_RECEIPT_VERSION" ]] || security_fail "Compatibility receipt version mismatch"
   [[ "${lines[1]}" == receipt_id=* ]] || security_fail "Compatibility receipt field 2 must be receipt_id"
   [[ "${lines[2]}" == timestamp_utc=* ]] || security_fail "Compatibility receipt field 3 must be timestamp_utc"
-  [[ "${lines[3]}" == status=* ]] || security_fail "Compatibility receipt field 4 must be status"
+  [[ "${lines[3]}" == compatibility=* ]] || security_fail "Compatibility receipt field 4 must be compatibility"
   [[ "${lines[4]}" == target_sha=* ]] || security_fail "Compatibility receipt field 5 must be target_sha"
   [[ "${lines[5]}" == previous_sha=* ]] || security_fail "Compatibility receipt field 6 must be previous_sha"
   [[ "${lines[6]}" == previous_api_digest=* ]] || security_fail "Compatibility receipt field 7 must be previous_api_digest"
@@ -351,7 +363,7 @@ validate_rollback_receipt() {
 
   receipt_id="${lines[1]#receipt_id=}"
   timestamp="${lines[2]#timestamp_utc=}"
-  status="${lines[3]#status=}"
+  compatibility="${lines[3]#compatibility=}"
   target_sha="${lines[4]#target_sha=}"
   previous_sha="${lines[5]#previous_sha=}"
   api_digest="${lines[6]#previous_api_digest=}"
@@ -361,7 +373,7 @@ validate_rollback_receipt() {
   [[ "$receipt_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || security_fail "Receipt ID is invalid"
   [[ "$receipt_name" == "$receipt_id.receipt" ]] || security_fail "Receipt filename does not match receipt_id"
   validate_canonical_timestamp "$timestamp"
-  [[ "$status" == 'SAFE' ]] || security_fail "Rollback compatibility is not SAFE"
+  [[ "$compatibility" == 'SAFE' ]] || security_fail "Rollback compatibility is not SAFE"
   [[ "$target_sha" == "$expected_target_sha" ]] || security_fail "Receipt target SHA mismatch"
   [[ "$previous_sha" == "$expected_previous_sha" ]] || security_fail "Receipt previous SHA mismatch"
   [[ "$api_digest" == "$expected_api_digest" ]] || security_fail "Receipt API digest mismatch"
@@ -370,6 +382,88 @@ validate_rollback_receipt() {
 
   # shellcheck disable=SC2034 # Output consumed by rollback-production.sh after sourcing this file.
   VALIDATED_ROLLBACK_MIGRATION_COUNT="$migration_count"
+}
+
+validate_application_rollback_compatibility() {
+  local postgres_container="${1:-pawtech-postgres}"
+  local database_name="${2:-buildingos_db}"
+  local result
+
+  [[ "$postgres_container" =~ ^[A-Za-z0-9_.-]+$ ]] || security_fail 'Unsafe PostgreSQL container name'
+  [[ "$database_name" =~ ^[a-z0-9_]+$ ]] || security_fail 'Unsafe database name'
+  command -v docker >/dev/null 2>&1 || security_fail 'docker is required for compatibility validation'
+  docker inspect "$postgres_container" >/dev/null 2>&1 || security_fail 'PostgreSQL container is unavailable for compatibility validation'
+
+  result="$({
+    docker exec -i "$postgres_container" sh -lc \
+      'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' sh "$database_name" <<'SQL'
+BEGIN READ ONLY;
+SELECT CASE WHEN
+  (
+    SELECT count(*) FROM "RecurringExpense" WHERE "buildingId" IS NULL
+  )
+  + (SELECT count(*) FROM "ExchangeRate")
+  + (SELECT count(*) FROM "Expense" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Income" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Adjustment" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "PaymentAllocation" WHERE "paymentOriginalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Liquidation" WHERE "valuationMode" IS NOT NULL)
+  + (SELECT count(*) FROM "Fund")
+  + (SELECT count(*) FROM "FundTransaction")
+  + (SELECT count(*) FROM "IncomeApplication")
+  + (SELECT count(*) FROM "IncomePolicy")
+  + (SELECT count(*) FROM "LiquidationIncomeOffset") = 0
+THEN 'SAFE' ELSE 'UNSAFE' END;
+COMMIT;
+SQL
+  } 2>/dev/null)" || security_fail 'Unable to validate application rollback compatibility'
+
+  [[ "$result" == 'SAFE' ]] || security_fail 'New-schema data makes application rollback unsafe'
+  printf 'Application rollback compatibility verified: SAFE\n'
+}
+
+generate_rollback_compatibility_receipt() {
+  local target_sha="$1"
+  local previous_sha="$2"
+  local previous_api_digest="$3"
+  local previous_web_digest="$4"
+  local migration_count="$5"
+  local receipt_id receipt timestamp_utc
+
+  [[ "$target_sha" =~ ^[0-9a-f]{40}$ && "$previous_sha" =~ ^[0-9a-f]{40}$ ]] \
+    || security_fail 'Receipt generation requires exact commit SHAs'
+  [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || security_fail 'Receipt generation requires immutable image digests'
+  [[ "$migration_count" == '97' ]] || security_fail 'Receipt generation requires exactly 97 applied migrations'
+
+  resolve_rollback_security_context
+  if [[ ! -e "$ROLLBACK_SECURITY_PROTECTED_DIR" ]]; then
+    (umask 077 && mkdir "$ROLLBACK_SECURITY_PROTECTED_DIR") \
+      || security_fail 'Unable to create rollback protected directory'
+  fi
+  validate_rollback_protected_directory
+
+  receipt_id="rollback-$target_sha"
+  receipt="$ROLLBACK_SECURITY_PROTECTED_DIR/$receipt_id.receipt"
+  if [[ -e "$receipt" || -L "$receipt" ]]; then
+    validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+    printf '%s\n' "$receipt"
+    return
+  fi
+  timestamp_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || security_fail 'Unable to generate receipt timestamp'
+
+  if ! (
+    umask 077
+    set -o noclobber
+    printf 'receipt_version=%s\nreceipt_id=%s\ntimestamp_utc=%s\ncompatibility=SAFE\ntarget_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
+      "$ROLLBACK_RECEIPT_VERSION" "$receipt_id" "$timestamp_utc" "$target_sha" "$previous_sha" \
+      "$previous_api_digest" "$previous_web_digest" "$migration_count" > "$receipt"
+  ); then
+    security_fail 'Unable to create rollback compatibility receipt without clobbering'
+  fi
+  validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+  printf '%s\n' "$receipt"
 }
 
 production_security_usage() {

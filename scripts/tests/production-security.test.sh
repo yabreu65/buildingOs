@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -50,6 +51,7 @@ protected_dir="$tmp_root/protected"
 mock_bin="$tmp_root/mock-bin"
 docker_marker="$tmp_root/docker-called"
 mkdir -p "$protected_dir" "$mock_bin"
+chmod 700 "$protected_dir"
 
 current_owner="$(id -un)"
 current_group="$(id -gn)"
@@ -57,6 +59,14 @@ current_group="$(id -gn)"
 cat > "$mock_bin/docker" <<EOF
 #!/usr/bin/env bash
 touch '$docker_marker'
+if [[ "\$1" == 'inspect' ]]; then
+  exit 0
+fi
+if [[ "\$1" == 'exec' ]]; then
+  cat >/dev/null
+  printf '%s\n' "\${MOCK_COMPATIBILITY:-SAFE}"
+  exit 0
+fi
 exit 99
 EOF
 chmod 700 "$mock_bin/docker"
@@ -65,10 +75,10 @@ write_receipt() {
   local path="$1"
   local receipt_id="$2"
   cat > "$path" <<EOF
-version=rollback-compatibility-receipt.v1
+receipt_version=rollback-compatibility-receipt.v2
 receipt_id=$receipt_id
 timestamp_utc=2026-08-23T12:34:56Z
-status=SAFE
+compatibility=SAFE
 target_sha=$TARGET_SHA
 previous_sha=$PREVIOUS_SHA
 previous_api_digest=$API_DIGEST
@@ -172,7 +182,7 @@ expect_failure 'rejects a receipt not using exact 0600 before Docker' \
   run_invalid_rollback "$wrong_mode_receipt"
 
 malformed_receipt="$protected_dir/rollback-malformed.receipt"
-printf 'version=rollback-compatibility-receipt.v1\r\nreceipt_id=rollback-malformed\r\n' > "$malformed_receipt"
+printf 'receipt_version=rollback-compatibility-receipt.v2\r\nreceipt_id=rollback-malformed\r\n' > "$malformed_receipt"
 chmod 600 "$malformed_receipt"
 expect_failure 'rejects a malformed CRLF receipt before Docker' \
   run_invalid_rollback "$malformed_receipt"
@@ -202,5 +212,45 @@ expect_failure 'rejects a backup manifest with a mismatched SHA-256' \
 
 [[ ! -e "$docker_marker" ]] || fail_test 'failed validation must not invoke Docker'
 pass 'all failed rollback validations avoid Docker side effects'
+
+expect_success 'shared compatibility guard accepts safe data' \
+  env \
+    PATH="$mock_bin:$PATH" \
+    MOCK_COMPATIBILITY=SAFE \
+    bash -c 'source "$1"; validate_application_rollback_compatibility mock-postgres buildingos_db' _ "$VALIDATOR"
+
+expect_failure 'shared compatibility guard rejects unsafe data' \
+  env \
+    PATH="$mock_bin:$PATH" \
+    MOCK_COMPATIBILITY=UNSAFE \
+    bash -c 'source "$1"; validate_application_rollback_compatibility mock-postgres buildingos_db' _ "$VALIDATOR"
+
+generated_receipt="$(env \
+  TEST_MODE=1 \
+  ROLLBACK_PROTECTED_DIR="$protected_dir" \
+  ROLLBACK_EXPECTED_OWNER="$current_owner" \
+  ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST")" \
+  || fail_test 'receipt generation failed'
+[[ -f "$generated_receipt" ]] || fail_test 'receipt generation did not return a regular receipt path'
+pass 'generates and immediately validates a safe rollback receipt'
+
+reused_receipt="$(env \
+  TEST_MODE=1 \
+  ROLLBACK_PROTECTED_DIR="$protected_dir" \
+  ROLLBACK_EXPECTED_OWNER="$current_owner" \
+  ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST")" \
+  || fail_test 'valid receipt reuse failed'
+[[ "$reused_receipt" == "$generated_receipt" ]] || fail_test 'receipt reuse returned a different path'
+pass 'reuses a matching receipt after a retry'
+
+expect_failure 'rejects an existing receipt with mismatched immutable inputs' \
+  env \
+    TEST_MODE=1 \
+    ROLLBACK_PROTECTED_DIR="$protected_dir" \
+    ROLLBACK_EXPECTED_OWNER="$current_owner" \
+    ROLLBACK_EXPECTED_GROUP="$current_group" \
+    bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$TARGET_SHA" "$API_DIGEST" "$WEB_DIGEST"
 
 printf '1..%d\n' "$tests_run"

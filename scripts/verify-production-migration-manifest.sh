@@ -8,6 +8,7 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-97.tsv}"
+readonly METADATA_EXCEPTION_FILE="${METADATA_EXCEPTION_FILE:-$SCRIPT_DIR/manifests/production-migration-metadata-exceptions.tsv}"
 readonly MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/apps/api/prisma/migrations}"
 readonly POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-pawtech-postgres}"
 readonly DATABASE_NAME="${DATABASE_NAME:-buildingos_db}"
@@ -20,6 +21,7 @@ readonly TARGET_APPLIED=97
 readonly TARGET_FAILED=0
 readonly EXPECTED_PENDING=16
 readonly TAB=$'\t'
+readonly METADATA_EXCEPTION_VERSION=1
 
 MODE="${1:-}"
 PHASE="${2:-none}"
@@ -27,6 +29,8 @@ TMP_DIR=''
 LOCAL_NAMES=()
 STATE_NAMES=()
 STATE_CHECKSUMS=()
+HISTORICAL_EXCEPTION_NAME=''
+HISTORICAL_EXCEPTION_CHECKSUM=''
 
 EXPECTED_NAMES=(
   '20260805000000_add_receipt_generated_to_payment_audit_action'
@@ -137,6 +141,41 @@ validate_manifest() {
   done < "$MANIFEST_FILE"
 
   [[ "$line_number" -eq $((EXPECTED_PENDING + 3)) ]] || fail 'manifest_row_count_mismatch'
+}
+
+validate_metadata_exception_manifest() {
+  local line
+  local line_number=0
+  local exception_kind
+  local exception_name
+  local exception_checksum
+
+  [[ -f "$METADATA_EXCEPTION_FILE" && ! -L "$METADATA_EXCEPTION_FILE" ]] || fail 'metadata_exception_manifest_not_regular_file'
+  [[ -s "$METADATA_EXCEPTION_FILE" ]] || fail 'metadata_exception_manifest_empty'
+  [[ -z "$(tail -c 1 "$METADATA_EXCEPTION_FILE")" ]] || fail 'metadata_exception_manifest_missing_final_newline'
+
+  while IFS= read -r line; do
+    line_number=$((line_number + 1))
+    case "$line_number" in
+      1)
+        [[ "$line" == "manifest_version${TAB}${METADATA_EXCEPTION_VERSION}" ]] || fail 'metadata_exception_manifest_version_mismatch'
+        ;;
+      2)
+        IFS="$TAB" read -r exception_kind exception_name exception_checksum <<< "$line"
+        [[ "$exception_kind" == 'exception' ]] || fail 'metadata_exception_manifest_kind_mismatch'
+        [[ "$exception_name" == '20260719000000_add_receipt_sequence' ]] || fail 'metadata_exception_manifest_name_mismatch'
+        [[ "$exception_checksum" == '93c6d2c0b8c4468fea26489cfb4875bfdc6763ec0056487c21094eae0dbcb257' ]] || fail 'metadata_exception_manifest_checksum_mismatch'
+        HISTORICAL_EXCEPTION_NAME="$exception_name"
+        HISTORICAL_EXCEPTION_CHECKSUM="$exception_checksum"
+        ;;
+      *)
+        fail 'metadata_exception_manifest_extra_row'
+        ;;
+    esac
+  done < "$METADATA_EXCEPTION_FILE"
+
+  [[ "$line_number" -eq 2 && -n "$HISTORICAL_EXCEPTION_NAME" && -n "$HISTORICAL_EXCEPTION_CHECKSUM" ]] \
+    || fail 'metadata_exception_manifest_row_count_mismatch'
 }
 
 validate_local_migrations() {
@@ -253,6 +292,7 @@ validate_database_state() {
   local duplicate_name
 
   [[ -s "$state_file" ]] || fail 'database_state_empty'
+  validate_metadata_exception_manifest
   [[ -z "$(tail -c 1 "$state_file")" ]] || fail 'database_state_missing_final_newline'
   state_row_pattern="^([^[:space:]]+)${TAB}([0-9a-f]{64}|manual_insert)${TAB}(finished|failed)${TAB}(active|rolled_back)${TAB}([0-9]+)$"
 
@@ -272,7 +312,11 @@ validate_database_state() {
 
     [[ "$finish_state" == 'finished' ]] || fail 'database_failed_row'
     [[ "$rollback_state" == 'active' ]] || fail 'database_rolled_back_row'
-    [[ "$applied_steps" == '1' ]] || fail 'database_incomplete_row'
+    if [[ "$applied_steps" != '1' ]]; then
+      [[ "$name" == "$HISTORICAL_EXCEPTION_NAME" ]] || fail 'database_incomplete_row'
+      [[ "$checksum" == "$HISTORICAL_EXCEPTION_CHECKSUM" ]] || fail 'database_metadata_exception_checksum_mismatch'
+      [[ "$applied_steps" == '0' ]] || fail 'database_incomplete_row'
+    fi
 
     STATE_NAMES[${#STATE_NAMES[@]}]="$name"
     STATE_CHECKSUMS[${#STATE_CHECKSUMS[@]}]="$checksum"
@@ -308,6 +352,7 @@ case "$MODE" in
   verify-files)
     [[ "$#" -eq 1 ]] || fail 'usage'
     validate_manifest
+    validate_metadata_exception_manifest
     validate_local_migrations
     printf 'status=ok\tmode=verify-files\tmanifest_version=%s\tlocal=%s\tbaseline=%s\ttarget=%s\tpending=%s\n' \
       "$MANIFEST_VERSION" "${#LOCAL_NAMES[@]}" "$BASELINE_APPLIED" "$TARGET_APPLIED" "$EXPECTED_PENDING"

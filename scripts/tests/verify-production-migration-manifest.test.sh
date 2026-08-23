@@ -76,6 +76,14 @@ write_fixture() {
   done
 }
 
+write_historical_exception_fixture() {
+  local destination="$1"
+
+  write_fixture "$TMP_DIR/historical-base.tsv" 81
+  awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
+    "$TMP_DIR/historical-base.tsv" > "$destination"
+}
+
 run_fixture() {
   local fixture="$1"
   local phase="$2"
@@ -112,6 +120,32 @@ grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=81\t
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 pass_test 'exact pre state passes'
 
+write_historical_exception_fixture "$TMP_DIR/historical-exception.tsv"
+if ! run_fixture "$TMP_DIR/historical-exception.tsv" pre "$TMP_DIR/output.tsv"; then
+  fail_test "approved historical metadata exception failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+fi
+pass_test 'approved historical zero-step exception passes'
+
+awk -F "$TAB" -v OFS="$TAB" 'NR == 1 { $5 = 0 } { print }' \
+  "$TMP_DIR/pre.tsv" > "$TMP_DIR/non-approved-zero-step.tsv"
+assert_failure_code 'non-approved zero-step migration is rejected' \
+  "$TMP_DIR/non-approved-zero-step.tsv" pre 'database_incomplete_row'
+
+awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $2 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } { print }' \
+  "$TMP_DIR/historical-exception.tsv" > "$TMP_DIR/historical-wrong-checksum.tsv"
+assert_failure_code 'historical exception checksum mismatch is rejected' \
+  "$TMP_DIR/historical-wrong-checksum.tsv" pre 'database_metadata_exception_checksum_mismatch'
+
+awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $3 = "failed" } { print }' \
+  "$TMP_DIR/historical-exception.tsv" > "$TMP_DIR/historical-unfinished.tsv"
+assert_failure_code 'historical exception unfinished state is rejected' \
+  "$TMP_DIR/historical-unfinished.tsv" pre 'database_failed_row'
+
+awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $4 = "rolled_back" } { print }' \
+  "$TMP_DIR/historical-exception.tsv" > "$TMP_DIR/historical-rolled-back.tsv"
+assert_failure_code 'historical exception rolled-back state is rejected' \
+  "$TMP_DIR/historical-rolled-back.tsv" pre 'database_rolled_back_row'
+
 write_fixture "$TMP_DIR/post.tsv" 97
 if ! run_fixture "$TMP_DIR/post.tsv" post "$TMP_DIR/output.tsv"; then
   fail_test "exact post state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
@@ -119,6 +153,14 @@ fi
 grep -F $'status=ok\tmode=verify-db\tphase=post\tmanifest_version=1\tapplied=97\tfailed=0\tpending=0\ttarget=97' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact post state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 pass_test 'exact post state passes'
+
+write_fixture "$TMP_DIR/historical-post-base.tsv" 97
+awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
+  "$TMP_DIR/historical-post-base.tsv" > "$TMP_DIR/historical-post-exception.tsv"
+if ! run_fixture "$TMP_DIR/historical-post-exception.tsv" post "$TMP_DIR/output.tsv"; then
+  fail_test "approved historical post metadata exception failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+fi
+pass_test 'approved historical zero-step exception persists through post state'
 
 cp "$TMP_DIR/post.tsv" "$TMP_DIR/missing.tsv"
 missing_name="$(tail -n 1 "$TMP_DIR/missing.tsv" | cut -f 1)"
