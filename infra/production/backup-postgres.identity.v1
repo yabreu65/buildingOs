@@ -1,0 +1,6 @@
+version=backup-postgres.identity.v1
+path=/opt/pawtech/backups/scripts/backup-postgres.sh
+sha256=3cbf2bf191bd9a06e7bbf831848cfa2816cd80fca980593f84d3411cb3b14ff5
+owner=yoryi
+group=yoryi
+mode=0775

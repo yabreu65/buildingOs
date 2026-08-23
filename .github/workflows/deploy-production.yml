@@ -43,7 +43,7 @@ jobs:
       WEB_LOGIN_URL: ${{ vars.PRODUCTION_WEB_LOGIN_URL }}
     steps:
       - name: Checkout trusted production control
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -63,6 +63,12 @@ jobs:
           git merge-base --is-ancestor "$DEPLOY_SHA" FETCH_HEAD
           test -x scripts/deploy-production.sh
           test -x scripts/verify-production-migration-baseline.sh
+          test -f scripts/production-security-validate.sh && test ! -L scripts/production-security-validate.sh
+          test -f infra/production/backup-postgres.identity.v1 && test ! -L infra/production/backup-postgres.identity.v1
+          test -f scripts/verify-production-migration-manifest.sh && test ! -L scripts/verify-production-migration-manifest.sh
+          test -f scripts/manifests/production-migrations-81-to-97.tsv && test ! -L scripts/manifests/production-migrations-81-to-97.tsv
+          bash scripts/production-security-validate.sh backup-manifest infra/production/backup-postgres.identity.v1
+          bash scripts/verify-production-migration-manifest.sh verify-files
           test -f infra/docker/docker-compose.production.yml
 
       - name: Run trusted production deployment
@@ -97,7 +103,13 @@ jobs:
             remote_args+=("$quoted")
           done
 
-          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "bash -s -- ${remote_args[*]}" < scripts/deploy-production.sh
+          remote_command='set -Eeuo pipefail; control_dir="$(mktemp -d /tmp/buildingos-production-control.XXXXXX)"; cleanup() { rm -rf "$control_dir"; }; trap cleanup EXIT; tar -xzf - -C "$control_dir"; bash "$control_dir/scripts/deploy-production.sh"'
+          remote_command+=" ${remote_args[*]}"
+          tar -czf - \
+            scripts/deploy-production.sh \
+            scripts/production-security-validate.sh \
+            infra/production/backup-postgres.identity.v1 \
+            | ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"
 
       - name: Record workflow evidence
         shell: bash

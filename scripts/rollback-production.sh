@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# shellcheck source=scripts/production-security-validate.sh
+source "$SCRIPT_DIR/production-security-validate.sh"
+
 usage() {
   printf 'Usage: %s <expected_current_sha> <previous_sha> <previous_api_digest> <previous_web_digest> <compatibility_receipt> <api_health_url> <api_readyz_url> <web_login_url>\n' "${0##*/}" >&2
   exit 64
@@ -34,15 +39,13 @@ done
 for digest in "$PREVIOUS_API_DIGEST" "$PREVIOUS_WEB_DIGEST"; do
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Every image digest must be immutable"
 done
-[[ "$RECEIPT" == "$PRODUCTION_ROOT/compatibility/"*.receipt ]] || fail "Compatibility receipt must use the protected production path"
-[[ -r "$RECEIPT" ]] || fail "Compatibility receipt is missing"
-grep -Fx 'status=SAFE' "$RECEIPT" >/dev/null || fail "Rollback compatibility is not SAFE"
-grep -Fx "target_sha=$EXPECTED_CURRENT_SHA" "$RECEIPT" >/dev/null || fail "Receipt target SHA mismatch"
-grep -Fx "previous_sha=$PREVIOUS_SHA" "$RECEIPT" >/dev/null || fail "Receipt previous SHA mismatch"
-grep -Fx "previous_api_digest=$PREVIOUS_API_DIGEST" "$RECEIPT" >/dev/null || fail "Receipt API digest mismatch"
-grep -Fx "previous_web_digest=$PREVIOUS_WEB_DIGEST" "$RECEIPT" >/dev/null || fail "Receipt Web digest mismatch"
-migration_count="$(grep -E '^migration_count=[0-9]+$' "$RECEIPT" | cut -d= -f2)"
-[[ "$migration_count" =~ ^[0-9]+$ ]] || fail "Receipt migration count is invalid"
+validate_rollback_receipt \
+  "$RECEIPT" \
+  "$EXPECTED_CURRENT_SHA" \
+  "$PREVIOUS_SHA" \
+  "$PREVIOUS_API_DIGEST" \
+  "$PREVIOUS_WEB_DIGEST"
+readonly migration_count="$VALIDATED_ROLLBACK_MIGRATION_COUNT"
 
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
