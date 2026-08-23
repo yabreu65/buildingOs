@@ -20,9 +20,9 @@ The workflow must never be dispatched to compensate for a failed preflight.
 | Target | Exact 40-character SHA reachable from `origin/main` |
 | Race guard | `expected_current_sha` must equal the remote checkout |
 | Checkout | Clean, detached, exact target SHA |
-| Backup | New verified custom dump before checkout/build/migration |
+| Backup | Exact external script identity plus new verified custom dump before checkout/build/migration |
 | Images | SHA tag plus `org.opencontainers.image.revision` |
-| Migration | Dedicated `prisma migrate deploy` runner |
+| Migration | Immutable 81→97 manifest verified against files and database before and after the dedicated runner |
 | Runtime change | Recreate only `buildingos-api` and `buildingos-web` |
 | Infrastructure | Never recreate PostgreSQL, Redis, MinIO, Traefik, networks, or volumes |
 | Seeds | Prohibited |
@@ -84,7 +84,9 @@ Any mismatch outside these exact records or DDL invariants is a release blocker.
 
 ## Backup and restore
 
-The official backup produces PostgreSQL custom dumps and checksums. Validate custom dumps with `pg_restore`, not the legacy gzip/plain-SQL restore script.
+The workflow sends the versioned deploy script, security validator, and `infra/production/backup-postgres.identity.v1` together as a temporary remote control bundle outside the checkout. The bundle is removed when the remote command exits. Deployment stops unless the external backup script is a non-symlink regular file at the exact path, SHA-256, owner, group, and mode declared by the canonical manifest. Immediately before backup, the validator creates a private copy, verifies its SHA-256, revalidates the source identity, and executes only the pinned copy.
+
+The official backup produces PostgreSQL custom dumps and checksums. Deployment requires a newly created backup directory, verifies the dump checksum, and validates the custom archive with `pg_restore --list` before checkout, build, or migration. Validate custom dumps with `pg_restore`, not the legacy gzip/plain-SQL restore script.
 
 Temporary restore example:
 
@@ -100,6 +102,21 @@ The target database must not already exist. A failed temporary restore removes o
 
 Never invoke restore tooling from deploy or application rollback.
 
+For incident recovery, use the separately gated candidate-restore, swap, and reverse procedure in `docs/operations/production-postgres-custom-recovery.md`. It is never an automatic deploy fallback.
+
+## Exact migration transition
+
+`scripts/manifests/production-migrations-81-to-97.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 16 migration names and SHA-256 values, and a final state of 97 successful migrations with zero failed or rolled-back rows.
+
+The deploy sequence is fail-closed:
+
+1. The workflow validates the manifest and local migration files before opening SSH.
+2. After the exact target checkout, deployment revalidates local files from that target.
+3. Immediately before `prisma migrate deploy`, the database must match the exact 81-row baseline and contain none of the 16 pending rows.
+4. Immediately after migration, the database must contain exactly the 97 expected active, finished rows; all 16 new database checksums must match the manifest.
+
+Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. Do not edit migration history or bypass the verifier.
+
 ## Application rollback
 
 `scripts/rollback-production.sh` uses captured image digests and never changes the database. It requires a protected compatibility receipt created only after an isolated rehearsal against the migrated schema.
@@ -107,6 +124,9 @@ Never invoke restore tooling from deploy or application rollback.
 Receipt format:
 
 ```text
+version=rollback-compatibility-receipt.v1
+receipt_id=<unique-safe-id>
+timestamp_utc=<YYYY-MM-DDTHH:MM:SSZ>
 status=SAFE
 target_sha=<deployed-40-character-sha>
 previous_sha=<previous-40-character-sha>
@@ -115,7 +135,7 @@ previous_web_digest=sha256:<64-hex>
 migration_count=<verified-count>
 ```
 
-Store receipts under `/opt/pawtech/apps/buildingos/compatibility/` with mode `0600`; never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
+The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
 
 Rollback does not check out old source or rebuild old images. It tags the captured digests locally, recreates only API/Web, verifies the unchanged migration count, then runs health smoke.
 
@@ -141,3 +161,4 @@ Do not create financial movements or synthetic production data.
 - Application rollback is allowed only with a matching SAFE compatibility receipt.
 - Otherwise stop, preserve evidence, and forward-fix.
 - Database restore requires separate approval: `APPROVE DATABASE RESTORE`.
+- MinIO anonymous-policy change or restoration requires a separate approved window and the exact captured-policy procedure in `docs/operations/production-minio-policy-recovery.md`.
