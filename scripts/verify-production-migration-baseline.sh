@@ -99,6 +99,59 @@ SELECT CASE WHEN
       AND data_type = 'text'
       AND is_nullable = 'NO'
   )
+  AND (
+    SELECT count(*) = 6
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'ReceiptSequence'
+      AND (
+        (column_name = 'id' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL)
+        OR (column_name = 'tenantId' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL)
+        OR (column_name = 'year' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default IS NULL)
+        OR (column_name = 'lastNumber' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default = '0')
+        OR (column_name = 'createdAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default = 'CURRENT_TIMESTAMP')
+        OR (column_name = 'updatedAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default IS NULL)
+      )
+  )
+  AND (
+    SELECT count(*) = 6
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'ReceiptSequence'
+  )
+  AND (
+    SELECT count(*) = 1 AND bool_and(
+      conname = 'ReceiptSequence_pkey'
+      AND convalidated
+      AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+    )
+    FROM pg_constraint
+    WHERE conrelid = 'public."ReceiptSequence"'::regclass
+      AND contype = 'p'
+  )
+  AND (
+    SELECT count(*) = 1 AND bool_and(
+      conname = 'ReceiptSequence_tenantId_fkey'
+      AND convalidated
+      AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'tenantId' AND NOT attisdropped)]::smallint[]
+      AND confrelid = 'public."Tenant"'::regclass
+      AND confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."Tenant"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+      AND confdeltype = 'c'
+      AND confupdtype = 'c'
+    )
+    FROM pg_constraint
+    WHERE conrelid = 'public."ReceiptSequence"'::regclass
+      AND contype = 'f'
+  )
+  AND (
+    SELECT count(*) = 3
+      AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_pkey' AND i.indisunique AND i.indkey::text = '1') = 1
+      AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_year_key' AND i.indisunique AND i.indkey::text = '2 3') = 1
+      AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_idx' AND NOT i.indisunique AND i.indkey::text = '2') = 1
+    FROM pg_index i
+    JOIN pg_class c ON c.oid = i.indexrelid
+    WHERE i.indrelid = 'public."ReceiptSequence"'::regclass
+  )
 THEN 'OK' ELSE 'FAIL' END;
 SQL
 } 2>/dev/null)" || fail "Unable to verify the production migration baseline"

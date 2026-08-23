@@ -106,7 +106,7 @@ For incident recovery, use the separately gated candidate-restore, swap, and rev
 
 ## Exact migration transition
 
-`scripts/manifests/production-migrations-81-to-97.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 16 migration names and SHA-256 values, and a final state of 97 successful migrations with zero failed or rolled-back rows.
+`scripts/manifests/production-migrations-81-to-97.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 16 migration names and SHA-256 values, and a final state of 97 successful migrations with zero failed or rolled-back rows. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
 
 The deploy sequence is fail-closed:
 
@@ -115,31 +115,31 @@ The deploy sequence is fail-closed:
 3. Immediately before `prisma migrate deploy`, the database must match the exact 81-row baseline and contain none of the 16 pending rows.
 4. Immediately after migration, the database must contain exactly the 97 expected active, finished rows; all 16 new database checksums must match the manifest.
 
-Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. Do not edit migration history or bypass the verifier.
+Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. No zero-step row is accepted outside the immutable historical exception manifest. Do not edit migration history or bypass the verifier.
 
 ## Application rollback
 
-`scripts/rollback-production.sh` uses captured image digests and never changes the database. It requires a protected compatibility receipt created only after an isolated rehearsal against the migrated schema.
+`scripts/rollback-production.sh` uses captured image digests and never changes the database. The deploy script creates the protected compatibility receipt only after migration, post-verification, and the shared compatibility guard pass, and before API/Web recreation. If generation or immediate validation fails, deployment stops before application recreation.
 
 Receipt format:
 
 ```text
-version=rollback-compatibility-receipt.v1
+receipt_version=rollback-compatibility-receipt.v2
 receipt_id=<unique-safe-id>
 timestamp_utc=<YYYY-MM-DDTHH:MM:SSZ>
-status=SAFE
+compatibility=SAFE
 target_sha=<deployed-40-character-sha>
 previous_sha=<previous-40-character-sha>
 previous_api_digest=sha256:<64-hex>
 previous_web_digest=sha256:<64-hex>
-migration_count=<verified-count>
+migration_count=97
 ```
 
-The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
+The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with directory mode exactly `0700` and receipt mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
 
 Rollback does not check out old source or rebuild old images. It tags the captured digests locally, recreates only API/Web, verifies the unchanged migration count, then runs health smoke.
 
-Immediately before rollback, the script also requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If users have created any such data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
+Immediately before rollback, the script reuses the same read-only compatibility guard used by deploy and requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If users have created any such data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
 
 ## Post-deploy smoke
 

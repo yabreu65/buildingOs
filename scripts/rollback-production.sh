@@ -52,23 +52,7 @@ cd "$APP_DIR"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
-incompatible_rows="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''
-  SELECT
-    (SELECT count(*) FROM "RecurringExpense" WHERE "buildingId" IS NULL)
-    + (SELECT count(*) FROM "ExchangeRate")
-    + (SELECT count(*) FROM "Expense" WHERE "functionalAmountMinor" IS NOT NULL)
-    + (SELECT count(*) FROM "Income" WHERE "functionalAmountMinor" IS NOT NULL)
-    + (SELECT count(*) FROM "Adjustment" WHERE "functionalAmountMinor" IS NOT NULL)
-    + (SELECT count(*) FROM "Payment" WHERE "functionalAmountMinor" IS NOT NULL)
-    + (SELECT count(*) FROM "PaymentAllocation" WHERE "paymentOriginalAmountMinor" IS NOT NULL)
-    + (SELECT count(*) FROM "Liquidation" WHERE "valuationMode" IS NOT NULL)
-    + (SELECT count(*) FROM "Fund")
-    + (SELECT count(*) FROM "FundTransaction")
-    + (SELECT count(*) FROM "IncomeApplication")
-    + (SELECT count(*) FROM "IncomePolicy")
-    + (SELECT count(*) FROM "LiquidationIncomeOffset")
-'\''')"
-[[ "$incompatible_rows" == '0' ]] || fail "New-schema Finance data makes application rollback unsafe"
+validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db
 
 docker image inspect "$PREVIOUS_API_DIGEST" >/dev/null
 docker image inspect "$PREVIOUS_WEB_DIGEST" >/dev/null

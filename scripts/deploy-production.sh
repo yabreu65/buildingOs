@@ -54,6 +54,7 @@ NEW_API_DIGEST='unknown'
 NEW_WEB_DIGEST='unknown'
 BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
+ROLLBACK_RECEIPT='unknown'
 
 write_record() {
   local status="$1"
@@ -71,6 +72,7 @@ write_record() {
     printf 'new_web_digest=%s\n' "$NEW_WEB_DIGEST"
     printf 'backup_id=%s\n' "$BACKUP_ID"
     printf 'migration_count=%s\n' "$MIGRATION_COUNT"
+    printf 'rollback_receipt=%s\n' "$ROLLBACK_RECEIPT"
     printf 'database_rollback=never-automatic\n'
     printf 'services_recreated=buildingos-api buildingos-web\n'
     printf 'seeds=no\n'
@@ -220,6 +222,11 @@ POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
 MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$MIGRATION_COUNT" == '97' ]] || fail "Final migration count is not exactly 97"
+
+PHASE='rollback-compatibility'
+validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db
+ROLLBACK_RECEIPT="$(generate_rollback_compatibility_receipt \
+  "$TARGET_SHA" "$PREVIOUS_SHA" "$PREVIOUS_API_DIGEST" "$PREVIOUS_WEB_DIGEST" "$MIGRATION_COUNT")"
 
 PHASE='application-recreate'
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
