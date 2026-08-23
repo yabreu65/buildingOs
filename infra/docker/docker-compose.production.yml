@@ -1,0 +1,153 @@
+name: buildingos
+
+networks:
+  pawtech_public:
+    external: true
+  pawtech_internal:
+    external: true
+
+services:
+  buildingos-api:
+    image: buildingos-api:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+      args:
+        BUILD_REVISION: ${BUILD_REVISION:?BUILD_REVISION is required}
+        BUILD_VERSION: ${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: buildingos-api
+    restart: unless-stopped
+    env_file:
+      - ${API_ENV_FILE:-/opt/pawtech/env/buildingos.env}
+    networks:
+      - pawtech_public
+      - pawtech_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos-api.rule=Host(`buildingos-api.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos-api.entrypoints=websecure"
+      - "traefik.http.routers.buildingos-api.tls=true"
+      - "traefik.http.routers.buildingos-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos-api.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      buildingos-minio:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  buildingos-web:
+    image: buildingos-web:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ../../
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://buildingos-api.31-220-98-21.sslip.io
+        BUILD_REVISION: ${BUILD_REVISION:?BUILD_REVISION is required}
+        BUILD_VERSION: ${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: buildingos-web
+    restart: unless-stopped
+    env_file:
+      - ${WEB_ENV_FILE:-/opt/pawtech/env/buildingos-web.env}
+    networks:
+      - pawtech_public
+      - pawtech_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos.rule=Host(`buildingos.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos.entrypoints=websecure"
+      - "traefik.http.routers.buildingos.tls=true"
+      - "traefik.http.routers.buildingos.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos.loadbalancer.server.port=3000"
+    depends_on:
+      buildingos-api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  buildingos-migrate:
+    profiles: ["migrate"]
+    image: buildingos-migrate:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    env_file:
+      - ${API_ENV_FILE:-/opt/pawtech/env/buildingos.env}
+    networks:
+      - pawtech_public
+      - pawtech_internal
+    restart: "no"
+
+  buildingos-minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    container_name: buildingos-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+    volumes:
+      - buildingos_miniodata:/data
+    networks:
+      - pawtech_public
+      - pawtech_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=pawtech_public"
+      - "traefik.http.routers.buildingos-minio.rule=Host(`buildingos-minio.31-220-98-21.sslip.io`)"
+      - "traefik.http.routers.buildingos-minio.entrypoints=websecure"
+      - "traefik.http.routers.buildingos-minio.tls=true"
+      - "traefik.http.routers.buildingos-minio.tls.certresolver=letsencrypt"
+      - "traefik.http.services.buildingos-minio.loadbalancer.server.port=9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  buildingos-minio-init:
+    profiles: ["storage-init"]
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    container_name: buildingos-minio-init
+    restart: "no"
+    networks:
+      - pawtech_internal
+    depends_on:
+      buildingos-minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        mc alias set myminio http://buildingos-minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+        mc mb --ignore-existing "myminio/$${S3_BUCKET}";
+        mc anonymous set download "myminio/$${S3_BUCKET}";
+
+volumes:
+  buildingos_miniodata:
+    name: buildingos_buildingos_miniodata
