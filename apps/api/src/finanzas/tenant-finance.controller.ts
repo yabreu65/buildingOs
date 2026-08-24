@@ -169,6 +169,7 @@ export class TenantFinanceController {
       userRoles,
       membershipId,
       dto,
+      req.user.id,
     );
   }
 

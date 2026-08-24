@@ -1,4 +1,4 @@
-import { ChargeStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { ChargeStatus, PaymentAuditAction, PaymentStatus, Prisma } from '@prisma/client';
 import {
   aggregatePaymentSideAllocations,
   assertPaymentAllocationCurrencyMode,
@@ -22,13 +22,15 @@ describe('payment allocation transaction semantics', () => {
 
   function transaction(payment: Record<string, unknown>) {
     const update = jest.fn().mockResolvedValue(undefined);
+    const paymentAuditLog = { create: jest.fn().mockResolvedValue(undefined) };
     const tx = {
       payment: {
         findUnique: jest.fn().mockResolvedValue(payment),
         update,
       },
+      paymentAuditLog,
     } as unknown as Prisma.TransactionClient;
-    return { tx, update };
+    return { tx, update, paymentAuditLog };
   }
 
   it.each([
@@ -128,7 +130,7 @@ describe('payment allocation transaction semantics', () => {
   });
 
   it('reconciles a fully consumed pure SAME payment with a COMPLETE cross-capable snapshot', async () => {
-    const { tx, update } = transaction({
+    const { tx, update, paymentAuditLog } = transaction({
       id: 'payment', amount: 10000, currency: 'USD', status: PaymentStatus.APPROVED,
       ...completeSnapshot,
       paymentAllocations: [{
@@ -140,6 +142,12 @@ describe('payment allocation transaction semantics', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: PaymentStatus.RECONCILED }),
     }));
+    expect(paymentAuditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        paymentId: 'payment',
+        action: PaymentAuditAction.RECONCILED,
+      }),
+    });
   });
 
   it('reconciles a pure CROSS payment only after exact original and functional consumption', async () => {
@@ -351,6 +359,7 @@ describe('payment allocation transaction semantics', () => {
           calls.push(`payment:${data.status}`);
         }),
       },
+      paymentAuditLog: { create: jest.fn().mockResolvedValue(undefined) },
     } as unknown as Prisma.TransactionClient;
 
     await deleteLockedAllocation(tx, 'tenant', 'building', 'same-a');
@@ -403,6 +412,7 @@ describe('payment allocation transaction semantics', () => {
         })),
         update,
       },
+      paymentAuditLog: { create: jest.fn().mockResolvedValue(undefined) },
     } as unknown as Prisma.TransactionClient;
 
     await deleteLockedAllocation(tx, 'tenant', 'building', 'unresolved');

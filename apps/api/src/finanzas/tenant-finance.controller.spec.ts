@@ -260,6 +260,7 @@ describe('TenantFinanceController administrative portal access', () => {
       ['TENANT_ADMIN'],
       'member-1',
       {},
+      'user-1',
     );
     expect(service.rejectPaymentTenant).toHaveBeenCalledWith(
       'tenant-1',
