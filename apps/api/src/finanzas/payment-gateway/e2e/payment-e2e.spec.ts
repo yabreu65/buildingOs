@@ -118,6 +118,9 @@ describe('E2E Payment Flow', () => {
           },
         ),
       },
+      paymentAuditLog: {
+        create: jest.fn().mockResolvedValue({ id: 'payment-audit-e2e-1' }),
+      },
       processedWebhookEvent: {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'processed-e2e-1' }),
@@ -165,7 +168,9 @@ describe('E2E Payment Flow', () => {
     expect(preference.provider).toBe('mercadopago');
 
     // Step 2: Process webhook (charge PENDING + local SUBMITTED payment)
-    mockIdempotencyService.isProcessed.mockResolvedValue(false);
+    mockIdempotencyService.isProcessed
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
     mockIdempotencyService.markProcessed.mockResolvedValue(undefined);
     mockIdempotencyService.cacheProcessed.mockResolvedValue(undefined);
 
@@ -188,8 +193,32 @@ describe('E2E Payment Flow', () => {
         data: expect.objectContaining({ status: 'APPROVED', paymentEventId: 'mock-evt-1' }),
       }),
     );
+    expect(mockPrisma.payment.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { id: 'payment-e2e-1' },
+        data: expect.objectContaining({ status: 'RECONCILED' }),
+      }),
+    );
+    expect(mockPrisma.paymentAuditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: 'tenant-e2e',
+        paymentId: 'payment-e2e-1',
+        action: 'RECONCILED',
+      }),
+    });
+    expect(mockPrisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
     expect(mockIdempotencyService.isProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
     expect(mockIdempotencyService.cacheProcessed).toHaveBeenCalledWith('mock-evt-1', 'mercadopago');
+
+    const replay = await service.processWebhookEvent(
+      { action: 'payment.approved', data: { id: 'mock-evt-1' } },
+      'mock-signature',
+      'mercadopago',
+    );
+
+    expect(replay.chargeUpdated).toBe(false);
+    expect(mockPrisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.payment.update).toHaveBeenCalledTimes(2);
   });
 
   it('rejects duplicate webhook delivery (idempotency)', async () => {
