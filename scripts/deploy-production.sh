@@ -73,6 +73,7 @@ write_record() {
     printf 'backup_id=%s\n' "$BACKUP_ID"
     printf 'migration_count=%s\n' "$MIGRATION_COUNT"
     printf 'rollback_receipt=%s\n' "$ROLLBACK_RECEIPT"
+    printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
     printf 'database_rollback=never-automatic\n'
     printf 'services_recreated=buildingos-api buildingos-web\n'
     printf 'seeds=no\n'
@@ -224,7 +225,7 @@ MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "
 [[ "$MIGRATION_COUNT" == '97' ]] || fail "Final migration count is not exactly 97"
 
 PHASE='rollback-compatibility'
-validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db
+validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"
 ROLLBACK_RECEIPT="$(generate_rollback_compatibility_receipt \
   "$TARGET_SHA" "$PREVIOUS_SHA" "$PREVIOUS_API_DIGEST" "$PREVIOUS_WEB_DIGEST" "$MIGRATION_COUNT")"
 

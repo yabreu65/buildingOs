@@ -52,7 +52,7 @@ cd "$APP_DIR"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
-validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db
+validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
 
 docker image inspect "$PREVIOUS_API_DIGEST" >/dev/null
 docker image inspect "$PREVIOUS_WEB_DIGEST" >/dev/null
@@ -87,6 +87,7 @@ umask 077
   printf 'api_digest=%s\n' "$PREVIOUS_API_DIGEST"
   printf 'web_digest=%s\n' "$PREVIOUS_WEB_DIGEST"
   printf 'migration_count=%s\n' "$migration_count"
+  printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
   printf 'database_changed=no\n'
   printf 'database_restore=never-automatic\n'
 } > "$RECORD"

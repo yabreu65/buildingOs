@@ -12,6 +12,10 @@ readonly PRODUCTION_ROLLBACK_PROTECTED_DIR='/opt/pawtech/apps/buildingos/compati
 readonly PRODUCTION_ROLLBACK_EXPECTED_OWNER='yoryi'
 readonly PRODUCTION_ROLLBACK_EXPECTED_GROUP='yoryi'
 
+ROLLBACK_COMPATIBILITY_BASIS=''
+ROLLBACK_COMPATIBILITY_PREVIOUS_SHA=''
+ROLLBACK_COMPATIBILITY_TARGET_SHA=''
+
 security_fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
@@ -384,10 +388,51 @@ validate_rollback_receipt() {
   VALIDATED_ROLLBACK_MIGRATION_COUNT="$migration_count"
 }
 
+database_contracts_match() {
+  local previous_sha="$1"
+  local target_sha="$2"
+  local comparison_status
+
+  [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || security_fail 'Previous SHA is required for database contract comparison'
+  [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || security_fail 'Target SHA is required for database contract comparison'
+  command -v git >/dev/null 2>&1 || security_fail 'git is required for database contract comparison'
+  git cat-file -e "${previous_sha}^{commit}" >/dev/null 2>&1 \
+    || security_fail 'Previous SHA cannot be resolved for database contract comparison'
+  git cat-file -e "${target_sha}^{commit}" >/dev/null 2>&1 \
+    || security_fail 'Target SHA cannot be resolved for database contract comparison'
+
+  if git diff --no-ext-diff --no-textconv --quiet \
+    "$previous_sha" "$target_sha" -- \
+    apps/api/prisma/schema.prisma apps/api/prisma/migrations; then
+    return 0
+  else
+    comparison_status=$?
+  fi
+
+  [[ "$comparison_status" -eq 1 ]] \
+    || security_fail 'Unable to compare database contract between SHAs'
+  return 1
+}
+
 validate_application_rollback_compatibility() {
   local postgres_container="${1:-pawtech-postgres}"
   local database_name="${2:-buildingos_db}"
+  local previous_sha="${3:-}"
+  local target_sha="${4:-}"
   local result
+
+  [[ "$#" -eq 4 ]] || security_fail 'Application rollback compatibility requires previous and target SHAs'
+  ROLLBACK_COMPATIBILITY_BASIS=''
+  ROLLBACK_COMPATIBILITY_PREVIOUS_SHA=''
+  ROLLBACK_COMPATIBILITY_TARGET_SHA=''
+
+  if database_contracts_match "$previous_sha" "$target_sha"; then
+    ROLLBACK_COMPATIBILITY_BASIS='SAME_DB_CONTRACT'
+    ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$previous_sha"
+    ROLLBACK_COMPATIBILITY_TARGET_SHA="$target_sha"
+    printf 'Application rollback compatibility verified: SAFE (basis=SAME_DB_CONTRACT)\n'
+    return 0
+  fi
 
   [[ "$postgres_container" =~ ^[A-Za-z0-9_.-]+$ ]] || security_fail 'Unsafe PostgreSQL container name'
   [[ "$database_name" =~ ^[a-z0-9_]+$ ]] || security_fail 'Unsafe database name'
@@ -420,7 +465,10 @@ SQL
   } 2>/dev/null)" || security_fail 'Unable to validate application rollback compatibility'
 
   [[ "$result" == 'SAFE' ]] || security_fail 'New-schema data makes application rollback unsafe'
-  printf 'Application rollback compatibility verified: SAFE\n'
+  ROLLBACK_COMPATIBILITY_BASIS='DATA_COMPATIBILITY'
+  ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$previous_sha"
+  ROLLBACK_COMPATIBILITY_TARGET_SHA="$target_sha"
+  printf 'Application rollback compatibility verified: SAFE (basis=DATA_COMPATIBILITY)\n'
 }
 
 generate_rollback_compatibility_receipt() {
@@ -436,6 +484,10 @@ generate_rollback_compatibility_receipt() {
   [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || security_fail 'Receipt generation requires immutable image digests'
   [[ "$migration_count" == '97' ]] || security_fail 'Receipt generation requires exactly 97 applied migrations'
+  [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'SAME_DB_CONTRACT' || "$ROLLBACK_COMPATIBILITY_BASIS" == 'DATA_COMPATIBILITY' ]] \
+    || security_fail 'Receipt generation requires validated rollback compatibility'
+  [[ "$ROLLBACK_COMPATIBILITY_TARGET_SHA" == "$target_sha" && "$ROLLBACK_COMPATIBILITY_PREVIOUS_SHA" == "$previous_sha" ]] \
+    || security_fail 'Receipt generation inputs differ from validated rollback compatibility'
 
   resolve_rollback_security_context
   if [[ ! -e "$ROLLBACK_SECURITY_PROTECTED_DIR" ]]; then

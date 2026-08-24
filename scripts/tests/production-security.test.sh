@@ -71,6 +71,64 @@ exit 99
 EOF
 chmod 700 "$mock_bin/docker"
 
+fixture_repo="$tmp_root/database-contract-repo"
+mkdir -p "$fixture_repo"
+(
+  cd "$fixture_repo"
+  git init -q
+  git config core.hooksPath /dev/null
+  git config user.name 'BuildingOS Tests'
+  git config user.email 'tests@buildingos.invalid'
+  mkdir -p apps/api/prisma/migrations
+  printf 'schema-v1\n' > apps/api/prisma/schema.prisma
+  printf 'migration-v1\n' > apps/api/prisma/migrations/001_contract.sql
+  git add apps/api/prisma
+  git commit -qm 'fixture: initial database contract'
+)
+fixture_base_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+printf 'application-v2\n' > "$fixture_repo/application.txt"
+git -C "$fixture_repo" add application.txt
+git -C "$fixture_repo" commit -qm 'fixture: application-only release'
+fixture_same_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+git -C "$fixture_repo" switch --quiet --detach "$fixture_base_sha"
+printf 'schema-v2\n' > "$fixture_repo/apps/api/prisma/schema.prisma"
+git -C "$fixture_repo" add apps/api/prisma/schema.prisma
+git -C "$fixture_repo" commit -qm 'fixture: schema contract change'
+fixture_schema_changed_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+git -C "$fixture_repo" switch --quiet --detach "$fixture_base_sha"
+printf 'migration-v2\n' > "$fixture_repo/apps/api/prisma/migrations/001_contract.sql"
+git -C "$fixture_repo" add apps/api/prisma/migrations/001_contract.sql
+git -C "$fixture_repo" commit -qm 'fixture: migration contract change'
+fixture_migration_changed_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+run_contract_validation() {
+  local previous_sha="$1"
+  local target_sha="$2"
+  local mock_compatibility="$3"
+
+  env \
+    PATH="$mock_bin:$PATH" \
+    MOCK_COMPATIBILITY="$mock_compatibility" \
+    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' \
+    _ "$fixture_repo" "$VALIDATOR" "$previous_sha" "$target_sha"
+}
+
+expect_output_contains() {
+  local name="$1"
+  local expected="$2"
+  local output
+  shift 2
+  if ! output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail_test "$name"
+  fi
+  [[ "$output" == *"$expected"* ]] || fail_test "$name"
+  pass "$name"
+}
+
 write_receipt() {
   local path="$1"
   local receipt_id="$2"
@@ -217,20 +275,78 @@ expect_success 'shared compatibility guard accepts safe data' \
   env \
     PATH="$mock_bin:$PATH" \
     MOCK_COMPATIBILITY=SAFE \
-    bash -c 'source "$1"; validate_application_rollback_compatibility mock-postgres buildingos_db' _ "$VALIDATOR"
+    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' _ \
+    "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_schema_changed_sha"
 
 expect_failure 'shared compatibility guard rejects unsafe data' \
+  run_contract_validation "$fixture_base_sha" "$fixture_schema_changed_sha" UNSAFE
+
+expect_output_contains 'same schema and migrations with new data use SAME_DB_CONTRACT' \
+  'basis=SAME_DB_CONTRACT' \
+  run_contract_validation "$fixture_base_sha" "$fixture_same_sha" UNSAFE
+
+expect_failure 'schema changes with new data remain unsafe' \
+  run_contract_validation "$fixture_base_sha" "$fixture_schema_changed_sha" UNSAFE
+
+expect_failure 'migration changes with new data remain unsafe' \
+  run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" UNSAFE
+
+expect_failure 'same migration count with different migration content is not SAME_DB_CONTRACT' \
+  run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" UNSAFE
+
+expect_failure 'same schema with different migration content is not SAME_DB_CONTRACT' \
+  run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" UNSAFE
+
+expect_output_contains 'schema changes with zero new data use DATA_COMPATIBILITY' \
+  'basis=DATA_COMPATIBILITY' \
+  run_contract_validation "$fixture_base_sha" "$fixture_schema_changed_sha" SAFE
+
+expect_output_contains 'migration changes with zero new data use DATA_COMPATIBILITY' \
+  'basis=DATA_COMPATIBILITY' \
+  run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" SAFE
+
+expect_failure 'missing previous SHA fails closed' \
+  run_contract_validation aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$fixture_same_sha" UNSAFE
+
+expect_failure 'missing target SHA fails closed' \
+  run_contract_validation "$fixture_base_sha" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb UNSAFE
+
+git_error_bin="$tmp_root/git-error-bin"
+mkdir -p "$git_error_bin"
+real_git="$(command -v git)"
+cat > "$git_error_bin/git" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  cat-file) exit 0 ;;
+  diff) exit 2 ;;
+  *) exec "$real_git" "\$@" ;;
+EOF
+chmod 700 "$git_error_bin/git"
+
+expect_failure 'git comparison errors fail closed' \
   env \
-    PATH="$mock_bin:$PATH" \
-    MOCK_COMPATIBILITY=UNSAFE \
-    bash -c 'source "$1"; validate_application_rollback_compatibility mock-postgres buildingos_db' _ "$VALIDATOR"
+    PATH="$git_error_bin:$PATH" \
+    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' _ \
+    "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha"
+
+expect_failure 'receipt generation rejects unvalidated compatibility' \
+  env \
+    TEST_MODE=1 \
+    ROLLBACK_PROTECTED_DIR="$protected_dir" \
+    ROLLBACK_EXPECTED_OWNER="$current_owner" \
+    ROLLBACK_EXPECTED_GROUP="$current_group" \
+    bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+    "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
 
 generated_receipt="$(env \
   TEST_MODE=1 \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
   ROLLBACK_EXPECTED_OWNER="$current_owner" \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST")" \
+  PATH="$mock_bin:$PATH" \
+  MOCK_COMPATIBILITY=UNSAFE \
+  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 97' _ \
+  "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'receipt generation failed'
 [[ -f "$generated_receipt" ]] || fail_test 'receipt generation did not return a regular receipt path'
 pass 'generates and immediately validates a safe rollback receipt'
@@ -240,7 +356,10 @@ reused_receipt="$(env \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
   ROLLBACK_EXPECTED_OWNER="$current_owner" \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST")" \
+  PATH="$mock_bin:$PATH" \
+  MOCK_COMPATIBILITY=UNSAFE \
+  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 97' _ \
+  "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'valid receipt reuse failed'
 [[ "$reused_receipt" == "$generated_receipt" ]] || fail_test 'receipt reuse returned a different path'
 pass 'reuses a matching receipt after a retry'
@@ -251,6 +370,7 @@ expect_failure 'rejects an existing receipt with mismatched immutable inputs' \
     ROLLBACK_PROTECTED_DIR="$protected_dir" \
     ROLLBACK_EXPECTED_OWNER="$current_owner" \
     ROLLBACK_EXPECTED_GROUP="$current_group" \
-    bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ "$VALIDATOR" "$TARGET_SHA" "$TARGET_SHA" "$API_DIGEST" "$WEB_DIGEST"
+    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$4" "$5" "$6" 97' _ \
+    "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST"
 
 printf '1..%d\n' "$tests_run"
