@@ -290,6 +290,7 @@ validate_database_state() {
   local expected_index=0
   local state_name
   local duplicate_name
+  local observed_count
 
   [[ -s "$state_file" ]] || fail 'database_state_empty'
   validate_metadata_exception_manifest
@@ -322,8 +323,15 @@ validate_database_state() {
     STATE_CHECKSUMS[${#STATE_CHECKSUMS[@]}]="$checksum"
   done < "$state_file"
 
+  observed_count="${#STATE_NAMES[@]}"
   if [[ "$PHASE" == 'pre' ]]; then
-    expected_limit="$BASELINE_APPLIED"
+    if (( observed_count == BASELINE_APPLIED )); then
+      expected_limit="$BASELINE_APPLIED"
+    elif (( observed_count == TARGET_APPLIED )); then
+      expected_limit="$TARGET_APPLIED"
+    else
+      fail 'database_pre_state_count_invalid'
+    fi
   else
     expected_limit="$TARGET_APPLIED"
   fi
@@ -366,8 +374,10 @@ case "$MODE" in
     read_database_state "$TMP_DIR/state.tsv"
     validate_database_state "$TMP_DIR/state.tsv"
     if [[ "$PHASE" == 'pre' ]]; then
+      applied_count="${#STATE_NAMES[@]}"
+      pending_count="$((TARGET_APPLIED - applied_count))"
       printf 'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=%s\ttarget=%s\n' \
-        "$MANIFEST_VERSION" "$BASELINE_APPLIED" "$EXPECTED_PENDING" "$TARGET_APPLIED"
+        "$MANIFEST_VERSION" "$applied_count" "$pending_count" "$TARGET_APPLIED"
     else
       printf 'status=ok\tmode=verify-db\tphase=post\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=0\ttarget=%s\n' \
         "$MANIFEST_VERSION" "$TARGET_APPLIED" "$TARGET_APPLIED"

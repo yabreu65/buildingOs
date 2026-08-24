@@ -120,6 +120,16 @@ grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=81\t
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 pass_test 'exact pre state passes'
 
+write_fixture "$TMP_DIR/pre-target-base.tsv" 97
+awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
+  "$TMP_DIR/pre-target-base.tsv" > "$TMP_DIR/pre-target.tsv"
+if ! run_fixture "$TMP_DIR/pre-target.tsv" pre "$TMP_DIR/output.tsv"; then
+  fail_test "already-at-target pre state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+fi
+grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=97\tfailed=0\tpending=0\ttarget=97' \
+  "$TMP_DIR/output.tsv" >/dev/null || fail_test "already-at-target pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+pass_test 'already-at-target pre state passes'
+
 write_historical_exception_fixture "$TMP_DIR/historical-exception.tsv"
 if ! run_fixture "$TMP_DIR/historical-exception.tsv" pre "$TMP_DIR/output.tsv"; then
   fail_test "approved historical metadata exception failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
@@ -162,17 +172,31 @@ if ! run_fixture "$TMP_DIR/historical-post-exception.tsv" post "$TMP_DIR/output.
 fi
 pass_test 'approved historical zero-step exception persists through post state'
 
+write_fixture "$TMP_DIR/pre-82.tsv" 82
+assert_failure_code '82 applied migrations are rejected in pre state' \
+  "$TMP_DIR/pre-82.tsv" pre 'database_pre_state_count_invalid'
+
+write_fixture "$TMP_DIR/pre-96.tsv" 96
+assert_failure_code '96 applied migrations are rejected in pre state' \
+  "$TMP_DIR/pre-96.tsv" pre 'database_pre_state_count_invalid'
+
+cp "$TMP_DIR/post.tsv" "$TMP_DIR/pre-extra-98.tsv"
+printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/pre-extra-98.tsv"
+assert_failure_code '98 applied migrations are rejected in pre state' \
+  "$TMP_DIR/pre-extra-98.tsv" pre 'database_pre_state_count_invalid'
+
 cp "$TMP_DIR/post.tsv" "$TMP_DIR/missing.tsv"
 missing_name="$(tail -n 1 "$TMP_DIR/missing.tsv" | cut -f 1)"
 sed "/^${missing_name}${TAB}/d" "$TMP_DIR/missing.tsv" > "$TMP_DIR/missing-with-extra.tsv"
 printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/missing-with-extra.tsv"
-assert_failure_code 'missing row is rejected' "$TMP_DIR/missing-with-extra.tsv" post 'database_missing_row'
+assert_failure_code 'missing target row in 97 state is rejected' "$TMP_DIR/missing-with-extra.tsv" post 'database_missing_row'
 
 cp "$TMP_DIR/pre.tsv" "$TMP_DIR/extra.tsv"
 printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/extra.tsv"
-assert_failure_code 'extra row is rejected' "$TMP_DIR/extra.tsv" pre 'database_extra_row'
+assert_failure_code 'partial pre state is rejected' "$TMP_DIR/extra.tsv" pre 'database_pre_state_count_invalid'
 
 sed '$s/[0-9a-f]\{64\}/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' \
   "$TMP_DIR/post.tsv" > "$TMP_DIR/checksum.tsv"
@@ -191,7 +215,13 @@ printf '%s\n' "$duplicate_row" >> "$TMP_DIR/duplicate.tsv"
 assert_failure_code 'duplicate row is rejected' "$TMP_DIR/duplicate.tsv" pre 'database_duplicate_row'
 
 write_fixture "$TMP_DIR/wrong-baseline.tsv" 80
-assert_failure_code 'wrong baseline is rejected' "$TMP_DIR/wrong-baseline.tsv" pre 'database_missing_row'
+assert_failure_code 'missing baseline row is rejected' "$TMP_DIR/wrong-baseline.tsv" pre 'database_pre_state_count_invalid'
+
+awk -F "$TAB" -v OFS="$TAB" \
+  '$1 == "20260805000000_add_receipt_generated_to_payment_audit_action" { $2 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } { print }' \
+  "$TMP_DIR/pre-target.tsv" > "$TMP_DIR/pre-target-wrong-checksum.tsv"
+assert_failure_code 'target checksum mismatch is rejected in pre state' \
+  "$TMP_DIR/pre-target-wrong-checksum.tsv" pre 'database_pending_checksum_mismatch'
 
 write_fixture "$TMP_DIR/wrong-final-count.tsv" 96
 assert_failure_code 'wrong final count is rejected' "$TMP_DIR/wrong-final-count.tsv" post 'database_missing_row'
