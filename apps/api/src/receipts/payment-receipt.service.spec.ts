@@ -337,6 +337,12 @@ describe('PaymentReceiptService', () => {
         receiptError: null,
       }),
     }));
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        paymentId: 'payment-1',
+        action: 'RECEIPT_GENERATED',
+      }),
+    });
     expect(minio.presignDownload).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
       expect.stringContaining('/receipts/R-'),

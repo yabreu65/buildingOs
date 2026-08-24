@@ -870,6 +870,24 @@ export class FinanzasService {
           });
         }
 
+        await tx.paymentAuditLog.create({
+          data: {
+            tenantId,
+            paymentId: payment.id,
+            action: PaymentAuditAction.SUBMITTED,
+            membershipId: null,
+            reason: null,
+            comment: null,
+            metadata: {
+              amount: payment.amount,
+              currency: payment.currency,
+              method: payment.method,
+              reference: payment.reference,
+              submittedByUserId: userId,
+            },
+          },
+        });
+
         return payment;
       });
 
@@ -997,11 +1015,18 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: ApprovePaymentDto,
+    userId?: string,
   ): Promise<PaymentDetailDto> {
     // 1. Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'approve');
     }
+
+    const actorUserId = await this.resolvePaymentReviewerUserId(
+      tenantId,
+      membershipId,
+      userId,
+    );
 
     // 2. Approve payment with either resident-selected allocations or legacy FIFO allocation
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1045,16 +1070,15 @@ export class FinanzasService {
         payment,
         paidAt,
       );
-      const approvedPayment = await tx.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: PaymentStatus.APPROVED,
-          paidAt,
-          reviewedByMembershipId: membershipId,
-          updatedAt: new Date(),
-          ...snapshot,
-        },
-      });
+      const approvedPayment = await this.persistPaymentApproval(
+        tx,
+        tenantId,
+        payment,
+        membershipId,
+        actorUserId,
+        paidAt,
+        snapshot,
+      );
 
       // 3E1: the payment's allocations became effective at APPROVED, so the
       // affected charges must be recalculated from effective allocations only
@@ -1070,26 +1094,26 @@ export class FinanzasService {
       return approvedPayment;
     });
 
-    // Audit: PAYMENT_APPROVE
+    // Global audit remains best-effort; the financial PaymentAuditLog above is strict.
     void this.auditService.createLog({
       tenantId,
-      actorUserId: membershipId,
+      actorUserId,
+      actorMembershipId: membershipId,
       action: AuditAction.PAYMENT_APPROVE,
       entityType: 'Payment',
       entityId: paymentId,
       metadata: {
         amount: result.amount,
-        paidAt: result.paidAt,
+        paidAt: result.paidAt?.toISOString() ?? null,
         fifoAllocated: result.unitId ? true : false,
       },
     });
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
-    void this.sendPaymentReceivedNotification(tenantId, result, actorUserId ?? undefined);
+    void this.sendPaymentReceivedNotification(tenantId, result, actorUserId);
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
+    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
     });
 
@@ -3097,11 +3121,18 @@ export class FinanzasService {
     userRoles: string[],
     membershipId: string,
     dto: ApprovePaymentDto,
+    userId?: string,
   ): Promise<PaymentDetailDto> {
     // Permission check
     if (!this.validators.canReviewPayments(userRoles)) {
       this.validators.throwForbidden('payments', 'approve');
     }
+
+    const actorUserId = await this.resolvePaymentReviewerUserId(
+      tenantId,
+      membershipId,
+      userId,
+    );
 
     // Execute approval only when the submitted payment already carries explicit allocations
     let approvedPaymentResult: Payment | null = null;
@@ -3142,17 +3173,15 @@ export class FinanzasService {
         payment,
         paidAt,
       );
-      const approvedPayment = await tx.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: PaymentStatus.APPROVED,
-          reviewedByMembershipId: membershipId,
-          reviewedAt: new Date(),
-          paidAt,
-          updatedAt: new Date(),
-          ...snapshot,
-        },
-      });
+      const approvedPayment = await this.persistPaymentApproval(
+        tx,
+        tenantId,
+        payment,
+        membershipId,
+        actorUserId,
+        paidAt,
+        snapshot,
+      );
 
       approvedPaymentResult = approvedPayment;
 
@@ -3168,34 +3197,15 @@ export class FinanzasService {
         approvedPaymentResult = reconciledPayment;
       }
 
-      // Registrar auditoría de aprobación
-      await tx.paymentAuditLog.create({
-        data: {
-          tenantId,
-          paymentId,
-          action: PaymentAuditAction.APPROVED,
-          membershipId,
-          reason: null,
-          comment: null,
-          metadata: {
-            amount: payment.amount,
-            currency: payment.currency,
-            method: payment.method,
-            reference: payment.reference,
-          },
-        },
-      });
-
       return approvedPaymentResult;
     });
 
     // Send notification to resident about approval (outside transaction, using returned payment)
     if (approvedPaymentResult) {
-      const actorUserId = await this.resolveMembershipUserId(tenantId, membershipId);
-      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId ?? undefined);
+      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId);
       
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId ?? undefined).catch((err) => {
+      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
         this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
       });
     }
@@ -3731,6 +3741,68 @@ export class FinanzasService {
     });
 
     return membership?.userId ?? null;
+  }
+
+  private async persistPaymentApproval(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    payment: PaymentWithAllocations,
+    membershipId: string,
+    actorUserId: string,
+    paidAt: Date,
+    snapshot: Record<string, unknown>,
+  ): Promise<Payment> {
+    const approvedAt = new Date();
+    const approvedPayment = await tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: PaymentStatus.APPROVED,
+        paidAt,
+        reviewedByMembershipId: membershipId,
+        reviewedAt: approvedAt,
+        approvedAt,
+        approvedByUserId: actorUserId,
+        updatedAt: new Date(),
+        ...snapshot,
+      },
+    });
+
+    await tx.paymentAuditLog.create({
+      data: {
+        tenantId,
+        paymentId: payment.id,
+        action: PaymentAuditAction.APPROVED,
+        membershipId,
+        reason: null,
+        comment: null,
+        metadata: {
+          amount: payment.amount,
+          currency: payment.currency,
+          method: payment.method,
+          reference: payment.reference,
+          paidAt: paidAt.toISOString(),
+          approvedByUserId: actorUserId,
+        },
+      },
+    });
+
+    return approvedPayment;
+  }
+
+  private async resolvePaymentReviewerUserId(
+    tenantId: string,
+    membershipId: string,
+    requestedUserId?: string,
+  ): Promise<string> {
+    const membershipUserId = await this.resolveMembershipUserId(tenantId, membershipId);
+    if (!membershipUserId) {
+      throw new ConflictException('Reviewer membership is not valid for this tenant');
+    }
+    if (requestedUserId && requestedUserId !== membershipUserId) {
+      throw new ForbiddenException('Reviewer membership does not belong to the authenticated user');
+    }
+
+    return membershipUserId;
   }
 
   /**

@@ -119,6 +119,9 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
           return Promise.resolve({ id: 'alloc-1', ...data });
         }),
       },
+      paymentAuditLog: {
+        create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
       processedWebhookEvent: {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'processed-1' }),

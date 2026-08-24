@@ -171,6 +171,7 @@ describe('FinanzasService', () => {
     notificationsService = module.get(NotificationsService) as never;
     expensesService = module.get<ExpensesService>(ExpensesService);
     receiptService = module.get<PaymentReceiptService>(PaymentReceiptService);
+    jest.spyOn(service as any, 'resolvePaymentReviewerUserId').mockResolvedValue('user-123');
 
     jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       return callback(prismaService as never);
@@ -642,6 +643,13 @@ describe('FinanzasService', () => {
           }),
         }),
       );
+      expect(prismaService.paymentAuditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tenantId,
+          paymentId: 'payment-123',
+          action: 'SUBMITTED',
+        }),
+      });
       expect(prismaService.$executeRaw).toHaveBeenCalledTimes(2);
     });
 
@@ -1284,9 +1292,44 @@ describe('FinanzasService', () => {
           data: expect.objectContaining({
             status: PaymentStatus.APPROVED,
             reviewedByMembershipId: membershipId,
+            reviewedAt: expect.any(Date),
+            approvedAt: expect.any(Date),
+            approvedByUserId: 'user-123',
           }),
         }),
       );
+      expect(prismaService.paymentAuditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tenantId,
+          paymentId,
+          action: 'APPROVED',
+          membershipId,
+        }),
+      });
+      expect(auditService.createLog).toHaveBeenCalledWith(expect.objectContaining({
+        actorUserId: 'user-123',
+        metadata: expect.objectContaining({
+          paidAt: '2026-07-24T12:00:00.000Z',
+        }),
+      }));
+    });
+
+    it('does not complete approval when the financial audit event fails', async () => {
+      jest.spyOn(prismaService.paymentAuditLog, 'create').mockRejectedValueOnce(
+        new Error('payment audit unavailable'),
+      );
+
+      await expect(service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      )).rejects.toThrow('payment audit unavailable');
+
+      expect(receiptService.ensureReceiptForPayment).not.toHaveBeenCalled();
+      expect(auditService.createLog).not.toHaveBeenCalled();
     });
 
     it('rejects approval when a payment has no explicit allocations', async () => {
@@ -1768,6 +1811,9 @@ describe('FinanzasService', () => {
           data: expect.objectContaining({
             status: PaymentStatus.APPROVED,
             reviewedByMembershipId: membershipId,
+            reviewedAt: expect.any(Date),
+            approvedAt: expect.any(Date),
+            approvedByUserId: 'user-123',
           }),
         }),
       );
@@ -1780,6 +1826,19 @@ describe('FinanzasService', () => {
           }),
         }),
       );
+      expect(prismaService.paymentAuditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tenantId,
+          paymentId,
+          action: 'APPROVED',
+          membershipId,
+        }),
+      });
+      expect(
+        (prismaService.paymentAuditLog.create as jest.Mock).mock.calls.map(
+          ([call]) => call.data.action,
+        ),
+      ).toEqual(['APPROVED', 'RECONCILED']);
     });
 
     it('rejects tenant approval when a submitted payment has no explicit allocations', async () => {
@@ -2200,6 +2259,7 @@ describe('FinanzasService', () => {
       expect(prismaService.paymentAllocation.create).toHaveBeenCalledTimes(0);
       expect(prismaService.charge.update).toHaveBeenCalledTimes(0);
       expect(auditService.createLog).toHaveBeenCalledTimes(1);
+      expect(prismaService.paymentAuditLog.create).toHaveBeenCalledTimes(1);
       expect(receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
       expect(prismaService.payment.update).toHaveBeenCalledTimes(1);
     });

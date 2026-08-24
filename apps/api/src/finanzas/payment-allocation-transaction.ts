@@ -1,5 +1,6 @@
 import {
   ChargeStatus,
+  PaymentAuditAction,
   PaymentStatus,
   Prisma,
   type PaymentAllocation,
@@ -319,6 +320,20 @@ export async function reconcilePaymentWhenConsumed(
       where: { id: paymentId },
       data: { status: nextStatus, updatedAt: new Date() },
     });
+
+    if (nextStatus === PaymentStatus.RECONCILED) {
+      await tx.paymentAuditLog.create({
+        data: {
+          tenantId: payment.tenantId,
+          paymentId,
+          action: PaymentAuditAction.RECONCILED,
+          membershipId: null,
+          reason: null,
+          comment: null,
+          metadata: { status: PaymentStatus.RECONCILED },
+        },
+      });
+    }
   }
 }
 
