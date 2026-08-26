@@ -45,7 +45,7 @@ The command performs its environment guard before constructing Prisma, then vali
 | Administradora Multi | Los Robles / El Parque | RESIDENT | `resident.multi@buildingos.local` | ROB-102, PAR-301 | One resident with two properties |
 | Administradora Multi | El Parque (`parque`) | RESIDENT | `resident.parque101@buildingos.local` | PAR-101 | One payment allocated across two charges |
 | Administradora Multi | El Parque (`parque`) | RESIDENT | `resident.parque102@buildingos.local` | PAR-102 | Two unpaid charges |
-| Administradora Multi | El Parque (`parque`) | RESIDENT | `resident.parque103@buildingos.local` | PAR-103 | Partial payment and allocation |
+| Administradora Multi | El Parque (`parque`) | RESIDENT | `resident.parque103@buildingos.local` | PAR-103 | Full settlement payment |
 | Administradora Multi | Las Palmas (`palmas`) | RESIDENT | `resident.palmas101@buildingos.local` | PAL-101 | USD identity valuation snapshot |
 | Administradora Multi | Las Palmas (`palmas`) | RESIDENT | `resident.palmas102@buildingos.local` | PAL-102 | VES-to-USD valuation at 0.025 |
 | Administradora Multi | Las Palmas (`palmas`) | RESIDENT | `resident.palmas103@buildingos.local` | PAL-103 | COP-to-USD valuation at 0.00025 |
@@ -53,7 +53,7 @@ The command performs its environment guard before constructing Prisma, then vali
 | QA / Edge Cases | QA Building (`qa`) | TENANT_ADMIN + RESIDENT | `admin-resident.qa@buildingos.local` | QA-101 | One membership with two roles |
 | QA / Edge Cases | QA Building (`qa`) | RESIDENT | `resident.multiunit.qa@buildingos.local` | QA-102, QA-106 | Multi-unit resident; QA-106 has zero balance |
 | QA / Edge Cases | QA Building (`qa`) | RESIDENT | `resident.delinquent.qa@buildingos.local` | QA-104 | Historic delinquent charge and open ticket |
-| QA / Edge Cases | QA Building (`qa`) | RESIDENT | `resident.partial.qa@buildingos.local` | QA-105 | Partial payment and closed ticket |
+| QA / Edge Cases | QA Building (`qa`) | RESIDENT | `resident.partial.qa@buildingos.local` | QA-105 | Full payment and closed ticket |
 
 ## Vacant-unit scenarios
 
@@ -69,5 +69,5 @@ The seed does **not** fabricate a `receiptDocumentId`/Minio object for receipts:
 
 - Tenant 01: five ARS charges, two reconciled payments with Payment receipt fields, one open ticket, and one sent in-app communication with five resident receipts.
 - Tenant 02: two simple ARS charges and one reconciled payment with Payment receipt fields.
-- Tenant 03: USD functional currency, split and partial allocations, USD identity valuation, VES/COP conversion snapshots, two dated exchange rates, and two validated adjustments. No resident credit is modeled.
-- Tenant 04: historic delinquency, partial payment, zero balance, one validated historical adjustment, and both open and closed ticket states.
+- Tenant 03: USD functional currency, split allocation across two complete charges, USD identity valuation, VES/COP conversion snapshots, two dated exchange rates, and two validated adjustments. No resident credit is modeled.
+- Tenant 04: historic delinquency, full payments, zero balance, one validated historical adjustment, and both open and closed ticket states.

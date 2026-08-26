@@ -1,6 +1,7 @@
 import { ChargeStatus, PaymentAuditAction, PaymentStatus, Prisma } from '@prisma/client';
 import {
   aggregatePaymentSideAllocations,
+  assertFifoNoPartialAllocation,
   assertPaymentAllocationCurrencyMode,
   calculateChargeAvailableOutstanding,
   classifyPaymentSideAllocations,
@@ -614,5 +615,139 @@ describe('payment allocation transaction semantics', () => {
       id: 'payment', amount: 10000, currency: 'USD', ...snapshot,
       paymentAllocations: [{ amount: 100000, paymentOriginalAmountMinor: 2740, charge: { currency: 'VES' } }],
     })).toThrow(expect.objectContaining({ response: { statusCode: 422, error } }));
+  });
+});
+
+describe('assertFifoNoPartialAllocation (product contract: no partial + oldest-first)', () => {
+  const charge = (
+    id: string,
+    amount: number,
+    allocations: Array<{ paymentId: string; status: PaymentStatus; amount: number }>,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    id,
+    tenantId: 'tenant',
+    buildingId: 'building',
+    unitId: 'unit',
+    amount,
+    currency: 'ARS',
+    canceledAt: null,
+    dueDate: new Date(`2026-0${id === 'c1' ? '1' : id === 'c2' ? '2' : '3'}-10T00:00:00.000Z`),
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    paymentAllocations: allocations.map((allocation) => ({
+      amount: allocation.amount,
+      payment: { id: allocation.paymentId, status: allocation.status },
+    })),
+    ...overrides,
+  });
+
+  const txWithCharges = (charges: unknown[]) => ({
+    charge: {
+      findMany: jest.fn().mockResolvedValue(charges),
+    },
+  } as unknown as Prisma.TransactionClient);
+
+  const scope = {
+    tenantId: 'tenant',
+    buildingId: 'building',
+    paymentId: 'payment-p',
+    chargeId: 'c2',
+    unitId: 'unit',
+  };
+
+  it('A: accepts an exact allocation for the oldest outstanding charge', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, []),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, { ...scope, chargeId: 'c1' }, 3000),
+    ).resolves.toBeUndefined();
+  });
+
+  it('B: accepts full settlement of the next-oldest charge after the oldest is fully claimed by the same payment', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, [{ paymentId: 'payment-p', status: PaymentStatus.SUBMITTED, amount: 3000 }]),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).resolves.toBeUndefined();
+  });
+
+  it('C: rejects an insufficient amount for the oldest charge (partial payment)', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, []),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, { ...scope, chargeId: 'c1' }, 1000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'La asignación debe completar el saldo pendiente del cargo.' },
+    });
+  });
+
+  it('D: rejects allocating to a newer charge while an older eligible charge remains outstanding', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, []),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.' },
+    });
+  });
+
+  it('E: rejects an amount that fully settles the first charge but partially enters the second', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, []),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.' },
+    });
+  });
+
+  it('F: accepts a top-up that completes a legacy partial claim of the same payment on the oldest charge', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, [{ paymentId: 'payment-p', status: PaymentStatus.APPROVED, amount: 2000 }]),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, { ...scope, chargeId: 'c1' }, 1000),
+    ).resolves.toBeUndefined();
+  });
+
+  it('G: breaks the eligible prefix at a pending reservation from another SUBMITTED payment', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, [{ paymentId: 'other', status: PaymentStatus.SUBMITTED, amount: 3000 }]),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'No hay cargos elegibles para asignar a este pago.' },
+    });
+  });
+
+  it('H: skips charges already fully settled by other effective payments', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, [{ paymentId: 'other', status: PaymentStatus.APPROVED, amount: 3000 }]),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).resolves.toBeUndefined();
+  });
+
+  it('I: rejects when the unit has no eligible charges', async () => {
+    const tx = txWithCharges([]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'No hay cargos elegibles para asignar a este pago.' },
+    });
   });
 });

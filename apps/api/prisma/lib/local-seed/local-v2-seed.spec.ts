@@ -327,6 +327,90 @@ describe('LOCAL V2 seed definition', () => {
     expect(vacantCodes.every((code) => !occupiedCodes.has(code))).toBe(true);
   });
 
+  it('contains ZERO partial seeded allocations (no partial payments)', () => {
+    const allocatedByCharge = new Map<string, number>();
+    for (const allocation of allocations) {
+      allocatedByCharge.set(
+        allocation.chargeSemanticKey,
+        (allocatedByCharge.get(allocation.chargeSemanticKey) ?? 0) + allocation.amount,
+      );
+    }
+
+    for (const charge of charges) {
+      expect(charge.status).not.toBe('PARTIAL');
+      const allocated = allocatedByCharge.get(charge.semanticKey) ?? 0;
+      if (allocated > 0) {
+        expect(charge.status).toBe('PAID');
+        expect(allocated).toBe(charge.amount);
+      } else {
+        expect(charge.status).toBe('PENDING');
+      }
+    }
+  });
+
+  it('contains ZERO seeded payments leaving a charge partially settled', () => {
+    const allocatedByCharge = new Map<string, number>();
+    for (const payment of payments) {
+      const paymentTotal = payment.allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+      expect(paymentTotal).toBe(payment.amount);
+      for (const allocation of payment.allocations) {
+        allocatedByCharge.set(
+          allocation.chargeSemanticKey,
+          (allocatedByCharge.get(allocation.chargeSemanticKey) ?? 0) + allocation.amount,
+        );
+      }
+    }
+
+    for (const charge of charges) {
+      const allocated = allocatedByCharge.get(charge.semanticKey) ?? 0;
+      if (allocated > 0) {
+        expect(allocated).toBe(charge.amount);
+      }
+    }
+  });
+
+  it('every seeded payment corresponds to a production-valid state', () => {
+    for (const payment of payments) {
+      expect(payment.status).toBe('RECONCILED');
+      expect(payment.method).toBe('TRANSFER');
+      expect(payment.allocations.length).toBeGreaterThan(0);
+      expect(payment.receiptEvidence.receiptStatus).toBe('READY');
+    }
+  });
+
+  it('every seeded payment settles its charges oldest-first (FIFO)', () => {
+    const chargesByUnit = new Map<string, Array<{ charge: (typeof charges)[number]; index: number }>>();
+    charges.forEach((charge, index) => {
+      const list = chargesByUnit.get(charge.unitCode) ?? [];
+      list.push({ charge, index });
+      chargesByUnit.set(charge.unitCode, list);
+    });
+
+    const canonicalPosition = new Map<string, number>();
+    for (const list of chargesByUnit.values()) {
+      list.sort((a, b) => {
+        const byDueDate = a.charge.dueDate.localeCompare(b.charge.dueDate);
+        return byDueDate !== 0 ? byDueDate : a.index - b.index;
+      });
+      list.forEach((entry, position) => canonicalPosition.set(entry.charge.semanticKey, position));
+    }
+
+    for (const payment of payments) {
+      const positions = payment.allocations
+        .map((allocation) => {
+          const position = canonicalPosition.get(allocation.chargeSemanticKey);
+          expect(position).toBeDefined();
+          return position as number;
+        })
+        .sort((a, b) => a - b);
+
+      // The allocated charges must be the first N outstanding charges of the unit.
+      positions.forEach((position, index) => {
+        expect(position).toBe(index);
+      });
+    }
+  });
+
   it('captures precise USD, VES, and COP currency scenarios and rates', () => {
     const multi = tenants.find((tenant) => tenant.key === 'tenant-03');
     expect(multi).toMatchObject({ currency: 'USD', functionalCurrency: 'USD' });

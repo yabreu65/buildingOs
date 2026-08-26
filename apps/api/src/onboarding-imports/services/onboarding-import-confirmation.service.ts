@@ -20,6 +20,8 @@ import { createHash } from 'crypto';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MinioService } from '../../storage/minio.service';
+import { lockUnitChargesForAllocation } from '../../finanzas/payment-allocation-transaction';
+import { lockUnitsFinancialMutations } from '../../finanzas/unit-financial-lock';
 import {
   ONBOARDING_IMPORT_CONFIRM_LOCK_TIMEOUT_MS,
   ONBOARDING_IMPORT_CONFIRM_TRANSACTION_MAX_WAIT_MS,
@@ -871,16 +873,27 @@ export class OnboardingImportConfirmationService {
     unitMap: Map<string, string>,
     summary: WorkingConfirmationSummary,
   ): Promise<void> {
-    for (const row of rows) {
+    const resolvedRows = rows.map((row) => {
       const normalized = this.requireNormalizedRow(row, 'Opening balances');
       const buildingCode = this.normalizeCode(normalized.edificioCodigo);
       const unitCode = this.normalizeCode(normalized.unidadCodigo);
       const buildingId = buildingMap.get(buildingCode);
       const unitId = unitMap.get(`${buildingCode}::${unitCode}`);
-
       if (!buildingId || !unitId) {
         throw new ConflictException(`El saldo inicial ${buildingCode}:${unitCode} referencia entidades inexistentes`);
       }
+      return { row, normalized, buildingId, unitId };
+    });
+    const unitIds = resolvedRows.map(({ unitId }) => unitId);
+    await lockUnitsFinancialMutations(tx, input.tenantId, unitIds);
+    for (const unitId of [...new Set(unitIds)].sort()) {
+      const buildingId = resolvedRows.find((resolved) => resolved.unitId === unitId)?.buildingId;
+      if (buildingId) {
+        await lockUnitChargesForAllocation(tx, input.tenantId, buildingId, unitId);
+      }
+    }
+
+    for (const { normalized, buildingId, unitId } of resolvedRows) {
 
       if (this.normalizeCode(normalized.currency) !== input.tenantCurrency) {
         throw new ConflictException(`La moneda del saldo inicial ${normalized.currency} no coincide con la moneda del tenant ${input.tenantCurrency}`);

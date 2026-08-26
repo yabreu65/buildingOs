@@ -4,9 +4,18 @@ import {
   PaymentStatus,
   Prisma,
   PrismaClient,
+  Role,
+  ScopeType,
   TenantType,
 } from '@prisma/client';
+import { AuditService } from '../../audit/audit.service';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { ResidentAccessService } from '../../resident-access/resident-access.service';
+import { PaymentReceiptService } from '../../receipts/payment-receipt.service';
 import { CurrencyConversionService } from '../currency-conversion.service';
+import { ExpensesService } from '../expenses.service';
+import { FinanzasService } from '../finanzas.service';
+import { FinanzasValidators } from '../finanzas.validators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaymentGatewayService } from './payment-gateway.service';
 import {
@@ -19,7 +28,8 @@ import { IdempotencyService } from './webhooks/idempotency.service';
 
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
-  process.env.POSTGRES_TEST_DB_NAME === 'buildingos_3e3_acceptance';
+  (process.env.POSTGRES_TEST_DB_NAME === 'buildingos_3e3_acceptance' ||
+    process.env.POSTGRES_TEST_DB_NAME === 'buildingos_local_v2_test');
 const describePostgres = enabled ? describe : describe.skip;
 
 class DeterministicProvider implements PaymentProvider {
@@ -50,6 +60,7 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
   let blocker: PrismaClient;
   let firstPrisma: PrismaService;
   let secondPrisma: PrismaService;
+  let approvalPrisma: PrismaService;
   const tenantIds: string[] = [];
   const userIds: string[] = [];
   const eventIds: string[] = [];
@@ -69,16 +80,23 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
     secondPrisma = new PrismaService({
       datasources: { db: { url: clientUrl('gateway-concurrency-second') } },
     });
+    approvalPrisma = new PrismaService({
+      datasources: { db: { url: clientUrl('legacy-approval-concurrency') } },
+    });
     await Promise.all([
       observer.$connect(),
       blocker.$connect(),
       firstPrisma.$connect(),
       secondPrisma.$connect(),
+      approvalPrisma.$connect(),
     ]);
     const [database] = await observer.$queryRaw<Array<{ name: string }>>`
       SELECT current_database() AS name
     `;
-    if (database?.name !== 'buildingos_3e3_acceptance') {
+    if (
+      database?.name !== process.env.POSTGRES_TEST_DB_NAME ||
+      (database.name !== 'buildingos_3e3_acceptance' && database.name !== 'buildingos_local_v2_test')
+    ) {
       throw new Error(`Refusing destructive test database ${database?.name ?? 'unknown'}`);
     }
   });
@@ -101,8 +119,23 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
       blocker?.$disconnect(),
       firstPrisma?.$disconnect(),
       secondPrisma?.$disconnect(),
+      approvalPrisma?.$disconnect(),
     ]);
   });
+
+  async function waitForApplicationToBlock(applicationName: string): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const activity = await observer.$queryRaw<Array<{ pid: number }>>(Prisma.sql`
+        SELECT pid
+        FROM pg_stat_activity
+        WHERE application_name = ${applicationName}
+          AND wait_event_type = 'Lock'
+      `);
+      if (activity.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Application ${applicationName} did not reach a database lock wait`);
+  }
 
   async function waitForBothServiceTransactionsToBlock(): Promise<number[]> {
     for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -119,7 +152,7 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
     throw new Error('Both gateway transactions did not reach a database lock wait');
   }
 
-  async function fixture() {
+  async function fixture(options: { legacyNullUnit?: boolean } = {}) {
     const suffix = `${Date.now()}-${Math.random()}`;
     const tenant = await observer.tenant.create({
       data: {
@@ -173,7 +206,7 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
       data: {
         tenantId: tenant.id,
         buildingId: building.id,
-        unitId: unit.id,
+        unitId: options.legacyNullUnit ? null : unit.id,
         amount: 10000,
         currency: 'ARS',
         method: PaymentMethod.TRANSFER,
@@ -209,6 +242,22 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
     };
     eventIds.push(event.eventId);
     return { allocation, charge, event, payment };
+  }
+
+  function buildApprovalService(): FinanzasService {
+    const validators = new FinanzasValidators(
+      approvalPrisma,
+      new ResidentAccessService(approvalPrisma),
+    );
+    return new FinanzasService(
+      approvalPrisma,
+      validators,
+      { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      { createNotification: jest.fn().mockResolvedValue(undefined) } as unknown as NotificationsService,
+      { ensureReceiptForPayment: jest.fn().mockResolvedValue(null) } as unknown as PaymentReceiptService,
+      {} as unknown as ExpensesService,
+      new CurrencyConversionService(approvalPrisma),
+    );
   }
 
   it('serializes duplicate paid webhooks and reuses the submitted reservation exactly once', async () => {
@@ -278,4 +327,78 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
     await expect(observer.processedWebhookEvent.count({ where: { eventId: ctx.event.eventId } }))
       .resolves.toBe(1);
   });
+
+  it('does not deadlock legacy null-unit approval against a gateway webhook', async () => {
+    const ctx = await fixture({ legacyNullUnit: true });
+    const membership = await observer.membership.create({
+      data: { tenantId: ctx.payment.tenantId, userId: ctx.payment.createdByUserId },
+    });
+    await observer.membershipRole.create({
+      data: {
+        tenantId: ctx.payment.tenantId,
+        membershipId: membership.id,
+        role: Role.TENANT_ADMIN,
+        scopeType: ScopeType.TENANT,
+      },
+    });
+
+    const provider = new DeterministicProvider(ctx.event);
+    const gateway = new PaymentGatewayService(
+      provider,
+      secondPrisma,
+      noOpIdempotency,
+      new CurrencyConversionService(secondPrisma),
+    );
+    const approval = buildApprovalService();
+    const eventLockKey = `webhook:${provider.providerName}:${ctx.event.eventId}`;
+    let releaseBlocker!: () => void;
+    const holdBlocker = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    let blockerReady!: () => void;
+    const blockerAcquired = new Promise<void>((resolve) => { blockerReady = resolve; });
+    const blockingTransaction = blocker.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${eventLockKey}, 0))`,
+      );
+      blockerReady();
+      await holdBlocker;
+    });
+    await blockerAcquired;
+
+    const gatewayRun = gateway.processWebhookEvent(ctx.event.rawPayload, 'sig', 'mercadopago');
+    await waitForApplicationToBlock('gateway-concurrency-second');
+    const approvalRun = approval.approvePayment(
+      ctx.payment.tenantId,
+      ctx.payment.buildingId,
+      ctx.payment.id,
+      ['TENANT_ADMIN'],
+      membership.id,
+      { paidAt: '2026-08-10T00:00:00.000Z' },
+      ctx.payment.createdByUserId,
+    );
+    await waitForApplicationToBlock('legacy-approval-concurrency');
+
+    releaseBlocker();
+    await blockingTransaction;
+    const [gatewayResult, approvalResult] = await Promise.allSettled([gatewayRun, approvalRun]);
+
+    expect(gatewayResult.status).toBe('fulfilled');
+    if (gatewayResult.status === 'fulfilled') {
+      expect(gatewayResult.value.chargeUpdated).toBe(true);
+    }
+    if (approvalResult.status === 'rejected') {
+      const reason = approvalResult.reason as { code?: string; message?: string };
+      expect(reason.code).not.toBe('40P01');
+      expect(reason.message ?? '').not.toMatch(/deadlock/i);
+    }
+
+    const [payment, charge, allocations] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: ctx.charge.id } }),
+      observer.paymentAllocation.findMany({ where: { paymentId: ctx.payment.id } }),
+    ]);
+    expect(payment.status).toBe(PaymentStatus.RECONCILED);
+    expect(charge.status).toBe(ChargeStatus.PAID);
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]).toMatchObject({ amount: 10000, paymentOriginalAmountMinor: 10000 });
+  }, 20000);
 });

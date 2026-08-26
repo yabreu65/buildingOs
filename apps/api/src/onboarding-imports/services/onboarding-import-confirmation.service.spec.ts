@@ -226,6 +226,7 @@ function createCurrentJob(overrides: Partial<Record<string, unknown>> = {}) {
 
 function createTransactionMocks() {
   return {
+    $queryRaw: jest.fn().mockResolvedValue([]),
     importJob: {
       findFirst: jest.fn(),
       update: jest.fn().mockResolvedValue({}),

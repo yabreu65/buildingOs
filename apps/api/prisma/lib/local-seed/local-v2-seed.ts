@@ -234,7 +234,7 @@ const tenant03Charges: readonly ChargeDefinition[] = [
   ['par101-extra', 'PAR-101', 4000, 'USD', 'PAID'],
   ['par102-common', 'PAR-102', 7000, 'USD', 'PENDING'],
   ['par102-extra', 'PAR-102', 3000, 'USD', 'PENDING'],
-  ['par103', 'PAR-103', 9000, 'USD', 'PARTIAL'],
+  ['par103', 'PAR-103', 9000, 'USD', 'PAID'],
   ['par301', 'PAR-301', 8000, 'USD', 'PENDING'],
   ['pal101-usd', 'PAL-101', 10000, 'USD', 'PAID'],
   ['pal102-ves', 'PAL-102', 400000, 'VES', 'PAID'],
@@ -269,11 +269,11 @@ const tenant03Payments: readonly PaymentDefinition[] = [
     allocations: [{ chargeSemanticKey: key('t03:charge:par101-common'), amount: 6000 }, { chargeSemanticKey: key('t03:charge:par101-extra'), amount: 4000 }],
   },
   {
-    semanticKey: key('t03:payment:par103-partial'), unitCode: 'PAR-103', amount: 4000, currency: 'USD', status: 'APPROVED', method: 'TRANSFER', paidAt: '2026-04-07',
-    reference: marker(key('t03:payment:par103-partial'), 'PAR-103 partial'), submittedByEmail: 'resident.parque103@buildingos.local', reviewedByEmail: 'admin.multi@buildingos.local',
+    semanticKey: key('t03:payment:par103-full'), unitCode: 'PAR-103', amount: 9000, currency: 'USD', status: 'RECONCILED', method: 'TRANSFER', paidAt: '2026-04-07',
+    reference: marker(key('t03:payment:par103-full'), 'PAR-103 full settlement'), submittedByEmail: 'resident.parque103@buildingos.local', reviewedByEmail: 'admin.multi@buildingos.local',
     receiptEvidence: { receiptNumber: 'LOCAL-V2-T03-0003', receiptStatus: 'READY', receiptGeneratedAt: '2026-04-08' },
-    functionalAmountMinor: 4000, functionalCurrencyCode: 'USD', exchangeRateValue: '1', exchangeRateDirection: 'IDENTITY',
-    allocations: [{ chargeSemanticKey: key('t03:charge:par103'), amount: 4000 }],
+    functionalAmountMinor: 9000, functionalCurrencyCode: 'USD', exchangeRateValue: '1', exchangeRateDirection: 'IDENTITY',
+    allocations: [{ chargeSemanticKey: key('t03:charge:par103'), amount: 9000 }],
   },
   {
     semanticKey: key('t03:payment:pal101-usd'), unitCode: 'PAL-101', amount: 10000, currency: 'USD', status: 'RECONCILED', method: 'TRANSFER', paidAt: '2026-04-08',
@@ -302,7 +302,7 @@ const tenant04Charges: readonly ChargeDefinition[] = [
   ['qa101-paid', 'QA-101', 10000, 'PAID', '2026-04', '2026-04-10'],
   ['qa102-pending', 'QA-102', 8000, 'PENDING', '2026-04', '2026-04-10'],
   ['qa104-delinquent', 'QA-104', 15000, 'PENDING', '2025-12', '2025-12-10'],
-  ['qa105-partial', 'QA-105', 10000, 'PARTIAL', '2026-04', '2026-04-10'],
+  ['qa105-paid', 'QA-105', 10000, 'PAID', '2026-04', '2026-04-10'],
   ['qa106-zero-balance', 'QA-106', 5000, 'PAID', '2026-04', '2026-04-10'],
 ].map(([suffix, unitCode, amount, status, period, dueDate]) => {
   const semanticKey = key(`t04:charge:${suffix}`);
@@ -311,12 +311,12 @@ const tenant04Charges: readonly ChargeDefinition[] = [
 
 const tenant04Payments: readonly PaymentDefinition[] = [
   ['qa101', 'QA-101', 10000, 'admin-resident.qa@buildingos.local', key('t04:charge:qa101-paid')],
-  ['qa105-partial', 'QA-105', 4000, 'resident.partial.qa@buildingos.local', key('t04:charge:qa105-partial')],
+  ['qa105-paid', 'QA-105', 10000, 'resident.partial.qa@buildingos.local', key('t04:charge:qa105-paid')],
   ['qa106-zero-balance', 'QA-106', 5000, 'resident.multiunit.qa@buildingos.local', key('t04:charge:qa106-zero-balance')],
 ].map(([suffix, unitCode, amount, submittedByEmail, chargeSemanticKey], index) => {
   const semanticKey = key(`t04:payment:${suffix}`);
   return {
-    semanticKey, unitCode: String(unitCode), amount: Number(amount), currency: 'ARS', status: index === 1 ? 'APPROVED' : 'RECONCILED', method: 'TRANSFER', paidAt: `2026-04-${10 + index}`,
+    semanticKey, unitCode: String(unitCode), amount: Number(amount), currency: 'ARS', status: 'RECONCILED', method: 'TRANSFER', paidAt: `2026-04-${10 + index}`,
     reference: marker(semanticKey, `QA payment ${unitCode}`), submittedByEmail: String(submittedByEmail), reviewedByEmail: 'owner.qa@buildingos.local',
     receiptEvidence: { receiptNumber: `LOCAL-V2-T04-000${index + 1}`, receiptStatus: 'READY', receiptGeneratedAt: `2026-04-${11 + index}` },
     allocations: [{ chargeSemanticKey: String(chargeSemanticKey), amount: Number(amount) }],

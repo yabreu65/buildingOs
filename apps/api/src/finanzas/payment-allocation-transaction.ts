@@ -12,12 +12,14 @@ import {
 } from '@nestjs/common';
 import { classifyFunctionalSnapshot } from './functional-snapshot';
 import { isEffectivePaymentStatus } from './payment-status-semantics';
+import { lockUnitFinancialMutations } from './unit-financial-lock';
 
 export interface AllocationScope {
   readonly tenantId: string;
   readonly buildingId: string;
   readonly paymentId: string;
   readonly chargeId: string;
+  readonly unitId: string;
 }
 
 interface AllocationChargeCurrency {
@@ -196,6 +198,95 @@ export async function lockPaymentForAllocation(
   );
 }
 
+/**
+ * Canonical FIFO + full-settlement invariant for Payment → Charge allocation.
+ *
+ * Contract (product rule, enforced end-to-end):
+ * - Partial payments are forbidden: an allocation must COMPLETELY settle the
+ *   remaining eligible balance of its target charge.
+ * - Oldest outstanding charge must always be settled first: the target charge
+ *   must be the oldest charge of the payment's unit that still has an eligible
+ *   remaining balance (not already fully settled by other effective/reserved
+ *   payments and not already fully claimed by the current payment).
+ * - A pending SUBMITTED reservation from ANOTHER payment blocks the prefix
+ *   (no allocation may jump ahead of an in-flight payment).
+ *
+ * This helper is intentionally caller-agnostic: it is invoked inside
+ * createLockedAllocation so every allocation-creation path (REST manual
+ * allocation and payment-gateway webhook reconciliation) shares one invariant.
+ * The caller must invoke this inside the same transaction as the allocation
+ * mutation; the unit and charge locks are acquired by createLockedAllocation.
+ */
+export async function assertFifoNoPartialAllocation(
+  tx: Prisma.TransactionClient,
+  scope: AllocationScope,
+  amount: number,
+): Promise<void> {
+  const charges = await tx.charge.findMany({
+    where: {
+      tenantId: scope.tenantId,
+      buildingId: scope.buildingId,
+      unitId: scope.unitId,
+      canceledAt: null,
+    },
+    include: {
+      paymentAllocations: {
+        include: {
+          payment: { select: { id: true, status: true } },
+        },
+      },
+    },
+    orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+  });
+
+  for (const charge of charges) {
+    let effectiveConsumed = 0;
+    let reservedByOtherPayments = 0;
+    let claimedByCurrentPayment = 0;
+
+    for (const allocation of charge.paymentAllocations) {
+      const status = allocation.payment?.status;
+      if (allocation.payment?.id === scope.paymentId) {
+        claimedByCurrentPayment += allocation.amount;
+        continue;
+      }
+      if (isEffectivePaymentStatus(status)) {
+        effectiveConsumed += allocation.amount;
+      } else if (status === PaymentStatus.SUBMITTED) {
+        reservedByOtherPayments += allocation.amount;
+      }
+    }
+
+    // An in-flight payment (other than the current one) reserves this charge:
+    // the eligible prefix ends here, exactly like the resident selection logic.
+    if (reservedByOtherPayments > 0) {
+      break;
+    }
+
+    const remaining = charge.amount - effectiveConsumed;
+    if (remaining <= 0) {
+      continue;
+    }
+    if (claimedByCurrentPayment >= remaining) {
+      continue;
+    }
+
+    if (charge.id !== scope.chargeId) {
+      throw new ConflictException(
+        'Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.',
+      );
+    }
+    if (amount !== remaining - claimedByCurrentPayment) {
+      throw new ConflictException(
+        'La asignación debe completar el saldo pendiente del cargo.',
+      );
+    }
+    return;
+  }
+
+  throw new ConflictException('No hay cargos elegibles para asignar a este pago.');
+}
+
 export async function lockChargesForAllocation(
   tx: Prisma.TransactionClient,
   tenantId: string,
@@ -207,6 +298,26 @@ export async function lockChargesForAllocation(
       Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
     );
   }
+}
+
+export async function lockUnitChargesForAllocation(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`
+      SELECT id
+      FROM "Charge"
+      WHERE "tenantId" = ${tenantId}
+        AND "buildingId" = ${buildingId}
+        AND "unitId" = ${unitId}
+        AND "canceledAt" IS NULL
+      ORDER BY "dueDate" ASC, "createdAt" ASC, id ASC
+      FOR UPDATE
+    `,
+  );
 }
 
 async function loadLockedPayment(tx: Prisma.TransactionClient, scope: AllocationScope) {
@@ -372,13 +483,20 @@ export async function deleteLockedAllocation(
   allocationId: string,
 ): Promise<DeletedAllocationMetadata> {
   const discovered = await tx.paymentAllocation.findFirst({
-    where: { id: allocationId, tenantId },
-    select: { paymentId: true, chargeId: true },
+    where: { id: allocationId, tenantId, payment: { tenantId, buildingId } },
+    select: { paymentId: true, chargeId: true, payment: { select: { unitId: true } } },
   });
   const notFound = () => new NotFoundException('Allocation not found or does not belong to this tenant');
   if (!discovered) throw notFound();
 
-  await lockPaymentForAllocation(tx, { tenantId, buildingId, paymentId: discovered.paymentId });
+  const unitId = discovered.payment?.unitId;
+  if (unitId) {
+    await lockUnitFinancialMutations(tx, tenantId, unitId);
+    await lockPaymentForAllocation(tx, { tenantId, buildingId, paymentId: discovered.paymentId });
+    await lockUnitChargesForAllocation(tx, tenantId, buildingId, unitId);
+  } else {
+    await lockPaymentForAllocation(tx, { tenantId, buildingId, paymentId: discovered.paymentId });
+  }
   await lockChargesForAllocation(tx, tenantId, buildingId, [discovered.chargeId]);
   const allocation = await tx.paymentAllocation.findFirst({
     where: {
@@ -403,10 +521,17 @@ export async function createLockedAllocation(
   scope: AllocationScope,
   amount: number,
 ): Promise<PaymentAllocation> {
+  await lockUnitFinancialMutations(tx, scope.tenantId, scope.unitId);
   await lockPaymentForAllocation(tx, scope);
   const payment = await loadLockedPayment(tx, scope);
-  await lockChargesForAllocation(tx, scope.tenantId, scope.buildingId, [scope.chargeId]);
+  if (payment.unitId !== scope.unitId) {
+    throw new ConflictException('Payment and allocation unit do not match');
+  }
+  await lockUnitChargesForAllocation(tx, scope.tenantId, scope.buildingId, scope.unitId);
   const charge = await loadLockedCharge(tx, scope);
+  if (charge.unitId !== scope.unitId) {
+    throw new ConflictException('Payment and allocation charge unit do not match');
+  }
 
   if (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED) {
     throw new ConflictException(`Cannot allocate payment in status ${payment.status}`);
@@ -453,6 +578,14 @@ export async function createLockedAllocation(
   if (amount > calculateChargeAvailableOutstanding(charge.amount, charge.paymentAllocations ?? [])) {
     throw new ConflictException('The allocation exceeds the charge available outstanding');
   }
+
+  await assertFifoNoPartialAllocation(tx, {
+    tenantId: scope.tenantId,
+    buildingId: scope.buildingId,
+    paymentId: scope.paymentId,
+    chargeId: scope.chargeId,
+    unitId: scope.unitId,
+  }, amount);
 
   const allocation = await tx.paymentAllocation.create({
     data: {

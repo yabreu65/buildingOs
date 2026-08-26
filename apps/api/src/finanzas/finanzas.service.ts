@@ -20,6 +20,7 @@ import {
   createLockedAllocation,
   deleteLockedAllocation,
   lockChargesForAllocation,
+  lockUnitChargesForAllocation,
   lockPaymentForAllocation,
   recalculateLockedCharge,
   reconcilePaymentWhenConsumed,
@@ -31,6 +32,10 @@ import {
 } from './currency-buckets';
 import { acquirePaymentLinkedDocumentLock } from '../common/payment-linked-document-lock';
 import { isEffectivePaymentStatus as isEffectivePaymentStatusShared } from './payment-status-semantics';
+import {
+  lockUnitFinancialMutations,
+  lockUnitsFinancialMutations,
+} from './unit-financial-lock';
 import type { Role, ScopedRole } from '@buildingos/contracts';
 import {
   CreateChargeDto,
@@ -318,39 +323,42 @@ export class FinanzasService {
       dto.unitId,
     );
 
-    // 4. Check for duplicate (unique per unit/period/concept)
-    const existing = await this.prisma.charge.findFirst({
-      where: {
-        tenantId,
-        buildingId,
-        unitId: dto.unitId,
-        period: dto.period || new Date().toISOString().substring(0, 7),
-        concept: dto.concept,
-        canceledAt: null, // Don't count canceled charges
-      },
-    });
+    const charge = await this.prisma.$transaction(async (tx) => {
+      await lockUnitFinancialMutations(tx, tenantId, dto.unitId);
+      await lockUnitChargesForAllocation(tx, tenantId, buildingId, dto.unitId);
+      const period = dto.period || new Date().toISOString().substring(0, 7);
+      const existing = await tx.charge.findFirst({
+        where: {
+          tenantId,
+          buildingId,
+          unitId: dto.unitId,
+          period,
+          concept: dto.concept,
+          canceledAt: null,
+        },
+      });
 
-    if (existing) {
-      throw new ConflictException(
-        `Charge already exists for this unit/period/concept`,
-      );
-    }
+      if (existing) {
+        throw new ConflictException(
+          `Charge already exists for this unit/period/concept`,
+        );
+      }
 
-    // 5. Create charge with PENDING status
-    const charge = await this.prisma.charge.create({
-      data: {
-        tenantId,
-        buildingId,
-        unitId: dto.unitId,
-        period: dto.period || new Date().toISOString().substring(0, 7),
-        type: dto.type,
-        concept: dto.concept,
-        amount: dto.amount,
-        currency: dto.currency,
-        dueDate: new Date(dto.dueDate),
-        status: ChargeStatus.PENDING,
-        createdByMembershipId: dto.createdByMembershipId,
-      },
+      return tx.charge.create({
+        data: {
+          tenantId,
+          buildingId,
+          unitId: dto.unitId,
+          period,
+          type: dto.type,
+          concept: dto.concept,
+          amount: dto.amount,
+          currency: dto.currency,
+          dueDate: new Date(dto.dueDate),
+          status: ChargeStatus.PENDING,
+          createdByMembershipId: dto.createdByMembershipId,
+        },
+      });
     });
 
     // Audit: CHARGE_CREATE
@@ -513,39 +521,41 @@ export class FinanzasService {
       this.validators.throwForbidden('charges', 'update');
     }
 
-    // 2. Validate charge
-    const charge = await this.prisma.charge.findFirst({
-      where: {
-        id: chargeId,
-        tenantId,
-        buildingId,
-      },
-      include: {
-        paymentAllocations: true,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const charge = await tx.charge.findFirst({
+        where: { id: chargeId, tenantId, buildingId },
+        include: { paymentAllocations: true },
+      });
+      if (!charge) {
+        throw new NotFoundException(
+          `Charge not found or does not belong to this building/tenant`,
+        );
+      }
 
-    if (!charge) {
-      throw new NotFoundException(
-        `Charge not found or does not belong to this building/tenant`,
-      );
-    }
+      await lockUnitFinancialMutations(tx, tenantId, charge.unitId);
+      const lockedCharge = await tx.charge.findFirst({
+        where: { id: chargeId, tenantId, buildingId },
+        include: { paymentAllocations: true },
+      });
+      if (!lockedCharge) {
+        throw new NotFoundException(
+          `Charge not found or does not belong to this building/tenant`,
+        );
+      }
+      if (lockedCharge.paymentAllocations.length > 0) {
+        throw new ConflictException(
+          `Cannot update charge that has payment allocations`,
+        );
+      }
 
-    // 3. Cannot update if has allocations
-    if (charge.paymentAllocations.length > 0) {
-      throw new ConflictException(
-        `Cannot update charge that has payment allocations`,
-      );
-    }
-
-    // 4. Update
-    return this.prisma.charge.update({
-      where: { id: chargeId, tenantId },
-      data: {
-        ...dto,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        updatedAt: new Date(),
-      },
+      return tx.charge.update({
+        where: { id: chargeId, tenantId },
+        data: {
+          ...dto,
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+          updatedAt: new Date(),
+        },
+      });
     });
   }
 
@@ -568,49 +578,49 @@ export class FinanzasService {
       this.validators.throwForbidden('charges', 'cancel');
     }
 
-    // 2. Validate and fetch charge
     await this.validators.validateChargeBelongsToBuildingAndTenant(
       tenantId,
       buildingId,
       chargeId,
     );
 
-    const charge = await this.prisma.charge.findUnique({
-      where: { id: chargeId },
-    });
+    const canceledCharge = await this.prisma.$transaction(async (tx) => {
+      const charge = await tx.charge.findUnique({ where: { id: chargeId } });
+      if (!charge || charge.tenantId !== tenantId || charge.buildingId !== buildingId) {
+        throw new NotFoundException(
+          `Charge not found or does not belong to this building/tenant`,
+        );
+      }
+      await lockUnitFinancialMutations(tx, tenantId, charge.unitId);
+      const lockedCharge = await tx.charge.findUnique({ where: { id: chargeId } });
+      if (!lockedCharge || lockedCharge.tenantId !== tenantId || lockedCharge.buildingId !== buildingId) {
+        throw new NotFoundException(
+          `Charge not found or does not belong to this building/tenant`,
+        );
+      }
 
-    // 2.5. A charge with effective (APPROVED/RECONCILED) payments cannot be
-    // canceled: PaymentAllocation history must stay coherent. SUBMITTED
-    // payments are only reservations and do not block cancellation.
-    const effectiveAllocation = await this.prisma.paymentAllocation.findFirst({
-      where: {
-        tenantId,
-        chargeId,
-        payment: {
-          status: {
-            in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED],
+      const effectiveAllocation = await tx.paymentAllocation.findFirst({
+        where: {
+          tenantId,
+          chargeId,
+          payment: {
+            status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
           },
         },
-      },
-      select: { id: true },
-    });
-
-    if (effectiveAllocation) {
-      throw new ConflictException({
-        statusCode: 409,
-        error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS',
-        message:
-          'No se puede cancelar un cargo con pagos efectivos aplicados',
+        select: { id: true },
       });
-    }
+      if (effectiveAllocation) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS',
+          message: 'No se puede cancelar un cargo con pagos efectivos aplicados',
+        });
+      }
 
-    // 3. Cancel
-    const canceledCharge = await this.prisma.charge.update({
-      where: { id: chargeId },
-      data: {
-        canceledAt: new Date(),
-        updatedAt: new Date(),
-      },
+      return tx.charge.update({
+        where: { id: chargeId },
+        data: { canceledAt: new Date(), updatedAt: new Date() },
+      });
     });
 
     // Audit: CHARGE_CANCEL
@@ -621,9 +631,9 @@ export class FinanzasService {
       entityType: 'Charge',
       entityId: chargeId,
       metadata: {
-        unitId: charge?.unitId,
-        amount: charge?.amount,
-        concept: charge?.concept,
+        unitId: canceledCharge.unitId,
+        amount: canceledCharge.amount,
+        concept: canceledCharge.concept,
         reason: dto.reason || 'No reason provided',
       },
     });
@@ -834,12 +844,7 @@ export class FinanzasService {
           buildingId,
           paymentId: payment.id,
         });
-        await lockChargesForAllocation(
-          tx,
-          tenantId,
-          buildingId,
-          canonicalSelection.map(({ charge }) => charge.id),
-        );
+        await lockUnitChargesForAllocation(tx, tenantId, buildingId, dto.unitId!);
         const lockedSelection = this.validateCanonicalResidentChargeSelection(
           await this.loadResidentChargeSelection(tx, tenantId, buildingId, dto.unitId!),
           requestedChargeIds,
@@ -1156,12 +1161,13 @@ export class FinanzasService {
         throw new BadRequestException('Cannot reject a canceled payment');
       }
 
-      await this.releaseSubmittedPaymentAllocations(
-        tx,
-        paymentId,
-        tenantId,
-        buildingId,
-      );
+        await this.releaseSubmittedPaymentAllocations(
+          tx,
+          paymentId,
+          tenantId,
+          buildingId,
+          payment.unitId ?? undefined,
+        );
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
@@ -1233,8 +1239,6 @@ export class FinanzasService {
     );
 
     return this.prisma.$transaction(async (tx) => {
-      const scope = { tenantId, buildingId, paymentId: dto.paymentId, chargeId: dto.chargeId };
-      await lockPaymentForAllocation(tx, scope);
       const payment = await tx.payment.findFirst({
         where: { id: dto.paymentId, tenantId, buildingId },
         select: { unitId: true, currency: true },
@@ -1245,7 +1249,16 @@ export class FinanzasService {
         );
       }
       if (!payment.unitId) throw new ConflictException('Payment must belong to a unit');
-      await lockChargesForAllocation(tx, tenantId, buildingId, [dto.chargeId]);
+      await lockUnitFinancialMutations(tx, tenantId, payment.unitId);
+      const scope = {
+        tenantId,
+        buildingId,
+        paymentId: dto.paymentId,
+        chargeId: dto.chargeId,
+        unitId: payment.unitId,
+      };
+      await lockPaymentForAllocation(tx, scope);
+      await lockUnitChargesForAllocation(tx, tenantId, buildingId, payment.unitId);
       const charge = await tx.charge.findFirst({
         where: { id: dto.chargeId, tenantId, buildingId },
         select: { id: true },
@@ -1396,6 +1409,7 @@ export class FinanzasService {
     paymentId: string,
     tenantId: string,
     buildingId: string,
+    unitId?: string | null,
   ): Promise<Array<{ chargeId: string; amount: number }>> {
     const allocations = await tx.paymentAllocation.findMany({
       where: {
@@ -1412,12 +1426,11 @@ export class FinanzasService {
       return [];
     }
 
-    await lockChargesForAllocation(
-      tx,
-      tenantId,
-      buildingId,
-      allocations.map((allocation) => allocation.chargeId),
-    );
+    if (unitId) {
+      await lockUnitChargesForAllocation(tx, tenantId, buildingId, unitId);
+    } else {
+      await lockChargesForAllocation(tx, tenantId, buildingId, allocations.map((allocation) => allocation.chargeId));
+    }
     const lockedAllocations = await tx.paymentAllocation.findMany({
       where: {
         tenantId,
@@ -1675,10 +1688,7 @@ export class FinanzasService {
     buildingId: string,
     unitId: string,
   ): Promise<void> {
-    const selectionLockKey = `resident-payment-selection:${tenantId}:${buildingId}:${unitId}`;
-    await tx.$executeRaw(
-      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${selectionLockKey}, 0))`,
-    );
+    await lockUnitFinancialMutations(tx, tenantId, unitId);
   }
 
   private async validateResidentPaymentAllocationsForApproval(
@@ -1693,6 +1703,15 @@ export class FinanzasService {
         'El pago no tiene cargos asociados para validar la selección.',
       );
     }
+
+    const selectedUnitId = payment.unitId ?? payment.paymentAllocations[0]?.charge.unitId;
+    if (!selectedUnitId) {
+      throw new ConflictException(
+        'El pago no tiene una unidad asociada para validar la selección de cargos.',
+      );
+    }
+
+    await lockUnitChargesForAllocation(tx, tenantId, buildingId, selectedUnitId);
 
     const selectedCharges = await tx.charge.findMany({
       where: {
@@ -1719,28 +1738,10 @@ export class FinanzasService {
       );
     }
 
-    const selectedUnitId = payment.unitId ?? selectedCharges[0]?.unitId;
-    if (!selectedUnitId) {
-      throw new ConflictException(
-        'El pago no tiene una unidad asociada para validar la selección de cargos.',
-      );
-    }
-
     if (selectedCharges.some((charge) => charge.unitId !== selectedUnitId || charge.buildingId !== buildingId)) {
       throw new ConflictException(
         'El pago contiene cargos fuera de la unidad o edificio permitidos.',
       );
-    }
-
-    await this.acquireResidentPaymentSelectionLock(
-      tx,
-      tenantId,
-      buildingId,
-      selectedUnitId,
-    );
-
-    for (const chargeId of [...selectedChargeIds].sort()) {
-      await this.lockChargeForApproval(tx, tenantId, buildingId, chargeId);
     }
 
     const selectableCharges = await this.loadResidentChargeSelection(
@@ -1793,23 +1794,42 @@ export class FinanzasService {
     return canonicalSelection;
   }
 
-  private async lockChargeForApproval(
-    tx: Prisma.TransactionClient,
-    tenantId: string,
-    buildingId: string,
-    chargeId: string,
-  ): Promise<void> {
-    await tx.$queryRaw(
-      Prisma.sql`SELECT 1 FROM "Charge" WHERE id = ${chargeId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
-    );
-  }
-
   private async lockSubmittedPaymentForApproval(
     tx: Prisma.TransactionClient,
     tenantId: string,
     paymentId: string,
     buildingId?: string,
   ): Promise<PaymentWithAllocations> {
+    const discoveredPaymentUnits = await tx.$queryRaw<Array<{ unitId: string | null }>>(
+      Prisma.sql`
+        SELECT "unitId" AS "unitId"
+        FROM "Payment"
+        WHERE id = ${paymentId}
+          AND "tenantId" = ${tenantId}
+          ${buildingId ? Prisma.sql`AND "buildingId" = ${buildingId}` : Prisma.empty}
+        LIMIT 1
+      `,
+    );
+    let preliminaryUnitIds = discoveredPaymentUnits?.[0]?.unitId
+      ? [discoveredPaymentUnits[0].unitId]
+      : [];
+    if (preliminaryUnitIds.length === 0) {
+      const discoveredAllocationUnits = await tx.$queryRaw<Array<{ unitId: string }>>(
+        Prisma.sql`
+          SELECT DISTINCT c."unitId" AS "unitId"
+          FROM "PaymentAllocation" pa
+          JOIN "Payment" p ON p.id = pa."paymentId"
+          JOIN "Charge" c ON c.id = pa."chargeId"
+          WHERE pa."paymentId" = ${paymentId}
+            AND pa."tenantId" = ${tenantId}
+            AND p."tenantId" = ${tenantId}
+            ${buildingId ? Prisma.sql`AND p."buildingId" = ${buildingId}` : Prisma.empty}
+        `,
+      );
+      preliminaryUnitIds = discoveredAllocationUnits?.map(({ unitId }) => unitId) ?? [];
+    }
+    await lockUnitsFinancialMutations(tx, tenantId, preliminaryUnitIds);
+
     if (buildingId) {
       await tx.$queryRaw(
         Prisma.sql`SELECT 1 FROM "Payment" WHERE id = ${paymentId} AND "tenantId" = ${tenantId} AND "buildingId" = ${buildingId} FOR UPDATE`,
@@ -1841,6 +1861,17 @@ export class FinanzasService {
           'Payment not found or does not belong to this building/tenant',
         )
         : new NotFoundException('Payment not found');
+    }
+
+    const authoritativeUnitIds = payment.unitId
+      ? [payment.unitId]
+      : payment.paymentAllocations?.map(({ charge }) => charge.unitId) ?? [];
+    const preliminaryUnitKey = [...new Set(preliminaryUnitIds)].sort().join(':');
+    const authoritativeUnitKey = [...new Set(authoritativeUnitIds)].sort().join(':');
+    if (preliminaryUnitKey && preliminaryUnitKey !== authoritativeUnitKey) {
+      throw new ConflictException(
+        'La asociación del pago con la unidad cambió durante la operación. Inténtalo nuevamente.',
+      );
     }
 
     return payment;
@@ -2673,7 +2704,7 @@ export class FinanzasService {
       }
 
       if (payment.status === PaymentStatus.SUBMITTED) {
-        await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId, buildingId);
+        await this.releaseSubmittedPaymentAllocations(tx, paymentId, tenantId, buildingId, payment.unitId);
       }
       const canceledPayment = await tx.payment.update({
         where: { id: paymentId },
@@ -3253,6 +3284,7 @@ export class FinanzasService {
         paymentId,
         tenantId,
         payment.buildingId,
+        payment.unitId,
       );
       const rejectedPayment = await tx.payment.update({
         where: { id: paymentId },
