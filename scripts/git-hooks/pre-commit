@@ -6,20 +6,8 @@ set -euo pipefail
 #
 # Order of gates:
 #   1. SAFETY  (scripts/pre-commit-deny-dangerous.sh)  -> BLOCKING
-#   2. GENTLE  (scripts/gentle-advisory.sh)            -> ADVISORY / NON-BLOCKING
 
 # ======== DANGEROUS COMMANDS CHECK (BLOCKING - safety gate) ========
 ./scripts/pre-commit-deny-dangerous.sh || exit 1
-
-# ======== GENTLE AI REVIEW (ADVISORY - non-blocking) ========
-# Gentle AI is advisory and non-blocking. Its findings require independent
-# adjudication, and an internal Gentle tool error never blocks commit/push.
-# The wrapper always exits 0; the normal quality gates (tests, typecheck,
-# lint, build, E2E, CI) remain blocking and are not part of this hook.
-if [ -x ./scripts/gentle-advisory.sh ]; then
-  ./scripts/gentle-advisory.sh
-else
-  echo "[pre-commit] gentle-advisory.sh not found; skipping advisory review"
-fi
 
 exit 0

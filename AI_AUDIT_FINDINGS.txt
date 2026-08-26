@@ -319,7 +319,7 @@ WEEK 3:
 For full details, see:
 - AI_AUDIT_EXECUTIVE_SUMMARY.md (this file's TL;DR)
 - AI_IMPLEMENTATION_RECOMMENDATIONS.md (step-by-step code)
-- AI_AUDIT_DETAILED.md (saved in Engram, full analysis)
+- AI_AUDIT_DETAILED.md (full analysis)
 
 Questions? Ask YoryI Abreu (AI Implementation Lead)
 
