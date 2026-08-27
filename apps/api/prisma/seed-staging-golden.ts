@@ -12,8 +12,8 @@ import {
   ConnectionIdentity,
 } from './lib/staging-seed/staging-golden-seed';
 
-function requiredPassword(): string {
-  const password = process.env[STAGING_GOLDEN_PASSWORD_ENV];
+export function requiredPassword(environment: Readonly<Record<string, string | undefined>> = process.env): string {
+  const password = environment[STAGING_GOLDEN_PASSWORD_ENV];
   if (!password || password.length < 12) {
     throw new Error(`${STAGING_GOLDEN_PASSWORD_ENV} is required and must contain at least 12 characters`);
   }

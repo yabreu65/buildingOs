@@ -135,7 +135,7 @@ services:
       NODE_ENV: staging
       STAGING_GOLDEN_SEED: "1"
       STAGING_GOLDEN_CONFIRMATION: STG-DATA-01
-      STAGING_GOLDEN_QA_PASSWORD: ${STAGING_GOLDEN_QA_PASSWORD:?STAGING_GOLDEN_QA_PASSWORD is required}
+      STAGING_GOLDEN_QA_PASSWORD: ${STAGING_GOLDEN_QA_PASSWORD:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
     command: ["npm", "run", "seed:staging:golden", "-w", "apps/api"]
     restart: "no"
