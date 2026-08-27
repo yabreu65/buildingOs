@@ -329,7 +329,8 @@ function privateStagingAddress(address: string | null): boolean {
   const normalized = address.replace(/^\[|\]$/g, '').split('/')[0] ?? '';
   const parts = normalized.split('.');
   if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) return normalized.startsWith('fd') || normalized.startsWith('fc');
-  const [first, second] = parts.map(Number);
+  const first = Number(parts[0] ?? Number.NaN);
+  const second = Number(parts[1] ?? Number.NaN);
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 }
 
