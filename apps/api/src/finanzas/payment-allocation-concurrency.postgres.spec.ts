@@ -2,14 +2,22 @@ import { ChargeStatus, PaymentMethod, PaymentStatus, PrismaClient, TenantType } 
 import {
   createLockedAllocation,
   deleteLockedAllocation,
+  lockUnitChargesForAllocation,
 } from './payment-allocation-transaction';
+import { lockUnitFinancialMutations } from './unit-financial-lock';
 
 const ACCEPTANCE_DATABASES = new Set([
   'buildingos_3e3_acceptance',
   'buildingos_3e4_acceptance',
+  'buildingos_local_v2_test',
 ]);
 const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
-const fixturePhase = expectedDatabaseName === 'buildingos_3e4_acceptance' ? 'qa3e4' : 'qa3e3';
+const fixturePhase =
+  expectedDatabaseName === 'buildingos_local_v2_test'
+    ? 'local-v2'
+    : expectedDatabaseName === 'buildingos_3e4_acceptance'
+      ? 'qa3e4'
+      : 'qa3e3';
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
   expectedDatabaseName !== undefined &&
@@ -100,7 +108,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
       currency: 'ARS',
       dueDate: new Date('2026-08-31T00:00:00.000Z'),
     } as const;
-    return { tenant, building, paymentData, chargeData };
+    return { tenant, building, unit, paymentData, chargeData };
   }
 
   async function waitUntilBlocked(pid: number): Promise<void> {
@@ -114,9 +122,9 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     throw new Error(`Backend ${pid} did not reach a database lock wait`);
   }
 
-  it('serializes two 7000 allocations against one 10000 payment', async () => {
+  it('serializes two full allocations against one 20000 payment (contract: complete charges only)', async () => {
     const ctx = await fixture('payment-race');
-    const payment = await observer.payment.create({ data: ctx.paymentData });
+    const payment = await observer.payment.create({ data: { ...ctx.paymentData, amount: 20000 } });
     const firstCharge = await observer.charge.create({ data: ctx.chargeData });
     const secondCharge = await observer.charge.create({
       data: { ...ctx.chargeData, period: '2026-09', concept: 'payment-race-2' },
@@ -129,8 +137,8 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     const first = firstClient.$transaction(async (tx) => {
       await createLockedAllocation(tx, {
         tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-        paymentId: payment.id, chargeId: firstCharge.id,
-      }, 7000);
+         paymentId: payment.id, chargeId: firstCharge.id, unitId: ctx.unit.id,
+      }, 10000);
       firstInserted();
       await holdFirst;
     });
@@ -141,21 +149,21 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
       secondPid = row.pid;
       await createLockedAllocation(tx, {
         tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-        paymentId: payment.id, chargeId: secondCharge.id,
-      }, 7000);
+         paymentId: payment.id, chargeId: secondCharge.id, unitId: ctx.unit.id,
+      }, 10000);
     });
     while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     await waitUntilBlocked(secondPid);
     releaseFirst();
     await first;
-    await expect(second).rejects.toMatchObject({ response: { error: 'PAYMENT_ORIGINAL_AMOUNT_EXCEEDED' } });
+    await expect(second).resolves.toBeUndefined();
     const total = await observer.paymentAllocation.aggregate({
       where: { paymentId: payment.id }, _sum: { paymentOriginalAmountMinor: true },
     });
-    expect(total._sum.paymentOriginalAmountMinor).toBe(7000);
+    expect(total._sum.paymentOriginalAmountMinor).toBe(20000);
   });
 
-  it('serializes two 7000 payments against one 10000 charge', async () => {
+  it('serializes two full payments against one 10000 charge (second is rejected)', async () => {
     const ctx = await fixture('charge-race');
     const [firstPayment, secondPayment] = await Promise.all([
       observer.payment.create({ data: ctx.paymentData }),
@@ -169,8 +177,8 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     const first = firstClient.$transaction(async (tx) => {
       await createLockedAllocation(tx, {
         tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-        paymentId: firstPayment.id, chargeId: charge.id,
-      }, 7000);
+         paymentId: firstPayment.id, chargeId: charge.id, unitId: ctx.unit.id,
+      }, 10000);
       firstInserted();
       await holdFirst;
     });
@@ -181,8 +189,8 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
       secondPid = row.pid;
       await createLockedAllocation(tx, {
         tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-        paymentId: secondPayment.id, chargeId: charge.id,
-      }, 7000);
+         paymentId: secondPayment.id, chargeId: charge.id, unitId: ctx.unit.id,
+      }, 10000);
     });
     while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     await waitUntilBlocked(secondPid);
@@ -192,7 +200,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     const total = await observer.paymentAllocation.aggregate({
       where: { chargeId: charge.id }, _sum: { amount: true },
     });
-    expect(total._sum.amount).toBe(7000);
+    expect(total._sum.amount).toBe(10000);
   });
 
   it('reconciles a same-currency allocation despite a complete cross-currency snapshot', async () => {
@@ -228,8 +236,9 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     await firstClient.$transaction((tx) => createLockedAllocation(tx, {
       tenantId: ctx.tenant.id,
       buildingId: ctx.building.id,
-      paymentId: payment.id,
-      chargeId: charge.id,
+       paymentId: payment.id,
+       chargeId: charge.id,
+       unitId: ctx.unit.id,
     }, 10000));
 
     const [allocation, persistedCharge, persistedPayment] = await Promise.all([
@@ -317,7 +326,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
         },
       }),
       observer.paymentAllocation.create({
-        data: {
+       data: {
           tenantId: ctx.tenant.id,
           paymentId: payment.id,
           chargeId: charges[2].id,
@@ -352,6 +361,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
       buildingId: ctx.building.id,
       paymentId: payment.id,
       chargeId: charges[2].id,
+      unitId: ctx.unit.id,
     }, 165000));
 
     const [restoredPayment, paidCharge, restoredTotals] = await Promise.all([
@@ -421,8 +431,9 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     await expect(firstClient.$transaction((tx) => createLockedAllocation(tx, {
       tenantId: ctx.tenant.id,
       buildingId: ctx.building.id,
-      paymentId: payment.id,
-      chargeId: candidateCharge.id,
+       paymentId: payment.id,
+       chargeId: candidateCharge.id,
+       unitId: ctx.unit.id,
     }, 265000))).rejects.toMatchObject({
       response: { statusCode: 422, error: 'PAYMENT_LEGACY_SNAPSHOT_REQUIRED' },
     });
@@ -534,7 +545,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     const charge = await observer.charge.create({ data: ctx.chargeData });
     const allocation = await firstClient.$transaction((tx) => createLockedAllocation(tx, {
       tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-      paymentId: payment.id, chargeId: charge.id,
+      paymentId: payment.id, chargeId: charge.id, unitId: ctx.unit.id,
     }, 10000));
     let releaseDelete!: () => void;
     const holdDelete = new Promise<void>((resolve) => { releaseDelete = resolve; });
@@ -552,7 +563,7 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
       secondPid = row.pid;
       return createLockedAllocation(tx, {
         tenantId: ctx.tenant.id, buildingId: ctx.building.id,
-        paymentId: payment.id, chargeId: charge.id,
+        paymentId: payment.id, chargeId: charge.id, unitId: ctx.unit.id,
       }, 10000);
     });
     while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -565,6 +576,132 @@ describePostgres('Payment allocation PostgreSQL concurrency', () => {
     ))).rejects.toMatchObject({ status: 404 });
     await expect(observer.payment.findUniqueOrThrow({ where: { id: payment.id } }))
       .resolves.toMatchObject({ status: PaymentStatus.RECONCILED });
+  });
+
+  it('serializes allocation with deletion of another charge in the same unit', async () => {
+    const ctx = await fixture('allocation-delete-cross-charge-race');
+    const payment = await observer.payment.create({ data: ctx.paymentData });
+    const [oldCharge, newCharge] = await Promise.all([
+      observer.charge.create({ data: { ...ctx.chargeData, concept: 'old-charge' } }),
+      observer.charge.create({
+        data: {
+          ...ctx.chargeData,
+          period: '2026-09',
+          concept: 'new-charge',
+          dueDate: new Date('2026-09-30T00:00:00.000Z'),
+        },
+      }),
+    ]);
+    let releaseDelete!: () => void;
+    const deleteHold = new Promise<void>((resolve) => { releaseDelete = resolve; });
+    let deleteReached!: () => void;
+    const deleteStarted = new Promise<void>((resolve) => { deleteReached = resolve; });
+
+    const deletion = firstClient.$transaction(async (tx) => {
+      await lockUnitFinancialMutations(tx, ctx.tenant.id, ctx.unit.id);
+      await lockUnitChargesForAllocation(tx, ctx.tenant.id, ctx.building.id, ctx.unit.id);
+      await tx.charge.delete({ where: { id: oldCharge.id } });
+      deleteReached();
+      await deleteHold;
+    });
+    await deleteStarted;
+
+    let secondPid = 0;
+    const allocation = secondClient.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      secondPid = row.pid;
+      return createLockedAllocation(tx, {
+        tenantId: ctx.tenant.id,
+        buildingId: ctx.building.id,
+        paymentId: payment.id,
+        chargeId: newCharge.id,
+        unitId: ctx.unit.id,
+      }, 10000);
+    });
+    while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitUntilBlocked(secondPid);
+    releaseDelete();
+    await deletion;
+    await expect(allocation).resolves.toMatchObject({ chargeId: newCharge.id, amount: 10000 });
+  });
+
+  it('serializes allocation with a legitimate backdated charge creation', async () => {
+    const ctx = await fixture('allocation-charge-create-race');
+    const payment = await observer.payment.create({ data: ctx.paymentData });
+    const charge = await observer.charge.create({ data: ctx.chargeData });
+    let releaseAllocation!: () => void;
+    const allocationHold = new Promise<void>((resolve) => { releaseAllocation = resolve; });
+    let allocationReached!: () => void;
+    const allocationStarted = new Promise<void>((resolve) => { allocationReached = resolve; });
+
+    const first = firstClient.$transaction(async (tx) => {
+      await createLockedAllocation(tx, {
+        tenantId: ctx.tenant.id,
+        buildingId: ctx.building.id,
+        paymentId: payment.id,
+        chargeId: charge.id,
+        unitId: ctx.unit.id,
+      }, 10000);
+      allocationReached();
+      await allocationHold;
+    });
+    await allocationStarted;
+
+    let secondPid = 0;
+    const creation = secondClient.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      secondPid = row.pid;
+      await lockUnitFinancialMutations(tx, ctx.tenant.id, ctx.unit.id);
+      await lockUnitChargesForAllocation(tx, ctx.tenant.id, ctx.building.id, ctx.unit.id);
+      return tx.charge.create({
+        data: {
+          ...ctx.chargeData,
+          period: '2026-07',
+          concept: 'backdated-charge',
+          dueDate: new Date('2026-07-31T00:00:00.000Z'),
+        },
+      });
+    });
+    while (secondPid === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitUntilBlocked(secondPid);
+    releaseAllocation();
+    await first;
+    await expect(creation).resolves.toMatchObject({ concept: 'backdated-charge' });
+  });
+
+  it('completes a legacy PARTIAL charge with the remaining amount from a new payment', async () => {
+    const ctx = await fixture('legacy-partial-top-up-production-path');
+    const charge = await observer.charge.create({
+      data: { ...ctx.chargeData, amount: 10000, status: ChargeStatus.PARTIAL },
+    });
+    const legacyPayment = await observer.payment.create({
+      data: { ...ctx.paymentData, amount: 4000, reference: 'legacy-partial-payment' },
+    });
+    await observer.paymentAllocation.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        paymentId: legacyPayment.id,
+        chargeId: charge.id,
+        amount: 4000,
+        paymentOriginalAmountMinor: null,
+      },
+    });
+    const topUpPayment = await observer.payment.create({
+      data: { ...ctx.paymentData, amount: 6000, reference: 'legacy-partial-top-up' },
+    });
+
+    await firstClient.$transaction((tx) => createLockedAllocation(tx, {
+      tenantId: ctx.tenant.id,
+      buildingId: ctx.building.id,
+      paymentId: topUpPayment.id,
+      chargeId: charge.id,
+      unitId: ctx.unit.id,
+    }, 6000));
+
+    await expect(observer.charge.findUniqueOrThrow({ where: { id: charge.id } }))
+      .resolves.toMatchObject({ status: ChargeStatus.PAID });
+    await expect(observer.paymentAllocation.count({ where: { chargeId: charge.id } }))
+      .resolves.toBe(2);
   });
 
   it.each([

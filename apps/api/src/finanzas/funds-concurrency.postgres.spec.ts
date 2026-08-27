@@ -4,7 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { PrismaService } from '../prisma/prisma.service';
 
-const ACCEPTANCE_DATABASES = new Set(['buildingos_fin02_acceptance']);
+const ACCEPTANCE_DATABASES = new Set(['buildingos_fin02_acceptance', 'buildingos_local_v2_test']);
 const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
 const fixturePhase = 'fin02';
 const enabled =

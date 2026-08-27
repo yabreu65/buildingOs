@@ -1,7 +1,7 @@
 # BuildingOS — Canonical Architecture
 
 Fecha: 2026-02-22  
-Fuente: Engram (project: BuildingOS)
+Fuente: BuildingOS repository documentation
 
 ## 1) Overview
 BuildingOS es un SaaS multi-tenant para administración de condominios/edificios, con aislamiento estricto por tenant y permisos enforceados en backend.

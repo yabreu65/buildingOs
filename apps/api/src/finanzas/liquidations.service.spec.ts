@@ -88,6 +88,7 @@ describe('LiquidationsService', () => {
     };
     paymentAllocation: { count: jest.Mock };
     auditLog: { create: jest.Mock };
+    $queryRaw: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -124,6 +125,7 @@ describe('LiquidationsService', () => {
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
         count: jest.fn().mockResolvedValue(0),
       },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       $executeRaw: jest.fn().mockResolvedValue(undefined),
       unit: {
         findMany: jest.fn().mockResolvedValue([

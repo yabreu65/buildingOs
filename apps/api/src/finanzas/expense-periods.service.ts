@@ -16,6 +16,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
+import { lockUnitChargesForAllocation } from './payment-allocation-transaction';
+import { lockUnitsFinancialMutations } from './unit-financial-lock';
 import {
   CreateExpensePeriodDto,
   UpdateExpensePeriodDto,
@@ -302,15 +304,21 @@ export class ExpensePeriodsService {
       );
     }
 
-    // Delete charges first, then period
-    await this.prisma.charge.deleteMany({
-      where: {
-        periodId,
-      },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      const chargeUnits = await tx.charge.findMany({
+        where: { periodId },
+        select: { unitId: true, buildingId: true },
+      });
+      await lockUnitsFinancialMutations(tx, tenantId, chargeUnits.map(({ unitId }) => unitId));
+      for (const unitId of [...new Set(chargeUnits.map(({ unitId }) => unitId))].sort()) {
+        const buildingIdForUnit = chargeUnits.find((charge) => charge.unitId === unitId)?.buildingId;
+        if (buildingIdForUnit) {
+          await lockUnitChargesForAllocation(tx, tenantId, buildingIdForUnit, unitId);
+        }
+      }
 
-    await this.prisma.expensePeriod.delete({
-      where: { id: periodId },
+      await tx.charge.deleteMany({ where: { periodId } });
+      await tx.expensePeriod.delete({ where: { id: periodId } });
     });
 
     // Audit: EXPENSE_PERIOD_DELETE
@@ -348,8 +356,9 @@ export class ExpensePeriodsService {
 
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
+    return this.prisma.$transaction(async (tx) => {
     // 1. Get period and validate
-    const period = await this.prisma.expensePeriod.findFirst({
+    const period = await tx.expensePeriod.findFirst({
       where: {
         id: periodId,
         tenantId,
@@ -368,8 +377,8 @@ export class ExpensePeriodsService {
     }
 
     // 2. Validate building allocation mode
-    const building = await this.prisma.building.findUnique({
-      where: { id: buildingId },
+    const building = await tx.building.findFirst({
+      where: { id: buildingId, tenantId },
     });
 
     if (!building) {
@@ -394,8 +403,9 @@ export class ExpensePeriodsService {
     }
 
     // 4. Get billable units with categories (active only)
-    const billableUnits = await this.prisma.unit.findMany({
+    const billableUnits = await tx.unit.findMany({
       where: {
+        tenantId,
         buildingId,
         isBillable: true,
       },
@@ -404,6 +414,10 @@ export class ExpensePeriodsService {
       },
       orderBy: { code: 'asc' }, // Deterministic order
     });
+    await lockUnitsFinancialMutations(tx, tenantId, billableUnits.map(({ id }) => id));
+    for (const unitId of billableUnits.map(({ id }) => id).sort()) {
+      await lockUnitChargesForAllocation(tx, tenantId, buildingId, unitId);
+    }
 
     // 5. Check that all billable units have active categories
     const unitsWithoutCategory = billableUnits.filter(
@@ -486,7 +500,7 @@ export class ExpensePeriodsService {
     });
 
     // Delete any existing charges for this period (re-generation)
-    await this.prisma.charge.deleteMany({
+    await tx.charge.deleteMany({
       where: {
         periodId,
         status: ChargeStatus.PENDING,
@@ -494,12 +508,12 @@ export class ExpensePeriodsService {
     });
 
     // Batch create
-    await this.prisma.charge.createMany({
+    await tx.charge.createMany({
       data: charges as Prisma.ChargeCreateManyInput[],
     });
 
     // Update period status
-    await this.prisma.expensePeriod.update({
+    await tx.expensePeriod.update({
       where: { id: periodId },
       data: { status: ExpensePeriodStatus.GENERATED },
     });
@@ -522,6 +536,7 @@ export class ExpensePeriodsService {
       chargesCount: charges.length,
       totalAllocated: period.totalToAllocate.toString(),
     };
+    });
   }
 
   /**

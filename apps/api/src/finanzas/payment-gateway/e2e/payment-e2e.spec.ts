@@ -93,6 +93,19 @@ describe('E2E Payment Flow', () => {
             payment: { status: paymentRecord.status },
           })),
         })),
+        findMany: jest.fn().mockImplementation(() => Promise.resolve([{
+          id: 'charge-e2e-1',
+          tenantId: 'tenant-e2e',
+          buildingId: 'building-e2e',
+          unitId: 'unit-e2e',
+          amount: 10000,
+          currency: 'ARS',
+          status: createdAllocations.length === 0 ? 'PENDING' : 'PAID',
+          paymentAllocations: createdAllocations.map((allocation) => ({
+            ...allocation,
+            payment: { id: 'payment-e2e-1', status: paymentRecord.status },
+          })),
+        }])),
         update: jest.fn(),
       },
       payment: {

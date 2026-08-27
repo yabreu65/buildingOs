@@ -39,11 +39,12 @@ import {
   assertPaymentAllocationCurrencyMode,
   calculateChargeAvailableOutstanding,
   createLockedAllocation,
-  lockChargesForAllocation,
+  lockUnitChargesForAllocation,
   lockPaymentForAllocation,
   recalculateLockedCharge,
   reconcilePaymentWhenConsumed,
 } from '../payment-allocation-transaction';
+import { lockUnitFinancialMutations } from '../unit-financial-lock';
 
 /**
  * 3E2 fix: the gateway Payment.paidAt must derive from the SAME verified
@@ -236,6 +237,7 @@ export class PaymentGatewayService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await lockUnitFinancialMutations(tx, charge.tenantId, charge.unitId);
       const eventLockKey = `webhook:${this.provider?.providerName}:${event.eventId}`;
       await tx.$executeRaw(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${eventLockKey}, 0))`,
@@ -271,6 +273,7 @@ export class PaymentGatewayService {
         buildingId: charge.buildingId,
         paymentId: discoveredPayment.id,
         chargeId: charge.id,
+        unitId: charge.unitId,
       };
       await lockPaymentForAllocation(tx, scope);
       const payment = await tx.payment.findFirst({
@@ -280,7 +283,7 @@ export class PaymentGatewayService {
         },
       });
       if (!payment) return false;
-      await lockChargesForAllocation(tx, charge.tenantId, charge.buildingId, [charge.id]);
+      await lockUnitChargesForAllocation(tx, charge.tenantId, charge.buildingId, charge.unitId);
       const lockedCharge = await tx.charge.findFirst({
         where: { id: charge.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
         include: {
@@ -290,6 +293,18 @@ export class PaymentGatewayService {
         },
       });
       if (!lockedCharge) return false;
+      if (event.currency !== lockedCharge.currency) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_ALLOCATION_CURRENCY_NOT_SUPPORTED',
+        });
+      }
+      if (verifiedAmount > lockedCharge.amount) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'PAYMENT_EVENT_AMOUNT_EXCEEDS_CHARGE',
+        });
+      }
       const lockedOutstanding = calculateChargeAvailableOutstanding(
         lockedCharge.amount,
         lockedCharge.paymentAllocations,
@@ -332,6 +347,13 @@ export class PaymentGatewayService {
           throw new UnprocessableEntityException({
             statusCode: 422,
             error: 'PAYMENT_PROVIDER_AMOUNT_MISMATCH',
+          });
+        }
+        if (existingAllocation.amount !== lockedCharge.amount) {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            error: 'PAYMENT_LEGACY_PARTIAL_ALLOCATION_UNSUPPORTED',
+            message: 'No se puede completar una asignación parcial heredada mediante webhook',
           });
         }
       }

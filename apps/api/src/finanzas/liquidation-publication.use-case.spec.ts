@@ -49,6 +49,7 @@ describe('LiquidationPublicationUseCase', () => {
   };
 
   let tx: {
+    $queryRaw: jest.Mock;
     membership: { findFirst: jest.Mock };
     liquidation: { findFirst: jest.Mock; updateMany: jest.Mock };
     unit: { findMany: jest.Mock };
@@ -62,6 +63,7 @@ describe('LiquidationPublicationUseCase', () => {
 
   beforeEach(() => {
     tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       membership: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'member-1',

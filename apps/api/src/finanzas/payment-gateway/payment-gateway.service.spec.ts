@@ -87,6 +87,17 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
             }))),
           })),
         ),
+        findMany: jest.fn(() =>
+          Promise.resolve([charge({
+            paymentAllocations: createdAllocations.map((allocation) => ({
+              ...allocation,
+              payment: { id: 'other-payment', status: 'APPROVED' },
+            })).concat(currentPayment.paymentAllocations.map((allocation) => ({
+              ...allocation,
+              payment: { id: currentPayment.id, status: currentPayment.status },
+            }))),
+          })]),
+        ),
         findUnique: jest.fn(() =>
           Promise.resolve(charge({
             paymentAllocations: createdAllocations.map((allocation) => ({
@@ -399,40 +410,71 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
   });
 
-  describe('same-currency provider partial payment', () => {
-    it('charge 10000, payment 4000, event 4000 => allocation 4000, charge PARTIAL, outstanding 6000', async () => {
+  describe('provider partial payment (contract: no partial payments)', () => {
+    it('rejects a provider event that would partially settle the charge (no mutation, no processed event)', async () => {
       mockPrisma.charge.findFirst.mockImplementation(() =>
         Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
       );
+      mockPrisma.charge.findMany.mockImplementation(() =>
+        Promise.resolve([charge({ amount: 10000, paymentAllocations: [...createdAllocations] })]),
+      );
       currentPayment = payment({ amount: 4000 });
 
-      const result = await run(paidEvent({ amount: 4000 }));
-
-      expect(result.chargeUpdated).toBe(true);
-      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ amount: 4000 }),
-        }),
-      );
-      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ status: 'PARTIAL' }) }),
-      );
-      // ledger-derived outstanding
-      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+      await expect(run(paidEvent({ amount: 4000 }))).rejects.toMatchObject({
+        response: {
+          statusCode: 409,
+          message: 'La asignación debe completar el saldo pendiente del cargo.',
+        },
+      });
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.processedWebhookEvent.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.cacheProcessed).not.toHaveBeenCalled();
     });
 
-    it('replay of the partial event does not duplicate the allocation', async () => {
+    it('rejects a provider event for a newer charge while an older eligible charge remains outstanding', async () => {
+      const olderCharge = charge({
+        id: 'charge-older',
+        amount: 6000,
+        paymentAllocations: [],
+      });
       mockPrisma.charge.findFirst.mockImplementation(() =>
-        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+        Promise.resolve(charge({ id: 'charge-1', amount: 4000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.charge.findMany.mockImplementation(() =>
+        Promise.resolve([olderCharge, charge({ id: 'charge-1', amount: 4000, paymentAllocations: [] })]),
       );
       currentPayment = payment({ amount: 4000 });
 
-      await run(paidEvent({ amount: 4000 }));
-      mockIdempotencyService.isProcessed.mockResolvedValue(true);
-      await run(paidEvent({ amount: 4000 }));
+      await expect(run(paidEvent({ amount: 4000 }))).rejects.toMatchObject({
+        response: {
+          statusCode: 409,
+          message: 'Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.',
+        },
+      });
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.processedWebhookEvent.create).not.toHaveBeenCalled();
+    });
 
-      expect(mockPrisma.paymentAllocation.create).toHaveBeenCalledTimes(1);
-      expect(createdAllocations).toEqual([{ amount: 4000 }]);
+    it('rejects a provider event that would leave a charge partially settled even on replay (idempotent rejection)', async () => {
+      mockPrisma.charge.findFirst.mockImplementation(() =>
+        Promise.resolve(charge({ amount: 10000, paymentAllocations: [...createdAllocations] })),
+      );
+      mockPrisma.charge.findMany.mockImplementation(() =>
+        Promise.resolve([charge({ amount: 10000, paymentAllocations: [...createdAllocations] })]),
+      );
+      currentPayment = payment({ amount: 4000 });
+
+      await expect(run(paidEvent({ amount: 4000 }))).rejects.toMatchObject({
+        response: { statusCode: 409 },
+      });
+      mockIdempotencyService.isProcessed.mockResolvedValue(false);
+      await expect(run(paidEvent({ amount: 4000 }))).rejects.toMatchObject({
+        response: { statusCode: 409 },
+      });
+
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(createdAllocations).toEqual([]);
     });
   });
 
@@ -456,7 +498,7 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
       });
     });
 
-    it('accepts 7000 when another SUBMITTED payment reserves 3000 and reuses its own 7000 reservation', async () => {
+    it('rejects an existing legacy partial allocation instead of completing it through the webhook', async () => {
       currentPayment = payment({
         amount: 7000,
         paymentAllocations: [{ chargeId: 'charge-1', amount: 7000, charge: { currency: 'ARS' } }],
@@ -468,10 +510,11 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
         ],
       }));
 
-      await expect(run(paidEvent({ amount: 7000 }))).resolves.toEqual(
-        expect.objectContaining({ chargeUpdated: true }),
-      );
+      await expect(run(paidEvent({ amount: 7000 }))).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'PAYMENT_LEGACY_PARTIAL_ALLOCATION_UNSUPPORTED' },
+      });
       expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
     });
 
     it('blocks 7000 when another SUBMITTED payment reserves 7000', async () => {

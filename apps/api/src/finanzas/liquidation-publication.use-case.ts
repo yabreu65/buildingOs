@@ -23,6 +23,8 @@ import {
   type LiquidationResponseDto,
   type PublishLiquidationDto,
 } from './expense-ledger.dto';
+import { lockUnitChargesForAllocation } from './payment-allocation-transaction';
+import { lockUnitsFinancialMutations } from './unit-financial-lock';
 
 export type NotificationPolicy = 'post-commit' | 'disabled';
 
@@ -988,8 +990,14 @@ export class LiquidationPublicationUseCase {
                   amount: distributionItem.amountMinor,
                   currency: current.baseCurrency,
                   dueDate,
-                  liquidationId,
-                }));
+                   liquidationId,
+                 }));
+
+          const publicationUnitIds = expectedCharges.map(({ unitId }) => unitId);
+          await lockUnitsFinancialMutations(tx, tenantId, publicationUnitIds);
+          for (const unitId of [...new Set(publicationUnitIds)].sort()) {
+            await lockUnitChargesForAllocation(tx, tenantId, current.buildingId, unitId);
+          }
 
           const existingCharges = await tx.charge.findMany({
             where: {
