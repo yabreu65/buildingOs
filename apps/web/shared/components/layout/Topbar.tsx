@@ -12,7 +12,7 @@ import { useTenants } from '../../../features/tenants/tenants.hooks';
 import type { TenantSummary } from '../../../features/tenants/tenants.service';
 import type { Membership } from '../../../features/auth/auth.types';
 import Select from '../ui/Select';
-import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu } from 'lucide-react';
+import { Bell, CreditCard, X, Clock, CheckCircle, XCircle, MessageSquare, FileText, Home, Menu, ChevronDown } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { listNotifications, markAsRead, markAllAsRead, getUnreadCount, type Notification } from '@/features/notifications/notifications.api';
@@ -30,7 +30,7 @@ import {
   notificationQueryKeys,
   useNotificationQueryCleanup,
 } from '@/features/notifications/notification-queries';
-import { notificationsCenterPath } from '@/shared/lib/routes';
+import { notificationsCenterPath, residentDashboard, tenantDashboard } from '@/shared/lib/routes';
 
 const ADMIN_ROLES = new Set(['TENANT_ADMIN', 'TENANT_OWNER', 'OPERATOR', 'SUPER_ADMIN']);
 
@@ -417,6 +417,8 @@ export const Topbar = ({
   const currentSearch = searchParams.toString();
   const urlTenantId = typeof params?.tenantId === 'string' ? params.tenantId : undefined;
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isPortalMenuOpen, setIsPortalMenuOpen] = useState(false);
+  const portalMenuRef = useRef<HTMLDivElement>(null);
   const session = useAuthSession();
   const { data: tenants, isLoading, error } = useTenants();
 
@@ -443,6 +445,8 @@ export const Topbar = ({
 
   // Obtener rol del usuario en el tenant activo
   const activeMembership = session?.memberships.find((m) => m.tenantId === activeTenantId);
+  const isAdmin = activeMembership?.roles.some((candidateRole) => ADMIN_ROLES.has(candidateRole)) ?? false;
+  const isResident = activeMembership?.roles.includes('RESIDENT') ?? false;
   const activePortal = resolveAuthorizedPortalContext({
     session,
     tenantId: activeTenantId,
@@ -467,6 +471,29 @@ export const Topbar = ({
   };
 
   const roleLabel = roleLabelMap[role] || role;
+  const canSwitchPortal = isAdmin && isResident;
+
+  useEffect(() => {
+    if (!isPortalMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!portalMenuRef.current?.contains(event.target as Node)) {
+        setIsPortalMenuOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsPortalMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isPortalMenuOpen]);
 
   const handleTenantChange = (nextTenantId: string) => {
     if (!session) return;
@@ -488,6 +515,16 @@ export const Topbar = ({
         preferredTenantId: nextTenantId,
         preferredPortal: activePortal,
       }),
+    );
+  };
+
+  const handlePortalChange = (nextPortal: 'admin' | 'resident') => {
+    setLastPortal(nextPortal);
+    setIsPortalMenuOpen(false);
+    router.replace(
+      nextPortal === 'resident'
+        ? residentDashboard(activeTenantId)
+        : tenantDashboard(activeTenantId),
     );
   };
 
@@ -583,9 +620,52 @@ export const Topbar = ({
             isMobileMenuOpen={isMobileMenuOpen}
           />
         )}
-        <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
-          {roleLabel}
-        </span>
+        {canSwitchPortal ? (
+          <div ref={portalMenuRef} className="relative">
+            <button
+              type="button"
+              className="inline-flex min-h-11 items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium transition hover:bg-muted/80 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              onClick={() => setIsPortalMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={isPortalMenuOpen}
+              aria-controls="portal-context-menu"
+            >
+              {roleLabel}
+              <ChevronDown className="size-3.5" aria-hidden="true" />
+            </button>
+            {isPortalMenuOpen && (
+              <div
+                id="portal-context-menu"
+                role="menu"
+                aria-label="Cambiar portal"
+                className="absolute right-0 top-full z-50 mt-2 min-w-40 rounded-lg border border-border bg-card p-1 text-card-foreground shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm hover:bg-muted focus:bg-muted focus:outline-none"
+                  onClick={() => handlePortalChange('admin')}
+                  aria-current={activePortal === 'admin' ? 'page' : undefined}
+                >
+                  Administrador
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm hover:bg-muted focus:bg-muted focus:outline-none"
+                  onClick={() => handlePortalChange('resident')}
+                  aria-current={activePortal === 'resident' ? 'page' : undefined}
+                >
+                  Residente
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <span className="hidden items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium lg:inline-flex">
+            {roleLabel}
+          </span>
+        )}
 
         <button
           className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"

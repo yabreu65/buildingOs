@@ -1268,6 +1268,119 @@ describe('Topbar portal persistence', () => {
   });
 });
 
+describe('Topbar portal switcher', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPush.mockReset();
+    mockReplace.mockReset();
+    currentSearch = '';
+    jest.requireMock('next/navigation').useRouter = () => ({ push: mockPush, replace: mockReplace });
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/dashboard';
+    mockUseSearchParams.mockImplementation(() => new URLSearchParams(currentSearch));
+    mockGetLastPortal.mockReturnValue(null);
+    mockGetUnreadCount.mockResolvedValue(0);
+    mockListNotifications.mockResolvedValue({ notifications: [], total: 0 });
+    mockListPendingPayments.mockResolvedValue([]);
+  });
+
+  it('keeps the admin-only role label static without a resident option', () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'admin-1', email: 'admin@test.com', name: 'Admin User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+
+    expect(screen.getByText('Administrador')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Administrador' })).toBeNull();
+  });
+
+  it('keeps the resident-only role label static', () => {
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+    mockGetSession.mockReturnValue({
+      user: { id: 'resident-1', email: 'resident@test.com', name: 'Resident User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+
+    expect(screen.getByText('Residente')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Residente' })).toBeNull();
+  });
+
+  it('shows both portals for a mixed user on an admin route', () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'mixed-1', email: 'admin-resident@test.com', name: 'Mixed User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN', 'RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+
+    const trigger = screen.getByRole('button', { name: 'Administrador' });
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('menu', { name: 'Cambiar portal' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Administrador' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Residente' })).toBeTruthy();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('navigates a mixed user from admin to resident and persists the portal', () => {
+    mockGetSession.mockReturnValue({
+      user: { id: 'mixed-1', email: 'admin-resident@test.com', name: 'Mixed User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN', 'RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+    fireEvent.click(screen.getByRole('button', { name: 'Administrador' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Residente' }));
+
+    expect(mockSetLastPortal).toHaveBeenCalledWith('resident');
+    expect(mockReplace).toHaveBeenCalledWith('/tenant-1/resident/dashboard');
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('shows the resident portal as current and offers admin for a mixed user', () => {
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+    mockGetSession.mockReturnValue({
+      user: { id: 'mixed-1', email: 'admin-resident@test.com', name: 'Mixed User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN', 'RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+    const trigger = screen.getByRole('button', { name: 'Residente' });
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('menuitem', { name: 'Administrador' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Residente' })).toBeTruthy();
+  });
+
+  it('navigates a mixed user from resident to admin and persists the portal', () => {
+    jest.requireMock('next/navigation').usePathname = () => '/tenant-1/resident/dashboard';
+    mockGetSession.mockReturnValue({
+      user: { id: 'mixed-1', email: 'admin-resident@test.com', name: 'Mixed User' },
+      memberships: [{ tenantId: TENANT_ID, roles: ['TENANT_ADMIN', 'RESIDENT'] }],
+      activeTenantId: TENANT_ID,
+    });
+
+    renderTopbar();
+    fireEvent.click(screen.getByRole('button', { name: 'Residente' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Administrador' }));
+
+    expect(mockSetLastPortal).toHaveBeenCalledWith('admin');
+    expect(mockReplace).toHaveBeenCalledWith('/tenant-1/dashboard');
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
 
 function MobileMenuHarness() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
