@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { requiredPassword } from '../../prisma/seed-staging-golden';
 import {
   applyStagingGoldenSeed,
   assertConnectedStagingGoldenTarget,
@@ -83,6 +84,21 @@ describe('STG-DATA-01 Golden Dataset safety', () => {
   it('requires explicit opt-in and confirmation', () => {
     expect(() => assertSafeStagingGoldenEnvironment({ ...baseEnvironment, STAGING_GOLDEN_SEED: undefined })).toThrow('STAGING_GOLDEN_SEED');
     expect(() => assertSafeStagingGoldenEnvironment({ ...baseEnvironment, STAGING_GOLDEN_CONFIRMATION: 'wrong' })).toThrow('STAGING_GOLDEN_CONFIRMATION');
+  });
+
+  it('requires the QA password at the application execution boundary', () => {
+    const validPassword = 'x'.repeat(12);
+    expect(() => requiredPassword({})).toThrow('STAGING_GOLDEN_QA_PASSWORD');
+    expect(() => requiredPassword({ STAGING_GOLDEN_QA_PASSWORD: 'too-short' })).toThrow('STAGING_GOLDEN_QA_PASSWORD');
+    expect(requiredPassword({ STAGING_GOLDEN_QA_PASSWORD: validPassword })).toBe(validPassword);
+  });
+
+  it('keeps the Golden service profile-gated without requiring its password during Compose interpolation', () => {
+    const compose = readFileSync(join(__dirname, '../../../../infra/docker/docker-compose.staging.yml'), 'utf8');
+    const service = compose.match(/  api-seed-staging-golden:\n([\s\S]*?)(?=\n  [a-z])/i)?.[1] ?? '';
+    expect(service).toContain('profiles: ["seed-staging-golden"]');
+    expect(service).toContain('STAGING_GOLDEN_QA_PASSWORD: ${STAGING_GOLDEN_QA_PASSWORD:-}');
+    expect(service).not.toContain('STAGING_GOLDEN_QA_PASSWORD:?');
   });
 
   it('requires the verified PostgreSQL identity to be private staging infrastructure', async () => {
