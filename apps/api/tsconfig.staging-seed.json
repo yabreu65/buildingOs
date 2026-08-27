@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "prisma/seed-staging-golden.ts",
+    "prisma/lib/staging-seed/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

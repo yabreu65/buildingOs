@@ -108,6 +108,26 @@ describe('STG-DATA-01 Golden Dataset safety', () => {
     await expect(assertConnectedStagingGoldenTarget({ readConnectionIdentity: async () => ({ database: target.database, address: '8.8.8.8' }) }, target)).rejects.toThrow();
   });
 
+  it.each([
+    ['10.1.2.3', true],
+    ['172.16.0.1', true],
+    ['172.31.255.254', true],
+    ['172.15.0.1', false],
+    ['172.32.0.1', false],
+    ['192.168.1.5', true],
+    ['8.8.8.8', false],
+    ['not-an-address', false],
+    [null, false],
+  ] as const)('validates staging address %s as private=%s', async (address, accepted) => {
+    const target = assertSafeStagingGoldenEnvironment(baseEnvironment);
+    const result = assertConnectedStagingGoldenTarget({ readConnectionIdentity: async () => ({ database: target.database, address }) }, target);
+    if (accepted) {
+      await expect(result).resolves.toMatchObject({ database: target.database, address });
+    } else {
+      await expect(result).rejects.toThrow();
+    }
+  });
+
   it('creates owned Golden records on the first run', async () => {
     const database = createFakeDatabase();
     await applyStagingGoldenSeed(database.client, 'hashed-qa-password');
