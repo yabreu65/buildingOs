@@ -145,6 +145,24 @@ describe('STG-DATA-01 Golden Dataset safety', () => {
     expect(Object.fromEntries(Object.entries(database.delegates).map(([name, delegate]) => [name, delegate.created.length]))).toEqual(counts);
   });
 
+  it('is idempotent when PostgreSQL returns null for an identity payment rate ID', async () => {
+    const database = createFakeDatabase();
+    await applyStagingGoldenSeed(database.client, 'hashed-qa-password');
+    const payment = database.delegates.payment.records.find((record) => record.id === 'stg-golden-payment-auto-101');
+    if (!payment) throw new Error('expected identity payment missing from fake');
+
+    // Fake persistence keeps omitted nullable values as undefined; Prisma/PostgreSQL returns them as null.
+    const paymentIndex = database.delegates.payment.records.indexOf(payment);
+    database.delegates.payment.records.splice(paymentIndex, 1, { ...payment, exchangeRateId: null });
+    const createdPayments = database.delegates.payment.created.length;
+
+    await applyStagingGoldenSeed(database.client, 'hashed-qa-password');
+
+    expect(database.delegates.payment.created).toHaveLength(createdPayments);
+    expect(database.delegates.payment.records.filter((record) => record.id === payment.id)).toHaveLength(1);
+    expect(database.delegates.payment.records.find((record) => record.id === payment.id)).toMatchObject({ exchangeRateId: null });
+  });
+
   it('preserves unrelated tenants and residents', async () => {
     const database = createFakeDatabase();
     database.delegates.tenant.records.push({ id: 'unrelated-tenant', name: 'Compatibility Tenant', type: 'ADMINISTRADORA' });
