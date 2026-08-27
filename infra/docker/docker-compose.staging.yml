@@ -119,6 +119,27 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
     restart: "no"
 
+  api-seed-staging-golden:
+    profiles: ["seed-staging-golden"]
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: dev-tools
+    networks:
+      - buildingos_staging_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: staging
+      NODE_ENV: staging
+      STAGING_GOLDEN_SEED: "1"
+      STAGING_GOLDEN_CONFIRMATION: STG-DATA-01
+      STAGING_GOLDEN_QA_PASSWORD: ${STAGING_GOLDEN_QA_PASSWORD:?STAGING_GOLDEN_QA_PASSWORD is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+    command: ["npm", "run", "seed:staging:golden", "-w", "apps/api"]
+    restart: "no"
+
   buildingos-api:
     build:
       context: ../../

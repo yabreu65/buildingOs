@@ -24,6 +24,7 @@
     "seed:local:manual": "ts-node prisma/seed-local-manual.ts",
     "seed:test": "ts-node prisma/seed.test.ts",
     "seed:staging": "NODE_ENV=staging ts-node prisma/seed.ts",
+    "seed:staging:golden": "APP_ENV=staging NODE_ENV=staging STAGING_GOLDEN_SEED=1 STAGING_GOLDEN_CONFIRMATION=STG-DATA-01 ts-node prisma/seed-staging-golden.ts",
     "seed:pilot": "ts-node prisma/seed-pilot.ts",
     "seed:pilot:staging": "NODE_ENV=staging ts-node prisma/seed-pilot.ts",
     "seed:pilot:data-pack": "ts-node prisma/seed-pilot-data-pack.ts",
