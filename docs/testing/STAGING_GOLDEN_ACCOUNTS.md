@@ -6,9 +6,21 @@ environment. Every owned record uses the `STG-DATA-01:GOLDEN` marker, stable
 
 ## Safety Contract
 
-Run only through `npm run seed:staging:golden` in `apps/api`, with
-`STAGING_GOLDEN_QA_PASSWORD` supplied by the staging secret manager. The seed
-does not print or persist the plaintext password.
+The Golden seed is a manual, explicit one-shot operation. Run it only through
+the profile-gated Compose service from the staging checkout, with
+`STAGING_GOLDEN_QA_PASSWORD` supplied by the staging secret manager:
+
+```bash
+docker compose \
+  --env-file /opt/pawtech/env/buildingos-staging.env \
+  -f infra/docker/docker-compose.staging.yml \
+  --profile seed-staging-golden \
+  run --rm --build api-seed-staging-golden
+```
+
+This service is not part of deployment, normal staging startup, restart, or
+`docker compose up` without the explicit profile. Production execution is
+forbidden. The seed does not print or persist the plaintext password.
 
 The seed requires all of the following before constructing `PrismaClient`:
 
