@@ -69,6 +69,11 @@ destination versioning, Object Lock, and retention controls. The scripts
 calculate and compare per-object SHA-256 content digests, object keys, byte
 sizes, counts, byte totals, and the manifest SHA-256. Verify and restore also
 bind the verified manifest SHA-256, count, and byte total to the backup receipt.
+Independent verification passes only when those content checks and receipt
+bindings pass and every retained PostgreSQL dump, checksum, receipt, MinIO data
+object, manifest, manifest checksum, and embedded receipt independently proves
+`x-amz-server-side-encryption: AES256` metadata. The capability probe remains a
+prerequisite; provider defaults are not treated as object-level proof.
 ETags are not used as the portable cryptographic integrity control because
 their semantics vary by provider, multipart upload, and encryption mode.
 

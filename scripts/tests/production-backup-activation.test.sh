@@ -142,6 +142,15 @@ case "$1" in
   cat)
     /bin/cat "$(remote_path "$2")"
     ;;
+  backend)
+    [[ "$2" == head ]] || exit 1
+    object_path="${@: -1}"
+    if [[ -n "${MOCK_RCLONE_MISSING_SSE_MATCH:-}" && "$object_path" == *"$MOCK_RCLONE_MISSING_SSE_MATCH"* ]]; then
+      printf '{}\n'
+    else
+      printf '{"X-Amz-Server-Side-Encryption":"AES256"}\n'
+    fi
+    ;;
   *) exit 1 ;;
 esac
 MOCK
@@ -162,6 +171,23 @@ if jq -e --arg setId '20260828t121000z-pgreceipt' --arg appSha "$MOCK_APP_SHA" '
 else
   fail_test "PostgreSQL receipt binds backup set, APP_SHA, and SHA-256"
 fi
+
+pg_dump_sse_receipt="$TEST_ROOT/postgres-dump-sse-failure.json"
+PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='.dump' BACKUP_SET_ID='20260828t121010z-pgdumpsse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_dump_sse_receipt" \
+  assert_failure "PostgreSQL dump with correct SHA but missing SSE fails" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
+assert_absent "PostgreSQL dump SSE failure emits no PASS marker" 'POSTGRES_BACKUP_COMPLETE' "$TEST_ROOT/output"
+if [[ ! -e "$pg_dump_sse_receipt" ]]; then pass "PostgreSQL dump SSE failure creates no PASS receipt"; else fail_test "PostgreSQL dump SSE failure creates no PASS receipt"; fi
+
+pg_checksum_sse_receipt="$TEST_ROOT/postgres-checksum-sse-failure.json"
+PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='.dump.sha256' BACKUP_SET_ID='20260828t121020z-pgchecksse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_checksum_sse_receipt" \
+  assert_failure "PostgreSQL checksum with correct content but missing SSE fails" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
+assert_absent "PostgreSQL checksum SSE failure emits no PASS marker" 'POSTGRES_BACKUP_COMPLETE' "$TEST_ROOT/output"
+if [[ ! -e "$pg_checksum_sse_receipt" ]]; then pass "PostgreSQL checksum SSE failure creates no PASS receipt"; else fail_test "PostgreSQL checksum SSE failure creates no PASS receipt"; fi
+
+pg_receipt_sse_failure="$TEST_ROOT/postgres-receipt-sse-failure.json"
+PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='postgres-backup-receipt.json' BACKUP_SET_ID='20260828t121030z-pgreceiptsse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_receipt_sse_failure" \
+  assert_failure "PostgreSQL receipt with correct content but missing SSE fails" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
+assert_absent "PostgreSQL receipt SSE failure emits no PASS marker" 'POSTGRES_BACKUP_COMPLETE' "$TEST_ROOT/output"
 failed_pg_receipt="$TEST_ROOT/postgres-failure.json"
 PATH="$TEST_ROOT/bin:$PATH" \
   MOCK_PG_DUMP_RESULT=FAIL \

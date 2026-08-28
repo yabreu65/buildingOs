@@ -47,6 +47,7 @@ create_manifest() {
   while IFS=$'\t' read -r key size; do
     [[ -n "$key" ]] || fail "MinIO listing contains an empty object key"
     sha256="$(hash_object "$object_root/$key")"
+    assert_sse_s3_object "$object_root/$key"
     record="$(jq -cn --arg key "$key" --argjson size "$size" --arg sha256 "$sha256" '{key:$key,size:$size,sha256:$sha256}')"
     printf '%s\n' "$record" >> "$manifest_file"
   done < "$entries_file"
@@ -80,6 +81,9 @@ mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.json" "$TEMP_DIR/minio-
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.sha256" "$TEMP_DIR/minio-manifest.sha256" >/dev/null || fail "manifest checksum is unavailable"
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/backup-receipt.json" "$TEMP_DIR/backup-receipt.json" >/dev/null || fail "backup receipt is unavailable"
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/postgres-backup-receipt.json" "$TEMP_DIR/postgres-backup-receipt.json" >/dev/null || fail "PostgreSQL receipt is unavailable"
+for metadata_object in minio-manifest.json minio-manifest.sha256 backup-receipt.json postgres-backup-receipt.json; do
+  assert_sse_s3_object "backup/$BACKUP_BUCKET/$PREFIX/meta/$metadata_object"
+done
 
 grep -Eq '^[0-9a-fA-F]{64}[[:space:]]+[*]?minio-manifest\.json$' "$TEMP_DIR/minio-manifest.sha256" || fail "invalid manifest checksum file"
 (cd "$TEMP_DIR" && sha256sum -c minio-manifest.sha256 >/dev/null) || fail "manifest checksum verification failed"
@@ -121,6 +125,14 @@ postgres_sha256="$(jq -er '.postgres_sha256 | select(test("^[0-9a-f]{64}$"))' "$
 actual_postgres_sha256="$(hash_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/$postgres_dump_filename")"
 [[ "$actual_postgres_sha256" == "$postgres_sha256" ]] || fail "off-host PostgreSQL dump SHA-256 does not match paired receipt"
 assert_sse_s3_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/$postgres_dump_filename"
+printf '%s  %s\n' "$postgres_sha256" "$postgres_dump_filename" > "$TEMP_DIR/expected-postgres.sha256"
+expected_postgres_checksum_sha256="$(sha256sum "$TEMP_DIR/expected-postgres.sha256" | cut -d ' ' -f1)"
+actual_postgres_checksum_sha256="$(hash_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/$postgres_dump_filename.sha256")"
+[[ "$actual_postgres_checksum_sha256" == "$expected_postgres_checksum_sha256" ]] || fail "off-host PostgreSQL checksum object does not match paired receipt"
+assert_sse_s3_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/$postgres_dump_filename.sha256"
+actual_external_postgres_receipt_sha256="$(hash_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/postgres-backup-receipt.json")"
+[[ "$actual_external_postgres_receipt_sha256" == "$postgres_receipt_sha256" ]] || fail "off-host PostgreSQL receipt does not match embedded receipt"
+assert_sse_s3_object "backup/$BACKUP_BUCKET/$postgres_remote_object_prefix/postgres-backup-receipt.json"
 
 if ! mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" > "$TEMP_DIR/backup-listing.json"; then
   fail "backup object listing is unavailable"

@@ -5,6 +5,15 @@ set +x
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
+assert_remote_sse_s3() {
+  local object_path="$1"
+  rclone backend head "$object_path" | jq -e '
+    to_entries | any(
+      (.key | ascii_downcase) == "x-amz-server-side-encryption" and
+      ((.value | if type == "array" then .[0] else . end) | ascii_downcase) == "aes256"
+    )
+  ' >/dev/null || fail "PostgreSQL backup object is missing required SSE-S3 AES256 metadata"
+}
 
 for variable in BACKUP_SET_ID APP_SHA BACKUP_BUCKET POSTGRES_CONTAINER POSTGRES_DATABASE POSTGRES_USER POSTGRES_BACKUP_ROOT POSTGRES_RCLONE_DESTINATION POSTGRES_VERIFY_RCLONE_DESTINATION POSTGRES_SSE_MODE POSTGRES_RECEIPT_FILE; do require "$variable"; done
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
@@ -46,6 +55,11 @@ rclone copyto --s3-server-side-encryption AES256 "$dump_file" "$remote_root/$dum
 rclone copyto --s3-server-side-encryption AES256 "$checksum_file" "$remote_root/$dump_filename.sha256" || fail "PostgreSQL encrypted off-host checksum upload failed"
 remote_sha256="$(rclone cat "$verify_remote_root/$dump_filename" | sha256sum | cut -d ' ' -f1)" || fail "PostgreSQL remote checksum evidence is unavailable"
 [[ "$remote_sha256" == "$postgres_sha256" ]] || fail "PostgreSQL remote checksum does not match"
+local_checksum_sha256="$(sha256sum "$checksum_file" | cut -d ' ' -f1)"
+remote_checksum_sha256="$(rclone cat "$verify_remote_root/$dump_filename.sha256" | sha256sum | cut -d ' ' -f1)" || fail "PostgreSQL remote checksum object evidence is unavailable"
+[[ "$remote_checksum_sha256" == "$local_checksum_sha256" ]] || fail "PostgreSQL remote checksum object does not match"
+assert_remote_sse_s3 "$verify_remote_root/$dump_filename"
+assert_remote_sse_s3 "$verify_remote_root/$dump_filename.sha256"
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 jq -n \
@@ -65,6 +79,7 @@ rclone copyto --s3-server-side-encryption AES256 "$POSTGRES_RECEIPT_FILE" "$remo
 local_receipt_sha256="$(sha256sum "$POSTGRES_RECEIPT_FILE" | cut -d ' ' -f1)"
 remote_receipt_sha256="$(rclone cat "$verify_remote_root/postgres-backup-receipt.json" | sha256sum | cut -d ' ' -f1)" || fail "PostgreSQL remote receipt evidence is unavailable"
 [[ "$remote_receipt_sha256" == "$local_receipt_sha256" ]] || fail "PostgreSQL remote receipt does not match local PASS evidence"
+assert_remote_sse_s3 "$verify_remote_root/postgres-backup-receipt.json"
 
 printf 'POSTGRES_BACKUP_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nAPP_SHA=%s\nPOSTGRES_BACKUP_ID=%s\nPOSTGRES_SHA256=%s\nCOMPLETED_AT=%s\n' \
   "$BACKUP_SET_ID" "$APP_SHA" "$postgres_backup_id" "$postgres_sha256" "$completed_at"

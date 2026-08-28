@@ -9,7 +9,9 @@ FAIL_COUNT=0
 pass() { PASS_COUNT=$((PASS_COUNT + 1)); printf 'ok %s - %s\n' "$PASS_COUNT" "$1"; }
 fail_test() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf 'not ok - %s\n' "$1" >&2; }
 assert_success() { local name="$1"; shift; if "$@" > "$TEST_ROOT/output" 2>&1; then pass "$name"; else fail_test "$name"; command cat "$TEST_ROOT/output" >&2; fi; }
+assert_failure() { local name="$1"; shift; if "$@" > "$TEST_ROOT/output" 2>&1; then fail_test "$name (unexpected success)"; else pass "$name"; fi; }
 assert_contains() { local name="$1" value="$2" file="$3"; if grep -Fq -- "$value" "$file"; then pass "$name"; else fail_test "$name"; fi; }
+assert_absent() { local name="$1" value="$2" file="$3"; if grep -Fq -- "$value" "$file"; then fail_test "$name"; else pass "$name"; fi; }
 
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/source/buildingos/tenant-test/documents" "$TEST_ROOT/backup/buildingos-prod-backup-test" "$TEST_ROOT/target/buildingos-test-restore-minio"
 printf 'non-sensitive test object\n' > "$TEST_ROOT/source/buildingos/tenant-test/documents/test.txt"
@@ -41,7 +43,14 @@ case "$1" in
     ;;
   stat)
     test -e "$(map_path "${@: -1}")" || exit 1
-    if [[ "$*" == *'--json'* ]]; then printf '{"metadata":{"X-Amz-Server-Side-Encryption":"AES256"}}\n'; fi
+    if [[ "$*" == *'--json'* ]]; then
+      object_path="${@: -1}"
+      if [[ -n "${MOCK_MC_MISSING_SSE_MATCH:-}" && "$object_path" == *"$MOCK_MC_MISSING_SSE_MATCH"* ]]; then
+        printf '{"metadata":{}}\n'
+      else
+        printf '{"metadata":{"X-Amz-Server-Side-Encryption":"AES256"}}\n'
+      fi
+    fi
     ;;
   cat)
     /bin/cat "$(map_path "${@: -1}")"
@@ -115,6 +124,8 @@ mkdir -p "$postgres_remote_dir"
 printf 'PGDMP paired remote test archive\n' > "$postgres_remote_dir/buildingos.dump"
 postgres_sha256="$(sha256sum "$postgres_remote_dir/buildingos.dump" | cut -d ' ' -f1)"
 jq -n --arg setId "$BACKUP_SET_ID" --arg appSha "$APP_SHA" --arg postgresSha "$postgres_sha256" '{version:1,status:"PASS",backup_set_id:$setId,started_at:"2026-08-28T12:00:00Z",completed_at:"2026-08-28T12:01:00Z",app_sha:$appSha,postgres_backup_id:("postgres-"+$setId),postgres_sha256:$postgresSha,dump_filename:"buildingos.dump",destination:("contabo:buildingos-prod-backup-test/postgresql/"+$setId),remote_object_prefix:("postgresql/"+$setId),encryption:"SSE-S3"}' > "$POSTGRES_BACKUP_RECEIPT_FILE"
+printf '%s  %s\n' "$postgres_sha256" 'buildingos.dump' > "$postgres_remote_dir/buildingos.dump.sha256"
+cp "$POSTGRES_BACKUP_RECEIPT_FILE" "$postgres_remote_dir/postgres-backup-receipt.json"
 jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:02:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
 chmod 0600 "$POSTGRES_BACKUP_RECEIPT_FILE" "$BACKUP_SSE_CAPABILITY_FILE"
 
@@ -131,6 +142,18 @@ fi
 
 assert_success "real independent verifier validates the paired set" "$ROOT_DIR/scripts/verify-minio-backup.sh"
 assert_contains "independent verification completion marker emitted" 'MINIO_BACKUP_VERIFY_COMPLETE' "$TEST_ROOT/output"
+
+for missing_sse_case in \
+  'objects/|MinIO data object with same content and SHA but missing SSE' \
+  'meta/minio-manifest.json|MinIO manifest with correct content but missing SSE' \
+  'meta/minio-manifest.sha256|MinIO manifest checksum with correct content but missing SSE' \
+  'meta/backup-receipt.json|MinIO backup receipt with correct content but missing SSE' \
+  'meta/postgres-backup-receipt.json|embedded PostgreSQL receipt with correct content but missing SSE'; do
+  missing_match="${missing_sse_case%%|*}"
+  missing_name="${missing_sse_case#*|}"
+  MOCK_MC_MISSING_SSE_MATCH="$missing_match" assert_failure "$missing_name fails verification" "$ROOT_DIR/scripts/verify-minio-backup.sh"
+  assert_absent "$missing_name emits no verify PASS marker" 'MINIO_BACKUP_VERIFY_COMPLETE' "$TEST_ROOT/output"
+done
 
 restore_policy="$TEST_ROOT/restore-policy.json"
 jq -n '{rehearsal:{endpoint_identity:"127.0.0.1:19000",bucket:"buildingos-test-restore-minio"}}' > "$restore_policy"
