@@ -39,3 +39,9 @@ mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" \
 if ! jq -S 'map({key,size})' "$TEMP_DIR/minio-manifest.json" | cmp -s - <(jq -S 'map({key,size})' "$TEMP_DIR/actual-manifest.json"); then
   fail "backup object keys or sizes do not match the approved manifest"
 fi
+
+object_count="$(jq 'length' "$TEMP_DIR/minio-manifest.json")"
+total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/minio-manifest.json")"
+manifest_sha256="$(cut -d ' ' -f1 "$TEMP_DIR/minio-manifest.sha256")"
+printf 'MINIO_BACKUP_VERIFY_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nSOURCE_ENV=%s\nBUCKET=%s\nOBJECT_COUNT=%s\nTOTAL_BYTES=%s\nMANIFEST_SHA256=%s\n' \
+  "$BACKUP_SET_ID" "$EXPECTED_SOURCE_ENVIRONMENT" "$BACKUP_BUCKET" "$object_count" "$total_bytes" "$manifest_sha256"

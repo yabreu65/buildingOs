@@ -37,7 +37,11 @@ lock is configured by the repository compose files.
 
 ## Recommended backup design
 
-Use `mc mirror --overwrite` from the source bucket to a separate off-host S3
+Use `mc mirror --overwrite` from the source bucket to a separate off-host
+S3-compatible backup bucket, with no `--remove`. This protects against source
+deletions propagating to the backup, but is not itself append-only or
+immutable: `--overwrite` can replace an existing destination key if a backup
+prefix is reused. The backup prefix is
 `buildingos/<source-environment>/<backup-set-id>/`. Each set contains objects,
 `meta/minio-manifest.json`, its SHA-256 file, and `backup-receipt.json`.
 
@@ -49,9 +53,11 @@ in front of it in a later operations change. This slice does not introduce a
 new secret-management platform.
 
 The non-destructive copy is intentional: source deletion never propagates to
-existing backup sets. A new immutable set is created for every run, and a
-reused `BACKUP_SET_ID` fails closed. The scripts compare object keys, sizes,
-ETags where supplied by the client, counts, byte totals, and manifest SHA-256.
+existing backup sets. A new uniquely identified set is created for every run,
+and a reused `BACKUP_SET_ID` fails closed. True immutability requires
+destination versioning, Object Lock, and retention controls. The scripts
+compare object keys, sizes, ETags where supplied by the client, counts, byte
+totals, and manifest SHA-256.
 
 ### Required paired evidence
 

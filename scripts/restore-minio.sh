@@ -49,3 +49,8 @@ mc ls --recursive --json "target/$TARGET_BUCKET" \
 if ! jq -S 'map({key,size})' "$TEMP_DIR/minio-manifest.json" | cmp -s - <(jq -S 'map({key,size})' "$TEMP_DIR/actual-manifest.json"); then
   fail "restored object keys or sizes do not match the approved manifest"
 fi
+
+restored_object_count="$(jq 'length' "$TEMP_DIR/minio-manifest.json")"
+restored_total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/minio-manifest.json")"
+printf 'MINIO_RESTORE_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nTARGET_ENV=%s\nTARGET_BUCKET=%s\nRESTORED_OBJECT_COUNT=%s\nRESTORED_TOTAL_BYTES=%s\n' \
+  "$BACKUP_SET_ID" "$TARGET_ENVIRONMENT" "$TARGET_BUCKET" "$restored_object_count" "$restored_total_bytes"

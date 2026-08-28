@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Create an append-only MinIO backup set. Credentials are supplied through the
-# environment and are kept in a temporary mc config outside the repository.
+# Create a deletion-propagation-protected MinIO backup set. Credentials are
+# supplied through the environment and kept in a temporary mc config outside
+# the repository.
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
