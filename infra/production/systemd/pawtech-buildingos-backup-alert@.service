@@ -1,0 +1,15 @@
+[Unit]
+Description=Record BuildingOS backup failure for %i
+
+[Service]
+Type=oneshot
+User=yoryi
+Group=yoryi
+EnvironmentFile=-/etc/buildingos/backup-alert.env
+WorkingDirectory=/opt/pawtech/apps/buildingos/buildingos-app
+ExecStart=/opt/pawtech/apps/buildingos/buildingos-app/scripts/notify-production-backup-failure.sh %i
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
