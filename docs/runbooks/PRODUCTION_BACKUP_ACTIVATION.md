@@ -120,13 +120,16 @@ Create four distinct identities:
 | Identity | Boundary |
 | --- | --- |
 | `SOURCE_READ` | production MinIO bucket list/location and object read only |
-| `BACKUP_WRITE` | dedicated bucket `buildingos/production/*` list and upload only |
-| `VERIFY_READ` | dedicated bucket `buildingos/production/*` and `postgresql/*` list/read only |
+| `BACKUP_WRITE` | dedicated bucket `buildingos/production/*`, `postgresql/*`, and disposable `_capability-probes/*` list/upload only |
+| `VERIFY_READ` | those same dedicated prefixes list/read only, including independent HEAD of the disposable SSE probe |
 | `RESTORE_WRITE` | one approved non-production restore bucket list/upload only |
 
 `BACKUP_WRITE` also receives upload-only access to `postgresql/*`; it receives
-no object-read permission. The SSE probe uploads with `BACKUP_WRITE` and HEADs
-the result with `VERIFY_READ`, proving both identities without combining them.
+no object-read permission. Its only other write boundary is the disposable
+`_capability-probes/*` prefix. The SSE probe uploads there with `BACKUP_WRITE`
+and HEADs the result with `VERIFY_READ`, proving both identities without
+combining them. The probe has no delete permission and may remain under Object
+Lock retention.
 
 Expected: four credentials with no delete, retention, Object Lock bypass, or
 policy-administration permission. Test only allowed/denied capabilities with

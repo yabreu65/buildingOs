@@ -14,6 +14,24 @@ assert_remote_sse_s3() {
     )
   ' >/dev/null || fail "PostgreSQL backup object is missing required SSE-S3 AES256 metadata"
 }
+cleanup_run_dir() {
+  local status=$?
+  local expected_run_dir
+  trap - EXIT
+
+  if [[ "${run_dir_owned:-false}" == true ]]; then
+    expected_run_dir="$backup_root/postgres-$BACKUP_SET_ID"
+    if [[ -z "${run_dir:-}" || "$run_dir" == "/" || "$run_dir" == "$backup_root" || "$run_dir" != "$expected_run_dir" || -L "$run_dir" ]]; then
+      printf 'ERROR: refusing unsafe PostgreSQL scratch cleanup\n' >&2
+      exit 1
+    fi
+    if [[ -e "$run_dir" ]]; then
+      [[ -d "$run_dir" ]] || { printf 'ERROR: PostgreSQL scratch path is not a directory\n' >&2; exit 1; }
+      rm -rf -- "$run_dir" || { printf 'ERROR: unable to remove PostgreSQL scratch directory\n' >&2; exit 1; }
+    fi
+  fi
+  exit "$status"
+}
 
 for variable in BACKUP_SET_ID APP_SHA BACKUP_BUCKET POSTGRES_CONTAINER POSTGRES_DATABASE POSTGRES_USER POSTGRES_BACKUP_ROOT POSTGRES_RCLONE_DESTINATION POSTGRES_VERIFY_RCLONE_DESTINATION POSTGRES_SSE_MODE POSTGRES_RECEIPT_FILE; do require "$variable"; done
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
@@ -21,7 +39,11 @@ safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
 [[ "$POSTGRES_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || fail "unsafe PostgreSQL container name"
 [[ "$POSTGRES_DATABASE" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || fail "unsafe PostgreSQL database name"
 [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || fail "unsafe PostgreSQL user name"
-[[ "$POSTGRES_BACKUP_ROOT" == /* && ! -L "$POSTGRES_BACKUP_ROOT" ]] || fail "POSTGRES_BACKUP_ROOT must be an absolute non-symlink path"
+[[ "$POSTGRES_BACKUP_ROOT" == /* && "$POSTGRES_BACKUP_ROOT" != "/" && ! -L "$POSTGRES_BACKUP_ROOT" && -d "$POSTGRES_BACKUP_ROOT" ]] || fail "POSTGRES_BACKUP_ROOT must be an existing absolute non-symlink directory"
+backup_root="$(cd -P -- "$POSTGRES_BACKUP_ROOT" && pwd -P)" || fail "unable to resolve POSTGRES_BACKUP_ROOT"
+readonly backup_root
+POSTGRES_BACKUP_ROOT="$backup_root"
+readonly POSTGRES_BACKUP_ROOT
 [[ "$POSTGRES_RCLONE_DESTINATION" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+$ ]] || fail "unsafe PostgreSQL off-host destination"
 [[ "$POSTGRES_VERIFY_RCLONE_DESTINATION" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+$ ]] || fail "unsafe PostgreSQL verification destination"
 [[ "${POSTGRES_RCLONE_DESTINATION#*:}" == "$BACKUP_BUCKET/postgresql" ]] || fail "PostgreSQL backup must use the dedicated paired backup bucket"
@@ -34,12 +56,17 @@ for command_name in docker pg_restore rclone jq sha256sum; do command -v "$comma
 umask 077
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 postgres_backup_id="postgres-$BACKUP_SET_ID"
-run_dir="$POSTGRES_BACKUP_ROOT/$postgres_backup_id"
+run_dir="$backup_root/$postgres_backup_id"
 [[ ! -e "$run_dir" ]] || fail "PostgreSQL backup set already exists"
-mkdir -p "$run_dir"
+mkdir -- "$run_dir"
+run_dir_owned=true
+readonly run_dir
+readonly run_dir_owned
+trap cleanup_run_dir EXIT
 dump_filename="buildingos_db_${BACKUP_SET_ID}.dump"
 dump_file="$run_dir/$dump_filename"
 checksum_file="$dump_file.sha256"
+receipt_candidate="$run_dir/postgres-backup-receipt.json"
 remote_root="${POSTGRES_RCLONE_DESTINATION%/}/$BACKUP_SET_ID"
 verify_remote_root="${POSTGRES_VERIFY_RCLONE_DESTINATION%/}/$BACKUP_SET_ID"
 remote_object_prefix="postgresql/$BACKUP_SET_ID"
@@ -73,13 +100,15 @@ jq -n \
   --arg destination "$remote_root" \
   --arg remoteObjectPrefix "$remote_object_prefix" \
   '{version:1,backup_set_id:$backupSetId,started_at:$startedAt,completed_at:$completedAt,app_sha:$appSha,postgres_backup_id:$postgresBackupId,postgres_sha256:$postgresSha256,dump_filename:$dumpFilename,destination:$destination,remote_object_prefix:$remoteObjectPrefix,encryption:"SSE-S3",status:"PASS"}' \
-  > "$POSTGRES_RECEIPT_FILE"
-chmod 0600 "$POSTGRES_RECEIPT_FILE"
-rclone copyto --s3-server-side-encryption AES256 "$POSTGRES_RECEIPT_FILE" "$remote_root/postgres-backup-receipt.json" || fail "PostgreSQL encrypted receipt upload failed"
-local_receipt_sha256="$(sha256sum "$POSTGRES_RECEIPT_FILE" | cut -d ' ' -f1)"
+  > "$receipt_candidate"
+chmod 0600 "$receipt_candidate"
+rclone copyto --s3-server-side-encryption AES256 "$receipt_candidate" "$remote_root/postgres-backup-receipt.json" || fail "PostgreSQL encrypted receipt upload failed"
+local_receipt_sha256="$(sha256sum "$receipt_candidate" | cut -d ' ' -f1)"
 remote_receipt_sha256="$(rclone cat "$verify_remote_root/postgres-backup-receipt.json" | sha256sum | cut -d ' ' -f1)" || fail "PostgreSQL remote receipt evidence is unavailable"
 [[ "$remote_receipt_sha256" == "$local_receipt_sha256" ]] || fail "PostgreSQL remote receipt does not match local PASS evidence"
 assert_remote_sse_s3 "$verify_remote_root/postgres-backup-receipt.json"
+mv -- "$receipt_candidate" "$POSTGRES_RECEIPT_FILE"
+chmod 0600 "$POSTGRES_RECEIPT_FILE"
 
 printf 'POSTGRES_BACKUP_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nAPP_SHA=%s\nPOSTGRES_BACKUP_ID=%s\nPOSTGRES_SHA256=%s\nCOMPLETED_AT=%s\n' \
   "$BACKUP_SET_ID" "$APP_SHA" "$postgres_backup_id" "$postgres_sha256" "$completed_at"

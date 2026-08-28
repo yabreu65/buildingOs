@@ -66,8 +66,8 @@ export SOURCE_ENDPOINT='https://source.example.invalid'
 export SOURCE_ACCESS_KEY='SOURCE_ACCESS_SENTINEL'
 export SOURCE_SECRET_KEY='SOURCE_SECRET_SENTINEL'
 export SOURCE_BUCKET='buildingos'
-export POSTGRES_CONTAINER='buildingos-postgres'
-export POSTGRES_DATABASE='buildingos'
+export POSTGRES_CONTAINER='pawtech-postgres'
+export POSTGRES_DATABASE='buildingos_db'
 export POSTGRES_USER='buildingos'
 export POSTGRES_BACKUP_ROOT="$TEST_ROOT/pg-root"
 export POSTGRES_RCLONE_DESTINATION='contabowrite:buildingos-prod-backup-test/postgresql'
@@ -171,12 +171,14 @@ if jq -e --arg setId '20260828t121000z-pgreceipt' --arg appSha "$MOCK_APP_SHA" '
 else
   fail_test "PostgreSQL receipt binds backup set, APP_SHA, and SHA-256"
 fi
+if [[ ! -e "$POSTGRES_BACKUP_ROOT/postgres-20260828t121000z-pgreceipt" ]]; then pass "successful PostgreSQL backup removes invocation scratch directory"; else fail_test "successful PostgreSQL backup removes invocation scratch directory"; fi
 
 pg_dump_sse_receipt="$TEST_ROOT/postgres-dump-sse-failure.json"
 PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='.dump' BACKUP_SET_ID='20260828t121010z-pgdumpsse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_dump_sse_receipt" \
   assert_failure "PostgreSQL dump with correct SHA but missing SSE fails" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
 assert_absent "PostgreSQL dump SSE failure emits no PASS marker" 'POSTGRES_BACKUP_COMPLETE' "$TEST_ROOT/output"
 if [[ ! -e "$pg_dump_sse_receipt" ]]; then pass "PostgreSQL dump SSE failure creates no PASS receipt"; else fail_test "PostgreSQL dump SSE failure creates no PASS receipt"; fi
+if [[ ! -e "$POSTGRES_BACKUP_ROOT/postgres-20260828t121010z-pgdumpsse" ]]; then pass "failure after dump creation removes invocation scratch directory"; else fail_test "failure after dump creation removes invocation scratch directory"; fi
 
 pg_checksum_sse_receipt="$TEST_ROOT/postgres-checksum-sse-failure.json"
 PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='.dump.sha256' BACKUP_SET_ID='20260828t121020z-pgchecksse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_checksum_sse_receipt" \
@@ -188,6 +190,21 @@ pg_receipt_sse_failure="$TEST_ROOT/postgres-receipt-sse-failure.json"
 PATH="$TEST_ROOT/bin:$PATH" MOCK_RCLONE_MISSING_SSE_MATCH='postgres-backup-receipt.json' BACKUP_SET_ID='20260828t121030z-pgreceiptsse' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$pg_receipt_sse_failure" \
   assert_failure "PostgreSQL receipt with correct content but missing SSE fails" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
 assert_absent "PostgreSQL receipt SSE failure emits no PASS marker" 'POSTGRES_BACKUP_COMPLETE' "$TEST_ROOT/output"
+if [[ ! -e "$pg_receipt_sse_failure" ]]; then pass "PostgreSQL receipt SSE failure publishes no local PASS receipt"; else fail_test "PostgreSQL receipt SSE failure publishes no local PASS receipt"; fi
+
+preexisting_set_id='20260828t121040z-preexisting'
+preexisting_run_dir="$POSTGRES_BACKUP_ROOT/postgres-$preexisting_set_id"
+mkdir "$preexisting_run_dir"
+printf 'preserve\n' > "$preexisting_run_dir/operator-marker"
+PATH="$TEST_ROOT/bin:$PATH" BACKUP_SET_ID="$preexisting_set_id" APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$TEST_ROOT/preexisting-receipt.json" \
+  assert_failure "pre-existing PostgreSQL run directory fails closed" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
+if [[ -f "$preexisting_run_dir/operator-marker" ]]; then pass "pre-existing PostgreSQL run directory remains untouched"; else fail_test "pre-existing PostgreSQL run directory remains untouched"; fi
+
+cleanup_escape_sentinel="$TEST_ROOT/cleanup-escape-sentinel"
+printf 'preserve\n' > "$cleanup_escape_sentinel"
+PATH="$TEST_ROOT/bin:$PATH" BACKUP_SET_ID='../cleanup-escape-sentinel' APP_SHA="$MOCK_APP_SHA" POSTGRES_RECEIPT_FILE="$TEST_ROOT/unsafe-receipt.json" \
+  assert_failure "unsafe BACKUP_SET_ID cannot escape PostgreSQL cleanup root" "$ROOT_DIR/scripts/backup-postgres-paired.sh"
+if [[ -f "$cleanup_escape_sentinel" ]]; then pass "unsafe cleanup escape leaves external sentinel untouched"; else fail_test "unsafe cleanup escape leaves external sentinel untouched"; fi
 failed_pg_receipt="$TEST_ROOT/postgres-failure.json"
 PATH="$TEST_ROOT/bin:$PATH" \
   MOCK_PG_DUMP_RESULT=FAIL \
@@ -218,6 +235,36 @@ for policy_file in "$ROOT_DIR"/infra/production/policies/*.json; do
   if ! jq -e '[.Statement[].Resource] | all(. != "*")' "$policy_file" >/dev/null; then policy_controls_valid=false; fi
 done
 if [[ "$policy_controls_valid" == true ]]; then pass "least-privilege policies exclude delete, retention bypass, policy admin, and broad resources"; else fail_test "least-privilege policies exclude dangerous actions"; fi
+
+backup_write_policy="$ROOT_DIR/infra/production/policies/backup-write.json"
+verify_read_policy="$ROOT_DIR/infra/production/policies/verify-read.json"
+if jq -e '
+  any(.Statement[]; (.Action | index("s3:ListBucket")) != null and (.Condition.StringLike["s3:prefix"] | index("_capability-probes/*")) != null) and
+  any(.Statement[]; (.Action | index("s3:PutObject")) != null and ((.Resource | arrays) | index("arn:aws:s3:::BUILDINGOS_BACKUP_BUCKET/_capability-probes/*")) != null)
+' "$backup_write_policy" >/dev/null; then pass "BACKUP_WRITE can list and write only the capability probe prefix"; else fail_test "BACKUP_WRITE can list and write only the capability probe prefix"; fi
+if jq -e '
+  all(.Statement[]; ((.Resource | arrays) // []) | all(. == "arn:aws:s3:::BUILDINGOS_BACKUP_BUCKET/buildingos/production/*" or . == "arn:aws:s3:::BUILDINGOS_BACKUP_BUCKET/postgresql/*" or . == "arn:aws:s3:::BUILDINGOS_BACKUP_BUCKET/_capability-probes/*")) and
+  ([.Statement[].Action[]] | index("s3:DeleteObject")) == null and
+  ([.Statement[].Action[]] | index("s3:GetObject")) == null
+' "$backup_write_policy" >/dev/null; then pass "BACKUP_WRITE cannot access unrelated prefixes, read, or delete"; else fail_test "BACKUP_WRITE cannot access unrelated prefixes, read, or delete"; fi
+if jq -e '
+  any(.Statement[]; (.Action | index("s3:ListBucket")) != null and (.Condition.StringLike["s3:prefix"] | index("_capability-probes/*")) != null) and
+  any(.Statement[]; (.Action | index("s3:GetObject")) != null and ((.Resource | arrays) | index("arn:aws:s3:::BUILDINGOS_BACKUP_BUCKET/_capability-probes/*")) != null) and
+  ([.Statement[].Action[]] | all(. != "s3:PutObject" and . != "s3:DeleteObject"))
+' "$verify_read_policy" >/dev/null; then pass "VERIFY_READ can inspect probes but cannot write or delete"; else fail_test "VERIFY_READ can inspect probes but cannot write or delete"; fi
+
+production_env_example="$ROOT_DIR/infra/production/buildingos-backup.env.example"
+if grep -Fxq 'POSTGRES_CONTAINER=pawtech-postgres' "$production_env_example" &&
+  grep -Fxq 'POSTGRES_DATABASE=buildingos_db' "$production_env_example" &&
+  grep -Fxq 'POSTGRES_USER=buildingos' "$production_env_example" &&
+  grep -Fq "readonly POSTGRES_CONTAINER='pawtech-postgres'" "$ROOT_DIR/scripts/deploy-production.sh" &&
+  grep -Fq "readonly POSTGRES_CONTAINER='pawtech-postgres'" "$ROOT_DIR/scripts/rollback-production.sh" &&
+  grep -Fq 'DATABASE_NAME=buildingos_db' "$ROOT_DIR/scripts/deploy-production.sh" &&
+  grep -Fq -- "-U \"\$POSTGRES_USER\" -d buildingos_db" "$ROOT_DIR/scripts/rollback-production.sh"; then
+  pass "production backup identifiers match canonical deploy and rollback evidence"
+else
+  fail_test "production backup identifiers match canonical deploy and rollback evidence"
+fi
 
 systemd_controls_valid=true
 for timer_file in "$ROOT_DIR"/infra/production/systemd/*.timer; do grep -Fxq 'Persistent=true' "$timer_file" || systemd_controls_valid=false; done
