@@ -20,6 +20,44 @@ validate_prefix() {
     [[ "$segment" != "." && "$segment" != ".." ]] || fail "unsafe BACKUP_PREFIX"
   done
 }
+hash_object() {
+  local object_path="$1"
+  local sha256
+  if ! sha256="$(mc cat "$object_path" < /dev/null | sha256sum | cut -d ' ' -f1)"; then
+    fail "unable to hash object: $object_path"
+  fi
+  [[ "$sha256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "invalid object SHA-256: $object_path"
+  printf '%s\n' "$sha256"
+}
+create_manifest() {
+  local listing_file="$1"
+  local object_root="$2"
+  local manifest_file="$3"
+  local strip_objects_prefix="$4"
+  local entries_file sorted_manifest_file
+  entries_file="$TEMP_DIR/$(basename "$manifest_file").entries"
+  sorted_manifest_file="$TEMP_DIR/$(basename "$manifest_file").sorted"
+  local key size sha256 record
+
+  if ! jq -s -e 'all(.[]; ((.type // "file") != "file") or (((.key // .name) | type) == "string" and ((.size // 0) | type) == "number" and ((.size // 0) >= 0) and (((.size // 0) | floor) == (.size // 0))))' "$listing_file" >/dev/null; then
+    fail "invalid MinIO listing"
+  fi
+  if [[ "$strip_objects_prefix" == true ]]; then
+    jq -r 'select((.type // "file") == "file") | [((.key // .name) | sub("^.*?/objects/"; "")), (.size // 0)] | @tsv' "$listing_file" > "$entries_file" || fail "unable to normalize MinIO listing"
+  else
+    jq -r 'select((.type // "file") == "file") | [(.key // .name), (.size // 0)] | @tsv' "$listing_file" > "$entries_file" || fail "unable to normalize MinIO listing"
+  fi
+
+  : > "$manifest_file"
+  while IFS=$'\t' read -r key size; do
+    [[ -n "$key" ]] || fail "MinIO listing contains an empty object key"
+    sha256="$(hash_object "$object_root/$key")"
+    record="$(jq -cn --arg key "$key" --argjson size "$size" --arg sha256 "$sha256" '{key:$key,size:$size,sha256:$sha256}')"
+    printf '%s\n' "$record" >> "$manifest_file"
+  done < "$entries_file"
+  jq -s 'sort_by(.key)' "$manifest_file" > "$sorted_manifest_file" || fail "unable to create MinIO manifest"
+  mv "$sorted_manifest_file" "$manifest_file"
+}
 
 for variable in SOURCE_ENVIRONMENT EXPECTED_SOURCE_ENVIRONMENT SOURCE_ENDPOINT SOURCE_ACCESS_KEY SOURCE_SECRET_KEY SOURCE_BUCKET BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID APP_SHA POSTGRES_BACKUP_ID POSTGRES_BACKUP_SHA256 POSTGRES_BACKUP_COMPLETED_AT; do
   require "$variable"
@@ -53,13 +91,20 @@ mc alias set source "$SOURCE_ENDPOINT" "$SOURCE_ACCESS_KEY" "$SOURCE_SECRET_KEY"
 mc alias set backup "$BACKUP_ENDPOINT" "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY" >/dev/null
 mc stat "source/$SOURCE_BUCKET" >/dev/null || fail "source bucket is unavailable"
 mc stat "backup/$BACKUP_BUCKET" >/dev/null || fail "backup bucket is unavailable"
-if mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX" | jq -e 'select((.type // "file") == "file")' >/dev/null 2>&1; then
+if ! mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX" > "$TEMP_DIR/backup-set-listing.json"; then
+  fail "backup set listing is unavailable"
+fi
+if ! backup_set_has_objects="$(jq -s 'any(.[]; ((.type // "file") == "file"))' "$TEMP_DIR/backup-set-listing.json")"; then
+  fail "backup set listing is invalid"
+fi
+if [[ "$backup_set_has_objects" == true ]]; then
   fail "backup set already exists; use a new BACKUP_SET_ID"
 fi
 
-mc ls --recursive --json "source/$SOURCE_BUCKET" \
-  | jq -c 'select((.type // "file") == "file") | {key:(.key // .name),size:(.size // 0),etag:(.etag // null),lastModified:(.lastModified // null)}' \
-  | jq -s 'sort_by(.key)' > "$TEMP_DIR/source-manifest.json"
+if ! mc ls --recursive --json "source/$SOURCE_BUCKET" > "$TEMP_DIR/source-listing.json"; then
+  fail "source listing is unavailable"
+fi
+create_manifest "$TEMP_DIR/source-listing.json" "source/$SOURCE_BUCKET" "$TEMP_DIR/source-manifest.json" false
 
 object_count="$(jq 'length' "$TEMP_DIR/source-manifest.json")"
 total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/source-manifest.json")"
@@ -68,16 +113,17 @@ total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/source-manifest.json")"
 # Deliberately omit --remove: source deletions must never propagate to backups.
 mc mirror --overwrite --json "source/$SOURCE_BUCKET" "backup/$BACKUP_BUCKET/$PREFIX/objects" >/dev/null
 
-mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" \
-  | jq -c 'select((.type // "file") == "file") | {key:(.key // .name | sub("^.*?/objects/"; "")),size:(.size // 0),etag:(.etag // null),lastModified:(.lastModified // null)}' \
-  | jq -s 'sort_by(.key)' > "$TEMP_DIR/backup-manifest.json"
+if ! mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" > "$TEMP_DIR/backup-listing.json"; then
+  fail "backup object listing is unavailable"
+fi
+create_manifest "$TEMP_DIR/backup-listing.json" "backup/$BACKUP_BUCKET/$PREFIX/objects" "$TEMP_DIR/backup-manifest.json" true
 
 backup_count="$(jq 'length' "$TEMP_DIR/backup-manifest.json")"
 backup_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/backup-manifest.json")"
 [[ "$object_count" == "$backup_count" && "$total_bytes" == "$backup_bytes" ]] || fail "copied object count or byte total does not match source"
 
-if ! jq -S 'map({key,size})' "$TEMP_DIR/source-manifest.json" | cmp -s - <(jq -S 'map({key,size})' "$TEMP_DIR/backup-manifest.json"); then
-  fail "copied object keys or sizes do not match source manifest"
+if ! jq -S 'map({key,size,sha256})' "$TEMP_DIR/source-manifest.json" | cmp -s - <(jq -S 'map({key,size,sha256})' "$TEMP_DIR/backup-manifest.json"); then
+  fail "copied object keys, sizes, or SHA-256 values do not match source manifest"
 fi
 cp "$TEMP_DIR/source-manifest.json" "$TEMP_DIR/minio-manifest.json"
 printf '%s  %s\n' "$(sha256sum "$TEMP_DIR/minio-manifest.json" | cut -d ' ' -f1)" "minio-manifest.json" > "$TEMP_DIR/minio-manifest.sha256"

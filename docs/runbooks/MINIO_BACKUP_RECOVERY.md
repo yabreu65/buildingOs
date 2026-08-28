@@ -62,8 +62,11 @@ The non-destructive copy is intentional: source deletion never propagates to
 existing backup sets. A new uniquely identified set is created for every run,
 and a reused `BACKUP_SET_ID` fails closed. True immutability requires
 destination versioning, Object Lock, and retention controls. The scripts
-compare object keys, sizes, ETags where supplied by the client, counts, byte
-totals, and manifest SHA-256.
+calculate and compare per-object SHA-256 content digests, object keys, byte
+sizes, counts, byte totals, and the manifest SHA-256. Verify and restore also
+bind the verified manifest SHA-256, count, and byte total to the backup receipt.
+ETags are not used as the portable cryptographic integrity control because
+their semantics vary by provider, multipart upload, and encryption mode.
 
 ### Required paired evidence
 
@@ -116,12 +119,28 @@ by the target-environment allowlist; there is no production override flag.
 
 ```bash
 export TARGET_ENVIRONMENT=rehearsal
-export TARGET_ENDPOINT='http://127.0.0.1:9000'
+export TARGET_ENDPOINT='http://127.0.0.1:19000'
 export TARGET_ACCESS_KEY='<rehearsal-key>'
 export TARGET_SECRET_KEY='<rehearsal-secret>'
-export TARGET_BUCKET='buildingos-restore-<unique-id>'
+export TARGET_BUCKET='buildingos-restore-rehearsal'
 export RESTORE_CONFIRMATION='RESTORE TO NON-PRODUCTION'
+export RESTORE_TARGET_POLICY_FILE='/etc/buildingos/minio-restore-target-policy.json'
 scripts/restore-minio.sh
+```
+
+`RESTORE_TARGET_POLICY_FILE` is required non-secret operational configuration.
+It must be supplied from trusted protected configuration and must not be
+created dynamically by the same restore invocation. It binds each allowed
+non-production environment to the canonical endpoint identity and exact
+restore bucket. Production must not be present in the policy. For example:
+
+```json
+{
+  "rehearsal": {
+    "endpoint_identity": "127.0.0.1:19000",
+    "bucket": "buildingos-restore-rehearsal"
+  }
+}
 ```
 
 ## Read-only production audit

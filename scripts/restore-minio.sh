@@ -16,8 +16,51 @@ validate_prefix() {
     [[ "$segment" != "." && "$segment" != ".." ]] || fail "unsafe BACKUP_PREFIX"
   done
 }
+hash_object() {
+  local object_path="$1"
+  local sha256
+  if ! sha256="$(mc cat "$object_path" < /dev/null | sha256sum | cut -d ' ' -f1)"; then
+    fail "unable to hash object: $object_path"
+  fi
+  [[ "$sha256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "invalid object SHA-256: $object_path"
+  printf '%s\n' "$sha256"
+}
+create_manifest() {
+  local listing_file="$1"
+  local object_root="$2"
+  local manifest_file="$3"
+  local entries_file sorted_manifest_file
+  entries_file="$TEMP_DIR/$(basename "$manifest_file").entries"
+  sorted_manifest_file="$TEMP_DIR/$(basename "$manifest_file").sorted"
+  local key size sha256 record
 
-for variable in BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID EXPECTED_SOURCE_ENVIRONMENT TARGET_ENDPOINT TARGET_ACCESS_KEY TARGET_SECRET_KEY TARGET_BUCKET TARGET_ENVIRONMENT RESTORE_CONFIRMATION; do require "$variable"; done
+  if ! jq -s -e 'all(.[]; ((.type // "file") != "file") or (((.key // .name) | type) == "string" and ((.size // 0) | type) == "number" and ((.size // 0) >= 0) and (((.size // 0) | floor) == (.size // 0))))' "$listing_file" >/dev/null; then
+    fail "invalid MinIO listing"
+  fi
+  jq -r 'select((.type // "file") == "file") | [((.key // .name) | sub("^.*?/objects/"; "")), (.size // 0)] | @tsv' "$listing_file" > "$entries_file" || fail "unable to normalize MinIO listing"
+
+  : > "$manifest_file"
+  while IFS=$'\t' read -r key size; do
+    [[ -n "$key" ]] || fail "MinIO listing contains an empty object key"
+    sha256="$(hash_object "$object_root/$key")"
+    record="$(jq -cn --arg key "$key" --argjson size "$size" --arg sha256 "$sha256" '{key:$key,size:$size,sha256:$sha256}')"
+    printf '%s\n' "$record" >> "$manifest_file"
+  done < "$entries_file"
+  jq -s 'sort_by(.key)' "$manifest_file" > "$sorted_manifest_file" || fail "unable to create MinIO manifest"
+  mv "$sorted_manifest_file" "$manifest_file"
+}
+validate_target_policy() {
+  [[ -f "$RESTORE_TARGET_POLICY_FILE" && -r "$RESTORE_TARGET_POLICY_FILE" ]] || fail "restore target policy is unavailable"
+  jq -e 'type == "object" and (has("production") | not) and all(to_entries[]; (.value | type == "object" and (.endpoint_identity | type == "string" and length > 0) and (.bucket | type == "string" and length > 0)))' "$RESTORE_TARGET_POLICY_FILE" >/dev/null || fail "restore target policy is invalid"
+  jq -e --arg environment "$TARGET_ENVIRONMENT" 'has($environment)' "$RESTORE_TARGET_POLICY_FILE" >/dev/null || fail "restore target environment is not allowed by policy"
+  local policy_endpoint policy_bucket
+  policy_endpoint="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].endpoint_identity' "$RESTORE_TARGET_POLICY_FILE")" || fail "restore target endpoint policy is invalid"
+  policy_bucket="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].bucket' "$RESTORE_TARGET_POLICY_FILE")" || fail "restore target bucket policy is invalid"
+  [[ "$(endpoint_identity "$TARGET_ENDPOINT")" == "$policy_endpoint" ]] || fail "target endpoint does not match restore target policy"
+  [[ "$TARGET_BUCKET" == "$policy_bucket" ]] || fail "target bucket does not match restore target policy"
+}
+
+for variable in BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID EXPECTED_SOURCE_ENVIRONMENT TARGET_ENDPOINT TARGET_ACCESS_KEY TARGET_SECRET_KEY TARGET_BUCKET TARGET_ENVIRONMENT RESTORE_CONFIRMATION RESTORE_TARGET_POLICY_FILE; do require "$variable"; done
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
 validate_prefix "${BACKUP_PREFIX:-}"
 [[ "$EXPECTED_SOURCE_ENVIRONMENT" =~ ^(production|staging|development|rehearsal)$ ]] || fail "unsafe source environment"
@@ -43,29 +86,53 @@ mc stat "backup/$BACKUP_BUCKET" >/dev/null || fail "backup bucket is unavailable
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/backup-receipt.json" "$TEMP_DIR/backup-receipt.json" >/dev/null || fail "backup receipt is unavailable"
 jq -er 'select((.backup_set_id | type) == "string") | .backup_set_id' "$TEMP_DIR/backup-receipt.json" > "$TEMP_DIR/receipt-backup-set-id" || fail "backup receipt backup_set_id is missing or invalid"
 [[ "$(<"$TEMP_DIR/receipt-backup-set-id")" == "$BACKUP_SET_ID" ]] || fail "backup set identity mismatch"
+receipt_source_host="$(jq -er 'select((.source_host | type) == "string" and (.source_host | length > 0)) | .source_host' "$TEMP_DIR/backup-receipt.json")" || fail "backup receipt source host is missing or invalid"
+receipt_source_bucket="$(jq -er 'select((.source_bucket | type) == "string" and (.source_bucket | length > 0)) | .source_bucket' "$TEMP_DIR/backup-receipt.json")" || fail "backup receipt source bucket is missing or invalid"
 
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.json" "$TEMP_DIR/minio-manifest.json" >/dev/null || fail "manifest is unavailable"
 mc cp "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.sha256" "$TEMP_DIR/minio-manifest.sha256" >/dev/null || fail "manifest checksum is unavailable"
 grep -Eq '^[0-9a-fA-F]{64}[[:space:]]+[*]?minio-manifest\.json$' "$TEMP_DIR/minio-manifest.sha256" || fail "invalid manifest checksum file"
 (cd "$TEMP_DIR" && sha256sum -c minio-manifest.sha256 >/dev/null) || fail "manifest checksum verification failed"
 jq -e --arg environment "$EXPECTED_SOURCE_ENVIRONMENT" '.source_env == $environment and .deletion_propagation == false' "$TEMP_DIR/backup-receipt.json" >/dev/null || fail "backup receipt identity or deletion guard is invalid"
+receipt_manifest_sha256="$(jq -er 'select((.minio_manifest_sha256 | type) == "string") | .minio_manifest_sha256' "$TEMP_DIR/backup-receipt.json")" || fail "backup receipt manifest SHA-256 is missing or invalid"
+[[ "$receipt_manifest_sha256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "backup receipt manifest SHA-256 is invalid"
+receipt_object_count="$(jq -er 'select((.object_count | type) == "number" and .object_count >= 0 and ((.object_count | floor) == .object_count)) | .object_count' "$TEMP_DIR/backup-receipt.json")" || fail "backup receipt object count is missing or invalid"
+receipt_total_bytes="$(jq -er 'select((.total_bytes | type) == "number" and .total_bytes >= 0 and ((.total_bytes | floor) == .total_bytes)) | .total_bytes' "$TEMP_DIR/backup-receipt.json")" || fail "backup receipt byte total is missing or invalid"
+if ! jq -e 'type == "array" and all(.[]; (.key | type == "string" and length > 0) and (.size | type == "number" and . >= 0 and floor == .) and (.sha256 | type == "string" and test("^[0-9a-fA-F]{64}$")))' "$TEMP_DIR/minio-manifest.json" >/dev/null; then
+  fail "manifest schema is invalid"
+fi
+actual_manifest_sha256="$(sha256sum "$TEMP_DIR/minio-manifest.json" | cut -d ' ' -f1)"
+actual_object_count="$(jq 'length' "$TEMP_DIR/minio-manifest.json")"
+actual_total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/minio-manifest.json")"
+[[ "$actual_manifest_sha256" == "$receipt_manifest_sha256" ]] || fail "manifest SHA-256 does not match backup receipt"
+[[ "$actual_object_count" == "$receipt_object_count" ]] || fail "manifest object count does not match backup receipt"
+[[ "$actual_total_bytes" == "$receipt_total_bytes" ]] || fail "manifest byte total does not match backup receipt"
+[[ "$(endpoint_identity "$TARGET_ENDPOINT")" != "$receipt_source_host" || "$TARGET_BUCKET" != "$receipt_source_bucket" ]] || fail "restore target matches backup source identity"
+validate_target_policy
 
 mc alias set target "$TARGET_ENDPOINT" "$TARGET_ACCESS_KEY" "$TARGET_SECRET_KEY" >/dev/null
 mc stat "target/$TARGET_BUCKET" >/dev/null || fail "target bucket is unavailable"
-if mc ls --recursive --json "target/$TARGET_BUCKET" | jq -e 'select((.type // "file") == "file")' >/dev/null 2>&1; then
+if ! mc ls --recursive --json "target/$TARGET_BUCKET" > "$TEMP_DIR/target-listing.json"; then
+  fail "target listing is unavailable"
+fi
+if ! target_has_objects="$(jq -s 'any(.[]; ((.type // "file") == "file"))' "$TEMP_DIR/target-listing.json")"; then
+  fail "target listing is invalid"
+fi
+if [[ "$target_has_objects" == true ]]; then
   fail "target bucket is not empty; restore will not overwrite or delete existing objects"
 fi
 
 # Restore is additive into a proven-empty bucket; no delete or mirror removal is used.
 mc cp --recursive "backup/$BACKUP_BUCKET/$PREFIX/objects/" "target/$TARGET_BUCKET/" >/dev/null
-mc ls --recursive --json "target/$TARGET_BUCKET" \
-  | jq -c 'select((.type // "file") == "file") | {key:(.key // .name),size:(.size // 0),etag:(.etag // null),lastModified:(.lastModified // null)}' \
-  | jq -s 'sort_by(.key)' > "$TEMP_DIR/actual-manifest.json"
-if ! jq -S 'map({key,size})' "$TEMP_DIR/minio-manifest.json" | cmp -s - <(jq -S 'map({key,size})' "$TEMP_DIR/actual-manifest.json"); then
-  fail "restored object keys or sizes do not match the approved manifest"
+if ! mc ls --recursive --json "target/$TARGET_BUCKET" > "$TEMP_DIR/target-listing.json"; then
+  fail "restored object listing is unavailable"
+fi
+create_manifest "$TEMP_DIR/target-listing.json" "target/$TARGET_BUCKET" "$TEMP_DIR/actual-manifest.json" true
+if ! jq -S 'map({key,size,sha256})' "$TEMP_DIR/minio-manifest.json" | cmp -s - <(jq -S 'map({key,size,sha256})' "$TEMP_DIR/actual-manifest.json"); then
+  fail "restored object keys, sizes, or SHA-256 values do not match the approved manifest"
 fi
 
-restored_object_count="$(jq 'length' "$TEMP_DIR/minio-manifest.json")"
-restored_total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/minio-manifest.json")"
+restored_object_count="$actual_object_count"
+restored_total_bytes="$actual_total_bytes"
 printf 'MINIO_RESTORE_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nTARGET_ENV=%s\nTARGET_BUCKET=%s\nRESTORED_OBJECT_COUNT=%s\nRESTORED_TOTAL_BYTES=%s\n' \
   "$BACKUP_SET_ID" "$TARGET_ENVIRONMENT" "$TARGET_BUCKET" "$restored_object_count" "$restored_total_bytes"
