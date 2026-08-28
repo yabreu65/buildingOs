@@ -124,15 +124,20 @@ export TARGET_ACCESS_KEY='<rehearsal-key>'
 export TARGET_SECRET_KEY='<rehearsal-secret>'
 export TARGET_BUCKET='buildingos-restore-rehearsal'
 export RESTORE_CONFIRMATION='RESTORE TO NON-PRODUCTION'
-export RESTORE_TARGET_POLICY_FILE='/etc/buildingos/minio-restore-target-policy.json'
 scripts/restore-minio.sh
 ```
 
-`RESTORE_TARGET_POLICY_FILE` is required non-secret operational configuration.
-It must be supplied from trusted protected configuration and must not be
-created dynamically by the same restore invocation. It binds each allowed
-non-production environment to the canonical endpoint identity and exact
-restore bucket. Production must not be present in the policy. For example:
+Normal operational restores always load the non-secret allowlist from the
+fixed path `/etc/buildingos/minio-restore-target-policy.json`; the restore
+caller cannot select another operational policy. The file must be a regular,
+non-symlink, root-owned file that is not group or world writable. It must be
+provisioned separately through protected operational configuration, not
+created dynamically by the restore invocation. This slice does not provision
+that file.
+
+The policy binds each allowed non-production environment to a canonical
+endpoint identity and exact restore bucket. Only `development`, `rehearsal`,
+and `test` keys are accepted, and production must never appear. For example:
 
 ```json
 {
@@ -142,6 +147,16 @@ restore bucket. Production must not be present in the policy. For example:
   }
 }
 ```
+
+For isolated local rehearsal only, tests may set
+`MINIO_RESTORE_TEST_MODE=LOCAL_ISOLATED_ONLY` and
+`MINIO_RESTORE_TEST_POLICY_FILE` to a caller-owned, non-writable test policy.
+That mode accepts only `rehearsal` or `test` targets and loopback/local Docker
+host identities (`localhost`, `127.0.0.1`, `::1`, or
+`host.docker.internal`) over plain HTTP, plus a dedicated
+`buildingos-test-restore-*` bucket. It cannot authorize a remote endpoint or
+production-shaped bucket. `RESTORE_TARGET_POLICY_FILE` is not supported in any
+mode.
 
 ## Read-only production audit
 

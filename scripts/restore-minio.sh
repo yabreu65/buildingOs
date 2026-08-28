@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+readonly OPERATIONAL_RESTORE_TARGET_POLICY_FILE='/etc/buildingos/minio-restore-target-policy.json'
+
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
@@ -50,17 +52,71 @@ create_manifest() {
   mv "$sorted_manifest_file" "$manifest_file"
 }
 validate_target_policy() {
-  [[ -f "$RESTORE_TARGET_POLICY_FILE" && -r "$RESTORE_TARGET_POLICY_FILE" ]] || fail "restore target policy is unavailable"
-  jq -e 'type == "object" and (has("production") | not) and all(to_entries[]; (.value | type == "object" and (.endpoint_identity | type == "string" and length > 0) and (.bucket | type == "string" and length > 0)))' "$RESTORE_TARGET_POLICY_FILE" >/dev/null || fail "restore target policy is invalid"
-  jq -e --arg environment "$TARGET_ENVIRONMENT" 'has($environment)' "$RESTORE_TARGET_POLICY_FILE" >/dev/null || fail "restore target environment is not allowed by policy"
+  local policy_file="$1"
+  local expected_owner_uid="$2"
+  local owner_uid mode mode_value
+
+  [[ "$policy_file" == /* ]] || fail "restore target policy path must be absolute"
+  [[ ! -L "$policy_file" ]] || fail "restore target policy must not be a symlink"
+  [[ -f "$policy_file" && -r "$policy_file" ]] || fail "restore target policy is unavailable"
+  if owner_uid="$(stat -c '%u' "$policy_file" 2>/dev/null)" && mode="$(stat -c '%a' "$policy_file" 2>/dev/null)"; then
+    :
+  elif owner_uid="$(stat -f '%u' "$policy_file" 2>/dev/null)" && mode="$(stat -f '%Lp' "$policy_file" 2>/dev/null)"; then
+    :
+  else
+    fail "unable to validate restore target policy ownership and permissions"
+  fi
+  [[ "$owner_uid" == "$expected_owner_uid" ]] || fail "restore target policy has an untrusted owner"
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || fail "restore target policy permissions are invalid"
+  mode_value=$((8#$mode))
+  (( (mode_value & 0022) == 0 )) || fail "restore target policy must not be group or world writable"
+  jq -e '
+    type == "object" and length > 0 and
+    all(keys[]; test("^(development|rehearsal|test)$")) and
+    all(to_entries[];
+      (.value | type) == "object" and
+      (.value.endpoint_identity | type) == "string" and
+      (.value.endpoint_identity | length) > 0 and
+      (.value.bucket | type) == "string" and
+      (.value.bucket | length) > 0
+    )
+  ' "$policy_file" >/dev/null || fail "restore target policy is invalid"
+  jq -e --arg environment "$TARGET_ENVIRONMENT" 'has($environment)' "$policy_file" >/dev/null || fail "restore target environment is not allowed by policy"
   local policy_endpoint policy_bucket
-  policy_endpoint="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].endpoint_identity' "$RESTORE_TARGET_POLICY_FILE")" || fail "restore target endpoint policy is invalid"
-  policy_bucket="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].bucket' "$RESTORE_TARGET_POLICY_FILE")" || fail "restore target bucket policy is invalid"
+  policy_endpoint="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].endpoint_identity' "$policy_file")" || fail "restore target endpoint policy is invalid"
+  policy_bucket="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].bucket' "$policy_file")" || fail "restore target bucket policy is invalid"
   [[ "$(endpoint_identity "$TARGET_ENDPOINT")" == "$policy_endpoint" ]] || fail "target endpoint does not match restore target policy"
   [[ "$TARGET_BUCKET" == "$policy_bucket" ]] || fail "target bucket does not match restore target policy"
 }
+is_local_test_endpoint() {
+  local identity
+  [[ "$1" == http://* ]] || return 1
+  identity="$(endpoint_identity "$1")"
+  [[ "$identity" =~ ^(localhost|127\.0\.0\.1|host\.docker\.internal)(:[0-9]{1,5})?$ || "$identity" =~ ^\[::1\](:[0-9]{1,5})?$ ]]
+}
+select_target_policy() {
+  [[ -z "${RESTORE_TARGET_POLICY_FILE:-}" ]] || fail "caller-selected RESTORE_TARGET_POLICY_FILE is not supported"
+  case "${MINIO_RESTORE_TEST_MODE:-}" in
+    '')
+      [[ -z "${MINIO_RESTORE_TEST_POLICY_FILE:-}" ]] || fail "test policy requires isolated test mode"
+      TARGET_POLICY_FILE="$OPERATIONAL_RESTORE_TARGET_POLICY_FILE"
+      TARGET_POLICY_OWNER_UID=0
+      ;;
+    LOCAL_ISOLATED_ONLY)
+      [[ "$TARGET_ENVIRONMENT" =~ ^(rehearsal|test)$ ]] || fail "isolated test policy requires rehearsal or test target"
+      is_local_test_endpoint "$TARGET_ENDPOINT" || fail "isolated test policy requires a local endpoint"
+      [[ "$TARGET_BUCKET" =~ ^buildingos-test-restore-[a-z0-9.-]+$ ]] || fail "isolated test policy requires a dedicated test restore bucket"
+      [[ -n "${MINIO_RESTORE_TEST_POLICY_FILE:-}" ]] || fail "MINIO_RESTORE_TEST_POLICY_FILE is required in isolated test mode"
+      TARGET_POLICY_FILE="$MINIO_RESTORE_TEST_POLICY_FILE"
+      TARGET_POLICY_OWNER_UID="$(id -u)"
+      ;;
+    *)
+      fail "invalid MINIO_RESTORE_TEST_MODE"
+      ;;
+  esac
+}
 
-for variable in BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID EXPECTED_SOURCE_ENVIRONMENT TARGET_ENDPOINT TARGET_ACCESS_KEY TARGET_SECRET_KEY TARGET_BUCKET TARGET_ENVIRONMENT RESTORE_CONFIRMATION RESTORE_TARGET_POLICY_FILE; do require "$variable"; done
+for variable in BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID EXPECTED_SOURCE_ENVIRONMENT TARGET_ENDPOINT TARGET_ACCESS_KEY TARGET_SECRET_KEY TARGET_BUCKET TARGET_ENVIRONMENT RESTORE_CONFIRMATION; do require "$variable"; done
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
 validate_prefix "${BACKUP_PREFIX:-}"
 [[ "$EXPECTED_SOURCE_ENVIRONMENT" =~ ^(production|staging|development|rehearsal)$ ]] || fail "unsafe source environment"
@@ -68,9 +124,11 @@ validate_prefix "${BACKUP_PREFIX:-}"
 [[ "$RESTORE_CONFIRMATION" == "RESTORE TO NON-PRODUCTION" ]] || fail "exact non-production restore confirmation is required"
 [[ "$BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ && "$TARGET_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe bucket name"
 [[ "$(endpoint_identity "$BACKUP_ENDPOINT")" != "$(endpoint_identity "$TARGET_ENDPOINT")" || "$BACKUP_BUCKET" != "$TARGET_BUCKET" ]] || fail "restore target must not be the backup bucket"
+select_target_policy
 command -v mc >/dev/null 2>&1 || fail "mc is required"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
+validate_target_policy "$TARGET_POLICY_FILE" "$TARGET_POLICY_OWNER_UID"
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-minio-restore.XXXXXX")"
 readonly TEMP_DIR
@@ -107,8 +165,14 @@ actual_total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/minio-manifest.json"
 [[ "$actual_manifest_sha256" == "$receipt_manifest_sha256" ]] || fail "manifest SHA-256 does not match backup receipt"
 [[ "$actual_object_count" == "$receipt_object_count" ]] || fail "manifest object count does not match backup receipt"
 [[ "$actual_total_bytes" == "$receipt_total_bytes" ]] || fail "manifest byte total does not match backup receipt"
+if ! mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" > "$TEMP_DIR/backup-listing.json"; then
+  fail "backup object listing is unavailable"
+fi
+create_manifest "$TEMP_DIR/backup-listing.json" "backup/$BACKUP_BUCKET/$PREFIX/objects" "$TEMP_DIR/backup-actual-manifest.json" true
+if ! jq -S 'map({key,size,sha256})' "$TEMP_DIR/minio-manifest.json" | cmp -s - <(jq -S 'map({key,size,sha256})' "$TEMP_DIR/backup-actual-manifest.json"); then
+  fail "backup object keys, sizes, or SHA-256 values do not match the approved manifest"
+fi
 [[ "$(endpoint_identity "$TARGET_ENDPOINT")" != "$receipt_source_host" || "$TARGET_BUCKET" != "$receipt_source_bucket" ]] || fail "restore target matches backup source identity"
-validate_target_policy
 
 mc alias set target "$TARGET_ENDPOINT" "$TARGET_ACCESS_KEY" "$TARGET_SECRET_KEY" >/dev/null
 mc stat "target/$TARGET_BUCKET" >/dev/null || fail "target bucket is unavailable"
