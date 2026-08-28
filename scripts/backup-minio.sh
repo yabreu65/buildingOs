@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+set +x
 
 # Create a deletion-propagation-protected MinIO backup set. Credentials are
 # supplied through the environment and kept in a temporary mc config outside
@@ -59,7 +60,7 @@ create_manifest() {
   mv "$sorted_manifest_file" "$manifest_file"
 }
 
-for variable in SOURCE_ENVIRONMENT EXPECTED_SOURCE_ENVIRONMENT SOURCE_ENDPOINT SOURCE_ACCESS_KEY SOURCE_SECRET_KEY SOURCE_BUCKET BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID APP_SHA POSTGRES_BACKUP_ID POSTGRES_BACKUP_SHA256 POSTGRES_BACKUP_COMPLETED_AT; do
+for variable in SOURCE_ENVIRONMENT EXPECTED_SOURCE_ENVIRONMENT SOURCE_ENDPOINT SOURCE_ACCESS_KEY SOURCE_SECRET_KEY SOURCE_BUCKET BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID APP_SHA POSTGRES_BACKUP_RECEIPT_FILE BACKUP_SSE_CAPABILITY_FILE; do
   require "$variable"
 done
 
@@ -67,7 +68,6 @@ done
 [[ "$SOURCE_ENVIRONMENT" =~ ^(production|staging|development|rehearsal)$ ]] || fail "unsafe source environment"
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
 validate_prefix "${BACKUP_PREFIX:-}"
-[[ "$POSTGRES_BACKUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "POSTGRES_BACKUP_SHA256 must be SHA-256"
 [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "APP_SHA must be a 40-character commit SHA"
 [[ "$SOURCE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe SOURCE_BUCKET"
 [[ "$BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe BACKUP_BUCKET"
@@ -75,6 +75,25 @@ validate_prefix "${BACKUP_PREFIX:-}"
 command -v mc >/dev/null 2>&1 || fail "mc is required"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
+[[ "$POSTGRES_BACKUP_RECEIPT_FILE" == /* && ! -L "$POSTGRES_BACKUP_RECEIPT_FILE" && -f "$POSTGRES_BACKUP_RECEIPT_FILE" && -r "$POSTGRES_BACKUP_RECEIPT_FILE" ]] || fail "PostgreSQL backup receipt is unavailable"
+"$(dirname "${BASH_SOURCE[0]}")/validate-sse-capability.sh" >/dev/null || fail "SSE-S3 capability gate failed"
+
+jq -e --arg setId "$BACKUP_SET_ID" --arg appSha "$APP_SHA" '
+  .version == 1 and .status == "PASS" and
+  .backup_set_id == $setId and .app_sha == $appSha and
+  (.postgres_backup_id | type == "string" and test("^[a-z0-9][a-z0-9._-]{0,95}$")) and
+  (.postgres_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+  (.dump_filename | type == "string" and test("^[A-Za-z0-9._-]+$")) and
+  (.remote_object_prefix | type == "string" and test("^postgresql/[a-z0-9][a-z0-9._-]{0,95}$")) and
+  .encryption == "SSE-S3" and
+  (.completed_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+' "$POSTGRES_BACKUP_RECEIPT_FILE" >/dev/null || fail "PostgreSQL backup receipt is invalid or does not match this backup set"
+POSTGRES_BACKUP_ID="$(jq -er '.postgres_backup_id' "$POSTGRES_BACKUP_RECEIPT_FILE")"
+POSTGRES_BACKUP_SHA256="$(jq -er '.postgres_sha256' "$POSTGRES_BACKUP_RECEIPT_FILE")"
+POSTGRES_BACKUP_COMPLETED_AT="$(jq -er '.completed_at' "$POSTGRES_BACKUP_RECEIPT_FILE")"
+POSTGRES_DUMP_FILENAME="$(jq -er '.dump_filename' "$POSTGRES_BACKUP_RECEIPT_FILE")"
+POSTGRES_REMOTE_OBJECT_PREFIX="$(jq -er '.remote_object_prefix' "$POSTGRES_BACKUP_RECEIPT_FILE")"
+POSTGRES_RECEIPT_SHA256="$(sha256sum "$POSTGRES_BACKUP_RECEIPT_FILE" | cut -d ' ' -f1)"
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-minio-backup.XXXXXX")"
 readonly TEMP_DIR
@@ -111,20 +130,7 @@ total_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/source-manifest.json")"
 [[ "$object_count" =~ ^[0-9]+$ && "$total_bytes" =~ ^[0-9]+$ ]] || fail "source manifest totals are invalid"
 
 # Deliberately omit --remove: source deletions must never propagate to backups.
-mc mirror --overwrite --json "source/$SOURCE_BUCKET" "backup/$BACKUP_BUCKET/$PREFIX/objects" >/dev/null
-
-if ! mc ls --recursive --json "backup/$BACKUP_BUCKET/$PREFIX/objects" > "$TEMP_DIR/backup-listing.json"; then
-  fail "backup object listing is unavailable"
-fi
-create_manifest "$TEMP_DIR/backup-listing.json" "backup/$BACKUP_BUCKET/$PREFIX/objects" "$TEMP_DIR/backup-manifest.json" true
-
-backup_count="$(jq 'length' "$TEMP_DIR/backup-manifest.json")"
-backup_bytes="$(jq '[.[].size] | add // 0' "$TEMP_DIR/backup-manifest.json")"
-[[ "$object_count" == "$backup_count" && "$total_bytes" == "$backup_bytes" ]] || fail "copied object count or byte total does not match source"
-
-if ! jq -S 'map({key,size,sha256})' "$TEMP_DIR/source-manifest.json" | cmp -s - <(jq -S 'map({key,size,sha256})' "$TEMP_DIR/backup-manifest.json"); then
-  fail "copied object keys, sizes, or SHA-256 values do not match source manifest"
-fi
+mc mirror --overwrite --json --enc-s3 "backup/$BACKUP_BUCKET" "source/$SOURCE_BUCKET" "backup/$BACKUP_BUCKET/$PREFIX/objects" >/dev/null
 cp "$TEMP_DIR/source-manifest.json" "$TEMP_DIR/minio-manifest.json"
 printf '%s  %s\n' "$(sha256sum "$TEMP_DIR/minio-manifest.json" | cut -d ' ' -f1)" "minio-manifest.json" > "$TEMP_DIR/minio-manifest.sha256"
 
@@ -139,15 +145,20 @@ jq -n \
   --arg postgresBackupId "$POSTGRES_BACKUP_ID" \
   --arg postgresSha256 "$POSTGRES_BACKUP_SHA256" \
   --arg postgresCompletedAt "$POSTGRES_BACKUP_COMPLETED_AT" \
+  --arg postgresReceiptSha256 "$POSTGRES_RECEIPT_SHA256" \
+  --arg postgresDumpFilename "$POSTGRES_DUMP_FILENAME" \
+  --arg postgresRemoteObjectPrefix "$POSTGRES_REMOTE_OBJECT_PREFIX" \
   --arg minioManifestSha256 "$(cut -d ' ' -f1 "$TEMP_DIR/minio-manifest.sha256")" \
   --argjson objectCount "$object_count" \
   --argjson totalBytes "$total_bytes" \
-  '{backup_set_id:$backupSetId,started_at:$startedAt,completed_at:$completedAt,source_env:$sourceEnv,source_host:$sourceHost,source_bucket:$sourceBucket,app_sha:$appSha,postgres_backup_id:$postgresBackupId,postgres_sha256:$postgresSha256,postgres_completed_at:$postgresCompletedAt,minio_manifest:"minio-manifest.json",minio_manifest_sha256:$minioManifestSha256,object_count:$objectCount,total_bytes:$totalBytes,deletion_propagation:false}' \
+  '{version:1,status:"PASS",backup_set_id:$backupSetId,started_at:$startedAt,completed_at:$completedAt,source_env:$sourceEnv,source_host:$sourceHost,source_bucket:$sourceBucket,app_sha:$appSha,postgres_backup_id:$postgresBackupId,postgres_sha256:$postgresSha256,postgres_completed_at:$postgresCompletedAt,postgres_dump_filename:$postgresDumpFilename,postgres_remote_object_prefix:$postgresRemoteObjectPrefix,postgres_receipt:"postgres-backup-receipt.json",postgres_receipt_sha256:$postgresReceiptSha256,minio_manifest:"minio-manifest.json",minio_manifest_sha256:$minioManifestSha256,object_count:$objectCount,total_bytes:$totalBytes,deletion_propagation:false,encryption:"SSE-S3"}' \
   > "$TEMP_DIR/backup-receipt.json"
 
-mc cp "$TEMP_DIR/minio-manifest.json" "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.json" >/dev/null
-mc cp "$TEMP_DIR/minio-manifest.sha256" "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.sha256" >/dev/null
-mc cp "$TEMP_DIR/backup-receipt.json" "backup/$BACKUP_BUCKET/$PREFIX/meta/backup-receipt.json" >/dev/null
+mc cp --enc-s3 "backup/$BACKUP_BUCKET" "$POSTGRES_BACKUP_RECEIPT_FILE" "backup/$BACKUP_BUCKET/$PREFIX/meta/postgres-backup-receipt.json" >/dev/null
+mc cp --enc-s3 "backup/$BACKUP_BUCKET" "$TEMP_DIR/minio-manifest.json" "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.json" >/dev/null
+mc cp --enc-s3 "backup/$BACKUP_BUCKET" "$TEMP_DIR/minio-manifest.sha256" "backup/$BACKUP_BUCKET/$PREFIX/meta/minio-manifest.sha256" >/dev/null
+# The receipt is uploaded last and is the only completion marker for the set.
+mc cp --enc-s3 "backup/$BACKUP_BUCKET" "$TEMP_DIR/backup-receipt.json" "backup/$BACKUP_BUCKET/$PREFIX/meta/backup-receipt.json" >/dev/null
 
-printf 'MinIO backup verified: set=%s environment=%s objects=%s bytes=%s destination=%s/%s\n' \
-  "$BACKUP_SET_ID" "$SOURCE_ENVIRONMENT" "$object_count" "$total_bytes" "$BACKUP_BUCKET" "$PREFIX"
+printf 'MINIO_BACKUP_COMPLETE\nSTATUS=PASS\nBACKUP_SET_ID=%s\nAPP_SHA=%s\nOBJECT_COUNT=%s\nTOTAL_BYTES=%s\n' \
+  "$BACKUP_SET_ID" "$APP_SHA" "$object_count" "$total_bytes"

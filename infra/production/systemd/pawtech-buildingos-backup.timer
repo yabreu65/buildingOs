@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the BuildingOS paired backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=pawtech-buildingos-backup.service
+
+[Install]
+WantedBy=timers.target

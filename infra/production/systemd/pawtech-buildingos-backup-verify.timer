@@ -1,0 +1,11 @@
+[Unit]
+Description=Independently verify the latest BuildingOS MinIO backup daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=pawtech-buildingos-backup-verify.service
+
+[Install]
+WantedBy=timers.target

@@ -2,7 +2,8 @@
 
 ## Scope and current state
 
-This runbook is an executable, fail-closed procedure for later adoption. It
+This runbook is an executable, fail-closed recovery procedure. Production
+activation is controlled by `PRODUCTION_BACKUP_ACTIVATION.md`. It
 does not create production backups, change bucket policy, restart containers,
 or restore production data. Credentials are supplied outside Git through
 protected environment injection, Docker secrets, or a mode-0600 server file.
@@ -10,7 +11,10 @@ Never put credentials, signed URLs, or complete environment files in evidence.
 
 Production currently runs a pinned `minio/minio` image with the named Docker
 volume `buildingos_buildingos_miniodata`, bucket identity supplied by
-`S3_BUCKET`, and anonymous access disabled by the production init service. The
+`S3_BUCKET`. The production initializer intends to disable anonymous access,
+but the 2026-08-28 inventory found anonymous `GetObject` and `ListBucket`
+permissions still active. The application audit found no dependency on either
+permission; remove them only through the approved activation procedure. The
 repository contains no completed off-host MinIO backup or restore rehearsal.
 The public health endpoint responds, while an anonymous root request is
 denied. Exact object counts, bytes, versioning, object lock, encryption, and
@@ -77,11 +81,14 @@ The backup receipt binds:
 timestamp, MinIO manifest name/SHA-256, object count, byte total, and the
 explicit `deletion_propagation=false` guard.
 
-The current PostgreSQL script can upload a dump and metadata to S3, but it
-does not yet emit this shared backup-set contract. A later production change
-must make the PostgreSQL job create or accept the same `BACKUP_SET_ID` and
-publish its receipt before the MinIO receipt is finalized. Until then, the
-MinIO script requires PostgreSQL evidence as input and cannot invent it.
+`scripts/backup-postgres-paired.sh` is the repository-managed PostgreSQL
+contract used by the activation coordinator. It accepts or receives the same
+`BACKUP_SET_ID`, records the deployed `APP_SHA`, proves the local and remote
+dump SHA-256, requires SSE-S3, uploads into `postgresql/<backup-set-id>/` in
+the same versioned/Object-Locked dedicated bucket, publishes an exact PASS
+receipt, and only then permits MinIO backup.
+The older production-only script remains pinned for the pre-activation deploy
+contract and is not silently replaced by this repository change.
 
 ## Usage
 
@@ -101,9 +108,8 @@ export BACKUP_SECRET_KEY='<secret-from-secret-store>'
 export BACKUP_BUCKET='buildingos-backups'
 export BACKUP_SET_ID='20260827t120000z-prod-<short-id>'
 export APP_SHA='<40-character-deployed-sha>'
-export POSTGRES_BACKUP_ID='<postgres-backup-id>'
-export POSTGRES_BACKUP_SHA256='<64-character-sha256>'
-export POSTGRES_BACKUP_COMPLETED_AT='<postgres-completion-time>'
+export POSTGRES_BACKUP_RECEIPT_FILE='<absolute-path-to-protected-pass-receipt>'
+export BACKUP_SSE_CAPABILITY_FILE='/etc/buildingos/contabo-sse-s3-capability.json'
 scripts/backup-minio.sh
 ```
 
@@ -111,6 +117,7 @@ Verify a set independently:
 
 ```bash
 export EXPECTED_SOURCE_ENVIRONMENT=production
+export EXPECTED_APP_SHA='<40-character-deployed-sha>'
 scripts/verify-minio-backup.sh
 ```
 
@@ -119,6 +126,7 @@ by the target-environment allowlist; there is no production override flag.
 
 ```bash
 export TARGET_ENVIRONMENT=rehearsal
+export EXPECTED_APP_SHA='<40-character-deployed-sha>'
 export TARGET_ENDPOINT='http://127.0.0.1:19000'
 export TARGET_ACCESS_KEY='<rehearsal-key>'
 export TARGET_SECRET_KEY='<rehearsal-secret>'
@@ -219,15 +227,11 @@ here.
 - Rehearsal: monthly isolated restore, plus an annual full disaster-recovery
   exercise. Monitor receipt age and verification failures.
 
-## Production adoption still required
+## Production activation controls
 
-- Provision a separate off-host S3-compatible bucket with encryption and
-  immutable retention.
-- Create separate least-privilege backup-read/source and backup-write/
-  restore-write credentials through the existing protected secret mechanism.
-- Integrate `BACKUP_SET_ID` and PostgreSQL receipt creation into the scheduled
-  backup job.
-- Add a scheduler/alert for `backup-minio.sh` and
-  `verify-minio-backup.sh`; no compose change is included in this slice.
-- Perform a separately approved read-only MinIO inventory and then a
-  non-production restore rehearsal using production-shaped metadata.
+The repository-managed coordinator, schedulers, failure hooks, policy
+templates, and provider gate are installed only through the separately
+approved steps in `PRODUCTION_BACKUP_ACTIVATION.md`. No unencrypted production
+backup is allowed. A first paired backup is not successful until PostgreSQL,
+MinIO upload, and independent MinIO verification all pass for the same
+`BACKUP_SET_ID` and actual deployed `APP_SHA`.

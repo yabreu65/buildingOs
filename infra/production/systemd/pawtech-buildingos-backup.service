@@ -1,0 +1,22 @@
+[Unit]
+Description=BuildingOS paired PostgreSQL and MinIO backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=pawtech-buildingos-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+User=yoryi
+Group=yoryi
+EnvironmentFile=/etc/buildingos/buildingos-backup.env
+WorkingDirectory=/opt/pawtech/apps/buildingos/buildingos-app
+ExecStart=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh
+UMask=0077
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pawtech/backups /var/lib/buildingos-backup
+StateDirectory=buildingos-backup

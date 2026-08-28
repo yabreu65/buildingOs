@@ -1,0 +1,10 @@
+[Unit]
+Description=Check BuildingOS paired backup freshness hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=pawtech-buildingos-backup-freshness.service
+
+[Install]
+WantedBy=timers.target
