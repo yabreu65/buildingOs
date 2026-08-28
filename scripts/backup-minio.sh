@@ -9,6 +9,17 @@ fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
 endpoint_identity() { local value="${1#*://}"; printf '%s\n' "${value%%/*}"; }
+validate_prefix() {
+  local prefix="$1"
+  [[ -z "$prefix" ]] && return 0
+  [[ "$prefix" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || fail "unsafe BACKUP_PREFIX"
+  local segment
+  local -a segments
+  IFS='/' read -r -a segments <<< "$prefix"
+  for segment in "${segments[@]}"; do
+    [[ "$segment" != "." && "$segment" != ".." ]] || fail "unsafe BACKUP_PREFIX"
+  done
+}
 
 for variable in SOURCE_ENVIRONMENT EXPECTED_SOURCE_ENVIRONMENT SOURCE_ENDPOINT SOURCE_ACCESS_KEY SOURCE_SECRET_KEY SOURCE_BUCKET BACKUP_ENDPOINT BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_BUCKET BACKUP_SET_ID APP_SHA POSTGRES_BACKUP_ID POSTGRES_BACKUP_SHA256 POSTGRES_BACKUP_COMPLETED_AT; do
   require "$variable"
@@ -17,6 +28,7 @@ done
 [[ "$SOURCE_ENVIRONMENT" == "$EXPECTED_SOURCE_ENVIRONMENT" ]] || fail "source environment identity mismatch"
 [[ "$SOURCE_ENVIRONMENT" =~ ^(production|staging|development|rehearsal)$ ]] || fail "unsafe source environment"
 safe_id "$BACKUP_SET_ID" || fail "unsafe BACKUP_SET_ID"
+validate_prefix "${BACKUP_PREFIX:-}"
 [[ "$POSTGRES_BACKUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "POSTGRES_BACKUP_SHA256 must be SHA-256"
 [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "APP_SHA must be a 40-character commit SHA"
 [[ "$SOURCE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe SOURCE_BUCKET"

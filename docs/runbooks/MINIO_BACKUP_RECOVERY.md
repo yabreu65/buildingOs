@@ -45,6 +45,12 @@ prefix is reused. The backup prefix is
 `buildingos/<source-environment>/<backup-set-id>/`. Each set contains objects,
 `meta/minio-manifest.json`, its SHA-256 file, and `backup-receipt.json`.
 
+`BACKUP_PREFIX` is optional. When supplied, it must be a safe relative
+slash-separated prefix using only letters, numbers, `.`, `_`, and `-`; empty
+segments and `.`/`..` segments are rejected. Verify and restore compare the
+requested `BACKUP_SET_ID` exactly with `backup-receipt.json.backup_set_id` and
+fail closed on mismatch.
+
 The destination must be a different endpoint or bucket and should provide
 server-side encryption, object lock/retention, and a separate restricted
 backup credential. If the selected destination cannot provide those controls,
