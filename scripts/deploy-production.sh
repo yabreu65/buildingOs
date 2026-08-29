@@ -60,6 +60,26 @@ NEW_WEB_DIGEST='unknown'
 BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
 ROLLBACK_RECEIPT='unknown'
+TARGET_TREE_ROOT=''
+TARGET_TREE=''
+TARGET_TREE_ACTIVE=false
+
+cleanup_target_tree() {
+  if [[ "$TARGET_TREE_ACTIVE" == true ]]; then
+    git -C "$APP_DIR" worktree remove --force "$TARGET_TREE" >/dev/null 2>&1 || true
+    TARGET_TREE_ACTIVE=false
+  fi
+  if [[ -n "$TARGET_TREE_ROOT" && -d "$TARGET_TREE_ROOT" ]]; then
+    rm -rf -- "$TARGET_TREE_ROOT"
+  fi
+}
+
+materialize_target_tree() {
+  TARGET_TREE_ROOT="$(mktemp -d /tmp/buildingos-production-target.XXXXXX)"
+  TARGET_TREE="$TARGET_TREE_ROOT/target"
+  git worktree add --detach --quiet "$TARGET_TREE" "$TARGET_SHA" || fail 'Unable to materialize the target SHA worktree'
+  TARGET_TREE_ACTIVE=true
+}
 
 write_record() {
   local status="$1"
@@ -94,6 +114,7 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
+trap cleanup_target_tree EXIT
 
 check_http() {
   local label="$1"
@@ -173,10 +194,23 @@ done
 
 export IMAGE_TAG="$TARGET_SHA"
 export BUILD_REVISION="$TARGET_SHA"
-compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
-"${compose[@]}" --profile migrate config --quiet
-bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$COMPOSE_FILE" "$PROJECT_NAME"
+materialize_target_tree
+readonly TARGET_COMPOSE_FILE="$TARGET_TREE/$COMPOSE_FILE"
+target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$TARGET_COMPOSE_FILE")
+"${target_compose[@]}" config --quiet
+"${target_compose[@]}" --profile migrate config --quiet
+STORAGE_TRANSITION="$(bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME")"
+readonly STORAGE_TRANSITION
+[[ "$STORAGE_TRANSITION" =~ ^STORAGE_TRANSITION=(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] \
+  || fail 'Storage transition guard returned an invalid classification'
+cleanup_target_tree
+
+case "$STORAGE_TRANSITION" in
+  STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
+    wait_for_container_health buildingos-api
+    wait_for_container_health buildingos-web
+    ;;
+esac
 
 PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
 PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
@@ -206,6 +240,8 @@ PHASE='migration-manifest-files'
 [[ -f ./scripts/verify-production-migration-manifest.sh && ! -L ./scripts/verify-production-migration-manifest.sh ]] \
   || fail "Target migration manifest verifier is missing or invalid"
 bash ./scripts/verify-production-migration-manifest.sh verify-files
+
+compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
 
 PHASE='build'
 "${compose[@]}" --profile migrate build buildingos-migrate

@@ -54,9 +54,11 @@ case "$format" in
     esac
     ;;
   *State.Health*)
-    if [[ "$container" == 'buildingos-minio' ]]; then
-      printf '%s\n' "${FAKE_MINIO_HEALTH:-healthy}"
-    fi
+    case "$container" in
+      buildingos-api) printf '%s\n' "${FAKE_API_HEALTH:-healthy}" ;;
+      buildingos-web) printf '%s\n' "${FAKE_WEB_HEALTH:-healthy}" ;;
+      buildingos-minio) printf '%s\n' "${FAKE_MINIO_HEALTH:-healthy}" ;;
+    esac
     ;;
   *'pawtech_public'*)
     if [[ "$container" == 'buildingos-minio' && "${FAKE_PUBLIC_ATTACHED:-true}" == 'true' ]]; then
@@ -110,12 +112,19 @@ run_case() {
   fi
 }
 
-export FAKE_API_RUNNING=false FAKE_WEB_RUNNING=false FAKE_MINIO_EXISTS=true FAKE_MINIO_RUNNING=true
-export FAKE_MINIO_HEALTH=healthy FAKE_PUBLIC_ATTACHED=true FAKE_INTERNAL_ATTACHED=true
+export FAKE_API_RUNNING=true FAKE_WEB_RUNNING=true FAKE_MINIO_EXISTS=true FAKE_MINIO_RUNNING=true
+export FAKE_API_HEALTH=healthy FAKE_WEB_HEALTH=healthy FAKE_MINIO_HEALTH=healthy
+export FAKE_PUBLIC_ATTACHED=true FAKE_INTERNAL_ATTACHED=true
 export FAKE_CURRENT_ENDPOINT=http://buildingos-minio:9000 FAKE_COMPOSE_SERVICES='buildingos-api buildingos-web buildingos-migrate'
 
 write_env http://buildingos-minio:9000
 run_case 'MINIO to MINIO without confirmation' PASS
+
+FAKE_API_HEALTH=unhealthy
+run_case 'MINIO to MINIO API unhealthy' FAIL
+FAKE_API_HEALTH=healthy FAKE_WEB_HEALTH=unhealthy
+run_case 'MINIO to MINIO web unhealthy' FAIL
+FAKE_WEB_HEALTH=healthy
 
 FAKE_PUBLIC_ATTACHED=false
 run_case 'MINIO to MINIO requires public MinIO' FAIL
@@ -128,7 +137,7 @@ write_env https://usc1.contabostorage.com STORAGE_02_CONTABO
 FAKE_API_RUNNING=true
 run_case 'MINIO to EXTERNAL API still running' FAIL
 
-FAKE_API_RUNNING=false FAKE_PUBLIC_ATTACHED=true
+FAKE_API_RUNNING=false FAKE_WEB_RUNNING=false FAKE_PUBLIC_ATTACHED=true
 run_case 'MINIO to EXTERNAL public MinIO attached' FAIL
 
 FAKE_PUBLIC_ATTACHED=false FAKE_INTERNAL_ATTACHED=false
@@ -137,13 +146,18 @@ run_case 'MINIO to EXTERNAL internal MinIO missing' FAIL
 FAKE_INTERNAL_ATTACHED=true
 run_case 'MINIO to EXTERNAL barrier valid' PASS
 
-FAKE_CURRENT_ENDPOINT=https://current.example.invalid FAKE_MINIO_EXISTS=false
+FAKE_CURRENT_ENDPOINT=https://current.example.invalid FAKE_MINIO_EXISTS=false FAKE_API_RUNNING=true FAKE_WEB_RUNNING=true
+write_env https://target.example.invalid
+FAKE_API_RUNNING=false
+run_case 'EXTERNAL to EXTERNAL API stopped unexpectedly' FAIL
+FAKE_API_RUNNING=true
 write_env https://target.example.invalid
 run_case 'EXTERNAL to EXTERNAL without MinIO' PASS
 
 write_env http://buildingos-minio:9000
 run_case 'EXTERNAL to MINIO missing rollback confirmation' FAIL
 
+FAKE_API_RUNNING=false
 write_env http://buildingos-minio:9000 STORAGE_02_MINIO_ROLLBACK
 FAKE_MINIO_EXISTS=true FAKE_PUBLIC_ATTACHED=true
 run_case 'EXTERNAL to MINIO rollback barrier valid' PASS

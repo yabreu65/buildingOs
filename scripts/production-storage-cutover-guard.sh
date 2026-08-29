@@ -128,6 +128,13 @@ require_stopped_container() {
   ! container_running "$container" || { fail "$container must be stopped for storage transition"; return 1; }
 }
 
+require_healthy_container() {
+  local container="$1"
+  container_exists "$container" || { fail "$container container is unavailable"; return 1; }
+  container_running "$container" || { fail "$container must be running for a normal deployment"; return 1; }
+  container_healthy "$container" || { fail "$container must be healthy for a normal deployment"; return 1; }
+}
+
 require_target_storage() {
   local env_file="$1"
   local key value
@@ -204,6 +211,8 @@ main() {
 
   case "$current_provider:$target_provider" in
     MINIO:MINIO)
+      require_healthy_container buildingos-api || return 1
+      require_healthy_container buildingos-web || return 1
       require_minio_topology yes || return 1
       ;;
     MINIO:EXTERNAL_S3)
@@ -214,6 +223,8 @@ main() {
       require_minio_topology no || return 1
       ;;
     EXTERNAL_S3:EXTERNAL_S3)
+      require_healthy_container buildingos-api || return 1
+      require_healthy_container buildingos-web || return 1
       ;;
     EXTERNAL_S3:MINIO)
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
@@ -227,7 +238,7 @@ main() {
       ;;
   esac
 
-  printf 'production storage transition guard: PASS (%s -> %s)\n' "$current_provider" "$target_provider"
+  printf 'STORAGE_TRANSITION=%s:%s\n' "$current_provider" "$target_provider"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -90,6 +90,18 @@ migration, or container mutation. Existing exact-SHA, backup, migration
 baseline/manifest, rollback compatibility, image revision, health, and critical
 log validations remain required.
 
+Before invoking the guard, the deployment preflight materializes `TARGET_SHA`
+in a temporary detached Git worktree and renders the target Compose file from
+that tree. The current production checkout Compose file is never used as the
+target definition. The temporary worktree is removed on both success and
+failure; production `HEAD`, index, and working tree are not moved by this
+validation.
+
+Normal MinIO-to-MinIO and external-to-external deployments require the current
+API and web containers to be running and healthy before backup. MinIO-to-
+external cutover requires both application containers stopped, while the
+external-to-MinIO rollback path retains its explicit rollback barrier.
+
 The production workflow remains `workflow_dispatch` only, retains exact SHA,
 approved SHA, and expected-current-SHA inputs, and packages the guard as an
 explicit trusted deployment-control file. It does not create an automatic
