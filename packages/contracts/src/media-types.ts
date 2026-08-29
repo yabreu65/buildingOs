@@ -22,7 +22,7 @@ const TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 /** Parses a syntactically valid HTTP media type without trusting its contents. */
 export function parseMediaType(raw: string): ParsedMediaType | null {
-  const parts = splitMediaType(raw.replace(/^[ \t]+|[ \t]+$/g, ''));
+  const parts = splitMediaType(trimHttpOws(raw));
   if (!parts || parts.length === 0) {
     return null;
   }
@@ -105,7 +105,7 @@ export function isStorageObjectMimeCompatible(
     return false;
   }
 
-  if (source.raw.trim() === destination.raw.trim()) {
+  if (trimHttpOws(source.raw) === trimHttpOws(destination.raw)) {
     return true;
   }
 
@@ -144,10 +144,10 @@ function splitMediaType(value: string): string[] | null {
       continue;
     }
     if (!quoted && character === ';') {
-      if (!current.trim()) {
+      if (!trimHttpOws(current)) {
         return null;
       }
-      parts.push(current.trim());
+      parts.push(trimHttpOws(current));
       current = '';
       continue;
     }
@@ -157,10 +157,10 @@ function splitMediaType(value: string): string[] | null {
     current += character;
   }
 
-  if (quoted || escaped || !current.trim()) {
+  if (quoted || escaped || !trimHttpOws(current)) {
     return null;
   }
-  parts.push(current.trim());
+  parts.push(trimHttpOws(current));
   return parts;
 }
 
@@ -170,8 +170,8 @@ function parseParameter(value: string): ParsedMediaTypeParameter | null {
     return null;
   }
 
-  const name = value.slice(0, equalsIndex).trim();
-  const parsedValue = parseParameterValue(value.slice(equalsIndex + 1).trim());
+  const name = trimHttpOws(value.slice(0, equalsIndex));
+  const parsedValue = parseParameterValue(trimHttpOws(value.slice(equalsIndex + 1)));
   if (!TOKEN_PATTERN.test(name) || parsedValue === null) {
     return null;
   }
@@ -206,4 +206,9 @@ function parseParameterValue(value: string): string | null {
   }
 
   return escaped || !result ? null : result;
+}
+
+/** Trims only the SP and HTAB octets permitted as HTTP optional whitespace. */
+function trimHttpOws(value: string): string {
+  return value.replace(/^[ \t]+|[ \t]+$/g, '');
 }

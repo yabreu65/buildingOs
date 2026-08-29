@@ -66,8 +66,27 @@ describe('media type validation', () => {
     '\r\ntext/plain',
     'application/pdf\r\nX-Content-Type: text/html',
     'application/pdf-evil',
+    '\fapplication/pdf',
+    '\vapplication/pdf',
+    '\u00A0application/pdf',
+    'application/pdf\f',
+    'application/pdf\v',
+    'application/pdf\u00A0',
+    'text/plain;\fcharset=UTF-8',
+    'text/plain;\vcharset=UTF-8',
+    'text/plain;\u00A0charset=UTF-8',
+    'text/plain; charset=\fUTF-8',
+    'text/plain; charset=\vUTF-8',
+    'text/plain; charset=\u00A0UTF-8',
   ])('rejects unsafe or malformed MIME input %s', (mimeType) => {
     expect(isAllowedMediaType(mimeType, DOCUMENT_MIME_TYPES)).toBe(false);
+  });
+
+  it.each([
+    ' application/pdf ',
+    '\tapplication/pdf\t',
+  ])('allows HTTP optional whitespace at MIME boundaries: %s', (mimeType) => {
+    expect(isAllowedMediaType(mimeType, DOCUMENT_MIME_TYPES)).toBe(true);
   });
 
   it.each([...DOCUMENT_MIME_TYPES])('preserves every allowed document MIME type: %s', (mimeType) => {
