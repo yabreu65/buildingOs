@@ -6,6 +6,7 @@ import Button from '@/shared/components/ui/Button';
 import Card from '@/shared/components/ui/Card';
 import { useToast } from '@/shared/components/ui/Toast';
 import { Upload, X, Loader } from 'lucide-react';
+import { isAllowedMediaType } from '@buildingos/contracts';
 import {
   presignUpload,
   uploadFileToMinio,
@@ -32,6 +33,7 @@ const ALLOWED_MIME_TYPES = [
   'text/plain',
   'text/csv',
 ];
+const ALLOWED_MIME_TYPE_SET = new Set(ALLOWED_MIME_TYPES);
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -57,7 +59,7 @@ export function DocumentUploadModal({
 
   // Validate file
   const validateFile = (file: File): string | null => {
-    if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+    if (!isAllowedMediaType(file.type, ALLOWED_MIME_TYPE_SET)) {
       return `Tipo de archivo no permitido: ${file.type}`;
     }
     if (file.size > MAX_FILE_SIZE) {

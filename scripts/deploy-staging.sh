@@ -6,20 +6,6 @@ usage() {
   exit 64
 }
 
-[[ $# -eq 11 ]] || usage
-readonly TARGET_SHA="$1"
-readonly APP_DIR="$2"
-readonly COMPOSE_FILE="$3"
-readonly PROJECT_NAME="$4"
-readonly ENV_FILE="$5"
-readonly API_HEALTH_URL="$6"
-readonly API_READY_URL="$7"
-readonly API_READYZ_URL="$8"
-readonly WEB_LOCAL_URL="$9"
-readonly API_PUBLIC_HEALTH_URL="${10}"
-readonly WEB_PUBLIC_LOGIN_URL="${11}"
-readonly DEPLOYMENTS_DIR="$(dirname "$APP_DIR")/deployments"
-readonly RECORD="$DEPLOYMENTS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$TARGET_SHA.txt"
 readonly EXPECTED_APP_DIR="/opt/pawtech/apps/buildingos-staging/buildingos-app"
 readonly EXPECTED_COMPOSE_FILE="infra/docker/docker-compose.staging.yml"
 readonly EXPECTED_PROJECT_NAME="buildingos-staging"
@@ -50,8 +36,6 @@ on_error() {
   echo "Deployment failed (exit $rc)" >&2
   exit "$rc"
 }
-trap on_error ERR
-
 check_ignored_sensitive_files() {
   local path
   while IFS= read -r path; do
@@ -63,6 +47,106 @@ check_ignored_sensitive_files() {
     esac
   done < <(git ls-files --others --ignored --exclude-standard)
 }
+
+env_value() {
+  local expected_name="$1"
+  local name
+  local value
+
+  while IFS='=' read -r name value; do
+    if [[ "$name" == "$expected_name" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done < "$ENV_FILE"
+  return 1
+}
+
+target_uses_external_storage() {
+  local service
+
+  while IFS= read -r service; do
+    [[ "$service" == 'minio' ]] && return 1
+  done < <("${compose[@]}" config --services)
+  return 0
+}
+
+current_api_uses_legacy_minio() {
+  local endpoint
+
+  endpoint="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' buildingos-staging-api 2>/dev/null | while IFS='=' read -r name value; do
+    if [[ "$name" == 'S3_ENDPOINT' ]]; then
+      printf '%s' "$value"
+      break
+    fi
+  done)" || {
+    echo 'Current staging API storage endpoint cannot be inspected' >&2
+    return 2
+  }
+  [[ -n "$endpoint" ]] || {
+    echo 'Current staging API has no S3_ENDPOINT' >&2
+    return 2
+  }
+  [[ "$endpoint" == 'http://minio:9000' ]]
+}
+
+network_is_attached() {
+  local container="$1"
+  local network="$2"
+
+  [[ -n "$(docker inspect -f "{{with index .NetworkSettings.Networks \"$network\"}}{{.NetworkID}}{{end}}" "$container")" ]]
+}
+
+require_storage_cutover_preconditions() {
+  target_uses_external_storage || return 0
+  # This applies only while the current API still depends on local MinIO.
+  # Later external-S3 deployments do not require repeating the cutover barrier.
+  if current_api_uses_legacy_minio; then
+    :
+  else
+    local inspection_status=$?
+    [[ "$inspection_status" -eq 1 ]] && return 0
+    return "$inspection_status"
+  fi
+
+  [[ "$(env_value STORAGE_CUTOVER_CONFIRMATION || true)" == 'STORAGE_01_CONTABO' ]] || {
+    echo 'External-storage cutover confirmation is required' >&2
+    return 1
+  }
+  [[ "$(docker inspect -f '{{.State.Running}}' buildingos-staging-api)" == 'false' ]] || {
+    echo 'Staging API must be quiescent before external-storage cutover deployment' >&2
+    return 1
+  }
+  [[ "$(docker inspect -f '{{.State.Running}}' buildingos-staging-minio)" == 'true' ]] || {
+    echo 'Legacy MinIO must remain running for rollback' >&2
+    return 1
+  }
+  ! network_is_attached buildingos-staging-minio pawtech_public || {
+    echo 'Legacy MinIO must be detached from pawtech_public before cutover deployment' >&2
+    return 1
+  }
+  network_is_attached buildingos-staging-minio buildingos-staging_buildingos_staging_net || {
+    echo 'Legacy MinIO must remain attached to the internal staging network' >&2
+    return 1
+  }
+}
+
+main() {
+trap on_error ERR
+[[ $# -eq 11 ]] || usage
+readonly TARGET_SHA="$1"
+readonly APP_DIR="$2"
+readonly COMPOSE_FILE="$3"
+readonly PROJECT_NAME="$4"
+readonly ENV_FILE="$5"
+readonly API_HEALTH_URL="$6"
+readonly API_READY_URL="$7"
+readonly API_READYZ_URL="$8"
+readonly WEB_LOCAL_URL="$9"
+readonly API_PUBLIC_HEALTH_URL="${10}"
+readonly WEB_PUBLIC_LOGIN_URL="${11}"
+readonly DEPLOYMENTS_DIR="$(dirname "$APP_DIR")/deployments"
+readonly RECORD="$DEPLOYMENTS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$TARGET_SHA.txt"
 
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid SHA" >&2; exit 2; }
 for value in "$APP_DIR" "$COMPOSE_FILE" "$PROJECT_NAME" "$ENV_FILE" "$API_HEALTH_URL" "$API_READY_URL" "$API_READYZ_URL" "$WEB_LOCAL_URL" "$API_PUBLIC_HEALTH_URL" "$WEB_PUBLIC_LOGIN_URL"; do
@@ -96,6 +180,7 @@ check_ignored_sensitive_files
 compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
 "${compose[@]}" config --quiet
 "${compose[@]}" --profile migrate config --quiet
+require_storage_cutover_preconditions
 
 "${compose[@]}" --profile migrate build api-migrate
 "${compose[@]}" \
@@ -136,3 +221,8 @@ check_http "web-public-login" "$WEB_PUBLIC_LOGIN_URL"
 
 write_record SUCCESS
 echo "Deployment completed: $TARGET_SHA"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

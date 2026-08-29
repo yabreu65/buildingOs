@@ -2,6 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { isAllowedMediaType } from '@buildingos/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CreditCard,
@@ -295,6 +296,7 @@ const PAYMENT_PROOF_ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
 ] as const;
+const PAYMENT_PROOF_ALLOWED_MIME_TYPE_SET = new Set<string>(PAYMENT_PROOF_ALLOWED_MIME_TYPES);
 
 const PAYMENT_REJECTION_REASON_LABELS: Record<string, string> = {
   MONTO_INCORRECTO: 'Monto incorrecto',
@@ -705,7 +707,7 @@ export const ResidentPaymentsPage = () => {
       return;
     }
 
-    if (!PAYMENT_PROOF_ALLOWED_MIME_TYPES.includes(file.type as (typeof PAYMENT_PROOF_ALLOWED_MIME_TYPES)[number])) {
+    if (!isAllowedMediaType(file.type, PAYMENT_PROOF_ALLOWED_MIME_TYPE_SET)) {
       setSubmitError('El comprobante debe ser PDF, JPG o PNG');
       return;
     }
