@@ -7,9 +7,14 @@ readonly SCRIPT_DIR
 CONTROL_ROOT="$(dirname -- "$SCRIPT_DIR")"
 readonly CONTROL_ROOT
 readonly SECURITY_VALIDATOR="$SCRIPT_DIR/production-security-validate.sh"
+readonly STORAGE_CUTOVER_GUARD="$SCRIPT_DIR/production-storage-cutover-guard.sh"
 readonly BACKUP_IDENTITY_MANIFEST="$CONTROL_ROOT/infra/production/backup-postgres.identity.v1"
 [[ -f "$SECURITY_VALIDATOR" && ! -L "$SECURITY_VALIDATOR" ]] || {
   printf 'ERROR: Trusted production security validator is missing or invalid\n' >&2
+  exit 1
+}
+[[ -f "$STORAGE_CUTOVER_GUARD" && ! -L "$STORAGE_CUTOVER_GUARD" ]] || {
+  printf 'ERROR: Trusted production storage transition guard is missing or invalid\n' >&2
   exit 1
 }
 # shellcheck source=scripts/production-security-validate.sh
@@ -55,6 +60,26 @@ NEW_WEB_DIGEST='unknown'
 BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
 ROLLBACK_RECEIPT='unknown'
+TARGET_TREE_ROOT=''
+TARGET_TREE=''
+TARGET_TREE_ACTIVE=false
+
+cleanup_target_tree() {
+  if [[ "$TARGET_TREE_ACTIVE" == true ]]; then
+    git -C "$APP_DIR" worktree remove --force "$TARGET_TREE" >/dev/null 2>&1 || true
+    TARGET_TREE_ACTIVE=false
+  fi
+  if [[ -n "$TARGET_TREE_ROOT" && -d "$TARGET_TREE_ROOT" ]]; then
+    rm -rf -- "$TARGET_TREE_ROOT"
+  fi
+}
+
+materialize_target_tree() {
+  TARGET_TREE_ROOT="$(mktemp -d /tmp/buildingos-production-target.XXXXXX)"
+  TARGET_TREE="$TARGET_TREE_ROOT/target"
+  git worktree add --detach --quiet "$TARGET_TREE" "$TARGET_SHA" || fail 'Unable to materialize the target SHA worktree'
+  TARGET_TREE_ACTIVE=true
+}
 
 write_record() {
   local status="$1"
@@ -89,6 +114,7 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
+trap cleanup_target_tree EXIT
 
 check_http() {
   local label="$1"
@@ -162,12 +188,30 @@ git fetch --no-tags origin main
 git cat-file -e "$TARGET_SHA^{commit}"
 git merge-base --is-ancestor "$TARGET_SHA" origin/main || fail "Target SHA is not reachable from origin/main"
 
-for container in buildingos-api buildingos-web buildingos-minio "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
+for container in buildingos-api buildingos-web "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
   docker inspect "$container" >/dev/null 2>&1 || fail "Required production container is unavailable: $container"
 done
-wait_for_container_health buildingos-api
-wait_for_container_health buildingos-web
-wait_for_container_health buildingos-minio
+
+export IMAGE_TAG="$TARGET_SHA"
+export BUILD_REVISION="$TARGET_SHA"
+materialize_target_tree
+readonly TARGET_COMPOSE_FILE="$TARGET_TREE/$COMPOSE_FILE"
+target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$TARGET_COMPOSE_FILE")
+"${target_compose[@]}" config --quiet
+"${target_compose[@]}" --profile migrate config --quiet
+STORAGE_TRANSITION="$(bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME")"
+readonly STORAGE_TRANSITION
+[[ "$STORAGE_TRANSITION" =~ ^STORAGE_TRANSITION=(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] \
+  || fail 'Storage transition guard returned an invalid classification'
+cleanup_target_tree
+
+case "$STORAGE_TRANSITION" in
+  STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
+    wait_for_container_health buildingos-api
+    wait_for_container_health buildingos-web
+    ;;
+esac
+
 PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
 PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
 [[ "$PREVIOUS_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous API digest"
@@ -197,11 +241,7 @@ PHASE='migration-manifest-files'
   || fail "Target migration manifest verifier is missing or invalid"
 bash ./scripts/verify-production-migration-manifest.sh verify-files
 
-export IMAGE_TAG="$TARGET_SHA"
-export BUILD_REVISION="$TARGET_SHA"
 compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
-"${compose[@]}" --profile migrate config --quiet
 
 PHASE='build'
 "${compose[@]}" --profile migrate build buildingos-migrate
