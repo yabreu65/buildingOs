@@ -8,6 +8,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { AuditAction } from '@prisma/client';
+import { isAllowedMediaType } from '@buildingos/contracts';
 import { posix as pathPosix } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
@@ -74,7 +75,7 @@ type DocumentContentResponse = {
   disposition: 'inline' | 'attachment';
 };
 
-const ALLOWED_UPLOAD_MIME_TYPES = [
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
@@ -87,7 +88,7 @@ const ALLOWED_UPLOAD_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'text/plain',
   'text/csv',
-];
+]);
 
 const GENERAL_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
 const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
@@ -799,7 +800,7 @@ export class DocumentsService {
    * Blocked: executables, scripts, etc.
    */
   private validateMimeType(mimeType: string): void {
-    if (!ALLOWED_UPLOAD_MIME_TYPES.includes(mimeType)) {
+    if (!isAllowedMediaType(mimeType, ALLOWED_UPLOAD_MIME_TYPES)) {
       throw new BadRequestException(
         `File type not allowed: ${mimeType}`,
       );

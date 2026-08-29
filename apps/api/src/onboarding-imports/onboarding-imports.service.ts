@@ -15,6 +15,7 @@ import {
   Role,
 } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
+import { isAllowedMediaType } from '@buildingos/contracts';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
@@ -1132,7 +1133,7 @@ export class OnboardingImportsService {
   }
 
   private async uploadOriginalFile(objectKey: string, buffer: Buffer, mimeType: string): Promise<void> {
-    if (!ONBOARDING_IMPORT_ALLOWED_MIME_TYPES.has(mimeType)) {
+    if (!isAllowedMediaType(mimeType, ONBOARDING_IMPORT_ALLOWED_MIME_TYPES)) {
       throw new UnsupportedMediaTypeException('Solo se permite subir archivos .xlsx');
     }
 
@@ -1153,7 +1154,7 @@ export class OnboardingImportsService {
       throw new UnsupportedMediaTypeException('Solo se aceptan archivos .xlsx');
     }
 
-    if (!ONBOARDING_IMPORT_ALLOWED_MIME_TYPES.has(file.mimetype)) {
+    if (!isAllowedMediaType(file.mimetype, ONBOARDING_IMPORT_ALLOWED_MIME_TYPES)) {
       throw new UnsupportedMediaTypeException('MIME type no soportado para importación');
     }
 

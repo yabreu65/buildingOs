@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { isAllowedMediaType } from '@buildingos/contracts';
 import {
   AlertCircle,
   ArrowLeft,
@@ -33,6 +34,7 @@ import {
 } from './onboarding-import.api';
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const ONBOARDING_IMPORT_ALLOWED_MIME_TYPE_SET = new Set(ONBOARDING_IMPORT_ALLOWED_MIME_TYPES);
 const DEFAULT_PAGE_SIZE = 25;
 const ONBOARDING_IMPORT_POLLING_INTERVAL_MS = 1_000;
 const SHEET_OPTIONS = [
@@ -107,7 +109,7 @@ function formatIssueCount(count: number): string {
 
 function validateSpreadsheetFile(file: File): string | null {
   const fileName = file.name.toLowerCase();
-  const mimeTypeAllowed = file.type === '' || ONBOARDING_IMPORT_ALLOWED_MIME_TYPES.includes(file.type);
+  const mimeTypeAllowed = file.type === '' || isAllowedMediaType(file.type, ONBOARDING_IMPORT_ALLOWED_MIME_TYPE_SET);
 
   if (!fileName.endsWith('.xlsx')) {
     return 'Solo se permiten archivos .xlsx.';

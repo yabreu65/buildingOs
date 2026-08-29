@@ -162,6 +162,19 @@ describe('DocumentsService', () => {
     ).resolves.toEqual(expect.objectContaining({ objectKey: expect.stringContaining('/documents/') }));
   });
 
+  it.each([
+    'text/plain',
+    'text/plain; charset=UTF-8',
+    'text/plain;charset=utf-8',
+    'TEXT/PLAIN; CHARSET=UTF-8',
+  ])('accepts the approved text/plain MIME representation %s', async (mimeType) => {
+    minio.presignUpload.mockResolvedValue('https://upload.example/text.txt');
+
+    await expect(
+      service.presignUpload('tenant-1', 'notes.txt', mimeType, 1024),
+    ).resolves.toEqual(expect.objectContaining({ objectKey: expect.stringContaining('/documents/') }));
+  });
+
   it('rejects general document presign requests over 100 MiB with a 100 MB message', async () => {
     await expect(
       service.presignUpload(
