@@ -7,9 +7,14 @@ readonly SCRIPT_DIR
 CONTROL_ROOT="$(dirname -- "$SCRIPT_DIR")"
 readonly CONTROL_ROOT
 readonly SECURITY_VALIDATOR="$SCRIPT_DIR/production-security-validate.sh"
+readonly STORAGE_CUTOVER_GUARD="$SCRIPT_DIR/production-storage-cutover-guard.sh"
 readonly BACKUP_IDENTITY_MANIFEST="$CONTROL_ROOT/infra/production/backup-postgres.identity.v1"
 [[ -f "$SECURITY_VALIDATOR" && ! -L "$SECURITY_VALIDATOR" ]] || {
   printf 'ERROR: Trusted production security validator is missing or invalid\n' >&2
+  exit 1
+}
+[[ -f "$STORAGE_CUTOVER_GUARD" && ! -L "$STORAGE_CUTOVER_GUARD" ]] || {
+  printf 'ERROR: Trusted production storage transition guard is missing or invalid\n' >&2
   exit 1
 }
 # shellcheck source=scripts/production-security-validate.sh
@@ -162,12 +167,17 @@ git fetch --no-tags origin main
 git cat-file -e "$TARGET_SHA^{commit}"
 git merge-base --is-ancestor "$TARGET_SHA" origin/main || fail "Target SHA is not reachable from origin/main"
 
-for container in buildingos-api buildingos-web buildingos-minio "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
+for container in buildingos-api buildingos-web "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
   docker inspect "$container" >/dev/null 2>&1 || fail "Required production container is unavailable: $container"
 done
-wait_for_container_health buildingos-api
-wait_for_container_health buildingos-web
-wait_for_container_health buildingos-minio
+
+export IMAGE_TAG="$TARGET_SHA"
+export BUILD_REVISION="$TARGET_SHA"
+compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
+"${compose[@]}" config --quiet
+"${compose[@]}" --profile migrate config --quiet
+bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$COMPOSE_FILE" "$PROJECT_NAME"
+
 PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
 PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
 [[ "$PREVIOUS_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous API digest"
@@ -196,12 +206,6 @@ PHASE='migration-manifest-files'
 [[ -f ./scripts/verify-production-migration-manifest.sh && ! -L ./scripts/verify-production-migration-manifest.sh ]] \
   || fail "Target migration manifest verifier is missing or invalid"
 bash ./scripts/verify-production-migration-manifest.sh verify-files
-
-export IMAGE_TAG="$TARGET_SHA"
-export BUILD_REVISION="$TARGET_SHA"
-compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
-"${compose[@]}" --profile migrate config --quiet
 
 PHASE='build'
 "${compose[@]}" --profile migrate build buildingos-migrate

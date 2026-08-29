@@ -7,6 +7,7 @@ readonly DEPLOY_SCRIPT="$ROOT_DIR/scripts/deploy-production.sh"
 readonly ROLLBACK_SCRIPT="$ROOT_DIR/scripts/rollback-production.sh"
 
 line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"; }
+storage_guard_line="$(line_number 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")"
 backup_phase_line="$(line_number "PHASE='backup'" "$DEPLOY_SCRIPT")"
 checkout_phase_line="$(line_number "PHASE='checkout'" "$DEPLOY_SCRIPT")"
 build_phase_line="$(line_number "PHASE='build'" "$DEPLOY_SCRIPT")"
@@ -23,6 +24,12 @@ recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-
 [[ -n "$baseline_phase_line" && -n "$migrations_phase_line" && -n "$baseline_line" ]]
 [[ -n "$pre_line" && -n "$migrate_line" && -n "$post_line" ]]
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
+[[ -n "$storage_guard_line" ]]
+[[ "$(grep -F -c 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" -eq 1 ]]
+[[ "$storage_guard_line" -lt "$backup_phase_line" ]]
+[[ "$storage_guard_line" -lt "$build_phase_line" ]]
+[[ "$storage_guard_line" -lt "$migrations_phase_line" ]]
+[[ "$storage_guard_line" -lt "$recreate_line" ]]
 (( backup_phase_line < checkout_phase_line ))
 (( checkout_phase_line < build_phase_line ))
 (( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line ))

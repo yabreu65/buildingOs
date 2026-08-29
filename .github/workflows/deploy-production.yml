@@ -62,6 +62,7 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$DEPLOY_SHA" FETCH_HEAD
           test -x scripts/deploy-production.sh
+          test -x scripts/production-storage-cutover-guard.sh
           test -x scripts/verify-production-migration-baseline.sh
           test -f scripts/production-security-validate.sh && test ! -L scripts/production-security-validate.sh
           test -f infra/production/backup-postgres.identity.v1 && test ! -L infra/production/backup-postgres.identity.v1
@@ -107,6 +108,7 @@ jobs:
           remote_command+=" ${remote_args[*]}"
           tar -czf - \
             scripts/deploy-production.sh \
+            scripts/production-storage-cutover-guard.sh \
             scripts/production-security-validate.sh \
             infra/production/backup-postgres.identity.v1 \
             | ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"
