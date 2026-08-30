@@ -48,6 +48,7 @@ describe('ExpensesService TENANT_SHARED functional allocation', () => {
     allocationUpdates = [];
 
     const prismaValue = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       expense: {
         findFirst: jest.fn(),
         update: jest.fn(),
@@ -87,7 +88,11 @@ describe('ExpensesService TENANT_SHARED functional allocation', () => {
         },
         {
           provide: MovementAllocationService,
-          useValue: { createForExpense: jest.fn() },
+          useValue: {
+            validateAllocations: jest.fn(),
+            createForExpense: jest.fn(),
+            createForExpenseInTx: jest.fn(),
+          },
         },
         {
           provide: CurrencyConversionService,
@@ -190,6 +195,6 @@ describe('ExpensesService TENANT_SHARED functional allocation', () => {
 
     expect(prisma.movementAllocation.findMany).not.toHaveBeenCalled();
     expect(prisma.movementAllocation.update).not.toHaveBeenCalled();
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });

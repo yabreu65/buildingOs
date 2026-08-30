@@ -64,6 +64,8 @@ describe('IncomesService multicurrency snapshot', () => {
     exchangeRateFindFirst = jest.fn();
 
     const prismaValue = {
+      $transaction: jest.fn(),
+      $executeRaw: jest.fn().mockResolvedValue(1),
       income: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
@@ -78,7 +80,11 @@ describe('IncomesService multicurrency snapshot', () => {
       exchangeRate: { findFirst: exchangeRateFindFirst },
       expenseLedgerCategory: { findFirst: jest.fn() },
       unitGroup: { findFirst: jest.fn() },
+      movementAllocation: { count: jest.fn().mockResolvedValue(0) },
     };
+    prismaValue.$transaction.mockImplementation(
+      async (callback: (tx: typeof prismaValue) => unknown) => callback(prismaValue),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [

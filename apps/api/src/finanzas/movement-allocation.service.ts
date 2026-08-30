@@ -16,6 +16,8 @@ export interface CreateAllocationInput {
   currencyCode?: string;
 }
 
+type AllocationDbClient = PrismaService | Prisma.TransactionClient;
+
 type MovementAllocationWithBuilding = Prisma.MovementAllocationGetPayload<{
   include: {
     building: {
@@ -260,19 +262,12 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await this.prisma.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        expenseId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(this.prisma, {
+      tenantId,
+      expenseId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
 
     // Audit
@@ -299,19 +294,12 @@ export class MovementAllocationService {
     currencyCode: string,
     allocations: CreateAllocationInput[],
   ): Promise<void> {
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await tx.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        expenseId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(tx, {
+      tenantId,
+      expenseId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
   }
 
@@ -328,19 +316,12 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await this.prisma.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        incomeId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(this.prisma, {
+      tenantId,
+      incomeId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
 
     void this.auditService.createLog({
@@ -350,6 +331,54 @@ export class MovementAllocationService {
       entityType: 'MovementAllocation',
       entityId: incomeId,
       metadata: { allocationCount: allocations.length, totalAmount: amountMinor },
+    });
+  }
+
+  /** Persist a fully validated allocation set using the caller's transaction client. */
+  async createForIncomeInTx(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    incomeId: string,
+    amountMinor: number,
+    currencyCode: string,
+    allocations: CreateAllocationInput[],
+  ): Promise<void> {
+    await this.createForMovement(tx, {
+      tenantId,
+      incomeId,
+      amountMinor,
+      currencyCode,
+      allocations,
+    });
+  }
+
+  private async createForMovement(
+    client: AllocationDbClient,
+    input: {
+      tenantId: string;
+      expenseId?: string;
+      incomeId?: string;
+      amountMinor: number;
+      currencyCode: string;
+      allocations: CreateAllocationInput[];
+    },
+  ): Promise<void> {
+    const allocatedAmounts = input.allocations.some(
+      (allocation) => allocation.percentage !== undefined && allocation.percentage !== null,
+    )
+      ? allocateByLargestRemainder(input.amountMinor, input.allocations)
+      : input.allocations.map((allocation) => allocation.amountMinor!);
+
+    await client.movementAllocation.createMany({
+      data: input.allocations.map((allocation, index) => ({
+        tenantId: input.tenantId,
+        expenseId: input.expenseId,
+        incomeId: input.incomeId,
+        buildingId: allocation.buildingId,
+        percentage: allocation.percentage ?? null,
+        amountMinor: allocatedAmounts[index],
+        currencyCode: input.currencyCode,
+      })),
     });
   }
 

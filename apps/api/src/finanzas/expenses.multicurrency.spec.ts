@@ -66,6 +66,8 @@ describe('ExpensesService multicurrency snapshot', () => {
     exchangeRateFindFirst = jest.fn();
 
     const prismaValue = {
+      $transaction: jest.fn(),
+      $executeRaw: jest.fn().mockResolvedValue(1),
       expense: {
         findFirst: jest.fn(),
         update: jest.fn(),
@@ -82,7 +84,15 @@ describe('ExpensesService multicurrency snapshot', () => {
       vendor: { findFirst: jest.fn() },
       unitGroup: { findFirst: jest.fn() },
       adjustment: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+      movementAllocation: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
     };
+    prismaValue.$transaction.mockImplementation(
+      async (callback: (tx: typeof prismaValue) => unknown) => callback(prismaValue),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -95,7 +105,11 @@ describe('ExpensesService multicurrency snapshot', () => {
         },
         {
           provide: MovementAllocationService,
-          useValue: { createForExpense: jest.fn() },
+          useValue: {
+            validateAllocations: jest.fn(),
+            createForExpense: jest.fn(),
+            createForExpenseInTx: jest.fn(),
+          },
         },
         {
           provide: CurrencyConversionService,
