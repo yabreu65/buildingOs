@@ -328,6 +328,7 @@ validate_rollback_receipt() {
   local expected_api_digest="$4"
   local expected_web_digest="$5"
   local receipt_parent receipt_name body receipt_id timestamp compatibility target_sha previous_sha api_digest web_digest migration_count
+  local encoded_target_sha encoded_context_hash expected_context_hash
   local -a lines=()
 
   [[ "$expected_target_sha" =~ ^[0-9a-f]{40}$ && "$expected_previous_sha" =~ ^[0-9a-f]{40}$ ]] \
@@ -383,9 +384,40 @@ validate_rollback_receipt() {
   [[ "$api_digest" == "$expected_api_digest" ]] || security_fail "Receipt API digest mismatch"
   [[ "$web_digest" == "$expected_web_digest" ]] || security_fail "Receipt Web digest mismatch"
   [[ "$migration_count" =~ ^(0|[1-9][0-9]*)$ ]] || security_fail "Receipt migration count is not canonical"
+  if [[ "$receipt_id" =~ ^rollback-([0-9a-f]{40})-([0-9a-f]{64})$ ]]; then
+    encoded_target_sha="${BASH_REMATCH[1]}"
+    encoded_context_hash="${BASH_REMATCH[2]}"
+    [[ "$encoded_target_sha" == "$target_sha" ]] || security_fail "Receipt ID target SHA mismatch"
+    expected_context_hash="$(rollback_receipt_context_hash \
+      "$target_sha" "$previous_sha" "$api_digest" "$web_digest" "$migration_count")"
+    [[ "$encoded_context_hash" == "$expected_context_hash" ]] \
+      || security_fail "Receipt context hash mismatch"
+  fi
 
   # shellcheck disable=SC2034 # Output consumed by rollback-production.sh after sourcing this file.
   VALIDATED_ROLLBACK_MIGRATION_COUNT="$migration_count"
+}
+
+rollback_receipt_context_hash() {
+  local target_sha="$1"
+  local previous_sha="$2"
+  local previous_api_digest="$3"
+  local previous_web_digest="$4"
+  local migration_count="$5"
+  local canonical_context digest_output
+
+  canonical_context="$(printf 'target_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
+    "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest" "$migration_count")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest_output="$(printf '%s' "$canonical_context" | sha256sum)" \
+      || security_fail 'Unable to hash rollback receipt context'
+  elif command -v shasum >/dev/null 2>&1; then
+    digest_output="$(printf '%s' "$canonical_context" | shasum -a 256)" \
+      || security_fail 'Unable to hash rollback receipt context'
+  else
+    security_fail 'sha256sum or shasum is required for rollback receipt context'
+  fi
+  printf '%s\n' "${digest_output%% *}"
 }
 
 database_contracts_match() {
@@ -477,7 +509,7 @@ generate_rollback_compatibility_receipt() {
   local previous_api_digest="$3"
   local previous_web_digest="$4"
   local migration_count="$5"
-  local receipt_id receipt timestamp_utc
+  local receipt_id receipt timestamp_utc context_hash receipt_lock
 
   [[ "$target_sha" =~ ^[0-9a-f]{40}$ && "$previous_sha" =~ ^[0-9a-f]{40}$ ]] \
     || security_fail 'Receipt generation requires exact commit SHAs'
@@ -496,25 +528,54 @@ generate_rollback_compatibility_receipt() {
   fi
   validate_rollback_protected_directory
 
-  receipt_id="rollback-$target_sha"
+  context_hash="$(rollback_receipt_context_hash \
+    "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest" "$migration_count")"
+  [[ "$context_hash" =~ ^[0-9a-f]{64}$ ]] || security_fail 'Rollback receipt context hash is not canonical'
+  receipt_id="rollback-$target_sha-$context_hash"
   receipt="$ROLLBACK_SECURITY_PROTECTED_DIR/$receipt_id.receipt"
-  if [[ -e "$receipt" || -L "$receipt" ]]; then
-    validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
-    printf '%s\n' "$receipt"
-    return
-  fi
-  timestamp_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || security_fail 'Unable to generate receipt timestamp'
+  receipt_lock="$ROLLBACK_SECURITY_PROTECTED_DIR/.rollback-receipts.lock"
+  receipt="$(
+    (
+      local lock_acquired=0 attempt temp_receipt='' published=0
 
-  if ! (
-    umask 077
-    set -o noclobber
-    printf 'receipt_version=%s\nreceipt_id=%s\ntimestamp_utc=%s\ncompatibility=SAFE\ntarget_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
-      "$ROLLBACK_RECEIPT_VERSION" "$receipt_id" "$timestamp_utc" "$target_sha" "$previous_sha" \
-      "$previous_api_digest" "$previous_web_digest" "$migration_count" > "$receipt"
-  ); then
-    security_fail 'Unable to create rollback compatibility receipt without clobbering'
-  fi
-  validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+      umask 077
+      for attempt in {1..100}; do
+        if mkdir "$receipt_lock" 2>/dev/null; then
+          lock_acquired=1
+          break
+        fi
+        sleep 0.01
+      done
+      [[ "$lock_acquired" -eq 1 ]] || security_fail 'Unable to acquire rollback receipt generation lock'
+      trap 'if [[ -n "${temp_receipt:-}" ]]; then rm -f -- "$temp_receipt"; fi; rmdir "$receipt_lock" 2>/dev/null || true' EXIT
+
+      if [[ -e "$receipt" || -L "$receipt" ]]; then
+        validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+        printf '%s\n' "$receipt"
+        exit 0
+      fi
+
+      timestamp_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || security_fail 'Unable to generate receipt timestamp'
+      temp_receipt="$(mktemp "$ROLLBACK_SECURITY_PROTECTED_DIR/.rollback-receipt.XXXXXX")" \
+        || security_fail 'Unable to create a private rollback compatibility receipt'
+      printf 'receipt_version=%s\nreceipt_id=%s\ntimestamp_utc=%s\ncompatibility=SAFE\ntarget_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
+        "$ROLLBACK_RECEIPT_VERSION" "$receipt_id" "$timestamp_utc" "$target_sha" "$previous_sha" \
+        "$previous_api_digest" "$previous_web_digest" "$migration_count" > "$temp_receipt"
+      chmod 600 "$temp_receipt"
+      if mv -n -- "$temp_receipt" "$receipt" && [[ ! -e "$temp_receipt" ]]; then
+        published=1
+      fi
+      if [[ "$published" -eq 0 ]]; then
+        [[ -e "$receipt" || -L "$receipt" ]] \
+          || security_fail 'Unable to create rollback compatibility receipt without clobbering'
+        validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+        printf '%s\n' "$receipt"
+        exit 0
+      fi
+      validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+      printf '%s\n' "$receipt"
+    )
+  )" || security_fail 'Unable to generate rollback compatibility receipt'
   printf '%s\n' "$receipt"
 }
 

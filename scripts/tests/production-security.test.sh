@@ -155,6 +155,21 @@ validate_receipt() {
     bash "$VALIDATOR" rollback-receipt "$@"
 }
 
+generate_receipt_for_context() {
+  local target_sha="$1"
+  local previous_sha="$2"
+  local api_digest="$3"
+  local web_digest="$4"
+
+  env \
+    TEST_MODE=1 \
+    ROLLBACK_PROTECTED_DIR="$protected_dir" \
+    ROLLBACK_EXPECTED_OWNER="$current_owner" \
+    ROLLBACK_EXPECTED_GROUP="$current_group" \
+    bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+    "$VALIDATOR" "$target_sha" "$previous_sha" "$api_digest" "$web_digest"
+}
+
 run_invalid_rollback() {
   local receipt="$1"
   shift
@@ -217,6 +232,11 @@ pass 'validated backup execution produced the expected marker'
 
 expect_success 'accepts a valid secured rollback receipt' \
   validate_receipt "$valid_receipt" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
+
+legacy_receipt="$protected_dir/rollback-$TARGET_SHA.receipt"
+write_receipt "$legacy_receipt" "rollback-$TARGET_SHA"
+expect_success 'accepts a legacy target-only rollback receipt' \
+  validate_receipt "$legacy_receipt" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
 
 traversal_receipt="$protected_dir/../protected/rollback-check-001.receipt"
 expect_failure 'rejects receipt path traversal before Docker' \
@@ -349,7 +369,26 @@ generated_receipt="$(env \
   "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'receipt generation failed'
 [[ -f "$generated_receipt" ]] || fail_test 'receipt generation did not return a regular receipt path'
+[[ "$generated_receipt" =~ /rollback-${fixture_same_sha}-[0-9a-f]{64}\.receipt$ ]] \
+  || fail_test 'generated receipt does not use the canonical context identity'
+generated_receipt_id="${generated_receipt##*/}"
+generated_receipt_id="${generated_receipt_id%.receipt}"
+[[ "$generated_receipt_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+  || fail_test 'generated receipt ID violates the allowed identity regex'
+[[ "${#generated_receipt_id}" -le 128 ]] || fail_test 'generated receipt ID exceeds the allowed length'
+pass 'generated receipt ID satisfies the allowed regex and length'
 pass 'generates and immediately validates a safe rollback receipt'
+
+migration_tampered_original="$tmp_root/migration-tampered-original.receipt"
+migration_tampered_payload="$tmp_root/migration-tampered.receipt"
+cp "$generated_receipt" "$migration_tampered_original"
+awk '$0 == "migration_count=97" { print "migration_count=98"; next } { print }' \
+  "$generated_receipt" > "$migration_tampered_payload"
+chmod 600 "$migration_tampered_payload"
+mv "$migration_tampered_payload" "$generated_receipt"
+expect_failure 'rejects a deterministic receipt when only migration count changes' \
+  validate_receipt "$generated_receipt" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST"
+cp "$migration_tampered_original" "$generated_receipt"
 
 reused_receipt="$(env \
   TEST_MODE=1 \
@@ -363,6 +402,114 @@ reused_receipt="$(env \
   || fail_test 'valid receipt reuse failed'
 [[ "$reused_receipt" == "$generated_receipt" ]] || fail_test 'receipt reuse returned a different path'
 pass 'reuses a matching receipt after a retry'
+
+incident_a_to_b_receipt="$(generate_receipt_for_context "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST")" \
+  || fail_test 'historical A-to-B receipt generation failed'
+incident_a_to_b_snapshot="$tmp_root/incident-a-to-b.receipt"
+cp "$incident_a_to_b_receipt" "$incident_a_to_b_snapshot"
+pass 'historical A-to-B receipt generation passes'
+incident_b_to_b_receipt="$(generate_receipt_for_context "$fixture_same_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
+  || fail_test 'same-SHA B-to-B receipt generation failed'
+pass 'same-SHA B-to-B receipt generation passes'
+[[ "$incident_a_to_b_receipt" != "$incident_b_to_b_receipt" ]] \
+  || fail_test 'A-to-B and B-to-B receipts have the same path'
+cmp -s "$incident_a_to_b_snapshot" "$incident_a_to_b_receipt" \
+  || fail_test 'A-to-B receipt changed after B-to-B generation'
+[[ "$(awk -F= '$1 == "previous_sha" { print $2 }' "$incident_b_to_b_receipt")" == "$fixture_same_sha" ]] \
+  || fail_test 'B-to-B receipt does not record previous SHA B'
+expect_success 'validates the same-SHA B-to-B incident receipt' \
+  validate_receipt "$incident_b_to_b_receipt" "$fixture_same_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST"
+pass 'A-to-B then B-to-B incident regression preserves both receipts'
+
+alternate_previous_sha='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+alternate_receipt="$(env \
+  TEST_MODE=1 \
+  ROLLBACK_PROTECTED_DIR="$protected_dir" \
+  ROLLBACK_EXPECTED_OWNER="$current_owner" \
+  ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+  "$VALIDATOR" "$fixture_same_sha" "$alternate_previous_sha" "$API_DIGEST" "$WEB_DIGEST")" \
+  || fail_test 'receipt generation with a different previous SHA failed'
+[[ "$alternate_receipt" != "$generated_receipt" ]] || fail_test 'receipt identity ignored the previous SHA'
+expect_success 'validates distinct receipts for distinct rollback contexts' \
+  validate_receipt "$alternate_receipt" "$fixture_same_sha" "$alternate_previous_sha" "$API_DIGEST" "$WEB_DIGEST"
+
+alternate_api_digest='sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+digest_receipt="$(env \
+  TEST_MODE=1 \
+  ROLLBACK_PROTECTED_DIR="$protected_dir" \
+  ROLLBACK_EXPECTED_OWNER="$current_owner" \
+  ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+  "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$alternate_api_digest" "$WEB_DIGEST")" \
+  || fail_test 'receipt generation with a different API digest failed'
+[[ "$digest_receipt" != "$generated_receipt" ]] || fail_test 'receipt identity ignored an image digest'
+expect_success 'validates distinct receipts for distinct image contexts' \
+  validate_receipt "$digest_receipt" "$fixture_same_sha" "$fixture_base_sha" "$alternate_api_digest" "$WEB_DIGEST"
+expect_failure 'rejects a generated receipt with changed immutable inputs' \
+  validate_receipt "$generated_receipt" "$fixture_same_sha" "$fixture_base_sha" "$alternate_api_digest" "$WEB_DIGEST"
+
+alternate_web_digest='sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+web_receipt="$(generate_receipt_for_context "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$alternate_web_digest")" \
+  || fail_test 'receipt generation with a different Web digest failed'
+[[ "$web_receipt" != "$generated_receipt" ]] || fail_test 'receipt identity ignored the Web digest'
+expect_success 'validates distinct receipts for distinct Web image contexts' \
+  validate_receipt "$web_receipt" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$alternate_web_digest"
+
+tampered_original="$tmp_root/generated-original.receipt"
+tampered_payload="$tmp_root/generated-tampered.receipt"
+cp "$generated_receipt" "$tampered_original"
+awk -v replacement="$alternate_previous_sha" \
+  '$0 ~ /^previous_sha=/ { print "previous_sha=" replacement; next } { print }' \
+  "$generated_receipt" > "$tampered_payload"
+chmod 600 "$tampered_payload"
+mv "$tampered_payload" "$generated_receipt"
+expect_failure 'rejects a tampered pre-existing deterministic receipt fail closed' \
+  generate_receipt_for_context "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST"
+cp "$tampered_original" "$generated_receipt"
+
+rollback_consumer_output=''
+rollback_consumer_status=0
+rollback_consumer_output="$(env \
+  TEST_MODE=1 \
+  ROLLBACK_PROTECTED_DIR="$protected_dir" \
+  ROLLBACK_EXPECTED_OWNER="$current_owner" \
+  ROLLBACK_EXPECTED_GROUP="$current_group" \
+  PATH="$mock_bin:$PATH" \
+  bash "$ROLLBACK" \
+    "$fixture_same_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST" "$incident_b_to_b_receipt" \
+    https://api.example.test/health https://api.example.test/readyz https://app.example.test/login 2>&1)" \
+  || rollback_consumer_status=$?
+[[ "$rollback_consumer_status" -ne 0 ]] || fail_test 'rollback consumer unexpectedly completed in the fixture environment'
+[[ "$rollback_consumer_output" == *'cd: /opt/pawtech/apps/buildingos/buildingos-app: No such file or directory'* ]] \
+  || fail_test 'rollback consumer did not reach the expected post-validation checkout gate'
+pass 'rollback consumer validates new-format receipt before the checkout gate'
+
+concurrent_dir="$tmp_root/concurrent-protected"
+mkdir -p "$concurrent_dir"
+chmod 700 "$concurrent_dir"
+concurrent_output_a="$tmp_root/concurrent-a.out"
+concurrent_output_b="$tmp_root/concurrent-b.out"
+env TEST_MODE=1 ROLLBACK_PROTECTED_DIR="$concurrent_dir" ROLLBACK_EXPECTED_OWNER="$current_owner" ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+  "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST" > "$concurrent_output_a" 2>&1 &
+concurrent_pid_a=$!
+env TEST_MODE=1 ROLLBACK_PROTECTED_DIR="$concurrent_dir" ROLLBACK_EXPECTED_OWNER="$current_owner" ROLLBACK_EXPECTED_GROUP="$current_group" \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 97' _ \
+  "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST" > "$concurrent_output_b" 2>&1 &
+concurrent_pid_b=$!
+concurrent_status_a=0
+concurrent_status_b=0
+wait "$concurrent_pid_a" || concurrent_status_a=$?
+wait "$concurrent_pid_b" || concurrent_status_b=$?
+[[ "$concurrent_status_a" -eq 0 && "$concurrent_status_b" -eq 0 ]] || {
+  cat "$concurrent_output_a" "$concurrent_output_b" >&2
+  fail_test 'concurrent identical receipt generation is idempotent'
+}
+concurrent_receipt_a="$(tail -n 1 "$concurrent_output_a")"
+concurrent_receipt_b="$(tail -n 1 "$concurrent_output_b")"
+[[ "$concurrent_receipt_a" == "$concurrent_receipt_b" ]] || fail_test 'concurrent receipt generation returned different paths'
+pass 'concurrent identical receipt generation is idempotent'
 
 expect_failure 'rejects an existing receipt with mismatched immutable inputs' \
   env \
