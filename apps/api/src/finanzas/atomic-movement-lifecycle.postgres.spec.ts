@@ -121,6 +121,12 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
         catalogScope: 'CONDOMINIUM_COMMON',
       },
     });
+    const vendor = await observer.vendor.create({
+      data: {
+        tenantId: tenant.id,
+        name: `Vendor ${suffix}`,
+      },
+    });
     const unitGroup = await observer.unitGroup.create({
       data: {
         tenantId: tenant.id,
@@ -128,7 +134,7 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
         name: `Group ${suffix}`,
       },
     });
-    return { tenant, membership, building, secondBuilding, expenseCategory, sharedExpenseCategory, incomeCategory, unitGroup };
+    return { tenant, membership, building, secondBuilding, expenseCategory, sharedExpenseCategory, incomeCategory, unitGroup, vendor };
   }
 
   function services(client: PrismaClient, movement?: MovementAllocationService) {
@@ -168,6 +174,7 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
       invoiceDate: '2026-08-01',
       scopeType,
       buildingId: scopeType === 'BUILDING' ? ctx.building.id : undefined,
+      vendorId: scopeType === 'BUILDING' ? ctx.vendor.id : undefined,
       unitGroupId: scopeType === 'UNIT_GROUP' ? ctx.unitGroup.id : undefined,
       allocations: scopeType === 'BUILDING'
         ? undefined
@@ -310,5 +317,93 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     expect(results.every((result) => result.status === 'rejected')).toBe(true);
     expect(await observer.income.findUniqueOrThrow({ where: { id: allocated.id } })).toMatchObject({ currencyCode: 'ARS' });
     expect(await observer.movementAllocation.count({ where: { incomeId: allocated.id } })).toBe(1);
+  });
+
+  it('serializes an Expense update against validation using two PostgreSQL clients', async () => {
+    const ctx = await fixture('expense-update-validate-race');
+    const { expenses: expensesA } = services(clientA);
+    const { expenses: expensesB } = services(clientB);
+    const draft = await expensesA.createExpense(
+      ctx.tenant.id,
+      ctx.membership.id,
+      ['TENANT_ADMIN'],
+      expenseDto(ctx, 'BUILDING'),
+    );
+
+    const results = await Promise.allSettled([
+      expensesA.updateExpense(
+        ctx.tenant.id,
+        draft.id,
+        ctx.membership.id,
+        ['TENANT_ADMIN'],
+        { amountMinor: 2000, description: 'updated before validation' },
+      ),
+      expensesB.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    ]);
+
+    expect(results[1]?.status).toBe('fulfilled');
+    const updatedExpense = await observer.expense.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(updatedExpense.status).toBe('VALIDATED');
+    expect(updatedExpense.functionalAmountMinor).toBe(updatedExpense.amountMinor);
+    if (results[0]?.status === 'fulfilled') {
+      expect(updatedExpense.amountMinor).toBe(2000);
+    } else {
+      expect(updatedExpense.amountMinor).toBe(1000);
+    }
+  });
+
+  it('serializes Expense validation against void without state resurrection', async () => {
+    const ctx = await fixture('expense-validate-void-race');
+    const { expenses: expensesA } = services(clientA);
+    const { expenses: expensesB } = services(clientB);
+    const draft = await expensesA.createExpense(
+      ctx.tenant.id,
+      ctx.membership.id,
+      ['TENANT_ADMIN'],
+      expenseDto(ctx, 'BUILDING'),
+    );
+
+    const results = await Promise.allSettled([
+      expensesA.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+      expensesB.voidExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    ]);
+
+    expect(results[1]?.status).toBe('fulfilled');
+    expect(await observer.expense.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({
+      status: 'VOID',
+    });
+  });
+
+  it('serializes an Income update against recording with a consistent snapshot', async () => {
+    const ctx = await fixture('income-update-record-race');
+    const { incomes: incomesA } = services(clientA);
+    const { incomes: incomesB } = services(clientB);
+    const draft = await incomesA.createIncome(
+      ctx.tenant.id,
+      ctx.membership.id,
+      ['TENANT_ADMIN'],
+      incomeDto(ctx, 'BUILDING'),
+    );
+
+    const results = await Promise.allSettled([
+      incomesA.updateIncome(
+        ctx.tenant.id,
+        draft.id,
+        ctx.membership.id,
+        ['TENANT_ADMIN'],
+        { amountMinor: 2000, description: 'updated before recording' },
+      ),
+      incomesB.recordIncome(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    ]);
+
+    expect(results[1]?.status).toBe('fulfilled');
+    const recordedIncome = await observer.income.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(recordedIncome.status).toBe('RECORDED');
+    expect(recordedIncome.functionalAmountMinor).toBe(recordedIncome.amountMinor);
+    if (results[0]?.status === 'fulfilled') {
+      expect(recordedIncome.amountMinor).toBe(2000);
+    } else {
+      expect(recordedIncome.amountMinor).toBe(1000);
+    }
   });
 });

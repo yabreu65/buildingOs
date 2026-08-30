@@ -134,6 +134,7 @@ export class ExpensesService {
   private async buildExpenseConversionSnapshot(
     tenantId: string,
     expense: { amountMinor: number; currencyCode: string; invoiceDate: Date },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<{
     functionalAmountMinor: number;
     functionalCurrencyCode: string;
@@ -143,7 +144,7 @@ export class ExpensesService {
     exchangeRateEffectiveAt: Date | null;
     conversionDate: Date;
   }> {
-    const tenant = await this.prisma.tenant.findFirst({
+    const tenant = await db.tenant.findFirst({
       where: { id: tenantId },
       select: { id: true, functionalCurrency: true },
     });
@@ -162,7 +163,7 @@ export class ExpensesService {
         typeof this.currencyConversionService.convert
       >[0]['functionalCurrency'],
       conversionDate: this.toConversionDate(expense.invoiceDate),
-    });
+    }, db);
 
     return {
       functionalAmountMinor: result.functionalAmount,
@@ -196,8 +197,9 @@ export class ExpensesService {
     tenantId: string,
     buildingId: string,
     liquidationPeriod: string,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<void> {
-    const publishedLiq = await this.prisma.liquidation.findFirst({
+    const publishedLiq = await db.liquidation.findFirst({
       where: {
         tenantId,
         buildingId,
@@ -454,6 +456,17 @@ export class ExpensesService {
       return created;
     });
 
+    if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+      void this.auditService.createLog({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'EXPENSE_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: expense.id,
+        metadata: { allocationCount: dto.allocations.length, totalAmount: dto.amountMinor },
+      });
+    }
+
     void this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
@@ -537,7 +550,7 @@ export class ExpensesService {
       const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
 
       if (expense.scopeType === 'BUILDING' && expense.buildingId) {
-        await this.assertBuildingPeriodIsOpen(tenantId, expense.buildingId, liquidationPeriod);
+        await this.assertBuildingPeriodIsOpen(tenantId, expense.buildingId, liquidationPeriod, tx);
       }
 
       return tx.expense.update({
@@ -596,7 +609,7 @@ export class ExpensesService {
       }
 
       this.assertExpenseCanBeValidated(expense);
-      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense);
+      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense, tx);
       return this.persistValidatedExpense(tx, expense, conversionSnapshot, membershipId);
     });
 
@@ -632,7 +645,7 @@ export class ExpensesService {
       }
 
       this.assertExpenseCanBeValidated(expense);
-      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense);
+      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense, tx);
       return this.persistValidatedExpense(tx, expense, conversionSnapshot, membershipId ?? null);
     });
 
@@ -662,29 +675,33 @@ export class ExpensesService {
       throw new ForbiddenException('Acceso denegado');
     }
 
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, tenantId },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireExpenseLock(tx, tenantId, expenseId);
 
-    if (!expense) {
-      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
-    }
+      const expense = await tx.expense.findFirst({
+        where: { id: expenseId, tenantId },
+      });
 
-    if (expense.status === 'VOID') {
-      throw new BadRequestException('El gasto ya está anulado');
-    }
+      if (!expense) {
+        throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+      }
 
-    const updated = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        status: 'VOID',
-        voidedByMembershipId: membershipId,
-        voidedAt: new Date(),
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
+      if (expense.status === 'VOID') {
+        throw new BadRequestException('El gasto ya está anulado');
+      }
+
+      return tx.expense.update({
+        where: { id: expenseId },
+        data: {
+          status: 'VOID',
+          voidedByMembershipId: membershipId,
+          voidedAt: new Date(),
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
     });
 
     void this.auditService.createLog({
@@ -693,7 +710,7 @@ export class ExpensesService {
       action: 'EXPENSE_VOID',
       entityType: 'Expense',
       entityId: expenseId,
-      metadata: { period: expense.period, reason: 'void requested by admin' },
+      metadata: { period: updated.period, reason: 'void requested by admin' },
     });
 
     return this.toDto(updated);

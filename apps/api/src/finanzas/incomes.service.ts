@@ -5,7 +5,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
-import { FundStatus, FundTransactionDirection, IncomeStatus } from '@prisma/client';
+import { FundStatus, FundTransactionDirection, IncomeStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -186,6 +186,17 @@ export class IncomesService {
       return created;
     });
 
+    if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+      void this.auditService.createLog({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'INCOME_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: income.id,
+        metadata: { allocationCount: dto.allocations.length, totalAmount: dto.amountMinor },
+      });
+    }
+
     void this.auditService.createLog({
       tenantId,
       actorMembershipId: membershipId,
@@ -305,6 +316,7 @@ export class IncomesService {
   private async buildIncomeConversionSnapshot(
     tenantId: string,
     income: { amountMinor: number; currencyCode: string; receivedDate: Date },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<{
     functionalAmountMinor: number;
     functionalCurrencyCode: string;
@@ -314,7 +326,7 @@ export class IncomesService {
     exchangeRateEffectiveAt: Date | null;
     conversionDate: Date;
   }> {
-    const tenant = await this.prisma.tenant.findFirst({
+    const tenant = await db.tenant.findFirst({
       where: { id: tenantId },
       select: { id: true, functionalCurrency: true },
     });
@@ -333,7 +345,7 @@ export class IncomesService {
         typeof this.currencyConversionService.convert
       >[0]['functionalCurrency'],
       conversionDate: this.toConversionDate(income.receivedDate),
-    });
+    }, db);
 
     return {
       functionalAmountMinor: result.functionalAmount,
@@ -373,7 +385,7 @@ export class IncomesService {
         );
       }
 
-      const conversionSnapshot = await this.buildIncomeConversionSnapshot(tenantId, income);
+      const conversionSnapshot = await this.buildIncomeConversionSnapshot(tenantId, income, tx);
       return tx.income.update({
         where: { id: incomeId },
         data: {

@@ -24,6 +24,7 @@ function makePrismaMock() {
     },
     movementAllocation: {
       count: jest.fn().mockResolvedValue(0),
+      findMany: jest.fn().mockResolvedValue([]),
     },
     expenseLedgerCategory: { findFirst: jest.fn() },
     vendor: { findFirst: jest.fn() },
@@ -38,7 +39,7 @@ function makePrismaMock() {
   return prismaValue;
 }
 
-function makeExpense() {
+function makeExpense(overrides: Record<string, unknown> = {}) {
   return {
     id: 'expense-1',
     tenantId: 'tenant-1',
@@ -66,10 +67,11 @@ function makeExpense() {
     updatedAt: new Date(),
     category: { name: 'Shared expenses' },
     vendor: null,
+    ...overrides,
   };
 }
 
-function makeIncome() {
+function makeIncome(overrides: Record<string, unknown> = {}) {
   return {
     id: 'income-1',
     tenantId: 'tenant-1',
@@ -95,11 +97,13 @@ function makeIncome() {
     createdAt: new Date(),
     updatedAt: new Date(),
     category: { name: 'Other income' },
+    ...overrides,
   };
 }
 
 function buildExpenseService() {
   const prismaValue = makePrismaMock();
+  const audit = { createLog: jest.fn().mockResolvedValue(undefined) };
   const movement = {
     validateAllocations: jest.fn(),
     createForExpenseInTx: jest.fn(),
@@ -110,16 +114,17 @@ function buildExpenseService() {
   };
   const service = new ExpensesService(
     prismaValue as unknown as PrismaService,
-    { createLog: jest.fn() } as unknown as AuditService,
+    audit as unknown as AuditService,
     validators as unknown as FinanzasValidators,
     movement as unknown as MovementAllocationService,
     { convert: jest.fn() } as unknown as CurrencyConversionService,
   );
-  return { prismaValue, movement, service };
+  return { prismaValue, movement, audit, service };
 }
 
 function buildIncomeService() {
   const prismaValue = makePrismaMock();
+  const audit = { createLog: jest.fn().mockResolvedValue(undefined) };
   const movement = {
     validateAllocations: jest.fn(),
     createForIncomeInTx: jest.fn(),
@@ -129,12 +134,12 @@ function buildIncomeService() {
   };
   const service = new IncomesService(
     prismaValue as unknown as PrismaService,
-    { createLog: jest.fn() } as unknown as AuditService,
+    audit as unknown as AuditService,
     validators as unknown as FinanzasValidators,
     movement as unknown as MovementAllocationService,
     { convert: jest.fn() } as unknown as CurrencyConversionService,
   );
-  return { prismaValue, movement, service };
+  return { prismaValue, movement, audit, service };
 }
 
 const sharedExpenseDto: CreateExpenseDto = {
@@ -159,7 +164,7 @@ const sharedIncomeDto: CreateIncomeDto = {
 
 describe('atomic movement lifecycle', () => {
   it('rolls back an Expense parent when allocation persistence fails', async () => {
-    const { prismaValue, movement, service } = buildExpenseService();
+    const { prismaValue, movement, audit, service } = buildExpenseService();
     prismaValue.expenseLedgerCategory.findFirst.mockResolvedValue({
       id: 'expense-category-1',
       catalogScope: 'CONDOMINIUM_COMMON',
@@ -173,6 +178,7 @@ describe('atomic movement lifecycle', () => {
     expect(prismaValue.$transaction).toHaveBeenCalledTimes(1);
     expect(prismaValue.expense.create).toHaveBeenCalledTimes(1);
     expect(movement.createForExpenseInTx).toHaveBeenCalledTimes(1);
+    expect(audit.createLog).not.toHaveBeenCalled();
   });
 
   it('does not attempt allocations when an Expense parent fails', async () => {
@@ -221,8 +227,44 @@ describe('atomic movement lifecycle', () => {
     expect(prismaValue.expense.update).toHaveBeenCalledTimes(1);
   });
 
+  it('emits Expense allocation audit only after the transaction commits', async () => {
+    const { prismaValue, audit, movement, service } = buildExpenseService();
+    prismaValue.expenseLedgerCategory.findFirst.mockResolvedValue({
+      id: 'expense-category-1',
+      catalogScope: 'CONDOMINIUM_COMMON',
+    });
+    prismaValue.expense.create.mockResolvedValue(makeExpense());
+
+    let committed = false;
+    prismaValue.$transaction.mockImplementation(async (callback: (tx: typeof prismaValue) => unknown) => {
+      const result = await callback(prismaValue);
+      committed = true;
+      return result;
+    });
+    audit.createLog.mockImplementation(async () => {
+      expect(committed).toBe(true);
+    });
+
+    await service.createExpense('tenant-1', 'member-1', ['TENANT_ADMIN'], sharedExpenseDto);
+
+    expect(movement.createForExpenseInTx).toHaveBeenCalledTimes(1);
+    expect(audit.createLog).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        action: 'EXPENSE_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: 'expense-1',
+        metadata: { allocationCount: 1, totalAmount: 1000 },
+      }),
+    );
+    expect(audit.createLog).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: 'EXPENSE_CREATE', entityId: 'expense-1' }),
+    );
+  });
+
   it('rolls back an Income parent when allocation persistence fails', async () => {
-    const { prismaValue, movement, service } = buildIncomeService();
+    const { prismaValue, movement, audit, service } = buildIncomeService();
     prismaValue.expenseLedgerCategory.findFirst.mockResolvedValue({
       id: 'income-category-1',
       movementType: 'INCOME',
@@ -235,6 +277,7 @@ describe('atomic movement lifecycle', () => {
 
     expect(prismaValue.$transaction).toHaveBeenCalledTimes(1);
     expect(movement.createForIncomeInTx).toHaveBeenCalledTimes(1);
+    expect(audit.createLog).not.toHaveBeenCalled();
   });
 
   it('does not attempt allocations when an Income parent fails', async () => {
@@ -265,5 +308,152 @@ describe('atomic movement lifecycle', () => {
     )).rejects.toBeInstanceOf(ConflictException);
 
     expect(prismaValue.income.update).not.toHaveBeenCalled();
+  });
+
+  it('emits Income allocation audit only after the transaction commits', async () => {
+    const { prismaValue, audit, movement, service } = buildIncomeService();
+    prismaValue.expenseLedgerCategory.findFirst.mockResolvedValue({
+      id: 'income-category-1',
+      movementType: 'INCOME',
+    });
+    prismaValue.income.create.mockResolvedValue(makeIncome());
+
+    let committed = false;
+    prismaValue.$transaction.mockImplementation(async (callback: (tx: typeof prismaValue) => unknown) => {
+      const result = await callback(prismaValue);
+      committed = true;
+      return result;
+    });
+    audit.createLog.mockImplementation(async () => {
+      expect(committed).toBe(true);
+    });
+
+    await service.createIncome('tenant-1', 'member-1', ['TENANT_ADMIN'], sharedIncomeDto);
+
+    expect(movement.createForIncomeInTx).toHaveBeenCalledTimes(1);
+    expect(audit.createLog).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        action: 'INCOME_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: 'income-1',
+        metadata: { allocationCount: 1, totalAmount: 1000 },
+      }),
+    );
+    expect(audit.createLog).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: 'INCOME_CREATE', entityId: 'income-1' }),
+    );
+  });
+
+  it('passes the active transaction client to the Expense conversion snapshot', async () => {
+    const root = makePrismaMock();
+    const tx = makePrismaMock();
+    root.$transaction.mockImplementation(async (callback: (client: typeof tx) => unknown) => callback(tx));
+    tx.expense.findFirst.mockResolvedValue(makeExpense({
+      vendorId: 'vendor-1',
+      vendor: { name: 'Vendor' },
+    }));
+    tx.tenant.findFirst.mockResolvedValue({ id: 'tenant-1', functionalCurrency: 'ARS' });
+    tx.expense.update.mockResolvedValue(makeExpense({ status: 'VALIDATED' }));
+    const currencyConversion = {
+      convert: jest.fn().mockResolvedValue({
+        functionalAmount: 1000,
+        functionalCurrency: 'ARS',
+        sourceExchangeRateId: null,
+        appliedRate: '1',
+        direction: 'IDENTITY',
+        sourceEffectiveAt: null,
+        conversionDate: new Date('2026-08-01T00:00:00.000Z'),
+      }),
+    };
+    const validators = { isAdminOrOperator: jest.fn().mockReturnValue(true) };
+    const movement = { validateAllocations: jest.fn() };
+    const service = new ExpensesService(
+      root as unknown as PrismaService,
+      { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      validators as unknown as FinanzasValidators,
+      movement as unknown as MovementAllocationService,
+      currencyConversion as unknown as CurrencyConversionService,
+    );
+
+    await service.validateExpense('tenant-1', 'expense-1', 'member-1', ['TENANT_ADMIN']);
+
+    expect(root.tenant.findFirst).not.toHaveBeenCalled();
+    expect(tx.tenant.findFirst).toHaveBeenCalledTimes(1);
+    expect(currencyConversion.convert).toHaveBeenCalledWith(expect.any(Object), tx);
+  });
+
+  it('passes the active transaction client to the Income conversion snapshot', async () => {
+    const root = makePrismaMock();
+    const tx = makePrismaMock();
+    root.$transaction.mockImplementation(async (callback: (client: typeof tx) => unknown) => callback(tx));
+    tx.income.findFirst.mockResolvedValue(makeIncome());
+    tx.tenant.findFirst.mockResolvedValue({ id: 'tenant-1', functionalCurrency: 'ARS' });
+    tx.income.update.mockResolvedValue(makeIncome({ status: 'RECORDED' }));
+    const currencyConversion = {
+      convert: jest.fn().mockResolvedValue({
+        functionalAmount: 1000,
+        functionalCurrency: 'ARS',
+        sourceExchangeRateId: null,
+        appliedRate: '1',
+        direction: 'IDENTITY',
+        sourceEffectiveAt: null,
+        conversionDate: new Date('2026-08-01T00:00:00.000Z'),
+      }),
+    };
+    const validators = { isAdminOrOperator: jest.fn().mockReturnValue(true) };
+    const movement = { validateAllocations: jest.fn() };
+    const service = new IncomesService(
+      root as unknown as PrismaService,
+      { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      validators as unknown as FinanzasValidators,
+      movement as unknown as MovementAllocationService,
+      currencyConversion as unknown as CurrencyConversionService,
+    );
+
+    await service.recordIncome('tenant-1', 'income-1', 'member-1', ['TENANT_ADMIN']);
+
+    expect(root.tenant.findFirst).not.toHaveBeenCalled();
+    expect(tx.tenant.findFirst).toHaveBeenCalledTimes(1);
+    expect(currencyConversion.convert).toHaveBeenCalledWith(expect.any(Object), tx);
+  });
+
+  it('uses the active transaction client for Expense period checks', async () => {
+    const root = makePrismaMock();
+    const tx = makePrismaMock();
+    root.$transaction.mockImplementation(async (callback: (client: typeof tx) => unknown) => callback(tx));
+    tx.expense.findFirst.mockResolvedValue(makeExpense({
+      buildingId: 'building-1',
+      scopeType: 'BUILDING',
+      vendorId: 'vendor-1',
+      vendor: { name: 'Vendor' },
+    }));
+    tx.liquidation.findFirst.mockResolvedValue(null);
+    tx.expense.update.mockResolvedValue(makeExpense({
+      buildingId: 'building-1',
+      scopeType: 'BUILDING',
+      vendorId: 'vendor-1',
+      vendor: { name: 'Vendor' },
+    }));
+    const validators = { isAdminOrOperator: jest.fn().mockReturnValue(true) };
+    const service = new ExpensesService(
+      root as unknown as PrismaService,
+      { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      validators as unknown as FinanzasValidators,
+      { validateAllocations: jest.fn() } as unknown as MovementAllocationService,
+      { convert: jest.fn() } as unknown as CurrencyConversionService,
+    );
+
+    await service.updateExpense(
+      'tenant-1',
+      'expense-1',
+      'member-1',
+      ['TENANT_ADMIN'],
+      { description: 'metadata update' },
+    );
+
+    expect(root.liquidation.findFirst).not.toHaveBeenCalled();
+    expect(tx.liquidation.findFirst).toHaveBeenCalledTimes(1);
   });
 });
