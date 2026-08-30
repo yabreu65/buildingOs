@@ -328,6 +328,7 @@ validate_rollback_receipt() {
   local expected_api_digest="$4"
   local expected_web_digest="$5"
   local receipt_parent receipt_name body receipt_id timestamp compatibility target_sha previous_sha api_digest web_digest migration_count
+  local encoded_target_sha encoded_context_hash expected_context_hash
   local -a lines=()
 
   [[ "$expected_target_sha" =~ ^[0-9a-f]{40}$ && "$expected_previous_sha" =~ ^[0-9a-f]{40}$ ]] \
@@ -383,6 +384,15 @@ validate_rollback_receipt() {
   [[ "$api_digest" == "$expected_api_digest" ]] || security_fail "Receipt API digest mismatch"
   [[ "$web_digest" == "$expected_web_digest" ]] || security_fail "Receipt Web digest mismatch"
   [[ "$migration_count" =~ ^(0|[1-9][0-9]*)$ ]] || security_fail "Receipt migration count is not canonical"
+  if [[ "$receipt_id" =~ ^rollback-([0-9a-f]{40})-([0-9a-f]{64})$ ]]; then
+    encoded_target_sha="${BASH_REMATCH[1]}"
+    encoded_context_hash="${BASH_REMATCH[2]}"
+    [[ "$encoded_target_sha" == "$target_sha" ]] || security_fail "Receipt ID target SHA mismatch"
+    expected_context_hash="$(rollback_receipt_context_hash \
+      "$target_sha" "$previous_sha" "$api_digest" "$web_digest" "$migration_count")"
+    [[ "$encoded_context_hash" == "$expected_context_hash" ]] \
+      || security_fail "Receipt context hash mismatch"
+  fi
 
   # shellcheck disable=SC2034 # Output consumed by rollback-production.sh after sourcing this file.
   VALIDATED_ROLLBACK_MIGRATION_COUNT="$migration_count"

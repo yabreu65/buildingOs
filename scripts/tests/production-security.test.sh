@@ -379,6 +379,17 @@ generated_receipt_id="${generated_receipt_id%.receipt}"
 pass 'generated receipt ID satisfies the allowed regex and length'
 pass 'generates and immediately validates a safe rollback receipt'
 
+migration_tampered_original="$tmp_root/migration-tampered-original.receipt"
+migration_tampered_payload="$tmp_root/migration-tampered.receipt"
+cp "$generated_receipt" "$migration_tampered_original"
+awk '$0 == "migration_count=97" { print "migration_count=98"; next } { print }' \
+  "$generated_receipt" > "$migration_tampered_payload"
+chmod 600 "$migration_tampered_payload"
+mv "$migration_tampered_payload" "$generated_receipt"
+expect_failure 'rejects a deterministic receipt when only migration count changes' \
+  validate_receipt "$generated_receipt" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST"
+cp "$migration_tampered_original" "$generated_receipt"
+
 reused_receipt="$(env \
   TEST_MODE=1 \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
@@ -470,12 +481,9 @@ rollback_consumer_output="$(env \
     https://api.example.test/health https://api.example.test/readyz https://app.example.test/login 2>&1)" \
   || rollback_consumer_status=$?
 [[ "$rollback_consumer_status" -ne 0 ]] || fail_test 'rollback consumer unexpectedly completed in the fixture environment'
-[[ "$rollback_consumer_output" != *'Receipt target SHA mismatch'* && \
-  "$rollback_consumer_output" != *'Receipt previous SHA mismatch'* && \
-  "$rollback_consumer_output" != *'Receipt API digest mismatch'* && \
-  "$rollback_consumer_output" != *'Receipt Web digest mismatch'* ]] \
-  || fail_test 'rollback consumer rejected the generated new-format receipt'
-pass 'rollback consumer accepts a generated new-format receipt by explicit path'
+[[ "$rollback_consumer_output" == *'cd: /opt/pawtech/apps/buildingos/buildingos-app: No such file or directory'* ]] \
+  || fail_test 'rollback consumer did not reach the expected post-validation checkout gate'
+pass 'rollback consumer validates new-format receipt before the checkout gate'
 
 concurrent_dir="$tmp_root/concurrent-protected"
 mkdir -p "$concurrent_dir"
