@@ -237,42 +237,29 @@ read_secured_receipt_snapshot() {
   local receipt="$1"
   local expected_owner="$2"
   local expected_group="$3"
-  local descriptor_path path_identity descriptor_identity owner group mode snapshot_with_sentinel
-  local path_identity_after descriptor_identity_after owner_after group_after mode_after
+  local path_identity owner group mode snapshot_with_sentinel read_status
+  local path_identity_after owner_after group_after mode_after
 
   [[ ! -L "$receipt" && -f "$receipt" ]] || security_fail "Compatibility receipt must be a non-symlink regular file"
   exec 9< "$receipt" || security_fail "Unable to open compatibility receipt"
-  if [[ -e /proc/self/fd/9 ]]; then
-    descriptor_path='/proc/self/fd/9'
-  else
-    descriptor_path='/dev/fd/9'
-  fi
-  [[ -f "$descriptor_path" ]] || {
-    exec 9<&-
-    security_fail "Opened compatibility receipt is not a regular file"
-  }
 
   path_identity="$(file_identity "$receipt")" || {
     exec 9<&-
     security_fail "Unable to identify compatibility receipt"
   }
-  descriptor_identity="$(file_identity "$descriptor_path")" || {
-    exec 9<&-
-    security_fail "Unable to identify opened compatibility receipt"
-  }
-  owner="$(file_owner "$descriptor_path")" || {
+  owner="$(file_owner "$receipt")" || {
     exec 9<&-
     security_fail "Unable to read compatibility receipt owner"
   }
-  group="$(file_group "$descriptor_path")" || {
+  group="$(file_group "$receipt")" || {
     exec 9<&-
     security_fail "Unable to read compatibility receipt group"
   }
-  mode="0$(file_mode "$descriptor_path")" || {
+  mode="0$(file_mode "$receipt")" || {
     exec 9<&-
     security_fail "Unable to read compatibility receipt mode"
   }
-  [[ "$path_identity" == "$descriptor_identity" && ! -L "$receipt" && -f "$receipt" ]] || {
+  [[ ! -L "$receipt" && -f "$receipt" ]] || {
     exec 9<&-
     security_fail "Compatibility receipt changed while opening"
   }
@@ -289,31 +276,35 @@ read_secured_receipt_snapshot() {
     security_fail "Compatibility receipt mode must be exactly 0600"
   }
 
-  snapshot_with_sentinel="$(cat <&9; printf '__BUILDINGOS_RECEIPT_END__')" || {
-    exec 9<&-
-    security_fail "Unable to read compatibility receipt"
-  }
+  # Read through the opened descriptor while checking the canonical path before and after.
+  snapshot_with_sentinel=''
+  if IFS= read -r -d '' snapshot_with_sentinel <&9; then
+    :
+  else
+    read_status=$?
+    [[ "$read_status" -eq 1 ]] || {
+      exec 9<&-
+      security_fail "Unable to read compatibility receipt"
+    }
+  fi
+  snapshot_with_sentinel+="__BUILDINGOS_RECEIPT_END__"
   path_identity_after="$(file_identity "$receipt")" || {
     exec 9<&-
     security_fail "Compatibility receipt path changed while reading"
   }
-  descriptor_identity_after="$(file_identity "$descriptor_path")" || {
-    exec 9<&-
-    security_fail "Opened compatibility receipt changed while reading"
-  }
-  owner_after="$(file_owner "$descriptor_path")" || {
+  owner_after="$(file_owner "$receipt")" || {
     exec 9<&-
     security_fail "Unable to re-read compatibility receipt owner"
   }
-  group_after="$(file_group "$descriptor_path")" || {
+  group_after="$(file_group "$receipt")" || {
     exec 9<&-
     security_fail "Unable to re-read compatibility receipt group"
   }
-  mode_after="0$(file_mode "$descriptor_path")" || {
+  mode_after="0$(file_mode "$receipt")" || {
     exec 9<&-
     security_fail "Unable to re-read compatibility receipt mode"
   }
-  [[ "$path_identity_after" == "$path_identity" && "$descriptor_identity_after" == "$descriptor_identity" && "$owner_after" == "$owner" && "$group_after" == "$group" && "$mode_after" == "$mode" && ! -L "$receipt" && -f "$receipt" ]] || {
+  [[ "$path_identity_after" == "$path_identity" && "$owner_after" == "$owner" && "$group_after" == "$group" && "$mode_after" == "$mode" && ! -L "$receipt" && -f "$receipt" ]] || {
     exec 9<&-
     security_fail "Compatibility receipt changed while reading"
   }
@@ -386,6 +377,28 @@ validate_rollback_receipt() {
 
   # shellcheck disable=SC2034 # Output consumed by rollback-production.sh after sourcing this file.
   VALIDATED_ROLLBACK_MIGRATION_COUNT="$migration_count"
+}
+
+rollback_receipt_context_hash() {
+  local target_sha="$1"
+  local previous_sha="$2"
+  local previous_api_digest="$3"
+  local previous_web_digest="$4"
+  local migration_count="$5"
+  local canonical_context digest_output
+
+  canonical_context="$(printf 'target_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
+    "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest" "$migration_count")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest_output="$(printf '%s' "$canonical_context" | sha256sum)" \
+      || security_fail 'Unable to hash rollback receipt context'
+  elif command -v shasum >/dev/null 2>&1; then
+    digest_output="$(printf '%s' "$canonical_context" | shasum -a 256)" \
+      || security_fail 'Unable to hash rollback receipt context'
+  else
+    security_fail 'sha256sum or shasum is required for rollback receipt context'
+  fi
+  printf '%s\n' "${digest_output%% *}"
 }
 
 database_contracts_match() {
@@ -477,7 +490,7 @@ generate_rollback_compatibility_receipt() {
   local previous_api_digest="$3"
   local previous_web_digest="$4"
   local migration_count="$5"
-  local receipt_id receipt timestamp_utc
+  local receipt_id receipt timestamp_utc context_hash temp_receipt
 
   [[ "$target_sha" =~ ^[0-9a-f]{40}$ && "$previous_sha" =~ ^[0-9a-f]{40}$ ]] \
     || security_fail 'Receipt generation requires exact commit SHAs'
@@ -496,7 +509,10 @@ generate_rollback_compatibility_receipt() {
   fi
   validate_rollback_protected_directory
 
-  receipt_id="rollback-$target_sha"
+  context_hash="$(rollback_receipt_context_hash \
+    "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest" "$migration_count")"
+  [[ "$context_hash" =~ ^[0-9a-f]{64}$ ]] || security_fail 'Rollback receipt context hash is not canonical'
+  receipt_id="rollback-$target_sha-$context_hash"
   receipt="$ROLLBACK_SECURITY_PROTECTED_DIR/$receipt_id.receipt"
   if [[ -e "$receipt" || -L "$receipt" ]]; then
     validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
@@ -505,13 +521,23 @@ generate_rollback_compatibility_receipt() {
   fi
   timestamp_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || security_fail 'Unable to generate receipt timestamp'
 
+  temp_receipt="$(mktemp "$ROLLBACK_SECURITY_PROTECTED_DIR/.rollback-receipt.XXXXXX")" \
+    || security_fail 'Unable to create a private rollback compatibility receipt'
   if ! (
+    trap 'rm -f -- "$temp_receipt"' EXIT
     umask 077
-    set -o noclobber
     printf 'receipt_version=%s\nreceipt_id=%s\ntimestamp_utc=%s\ncompatibility=SAFE\ntarget_sha=%s\nprevious_sha=%s\nprevious_api_digest=%s\nprevious_web_digest=%s\nmigration_count=%s\n' \
       "$ROLLBACK_RECEIPT_VERSION" "$receipt_id" "$timestamp_utc" "$target_sha" "$previous_sha" \
-      "$previous_api_digest" "$previous_web_digest" "$migration_count" > "$receipt"
+      "$previous_api_digest" "$previous_web_digest" "$migration_count" > "$temp_receipt"
+    chmod 600 "$temp_receipt"
+    mv -n -- "$temp_receipt" "$receipt"
+    [[ ! -e "$temp_receipt" ]]
   ); then
+    if [[ -e "$receipt" || -L "$receipt" ]]; then
+      validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
+      printf '%s\n' "$receipt"
+      return
+    fi
     security_fail 'Unable to create rollback compatibility receipt without clobbering'
   fi
   validate_rollback_receipt "$receipt" "$target_sha" "$previous_sha" "$previous_api_digest" "$previous_web_digest"
