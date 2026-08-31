@@ -20,6 +20,9 @@ const RECEIPT_MIME_TYPE = "application/pdf";
 const MAX_RECEIPT_OBJECT_BYTES = 10 * 1024 * 1024;
 const RECEIPT_SNAPSHOT_VERSION = "PAYMENT_RECEIPT_V1";
 const RECEIPT_GENERATION_LEASE_MS = 5 * 60 * 1000;
+const RECEIPT_GENERATION_HEARTBEAT_INTERVAL_MS = Math.floor(
+  RECEIPT_GENERATION_LEASE_MS / 3,
+);
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -138,7 +141,13 @@ interface ReceiptStorageMetadata {
   readonly checksum: string;
 }
 
+interface ReceiptGenerationHeartbeat {
+  assertOwned(): void;
+  stop(): Promise<void>;
+}
+
 class ReceiptConsistencyError extends Error {}
+class ReceiptLeaseLostError extends Error {}
 
 interface ReceiptPdfLine {
   text: string;
@@ -240,20 +249,33 @@ export class PaymentReceiptService {
         return null;
       }
 
-      const pdfContent = this.generateReceiptPdfFromSnapshot(preparedReceipt.snapshot);
-      const expectedChecksum = this.sha256(pdfContent);
-      const storageMetadata = await this.ensureReceiptStorageObject(
-        preparedReceipt.bucket,
-        preparedReceipt.fileKey,
-        pdfContent,
-      );
-      const finalizedReceipt = await this.finalizeReceipt(
+      const heartbeat = this.startReceiptGenerationHeartbeat(
         tenantId,
-        preparedReceipt,
-        storageMetadata,
-        pdfContent.length,
-        expectedChecksum,
+        paymentId,
+        preparedReceipt.generationToken,
       );
+      let finalizedReceipt: FinalizedReceipt;
+      try {
+        heartbeat.assertOwned();
+        const pdfContent = this.generateReceiptPdfFromSnapshot(preparedReceipt.snapshot);
+        const expectedChecksum = this.sha256(pdfContent);
+        heartbeat.assertOwned();
+        const storageMetadata = await this.ensureReceiptStorageObject(
+          preparedReceipt.bucket,
+          preparedReceipt.fileKey,
+          pdfContent,
+        );
+        heartbeat.assertOwned();
+        finalizedReceipt = await this.finalizeReceipt(
+          tenantId,
+          preparedReceipt,
+          storageMetadata,
+          pdfContent.length,
+          expectedChecksum,
+        );
+      } finally {
+        await heartbeat.stop();
+      }
 
       const url = await this.minio.presignDownload(finalizedReceipt.bucket, finalizedReceipt.fileKey, 3600);
 
@@ -433,6 +455,7 @@ export class PaymentReceiptService {
         );
       }
 
+      const databaseNow = await this.getDatabaseNow(tx);
       const tenant = await tx.tenant.findUnique({
         where: { id: payment.tenantId },
         select: { name: true, brandName: true },
@@ -443,7 +466,7 @@ export class PaymentReceiptService {
             select: { name: true },
           })
         : null;
-      const snapshotCreatedAt = new Date();
+      const snapshotCreatedAt = databaseNow;
       const newSnapshot = this.createReceiptSnapshot(
         payment,
         receiptNumber,
@@ -452,7 +475,7 @@ export class PaymentReceiptService {
         snapshotCreatedAt,
       );
       const generationToken = randomUUID();
-      const leaseUntil = new Date(Date.now() + RECEIPT_GENERATION_LEASE_MS);
+      const leaseUntil = this.addLeaseDuration(databaseNow);
 
       await tx.payment.update({
         where: { id: paymentId, tenantId },
@@ -492,7 +515,7 @@ export class PaymentReceiptService {
     existingDocument: ReceiptDocumentWithFile | null,
     shouldNotify: boolean,
   ): Promise<PreparedReceiptGeneration | null> {
-    const now = new Date();
+    const now = await this.getDatabaseNow(tx);
     if (
       payment.receiptGenerationToken &&
       payment.receiptGenerationLeaseUntil &&
@@ -502,7 +525,7 @@ export class PaymentReceiptService {
     }
 
     const generationToken = randomUUID();
-    const leaseUntil = new Date(Date.now() + RECEIPT_GENERATION_LEASE_MS);
+    const leaseUntil = this.addLeaseDuration(now);
     await tx.payment.update({
       where: { id: payment.id, tenantId },
       data: {
@@ -559,12 +582,13 @@ export class PaymentReceiptService {
           `Payment ${currentPayment.id} has no trustworthy issuance snapshot`,
         );
       }
+      const databaseNow = await this.getDatabaseNow(tx);
       if (
         currentPayment.receiptNumber !== preparedReceipt.receiptNumber ||
         snapshot.receiptNumber !== preparedReceipt.receiptNumber ||
         currentPayment.receiptGenerationToken !== preparedReceipt.generationToken ||
         !currentPayment.receiptGenerationLeaseUntil ||
-        currentPayment.receiptGenerationLeaseUntil <= new Date()
+        currentPayment.receiptGenerationLeaseUntil <= databaseNow
       ) {
         throw new ReceiptConsistencyError(
           `Receipt generation claim is no longer owned for payment ${currentPayment.id}`,
@@ -670,17 +694,27 @@ export class PaymentReceiptService {
         tenantId,
         currentPayment.id,
       );
-      await tx.payment.update({
-        where: { id: currentPayment.id, tenantId },
+      const finalizedPayment = await tx.payment.updateMany({
+        where: {
+          id: currentPayment.id,
+          tenantId,
+          receiptGenerationToken: preparedReceipt.generationToken,
+          receiptGenerationLeaseUntil: { gt: databaseNow },
+        },
         data: {
           receiptDocumentId: documentId,
           receiptStatus: ReceiptStatus.READY,
-          receiptGeneratedAt: new Date(),
+          receiptGeneratedAt: databaseNow,
           receiptError: null,
           receiptGenerationToken: null,
           receiptGenerationLeaseUntil: null,
         },
       });
+      if (finalizedPayment.count !== 1) {
+        throw new ReceiptLeaseLostError(
+          `Receipt generation claim is no longer owned for payment ${currentPayment.id}`,
+        );
+      }
       if (!auditExists) {
         await tx.paymentAuditLog.create({
           data: {
@@ -1001,6 +1035,97 @@ export class PaymentReceiptService {
     return this.hashJsonValue(snapshot);
   }
 
+  private addLeaseDuration(databaseNow: Date): Date {
+    return new Date(databaseNow.getTime() + RECEIPT_GENERATION_LEASE_MS);
+  }
+
+  private async getDatabaseNow(
+    tx: Pick<Prisma.TransactionClient, "$queryRaw">,
+  ): Promise<Date> {
+    const [row] = await tx.$queryRaw<Array<{ now: Date }>>(
+      Prisma.sql`SELECT clock_timestamp() AS "now"`,
+    );
+    if (!(row?.now instanceof Date) || Number.isNaN(row.now.getTime())) {
+      throw new Error("Database did not return a valid current timestamp");
+    }
+    return row.now;
+  }
+
+  private startReceiptGenerationHeartbeat(
+    tenantId: string,
+    paymentId: string,
+    generationToken: string,
+  ): ReceiptGenerationHeartbeat {
+    let stopped = false;
+    let lost = false;
+    let renewal: Promise<void> | null = null;
+
+    const renew = async (): Promise<void> => {
+      if (stopped || lost || renewal) return;
+      renewal = this.renewReceiptGenerationLease(
+        tenantId,
+        paymentId,
+        generationToken,
+      ).catch((error: unknown) => {
+        lost = true;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Receipt generation lease renewal failed for payment ${paymentId}: ${message}`,
+        );
+      }).finally(() => {
+        renewal = null;
+      });
+      await renewal;
+    };
+
+    const timer = setInterval(() => {
+      void renew();
+    }, RECEIPT_GENERATION_HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+
+    return {
+      assertOwned: () => {
+        if (lost) {
+          throw new ReceiptLeaseLostError(
+            `Receipt generation claim is no longer owned for payment ${paymentId}`,
+          );
+        }
+      },
+      stop: async () => {
+        stopped = true;
+        clearInterval(timer);
+        if (renewal) await renewal;
+      },
+    };
+  }
+
+  private async renewReceiptGenerationLease(
+    tenantId: string,
+    paymentId: string,
+    generationToken: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
+      const databaseNow = await this.getDatabaseNow(tx);
+      const renewed = await tx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          receiptGenerationToken: generationToken,
+          receiptGenerationLeaseUntil: { gt: databaseNow },
+        },
+        data: {
+          receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
+        },
+      });
+      if (renewed.count !== 1) {
+        throw new ReceiptLeaseLostError(
+          `Receipt generation claim is no longer owned for payment ${paymentId}`,
+        );
+      }
+    });
+  }
+
   private hashJsonValue(value: unknown): string {
     return createHash("sha256")
       .update(this.canonicalizeJson(value), "utf8")
@@ -1033,25 +1158,43 @@ export class PaymentReceiptService {
   ): Promise<void> {
     await this.prisma.$transaction(async (failureTx) => {
       await acquirePaymentReceiptLock(failureTx, paymentId);
+      const databaseNow = await this.getDatabaseNow(failureTx);
       const payment = await failureTx.payment.findFirst({
         where: { id: paymentId, tenantId },
         select: {
           receiptStatus: true,
           receiptGenerationToken: true,
+          receiptGenerationLeaseUntil: true,
         },
       });
       if (!payment) return;
       if (
-        generationToken &&
-        payment.receiptGenerationToken !== generationToken
+        generationToken && (
+          payment.receiptGenerationToken !== generationToken ||
+          !payment.receiptGenerationLeaseUntil ||
+          payment.receiptGenerationLeaseUntil <= databaseNow
+        )
       ) {
         return;
       }
-      if (!generationToken && payment.receiptStatus === ReceiptStatus.READY) {
+      if (!generationToken && (
+        payment.receiptStatus === ReceiptStatus.READY ||
+        payment.receiptGenerationToken !== null
+      )) {
         return;
       }
-      await failureTx.payment.update({
-        where: { id: paymentId, tenantId },
+      await failureTx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          receiptStatus: { not: ReceiptStatus.READY },
+          ...(generationToken
+            ? {
+                receiptGenerationToken: generationToken,
+                receiptGenerationLeaseUntil: { gt: databaseNow },
+              }
+            : { receiptGenerationToken: null }),
+        },
         data: {
           receiptStatus: ReceiptStatus.FAILED,
           receiptError: errorMessage,
@@ -1096,48 +1239,30 @@ export class PaymentReceiptService {
       throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
     }
 
-    if (await this.minio.objectExists(bucket, fileKey)) {
-      const stat = await this.minio.statObject(bucket, fileKey);
-      if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
-        throw new ReceiptConsistencyError(
-          `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
-        );
-      }
-      const existingContent = await this.minio.getObjectBuffer(bucket, fileKey);
-      if (
-        !this.isPdfContent(existingContent) ||
-        existingContent.length !== stat.size ||
-        !existingContent.equals(pdfContent)
-      ) {
-        throw new ReceiptConsistencyError(
-          `Receipt storage object content mismatch for ${bucket}/${fileKey}`,
-        );
-      }
-      return {
+    // Conditional creation prevents a racing worker from replacing a
+    // canonical receipt object after it has been written.
+    if (!(await this.minio.objectExists(bucket, fileKey))) {
+      await this.minio.uploadBufferIfAbsent(
         bucket,
-        objectKey: fileKey,
-        mimeType: RECEIPT_MIME_TYPE,
-        size: existingContent.length,
-        checksum: this.sha256(existingContent),
-      };
+        fileKey,
+        pdfContent,
+        RECEIPT_MIME_TYPE,
+      );
     }
-
-    await this.minio.uploadBuffer(
-      bucket,
-      fileKey,
-      pdfContent,
-      RECEIPT_MIME_TYPE,
-    );
     const stat = await this.minio.statObject(bucket, fileKey);
     if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
       throw new ReceiptConsistencyError(
-        `Uploaded receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
+        `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
       );
     }
     const storedContent = await this.minio.getObjectBuffer(bucket, fileKey);
-    if (!this.isPdfContent(storedContent) || !storedContent.equals(pdfContent)) {
+    if (
+      !this.isPdfContent(storedContent) ||
+      storedContent.length !== stat.size ||
+      !storedContent.equals(pdfContent)
+    ) {
       throw new ReceiptConsistencyError(
-        `Uploaded receipt storage object content mismatch for ${bucket}/${fileKey}`,
+        `Receipt storage object content mismatch for ${bucket}/${fileKey}`,
       );
     }
     return {
@@ -1147,6 +1272,7 @@ export class PaymentReceiptService {
       size: storedContent.length,
       checksum: this.sha256(storedContent),
     };
+
   }
 
   private isValidReceiptObjectStat(

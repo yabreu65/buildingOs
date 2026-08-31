@@ -35,6 +35,21 @@ class LocalReceiptStorage {
     this.objects.set(`${bucket}/${objectKey}`, Buffer.from(content));
   }
 
+  async uploadBufferIfAbsent(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+  ): Promise<boolean> {
+    if (this.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    }
+    const key = `${bucket}/${objectKey}`;
+    if (this.objects.has(key)) return false;
+    this.uploadCalls.push(key);
+    this.objects.set(key, Buffer.from(content));
+    return true;
+  }
+
   async objectExists(bucket: string, objectKey: string): Promise<boolean> {
     return this.objects.has(`${bucket}/${objectKey}`);
   }

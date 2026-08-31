@@ -46,6 +46,7 @@ describe('PaymentReceiptService', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     document: {
       findUnique: jest.fn(),
@@ -77,6 +78,7 @@ describe('PaymentReceiptService', () => {
   const minio = {
     getDefaultBucket: jest.fn(() => DEFAULT_BUCKET),
     uploadBuffer: jest.fn(),
+    uploadBufferIfAbsent: jest.fn(),
     objectExists: jest.fn(),
     statObject: jest.fn(),
     getObjectBuffer: jest.fn(),
@@ -217,6 +219,10 @@ describe('PaymentReceiptService', () => {
     minio.uploadBuffer.mockImplementation(async () => {
       expect(insideTransaction).toBe(false);
     });
+    minio.uploadBufferIfAbsent.mockImplementation(async (...args: unknown[]) => {
+      await minio.uploadBuffer(...args);
+      return true;
+    });
     minio.presignDownload.mockImplementation(async () => {
       expect(insideTransaction).toBe(false);
       return 'https://download.example/receipt.pdf';
@@ -234,7 +240,9 @@ describe('PaymentReceiptService', () => {
       expect(insideTransaction).toBe(false);
       return {};
     });
-    transactionQueryRawMock = jest.fn().mockResolvedValue([]);
+    transactionQueryRawMock = jest.fn().mockResolvedValue([
+      { now: new Date('2026-08-31T00:00:00.000Z') },
+    ]);
     prisma.$transaction.mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       const tx = {
         file: prisma.file,
@@ -315,6 +323,16 @@ describe('PaymentReceiptService', () => {
         Object.assign(current, data);
       }
       return current as never;
+    });
+    prisma.payment.updateMany.mockImplementation(async ({ data }) => {
+      const latestFind = prisma.payment.findUnique.mock.results.at(-1);
+      const current = latestFind?.type === 'return'
+        ? await latestFind.value
+        : defaultPaymentState;
+      if (current && typeof current === 'object') {
+        Object.assign(current, data);
+      }
+      return { count: 1 };
     });
     prisma.paymentAuditLog.create.mockResolvedValue({} as never);
     prisma.paymentAuditLog.findFirst.mockResolvedValue(null);
@@ -432,8 +450,8 @@ describe('PaymentReceiptService', () => {
        }),
     }));
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(3);
-     expect(prisma.payment.update).toHaveBeenCalledWith(
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(5);
+     expect(prisma.payment.updateMany).toHaveBeenCalledWith(
        expect.objectContaining({
          data: expect.objectContaining({
            receiptStatus: ReceiptStatus.READY,
@@ -504,7 +522,7 @@ describe('PaymentReceiptService', () => {
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
     expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
     expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(3);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(5);
     expect(minio.deleteObject).not.toHaveBeenCalled();
 
     minio.uploadBuffer.mockResolvedValueOnce(undefined);
@@ -515,7 +533,7 @@ describe('PaymentReceiptService', () => {
     expect(retryResult?.fileKey).toBe('tenant/tenant-1/payments/payment-1/receipts/R-COMPLE-2026-000001.pdf');
     expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
     expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
-     expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+     expect(prisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
        data: expect.objectContaining({
          receiptStatus: ReceiptStatus.READY,
        }),
@@ -531,7 +549,7 @@ describe('PaymentReceiptService', () => {
 
     expect(minio.uploadBuffer).toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
-     expect(prisma.payment.update).toHaveBeenCalledWith(
+     expect(prisma.payment.updateMany).toHaveBeenCalledWith(
        expect.objectContaining({
          data: expect.objectContaining({
            receiptStatus: ReceiptStatus.FAILED,
@@ -550,14 +568,16 @@ describe('PaymentReceiptService', () => {
     prisma.payment.findUnique.mockResolvedValueOnce({
       receiptStatus: ReceiptStatus.PENDING,
       receiptDocumentId: null,
+      receiptGenerationToken: null,
+      receiptGenerationLeaseUntil: null,
     } as never);
 
     await markFailed.call(service, 'tenant-1', 'payment-1', 'boom');
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'payment-1', tenantId: 'tenant-1' },
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(2);
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'payment-1', tenantId: 'tenant-1' }),
       data: expect.objectContaining({
         receiptStatus: ReceiptStatus.FAILED,
         receiptError: 'boom',
@@ -575,6 +595,8 @@ describe('PaymentReceiptService', () => {
     prisma.payment.findUnique.mockResolvedValueOnce({
       receiptStatus: ReceiptStatus.READY,
       receiptDocumentId: null,
+      receiptGenerationToken: null,
+      receiptGenerationLeaseUntil: null,
     } as never);
 
     await markFailed.call(service, 'tenant-1', 'payment-1', 'presign failed');
@@ -588,11 +610,13 @@ describe('PaymentReceiptService', () => {
     prisma.payment.findUnique.mockResolvedValueOnce({
       receiptStatus: ReceiptStatus.PENDING,
       receiptDocumentId: 'document-1',
+      receiptGenerationToken: null,
+      receiptGenerationLeaseUntil: null,
     } as never);
 
     await markFailed.call(service, 'tenant-1', 'payment-1', 'notify failed');
 
-     expect(prisma.payment.update).toHaveBeenCalledWith(
+     expect(prisma.payment.updateMany).toHaveBeenCalledWith(
        expect.objectContaining({
          data: expect.objectContaining({
            receiptStatus: ReceiptStatus.FAILED,
@@ -647,7 +671,7 @@ describe('PaymentReceiptService', () => {
 
     await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
 
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         receiptStatus: ReceiptStatus.READY,
       }),
@@ -658,7 +682,7 @@ describe('PaymentReceiptService', () => {
       }),
     }));
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.READY);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(4);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(7);
   });
 
   it('keeps READY receipts stable when notification fails after confirmation', async () => {
@@ -667,7 +691,7 @@ describe('PaymentReceiptService', () => {
     const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     expect(result?.receiptNumber).toBe('R-COMPLE-2026-000001');
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         receiptStatus: ReceiptStatus.READY,
       }),
@@ -1451,5 +1475,133 @@ describe('PaymentReceiptService', () => {
     expect(storedObject?.includes(Buffer.from("MUTATED"))).toBe(false);
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.READY);
     expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('renews a live receipt lease using the database timestamp', async () => {
+    const renewLease = Reflect.get(service, 'renewReceiptGenerationLease') as (
+      tenantId: string,
+      paymentId: string,
+      generationToken: string,
+    ) => Promise<void>;
+    prisma.payment.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await renewLease.call(service, 'tenant-1', 'payment-1', 'generation-token');
+
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'payment-1',
+        tenantId: 'tenant-1',
+        receiptGenerationToken: 'generation-token',
+        receiptGenerationLeaseUntil: { gt: new Date('2026-08-31T00:00:00.000Z') },
+      },
+      data: {
+        receiptGenerationLeaseUntil: new Date('2026-08-31T00:05:00.000Z'),
+      },
+    });
+  });
+
+  it('fails closed when a stale receipt owner tries to renew', async () => {
+    const renewLease = Reflect.get(service, 'renewReceiptGenerationLease') as (
+      tenantId: string,
+      paymentId: string,
+      generationToken: string,
+    ) => Promise<void>;
+    prisma.payment.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      renewLease.call(service, 'tenant-1', 'payment-1', 'stale-token'),
+    ).rejects.toThrow('no longer owned');
+  });
+
+  it('does not clean up a newer owner through a tokenless failure path', async () => {
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptGenerationToken: 'new-owner-token',
+      receiptGenerationLeaseUntil: new Date('2026-08-31T00:05:00.000Z'),
+    } as never);
+    const markFailed = Reflect.get(service, 'markReceiptGenerationFailedIfNeeded') as (
+      tenantId: string,
+      paymentId: string,
+      errorMessage: string,
+    ) => Promise<void>;
+
+    await markFailed.call(service, 'tenant-1', 'payment-1', 'old failure');
+
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not clean up an expired owner after its storage attempt fails', async () => {
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptGenerationToken: 'expired-token',
+      receiptGenerationLeaseUntil: new Date('2026-08-30T23:59:59.000Z'),
+    } as never);
+    const markFailed = Reflect.get(service, 'markReceiptGenerationFailedIfNeeded') as (
+      tenantId: string,
+      paymentId: string,
+      errorMessage: string,
+      generationToken: string,
+    ) => Promise<void>;
+
+    await markFailed.call(
+      service,
+      'tenant-1',
+      'payment-1',
+      'expired failure',
+      'expired-token',
+    );
+
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('validates the winner after a conditional canonical object-create race', async () => {
+    const pdf = Buffer.from('%PDF-race-winner');
+    minio.objectExists.mockResolvedValueOnce(false);
+    minio.uploadBufferIfAbsent.mockResolvedValueOnce(false);
+    minio.statObject.mockResolvedValueOnce({ size: pdf.length });
+    minio.getObjectBuffer.mockResolvedValueOnce(pdf);
+    const ensureStorage = Reflect.get(service, 'ensureReceiptStorageObject') as (
+      bucket: string,
+      fileKey: string,
+      content: Buffer,
+    ) => Promise<unknown>;
+
+    await expect(
+      ensureStorage.call(service, DEFAULT_BUCKET, 'tenant-1/race.pdf', pdf),
+    ).resolves.toEqual(expect.objectContaining({
+      objectKey: 'tenant-1/race.pdf',
+      size: pdf.length,
+    }));
+    expect(minio.uploadBufferIfAbsent).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      'tenant-1/race.pdf',
+      pdf,
+      'application/pdf',
+    );
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('marks the heartbeat lost when the database no longer recognizes its lease', async () => {
+    jest.useFakeTimers();
+    try {
+      prisma.payment.updateMany.mockResolvedValue({ count: 0 });
+      const startHeartbeat = Reflect.get(service, 'startReceiptGenerationHeartbeat') as (
+        tenantId: string,
+        paymentId: string,
+        generationToken: string,
+      ) => { assertOwned(): void; stop(): Promise<void> };
+      const heartbeat = startHeartbeat.call(
+        service,
+        'tenant-1',
+        'payment-1',
+        'generation-token',
+      );
+
+      await jest.advanceTimersByTimeAsync(100000);
+      expect(() => heartbeat.assertOwned()).toThrow('no longer owned');
+      await heartbeat.stop();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

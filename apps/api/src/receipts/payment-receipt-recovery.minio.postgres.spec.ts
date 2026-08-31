@@ -28,6 +28,7 @@ const describeMinioRecovery = databaseEnabled && minioEnabled ? describe : descr
 interface ReceiptStorage {
   getDefaultBucket(): string;
   uploadBuffer(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<void>;
+  uploadBufferIfAbsent(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<boolean>;
   objectExists(bucket: string, objectKey: string): Promise<boolean>;
   statObject(bucket: string, objectKey: string): Promise<{ size: number }>;
   getObjectBuffer(bucket: string, objectKey: string): Promise<Buffer>;
@@ -89,6 +90,30 @@ class MinioReceiptStorage implements ReceiptStorage {
     } catch (error: unknown) {
       const errorLike = error as { code?: string; statusCode?: number };
       if (errorLike.code === 'NotFound' || errorLike.statusCode === 404) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async uploadBufferIfAbsent(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<boolean> {
+    try {
+      await this.client.putObject(
+        bucket,
+        objectKey,
+        Readable.from([content]),
+        content.length,
+        { 'Content-Type': contentType, 'If-None-Match': '*' },
+      );
+      return true;
+    } catch (error: unknown) {
+      const errorLike = error as { code?: string; statusCode?: number };
+      if (errorLike.code === 'PreconditionFailed' || errorLike.statusCode === 412) {
         return false;
       }
       throw error;

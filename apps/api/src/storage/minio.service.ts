@@ -52,6 +52,13 @@ export class MinioService {
       || errorLike?.statusCode === 404
       || errorLike?.message?.includes('NotFound') === true;
   }
+
+  private isPreconditionFailedError(error: unknown): boolean {
+    const errorLike = this.getErrorLike(error);
+    return errorLike?.code === 'PreconditionFailed'
+      || errorLike?.statusCode === 412
+      || errorLike?.message?.includes('PreconditionFailed') === true;
+  }
   constructor(private configService: ConfigService) {
     const nodeEnv = this.configService.getValue('nodeEnv');
     const isDevelopment = nodeEnv === 'development' || nodeEnv === 'test';
@@ -443,6 +450,50 @@ export class MinioService {
     } catch (error: unknown) {
       this.logger.error(
         `Failed to upload buffer: ${this.getErrorMessage(error)}`,
+        this.getErrorStack(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Create an object only when the canonical key does not already exist.
+   *
+   * @returns true when this call created the object, false when the key was
+   * already present.
+   */
+  async uploadBufferIfAbsent(
+    bucketName: string = this.bucket,
+    objectKey: string,
+    buffer: Buffer,
+    contentType: string = 'application/octet-stream',
+  ): Promise<boolean> {
+    try {
+      const stream = require('stream');
+      const readable = new stream.Readable();
+      readable._read = () => {};
+      readable.push(buffer);
+      readable.push(null);
+
+      await this.minioClient.putObject(
+        bucketName,
+        objectKey,
+        readable,
+        buffer.length,
+        {
+          'Content-Type': contentType,
+          'If-None-Match': '*',
+        },
+      );
+      this.logger.debug(`Created buffer object ${bucketName}/${objectKey} (${buffer.length} bytes)`);
+      return true;
+    } catch (error: unknown) {
+      if (this.isPreconditionFailedError(error)) {
+        this.logger.debug(`Object already exists: ${bucketName}/${objectKey}`);
+        return false;
+      }
+      this.logger.error(
+        `Failed to create buffer object: ${this.getErrorMessage(error)}`,
         this.getErrorStack(error),
       );
       throw error;

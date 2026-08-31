@@ -8,6 +8,7 @@ jest.mock('minio', () => ({
 
 interface ClientMock {
   readonly statObject: jest.Mock;
+  readonly putObject: jest.Mock;
   readonly presignedPutObject: jest.Mock;
   readonly presignedGetObject: jest.Mock;
 }
@@ -17,6 +18,7 @@ const minioClientConstructor = Minio.Client as unknown as jest.Mock;
 function createClientMock(): ClientMock {
   return {
     statObject: jest.fn(),
+    putObject: jest.fn(),
     presignedPutObject: jest.fn(),
     presignedGetObject: jest.fn(),
   };
@@ -96,6 +98,40 @@ describe('MinioService', () => {
       'tenant-a/proof.pdf',
       3600,
     );
+  });
+
+  it('creates an object conditionally and treats an existing key as a non-create', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.putObject.mockResolvedValue({ etag: 'etag' });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+    const created = await service.uploadBufferIfAbsent(
+      'buildingos-staging',
+      'tenant-a/receipt.pdf',
+      Buffer.from('%PDF-test'),
+      'application/pdf',
+    );
+
+    expect(created).toBe(true);
+    expect(internalClient.putObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/receipt.pdf',
+      expect.anything(),
+      9,
+      { 'Content-Type': 'application/pdf', 'If-None-Match': '*' },
+    );
+
+    internalClient.putObject.mockRejectedValueOnce({ statusCode: 412 });
+    await expect(service.uploadBufferIfAbsent(
+      'buildingos-staging',
+      'tenant-a/receipt.pdf',
+      Buffer.from('%PDF-test'),
+      'application/pdf',
+    )).resolves.toBe(false);
   });
 
   it('uses the protocol default port for a public HTTP endpoint', async () => {
