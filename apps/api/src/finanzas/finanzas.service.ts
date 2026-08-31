@@ -4061,7 +4061,7 @@ export class FinanzasService {
   }
 
   /**
-   * Retry generating receipt for an approved payment (if previous attempt failed)
+   * Retry generating receipt for an eligible payment (if previous attempt failed)
    */
   async retryReceiptGeneration(
     tenantId: string,
@@ -4081,29 +4081,24 @@ export class FinanzasService {
       throw new NotFoundException('Payment not found');
     }
 
-    if (payment.status !== PaymentStatus.APPROVED) {
-      throw new BadRequestException('Can only retry receipt generation for approved payments');
+    if (
+      payment.canceledAt ||
+      (payment.status !== PaymentStatus.APPROVED &&
+        payment.status !== PaymentStatus.RECONCILED)
+    ) {
+      throw new BadRequestException(
+        'Can only retry receipt generation for approved or reconciled payments',
+      );
     }
 
-    // Only retry if failed or no receipt exists
-    if (payment.receiptStatus !== ReceiptStatus.FAILED && payment.receiptNumber) {
-      return {
-        success: true,
-        receiptNumber: payment.receiptNumber,
-      };
-    }
-
-    // Reset to PENDING before retry
-    await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        receiptStatus: ReceiptStatus.PENDING,
-        receiptError: null,
-      },
-    });
-
-    // Try to generate receipt
-    const result = await this.receiptService.ensureReceiptForPayment(tenantId, paymentId, excludeUserId);
+    // Receipt preparation owns classification, number reuse, and state reset
+    // under the canonical per-payment lock. Do not infer completeness from a
+    // receipt number or reset state before inspecting linked artifacts.
+    const result = await this.receiptService.ensureReceiptForPayment(
+      tenantId,
+      paymentId,
+      excludeUserId,
+    );
 
     if (result) {
       return {
@@ -4113,8 +4108,8 @@ export class FinanzasService {
     }
 
     // Check for error
-    const updatedPayment = await this.prisma.payment.findUnique({
-      where: { id: paymentId },
+    const updatedPayment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
       select: { receiptError: true },
     });
 

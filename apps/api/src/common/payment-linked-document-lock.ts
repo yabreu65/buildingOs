@@ -11,6 +11,10 @@ function buildPaymentReceiptLockKey(paymentId: string): string {
   return `payment-receipt:${paymentId}`;
 }
 
+function buildReceiptSequenceLockKey(tenantId: string, year: number): string {
+  return `payment-receipt-sequence:${tenantId}:${year}`;
+}
+
 export async function acquirePaymentLinkedDocumentLock(
   tx: AdvisoryLockTransactionClient,
   tenantId: string,
@@ -49,6 +53,15 @@ export async function acquirePaymentReceiptLock(
   paymentId: string,
 ): Promise<void> {
   const lockKey = buildPaymentReceiptLockKey(paymentId);
+  await runAdvisoryLock(tx, lockKey);
+}
+
+export async function acquireReceiptSequenceLock(
+  tx: AdvisoryLockTransactionClient,
+  tenantId: string,
+  year: number,
+): Promise<void> {
+  const lockKey = buildReceiptSequenceLockKey(tenantId, year);
   await runAdvisoryLock(tx, lockKey);
 }
 
