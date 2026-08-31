@@ -458,6 +458,11 @@ export class PaymentReceiptService {
       }
 
       if (payment.receiptStatus === ReceiptStatus.READY) {
+        if (!payment.receiptGeneratedAt) {
+          throw new ReceiptConsistencyError(
+            `Payment ${paymentId} is READY without a receipt issuance timestamp`,
+          );
+        }
         if (!payment.receiptNumber || !existingDocument?.file || !snapshot) {
           throw new ReceiptConsistencyError(
             `Payment ${paymentId} is READY without a complete issuance snapshot and receipt document`,
@@ -819,6 +824,14 @@ export class PaymentReceiptService {
           `Payment ${currentPayment.id} has no trustworthy issuance snapshot`,
         );
       }
+      if (
+        currentPayment.receiptStatus === ReceiptStatus.READY &&
+        !currentPayment.receiptGeneratedAt
+      ) {
+        throw new ReceiptConsistencyError(
+          `Payment ${currentPayment.id} is READY without a receipt issuance timestamp`,
+        );
+      }
       const databaseNow = await this.getDatabaseNow(tx);
       if (
         currentPayment.receiptNumber !== preparedReceipt.receiptNumber ||
@@ -941,7 +954,7 @@ export class PaymentReceiptService {
         data: {
           receiptDocumentId: documentId,
           receiptStatus: ReceiptStatus.READY,
-          receiptGeneratedAt: databaseNow,
+          receiptGeneratedAt: currentPayment.receiptGeneratedAt ?? databaseNow,
           receiptError: null,
           receiptGenerationToken: null,
           receiptGenerationLeaseUntil: null,

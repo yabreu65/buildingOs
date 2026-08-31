@@ -458,10 +458,14 @@ describe('PaymentReceiptService', () => {
        expect.objectContaining({
          data: expect.objectContaining({
            receiptStatus: ReceiptStatus.READY,
-           receiptError: null,
+            receiptGeneratedAt: new Date('2026-08-31T00:00:00.000Z'),
+            receiptError: null,
+          }),
          }),
-        }),
-      );
+       );
+     expect(defaultPaymentState.receiptGeneratedAt).toEqual(
+       new Date('2026-08-31T00:00:00.000Z'),
+     );
     expect(prisma.paymentAuditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         paymentId: 'payment-1',
@@ -1242,6 +1246,116 @@ describe('PaymentReceiptService', () => {
     expect(prisma.file.updateMany).not.toHaveBeenCalled();
     expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
     expect(notificationsService.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original issuance timestamp across READY retries', async () => {
+    const originalGeneratedAt = new Date('2026-08-30T12:34:56.000Z');
+    const originalSnapshotCreatedAt = new Date('2026-08-29T12:34:56.000Z');
+    const snapshotFactory = Reflect.get(service, 'createReceiptSnapshot') as (
+      payment: unknown,
+      receiptNumber: string,
+      tenantDisplayName: string,
+      approvedByUserName: string,
+      createdAt: Date,
+    ) => unknown;
+    const hashSnapshot = Reflect.get(service, 'hashReceiptSnapshot') as (
+      snapshotValue: unknown,
+    ) => string;
+    const snapshot = snapshotFactory.call(
+      service,
+      defaultPaymentState,
+      'R-COMPLE-2026-000001',
+      'Complejo Horizonte',
+      'Admin',
+      originalSnapshotCreatedAt,
+    );
+    const snapshotHash = hashSnapshot.call(service, snapshot);
+    const generateReceiptPdfFromSnapshot = Reflect.get(
+      service,
+      'generateReceiptPdfFromSnapshot',
+    ) as (snapshotValue: unknown) => Buffer;
+    const validPdf = generateReceiptPdfFromSnapshot.call(service, snapshot);
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.READY,
+      receiptNumber: 'R-COMPLE-2026-000001',
+      receiptDocumentId: 'document-1',
+      receiptSnapshot: snapshot,
+      receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1',
+      receiptSnapshotHash: snapshotHash,
+      receiptSnapshotCreatedAt: originalSnapshotCreatedAt,
+      receiptGeneratedAt: originalGeneratedAt,
+    });
+    const checksum = createHash('sha256').update(validPdf).digest('hex');
+    prisma.document.findUnique.mockResolvedValue(
+      receiptDocument({ size: validPdf.length, checksum }) as never,
+    );
+    prisma.paymentAuditLog.findFirst.mockResolvedValue({ id: 'audit-1' } as never);
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: validPdf.length });
+    minio.getObjectBuffer.mockResolvedValue(validPdf);
+
+    const before = {
+      receiptNumber: defaultPaymentState.receiptNumber,
+      receiptSnapshot: defaultPaymentState.receiptSnapshot,
+      receiptSnapshotHash: defaultPaymentState.receiptSnapshotHash,
+      receiptSnapshotVersion: defaultPaymentState.receiptSnapshotVersion,
+      receiptSnapshotCreatedAt: defaultPaymentState.receiptSnapshotCreatedAt,
+      receiptGeneratedAt: defaultPaymentState.receiptGeneratedAt,
+      receiptDocumentId: defaultPaymentState.receiptDocumentId,
+    };
+    const first = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    const second = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(first).toEqual(second);
+    expect(defaultPaymentState).toEqual(expect.objectContaining(before));
+    expect(defaultPaymentState.receiptGeneratedAt).toEqual(originalGeneratedAt);
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a READY snapshot-backed receipt lacks its issuance timestamp', async () => {
+    const snapshotFactory = Reflect.get(service, 'createReceiptSnapshot') as (
+      payment: unknown,
+      receiptNumber: string,
+      tenantDisplayName: string,
+      approvedByUserName: string,
+      createdAt: Date,
+    ) => unknown;
+    const hashSnapshot = Reflect.get(service, 'hashReceiptSnapshot') as (
+      snapshotValue: unknown,
+    ) => string;
+    const snapshot = snapshotFactory.call(
+      service,
+      defaultPaymentState,
+      'R-COMPLE-2026-000001',
+      'Complejo Horizonte',
+      'Admin',
+      new Date('2026-08-29T12:34:56.000Z'),
+    );
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.READY,
+      receiptNumber: 'R-COMPLE-2026-000001',
+      receiptDocumentId: 'document-1',
+      receiptSnapshot: snapshot,
+      receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1',
+      receiptSnapshotHash: hashSnapshot.call(service, snapshot),
+      receiptSnapshotCreatedAt: new Date('2026-08-29T12:34:56.000Z'),
+      receiptGeneratedAt: null,
+    });
+
+    await expect(
+      service.ensureReceiptForPayment('tenant-1', 'payment-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.presignDownload).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+    expect(notificationsService.createNotification).not.toHaveBeenCalled();
+    expect(defaultPaymentState.receiptGeneratedAt).toBeNull();
   });
 
   it('fails closed for a checksum-less legacy READY receipt instead of fabricating a snapshot', async () => {

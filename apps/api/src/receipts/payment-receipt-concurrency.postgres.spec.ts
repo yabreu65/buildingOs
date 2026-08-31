@@ -246,6 +246,43 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
     expect(storage.uploadCalls).toHaveLength(1);
   }, 20000);
 
+  it('preserves the issuance timestamp across duplicate READY retries', async () => {
+    const fixture = await paymentFixture();
+    const firstResult = await service(firstPrisma).ensureReceiptForPayment(
+      fixture.tenant.id,
+      fixture.payment.id,
+    );
+    const firstPayment = await observer.payment.findUniqueOrThrow({
+      where: { id: fixture.payment.id },
+    });
+    const secondResult = await service(secondPrisma).ensureReceiptForPayment(
+      fixture.tenant.id,
+      fixture.payment.id,
+    );
+    const [secondPayment, files, documents, audits] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      observer.file.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.document.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.paymentAuditLog.findMany({
+        where: { paymentId: fixture.payment.id, action: 'RECEIPT_GENERATED' },
+      }),
+    ]);
+
+    expect(firstResult?.receiptNumber).toBe(secondResult?.receiptNumber);
+    expect(firstPayment.receiptGeneratedAt).not.toBeNull();
+    expect(secondPayment.receiptGeneratedAt).toEqual(firstPayment.receiptGeneratedAt);
+    expect(secondPayment.receiptNumber).toBe(firstPayment.receiptNumber);
+    expect(secondPayment.receiptSnapshot).toEqual(firstPayment.receiptSnapshot);
+    expect(secondPayment.receiptSnapshotHash).toBe(firstPayment.receiptSnapshotHash);
+    expect(secondPayment.receiptSnapshotVersion).toBe(firstPayment.receiptSnapshotVersion);
+    expect(secondPayment.receiptSnapshotCreatedAt).toEqual(firstPayment.receiptSnapshotCreatedAt);
+    expect(secondPayment.receiptDocumentId).toBe(firstPayment.receiptDocumentId);
+    expect(files).toHaveLength(1);
+    expect(documents).toHaveLength(1);
+    expect(audits).toHaveLength(1);
+    expect(storage.uploadCalls).toHaveLength(1);
+  }, 20000);
+
   it('recovers a legacy reserved-only receipt without allocating another number', async () => {
     const fixture = await paymentFixture();
     const legacyReceiptNumber = 'R-RECEIP-2026-000007';
