@@ -1378,6 +1378,7 @@ export class PaymentReceiptService {
       const payment = await this.prisma.payment.findFirst({
         where: { id: paymentId, tenantId },
         select: {
+          receiptStatus: true,
           receiptGenerationToken: true,
           receiptGenerationLeaseUntil: true,
         },
@@ -1392,11 +1393,77 @@ export class PaymentReceiptService {
         payment.receiptGenerationLeaseUntil !== null &&
         payment.receiptGenerationLeaseUntil > databaseNow;
       if (!activeLease) {
+        if (payment.receiptStatus === ReceiptStatus.READY) {
+          return this.loadCompletedReceiptData(tenantId, paymentId);
+        }
         return this.ensureReceiptForPayment(tenantId, paymentId, excludeUserId);
       }
     }
 
     return null;
+  }
+
+  private async loadCompletedReceiptData(
+    tenantId: string,
+    paymentId: string,
+  ): Promise<ReceiptData> {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+      include: {
+        unit: true,
+        building: true,
+        createdByUser: true,
+        paymentAllocations: {
+          include: {
+            charge: {
+              include: { expensePeriod: true },
+            },
+          },
+        },
+      },
+    });
+    if (!payment || payment.receiptStatus !== ReceiptStatus.READY) {
+      throw new ReceiptConsistencyError(
+        `Receipt generation completed without a READY payment ${paymentId}`,
+      );
+    }
+    if (!payment.receiptNumber || !payment.receiptDocumentId) {
+      throw new ReceiptConsistencyError(
+        `Payment ${paymentId} is READY without a complete receipt artifact`,
+      );
+    }
+
+    const document = await this.prisma.document.findFirst({
+      where: { id: payment.receiptDocumentId, tenantId },
+      include: { file: true },
+    });
+    if (
+      !document ||
+      !this.isReceiptDocumentIdentityValid(document, payment, payment.receiptNumber) ||
+      !(await this.isCompleteStorageArtifact(document.file))
+    ) {
+      throw new ReceiptConsistencyError(
+        `Receipt ${payment.receiptNumber} is not a complete canonical artifact`,
+      );
+    }
+    if (!this.getVerifiedReceiptSnapshot(payment)) {
+      throw new ReceiptConsistencyError(
+        `Payment ${paymentId} is READY without a trustworthy issuance snapshot`,
+      );
+    }
+
+    const url = await this.minio.presignDownload(
+      document.file.bucket,
+      document.file.objectKey,
+      3600,
+    );
+    return {
+      receiptNumber: payment.receiptNumber,
+      documentId: document.id,
+      fileKey: document.file.objectKey,
+      bucket: document.file.bucket,
+      url,
+    };
   }
 
   private hashJsonValue(value: unknown): string {

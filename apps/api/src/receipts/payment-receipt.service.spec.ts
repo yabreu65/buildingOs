@@ -71,6 +71,7 @@ describe('PaymentReceiptService', () => {
       update: jest.fn(),
     },
     $transaction: jest.fn(),
+    $queryRaw: jest.fn(),
     user: {
       findUnique: jest.fn(),
     },
@@ -213,6 +214,7 @@ describe('PaymentReceiptService', () => {
   }
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
     insideTransaction = false;
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
@@ -243,6 +245,7 @@ describe('PaymentReceiptService', () => {
     transactionQueryRawMock = jest.fn().mockResolvedValue([
       { now: new Date('2026-08-31T00:00:00.000Z') },
     ]);
+    prisma.$queryRaw.mockImplementation(transactionQueryRawMock);
     prisma.$transaction.mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
       const tx = {
         file: prisma.file,
@@ -1630,6 +1633,66 @@ describe('PaymentReceiptService', () => {
     expect(prisma.payment.updateMany).not.toHaveBeenCalled();
     expect(minio.uploadBuffer).not.toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('returns a completed receipt after waiting without reacquiring its lease', async () => {
+    const validPdf = Buffer.from('%PDF-completed-by-owner');
+    const snapshotFactory = Reflect.get(service, 'createReceiptSnapshot') as (
+      payment: unknown,
+      receiptNumber: string,
+      tenantDisplayName: string,
+      approvedByUserName: string,
+      createdAt: Date,
+    ) => unknown;
+    const hashSnapshot = Reflect.get(service, 'hashReceiptSnapshot') as (
+      snapshotValue: unknown,
+    ) => string;
+    const snapshot = snapshotFactory.call(
+      service,
+      defaultPaymentState,
+      'R-COMPLE-2026-000001',
+      'Complejo Horizonte',
+      'Admin',
+      new Date('2026-08-31T00:00:00.000Z'),
+    );
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.READY,
+      receiptNumber: 'R-COMPLE-2026-000001',
+      receiptDocumentId: 'document-1',
+      receiptSnapshot: snapshot,
+      receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1',
+      receiptSnapshotHash: hashSnapshot.call(service, snapshot),
+      receiptGenerationToken: null,
+      receiptGenerationLeaseUntil: null,
+    });
+    prisma.document.findUnique.mockResolvedValueOnce(
+      receiptDocument({
+        size: validPdf.length,
+        checksum: createHash('sha256').update(validPdf).digest('hex'),
+      }) as never,
+    );
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: validPdf.length });
+    minio.getObjectBuffer.mockResolvedValue(validPdf);
+
+    const waitForReceiptGeneration = Reflect.get(
+      service,
+      'waitForReceiptGeneration',
+    ) as (
+      tenantId: string,
+      paymentId: string,
+    ) => Promise<unknown>;
+    const result = await waitForReceiptGeneration.call(
+      service,
+      'tenant-1',
+      'payment-1',
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({ receiptNumber: 'R-COMPLE-2026-000001' }),
+    );
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
   it('validates the winner after a conditional canonical object-create race', async () => {
