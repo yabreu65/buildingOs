@@ -5,7 +5,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
-import { FundStatus, FundTransactionDirection, IncomeStatus } from '@prisma/client';
+import { FundStatus, FundTransactionDirection, IncomeStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
@@ -142,36 +142,59 @@ export class IncomesService {
       }
     }
 
-    const income = await this.prisma.income.create({
-      data: {
-        tenantId,
-        buildingId: dto.buildingId ?? null,
-        period: dto.period,
-        categoryId: dto.categoryId,
-        amountMinor: dto.amountMinor,
-        currencyCode: dto.currencyCode,
-        receivedDate: new Date(dto.receivedDate),
-        description: dto.description || null,
-        attachmentFileKey: dto.attachmentFileKey || null,
-        scopeType,
-        destination,
-        unitGroupId: dto.unitGroupId ?? null,
-        status: 'DRAFT',
-        createdByMembershipId: membershipId,
-      },
-      include: { category: true },
-    });
-
-    // Crear allocations si es TENANT_SHARED o UNIT_GROUP
     if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
-      await this.movementAllocationService.createForIncome(
+      await this.movementAllocationService.validateAllocations(
         tenantId,
-        income.id,
+        dto.allocations,
         dto.amountMinor,
         dto.currencyCode,
-        dto.allocations,
-        membershipId,
       );
+    }
+
+    const income = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.income.create({
+        data: {
+          tenantId,
+          buildingId: dto.buildingId ?? null,
+          period: dto.period,
+          categoryId: dto.categoryId,
+          amountMinor: dto.amountMinor,
+          currencyCode: dto.currencyCode,
+          receivedDate: new Date(dto.receivedDate),
+          description: dto.description || null,
+          attachmentFileKey: dto.attachmentFileKey || null,
+          scopeType,
+          destination,
+          unitGroupId: dto.unitGroupId ?? null,
+          status: 'DRAFT',
+          createdByMembershipId: membershipId,
+        },
+        include: { category: true },
+      });
+
+      if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+        await this.movementAllocationService.createForIncomeInTx(
+          tx,
+          tenantId,
+          created.id,
+          dto.amountMinor,
+          dto.currencyCode,
+          dto.allocations,
+        );
+      }
+
+      return created;
+    });
+
+    if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+      void this.auditService.createLog({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'INCOME_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: income.id,
+        metadata: { allocationCount: dto.allocations.length, totalAmount: dto.amountMinor },
+      });
     }
 
     void this.auditService.createLog({
@@ -204,55 +227,71 @@ export class IncomesService {
       throw new ForbiddenException('Solo administradores pueden editar ingresos');
     }
 
-    const income = await this.prisma.income.findFirst({
-      where: { id: incomeId, tenantId },
-      include: { category: true },
-    });
-
-    if (!income) {
-      throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
-    }
-
-    if (income.status !== 'DRAFT') {
-      throw new BadRequestException(
-        `Solo se pueden editar ingresos en DRAFT. Estado actual: ${income.status}`,
-      );
-    }
-
-    // If changing category, validate it's INCOME type
-    if (dto.categoryId && dto.categoryId !== income.categoryId) {
-      const newCategory = await this.prisma.expenseLedgerCategory.findFirst({
-        where: { id: dto.categoryId, tenantId },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireIncomeLock(tx, tenantId, incomeId);
+      const income = await tx.income.findFirst({
+        where: { id: incomeId, tenantId },
+        include: { category: true },
       });
 
-      if (!newCategory) {
-        throw new NotFoundException(`Rubro no encontrado: ${dto.categoryId}`);
+      if (!income) {
+        throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
       }
 
-      if (newCategory.movementType !== 'INCOME') {
+      if (income.status !== 'DRAFT') {
         throw new BadRequestException(
-          `El rubro "${newCategory.name}" no es de tipo INGRESO`,
+          `Solo se pueden editar ingresos en DRAFT. Estado actual: ${income.status}`,
         );
       }
-    }
 
-    const updated = await this.prisma.income.update({
-      where: { id: incomeId },
-      data: {
-        amountMinor: dto.amountMinor ?? income.amountMinor,
-        currencyCode: dto.currencyCode ?? income.currencyCode,
-        receivedDate: dto.receivedDate
-          ? new Date(dto.receivedDate)
-          : income.receivedDate,
-        categoryId: dto.categoryId ?? income.categoryId,
-        description:
-          dto.description !== undefined ? dto.description : income.description,
-        attachmentFileKey:
-          dto.attachmentFileKey !== undefined
-            ? dto.attachmentFileKey
-            : income.attachmentFileKey,
-      },
-      include: { category: true },
+      const amountChanged = dto.amountMinor !== undefined && dto.amountMinor !== income.amountMinor;
+      const currencyChanged = dto.currencyCode !== undefined && dto.currencyCode !== income.currencyCode;
+      if (amountChanged || currencyChanged) {
+        const allocationCount = await tx.movementAllocation.count({
+          where: { tenantId, incomeId },
+        });
+        if (allocationCount > 0) {
+          throw new ConflictException(
+            'No se puede cambiar monto o moneda de un ingreso con allocations. Reemplace las allocations explícitamente antes de editarlo.',
+          );
+        }
+      }
+
+      // If changing category, validate it's INCOME type
+      if (dto.categoryId && dto.categoryId !== income.categoryId) {
+        const newCategory = await tx.expenseLedgerCategory.findFirst({
+          where: { id: dto.categoryId, tenantId },
+        });
+
+        if (!newCategory) {
+          throw new NotFoundException(`Rubro no encontrado: ${dto.categoryId}`);
+        }
+
+        if (newCategory.movementType !== 'INCOME') {
+          throw new BadRequestException(
+            `El rubro "${newCategory.name}" no es de tipo INGRESO`,
+          );
+        }
+      }
+
+      return tx.income.update({
+        where: { id: incomeId },
+        data: {
+          amountMinor: dto.amountMinor ?? income.amountMinor,
+          currencyCode: dto.currencyCode ?? income.currencyCode,
+          receivedDate: dto.receivedDate
+            ? new Date(dto.receivedDate)
+            : income.receivedDate,
+          categoryId: dto.categoryId ?? income.categoryId,
+          description:
+            dto.description !== undefined ? dto.description : income.description,
+          attachmentFileKey:
+            dto.attachmentFileKey !== undefined
+              ? dto.attachmentFileKey
+              : income.attachmentFileKey,
+        },
+        include: { category: true },
+      });
     });
 
     void this.auditService.createLog({
@@ -277,6 +316,7 @@ export class IncomesService {
   private async buildIncomeConversionSnapshot(
     tenantId: string,
     income: { amountMinor: number; currencyCode: string; receivedDate: Date },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<{
     functionalAmountMinor: number;
     functionalCurrencyCode: string;
@@ -286,7 +326,7 @@ export class IncomesService {
     exchangeRateEffectiveAt: Date | null;
     conversionDate: Date;
   }> {
-    const tenant = await this.prisma.tenant.findFirst({
+    const tenant = await db.tenant.findFirst({
       where: { id: tenantId },
       select: { id: true, functionalCurrency: true },
     });
@@ -305,7 +345,7 @@ export class IncomesService {
         typeof this.currencyConversionService.convert
       >[0]['functionalCurrency'],
       conversionDate: this.toConversionDate(income.receivedDate),
-    });
+    }, db);
 
     return {
       functionalAmountMinor: result.functionalAmount,
@@ -328,41 +368,40 @@ export class IncomesService {
       throw new ForbiddenException('Solo administradores pueden registrar ingresos');
     }
 
-    const income = await this.prisma.income.findFirst({
-      where: { id: incomeId, tenantId },
-      include: { category: true },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireIncomeLock(tx, tenantId, incomeId);
+      const income = await tx.income.findFirst({
+        where: { id: incomeId, tenantId },
+        include: { category: true },
+      });
 
-    if (!income) {
-      throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
-    }
+      if (!income) {
+        throw new NotFoundException(`Ingreso no encontrado: ${incomeId}`);
+      }
 
-    if (income.status !== 'DRAFT') {
-      throw new BadRequestException(
-        `No se puede registrar un ingreso en estado ${income.status}`,
-      );
-    }
+      if (income.status !== 'DRAFT') {
+        throw new BadRequestException(
+          `No se puede registrar un ingreso en estado ${income.status}`,
+        );
+      }
 
-    const conversionSnapshot = await this.buildIncomeConversionSnapshot(
-      tenantId,
-      income,
-    );
-
-    const updated = await this.prisma.income.update({
-      where: { id: incomeId },
-      data: {
-        status: 'RECORDED',
-        recordedByMembershipId: membershipId,
-        recordedAt: new Date(),
-        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
-        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
-        exchangeRateId: conversionSnapshot.exchangeRateId,
-        exchangeRateValue: conversionSnapshot.exchangeRateValue,
-        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
-        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
-        conversionDate: conversionSnapshot.conversionDate,
-      },
-      include: { category: true },
+      const conversionSnapshot = await this.buildIncomeConversionSnapshot(tenantId, income, tx);
+      return tx.income.update({
+        where: { id: incomeId },
+        data: {
+          status: 'RECORDED',
+          recordedByMembershipId: membershipId,
+          recordedAt: new Date(),
+          functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+          functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+          exchangeRateId: conversionSnapshot.exchangeRateId,
+          exchangeRateValue: conversionSnapshot.exchangeRateValue,
+          exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+          exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+          conversionDate: conversionSnapshot.conversionDate,
+        },
+        include: { category: true },
+      });
     });
 
     void this.auditService.createLog({
@@ -371,7 +410,7 @@ export class IncomesService {
       action: 'INCOME_RECORD',
       entityType: 'Income',
       entityId: incomeId,
-      metadata: { previousStatus: income.status, newStatus: 'RECORDED' },
+      metadata: { previousStatus: 'DRAFT', newStatus: updated.status },
     });
 
     return this.toDto(updated);

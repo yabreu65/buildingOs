@@ -16,6 +16,9 @@ export interface CreateAllocationInput {
   currencyCode?: string;
 }
 
+type AllocationDbClient = PrismaService | Prisma.TransactionClient;
+type AllocationMode = 'PERCENTAGE' | 'AMOUNT';
+
 type MovementAllocationWithBuilding = Prisma.MovementAllocationGetPayload<{
   include: {
     building: {
@@ -30,6 +33,47 @@ type MovementAllocationWithBuilding = Prisma.MovementAllocationGetPayload<{
 const PERCENTAGE_SCALE = 10_000;
 const TOTAL_PERCENTAGE_BASIS_POINTS = 100 * PERCENTAGE_SCALE;
 
+function getHomogeneousAllocationMode(
+  allocations: readonly CreateAllocationInput[],
+): AllocationMode {
+  const modes = allocations.map((allocation, index): AllocationMode => {
+    const hasPercentage = allocation.percentage !== null && allocation.percentage !== undefined;
+    const hasAmount = allocation.amountMinor !== null && allocation.amountMinor !== undefined;
+
+    if (hasPercentage === hasAmount) {
+      throw new BadRequestException(
+        `La allocation ${index} debe tener exactamente uno de percentage o amountMinor`,
+      );
+    }
+
+    return hasPercentage ? 'PERCENTAGE' : 'AMOUNT';
+  });
+
+  const mode = modes[0];
+  if (!mode || modes.some((allocationMode) => allocationMode !== mode)) {
+    throw new BadRequestException(
+      'Todas las allocations deben usar el mismo modo: percentage o amountMinor',
+    );
+  }
+
+  return mode;
+}
+
+function requirePositivePersistedAmounts(
+  amounts: readonly (number | null | undefined)[],
+): number[] {
+  const validAmounts: number[] = [];
+  for (const amount of amounts) {
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) {
+      throw new BadRequestException(
+        'Las allocations deben producir importes enteros positivos',
+      );
+    }
+    validAmounts.push(amount);
+  }
+  return validAmounts;
+}
+
 export function toBasisPoints(percentage: number): number {
   return Math.round(percentage * PERCENTAGE_SCALE);
 }
@@ -39,7 +83,13 @@ export function allocateByLargestRemainder(
   allocations: CreateAllocationInput[],
 ): number[] {
   const exactAllocations = allocations.map((allocation, index) => {
-    const basisPoints = toBasisPoints(allocation.percentage ?? 0);
+    const percentage = allocation.percentage;
+    if (percentage === null || percentage === undefined) {
+      throw new BadRequestException(
+        `La allocation ${index} debe tener percentage para distribuir por porcentaje`,
+      );
+    }
+    const basisPoints = toBasisPoints(percentage);
     const numerator = totalAmountMinor * basisPoints;
     const amountMinor = Math.floor(numerator / TOTAL_PERCENTAGE_BASIS_POINTS);
 
@@ -194,28 +244,26 @@ export class MovementAllocationService {
       );
     }
 
-    // Detectar modo: % o montos
-    const hasPercentages = allocations.some((a) => a.percentage !== null && a.percentage !== undefined);
-    const hasAmounts = allocations.some((a) => a.amountMinor !== null && a.amountMinor !== undefined);
+    const allocationMode = getHomogeneousAllocationMode(allocations);
 
-    if (hasPercentages && hasAmounts) {
-      throw new BadRequestException(
-        'No puedes mezclar allocations por % y por monto',
-      );
-    }
-
-    if (hasPercentages) {
-      for (const alloc of allocations) {
-        const percentage = alloc.percentage ?? 0;
-        if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+    if (allocationMode === 'PERCENTAGE') {
+      const percentages = allocations.map((alloc) => {
+        const percentage = alloc.percentage;
+        if (
+          typeof percentage !== 'number' ||
+          !Number.isFinite(percentage) ||
+          percentage < 0 ||
+          percentage > 100
+        ) {
           throw new BadRequestException(
             `Porcentaje inválido para buildingId ${alloc.buildingId}: ${percentage}`,
           );
         }
-      }
+        return percentage;
+      });
 
-      const totalPercentageBasisPoints = allocations.reduce(
-        (sum, a) => sum + toBasisPoints(a.percentage ?? 0),
+      const totalPercentageBasisPoints = percentages.reduce(
+        (sum, percentage) => sum + toBasisPoints(percentage),
         0,
       );
 
@@ -224,7 +272,10 @@ export class MovementAllocationService {
           `Los porcentajes deben sumar 100%, sumaron: ${totalPercentageBasisPoints / PERCENTAGE_SCALE}%`,
         );
       }
-    } else if (hasAmounts) {
+      requirePositivePersistedAmounts(
+        allocateByLargestRemainder(parentAmount, allocations),
+      );
+    } else {
       // Verificar que todas las allocations tengan currencyCode = parentCurrency
       for (const alloc of allocations) {
         if (alloc.currencyCode && alloc.currencyCode !== parentCurrency) {
@@ -234,16 +285,14 @@ export class MovementAllocationService {
         }
       }
 
-      const totalAmount = allocations.reduce((sum, a) => sum + (a.amountMinor ?? 0), 0);
+      const amounts = allocations.map((allocation) => allocation.amountMinor);
+      const validAmounts = requirePositivePersistedAmounts(amounts);
+      const totalAmount = validAmounts.reduce((sum, amount) => sum + amount, 0);
       if (totalAmount !== parentAmount) {
         throw new BadRequestException(
           `Los montos deben sumar exactamente ${parentAmount}, sumaron: ${totalAmount}`,
         );
       }
-    } else {
-      throw new BadRequestException(
-        'Cada allocation debe tener percentage o amountMinor',
-      );
     }
   }
 
@@ -260,19 +309,12 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await this.prisma.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        expenseId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(this.prisma, {
+      tenantId,
+      expenseId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
 
     // Audit
@@ -299,19 +341,12 @@ export class MovementAllocationService {
     currencyCode: string,
     allocations: CreateAllocationInput[],
   ): Promise<void> {
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await tx.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        expenseId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(tx, {
+      tenantId,
+      expenseId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
   }
 
@@ -328,19 +363,12 @@ export class MovementAllocationService {
   ): Promise<void> {
     await this.validateAllocations(tenantId, allocations, amountMinor, currencyCode);
 
-    const allocatedAmounts = allocations.some((alloc) => alloc.percentage !== undefined && alloc.percentage !== null)
-      ? allocateByLargestRemainder(amountMinor, allocations)
-      : allocations.map((alloc) => alloc.amountMinor!);
-
-    await this.prisma.movementAllocation.createMany({
-      data: allocations.map((alloc, index) => ({
-        tenantId,
-        incomeId,
-        buildingId: alloc.buildingId,
-        percentage: alloc.percentage ?? null,
-        amountMinor: allocatedAmounts[index],
-        currencyCode,
-      })),
+    await this.createForMovement(this.prisma, {
+      tenantId,
+      incomeId,
+      amountMinor,
+      currencyCode,
+      allocations,
     });
 
     void this.auditService.createLog({
@@ -350,6 +378,54 @@ export class MovementAllocationService {
       entityType: 'MovementAllocation',
       entityId: incomeId,
       metadata: { allocationCount: allocations.length, totalAmount: amountMinor },
+    });
+  }
+
+  /** Persist a fully validated allocation set using the caller's transaction client. */
+  async createForIncomeInTx(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    incomeId: string,
+    amountMinor: number,
+    currencyCode: string,
+    allocations: CreateAllocationInput[],
+  ): Promise<void> {
+    await this.createForMovement(tx, {
+      tenantId,
+      incomeId,
+      amountMinor,
+      currencyCode,
+      allocations,
+    });
+  }
+
+  private async createForMovement(
+    client: AllocationDbClient,
+    input: {
+      tenantId: string;
+      expenseId?: string;
+      incomeId?: string;
+      amountMinor: number;
+      currencyCode: string;
+      allocations: CreateAllocationInput[];
+    },
+  ): Promise<void> {
+    const allocationMode = getHomogeneousAllocationMode(input.allocations);
+    const allocatedAmounts = allocationMode === 'PERCENTAGE'
+      ? allocateByLargestRemainder(input.amountMinor, input.allocations)
+      : input.allocations.map((allocation) => allocation.amountMinor);
+    const validAmounts = requirePositivePersistedAmounts(allocatedAmounts);
+
+    await client.movementAllocation.createMany({
+      data: input.allocations.map((allocation, index) => ({
+        tenantId: input.tenantId,
+        expenseId: input.expenseId,
+        incomeId: input.incomeId,
+        buildingId: allocation.buildingId,
+        percentage: allocation.percentage ?? null,
+        amountMinor: validAmounts[index],
+        currencyCode: input.currencyCode,
+      })),
     });
   }
 

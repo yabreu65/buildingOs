@@ -74,41 +74,50 @@ describe('ExpensesService', () => {
   let currencyConversion: CurrencyConversionService;
 
   beforeEach(async () => {
+    const prismaValue = {
+      $transaction: jest.fn(),
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      expense: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      movementAllocation: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
+      building: {
+        findMany: jest.fn(),
+      },
+      expenseLedgerCategory: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+      },
+      vendor: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+      },
+      tenant: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'tenant-1',
+          functionalCurrency: 'ARS',
+        }),
+      },
+      exchangeRate: { findFirst: jest.fn() },
+      liquidation: { findFirst: jest.fn() },
+      unitGroup: { findFirst: jest.fn() },
+      adjustment: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+    };
+    prismaValue.$transaction.mockImplementation(
+      async (callback: (tx: typeof prismaValue) => unknown) => callback(prismaValue),
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExpensesService,
-        {
-          provide: PrismaService,
-          useValue: {
-            expense: {
-              create: jest.fn(),
-              findMany: jest.fn(),
-              findFirst: jest.fn(),
-              update: jest.fn(),
-            },
-            building: {
-              findMany: jest.fn(),
-            },
-            expenseLedgerCategory: {
-              findMany: jest.fn(),
-              findFirst: jest.fn(),
-            },
-            vendor: {
-              findMany: jest.fn(),
-              findFirst: jest.fn(),
-            },
-            tenant: {
-              findFirst: jest.fn().mockResolvedValue({
-                id: 'tenant-1',
-                functionalCurrency: 'ARS',
-              }),
-            },
-            exchangeRate: { findFirst: jest.fn() },
-            liquidation: { findFirst: jest.fn() },
-            unitGroup: { findFirst: jest.fn() },
-            adjustment: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
-          },
-        },
+        { provide: PrismaService, useValue: prismaValue },
         { provide: AuditService, useValue: { createLog: jest.fn() } },
         {
           provide: FinanzasValidators,
@@ -119,7 +128,11 @@ describe('ExpensesService', () => {
         },
         {
           provide: MovementAllocationService,
-          useValue: { createForExpense: jest.fn() },
+          useValue: {
+            validateAllocations: jest.fn(),
+            createForExpense: jest.fn(),
+            createForExpenseInTx: jest.fn(),
+          },
         },
         {
           provide: CurrencyConversionService,
@@ -230,8 +243,8 @@ describe('ExpensesService', () => {
           }),
         }),
       );
-      expect(movementAllocation.createForExpense).toHaveBeenCalledWith(
-        'tenant-1', 'expense-1', 1000, 'ARS', allocations, 'member-1',
+      expect(movementAllocation.createForExpenseInTx).toHaveBeenCalledWith(
+        expect.anything(), 'tenant-1', 'expense-1', 1000, 'ARS', allocations,
       );
     });
 

@@ -2,9 +2,11 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import {
@@ -19,6 +21,7 @@ import {
   allocateFunctionalByLargestRemainder,
 } from './movement-allocation.service';
 import { CurrencyConversionService } from './currency-conversion.service';
+import { acquireExpenseLock } from './movement-locks';
 
 @Injectable()
 export class ExpensesService {
@@ -37,6 +40,7 @@ export class ExpensesService {
   }
 
   private async persistValidatedExpense(
+    tx: Prisma.TransactionClient,
     expense: {
       id: string;
       tenantId: string;
@@ -67,7 +71,7 @@ export class ExpensesService {
     };
 
     if (expense.scopeType !== 'TENANT_SHARED') {
-      return this.prisma.expense.update({
+      return tx.expense.update({
         where: { id: expense.id },
         data: baseData,
         include: {
@@ -77,13 +81,13 @@ export class ExpensesService {
       });
     }
 
-    const allocations = await this.prisma.movementAllocation.findMany({
+    const allocations = await tx.movementAllocation.findMany({
       where: { tenantId: expense.tenantId, expenseId: expense.id },
       select: { id: true, amountMinor: true },
     });
 
     if (allocations.length === 0) {
-      return this.prisma.expense.update({
+      return tx.expense.update({
         where: { id: expense.id },
         data: baseData,
         include: {
@@ -98,28 +102,26 @@ export class ExpensesService {
       allocations.map((allocation) => allocation.amountMinor ?? 0),
     );
 
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.expense.update({
-        where: { id: expense.id },
-        data: baseData,
-        include: {
-          category: { select: { name: true } },
-          vendor: { select: { name: true } },
+    const updated = await tx.expense.update({
+      where: { id: expense.id },
+      data: baseData,
+      include: {
+        category: { select: { name: true } },
+        vendor: { select: { name: true } },
+      },
+    });
+
+    for (const [index, allocation] of allocations.entries()) {
+      await tx.movementAllocation.update({
+        where: { id: allocation.id },
+        data: {
+          functionalAmountMinor: shares[index],
+          functionalCurrencyCode: snapshot.functionalCurrencyCode,
         },
       });
+    }
 
-      for (const [index, allocation] of allocations.entries()) {
-        await tx.movementAllocation.update({
-          where: { id: allocation.id },
-          data: {
-            functionalAmountMinor: shares[index],
-            functionalCurrencyCode: snapshot.functionalCurrencyCode,
-          },
-        });
-      }
-
-      return updated;
-    });
+    return updated;
   }
 
   private toConversionDate(invoiceDate: Date): string {
@@ -132,6 +134,7 @@ export class ExpensesService {
   private async buildExpenseConversionSnapshot(
     tenantId: string,
     expense: { amountMinor: number; currencyCode: string; invoiceDate: Date },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<{
     functionalAmountMinor: number;
     functionalCurrencyCode: string;
@@ -141,7 +144,7 @@ export class ExpensesService {
     exchangeRateEffectiveAt: Date | null;
     conversionDate: Date;
   }> {
-    const tenant = await this.prisma.tenant.findFirst({
+    const tenant = await db.tenant.findFirst({
       where: { id: tenantId },
       select: { id: true, functionalCurrency: true },
     });
@@ -160,7 +163,7 @@ export class ExpensesService {
         typeof this.currencyConversionService.convert
       >[0]['functionalCurrency'],
       conversionDate: this.toConversionDate(expense.invoiceDate),
-    });
+    }, db);
 
     return {
       functionalAmountMinor: result.functionalAmount,
@@ -194,8 +197,9 @@ export class ExpensesService {
     tenantId: string,
     buildingId: string,
     liquidationPeriod: string,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<void> {
-    const publishedLiq = await this.prisma.liquidation.findFirst({
+    const publishedLiq = await db.liquidation.findFirst({
       where: {
         tenantId,
         buildingId,
@@ -403,39 +407,64 @@ export class ExpensesService {
       await this.assertBuildingPeriodIsOpen(tenantId, dto.buildingId, liquidationPeriod);
     }
 
-    const expense = await this.prisma.expense.create({
-      data: {
-        tenantId,
-        buildingId: dto.buildingId ?? null,
-        period: liquidationPeriod,
-        liquidationPeriod,
-        categoryId: dto.categoryId,
-        vendorId: dto.vendorId ?? null,
-        amountMinor: dto.amountMinor,
-        currencyCode: dto.currencyCode,
-        invoiceDate,
-        description: dto.description ?? null,
-        attachmentFileKey: dto.attachmentFileKey ?? null,
-        scopeType,
-        unitGroupId: dto.unitGroupId ?? null,
-        createdByMembershipId: membershipId,
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
-    });
-
-    // Crear allocations si es TENANT_SHARED o UNIT_GROUP
+    // Validate before opening the write transaction, then persist the parent
+    // and canonical allocation rows in the same transaction.
     if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
-      await this.movementAllocationService.createForExpense(
+      await this.movementAllocationService.validateAllocations(
         tenantId,
-        expense.id,
+        dto.allocations,
         dto.amountMinor,
         dto.currencyCode,
-        dto.allocations,
-        membershipId,
       );
+    }
+
+    const expense = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.expense.create({
+        data: {
+          tenantId,
+          buildingId: dto.buildingId ?? null,
+          period: liquidationPeriod,
+          liquidationPeriod,
+          categoryId: dto.categoryId,
+          vendorId: dto.vendorId ?? null,
+          amountMinor: dto.amountMinor,
+          currencyCode: dto.currencyCode,
+          invoiceDate,
+          description: dto.description ?? null,
+          attachmentFileKey: dto.attachmentFileKey ?? null,
+          scopeType,
+          unitGroupId: dto.unitGroupId ?? null,
+          createdByMembershipId: membershipId,
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
+
+      if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+        await this.movementAllocationService.createForExpenseInTx(
+          tx,
+          tenantId,
+          created.id,
+          dto.amountMinor,
+          dto.currencyCode,
+          dto.allocations,
+        );
+      }
+
+      return created;
+    });
+
+    if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {
+      void this.auditService.createLog({
+        tenantId,
+        actorMembershipId: membershipId,
+        action: 'EXPENSE_ALLOCATION_CREATE',
+        entityType: 'MovementAllocation',
+        entityId: expense.id,
+        metadata: { allocationCount: dto.allocations.length, totalAmount: dto.amountMinor },
+      });
     }
 
     void this.auditService.createLog({
@@ -469,65 +498,82 @@ export class ExpensesService {
       throw new ForbiddenException('Acceso denegado');
     }
 
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, tenantId },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireExpenseLock(tx, tenantId, expenseId);
 
-    if (!expense) {
-      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
-    }
-
-    if (expense.status !== 'DRAFT') {
-      throw new BadRequestException(
-        `Solo se pueden editar gastos en DRAFT. Estado actual: ${expense.status}`,
-      );
-    }
-
-    if (dto.categoryId && dto.categoryId !== expense.categoryId) {
-      const category = await this.prisma.expenseLedgerCategory.findFirst({
-        where: { id: dto.categoryId, tenantId, isActive: true },
+      const expense = await tx.expense.findFirst({
+        where: { id: expenseId, tenantId },
       });
-      if (!category) {
-        throw new NotFoundException(`Rubro de gasto no encontrado: ${dto.categoryId}`);
-      }
-    }
 
-    if (dto.vendorId !== undefined && dto.vendorId !== null) {
-      const vendor = await this.prisma.vendor.findFirst({
-        where: { id: dto.vendorId, tenantId },
+      if (!expense) {
+        throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+      }
+
+      if (expense.status !== 'DRAFT') {
+        throw new BadRequestException(
+          `Solo se pueden editar gastos en DRAFT. Estado actual: ${expense.status}`,
+        );
+      }
+
+      const amountChanged = dto.amountMinor !== undefined && dto.amountMinor !== expense.amountMinor;
+      const currencyChanged = dto.currencyCode !== undefined && dto.currencyCode !== expense.currencyCode;
+      if (amountChanged || currencyChanged) {
+        const allocationCount = await tx.movementAllocation.count({
+          where: { tenantId, expenseId },
+        });
+        if (allocationCount > 0) {
+          throw new ConflictException(
+            'No se puede cambiar monto o moneda de un gasto con allocations. Reemplace las allocations explícitamente antes de editarlo.',
+          );
+        }
+      }
+
+      if (dto.categoryId && dto.categoryId !== expense.categoryId) {
+        const category = await tx.expenseLedgerCategory.findFirst({
+          where: { id: dto.categoryId, tenantId, isActive: true },
+        });
+        if (!category) {
+          throw new NotFoundException(`Rubro de gasto no encontrado: ${dto.categoryId}`);
+        }
+      }
+
+      if (dto.vendorId !== undefined && dto.vendorId !== null) {
+        const vendor = await tx.vendor.findFirst({
+          where: { id: dto.vendorId, tenantId },
+        });
+        if (!vendor) {
+          throw new NotFoundException(`Proveedor no encontrado: ${dto.vendorId}`);
+        }
+      }
+
+      const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : expense.invoiceDate;
+      const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
+
+      if (expense.scopeType === 'BUILDING' && expense.buildingId) {
+        await this.assertBuildingPeriodIsOpen(tenantId, expense.buildingId, liquidationPeriod, tx);
+      }
+
+      return tx.expense.update({
+        where: { id: expenseId },
+        data: {
+          amountMinor: dto.amountMinor ?? expense.amountMinor,
+          currencyCode: dto.currencyCode ?? expense.currencyCode,
+          invoiceDate,
+          period: liquidationPeriod,
+          liquidationPeriod,
+          categoryId: dto.categoryId ?? expense.categoryId,
+          vendorId: dto.vendorId !== undefined ? dto.vendorId : expense.vendorId,
+          description: dto.description !== undefined ? dto.description : expense.description,
+          attachmentFileKey:
+            dto.attachmentFileKey !== undefined
+              ? dto.attachmentFileKey
+              : expense.attachmentFileKey,
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
       });
-      if (!vendor) {
-        throw new NotFoundException(`Proveedor no encontrado: ${dto.vendorId}`);
-      }
-    }
-
-    const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : expense.invoiceDate;
-    const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
-
-    if (expense.scopeType === 'BUILDING' && expense.buildingId) {
-      await this.assertBuildingPeriodIsOpen(tenantId, expense.buildingId, liquidationPeriod);
-    }
-
-    const updated = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        amountMinor: dto.amountMinor ?? expense.amountMinor,
-        currencyCode: dto.currencyCode ?? expense.currencyCode,
-        invoiceDate,
-        period: liquidationPeriod,
-        liquidationPeriod,
-        categoryId: dto.categoryId ?? expense.categoryId,
-        vendorId: dto.vendorId !== undefined ? dto.vendorId : expense.vendorId,
-        description: dto.description !== undefined ? dto.description : expense.description,
-        attachmentFileKey:
-          dto.attachmentFileKey !== undefined
-            ? dto.attachmentFileKey
-            : expense.attachmentFileKey,
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
     });
 
     void this.auditService.createLog({
@@ -552,26 +598,20 @@ export class ExpensesService {
       throw new ForbiddenException('Acceso denegado');
     }
 
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, tenantId },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireExpenseLock(tx, tenantId, expenseId);
+      const expense = await tx.expense.findFirst({
+        where: { id: expenseId, tenantId },
+      });
+
+      if (!expense) {
+        throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+      }
+
+      this.assertExpenseCanBeValidated(expense);
+      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense, tx);
+      return this.persistValidatedExpense(tx, expense, conversionSnapshot, membershipId);
     });
-
-    if (!expense) {
-      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
-    }
-
-    this.assertExpenseCanBeValidated(expense);
-
-    const conversionSnapshot = await this.buildExpenseConversionSnapshot(
-      tenantId,
-      expense,
-    );
-
-    const updated = await this.persistValidatedExpense(
-      expense,
-      conversionSnapshot,
-      membershipId,
-    );
 
     void this.auditService.createLog({
       tenantId,
@@ -580,9 +620,9 @@ export class ExpensesService {
       entityType: 'Expense',
       entityId: expenseId,
       metadata: {
-        period: expense.period,
-        amountMinor: expense.amountMinor,
-        currencyCode: expense.currencyCode,
+        period: updated.period,
+        amountMinor: updated.amountMinor,
+        currencyCode: updated.currencyCode,
       },
     });
 
@@ -594,26 +634,20 @@ export class ExpensesService {
     expenseId: string,
     membershipId?: string,
   ): Promise<ExpenseResponseDto> {
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, tenantId },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireExpenseLock(tx, tenantId, expenseId);
+      const expense = await tx.expense.findFirst({
+        where: { id: expenseId, tenantId },
+      });
+
+      if (!expense) {
+        throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+      }
+
+      this.assertExpenseCanBeValidated(expense);
+      const conversionSnapshot = await this.buildExpenseConversionSnapshot(tenantId, expense, tx);
+      return this.persistValidatedExpense(tx, expense, conversionSnapshot, membershipId ?? null);
     });
-
-    if (!expense) {
-      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
-    }
-
-    this.assertExpenseCanBeValidated(expense);
-
-    const conversionSnapshot = await this.buildExpenseConversionSnapshot(
-      tenantId,
-      expense,
-    );
-
-    const updated = await this.persistValidatedExpense(
-      expense,
-      conversionSnapshot,
-      membershipId ?? null,
-    );
 
     void this.auditService.createLog({
       tenantId,
@@ -622,9 +656,9 @@ export class ExpensesService {
       entityType: 'Expense',
       entityId: expenseId,
       metadata: {
-        period: expense.period,
-        amountMinor: expense.amountMinor,
-        currencyCode: expense.currencyCode,
+        period: updated.period,
+        amountMinor: updated.amountMinor,
+        currencyCode: updated.currencyCode,
       },
     });
 
@@ -641,29 +675,33 @@ export class ExpensesService {
       throw new ForbiddenException('Acceso denegado');
     }
 
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, tenantId },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireExpenseLock(tx, tenantId, expenseId);
 
-    if (!expense) {
-      throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
-    }
+      const expense = await tx.expense.findFirst({
+        where: { id: expenseId, tenantId },
+      });
 
-    if (expense.status === 'VOID') {
-      throw new BadRequestException('El gasto ya está anulado');
-    }
+      if (!expense) {
+        throw new NotFoundException(`Gasto no encontrado: ${expenseId}`);
+      }
 
-    const updated = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        status: 'VOID',
-        voidedByMembershipId: membershipId,
-        voidedAt: new Date(),
-      },
-      include: {
-        category: { select: { name: true } },
-        vendor: { select: { name: true } },
-      },
+      if (expense.status === 'VOID') {
+        throw new BadRequestException('El gasto ya está anulado');
+      }
+
+      return tx.expense.update({
+        where: { id: expenseId },
+        data: {
+          status: 'VOID',
+          voidedByMembershipId: membershipId,
+          voidedAt: new Date(),
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
     });
 
     void this.auditService.createLog({
@@ -672,7 +710,7 @@ export class ExpensesService {
       action: 'EXPENSE_VOID',
       entityType: 'Expense',
       entityId: expenseId,
-      metadata: { period: expense.period, reason: 'void requested by admin' },
+      metadata: { period: updated.period, reason: 'void requested by admin' },
     });
 
     return this.toDto(updated);
