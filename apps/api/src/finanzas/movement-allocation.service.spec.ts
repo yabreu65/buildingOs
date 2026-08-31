@@ -2,7 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { MovementAllocationService } from './movement-allocation.service';
+import {
+  CreateAllocationInput,
+  MovementAllocationService,
+} from './movement-allocation.service';
 import { FinanzasValidators } from './finanzas.validators';
 
 describe('MovementAllocationService', () => {
@@ -51,6 +54,21 @@ describe('MovementAllocationService', () => {
   });
 
   describe('validateAllocations', () => {
+    const buildings = [
+      { id: 'building-1', name: 'Edificio A' },
+      { id: 'building-2', name: 'Edificio B' },
+    ];
+
+    async function expectInvalidAllocations(
+      allocations: CreateAllocationInput[],
+    ): Promise<void> {
+      jest.spyOn(prisma.building, 'findMany').mockResolvedValue(buildings as any);
+
+      await expect(
+        service.validateAllocations(tenantId, allocations, 100000, 'ARS'),
+      ).rejects.toThrow(BadRequestException);
+    }
+
     it('debería validar allocations por porcentaje sumando 100%', async () => {
       const buildings = [
         { id: 'building-1', name: 'Edificio A' },
@@ -161,6 +179,47 @@ describe('MovementAllocationService', () => {
           'ARS',
         ),
       ).resolves.not.toThrow();
+    });
+
+    it('debería rechazar una lista de porcentajes incompleta', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1', percentage: 100 },
+        { buildingId: 'building-2' },
+      ]);
+    });
+
+    it('debería rechazar una lista de montos incompleta', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1', amountMinor: 100000 },
+        { buildingId: 'building-2' },
+      ]);
+    });
+
+    it('debería rechazar una allocation con ambos discriminadores', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1', percentage: 100, amountMinor: 100000 },
+      ]);
+    });
+
+    it('debería rechazar una allocation sin discriminador', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1' },
+        { buildingId: 'building-2' },
+      ]);
+    });
+
+    it('debería rechazar porcentajes explícitos que producen una allocation cero', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1', percentage: 0 },
+        { buildingId: 'building-2', percentage: 100 },
+      ]);
+    });
+
+    it('debería rechazar montos explícitos cero', async () => {
+      await expectInvalidAllocations([
+        { buildingId: 'building-1', amountMinor: 0 },
+        { buildingId: 'building-2', amountMinor: 100000 },
+      ]);
     });
 
     it('debería lanzar error si montos no suman exacto', async () => {

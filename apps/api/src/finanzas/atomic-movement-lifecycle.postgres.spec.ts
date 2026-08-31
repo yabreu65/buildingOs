@@ -1,5 +1,6 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
+  Prisma,
   PrismaClient,
   TenantType,
 } from '@prisma/client';
@@ -20,6 +21,7 @@ const enabled =
   expectedDatabaseName !== undefined &&
   ACCEPTANCE_DATABASES.has(expectedDatabaseName);
 const describePostgres = enabled ? describe : describe.skip;
+const TEST_BARRIER_KEY = 'buildingos:finance:fin02a:test-barrier:v1';
 
 describePostgres('Atomic movement lifecycle PostgreSQL', () => {
   let observer: PrismaClient;
@@ -163,6 +165,113 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     };
   }
 
+  async function installRaceBarrier(): Promise<void> {
+    await observer.$executeRaw(Prisma.sql`
+      CREATE OR REPLACE FUNCTION "fin02a_block_update"()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(
+          hashtextextended('buildingos:finance:fin02a:test-barrier:v1', 0)
+        );
+        RETURN NEW;
+      END;
+      $function$
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Expense"
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Income"
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      CREATE TRIGGER "fin02a_block_update"
+      BEFORE UPDATE ON "Expense"
+      FOR EACH ROW EXECUTE FUNCTION "fin02a_block_update"()
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      CREATE TRIGGER "fin02a_block_update"
+      BEFORE UPDATE ON "Income"
+      FOR EACH ROW EXECUTE FUNCTION "fin02a_block_update"()
+    `);
+  }
+
+  async function removeRaceBarrier(): Promise<void> {
+    await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Expense"
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Income"
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      DROP FUNCTION IF EXISTS "fin02a_block_update"()
+    `);
+  }
+
+  async function holdRaceBarrier(): Promise<{
+    release: () => void;
+    transaction: Promise<void>;
+  }> {
+    let resolveReady!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const transaction = observer.$transaction(
+      async (tx) => {
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${TEST_BARRIER_KEY}, 0))`,
+        );
+        resolveReady();
+        await released;
+      },
+      { maxWait: 5000, timeout: 30000 },
+    );
+    await ready;
+    return { release, transaction };
+  }
+
+  async function waitForAdvisoryWaiters(expected: number): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const rows = await observer.$queryRaw<Array<{ waiters: number }>>`
+        SELECT count(*)::int AS waiters
+        FROM pg_locks
+        WHERE locktype = 'advisory' AND granted = false
+      `;
+      if ((rows[0]?.waiters ?? 0) >= expected) {
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Expected ${expected} advisory lock waiters`);
+  }
+
+  async function runControlledRace(
+    firstOperation: () => Promise<unknown>,
+    secondOperation: () => Promise<unknown>,
+  ): Promise<PromiseSettledResult<unknown>[]> {
+    await installRaceBarrier();
+    const barrier = await holdRaceBarrier();
+    try {
+      const first = firstOperation();
+      await waitForAdvisoryWaiters(1);
+
+      const second = secondOperation();
+      await waitForAdvisoryWaiters(2);
+
+      barrier.release();
+      return await Promise.allSettled([first, second]);
+    } finally {
+      barrier.release();
+      await barrier.transaction;
+      await removeRaceBarrier();
+    }
+  }
+
   function expenseDto(ctx: Awaited<ReturnType<typeof fixture>>, scopeType: CreateExpenseDto['scopeType']): CreateExpenseDto {
     return {
       period: '2026-08',
@@ -234,6 +343,23 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     expect(await observer.movementAllocation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
   });
 
+  it('rejects an incomplete Expense allocation list without persisting anything', async () => {
+    const ctx = await fixture('expense-invalid-allocation');
+    const { expenses } = services(clientA);
+    const dto = expenseDto(ctx, 'TENANT_SHARED');
+    dto.allocations = [
+      { buildingId: ctx.building.id, percentage: 100 },
+      { buildingId: ctx.secondBuilding.id },
+    ];
+
+    await expect(
+      expenses.createExpense(ctx.tenant.id, ctx.membership.id, ['TENANT_ADMIN'], dto),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(await observer.expense.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+    expect(await observer.movementAllocation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  });
+
   it('rejects amount changes for allocated Expenses and allows a valid unallocated update', async () => {
     const ctx = await fixture('expense-update');
     const { expenses } = services(clientA);
@@ -299,6 +425,23 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     expect(await observer.movementAllocation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
   });
 
+  it('rejects an incomplete Income allocation list without persisting anything', async () => {
+    const ctx = await fixture('income-invalid-allocation');
+    const { incomes } = services(clientA);
+    const dto = incomeDto(ctx, 'TENANT_SHARED');
+    dto.allocations = [
+      { buildingId: ctx.building.id, amountMinor: 1000 },
+      { buildingId: ctx.secondBuilding.id },
+    ];
+
+    await expect(
+      incomes.createIncome(ctx.tenant.id, ctx.membership.id, ['TENANT_ADMIN'], dto),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(await observer.income.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+    expect(await observer.movementAllocation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
+  });
+
   it('rejects currency changes for allocated Incomes and serializes concurrent DRAFT updates', async () => {
     const ctx = await fixture('income-update');
     const { incomes: incomesA } = services(clientA);
@@ -330,26 +473,23 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
       expenseDto(ctx, 'BUILDING'),
     );
 
-    const results = await Promise.allSettled([
-      expensesA.updateExpense(
+    const results = await runControlledRace(
+      () => expensesA.updateExpense(
         ctx.tenant.id,
         draft.id,
         ctx.membership.id,
         ['TENANT_ADMIN'],
         { amountMinor: 2000, description: 'updated before validation' },
       ),
-      expensesB.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
-    ]);
+      () => expensesB.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    );
 
+    expect(results[0]?.status).toBe('fulfilled');
     expect(results[1]?.status).toBe('fulfilled');
     const updatedExpense = await observer.expense.findUniqueOrThrow({ where: { id: draft.id } });
     expect(updatedExpense.status).toBe('VALIDATED');
     expect(updatedExpense.functionalAmountMinor).toBe(updatedExpense.amountMinor);
-    if (results[0]?.status === 'fulfilled') {
-      expect(updatedExpense.amountMinor).toBe(2000);
-    } else {
-      expect(updatedExpense.amountMinor).toBe(1000);
-    }
+    expect(updatedExpense.amountMinor).toBe(2000);
   });
 
   it('serializes Expense validation against void without state resurrection', async () => {
@@ -363,11 +503,12 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
       expenseDto(ctx, 'BUILDING'),
     );
 
-    const results = await Promise.allSettled([
-      expensesA.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
-      expensesB.voidExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
-    ]);
+    const results = await runControlledRace(
+      () => expensesA.validateExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+      () => expensesB.voidExpense(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    );
 
+    expect(results[0]?.status).toBe('fulfilled');
     expect(results[1]?.status).toBe('fulfilled');
     expect(await observer.expense.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({
       status: 'VOID',
@@ -385,25 +526,22 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
       incomeDto(ctx, 'BUILDING'),
     );
 
-    const results = await Promise.allSettled([
-      incomesA.updateIncome(
+    const results = await runControlledRace(
+      () => incomesA.updateIncome(
         ctx.tenant.id,
         draft.id,
         ctx.membership.id,
         ['TENANT_ADMIN'],
         { amountMinor: 2000, description: 'updated before recording' },
       ),
-      incomesB.recordIncome(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
-    ]);
+      () => incomesB.recordIncome(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    );
 
+    expect(results[0]?.status).toBe('fulfilled');
     expect(results[1]?.status).toBe('fulfilled');
     const recordedIncome = await observer.income.findUniqueOrThrow({ where: { id: draft.id } });
     expect(recordedIncome.status).toBe('RECORDED');
     expect(recordedIncome.functionalAmountMinor).toBe(recordedIncome.amountMinor);
-    if (results[0]?.status === 'fulfilled') {
-      expect(recordedIncome.amountMinor).toBe(2000);
-    } else {
-      expect(recordedIncome.amountMinor).toBe(1000);
-    }
+    expect(recordedIncome.amountMinor).toBe(2000);
   });
 });
