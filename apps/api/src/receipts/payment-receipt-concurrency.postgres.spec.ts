@@ -214,7 +214,7 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
       fixture.payment.id,
     );
 
-    const results = await Promise.all([first, second]);
+    const results = await Promise.allSettled([first, second]);
     const [payment, files, documents, audits] = await Promise.all([
       observer.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
       observer.file.findMany({ where: { tenantId: fixture.tenant.id } }),
@@ -224,13 +224,114 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
       }),
     ]);
 
-    expect(results.filter((result) => result !== null)).toHaveLength(1);
+    const successfulReceipts = results.filter(
+      (result): result is PromiseFulfilledResult<{ receiptNumber: string } | null> =>
+        result.status === 'fulfilled' && result.value !== null,
+    );
+    expect(successfulReceipts.length).toBeGreaterThanOrEqual(1);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        expect(result.reason).toEqual(
+          expect.objectContaining({
+            response: { message: 'RECEIPT_GENERATION_IN_PROGRESS' },
+          }),
+        );
+      }
+    }
     expect(payment.receiptStatus).toBe('READY');
     expect(payment.receiptNumber).toMatch(/-000001$/);
     expect(files).toHaveLength(1);
     expect(documents).toHaveLength(1);
     expect(audits).toHaveLength(1);
     expect(storage.uploadCalls).toHaveLength(1);
+  }, 20000);
+
+  it('recovers a legacy reserved-only receipt without allocating another number', async () => {
+    const fixture = await paymentFixture();
+    const legacyReceiptNumber = 'R-RECEIP-2026-000007';
+    await observer.receiptSequence.create({
+      data: {
+        tenantId: fixture.tenant.id,
+        year: 2026,
+        lastNumber: 7,
+      },
+    });
+    await observer.payment.update({
+      where: { id: fixture.payment.id },
+      data: {
+        receiptNumber: legacyReceiptNumber,
+        receiptStatus: 'FAILED',
+      },
+    });
+
+    const result = await service(firstPrisma).ensureReceiptForPayment(
+      fixture.tenant.id,
+      fixture.payment.id,
+    );
+    const [payment, sequence, files, documents, audits] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      observer.receiptSequence.findUniqueOrThrow({
+        where: {
+          tenantId_year: { tenantId: fixture.tenant.id, year: 2026 },
+        },
+      }),
+      observer.file.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.document.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.paymentAuditLog.findMany({
+        where: { paymentId: fixture.payment.id, action: 'RECEIPT_GENERATED' },
+      }),
+    ]);
+
+    expect(result?.receiptNumber).toBe(legacyReceiptNumber);
+    expect(payment.receiptNumber).toBe(legacyReceiptNumber);
+    expect(payment.receiptStatus).toBe('READY');
+    expect(payment.receiptSnapshot).not.toBeNull();
+    expect(sequence.lastNumber).toBe(7);
+    expect(files).toHaveLength(1);
+    expect(documents).toHaveLength(1);
+    expect(audits).toHaveLength(1);
+    expect(storage.uploadCalls).toHaveLength(1);
+  }, 20000);
+
+  it('fails closed when a legacy reserved-only receipt has a canonical object', async () => {
+    const fixture = await paymentFixture();
+    const legacyReceiptNumber = 'R-RECEIP-2026-000008';
+    const objectKey = `tenant/${fixture.tenant.id}/payments/${fixture.payment.id}/receipts/${legacyReceiptNumber}.pdf`;
+    await observer.payment.update({
+      where: { id: fixture.payment.id },
+      data: {
+        receiptNumber: legacyReceiptNumber,
+        receiptStatus: 'PENDING',
+      },
+    });
+    await storage.uploadBuffer(
+      storage.getDefaultBucket(),
+      objectKey,
+      Buffer.from('%PDF-existing-legacy-object'),
+    );
+    storage.uploadCalls.length = 0;
+
+    await expect(
+      service(firstPrisma).ensureReceiptForPayment(
+        fixture.tenant.id,
+        fixture.payment.id,
+      ),
+    ).rejects.toThrow('canonical storage object');
+
+    const [payment, files, documents, audits] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      observer.file.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.document.findMany({ where: { tenantId: fixture.tenant.id } }),
+      observer.paymentAuditLog.findMany({
+        where: { paymentId: fixture.payment.id, action: 'RECEIPT_GENERATED' },
+      }),
+    ]);
+    expect(payment.receiptNumber).toBe(legacyReceiptNumber);
+    expect(payment.receiptSnapshot).toBeNull();
+    expect(files).toHaveLength(0);
+    expect(documents).toHaveLength(0);
+    expect(audits).toHaveLength(0);
+    expect(storage.uploadCalls).toHaveLength(0);
   }, 20000);
 
   it('keeps slow storage outside the interactive Prisma transaction', async () => {

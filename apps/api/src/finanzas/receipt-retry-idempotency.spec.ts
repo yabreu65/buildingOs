@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { PaymentStatus, ReceiptStatus } from '@prisma/client';
 import { FinanzasService } from './finanzas.service';
 
@@ -76,6 +76,30 @@ describe('FinanzasService receipt retry eligibility', () => {
       ]),
     ).resolves.toEqual({ success: false, error: 'generation failed' });
     expect(ctx.receiptService.ensureReceiptForPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces an active receipt generation as an explicit conflict', async () => {
+    const ctx = buildService(
+      {
+        status: PaymentStatus.APPROVED,
+        canceledAt: null,
+        receiptStatus: ReceiptStatus.PENDING,
+        receiptNumber: 'R-ACTIVE-2026-000001',
+      },
+      null,
+    );
+    ctx.receiptService.ensureReceiptForPayment.mockRejectedValueOnce(
+      new ConflictException('RECEIPT_GENERATION_IN_PROGRESS'),
+    );
+
+    await expect(
+      ctx.service.retryReceiptGeneration('tenant-1', 'payment-1', [
+        'TENANT_ADMIN',
+      ]),
+    ).rejects.toMatchObject({
+      response: { message: 'RECEIPT_GENERATION_IN_PROGRESS' },
+    });
+    expect(ctx.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it.each([PaymentStatus.SUBMITTED, PaymentStatus.REJECTED])(
