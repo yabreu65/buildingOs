@@ -17,6 +17,7 @@ const describePostgres = enabled ? describe : describe.skip;
 class LocalReceiptStorage {
   private readonly objects = new Map<string, Buffer>();
   readonly uploadCalls: string[] = [];
+  delayMs = 0;
 
   getDefaultBucket(): string {
     return 'buildingos-receipt-test';
@@ -27,6 +28,9 @@ class LocalReceiptStorage {
     objectKey: string,
     content: Buffer,
   ): Promise<void> {
+    if (this.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    }
     this.uploadCalls.push(`${bucket}/${objectKey}`);
     this.objects.set(`${bucket}/${objectKey}`, Buffer.from(content));
   }
@@ -205,12 +209,31 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
       }),
     ]);
 
-    expect(results.every((result) => result !== null)).toBe(true);
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect(payment.receiptStatus).toBe('READY');
     expect(payment.receiptNumber).toMatch(/-000001$/);
     expect(files).toHaveLength(1);
     expect(documents).toHaveLength(1);
     expect(audits).toHaveLength(1);
+    expect(storage.uploadCalls).toHaveLength(1);
+  }, 20000);
+
+  it('keeps slow storage outside the interactive Prisma transaction', async () => {
+    const fixture = await paymentFixture();
+    storage.delayMs = 5500;
+
+    await expect(
+      service(firstPrisma).ensureReceiptForPayment(
+        fixture.tenant.id,
+        fixture.payment.id,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ receiptNumber: expect.any(String) }));
+
+    const payment = await observer.payment.findUniqueOrThrow({
+      where: { id: fixture.payment.id },
+      select: { receiptStatus: true },
+    });
+    expect(payment.receiptStatus).toBe('READY');
     expect(storage.uploadCalls).toHaveLength(1);
   }, 20000);
 

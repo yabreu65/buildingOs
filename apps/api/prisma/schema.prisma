@@ -1713,6 +1713,12 @@ model Payment {
   receiptStatus            ReceiptStatus     @default(PENDING)
   receiptError             String?           // Error message if receipt generation failed
   receiptGeneratedAt       DateTime?         // When receipt was successfully generated
+  receiptSnapshot           Json?             // Immutable semantic/display snapshot for receipt issuance
+  receiptSnapshotVersion    String?           // Renderer/snapshot version
+  receiptSnapshotHash       String?           // SHA-256 of canonical receiptSnapshot JSON
+  receiptSnapshotCreatedAt  DateTime?         // When the issuance snapshot was created
+  receiptGenerationToken   String?           // Durable owner of the current storage attempt
+  receiptGenerationLeaseUntil DateTime?      // Expiration for the current storage attempt
 
   // Webhook idempotency key (payment gateway)
   paymentEventId           String?            // Provider's webhook event ID for idempotency

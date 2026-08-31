@@ -297,7 +297,13 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
 
     const failedPayment = await observer.payment.findUniqueOrThrow({
       where: { id: payment.id },
-      select: { receiptNumber: true, receiptStatus: true },
+      select: {
+        receiptNumber: true,
+        receiptStatus: true,
+        receiptSnapshot: true,
+        receiptSnapshotHash: true,
+        receiptSnapshotVersion: true,
+      },
     });
     expect(failedPayment.receiptNumber).toMatch(/-000001$/);
     expect(failedPayment.receiptStatus).toBe('FAILED');
@@ -305,6 +311,10 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
     await expect(
       storage.objectExists(storage.getDefaultBucket(), objectKey),
     ).resolves.toBe(true);
+    const firstPdf = await storage.getObjectBuffer(
+      storage.getDefaultBucket(),
+      objectKey,
+    );
 
     const freshStorage = new MinioReceiptStorage(
       storage.getDefaultBucket(),
@@ -312,6 +322,24 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
       process.env.MINIO_ACCESS_KEY!,
       process.env.MINIO_SECRET_KEY!,
     );
+    await Promise.all([
+      observer.tenant.update({
+        where: { id: tenantId },
+        data: { name: `Mutated tenant ${suffix}`, brandName: 'Mutated brand' },
+      }),
+      observer.building.update({
+        where: { id: building.id },
+        data: { name: `Mutated building ${suffix}` },
+      }),
+      observer.unit.update({
+        where: { id: unit.id },
+        data: { label: `MUTATED-${suffix}` },
+      }),
+      observer.user.update({
+        where: { id: userId },
+        data: { name: 'Mutated approver' },
+      }),
+    ]);
     const freshService = new PaymentReceiptService(
       secondPrisma,
       freshStorage as unknown as never,
@@ -332,9 +360,17 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
     ]);
     expect(persistedPayment.receiptStatus).toBe('READY');
     expect(persistedPayment.receiptNumber).toBe(failedPayment.receiptNumber);
+    expect(persistedPayment.receiptSnapshot).toEqual(failedPayment.receiptSnapshot);
+    expect(persistedPayment.receiptSnapshotHash).toBe(failedPayment.receiptSnapshotHash);
+    expect(persistedPayment.receiptSnapshotVersion).toBe('PAYMENT_RECEIPT_V1');
     expect(files).toHaveLength(1);
     expect(documents).toHaveLength(1);
     expect(audits).toHaveLength(1);
     expect(objects).toEqual([objectKey]);
+    const recoveredPdf = await freshStorage.getObjectBuffer(
+      storage.getDefaultBucket(),
+      objectKey,
+    );
+    expect(recoveredPdf).toEqual(firstPdf);
   }, 30000);
 });
