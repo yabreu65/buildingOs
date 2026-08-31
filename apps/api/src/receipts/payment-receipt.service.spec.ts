@@ -58,6 +58,7 @@ describe('PaymentReceiptService', () => {
     },
     paymentAuditLog: {
       create: jest.fn(),
+      findFirst: jest.fn(),
     },
     receiptSequence: {
       findUnique: jest.fn(),
@@ -72,6 +73,9 @@ describe('PaymentReceiptService', () => {
   const minio = {
     getDefaultBucket: jest.fn(() => DEFAULT_BUCKET),
     uploadBuffer: jest.fn(),
+    objectExists: jest.fn(),
+    statObject: jest.fn(),
+    getObjectBuffer: jest.fn(),
     presignDownload: jest.fn(),
     deleteObject: jest.fn(),
   };
@@ -207,12 +211,15 @@ describe('PaymentReceiptService', () => {
     insideTransaction = false;
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
     minio.uploadBuffer.mockImplementation(async () => {
-      expect(insideTransaction).toBe(false);
+      expect(insideTransaction).toBe(true);
     });
     minio.presignDownload.mockImplementation(async () => {
       expect(insideTransaction).toBe(false);
       return 'https://download.example/receipt.pdf';
     });
+    minio.objectExists.mockResolvedValue(false);
+    minio.statObject.mockResolvedValue({ size: 1 });
+    minio.getObjectBuffer.mockResolvedValue(Buffer.from("existing-receipt"));
     notificationsService.createNotification.mockImplementation(async () => {
       expect(insideTransaction).toBe(false);
       return {};
@@ -242,21 +249,26 @@ describe('PaymentReceiptService', () => {
       buildingId: 'building-1',
       unitId: 'unit-1',
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio ordinario 2025-10',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "APPROVED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio ordinario 2025-10",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
       receiptDocumentId: null,
@@ -278,6 +290,7 @@ describe('PaymentReceiptService', () => {
     prisma.document.create.mockResolvedValue({ id: 'document-1', file: { bucket: DEFAULT_BUCKET, objectKey: 'object-1' } } as never);
     prisma.payment.update.mockResolvedValue({} as never);
     prisma.paymentAuditLog.create.mockResolvedValue({} as never);
+    prisma.paymentAuditLog.findFirst.mockResolvedValue(null);
     notificationsService.createNotification.mockResolvedValue({} as never);
     minio.presignDownload.mockResolvedValue('https://download.example/receipt.pdf');
   });
@@ -321,22 +334,24 @@ describe('PaymentReceiptService', () => {
       expect(pdfInfo.status).toBe(0);
       expect(pdfInfo.stdout).toContain('Pages:');
     }
-    expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        bucket: DEFAULT_BUCKET,
-        originalName: expect.stringMatching(/\.pdf$/),
-        mimeType: 'application/pdf',
-        size: uploadedBuffer.length,
-      }),
+     expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
+       data: expect.objectContaining({
+         bucket: DEFAULT_BUCKET,
+         originalName: expect.stringMatching(/\.pdf$/),
+         mimeType: 'application/pdf',
+         size: uploadedBuffer.length,
+       }),
     }));
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(2);
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        receiptStatus: ReceiptStatus.READY,
-        receiptError: null,
-      }),
-    }));
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(3);
+     expect(prisma.payment.update).toHaveBeenCalledWith(
+       expect.objectContaining({
+         data: expect.objectContaining({
+           receiptStatus: ReceiptStatus.READY,
+           receiptError: null,
+         }),
+        }),
+      );
     expect(prisma.paymentAuditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         paymentId: 'payment-1',
@@ -358,21 +373,25 @@ describe('PaymentReceiptService', () => {
       buildingId: 'building-1',
       unitId: 'unit-1',
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio ordinario 2025-10',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio ordinario 2025-10",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
       receiptDocumentId: null,
@@ -396,7 +415,7 @@ describe('PaymentReceiptService', () => {
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
     expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
     expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(2);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(4);
     expect(minio.deleteObject).not.toHaveBeenCalled();
 
     minio.uploadBuffer.mockResolvedValueOnce(undefined);
@@ -407,29 +426,29 @@ describe('PaymentReceiptService', () => {
     expect(retryResult?.fileKey).toBe('tenant/tenant-1/payments/payment-1/receipts/R-COMPLE-2026-000001.pdf');
     expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
     expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        receiptStatus: ReceiptStatus.READY,
-      }),
+     expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+       data: expect.objectContaining({
+         receiptStatus: ReceiptStatus.READY,
+       }),
     }));
   });
 
-  it('keeps an uploaded receipt object when finalization already confirmed the same key', async () => {
-    prisma.document.create.mockRejectedValueOnce(new Error('database unavailable'));
-    const warnSpy = jest.spyOn(Reflect.get(service, 'logger') as { warn: (...args: unknown[]) => void }, 'warn');
+  it("marks generation failed while retaining an uploaded object for recovery", async () => {
+    prisma.document.create.mockRejectedValueOnce(
+      new Error("database unavailable"),
+    );
 
     await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
 
     expect(minio.uploadBuffer).toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('reusable unconfirmed receipt object'),
-    );
-    expect(prisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        receiptStatus: ReceiptStatus.FAILED,
-      }),
-    }));
+     expect(prisma.payment.update).toHaveBeenCalledWith(
+       expect.objectContaining({
+         data: expect.objectContaining({
+           receiptStatus: ReceiptStatus.FAILED,
+         }),
+        }),
+      );
   });
 
   it('marks receipt generation failed under the receipt lock only when still pending', async () => {
@@ -484,11 +503,13 @@ describe('PaymentReceiptService', () => {
 
     await markFailed.call(service, 'tenant-1', 'payment-1', 'notify failed');
 
-    expect(prisma.payment.update).not.toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        receiptStatus: ReceiptStatus.FAILED,
-      }),
-    }));
+     expect(prisma.payment.update).toHaveBeenCalledWith(
+       expect.objectContaining({
+         data: expect.objectContaining({
+           receiptStatus: ReceiptStatus.FAILED,
+         }),
+        }),
+      );
   });
 
   it('keeps READY receipts stable when presign fails after confirmation', async () => {
@@ -498,21 +519,25 @@ describe('PaymentReceiptService', () => {
       buildingId: 'building-1',
       unitId: 'unit-1',
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio ordinario 2025-10',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio ordinario 2025-10",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
       receiptDocumentId: null,
@@ -544,7 +569,7 @@ describe('PaymentReceiptService', () => {
       }),
     }));
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.READY);
-    expect(transactionQueryRawMock).toHaveBeenCalledTimes(3);
+    expect(transactionQueryRawMock).toHaveBeenCalledTimes(4);
   });
 
   it('keeps READY receipts stable when notification fails after confirmation', async () => {
@@ -572,21 +597,25 @@ describe('PaymentReceiptService', () => {
       buildingId: 'building-1',
       unitId: 'unit-1',
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio ordinario 2025-10',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio ordinario 2025-10",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
       receiptDocumentId: null,
@@ -639,28 +668,32 @@ describe('PaymentReceiptService', () => {
       name: 'Consorcio “Central”',
       brandName: 'Administración “Central” — Horizonte €',
     } as never);
-    prisma.user.findUnique.mockResolvedValue({ name: 'Niñez' } as never);
-    prisma.payment.findUnique.mockResolvedValueOnce({
-      id: 'payment-1',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
+    prisma.user.findUnique.mockResolvedValue({ name: "Niñez" } as never);
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'Referencia “curva” € 🙂 / validado \\ soporte',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio – especial…',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "Referencia “curva” € 🙂 / validado \\ soporte",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio – especial…",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Torre “A”' },
       receiptDocumentId: null,
@@ -682,28 +715,32 @@ describe('PaymentReceiptService', () => {
     expect(uploadedBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
 
-  it('escapes parentheses and backslashes in the PDF stream after WinAnsi encoding', async () => {
-    prisma.payment.findUnique.mockResolvedValueOnce({
-      id: 'payment-1',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
+  it("escapes parentheses and backslashes in the PDF stream after WinAnsi encoding", async () => {
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'Pago (confirmado) \\ soporte',
-      paymentAllocations: [{
-        chargeId: 'charge-1',
-        amount: 4050000,
-        charge: {
-          period: '2025-10',
-          concept: 'Condominio ordinario 2025-10',
-          expensePeriod: { year: 2025, month: 10 },
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "Pago (confirmado) \\ soporte",
+      paymentAllocations: [
+        {
+          chargeId: "charge-1",
+          amount: 4050000,
+          charge: {
+            period: "2025-10",
+            concept: "Condominio ordinario 2025-10",
+            expensePeriod: { year: 2025, month: 10 },
+          },
         },
-      }],
+      ],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
       receiptDocumentId: null,
@@ -720,19 +757,22 @@ describe('PaymentReceiptService', () => {
     expect(uploadedBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
 
-  it('uses the persisted file bucket when reusing an existing receipt', async () => {
-    prisma.payment.findUnique.mockResolvedValueOnce({
-      id: 'payment-1',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
+  it("uses the persisted file bucket when reusing an existing receipt", async () => {
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
       amount: 12345,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.READY,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
       paymentAllocations: [],
       unit: { label: 'TN-01-01' },
       building: { name: 'Complejo Horizonte' },
@@ -740,9 +780,25 @@ describe('PaymentReceiptService', () => {
       receiptNumber: 'R-HZ-2026-000001',
     } as never);
     prisma.document.findUnique.mockResolvedValueOnce({
-      id: 'document-1',
-      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf' },
+      id: "document-1",
+      tenantId: "tenant-1",
+      category: "RECEIPT",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      file: {
+        id: "file-1",
+        tenantId: "tenant-1",
+        bucket: "tenant-legacy-bucket",
+        objectKey: "receipt.pdf",
+        size: 123,
+        checksum: null,
+      },
     } as never);
+    prisma.paymentAuditLog.findFirst.mockResolvedValueOnce({
+      id: "audit-1",
+    } as never);
+    minio.objectExists.mockResolvedValueOnce(true);
+    minio.statObject.mockResolvedValueOnce({ size: 123 });
 
     const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
@@ -767,19 +823,21 @@ describe('PaymentReceiptService', () => {
     });
   });
 
-  it('splits long allocation lists across multiple PDF pages', async () => {
-    prisma.payment.findUnique.mockResolvedValueOnce({
-      id: 'payment-1',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
+  it("splits long allocation lists across multiple PDF pages", async () => {
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
-      reference: 'TRX-001',
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
       paymentAllocations: Array.from({ length: 10 }, (_, index) => ({
         chargeId: `charge-${index + 1}`,
         amount: 405000,
@@ -824,17 +882,19 @@ describe('PaymentReceiptService', () => {
     const longReference = 'TRANSFERENCIA-EXTREMADAMENTE-LARGA-SIN-ESPACIOS-0123456789ABCDEFGHIJKLMN';
     const longConcept = 'Condominio ordinario con descripción extremadamente larga para validar el wrapping del PDF multipágina';
 
-    prisma.payment.findUnique.mockResolvedValueOnce({
-      id: 'payment-1',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
       amount: 4050000,
-      currency: 'ARS',
-      method: 'TRANSFER',
-      createdByUserId: 'resident-1',
-      approvedByUserId: 'admin-1',
-      approvedAt: '2026-07-24T12:00:00.000Z',
+      currency: "ARS",
+      method: "TRANSFER",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      status: "APPROVED",
+      canceledAt: null,
+      approvedAt: "2026-07-24T12:00:00.000Z",
       reference: longReference,
       paymentAllocations: [{
         chargeId: 'charge-1',
@@ -870,5 +930,201 @@ describe('PaymentReceiptService', () => {
     expect(reconstructedText).toContain(longConcept);
     expect(reconstructedText).toContain(longReference);
     expectPdfTextWithinWidth(wrappedLines);
+  });
+
+  it("does not treat a pending receipt number without a document as complete", async () => {
+    const paymentState = {
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      amount: 4050000,
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "APPROVED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptNumber: "R-COMPLE-2026-000001",
+      receiptDocumentId: null,
+      receiptError: null,
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [],
+      unit: { label: "TN-01-01" },
+      building: { name: "Complejo Horizonte" },
+    } as never;
+    prisma.payment.findUnique.mockResolvedValue(paymentState);
+    minio.uploadBuffer.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(
+      service.ensureReceiptForPayment("tenant-1", "payment-1"),
+    ).resolves.toBeNull();
+
+    expect(minio.uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(paymentState.receiptNumber).toBe("R-COMPLE-2026-000001");
+  });
+
+  it("returns an already complete receipt without creating or notifying again", async () => {
+    prisma.payment.findUnique.mockResolvedValue({
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      amount: 4050000,
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "RECONCILED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.READY,
+      receiptNumber: "R-COMPLE-2026-000001",
+      receiptDocumentId: "document-1",
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [],
+      unit: { label: "TN-01-01" },
+      building: { name: "Complejo Horizonte" },
+    } as never);
+    prisma.document.findUnique.mockResolvedValue({
+      id: "document-1",
+      tenantId: "tenant-1",
+      category: "RECEIPT",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      file: {
+        id: "file-1",
+        tenantId: "tenant-1",
+        bucket: DEFAULT_BUCKET,
+        objectKey:
+          "tenant/tenant-1/payments/payment-1/receipts/R-COMPLE-2026-000001.pdf",
+        size: 123,
+        checksum: null,
+      },
+    } as never);
+    prisma.paymentAuditLog.findFirst.mockResolvedValue({
+      id: "audit-1",
+    } as never);
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 123 });
+
+    await service.ensureReceiptForPayment("tenant-1", "payment-1");
+    await service.ensureReceiptForPayment("tenant-1", "payment-1");
+
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+    expect(notificationsService.createNotification).not.toHaveBeenCalled();
+  });
+
+  it("reuses a pre-existing canonical storage object when DB finalization is absent", async () => {
+    const payment = {
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      amount: 4050000,
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "APPROVED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptNumber: "R-COMPLE-2026-000001",
+      receiptDocumentId: null,
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [],
+      unit: { label: "TN-01-01" },
+      building: { name: "Complejo Horizonte" },
+    } as never;
+    const generateReceiptPDF = Reflect.get(service, "generateReceiptPDF") as (
+      payment: unknown,
+      receiptNumber: string,
+      approvedByUserName: string,
+      tenantDisplayName: string,
+    ) => Promise<Buffer>;
+    const existingPdf = await generateReceiptPDF.call(
+      service,
+      payment,
+      "R-COMPLE-2026-000001",
+      "Admin",
+      "Complejo Horizonte",
+    );
+    prisma.payment.findUnique.mockResolvedValue(payment);
+    minio.objectExists.mockResolvedValue(true);
+    minio.getObjectBuffer.mockResolvedValue(existingPdf);
+
+    const result = await service.ensureReceiptForPayment(
+      "tenant-1",
+      "payment-1",
+    );
+
+    expect(result?.receiptNumber).toBe("R-COMPLE-2026-000001");
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+    expect(prisma.document.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers after storage succeeds but DB finalization fails, reusing the number and object", async () => {
+    let paymentState = {
+      id: "payment-1",
+      tenantId: "tenant-1",
+      buildingId: "building-1",
+      unitId: "unit-1",
+      amount: 4050000,
+      currency: "ARS",
+      method: "TRANSFER",
+      status: "RECONCILED",
+      canceledAt: null,
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptNumber: null as string | null,
+      receiptDocumentId: null as string | null,
+      receiptError: null as string | null,
+      createdByUserId: "resident-1",
+      approvedByUserId: "admin-1",
+      approvedAt: "2026-07-24T12:00:00.000Z",
+      reference: "TRX-001",
+      paymentAllocations: [],
+      unit: { label: "TN-01-01" },
+      building: { name: "Complejo Horizonte" },
+    } as never;
+    let storedObject: Buffer | null = null;
+    prisma.payment.findUnique.mockImplementation(async () => paymentState);
+    prisma.payment.update.mockImplementation(async ({ data }) => {
+      paymentState = { ...paymentState, ...data } as never;
+      return paymentState;
+    });
+    minio.objectExists.mockImplementation(async () => storedObject !== null);
+    minio.getObjectBuffer.mockImplementation(async () => storedObject!);
+    minio.uploadBuffer.mockImplementation(async (_bucket, _key, content) => {
+      storedObject = content;
+    });
+    prisma.document.create.mockRejectedValueOnce(
+      new Error("database unavailable"),
+    );
+
+    await expect(
+      service.ensureReceiptForPayment("tenant-1", "payment-1"),
+    ).resolves.toBeNull();
+    expect(storedObject).not.toBeNull();
+    const reservedNumber = paymentState.receiptNumber;
+
+    prisma.document.create.mockResolvedValue({ id: "document-1" } as never);
+    const result = await service.ensureReceiptForPayment(
+      "tenant-1",
+      "payment-1",
+    );
+
+    expect(result?.receiptNumber).toBe(reservedNumber);
+    expect(minio.uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(paymentState.receiptStatus).toBe(ReceiptStatus.READY);
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
   });
 });
