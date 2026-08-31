@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
-import { MinioService } from "../storage/minio.service";
+import { MinioObjectStat, MinioService } from "../storage/minio.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import {
   DocumentCategory,
@@ -16,6 +16,8 @@ import {
 
 const RECEIPT_GENERATION_SAFE_ERROR =
   "No pudimos generar el comprobante. Intenta nuevamente más tarde.";
+const RECEIPT_MIME_TYPE = "application/pdf";
+const MAX_RECEIPT_OBJECT_BYTES = 10 * 1024 * 1024;
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -89,7 +91,16 @@ interface ReceiptFileArtifact {
   readonly bucket: string;
   readonly objectKey: string;
   readonly size: number;
+  readonly mimeType: string;
   readonly checksum: string | null;
+}
+
+interface ReceiptStorageMetadata {
+  readonly bucket: string;
+  readonly objectKey: string;
+  readonly mimeType: string;
+  readonly size: number;
+  readonly checksum: string;
 }
 
 class ReceiptConsistencyError extends Error {}
@@ -188,7 +199,7 @@ export class PaymentReceiptService {
       const url = await this.minio.presignDownload(finalizedReceipt.bucket, finalizedReceipt.fileKey, 3600);
 
       if (finalizedReceipt.shouldNotify) {
-        // Notify resident outside the transaction.
+        // Receipt persistence is authoritative; delivery remains best-effort outside the transaction.
         await this.notifyResidentReceiptReady(
           finalizedReceipt.payment,
           finalizedReceipt.receiptNumber,
@@ -258,10 +269,23 @@ export class PaymentReceiptService {
       }
       if (
         existingDocument &&
-        !this.isValidReceiptDocument(existingDocument, payment)
+        !this.isReceiptDocumentIdentityValid(
+          existingDocument,
+          payment,
+          payment.receiptNumber!,
+        )
       ) {
         throw new ReceiptConsistencyError(
           `Receipt document ${existingDocument.id} is inconsistent with payment ${paymentId}`,
+        );
+      }
+      if (
+        existingDocument?.file &&
+        payment.receiptStatus === ReceiptStatus.READY &&
+        existingDocument.file.mimeType !== RECEIPT_MIME_TYPE
+      ) {
+        throw new ReceiptConsistencyError(
+          `Receipt File ${existingDocument.file.id} has an invalid MIME type`,
         );
       }
 
@@ -384,10 +408,23 @@ export class PaymentReceiptService {
       }
       if (
         existingDocument &&
-        !this.isValidReceiptDocument(existingDocument, currentPayment)
+        !this.isReceiptDocumentIdentityValid(
+          existingDocument,
+          currentPayment,
+          currentPayment.receiptNumber!,
+        )
       ) {
         throw new ReceiptConsistencyError(
           `Receipt document ${existingDocument.id} is inconsistent during finalization`,
+        );
+      }
+      if (
+        existingDocument?.file &&
+        currentPayment.receiptStatus === ReceiptStatus.READY &&
+        existingDocument.file.mimeType !== RECEIPT_MIME_TYPE
+      ) {
+        throw new ReceiptConsistencyError(
+          `Receipt File ${existingDocument.file.id} has an invalid MIME type`,
         );
       }
       if (
@@ -401,14 +438,12 @@ export class PaymentReceiptService {
 
       const receiptNumber =
         currentPayment.receiptNumber || preparedReceipt.receiptNumber;
-      const fileKey =
-        existingDocument?.file.objectKey ||
-        this.buildReceiptObjectKey(
-          currentPayment.tenantId,
-          currentPayment.id,
-          receiptNumber,
-        );
-      const bucket = existingDocument?.file.bucket || this.bucket;
+      const fileKey = this.buildReceiptObjectKey(
+        currentPayment.tenantId,
+        currentPayment.id,
+        receiptNumber,
+      );
+      const bucket = this.bucket;
       const auditExists = await this.receiptAuditExists(
         tx,
         tenantId,
@@ -453,12 +488,20 @@ export class PaymentReceiptService {
         approvedByUserName,
         tenant?.brandName || tenant?.name || "Consorcio",
       );
-      await this.ensureReceiptStorageObject(
+      const storageMetadata = await this.ensureReceiptStorageObject(
         bucket,
         fileKey,
         pdfContent,
-        existingDocument?.file,
       );
+
+      if (existingDocument?.file) {
+        await this.reconcileReceiptFileMetadata(
+          tx,
+          currentPayment.tenantId,
+          existingDocument.file.id,
+          storageMetadata,
+        );
+      }
 
       let documentId = existingDocument?.id;
       let fileId = existingDocument?.file.id;
@@ -564,16 +607,20 @@ export class PaymentReceiptService {
     });
   }
 
-  private isValidReceiptDocument(
+  private isReceiptDocumentIdentityValid(
     document: ReceiptDocumentWithFile,
-    payment: Pick<PaymentReceiptPayment, "tenantId" | "buildingId" | "unitId">,
+    payment: Pick<PaymentReceiptPayment, "id" | "tenantId" | "buildingId" | "unitId">,
+    receiptNumber: string,
   ): boolean {
     return (
       document.tenantId === payment.tenantId &&
       document.file.tenantId === payment.tenantId &&
       document.category === DocumentCategory.RECEIPT &&
       document.buildingId === payment.buildingId &&
-      document.unitId === payment.unitId
+      document.unitId === payment.unitId &&
+      document.file.bucket === this.bucket &&
+      document.file.objectKey ===
+        this.buildReceiptObjectKey(payment.tenantId, payment.id, receiptNumber)
     );
   }
 
@@ -648,53 +695,116 @@ export class PaymentReceiptService {
   private async isCompleteStorageArtifact(
     file: ReceiptFileArtifact,
   ): Promise<boolean> {
+    // Legacy checksum-less artifacts are recovered, never reused as READY.
+    if (file.mimeType !== RECEIPT_MIME_TYPE || !file.checksum) {
+      return false;
+    }
     if (!(await this.minio.objectExists(file.bucket, file.objectKey))) {
       return false;
     }
     const stat = await this.minio.statObject(file.bucket, file.objectKey);
-    if (stat.size <= 0 || stat.size !== file.size) {
+    if (!this.isValidReceiptObjectStat(stat, file.size)) {
       return false;
     }
-    if (file.checksum) {
-      const content = await this.minio.getObjectBuffer(
-        file.bucket,
-        file.objectKey,
-      );
-      return this.sha256(content) === file.checksum;
-    }
-    return true;
+    const content = await this.minio.getObjectBuffer(
+      file.bucket,
+      file.objectKey,
+    );
+    return (
+      this.isPdfContent(content) &&
+      content.length === stat.size &&
+      this.sha256(content) === file.checksum
+    );
   }
 
   private async ensureReceiptStorageObject(
     bucket: string,
     fileKey: string,
     pdfContent: Buffer,
-    existingFile?: Pick<ReceiptFileArtifact, "checksum">,
-  ): Promise<void> {
+  ): Promise<ReceiptStorageMetadata> {
+    if (!this.isPdfContent(pdfContent) || pdfContent.length > MAX_RECEIPT_OBJECT_BYTES) {
+      throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
+    }
+
     if (await this.minio.objectExists(bucket, fileKey)) {
-      const existingContent = await this.minio.getObjectBuffer(bucket, fileKey);
-      if (
-        existingFile?.checksum &&
-        this.sha256(existingContent) !== existingFile.checksum
-      ) {
+      const stat = await this.minio.statObject(bucket, fileKey);
+      if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
         throw new ReceiptConsistencyError(
-          `Receipt storage object checksum mismatch for ${bucket}/${fileKey}`,
+          `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
         );
       }
-      if (!existingContent.equals(pdfContent)) {
+      const existingContent = await this.minio.getObjectBuffer(bucket, fileKey);
+      if (
+        !this.isPdfContent(existingContent) ||
+        existingContent.length !== stat.size ||
+        !existingContent.equals(pdfContent)
+      ) {
         throw new ReceiptConsistencyError(
           `Receipt storage object content mismatch for ${bucket}/${fileKey}`,
         );
       }
-      return;
+      return {
+        bucket,
+        objectKey: fileKey,
+        mimeType: RECEIPT_MIME_TYPE,
+        size: existingContent.length,
+        checksum: this.sha256(existingContent),
+      };
     }
 
     await this.minio.uploadBuffer(
       bucket,
       fileKey,
       pdfContent,
-      "application/pdf",
+      RECEIPT_MIME_TYPE,
     );
+    return {
+      bucket,
+      objectKey: fileKey,
+      mimeType: RECEIPT_MIME_TYPE,
+      size: pdfContent.length,
+      checksum: this.sha256(pdfContent),
+    };
+  }
+
+  private isValidReceiptObjectStat(
+    stat: MinioObjectStat,
+    expectedSize: number,
+  ): boolean {
+    const contentType = stat.metaData?.["content-type"] ?? stat.metaData?.["Content-Type"];
+    return (
+      stat.size > 0 &&
+      stat.size <= MAX_RECEIPT_OBJECT_BYTES &&
+      stat.size === expectedSize &&
+      (!contentType || contentType === RECEIPT_MIME_TYPE)
+    );
+  }
+
+  private isPdfContent(content: Buffer): boolean {
+    return content.subarray(0, 5).toString("ascii") === "%PDF-";
+  }
+
+  private async reconcileReceiptFileMetadata(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    fileId: string,
+    metadata: ReceiptStorageMetadata,
+  ): Promise<void> {
+    const result = await tx.file.updateMany({
+      where: { id: fileId, tenantId },
+      data: {
+        bucket: metadata.bucket,
+        objectKey: metadata.objectKey,
+        mimeType: metadata.mimeType,
+        size: metadata.size,
+        checksum: metadata.checksum,
+      },
+    });
+    if (result.count !== 1) {
+      throw new ReceiptConsistencyError(
+        `Receipt File ${fileId} is missing or belongs to another tenant`,
+      );
+    }
   }
 
   private sha256(content: Buffer): string {
