@@ -692,6 +692,89 @@ describe('PaymentReceiptService', () => {
     expect(transactionQueryRawMock).toHaveBeenCalledTimes(7);
   });
 
+  it('releases a failed READY generation lease without changing published receipt state', async () => {
+    const receiptGeneratedAt = new Date('2026-08-31T00:01:00.000Z');
+    const receiptSnapshotCreatedAt = new Date('2026-08-31T00:00:00.000Z');
+    const readyPayment = readyReceiptPayment({
+      receiptGeneratedAt,
+      receiptError: 'existing-ready-error',
+    }) as Record<string, unknown>;
+    const createSnapshot = Reflect.get(service, 'createReceiptSnapshot') as (
+      payment: unknown,
+      receiptNumber: string,
+      tenantDisplayName: string,
+      approvedByUserName: string,
+      createdAt: Date,
+    ) => unknown;
+    const receiptSnapshot = createSnapshot.call(
+      service,
+      readyPayment,
+      'R-COMPLE-2026-000001',
+      'Complejo Horizonte',
+      'Admin',
+      receiptSnapshotCreatedAt,
+    );
+    const hashSnapshot = Reflect.get(service, 'hashReceiptSnapshot') as (
+      snapshotValue: unknown,
+    ) => string;
+    Object.assign(readyPayment, {
+      receiptSnapshot,
+      receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1',
+      receiptSnapshotHash: hashSnapshot.call(service, receiptSnapshot),
+      receiptSnapshotCreatedAt,
+      receiptGenerationToken: null,
+      receiptGenerationLeaseUntil: null,
+    });
+    prisma.payment.findUnique.mockResolvedValue(readyPayment as never);
+    prisma.document.findUnique.mockResolvedValue(
+      receiptDocument({ checksum: 'published-checksum' }) as never,
+    );
+    prisma.paymentAuditLog.findFirst.mockResolvedValue({ id: 'audit-1' } as never);
+    minio.objectExists.mockRejectedValueOnce(new Error('storage validation failed'));
+
+    await expect(
+      service.ensureReceiptForPayment('tenant-1', 'payment-1'),
+    ).resolves.toBeNull();
+
+    expect(readyPayment.receiptStatus).toBe(ReceiptStatus.READY);
+    expect(readyPayment.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(readyPayment.receiptGeneratedAt).toBe(receiptGeneratedAt);
+    expect(readyPayment.receiptSnapshot).toEqual(receiptSnapshot);
+    expect(readyPayment.receiptSnapshotHash).toBe(
+      hashSnapshot.call(service, receiptSnapshot),
+    );
+    expect(readyPayment.receiptSnapshotCreatedAt).toBe(receiptSnapshotCreatedAt);
+    expect(readyPayment.receiptDocumentId).toBe('document-1');
+    expect(readyPayment.receiptError).toBe('existing-ready-error');
+    expect(readyPayment.receiptGenerationToken).toBeNull();
+    expect(readyPayment.receiptGenerationLeaseUntil).toBeNull();
+    expect(prisma.payment.updateMany).toHaveBeenLastCalledWith({
+      where: {
+        id: 'payment-1',
+        tenantId: 'tenant-1',
+        receiptGenerationToken: expect.any(String),
+        receiptGenerationLeaseUntil: {
+          gt: new Date('2026-08-31T00:00:00.000Z'),
+        },
+      },
+      data: {
+        receiptGenerationToken: null,
+        receiptGenerationLeaseUntil: null,
+      },
+    });
+
+    const retryResult = await service.ensureReceiptForPayment(
+      'tenant-1',
+      'payment-1',
+    );
+
+    expect(retryResult?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(readyPayment.receiptStatus).toBe(ReceiptStatus.READY);
+    expect(readyPayment.receiptGeneratedAt).toBe(receiptGeneratedAt);
+    expect(readyPayment.receiptSnapshot).toEqual(receiptSnapshot);
+    expect(readyPayment.receiptDocumentId).toBe('document-1');
+  });
+
   it('keeps READY receipts stable when notification fails after confirmation', async () => {
     notificationsService.createNotification.mockRejectedValueOnce(new Error('notify failed'));
 
@@ -1703,6 +1786,30 @@ describe('PaymentReceiptService', () => {
       'payment-1',
       'expired failure',
       'expired-token',
+    );
+
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale READY owner clear a replacement owner', async () => {
+    prisma.payment.findUnique.mockResolvedValueOnce({
+      receiptStatus: ReceiptStatus.READY,
+      receiptGenerationToken: 'replacement-token',
+      receiptGenerationLeaseUntil: new Date('2026-08-31T00:05:00.000Z'),
+    } as never);
+    const markFailed = Reflect.get(service, 'markReceiptGenerationFailedIfNeeded') as (
+      tenantId: string,
+      paymentId: string,
+      errorMessage: string,
+      generationToken: string,
+    ) => Promise<void>;
+
+    await markFailed.call(
+      service,
+      'tenant-1',
+      'payment-1',
+      'stale READY failure',
+      'stale-token',
     );
 
     expect(prisma.payment.updateMany).not.toHaveBeenCalled();

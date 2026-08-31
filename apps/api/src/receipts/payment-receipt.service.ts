@@ -1536,11 +1536,22 @@ export class PaymentReceiptService {
       )) {
         return;
       }
+      const failureData =
+        payment.receiptStatus === ReceiptStatus.READY
+          ? {
+              receiptGenerationToken: null,
+              receiptGenerationLeaseUntil: null,
+            }
+          : {
+              receiptStatus: ReceiptStatus.FAILED,
+              receiptError: errorMessage,
+              receiptGenerationToken: null,
+              receiptGenerationLeaseUntil: null,
+            };
       await failureTx.payment.updateMany({
         where: {
           id: paymentId,
           tenantId,
-          receiptStatus: { not: ReceiptStatus.READY },
           ...(generationToken
             ? {
                 receiptGenerationToken: generationToken,
@@ -1548,12 +1559,7 @@ export class PaymentReceiptService {
               }
             : { receiptGenerationToken: null }),
         },
-        data: {
-          receiptStatus: ReceiptStatus.FAILED,
-          receiptError: errorMessage,
-          receiptGenerationToken: null,
-          receiptGenerationLeaseUntil: null,
-        },
+        data: failureData,
       });
     });
   }
