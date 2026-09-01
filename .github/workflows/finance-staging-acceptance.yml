@@ -9,7 +9,7 @@ on:
         type: string
 
 concurrency:
-  group: finance-staging-acceptance
+  group: staging-deploy
   cancel-in-progress: false
 
 permissions:
