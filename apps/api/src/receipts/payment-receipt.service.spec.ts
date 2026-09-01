@@ -1019,6 +1019,7 @@ describe('PaymentReceiptService', () => {
     });
     expect(minio.presignDownload).not.toHaveBeenCalled();
     expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
     expect(prisma.file.create).not.toHaveBeenCalled();
   });
 
@@ -1156,24 +1157,86 @@ describe('PaymentReceiptService', () => {
     },
   );
 
-  it("fails closed when a legacy reserved-only receipt has a canonical object", async () => {
+  it("adopts an orphaned legacy canonical object without regenerating it", async () => {
     Object.assign(defaultPaymentState, {
       receiptStatus: ReceiptStatus.FAILED,
       receiptNumber: "R-COMPLE-2026-000001",
     });
+    const legacyPdf = Buffer.from("%PDF-legacy-orphan");
+    const lastModified = new Date("2026-08-30T12:00:00.000Z");
     minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: legacyPdf.length,
+      etag: "legacy-etag",
+      lastModified,
+      metaData: { "content-type": "application/pdf" },
+    });
+    minio.getObjectBuffer.mockResolvedValue(legacyPdf);
+
+    const result = await service.ensureReceiptForPayment("tenant-1", "payment-1");
+
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
+    expect(result?.receiptNumber).toBe("R-COMPLE-2026-000001");
+    expect(prisma.receiptSequence.create).not.toHaveBeenCalled();
+    expect(prisma.receiptSequence.update).not.toHaveBeenCalled();
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+    expect(prisma.document.create).toHaveBeenCalledTimes(1);
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(defaultPaymentState.receiptSnapshot).toBeNull();
+    expect(defaultPaymentState.receiptStatus).toBe(ReceiptStatus.READY);
+    expect(defaultPaymentState.receiptGeneratedAt).toEqual(lastModified);
+  });
+
+  it("fails closed for an invalid orphaned legacy canonical object", async () => {
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptNumber: "R-COMPLE-2026-000001",
+    });
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: 17,
+      etag: "invalid-etag",
+      lastModified: new Date("2026-08-30T12:00:00.000Z"),
+      metaData: { "content-type": "application/pdf" },
+    });
+    minio.getObjectBuffer.mockResolvedValue(Buffer.from("not-a-pdf-object"));
 
     await expect(
       service.ensureReceiptForPayment("tenant-1", "payment-1"),
     ).rejects.toBeInstanceOf(ConflictException);
 
     expect(minio.uploadBuffer).not.toHaveBeenCalled();
-    expect(prisma.receiptSequence.create).not.toHaveBeenCalled();
-    expect(prisma.receiptSequence.update).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
-    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
     expect(defaultPaymentState.receiptSnapshot).toBeNull();
+    expect(defaultPaymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
+  });
+
+  it("fails closed when an orphaned legacy object has a non-PDF MIME type", async () => {
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.FAILED,
+      receiptNumber: "R-COMPLE-2026-000001",
+    });
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: 18,
+      etag: "invalid-mime-etag",
+      lastModified: new Date("2026-08-30T12:00:00.000Z"),
+      metaData: { "content-type": "text/plain" },
+    });
+    minio.getObjectBuffer.mockResolvedValue(Buffer.from("%PDF-valid-content"));
+
+    await expect(
+      service.ensureReceiptForPayment("tenant-1", "payment-1"),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(defaultPaymentState.receiptStatus).toBe(ReceiptStatus.FAILED);
   });
 
   it.each([
@@ -1184,6 +1247,7 @@ describe('PaymentReceiptService', () => {
     }],
     ["audit", () => prisma.paymentAuditLog.findFirst.mockResolvedValueOnce({ id: "audit-legacy" } as never)],
     ["generatedAt", () => Object.assign(defaultPaymentState, { receiptGeneratedAt: new Date("2026-08-30T00:00:00.000Z") })],
+    ["snapshot metadata", () => Object.assign(defaultPaymentState, { receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1' })],
   ] as const)("fails closed when legacy receipt has %s evidence", async (_evidence, configureEvidence) => {
     Object.assign(defaultPaymentState, {
       receiptStatus: ReceiptStatus.PENDING,
@@ -1439,6 +1503,36 @@ describe('PaymentReceiptService', () => {
     expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
     expect(notificationsService.createNotification).not.toHaveBeenCalled();
     expect(defaultPaymentState.receiptGeneratedAt).toBeNull();
+  });
+
+  it('returns a complete legacy READY receipt without requiring a snapshot', async () => {
+    const validPdf = Buffer.from('%PDF-complete-legacy-ready');
+    const checksum = createHash('sha256').update(validPdf).digest('hex');
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.READY,
+      receiptNumber: 'R-COMPLE-2026-000001',
+      receiptDocumentId: 'document-1',
+      receiptGeneratedAt: new Date('2026-08-29T12:34:56.000Z'),
+      receiptSnapshot: null,
+      receiptSnapshotVersion: null,
+      receiptSnapshotHash: null,
+    });
+    prisma.document.findUnique.mockResolvedValue(
+      receiptDocument({ size: validPdf.length, checksum }) as never,
+    );
+    prisma.paymentAuditLog.findFirst.mockResolvedValue({ id: 'audit-1' } as never);
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: validPdf.length });
+    minio.getObjectBuffer.mockResolvedValue(validPdf);
+
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(result?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(result?.documentId).toBe('document-1');
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
   });
 
   it('fails closed for a checksum-less legacy READY receipt instead of fabricating a snapshot', async () => {
