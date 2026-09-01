@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger } from "@nestjs/common";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { MinioObjectStat, MinioService } from "../storage/minio.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -18,6 +18,13 @@ const RECEIPT_GENERATION_SAFE_ERROR =
   "No pudimos generar el comprobante. Intenta nuevamente más tarde.";
 const RECEIPT_MIME_TYPE = "application/pdf";
 const MAX_RECEIPT_OBJECT_BYTES = 10 * 1024 * 1024;
+const RECEIPT_SNAPSHOT_VERSION = "PAYMENT_RECEIPT_V1";
+const RECEIPT_GENERATION_LEASE_MS = 5 * 60 * 1000;
+const RECEIPT_GENERATION_HEARTBEAT_INTERVAL_MS = Math.floor(
+  RECEIPT_GENERATION_LEASE_MS / 3,
+);
+const RECEIPT_GENERATION_WAIT_TIMEOUT_MS = 2_000;
+const RECEIPT_GENERATION_WAIT_INTERVAL_MS = 100;
 
 export interface GenerateReceiptInput {
   paymentId: string;
@@ -67,17 +74,64 @@ type ChargeWithAllocations = Prisma.ChargeGetPayload<{
   };
 }>;
 
+interface ReceiptSnapshotAllocation {
+  readonly period: string;
+  readonly concept: string;
+  readonly amountMinor: number;
+  readonly amountFormatted: string;
+  readonly line: string;
+}
+
+interface ReceiptSnapshot {
+  readonly version: string;
+  readonly tenantId: string;
+  readonly paymentId: string;
+  readonly receiptNumber: string;
+  readonly buildingId: string;
+  readonly unitId: string | null;
+  readonly tenantDisplayName: string;
+  readonly buildingName: string;
+  readonly unitLabel: string;
+  readonly amountMinor: number;
+  readonly currency: string;
+  readonly amountFormatted: string;
+  readonly method: string;
+  readonly reference: string;
+  readonly approvedAt: string | null;
+  readonly approvedAtFormatted: string;
+  readonly approvedByUserName: string;
+  readonly primaryPeriod: string;
+  readonly allocations: readonly ReceiptSnapshotAllocation[];
+  readonly allocationLines: readonly string[];
+}
+
 interface PreparedReceiptGeneration {
   payment: PaymentReceiptPayment;
   receiptNumber: string;
   fileKey: string;
   bucket: string;
-  approvedByUserName: string;
-  tenantDisplayName: string;
-  reuseExisting: boolean;
+  snapshot?: ReceiptSnapshot;
   documentId?: string;
+  existingFile?: ReceiptFileArtifact;
+  auditExists: boolean;
+  generationToken?: string;
+  legacyReady: boolean;
+  legacyOrphaned: boolean;
   shouldNotify: boolean;
 }
+
+interface LegacyReservedOnlyCandidate {
+  readonly kind: "LEGACY_RESERVED_ONLY";
+  readonly payment: PaymentReceiptPayment;
+  readonly receiptNumber: string;
+  readonly fileKey: string;
+  readonly bucket: string;
+}
+
+type ReceiptPreparation =
+  | PreparedReceiptGeneration
+  | LegacyReservedOnlyCandidate
+  | null;
 
 interface FinalizedReceipt extends PreparedReceiptGeneration {
   documentId: string;
@@ -101,9 +155,18 @@ interface ReceiptStorageMetadata {
   readonly mimeType: string;
   readonly size: number;
   readonly checksum: string;
+  readonly etag?: string;
+  readonly lastModified?: Date;
+}
+
+interface ReceiptGenerationHeartbeat {
+  assertOwned(): void;
+  stop(): Promise<void>;
 }
 
 class ReceiptConsistencyError extends Error {}
+class ReceiptLeaseLostError extends Error {}
+class ReceiptGenerationInProgressError extends Error {}
 
 interface ReceiptPdfLine {
   text: string;
@@ -169,17 +232,84 @@ export class PaymentReceiptService {
     paymentId: string,
     excludeUserId?: string,
   ): Promise<ReceiptData | null> {
+    let preparedReceipt: PreparedReceiptGeneration | null = null;
     try {
-      const preparedReceipt = await this.prepareReceiptGeneration(
+      const preparation = await this.prepareReceiptGeneration(
         tenantId,
         paymentId,
       );
 
+      if (!preparation) {
+        return null;
+      }
+
+      if (this.isLegacyReservedOnlyCandidate(preparation)) {
+        preparedReceipt = await this.prepareLegacyCandidate(
+          tenantId,
+          paymentId,
+          preparation,
+        );
+        if (!preparedReceipt) {
+          return null;
+        }
+      } else {
+        preparedReceipt = preparation;
+      }
       if (!preparedReceipt) {
         return null;
       }
 
-      if (preparedReceipt.reuseExisting) {
+      if (preparedReceipt.legacyOrphaned) {
+        if (!preparedReceipt.generationToken) {
+          throw new ReceiptConsistencyError(
+            `Legacy receipt ${preparedReceipt.receiptNumber} has no recovery claim`,
+          );
+        }
+        const heartbeat = this.startReceiptGenerationHeartbeat(
+          tenantId,
+          paymentId,
+          preparedReceipt.generationToken,
+        );
+        let finalizedReceipt: FinalizedReceipt;
+        try {
+          heartbeat.assertOwned();
+          const storageMetadata = await this.validateLegacyOrphanedObject(
+            preparedReceipt.bucket,
+            preparedReceipt.fileKey,
+          );
+          heartbeat.assertOwned();
+          finalizedReceipt = await this.adoptLegacyOrphanedObject(
+            tenantId,
+            preparedReceipt,
+            storageMetadata,
+          );
+        } finally {
+          await heartbeat.stop();
+        }
+
+        return {
+          receiptNumber: finalizedReceipt.receiptNumber,
+          documentId: finalizedReceipt.documentId,
+          fileKey: finalizedReceipt.fileKey,
+          bucket: finalizedReceipt.bucket,
+          url: await this.minio.presignDownload(
+            finalizedReceipt.bucket,
+            finalizedReceipt.fileKey,
+            3600,
+          ),
+        };
+      }
+
+      if (preparedReceipt.legacyReady) {
+        if (
+          !preparedReceipt.existingFile ||
+          !preparedReceipt.auditExists ||
+          !(await this.isCompleteStorageArtifact(preparedReceipt.existingFile))
+        ) {
+          throw new ReceiptConsistencyError(
+            `Legacy receipt ${preparedReceipt.receiptNumber} has no trustworthy snapshot or complete artifact`,
+          );
+        }
         const url = await this.minio.presignDownload(preparedReceipt.bucket, preparedReceipt.fileKey, 3600);
 
         return {
@@ -191,10 +321,37 @@ export class PaymentReceiptService {
         };
       }
 
-      const finalizedReceipt = await this.generateAndFinalizeReceipt(
+      if (!preparedReceipt.snapshot || !preparedReceipt.generationToken) {
+        return null;
+      }
+
+      const heartbeat = this.startReceiptGenerationHeartbeat(
         tenantId,
-        preparedReceipt,
+        paymentId,
+        preparedReceipt.generationToken,
       );
+      let finalizedReceipt: FinalizedReceipt;
+      try {
+        heartbeat.assertOwned();
+        const pdfContent = this.generateReceiptPdfFromSnapshot(preparedReceipt.snapshot);
+        const expectedChecksum = this.sha256(pdfContent);
+        heartbeat.assertOwned();
+        const storageMetadata = await this.ensureReceiptStorageObject(
+          preparedReceipt.bucket,
+          preparedReceipt.fileKey,
+          pdfContent,
+        );
+        heartbeat.assertOwned();
+        finalizedReceipt = await this.finalizeReceipt(
+          tenantId,
+          preparedReceipt,
+          storageMetadata,
+          pdfContent.length,
+          expectedChecksum,
+        );
+      } finally {
+        await heartbeat.stop();
+      }
 
       const url = await this.minio.presignDownload(finalizedReceipt.bucket, finalizedReceipt.fileKey, 3600);
 
@@ -204,7 +361,7 @@ export class PaymentReceiptService {
           finalizedReceipt.payment,
           finalizedReceipt.receiptNumber,
           url,
-          finalizedReceipt.approvedByUserName,
+          finalizedReceipt.snapshot!.approvedByUserName,
           excludeUserId,
         );
 
@@ -221,20 +378,40 @@ export class PaymentReceiptService {
         url,
       };
     } catch (error) {
+      if (error instanceof ReceiptGenerationInProgressError) {
+        const completedReceipt = await this.waitForReceiptGeneration(
+          tenantId,
+          paymentId,
+          excludeUserId,
+        );
+        if (completedReceipt) {
+          return completedReceipt;
+        }
+        throw new ConflictException("RECEIPT_GENERATION_IN_PROGRESS");
+      }
+
       const rawMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${rawMessage}`);
+
+      await this.markReceiptGenerationFailedIfNeeded(
+        tenantId,
+        paymentId,
+        RECEIPT_GENERATION_SAFE_ERROR,
+        preparedReceipt?.generationToken,
+      );
 
       if (error instanceof ReceiptConsistencyError) {
         throw new ConflictException(rawMessage);
       }
 
-      await this.markReceiptGenerationFailedIfNeeded(tenantId, paymentId, RECEIPT_GENERATION_SAFE_ERROR);
-
       return null;
     }
   }
 
-  private async prepareReceiptGeneration(tenantId: string, paymentId: string): Promise<PreparedReceiptGeneration | null> {
+  private async prepareReceiptGeneration(
+    tenantId: string,
+    paymentId: string,
+  ): Promise<ReceiptPreparation> {
     return this.prisma.$transaction(async (tx) => {
       await acquirePaymentReceiptLock(tx, paymentId);
 
@@ -279,131 +456,752 @@ export class PaymentReceiptService {
           `Receipt document ${existingDocument.id} is inconsistent with payment ${paymentId}`,
         );
       }
-      if (
-        existingDocument?.file &&
-        payment.receiptStatus === ReceiptStatus.READY &&
-        existingDocument.file.mimeType !== RECEIPT_MIME_TYPE
-      ) {
-        throw new ReceiptConsistencyError(
-          `Receipt File ${existingDocument.file.id} has an invalid MIME type`,
-        );
-      }
+      const snapshot = this.getVerifiedReceiptSnapshot(payment);
+      const auditExists = await this.receiptAuditExists(tx, tenantId, paymentId);
 
-      if (existingDocument?.file && payment.receiptNumber) {
-        const storageComplete = await this.isCompleteStorageArtifact(
-          existingDocument.file,
-        );
-        const auditExists = await this.receiptAuditExists(
-          tx,
-          tenantId,
-          paymentId,
-        );
+      if (payment.receiptNumber && !snapshot) {
         if (
           payment.receiptStatus === ReceiptStatus.READY &&
-          storageComplete &&
-          auditExists
+          existingDocument?.file
         ) {
-          this.logger.log(
-            `Receipt already exists for payment ${paymentId}, reusing ${payment.receiptNumber}`,
-          );
-          return this.buildPreparedReceipt(
+          return {
             payment,
-            payment.receiptNumber,
-            existingDocument.file.bucket,
-            existingDocument.file.objectKey,
-            existingDocument.id,
-            true,
-            false,
+            receiptNumber: payment.receiptNumber,
+            fileKey: existingDocument.file.objectKey,
+            bucket: existingDocument.file.bucket,
+            documentId: existingDocument.id,
+            existingFile: existingDocument.file,
+            auditExists,
+            legacyReady: true,
+            legacyOrphaned: false,
+            shouldNotify: false,
+          };
+        }
+        if (
+          await this.isLegacyOrphanHistoricalState(
             tx,
+            payment,
+            existingDocument,
+            auditExists,
+          )
+        ) {
+          const fileKey = this.buildReceiptObjectKey(
+            payment.tenantId,
+            payment.id,
+            payment.receiptNumber,
           );
+          return {
+            kind: "LEGACY_RESERVED_ONLY",
+            payment,
+            receiptNumber: payment.receiptNumber,
+            fileKey,
+            bucket: this.bucket,
+          };
         }
-
-        if (payment.receiptStatus === ReceiptStatus.READY && !storageComplete) {
-          await tx.payment.update({
-            where: { id: paymentId, tenantId },
-            data: {
-              receiptStatus: ReceiptStatus.PENDING,
-              receiptGeneratedAt: null,
-              receiptError: null,
-            },
-          });
-        }
-
-        return this.buildPreparedReceipt(
-          payment,
-          payment.receiptNumber,
-          existingDocument.file.bucket,
-          existingDocument.file.objectKey,
-          existingDocument.id,
-          false,
-          payment.receiptStatus !== ReceiptStatus.READY,
-          tx,
+        throw new ReceiptConsistencyError(
+          `Receipt ${payment.receiptNumber} cannot be regenerated without an issuance snapshot`,
         );
       }
 
       if (payment.receiptStatus === ReceiptStatus.READY) {
-        throw new ReceiptConsistencyError(
-          `Payment ${paymentId} is READY without a linked receipt document`,
+        if (!payment.receiptGeneratedAt) {
+          throw new ReceiptConsistencyError(
+            `Payment ${paymentId} is READY without a receipt issuance timestamp`,
+          );
+        }
+        if (!payment.receiptNumber || !existingDocument?.file || !snapshot) {
+          throw new ReceiptConsistencyError(
+            `Payment ${paymentId} is READY without a complete issuance snapshot and receipt document`,
+          );
+        }
+        return this.claimReceiptGenerationInTransaction(
+          tx,
+          tenantId,
+          payment,
+          snapshot,
+          existingDocument,
+          false,
         );
       }
 
-      const receiptNumber =
+      if (snapshot) {
+        if (!payment.receiptNumber) {
+          throw new ReceiptConsistencyError(
+            `Payment ${paymentId} has an issuance snapshot without a receipt number`,
+          );
+        }
+        return this.claimReceiptGenerationInTransaction(
+          tx,
+          tenantId,
+          payment,
+          snapshot,
+          existingDocument,
+          true,
+        );
+      }
+
+      if (
         payment.receiptNumber ||
-        (await this.reserveReceiptNumberInTransaction(tx, payment.tenantId));
+        payment.receiptDocumentId ||
+        payment.receiptGeneratedAt
+      ) {
+        throw new ReceiptConsistencyError(
+          `Payment ${paymentId} has historical receipt evidence without an issuance snapshot`,
+        );
+      }
+
+      const receiptNumber = await this.reserveReceiptNumberInTransaction(
+        tx,
+        payment.tenantId,
+      );
       const fileKey = this.buildReceiptObjectKey(
         payment.tenantId,
         paymentId,
         receiptNumber,
       );
 
-      await this.markPaymentPending(tx, tenantId, paymentId, receiptNumber);
+      const conflictingFile = await tx.file.findFirst({
+        where: {
+          tenantId: payment.tenantId,
+          bucket: this.bucket,
+          objectKey: fileKey,
+        },
+        select: { id: true },
+      });
+      if (conflictingFile) {
+        throw new ReceiptConsistencyError(
+          `Receipt storage key ${this.bucket}/${fileKey} already has a database File`,
+        );
+      }
+
+      const databaseNow = await this.getDatabaseNow(tx);
+      const tenant = await tx.tenant.findUnique({
+        where: { id: payment.tenantId },
+        select: { name: true, brandName: true },
+      });
+      const approvedByUser = payment.approvedByUserId
+        ? await tx.user.findUnique({
+            where: { id: payment.approvedByUserId },
+            select: { name: true },
+          })
+        : null;
+      const snapshotCreatedAt = databaseNow;
+      const newSnapshot = this.createReceiptSnapshot(
+        payment,
+        receiptNumber,
+        tenant?.brandName || tenant?.name || "Consorcio",
+        approvedByUser?.name || "Administración",
+        snapshotCreatedAt,
+      );
+      const generationToken = randomUUID();
+      const leaseUntil = this.addLeaseDuration(databaseNow);
+
+      await tx.payment.update({
+        where: { id: paymentId, tenantId },
+        data: {
+          receiptNumber,
+          receiptSnapshot: this.toPrismaReceiptSnapshot(newSnapshot),
+          receiptSnapshotVersion: RECEIPT_SNAPSHOT_VERSION,
+          receiptSnapshotHash: this.hashReceiptSnapshot(newSnapshot),
+          receiptSnapshotCreatedAt: snapshotCreatedAt,
+          receiptStatus: ReceiptStatus.PENDING,
+          receiptGeneratedAt: null,
+          receiptError: null,
+          receiptGenerationToken: generationToken,
+          receiptGenerationLeaseUntil: leaseUntil,
+        },
+      });
       return this.buildPreparedReceipt(
         payment,
+        newSnapshot,
         receiptNumber,
         this.bucket,
         fileKey,
         undefined,
+        undefined,
         false,
         true,
-        tx,
+        generationToken,
       );
     });
   }
 
-  private async generateAndFinalizeReceipt(
+  private isLegacyReservedOnlyCandidate(
+    preparation: ReceiptPreparation,
+  ): preparation is LegacyReservedOnlyCandidate {
+    return (
+      preparation !== null &&
+      "kind" in preparation &&
+      preparation.kind === "LEGACY_RESERVED_ONLY"
+    );
+  }
+
+  private async prepareLegacyCandidate(
+    tenantId: string,
+    paymentId: string,
+    candidate: LegacyReservedOnlyCandidate,
+  ): Promise<PreparedReceiptGeneration | null> {
+    if (await this.minio.objectExists(candidate.bucket, candidate.fileKey)) {
+      return this.prepareLegacyOrphanedCanonicalObject(
+        tenantId,
+        paymentId,
+        candidate,
+      );
+    }
+    return this.prepareLegacyReservedOnlyGeneration(tenantId, paymentId, candidate);
+  }
+
+  private async prepareLegacyOrphanedCanonicalObject(
+    tenantId: string,
+    paymentId: string,
+    candidate: LegacyReservedOnlyCandidate,
+  ): Promise<PreparedReceiptGeneration | null> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
+
+      const payment = await this.loadPaymentForReceipt(tx, tenantId, paymentId);
+      if (!payment || !this.isReceiptEligible(payment)) {
+        return null;
+      }
+      if (payment.receiptNumber !== candidate.receiptNumber) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} changed before orphan recovery`,
+        );
+      }
+
+      const existingDocument = payment.receiptDocumentId
+        ? await this.loadReceiptDocument(tx, tenantId, payment.receiptDocumentId)
+        : null;
+      const snapshot = this.getVerifiedReceiptSnapshot(payment);
+      if (snapshot) {
+        return this.claimReceiptGenerationInTransaction(
+          tx,
+          tenantId,
+          payment,
+          snapshot,
+          existingDocument,
+          true,
+        );
+      }
+
+      const databaseNow = await this.getDatabaseNow(tx);
+      const previousGenerationToken = payment.receiptGenerationToken;
+      const previousLeaseUntil = payment.receiptGenerationLeaseUntil;
+      const hasGenerationToken = previousGenerationToken !== null;
+      const hasLeaseUntil = previousLeaseUntil !== null;
+      if (hasGenerationToken !== hasLeaseUntil) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} has an inconsistent recovery claim`,
+        );
+      }
+      if (hasGenerationToken && previousLeaseUntil! > databaseNow) {
+        throw new ReceiptGenerationInProgressError(
+          `Receipt generation is already in progress for payment ${payment.id}`,
+        );
+      }
+
+      const auditExists = await this.receiptAuditExists(tx, tenantId, paymentId);
+      if (
+        !(await this.isLegacyOrphanHistoricalState(
+          tx,
+          payment,
+          existingDocument,
+          auditExists,
+        ))
+      ) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} changed before orphan recovery`,
+        );
+      }
+
+      const generationToken = randomUUID();
+      const updated = await tx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          receiptNumber: candidate.receiptNumber,
+          receiptSnapshot: { equals: Prisma.DbNull },
+          receiptDocumentId: null,
+          receiptGeneratedAt: null,
+          receiptGenerationToken: previousGenerationToken,
+          receiptGenerationLeaseUntil: previousLeaseUntil,
+          receiptStatus: { in: [ReceiptStatus.PENDING, ReceiptStatus.FAILED] },
+        },
+        data: {
+          receiptStatus: ReceiptStatus.PENDING,
+          receiptError: null,
+          receiptGenerationToken: generationToken,
+          receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
+        },
+      });
+      if (updated.count !== 1) {
+        throw new ReceiptGenerationInProgressError(
+          `Legacy receipt ${candidate.receiptNumber} changed before orphan recovery claim`,
+        );
+      }
+
+      return {
+        payment,
+        receiptNumber: candidate.receiptNumber,
+        fileKey: candidate.fileKey,
+        bucket: candidate.bucket,
+        auditExists,
+        generationToken,
+        legacyReady: false,
+        legacyOrphaned: true,
+        shouldNotify: false,
+      };
+    });
+  }
+
+  private async isLegacyReservedOnlyDatabaseState(
+    tx: Prisma.TransactionClient,
+    payment: PaymentReceiptPayment,
+    existingDocument: ReceiptDocumentWithFile | null,
+    auditExists: boolean,
+  ): Promise<boolean> {
+    if (
+      !(await this.isLegacyOrphanHistoricalState(
+        tx,
+        payment,
+        existingDocument,
+        auditExists,
+      ))
+    ) {
+      return false;
+    }
+    return (
+      payment.receiptGenerationToken === null &&
+      payment.receiptGenerationLeaseUntil === null
+    );
+  }
+
+  private async isLegacyOrphanHistoricalState(
+    tx: Prisma.TransactionClient,
+    payment: PaymentReceiptPayment,
+    existingDocument: ReceiptDocumentWithFile | null,
+    auditExists: boolean,
+  ): Promise<boolean> {
+    if (
+      payment.receiptSnapshot !== null &&
+      payment.receiptSnapshot !== undefined
+    ) {
+      return false;
+    }
+    if (
+      !payment.receiptNumber ||
+      (payment.receiptStatus !== ReceiptStatus.PENDING &&
+        payment.receiptStatus !== ReceiptStatus.FAILED) ||
+        existingDocument ||
+        payment.receiptDocumentId ||
+        payment.receiptGeneratedAt ||
+        payment.receiptSnapshotVersion ||
+        payment.receiptSnapshotHash ||
+        payment.receiptSnapshotCreatedAt ||
+        auditExists
+    ) {
+      return false;
+    }
+
+    const canonicalFile = await tx.file.findFirst({
+      where: {
+        tenantId: payment.tenantId,
+        bucket: this.bucket,
+        objectKey: this.buildReceiptObjectKey(
+          payment.tenantId,
+          payment.id,
+          payment.receiptNumber,
+        ),
+      },
+      select: { id: true },
+    });
+    return canonicalFile === null;
+  }
+
+  private async prepareLegacyReservedOnlyGeneration(
+    tenantId: string,
+    paymentId: string,
+    candidate: LegacyReservedOnlyCandidate,
+  ): Promise<PreparedReceiptGeneration | null> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
+
+      const payment = await this.loadPaymentForReceipt(tx, tenantId, paymentId);
+      if (!payment || !this.isReceiptEligible(payment)) {
+        return null;
+      }
+
+      const existingDocument = payment.receiptDocumentId
+        ? await this.loadReceiptDocument(tx, tenantId, payment.receiptDocumentId)
+        : null;
+      if (payment.receiptDocumentId && !existingDocument) {
+        throw new ReceiptConsistencyError(
+          `Receipt document ${payment.receiptDocumentId} is missing or belongs to another tenant`,
+        );
+      }
+      const snapshot = this.getVerifiedReceiptSnapshot(payment);
+      if (snapshot) {
+        if (!payment.receiptNumber) {
+          throw new ReceiptConsistencyError(
+            `Payment ${payment.id} has an issuance snapshot without a receipt number`,
+          );
+        }
+        return this.claimReceiptGenerationInTransaction(
+          tx,
+          tenantId,
+          payment,
+          snapshot,
+          existingDocument,
+          true,
+        );
+      }
+
+      const auditExists = await this.receiptAuditExists(tx, tenantId, paymentId);
+      const stillReservedOnly = await this.isLegacyReservedOnlyDatabaseState(
+        tx,
+        payment,
+        existingDocument,
+        auditExists,
+      );
+      if (
+        !stillReservedOnly ||
+        payment.receiptNumber !== candidate.receiptNumber
+      ) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} changed before retry and cannot be safely reconstructed`,
+        );
+      }
+
+      const databaseNow = await this.getDatabaseNow(tx);
+      const tenant = await tx.tenant.findUnique({
+        where: { id: payment.tenantId },
+        select: { name: true, brandName: true },
+      });
+      const approvedByUser = payment.approvedByUserId
+        ? await tx.user.findUnique({
+            where: { id: payment.approvedByUserId },
+            select: { name: true },
+          })
+        : null;
+      const newSnapshot = this.createReceiptSnapshot(
+        payment,
+        candidate.receiptNumber,
+        tenant?.brandName || tenant?.name || "Consorcio",
+        approvedByUser?.name || "Administración",
+        databaseNow,
+      );
+      const generationToken = randomUUID();
+      const updated = await tx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          receiptNumber: candidate.receiptNumber,
+          receiptSnapshot: { equals: Prisma.DbNull },
+          receiptDocumentId: null,
+          receiptGeneratedAt: null,
+          receiptGenerationToken: null,
+          receiptGenerationLeaseUntil: null,
+        },
+        data: {
+          receiptSnapshot: this.toPrismaReceiptSnapshot(newSnapshot),
+          receiptSnapshotVersion: RECEIPT_SNAPSHOT_VERSION,
+          receiptSnapshotHash: this.hashReceiptSnapshot(newSnapshot),
+          receiptSnapshotCreatedAt: databaseNow,
+          receiptStatus: ReceiptStatus.PENDING,
+          receiptError: null,
+          receiptGenerationToken: generationToken,
+          receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
+        },
+      });
+      if (updated.count !== 1) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} changed before snapshot creation`,
+        );
+      }
+
+      return this.buildPreparedReceipt(
+        payment,
+        newSnapshot,
+        candidate.receiptNumber,
+        candidate.bucket,
+        candidate.fileKey,
+        undefined,
+        undefined,
+        false,
+        true,
+        generationToken,
+      );
+    });
+  }
+
+  private async claimReceiptGenerationInTransaction(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    payment: PaymentReceiptPayment,
+    snapshot: ReceiptSnapshot,
+    existingDocument: ReceiptDocumentWithFile | null,
+    shouldNotify: boolean,
+  ): Promise<PreparedReceiptGeneration | null> {
+    const now = await this.getDatabaseNow(tx);
+    if (
+      payment.receiptGenerationToken &&
+      payment.receiptGenerationLeaseUntil &&
+      payment.receiptGenerationLeaseUntil > now
+    ) {
+      throw new ReceiptGenerationInProgressError(
+        `Receipt generation is already in progress for payment ${payment.id}`,
+      );
+    }
+
+    const generationToken = randomUUID();
+    const leaseUntil = this.addLeaseDuration(now);
+    await tx.payment.update({
+      where: { id: payment.id, tenantId },
+      data: {
+        receiptGenerationToken: generationToken,
+        receiptGenerationLeaseUntil: leaseUntil,
+        ...(payment.receiptStatus === ReceiptStatus.READY
+          ? {}
+          : {
+              receiptStatus: ReceiptStatus.PENDING,
+              receiptGeneratedAt: null,
+              receiptError: null,
+            }),
+      },
+    });
+
+    return this.buildPreparedReceipt(
+      payment,
+      snapshot,
+      payment.receiptNumber!,
+      this.bucket,
+      this.buildReceiptObjectKey(tenantId, payment.id, payment.receiptNumber!),
+      existingDocument?.id,
+      existingDocument?.file,
+      await this.receiptAuditExists(tx, tenantId, payment.id),
+      shouldNotify,
+      generationToken,
+    );
+  }
+
+  private async adoptLegacyOrphanedObject(
     tenantId: string,
     preparedReceipt: PreparedReceiptGeneration,
+    storageMetadata: ReceiptStorageMetadata,
   ): Promise<FinalizedReceipt> {
     return this.prisma.$transaction(async (tx) => {
       await acquirePaymentReceiptLock(tx, preparedReceipt.payment.id);
 
-      const currentPayment = await this.loadPaymentForReceipt(tx, tenantId, preparedReceipt.payment.id);
-
-      if (!currentPayment) {
-        throw new Error(`Payment ${preparedReceipt.payment.id} not found while finalizing receipt`);
-      }
-
-      if (!this.isReceiptEligible(currentPayment)) {
+      const currentPayment = await this.loadPaymentForReceipt(
+        tx,
+        tenantId,
+        preparedReceipt.payment.id,
+      );
+      if (!currentPayment || !this.isReceiptEligible(currentPayment)) {
         throw new ReceiptConsistencyError(
-          `Payment ${preparedReceipt.payment.id} is not eligible for receipt recovery`,
+          `Payment ${preparedReceipt.payment.id} is not eligible for orphan recovery`,
+        );
+      }
+      const databaseNow = await this.getDatabaseNow(tx);
+      if (
+        currentPayment.receiptNumber !== preparedReceipt.receiptNumber ||
+        (currentPayment.receiptSnapshot !== null &&
+          currentPayment.receiptSnapshot !== undefined) ||
+        currentPayment.receiptSnapshotVersion != null ||
+        currentPayment.receiptSnapshotHash != null ||
+        currentPayment.receiptSnapshotCreatedAt != null ||
+        currentPayment.receiptDocumentId != null ||
+        currentPayment.receiptGeneratedAt != null ||
+        currentPayment.receiptGenerationToken !== preparedReceipt.generationToken ||
+        !currentPayment.receiptGenerationLeaseUntil ||
+        currentPayment.receiptGenerationLeaseUntil <= databaseNow ||
+        (currentPayment.receiptStatus !== ReceiptStatus.PENDING &&
+          currentPayment.receiptStatus !== ReceiptStatus.FAILED)
+      ) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${preparedReceipt.receiptNumber} recovery claim is no longer owned`,
+        );
+      }
+      if (
+        storageMetadata.bucket !== this.bucket ||
+        storageMetadata.objectKey !== preparedReceipt.fileKey ||
+        storageMetadata.mimeType !== RECEIPT_MIME_TYPE ||
+        !storageMetadata.lastModified
+      ) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${preparedReceipt.receiptNumber} storage metadata is incomplete`,
         );
       }
 
       const existingDocument = currentPayment.receiptDocumentId
-        ? await this.loadReceiptDocument(
-            tx,
-            tenantId,
-            currentPayment.receiptDocumentId,
-          )
+        ? await this.loadReceiptDocument(tx, tenantId, currentPayment.receiptDocumentId)
+        : null;
+      if (existingDocument) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${preparedReceipt.receiptNumber} already has a document`,
+        );
+      }
+      const existingFile = await tx.file.findFirst({
+        where: {
+          tenantId: currentPayment.tenantId,
+          bucket: this.bucket,
+          objectKey: preparedReceipt.fileKey,
+        },
+        select: { id: true },
+      });
+      if (existingFile) {
+        throw new ReceiptConsistencyError(
+          `Receipt storage key ${this.bucket}/${preparedReceipt.fileKey} already has a database File`,
+        );
+      }
+
+      const file = await tx.file.create({
+        data: {
+          tenantId: currentPayment.tenantId,
+          bucket: this.bucket,
+          objectKey: preparedReceipt.fileKey,
+          originalName: `receipt_${preparedReceipt.receiptNumber}.pdf`,
+          mimeType: RECEIPT_MIME_TYPE,
+          size: storageMetadata.size,
+          checksum: storageMetadata.checksum,
+        },
+      });
+      const document = await tx.document.create({
+        data: {
+          tenantId: currentPayment.tenantId,
+          fileId: file.id,
+          title: `Recibo de pago ${preparedReceipt.receiptNumber}`,
+          category: DocumentCategory.RECEIPT,
+          visibility: DocumentVisibility.RESIDENTS,
+          buildingId: currentPayment.buildingId,
+          unitId: currentPayment.unitId,
+        },
+      });
+      const finalizedPayment = await tx.payment.updateMany({
+        where: {
+          id: currentPayment.id,
+          tenantId,
+          receiptNumber: preparedReceipt.receiptNumber,
+          receiptSnapshot: { equals: Prisma.DbNull },
+          receiptDocumentId: null,
+          receiptGenerationToken: preparedReceipt.generationToken,
+          receiptGenerationLeaseUntil: { gt: databaseNow },
+        },
+        data: {
+          receiptDocumentId: document.id,
+          receiptStatus: ReceiptStatus.READY,
+          receiptGeneratedAt: storageMetadata.lastModified,
+          receiptError: null,
+          receiptGenerationToken: null,
+          receiptGenerationLeaseUntil: null,
+        },
+      });
+      if (finalizedPayment.count !== 1) {
+        throw new ReceiptLeaseLostError(
+          `Legacy receipt ${preparedReceipt.receiptNumber} recovery claim is no longer owned`,
+        );
+      }
+
+      if (!preparedReceipt.auditExists) {
+        await tx.paymentAuditLog.create({
+          data: {
+            tenantId: currentPayment.tenantId,
+            paymentId: currentPayment.id,
+            action: "RECEIPT_GENERATED",
+            metadata: {
+              receiptNumber: preparedReceipt.receiptNumber,
+              documentId: document.id,
+              objectKey: preparedReceipt.fileKey,
+              recovery: "LEGACY_ORPHANED_CANONICAL_OBJECT",
+              objectLastModified: storageMetadata.lastModified.toISOString(),
+              objectEtag: storageMetadata.etag ?? null,
+              checksum: storageMetadata.checksum,
+            },
+          },
+        });
+      }
+
+      return {
+        ...preparedReceipt,
+        payment: currentPayment,
+        documentId: document.id,
+        wasGenerated: false,
+        shouldNotify: false,
+      };
+    });
+  }
+
+  private async finalizeReceipt(
+    tenantId: string,
+    preparedReceipt: PreparedReceiptGeneration,
+    storageMetadata: ReceiptStorageMetadata,
+    expectedSize: number,
+    expectedChecksum: string,
+  ): Promise<FinalizedReceipt> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, preparedReceipt.payment.id);
+
+      const currentPayment = await this.loadPaymentForReceipt(
+        tx,
+        tenantId,
+        preparedReceipt.payment.id,
+      );
+      if (!currentPayment || !this.isReceiptEligible(currentPayment)) {
+        throw new ReceiptConsistencyError(
+          `Payment ${preparedReceipt.payment.id} is not eligible for receipt finalization`,
+        );
+      }
+
+      const snapshot = this.getVerifiedReceiptSnapshot(currentPayment);
+      if (!snapshot) {
+        throw new ReceiptConsistencyError(
+          `Payment ${currentPayment.id} has no trustworthy issuance snapshot`,
+        );
+      }
+      if (
+        currentPayment.receiptStatus === ReceiptStatus.READY &&
+        !currentPayment.receiptGeneratedAt
+      ) {
+        throw new ReceiptConsistencyError(
+          `Payment ${currentPayment.id} is READY without a receipt issuance timestamp`,
+        );
+      }
+      const databaseNow = await this.getDatabaseNow(tx);
+      if (
+        currentPayment.receiptNumber !== preparedReceipt.receiptNumber ||
+        snapshot.receiptNumber !== preparedReceipt.receiptNumber ||
+        currentPayment.receiptGenerationToken !== preparedReceipt.generationToken ||
+        !currentPayment.receiptGenerationLeaseUntil ||
+        currentPayment.receiptGenerationLeaseUntil <= databaseNow
+      ) {
+        throw new ReceiptConsistencyError(
+          `Receipt generation claim is no longer owned for payment ${currentPayment.id}`,
+        );
+      }
+
+      const fileKey = this.buildReceiptObjectKey(
+        currentPayment.tenantId,
+        currentPayment.id,
+        preparedReceipt.receiptNumber,
+      );
+      if (
+        storageMetadata.bucket !== this.bucket ||
+        storageMetadata.objectKey !== fileKey ||
+        storageMetadata.mimeType !== RECEIPT_MIME_TYPE ||
+        storageMetadata.size !== expectedSize ||
+        storageMetadata.checksum !== expectedChecksum
+      ) {
+        throw new ReceiptConsistencyError(
+          `Receipt storage metadata does not match the immutable issuance snapshot`,
+        );
+      }
+
+      const existingDocument = currentPayment.receiptDocumentId
+        ? await this.loadReceiptDocument(tx, tenantId, currentPayment.receiptDocumentId)
         : null;
       if (currentPayment.receiptDocumentId && !existingDocument) {
         throw new ReceiptConsistencyError(
           `Receipt document ${currentPayment.receiptDocumentId} is missing during finalization`,
-        );
-      }
-      if (existingDocument && !currentPayment.receiptNumber) {
-        throw new ReceiptConsistencyError(
-          `Receipt document ${existingDocument.id} has no receipt number during finalization`,
         );
       }
       if (
@@ -411,89 +1209,16 @@ export class PaymentReceiptService {
         !this.isReceiptDocumentIdentityValid(
           existingDocument,
           currentPayment,
-          currentPayment.receiptNumber!,
+          preparedReceipt.receiptNumber,
         )
       ) {
         throw new ReceiptConsistencyError(
           `Receipt document ${existingDocument.id} is inconsistent during finalization`,
         );
       }
-      if (
-        existingDocument?.file &&
-        currentPayment.receiptStatus === ReceiptStatus.READY &&
-        existingDocument.file.mimeType !== RECEIPT_MIME_TYPE
-      ) {
-        throw new ReceiptConsistencyError(
-          `Receipt File ${existingDocument.file.id} has an invalid MIME type`,
-        );
-      }
-      if (
-        currentPayment.receiptNumber &&
-        currentPayment.receiptNumber !== preparedReceipt.receiptNumber
-      ) {
-        throw new ReceiptConsistencyError(
-          `Receipt number changed during recovery for payment ${currentPayment.id}`,
-        );
-      }
 
-      const receiptNumber =
-        currentPayment.receiptNumber || preparedReceipt.receiptNumber;
-      const fileKey = this.buildReceiptObjectKey(
-        currentPayment.tenantId,
-        currentPayment.id,
-        receiptNumber,
-      );
-      const bucket = this.bucket;
-      const auditExists = await this.receiptAuditExists(
-        tx,
-        tenantId,
-        currentPayment.id,
-      );
-      const storageComplete = existingDocument?.file
-        ? await this.isCompleteStorageArtifact(existingDocument.file)
-        : false;
-      if (
-        currentPayment.receiptStatus === ReceiptStatus.READY &&
-        existingDocument?.file &&
-        storageComplete &&
-        auditExists
-      ) {
-        return {
-          ...preparedReceipt,
-          payment: currentPayment,
-          receiptNumber,
-          fileKey,
-          bucket,
-          documentId: existingDocument.id,
-          wasGenerated: false,
-          shouldNotify: false,
-        };
-      }
-
-      const tenant = await tx.tenant.findUnique({
-        where: { id: currentPayment.tenantId },
-        select: { name: true, brandName: true },
-      });
-      let approvedByUserName = "Administración";
-      if (currentPayment.approvedByUserId) {
-        const approvedByUser = await tx.user.findUnique({
-          where: { id: currentPayment.approvedByUserId },
-          select: { name: true },
-        });
-        approvedByUserName = approvedByUser?.name || "Administración";
-      }
-      const pdfContent = await this.generateReceiptPDF(
-        currentPayment,
-        receiptNumber,
-        approvedByUserName,
-        tenant?.brandName || tenant?.name || "Consorcio",
-      );
-      const storageMetadata = await this.ensureReceiptStorageObject(
-        bucket,
-        fileKey,
-        pdfContent,
-      );
-
+      let documentId = existingDocument?.id;
+      let fileId = existingDocument?.file.id;
       if (existingDocument?.file) {
         await this.reconcileReceiptFileMetadata(
           tx,
@@ -501,32 +1226,29 @@ export class PaymentReceiptService {
           existingDocument.file.id,
           storageMetadata,
         );
-      }
-
-      let documentId = existingDocument?.id;
-      let fileId = existingDocument?.file.id;
-      if (!documentId) {
+      } else {
         const existingFile = await tx.file.findFirst({
           where: {
             tenantId: currentPayment.tenantId,
-            bucket,
+            bucket: this.bucket,
             objectKey: fileKey,
           },
+          select: { id: true },
         });
         if (existingFile) {
           throw new ReceiptConsistencyError(
-            `Receipt storage key ${bucket}/${fileKey} already has an unrelated database File`,
+            `Receipt storage key ${this.bucket}/${fileKey} already has an unrelated database File`,
           );
         }
         const file = await tx.file.create({
           data: {
             tenantId: currentPayment.tenantId,
-            bucket,
+            bucket: this.bucket,
             objectKey: fileKey,
-            originalName: `receipt_${receiptNumber}.pdf`,
-            mimeType: "application/pdf",
-            size: pdfContent.length,
-            checksum: this.sha256(pdfContent),
+            originalName: `receipt_${preparedReceipt.receiptNumber}.pdf`,
+            mimeType: RECEIPT_MIME_TYPE,
+            size: storageMetadata.size,
+            checksum: storageMetadata.checksum,
           },
         });
         fileId = file.id;
@@ -535,11 +1257,11 @@ export class PaymentReceiptService {
           data: {
             tenantId: currentPayment.tenantId,
             fileId: file.id,
-            title: `Recibo de pago ${receiptNumber}`,
+            title: `Recibo de pago ${preparedReceipt.receiptNumber}`,
             category: DocumentCategory.RECEIPT,
             visibility: DocumentVisibility.RESIDENTS,
-            buildingId: currentPayment.buildingId,
-            unitId: currentPayment.unitId,
+            buildingId: snapshot.buildingId,
+            unitId: snapshot.unitId,
           },
         });
         documentId = document.id;
@@ -551,24 +1273,45 @@ export class PaymentReceiptService {
         );
       }
 
-      await tx.payment.update({
-        where: { id: currentPayment.id, tenantId },
+      const auditExists = await this.receiptAuditExists(
+        tx,
+        tenantId,
+        currentPayment.id,
+      );
+      const finalizedPayment = await tx.payment.updateMany({
+        where: {
+          id: currentPayment.id,
+          tenantId,
+          receiptGenerationToken: preparedReceipt.generationToken,
+          receiptGenerationLeaseUntil: { gt: databaseNow },
+        },
         data: {
           receiptDocumentId: documentId,
-          receiptNumber,
           receiptStatus: ReceiptStatus.READY,
-          receiptGeneratedAt: new Date(),
+          receiptGeneratedAt: currentPayment.receiptGeneratedAt ?? databaseNow,
           receiptError: null,
+          receiptGenerationToken: null,
+          receiptGenerationLeaseUntil: null,
         },
       });
-
+      if (finalizedPayment.count !== 1) {
+        throw new ReceiptLeaseLostError(
+          `Receipt generation claim is no longer owned for payment ${currentPayment.id}`,
+        );
+      }
       if (!auditExists) {
         await tx.paymentAuditLog.create({
           data: {
             tenantId: currentPayment.tenantId,
             paymentId: currentPayment.id,
             action: "RECEIPT_GENERATED",
-            metadata: { receiptNumber, documentId, objectKey: fileKey },
+            metadata: {
+              receiptNumber: preparedReceipt.receiptNumber,
+              documentId,
+              objectKey: fileKey,
+              snapshotVersion: snapshot.version,
+              snapshotHash: this.hashReceiptSnapshot(snapshot),
+            },
           },
         });
       }
@@ -576,13 +1319,9 @@ export class PaymentReceiptService {
       return {
         ...preparedReceipt,
         payment: currentPayment,
-        approvedByUserName,
-        receiptNumber,
-        fileKey,
-        bucket,
+        snapshot,
         documentId,
-        wasGenerated: true,
-        shouldNotify: preparedReceipt.shouldNotify,
+        wasGenerated: !auditExists,
       };
     });
   }
@@ -640,55 +1379,520 @@ export class PaymentReceiptService {
     return audit !== null;
   }
 
-  private async buildPreparedReceipt(
+  private buildPreparedReceipt(
     payment: PaymentReceiptPayment,
+    snapshot: ReceiptSnapshot,
     receiptNumber: string,
     bucket: string,
     fileKey: string,
     documentId: string | undefined,
-    reuseExisting: boolean,
+    existingFile: ReceiptFileArtifact | undefined,
+    auditExists: boolean,
     shouldNotify: boolean,
-    tx: Prisma.TransactionClient,
-  ): Promise<PreparedReceiptGeneration> {
-    const tenant = await tx.tenant.findUnique({
-      where: { id: payment.tenantId },
-      select: { name: true, brandName: true },
-    });
-    let approvedByUserName = "Administración";
-    if (payment.approvedByUserId) {
-      const approvedByUser = await tx.user.findUnique({
-        where: { id: payment.approvedByUserId },
-        select: { name: true },
-      });
-      approvedByUserName = approvedByUser?.name || "Administración";
-    }
+    generationToken: string,
+  ): PreparedReceiptGeneration {
     return {
       payment,
+      snapshot,
       receiptNumber,
       fileKey,
       bucket,
-      approvedByUserName,
-      tenantDisplayName: tenant?.brandName || tenant?.name || "Consorcio",
-      reuseExisting,
       documentId,
+      existingFile,
+      auditExists,
+      generationToken,
+      legacyReady: false,
+      legacyOrphaned: false,
       shouldNotify,
     };
   }
 
-  private async markPaymentPending(
-    tx: Prisma.TransactionClient,
+  private getVerifiedReceiptSnapshot(
+    payment: Pick<
+      PaymentReceiptPayment,
+      | "receiptSnapshot"
+      | "receiptSnapshotVersion"
+      | "receiptSnapshotHash"
+      | "tenantId"
+      | "id"
+      | "buildingId"
+      | "unitId"
+      | "receiptNumber"
+    >,
+  ): ReceiptSnapshot | null {
+    if (payment.receiptSnapshot === null || payment.receiptSnapshot === undefined) {
+      return null;
+    }
+
+    const persistedHash = this.hashJsonValue(payment.receiptSnapshot);
+    if (payment.receiptSnapshotHash !== persistedHash) {
+      throw new ReceiptConsistencyError(
+        `Receipt issuance snapshot hash is invalid for payment ${payment.id}`,
+      );
+    }
+    const snapshot = this.parseReceiptSnapshot(payment.receiptSnapshot);
+    if (
+      payment.receiptSnapshotVersion !== RECEIPT_SNAPSHOT_VERSION ||
+      snapshot.version !== RECEIPT_SNAPSHOT_VERSION ||
+      payment.receiptSnapshotHash !== this.hashReceiptSnapshot(snapshot)
+    ) {
+      throw new ReceiptConsistencyError(
+        `Receipt issuance snapshot is invalid for payment ${payment.id}`,
+      );
+    }
+    if (
+      snapshot.tenantId !== payment.tenantId ||
+      snapshot.paymentId !== payment.id ||
+      snapshot.buildingId !== payment.buildingId ||
+      snapshot.unitId !== payment.unitId ||
+      snapshot.receiptNumber !== payment.receiptNumber
+    ) {
+      throw new ReceiptConsistencyError(
+        `Receipt issuance snapshot identity is inconsistent for payment ${payment.id}`,
+      );
+    }
+    return snapshot;
+  }
+
+  private parseReceiptSnapshot(value: Prisma.JsonValue): ReceiptSnapshot {
+    if (!this.isJsonRecord(value)) {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot is not an object");
+    }
+
+    const requiredString = (key: string): string => {
+      const field = value[key];
+      if (typeof field !== "string") {
+        throw new ReceiptConsistencyError(`Receipt issuance snapshot field ${key} is invalid`);
+      }
+      return field;
+    };
+    const amountMinor = value.amountMinor;
+    if (typeof amountMinor !== "number" || !Number.isSafeInteger(amountMinor)) {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot amount is invalid");
+    }
+    const approvedAt = value.approvedAt;
+    if (approvedAt !== null && typeof approvedAt !== "string") {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot approval date is invalid");
+    }
+    const unitId = value.unitId;
+    if (unitId !== null && typeof unitId !== "string") {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot unit identity is invalid");
+    }
+    const allocationValues = value.allocations;
+    const allocationLines = value.allocationLines;
+    if (!Array.isArray(allocationValues) || !Array.isArray(allocationLines)) {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot allocations are invalid");
+    }
+    const allocations = allocationValues.map((allocation) => {
+      if (!this.isJsonRecord(allocation)) {
+        throw new ReceiptConsistencyError("Receipt issuance snapshot allocation is invalid");
+      }
+      const allocationAmount = allocation.amountMinor;
+      if (
+        typeof allocationAmount !== "number" ||
+        !Number.isSafeInteger(allocationAmount)
+      ) {
+        throw new ReceiptConsistencyError("Receipt issuance snapshot allocation amount is invalid");
+      }
+      return {
+        period: typeof allocation.period === "string" ? allocation.period : this.invalidSnapshotField("period"),
+        concept: typeof allocation.concept === "string" ? allocation.concept : this.invalidSnapshotField("concept"),
+        amountMinor: allocationAmount,
+        amountFormatted:
+          typeof allocation.amountFormatted === "string"
+            ? allocation.amountFormatted
+            : this.invalidSnapshotField("amountFormatted"),
+        line: typeof allocation.line === "string" ? allocation.line : this.invalidSnapshotField("line"),
+      };
+    });
+    if (!allocationLines.every((line): line is string => typeof line === "string")) {
+      throw new ReceiptConsistencyError("Receipt issuance snapshot allocation lines are invalid");
+    }
+
+    return {
+      version: requiredString("version"),
+      tenantId: requiredString("tenantId"),
+      paymentId: requiredString("paymentId"),
+      receiptNumber: requiredString("receiptNumber"),
+      buildingId: requiredString("buildingId"),
+      unitId,
+      tenantDisplayName: requiredString("tenantDisplayName"),
+      buildingName: requiredString("buildingName"),
+      unitLabel: requiredString("unitLabel"),
+      amountMinor,
+      currency: requiredString("currency"),
+      amountFormatted: requiredString("amountFormatted"),
+      method: requiredString("method"),
+      reference: requiredString("reference"),
+      approvedAt,
+      approvedAtFormatted: requiredString("approvedAtFormatted"),
+      approvedByUserName: requiredString("approvedByUserName"),
+      primaryPeriod: requiredString("primaryPeriod"),
+      allocations,
+      allocationLines,
+    };
+  }
+
+  private invalidSnapshotField(field: string): never {
+    throw new ReceiptConsistencyError(`Receipt issuance snapshot field ${field} is invalid`);
+  }
+
+  private isJsonRecord(value: Prisma.JsonValue | unknown): value is Record<string, Prisma.JsonValue> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  private createReceiptSnapshot(
+    payment: PaymentReceiptPayment,
+    receiptNumber: string,
+    tenantDisplayName: string,
+    approvedByUserName: string,
+    snapshotCreatedAt: Date,
+  ): ReceiptSnapshot {
+    const currency = payment.currency || "ARS";
+    const allocations = payment.paymentAllocations?.length
+      ? payment.paymentAllocations.map((allocation) => {
+          const expensePeriod = allocation.charge?.expensePeriod;
+          const period = expensePeriod
+            ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, "0")}`
+            : allocation.charge?.period || "N/A";
+          const concept = allocation.charge?.concept || "Cargo";
+          const amountFormatted = this.formatCurrencyForReceipt(
+            allocation.amount,
+            currency,
+          );
+          return {
+            period,
+            concept,
+            amountMinor: allocation.amount,
+            amountFormatted,
+            line: `${period} - ${concept} - ${amountFormatted}`,
+          };
+        })
+      : [];
+    const allocationLines = allocations.length
+      ? allocations.map((allocation) => allocation.line)
+      : ["Sin aplicación específica - saldo a favor"];
+    const primaryPeriod = allocations[0]?.period || "N/A";
+    const approvedAt = this.receiptDateIso(payment.approvedAt);
+
+    return {
+      version: RECEIPT_SNAPSHOT_VERSION,
+      tenantId: payment.tenantId,
+      paymentId: payment.id,
+      receiptNumber,
+      buildingId: payment.buildingId,
+      unitId: payment.unitId,
+      tenantDisplayName,
+      buildingName: payment.building?.name || "Edificio",
+      unitLabel: payment.unit?.label || payment.unitId || "N/A",
+      amountMinor: payment.amount,
+      currency,
+      amountFormatted: this.formatCurrencyForReceipt(payment.amount, currency),
+      method: payment.method,
+      reference: payment.reference || "N/A",
+      approvedAt,
+      approvedAtFormatted: this.formatReceiptDate(
+        payment.approvedAt ?? snapshotCreatedAt,
+      ),
+      approvedByUserName,
+      primaryPeriod,
+      allocations,
+      allocationLines,
+    };
+  }
+
+  private receiptDateIso(dateValue: Date | string | null | undefined): string | null {
+    if (!dateValue) return null;
+    return dateValue instanceof Date
+      ? dateValue.toISOString()
+      : new Date(dateValue).toISOString();
+  }
+
+  private toPrismaReceiptSnapshot(snapshot: ReceiptSnapshot): Prisma.InputJsonObject {
+    return {
+      ...snapshot,
+      allocations: snapshot.allocations.map((allocation) => ({ ...allocation })),
+      allocationLines: [...snapshot.allocationLines],
+    };
+  }
+
+  private hashReceiptSnapshot(snapshot: ReceiptSnapshot): string {
+    return this.hashJsonValue(snapshot);
+  }
+
+  private addLeaseDuration(databaseNow: Date): Date {
+    return new Date(databaseNow.getTime() + RECEIPT_GENERATION_LEASE_MS);
+  }
+
+  private async getDatabaseNow(
+    tx: Pick<Prisma.TransactionClient, "$queryRaw">,
+  ): Promise<Date> {
+    const [row] = await tx.$queryRaw<Array<{ now: Date }>>(
+      Prisma.sql`SELECT clock_timestamp() AS "now"`,
+    );
+    if (!(row?.now instanceof Date) || Number.isNaN(row.now.getTime())) {
+      throw new Error("Database did not return a valid current timestamp");
+    }
+    return row.now;
+  }
+
+  private startReceiptGenerationHeartbeat(
     tenantId: string,
     paymentId: string,
-    receiptNumber: string,
-  ): Promise<void> {
-    await tx.payment.update({
-      where: { id: paymentId, tenantId },
-      data: {
-        receiptNumber,
-        receiptStatus: ReceiptStatus.PENDING,
-        receiptGeneratedAt: null,
-        receiptError: null,
+    generationToken: string,
+  ): ReceiptGenerationHeartbeat {
+    let stopped = false;
+    let lost = false;
+    let renewal: Promise<void> | null = null;
+
+    const renew = async (): Promise<void> => {
+      if (stopped || lost || renewal) return;
+      renewal = this.renewReceiptGenerationLease(
+        tenantId,
+        paymentId,
+        generationToken,
+      ).catch((error: unknown) => {
+        lost = true;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Receipt generation lease renewal failed for payment ${paymentId}: ${message}`,
+        );
+      }).finally(() => {
+        renewal = null;
+      });
+      await renewal;
+    };
+
+    const timer = setInterval(() => {
+      void renew();
+    }, RECEIPT_GENERATION_HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+
+    return {
+      assertOwned: () => {
+        if (lost) {
+          throw new ReceiptLeaseLostError(
+            `Receipt generation claim is no longer owned for payment ${paymentId}`,
+          );
+        }
       },
+      stop: async () => {
+        stopped = true;
+        clearInterval(timer);
+        if (renewal) await renewal;
+      },
+    };
+  }
+
+  private async renewReceiptGenerationLease(
+    tenantId: string,
+    paymentId: string,
+    generationToken: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await acquirePaymentReceiptLock(tx, paymentId);
+      const databaseNow = await this.getDatabaseNow(tx);
+      const renewed = await tx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          receiptGenerationToken: generationToken,
+          receiptGenerationLeaseUntil: { gt: databaseNow },
+        },
+        data: {
+          receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
+        },
+      });
+      if (renewed.count !== 1) {
+        throw new ReceiptLeaseLostError(
+          `Receipt generation claim is no longer owned for payment ${paymentId}`,
+        );
+      }
+    });
+  }
+
+  private async waitForReceiptGeneration(
+    tenantId: string,
+    paymentId: string,
+    excludeUserId?: string,
+  ): Promise<ReceiptData | null> {
+    const deadline = Date.now() + RECEIPT_GENERATION_WAIT_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, RECEIPT_GENERATION_WAIT_INTERVAL_MS);
+      });
+
+      const payment = await this.prisma.payment.findFirst({
+        where: { id: paymentId, tenantId },
+        select: {
+          receiptStatus: true,
+          receiptGenerationToken: true,
+          receiptGenerationLeaseUntil: true,
+        },
+      });
+      if (!payment) {
+        return null;
+      }
+
+      const databaseNow = await this.getDatabaseNow(this.prisma);
+      const activeLease =
+        payment.receiptGenerationToken !== null &&
+        payment.receiptGenerationLeaseUntil !== null &&
+        payment.receiptGenerationLeaseUntil > databaseNow;
+      if (!activeLease) {
+        if (payment.receiptStatus === ReceiptStatus.READY) {
+          return this.loadCompletedReceiptData(tenantId, paymentId);
+        }
+        return this.ensureReceiptForPayment(tenantId, paymentId, excludeUserId);
+      }
+    }
+
+    return null;
+  }
+
+  private async loadCompletedReceiptData(
+    tenantId: string,
+    paymentId: string,
+  ): Promise<ReceiptData> {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+      include: {
+        unit: true,
+        building: true,
+        createdByUser: true,
+        paymentAllocations: {
+          include: {
+            charge: {
+              include: { expensePeriod: true },
+            },
+          },
+        },
+      },
+    });
+    if (!payment || payment.receiptStatus !== ReceiptStatus.READY) {
+      throw new ReceiptConsistencyError(
+        `Receipt generation completed without a READY payment ${paymentId}`,
+      );
+    }
+    if (!payment.receiptNumber || !payment.receiptDocumentId) {
+      throw new ReceiptConsistencyError(
+        `Payment ${paymentId} is READY without a complete receipt artifact`,
+      );
+    }
+
+    const document = await this.prisma.document.findFirst({
+      where: { id: payment.receiptDocumentId, tenantId },
+      include: { file: true },
+    });
+    if (
+      !document ||
+      !this.isReceiptDocumentIdentityValid(document, payment, payment.receiptNumber) ||
+      !(await this.isCompleteStorageArtifact(document.file))
+    ) {
+      throw new ReceiptConsistencyError(
+        `Receipt ${payment.receiptNumber} is not a complete canonical artifact`,
+      );
+    }
+    this.getVerifiedReceiptSnapshot(payment);
+
+    const url = await this.minio.presignDownload(
+      document.file.bucket,
+      document.file.objectKey,
+      3600,
+    );
+    return {
+      receiptNumber: payment.receiptNumber,
+      documentId: document.id,
+      fileKey: document.file.objectKey,
+      bucket: document.file.bucket,
+      url,
+    };
+  }
+
+  private hashJsonValue(value: unknown): string {
+    return createHash("sha256")
+      .update(this.canonicalizeJson(value), "utf8")
+      .digest("hex");
+  }
+
+  private canonicalizeJson(value: unknown): string {
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) throw new ReceiptConsistencyError("Cannot serialize receipt snapshot");
+      return serialized;
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => this.canonicalizeJson(item)).join(",")}]`;
+    }
+    if (this.isJsonRecord(value)) {
+      return `{${Object.keys(value)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${this.canonicalizeJson(value[key])}`)
+        .join(",")}}`;
+    }
+    throw new ReceiptConsistencyError("Cannot serialize receipt snapshot");
+  }
+
+  private async markReceiptGenerationFailedIfNeeded(
+    tenantId: string,
+    paymentId: string,
+    errorMessage: string,
+    generationToken?: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (failureTx) => {
+      await acquirePaymentReceiptLock(failureTx, paymentId);
+      const databaseNow = await this.getDatabaseNow(failureTx);
+      const payment = await failureTx.payment.findFirst({
+        where: { id: paymentId, tenantId },
+        select: {
+          receiptStatus: true,
+          receiptGenerationToken: true,
+          receiptGenerationLeaseUntil: true,
+        },
+      });
+      if (!payment) return;
+      if (
+        generationToken && (
+          payment.receiptGenerationToken !== generationToken ||
+          !payment.receiptGenerationLeaseUntil ||
+          payment.receiptGenerationLeaseUntil <= databaseNow
+        )
+      ) {
+        return;
+      }
+      if (!generationToken && (
+        payment.receiptStatus === ReceiptStatus.READY ||
+        payment.receiptGenerationToken !== null ||
+        payment.receiptGenerationLeaseUntil !== null
+      )) {
+        return;
+      }
+      const failureData =
+        payment.receiptStatus === ReceiptStatus.READY
+          ? {
+              receiptGenerationToken: null,
+              receiptGenerationLeaseUntil: null,
+            }
+          : {
+              receiptStatus: ReceiptStatus.FAILED,
+              receiptError: errorMessage,
+              receiptGenerationToken: null,
+              receiptGenerationLeaseUntil: null,
+            };
+      await failureTx.payment.updateMany({
+        where: {
+          id: paymentId,
+          tenantId,
+          ...(generationToken
+            ? {
+                receiptGenerationToken: generationToken,
+                receiptGenerationLeaseUntil: { gt: databaseNow },
+              }
+            : { receiptGenerationToken: null }),
+        },
+        data: failureData,
+      });
     });
   }
 
@@ -717,6 +1921,66 @@ export class PaymentReceiptService {
     );
   }
 
+  private async validateLegacyOrphanedObject(
+    bucket: string,
+    fileKey: string,
+  ): Promise<ReceiptStorageMetadata> {
+    if (!(await this.minio.objectExists(bucket, fileKey))) {
+      throw new ReceiptConsistencyError(
+        `Legacy receipt storage object is missing for ${bucket}/${fileKey}`,
+      );
+    }
+    const beforeRead = await this.minio.statObject(bucket, fileKey);
+    const beforeReadContentType =
+      beforeRead.metaData?.["content-type"] ??
+      beforeRead.metaData?.["Content-Type"];
+    if (
+      !beforeRead.lastModified ||
+      beforeReadContentType !== RECEIPT_MIME_TYPE ||
+      !this.isValidReceiptObjectStat(beforeRead, beforeRead.size)
+    ) {
+      throw new ReceiptConsistencyError(
+        `Legacy receipt storage object metadata is invalid for ${bucket}/${fileKey}`,
+      );
+    }
+    const content = await this.minio.getObjectBuffer(bucket, fileKey);
+    if (
+      !this.isPdfContent(content) ||
+      content.length !== beforeRead.size ||
+      content.length > MAX_RECEIPT_OBJECT_BYTES
+    ) {
+      throw new ReceiptConsistencyError(
+        `Legacy receipt storage object content is invalid for ${bucket}/${fileKey}`,
+      );
+    }
+    const afterRead = await this.minio.statObject(bucket, fileKey);
+    const afterReadContentType =
+      afterRead.metaData?.["content-type"] ??
+      afterRead.metaData?.["Content-Type"];
+    if (
+      !afterRead.lastModified ||
+      afterReadContentType !== RECEIPT_MIME_TYPE ||
+      !this.isValidReceiptObjectStat(afterRead, content.length) ||
+      beforeRead.size !== afterRead.size ||
+      beforeRead.lastModified.getTime() !== afterRead.lastModified.getTime() ||
+      beforeRead.etag !== afterRead.etag
+    ) {
+      throw new ReceiptConsistencyError(
+        `Legacy receipt storage object changed during recovery for ${bucket}/${fileKey}`,
+      );
+    }
+
+    return {
+      bucket,
+      objectKey: fileKey,
+      mimeType: RECEIPT_MIME_TYPE,
+      size: content.length,
+      checksum: this.sha256(content),
+      etag: afterRead.etag,
+      lastModified: afterRead.lastModified,
+    };
+  }
+
   private async ensureReceiptStorageObject(
     bucket: string,
     fileKey: string,
@@ -726,45 +1990,40 @@ export class PaymentReceiptService {
       throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
     }
 
-    if (await this.minio.objectExists(bucket, fileKey)) {
-      const stat = await this.minio.statObject(bucket, fileKey);
-      if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
-        throw new ReceiptConsistencyError(
-          `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
-        );
-      }
-      const existingContent = await this.minio.getObjectBuffer(bucket, fileKey);
-      if (
-        !this.isPdfContent(existingContent) ||
-        existingContent.length !== stat.size ||
-        !existingContent.equals(pdfContent)
-      ) {
-        throw new ReceiptConsistencyError(
-          `Receipt storage object content mismatch for ${bucket}/${fileKey}`,
-        );
-      }
-      return {
+    // Conditional creation prevents a racing worker from replacing a
+    // canonical receipt object after it has been written.
+    if (!(await this.minio.objectExists(bucket, fileKey))) {
+      await this.minio.uploadBufferIfAbsent(
         bucket,
-        objectKey: fileKey,
-        mimeType: RECEIPT_MIME_TYPE,
-        size: existingContent.length,
-        checksum: this.sha256(existingContent),
-      };
+        fileKey,
+        pdfContent,
+        RECEIPT_MIME_TYPE,
+      );
     }
-
-    await this.minio.uploadBuffer(
-      bucket,
-      fileKey,
-      pdfContent,
-      RECEIPT_MIME_TYPE,
-    );
+    const stat = await this.minio.statObject(bucket, fileKey);
+    if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
+      throw new ReceiptConsistencyError(
+        `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
+      );
+    }
+    const storedContent = await this.minio.getObjectBuffer(bucket, fileKey);
+    if (
+      !this.isPdfContent(storedContent) ||
+      storedContent.length !== stat.size ||
+      !storedContent.equals(pdfContent)
+    ) {
+      throw new ReceiptConsistencyError(
+        `Receipt storage object content mismatch for ${bucket}/${fileKey}`,
+      );
+    }
     return {
       bucket,
       objectKey: fileKey,
       mimeType: RECEIPT_MIME_TYPE,
-      size: pdfContent.length,
-      checksum: this.sha256(pdfContent),
+      size: storedContent.length,
+      checksum: this.sha256(storedContent),
     };
+
   }
 
   private isValidReceiptObjectStat(
@@ -809,32 +2068,6 @@ export class PaymentReceiptService {
 
   private sha256(content: Buffer): string {
     return createHash("sha256").update(content).digest("hex");
-  }
-
-  private async markReceiptGenerationFailedIfNeeded(tenantId: string, paymentId: string, errorMessage: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await acquirePaymentReceiptLock(tx, paymentId);
-
-      const payment = await tx.payment.findFirst({
-        where: { id: paymentId, tenantId },
-        select: {
-          receiptStatus: true,
-          receiptDocumentId: true,
-        },
-      });
-
-      if (!payment || payment.receiptStatus === ReceiptStatus.READY) {
-        return;
-      }
-
-      await tx.payment.update({
-        where: { id: paymentId, tenantId },
-        data: {
-          receiptStatus: ReceiptStatus.FAILED,
-          receiptError: errorMessage,
-        },
-      });
-    });
   }
 
   private async loadPaymentForReceipt(
@@ -918,7 +2151,27 @@ export class PaymentReceiptService {
   }
 
   /**
-   * Generate receipt PDF content.
+   * Generate a receipt PDF from the immutable issuance snapshot only.
+   */
+  private generateReceiptPdfFromSnapshot(snapshot: ReceiptSnapshot): Buffer {
+    return this.buildReceiptPdfBuffer({
+      tenantDisplayName: snapshot.tenantDisplayName,
+      receiptNumber: snapshot.receiptNumber,
+      approvedAt: snapshot.approvedAtFormatted,
+      approvedByUserName: snapshot.approvedByUserName,
+      unitLabel: snapshot.unitLabel,
+      buildingName: snapshot.buildingName,
+      amountFormatted: snapshot.amountFormatted,
+      method: snapshot.method,
+      reference: snapshot.reference,
+      primaryPeriod: snapshot.primaryPeriod,
+      allocations: snapshot.allocationLines,
+    });
+  }
+
+  /**
+   * Build a snapshot-shaped PDF for legacy renderer tests and first-issuance comparison.
+   * Production recovery never calls this live-data adapter.
    */
   private async generateReceiptPDF(
     payment: PaymentReceiptPayment,
@@ -926,43 +2179,14 @@ export class PaymentReceiptService {
     approvedByUserName: string,
     tenantDisplayName: string,
   ): Promise<Buffer> {
-    const approvedAt = this.formatReceiptDate(payment.approvedAt ?? new Date());
-    const unitLabel = payment.unit?.label || payment.unitId || 'N/A';
-    const buildingName = payment.building?.name || 'Edificio';
-    const currency = payment.currency || 'ARS';
-    const amountFormatted = this.formatCurrencyForReceipt(payment.amount, currency);
-    const allocations = payment.paymentAllocations?.length
-      ? payment.paymentAllocations.map((alloc, index) => {
-          const expensePeriod = alloc.charge?.expensePeriod;
-          const period = expensePeriod
-            ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, '0')}`
-            : alloc.charge?.period || 'N/A';
-          const concept = alloc.charge?.concept || 'Cargo';
-          return `${period} - ${concept} - ${this.formatCurrencyForReceipt(alloc.amount, currency)}`;
-        })
-      : ['Sin aplicación específica - saldo a favor'];
-    const primaryPeriod = payment.paymentAllocations?.[0]
-      ? (() => {
-          const expensePeriod = payment.paymentAllocations[0].charge?.expensePeriod;
-          return expensePeriod
-            ? `${expensePeriod.year}-${String(expensePeriod.month).padStart(2, '0')}`
-            : payment.paymentAllocations[0].charge?.period || 'N/A';
-        })()
-      : 'N/A';
-
-    return this.buildReceiptPdfBuffer({
-      tenantDisplayName,
+    const snapshot = this.createReceiptSnapshot(
+      payment,
       receiptNumber,
-      approvedAt,
+      tenantDisplayName,
       approvedByUserName,
-      unitLabel,
-      buildingName,
-      amountFormatted,
-      method: payment.method,
-      reference: payment.reference || 'N/A',
-      primaryPeriod,
-      allocations,
-    });
+      new Date(),
+    );
+    return this.generateReceiptPdfFromSnapshot(snapshot);
   }
 
   private buildReceiptPdfBuffer(input: {
