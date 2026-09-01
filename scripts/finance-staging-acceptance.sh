@@ -55,6 +55,17 @@ check_migration_status() {
   fi
 }
 
+assert_staging_runtime_environment() {
+  local container="$1"
+  local label="$2"
+
+  # APP_ENV identifies the BuildingOS deployment environment. NODE_ENV identifies the Node runtime mode.
+  # Staging intentionally runs the long-lived API/web runtime with APP_ENV=staging and NODE_ENV=production.
+  # The Golden seed remains separate and runs with APP_ENV=staging and NODE_ENV=staging.
+  [[ "$(container_env_value "$container" APP_ENV || true)" == 'staging' ]] || { fail "$label APP_ENV is not staging"; return 1; }
+  [[ "$(container_env_value "$container" NODE_ENV || true)" == 'production' ]] || { fail "$label NODE_ENV is not production"; return 1; }
+}
+
 validate_arguments() {
   [[ $# -eq 6 ]] || usage
   local tested_sha="$1"
@@ -92,8 +103,8 @@ assert_staging_runtime() {
   [[ "$(git -C "$app_path" rev-parse HEAD)" == "$tested_sha" ]] || fail 'staging checkout is not at the tested application SHA'
 
   "${compose[@]}" config --quiet
-  [[ "$(container_env_value buildingos-staging-api APP_ENV)" == 'staging' ]] || fail 'API APP_ENV is not staging'
-  [[ "$(container_env_value buildingos-staging-api NODE_ENV)" == 'staging' ]] || fail 'API NODE_ENV is not staging'
+  assert_staging_runtime_environment buildingos-staging-api 'API'
+  assert_staging_runtime_environment buildingos-staging-web 'WEB'
 
   check_container_healthy buildingos-staging-api
   check_container_healthy buildingos-staging-postgres
