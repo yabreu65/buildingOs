@@ -1,5 +1,6 @@
 import * as Minio from 'minio';
 import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
 import {
   ChargeStatus,
   PaymentMethod,
@@ -44,6 +45,7 @@ interface ReceiptStorage {
 
 class MinioReceiptStorage implements ReceiptStorage {
   private readonly client: Minio.Client;
+  readonly putCalls: string[] = [];
 
   constructor(
     private readonly bucket: string,
@@ -78,7 +80,7 @@ class MinioReceiptStorage implements ReceiptStorage {
   }
 
   async countObjectVersions(prefix: string): Promise<number> {
-    const stream = this.client.listObjectVersions(this.bucket, prefix, true);
+    const stream = this.client.listObjects(this.bucket, prefix, true, { IncludeVersion: true });
     return new Promise<number>((resolve, reject) => {
       let count = 0;
       stream.on('data', () => {
@@ -95,6 +97,7 @@ class MinioReceiptStorage implements ReceiptStorage {
     content: Buffer,
     contentType: string,
   ): Promise<void> {
+    this.putCalls.push(`${bucket}/${objectKey}`);
     await this.client.putObject(
       bucket,
       objectKey,
@@ -123,6 +126,7 @@ class MinioReceiptStorage implements ReceiptStorage {
     content: Buffer,
     contentType: string,
   ): Promise<boolean> {
+    this.putCalls.push(`${bucket}/${objectKey}`);
     try {
       await this.client.putObject(
         bucket,
@@ -141,7 +145,12 @@ class MinioReceiptStorage implements ReceiptStorage {
     }
   }
 
-  async statObject(bucket: string, objectKey: string): Promise<{ size: number }> {
+  async statObject(bucket: string, objectKey: string): Promise<{
+    size: number;
+    etag?: string;
+    lastModified?: Date;
+    metaData?: Record<string, string>;
+  }> {
     return this.client.statObject(bucket, objectKey);
   }
 
@@ -180,6 +189,17 @@ class MinioReceiptStorage implements ReceiptStorage {
       stream.on('end', () => resolve(names));
     });
   }
+}
+
+function receiptService(
+  prisma: PrismaService,
+  storage: MinioReceiptStorage,
+): PaymentReceiptService {
+  return new PaymentReceiptService(
+    prisma,
+    storage as unknown as never,
+    { createNotification: jest.fn().mockResolvedValue(undefined) } as never,
+  );
 }
 
 describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
@@ -475,12 +495,20 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
     const orphanKey = `tenant/${tenant.id}/payments/${payment.id}/receipts/${payment.receiptNumber}.pdf`;
     const orphanPdf = Buffer.from('%PDF-legacy-orphan');
     await storage.uploadBuffer(storage.getDefaultBucket(), orphanKey, orphanPdf, 'application/pdf');
+    const putCallsBeforeRecovery = storage.putCalls.length;
+    const orphanStatBefore = await storage.statObject(storage.getDefaultBucket(), orphanKey);
+    const orphanChecksum = createHash('sha256').update(orphanPdf).digest('hex');
     const versionsBefore = await storage.countObjectVersions(orphanKey);
+    const sequenceBefore = await observer.receiptSequence.findUnique({
+      where: {
+        tenantId_year: { tenantId: tenant.id, year: 2026 },
+      },
+    });
 
     try {
       const results = await Promise.allSettled([
-        service(firstPrisma).ensureReceiptForPayment(tenant.id, payment.id),
-        service(secondPrisma).ensureReceiptForPayment(tenant.id, payment.id),
+        receiptService(firstPrisma, storage).ensureReceiptForPayment(tenant.id, payment.id),
+        receiptService(secondPrisma, storage).ensureReceiptForPayment(tenant.id, payment.id),
       ]);
       const successfulResults = results.filter(
         (result): result is PromiseFulfilledResult<{ receiptNumber: string } | null> =>
@@ -497,8 +525,13 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
         }
       }
 
-      const [persistedPayment, files, documents, audits] = await Promise.all([
+      const [persistedPayment, sequenceAfter, files, documents, audits] = await Promise.all([
         observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+        observer.receiptSequence.findUnique({
+          where: {
+            tenantId_year: { tenantId: tenant.id, year: 2026 },
+          },
+        }),
         observer.file.findMany({ where: { tenantId: tenant.id } }),
         observer.document.findMany({ where: { tenantId: tenant.id } }),
         observer.paymentAuditLog.findMany({
@@ -506,11 +539,48 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
         }),
       ]);
       expect(persistedPayment.receiptStatus).toBe('READY');
+      expect(persistedPayment.receiptNumber).toBe(payment.receiptNumber);
       expect(persistedPayment.receiptSnapshot).toBeNull();
+      expect(persistedPayment.receiptSnapshotHash).toBeNull();
+      expect(persistedPayment.receiptSnapshotVersion).toBeNull();
+      expect(persistedPayment.receiptSnapshotCreatedAt).toBeNull();
+      expect(sequenceAfter).toEqual(sequenceBefore);
       expect(files).toHaveLength(1);
       expect(documents).toHaveLength(1);
       expect(audits).toHaveLength(1);
+      const orphanStatAfter = await storage.statObject(storage.getDefaultBucket(), orphanKey);
+      expect(orphanStatBefore.size).toBe(orphanPdf.length);
+      expect(orphanStatBefore.metaData?.['content-type']).toBe('application/pdf');
+      expect(orphanStatBefore.etag).toBeDefined();
+      expect(orphanStatBefore.lastModified).toBeDefined();
+      expect(orphanStatAfter.size).toBe(orphanPdf.length);
+      expect(orphanStatAfter.metaData?.['content-type']).toBe('application/pdf');
+      expect(orphanStatAfter.etag).toBe(orphanStatBefore.etag);
+      expect(orphanStatAfter.lastModified).toEqual(orphanStatBefore.lastModified);
       expect(await storage.getObjectBuffer(storage.getDefaultBucket(), orphanKey)).toEqual(orphanPdf);
+      expect(createHash('sha256').update(await storage.getObjectBuffer(storage.getDefaultBucket(), orphanKey)).digest('hex')).toBe(orphanChecksum);
+      expect(persistedPayment.receiptGeneratedAt).toEqual(orphanStatBefore.lastModified);
+      expect(await storage.countObjectVersions(orphanKey)).toBe(versionsBefore);
+      expect(await receiptService(secondPrisma, storage).ensureReceiptForPayment(tenant.id, payment.id)).toEqual(
+        expect.objectContaining({
+          receiptNumber: payment.receiptNumber,
+        }),
+      );
+      const [retriedPayment, retriedFiles, retriedDocuments, retriedAudits] = await Promise.all([
+        observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+        observer.file.findMany({ where: { tenantId: tenant.id } }),
+        observer.document.findMany({ where: { tenantId: tenant.id } }),
+        observer.paymentAuditLog.findMany({
+          where: { tenantId: tenant.id, paymentId: payment.id, action: 'RECEIPT_GENERATED' },
+        }),
+      ]);
+      expect(retriedPayment.receiptNumber).toBe(payment.receiptNumber);
+      expect(retriedPayment.receiptGeneratedAt).toEqual(persistedPayment.receiptGeneratedAt);
+      expect(retriedPayment.receiptSnapshot).toBeNull();
+      expect(retriedFiles).toHaveLength(1);
+      expect(retriedDocuments).toHaveLength(1);
+      expect(retriedAudits).toHaveLength(1);
+      expect(storage.putCalls.slice(putCallsBeforeRecovery)).toHaveLength(0);
       expect(await storage.countObjectVersions(orphanKey)).toBe(versionsBefore);
     } finally {
       await storage.deleteObject(storage.getDefaultBucket(), orphanKey).catch(() => undefined);

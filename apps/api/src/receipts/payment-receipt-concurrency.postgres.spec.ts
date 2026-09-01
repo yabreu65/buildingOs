@@ -5,6 +5,7 @@ import {
   PrismaClient,
   TenantType,
 } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentReceiptService } from './payment-receipt.service';
 
@@ -15,7 +16,12 @@ const enabled =
 const describePostgres = enabled ? describe : describe.skip;
 
 class LocalReceiptStorage {
-  private readonly objects = new Map<string, Buffer>();
+  private readonly objects = new Map<string, {
+    content: Buffer;
+    contentType: string;
+    etag: string;
+    lastModified: Date;
+  }>();
   readonly uploadCalls: string[] = [];
   delayMs = 0;
 
@@ -27,18 +33,20 @@ class LocalReceiptStorage {
     bucket: string,
     objectKey: string,
     content: Buffer,
+    contentType = 'application/pdf',
   ): Promise<void> {
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }
     this.uploadCalls.push(`${bucket}/${objectKey}`);
-    this.objects.set(`${bucket}/${objectKey}`, Buffer.from(content));
+    this.objects.set(`${bucket}/${objectKey}`, this.objectMetadata(content, contentType));
   }
 
   async uploadBufferIfAbsent(
     bucket: string,
     objectKey: string,
     content: Buffer,
+    contentType = 'application/pdf',
   ): Promise<boolean> {
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
@@ -46,8 +54,17 @@ class LocalReceiptStorage {
     const key = `${bucket}/${objectKey}`;
     if (this.objects.has(key)) return false;
     this.uploadCalls.push(key);
-    this.objects.set(key, Buffer.from(content));
+    this.objects.set(key, this.objectMetadata(content, contentType));
     return true;
+  }
+
+  private objectMetadata(content: Buffer, contentType: string) {
+    return {
+      content: Buffer.from(content),
+      contentType,
+      etag: createHash('md5').update(content).digest('hex'),
+      lastModified: new Date(),
+    };
   }
 
   async objectExists(bucket: string, objectKey: string): Promise<boolean> {
@@ -60,13 +77,18 @@ class LocalReceiptStorage {
   ): Promise<{ size: number }> {
     const object = this.objects.get(`${bucket}/${objectKey}`);
     if (!object) throw new Error('NotFound');
-    return { size: object.length };
+    return {
+      size: object.content.length,
+      etag: object.etag,
+      lastModified: object.lastModified,
+      metaData: { 'content-type': object.contentType },
+    };
   }
 
   async getObjectBuffer(bucket: string, objectKey: string): Promise<Buffer> {
     const object = this.objects.get(`${bucket}/${objectKey}`);
     if (!object) throw new Error('NotFound');
-    return Buffer.from(object);
+    return Buffer.from(object.content);
   }
 
   async presignDownload(bucket: string, objectKey: string): Promise<string> {
@@ -330,7 +352,7 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
     expect(storage.uploadCalls).toHaveLength(1);
   }, 20000);
 
-  it('fails closed when a legacy reserved-only receipt has a canonical object', async () => {
+  it('adopts a legacy orphaned canonical object without allocating another number', async () => {
     const fixture = await paymentFixture();
     const legacyReceiptNumber = 'R-RECEIP-2026-000008';
     const objectKey = `tenant/${fixture.tenant.id}/payments/${fixture.payment.id}/receipts/${legacyReceiptNumber}.pdf`;
@@ -348,12 +370,10 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
     );
     storage.uploadCalls.length = 0;
 
-    await expect(
-      service(firstPrisma).ensureReceiptForPayment(
-        fixture.tenant.id,
-        fixture.payment.id,
-      ),
-    ).rejects.toThrow('canonical storage object');
+    const result = await service(firstPrisma).ensureReceiptForPayment(
+      fixture.tenant.id,
+      fixture.payment.id,
+    );
 
     const [payment, files, documents, audits] = await Promise.all([
       observer.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
@@ -364,10 +384,12 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
       }),
     ]);
     expect(payment.receiptNumber).toBe(legacyReceiptNumber);
+    expect(result?.receiptNumber).toBe(legacyReceiptNumber);
+    expect(payment.receiptStatus).toBe('READY');
     expect(payment.receiptSnapshot).toBeNull();
-    expect(files).toHaveLength(0);
-    expect(documents).toHaveLength(0);
-    expect(audits).toHaveLength(0);
+    expect(files).toHaveLength(1);
+    expect(documents).toHaveLength(1);
+    expect(audits).toHaveLength(1);
     expect(storage.uploadCalls).toHaveLength(0);
   }, 20000);
 
