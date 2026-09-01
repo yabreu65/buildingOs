@@ -478,7 +478,7 @@ export class PaymentReceiptService {
           };
         }
         if (
-          await this.isLegacyReservedOnlyDatabaseState(
+          await this.isLegacyOrphanHistoricalState(
             tx,
             payment,
             existingDocument,
@@ -684,12 +684,17 @@ export class PaymentReceiptService {
         );
       }
 
-      const now = await this.getDatabaseNow(tx);
-      if (
-        payment.receiptGenerationToken &&
-        payment.receiptGenerationLeaseUntil &&
-        payment.receiptGenerationLeaseUntil > now
-      ) {
+      const databaseNow = await this.getDatabaseNow(tx);
+      const previousGenerationToken = payment.receiptGenerationToken;
+      const previousLeaseUntil = payment.receiptGenerationLeaseUntil;
+      const hasGenerationToken = previousGenerationToken !== null;
+      const hasLeaseUntil = previousLeaseUntil !== null;
+      if (hasGenerationToken !== hasLeaseUntil) {
+        throw new ReceiptConsistencyError(
+          `Legacy receipt ${candidate.receiptNumber} has an inconsistent recovery claim`,
+        );
+      }
+      if (hasGenerationToken && previousLeaseUntil! > databaseNow) {
         throw new ReceiptGenerationInProgressError(
           `Receipt generation is already in progress for payment ${payment.id}`,
         );
@@ -697,7 +702,7 @@ export class PaymentReceiptService {
 
       const auditExists = await this.receiptAuditExists(tx, tenantId, paymentId);
       if (
-        !(await this.isLegacyReservedOnlyDatabaseState(
+        !(await this.isLegacyOrphanHistoricalState(
           tx,
           payment,
           existingDocument,
@@ -718,19 +723,19 @@ export class PaymentReceiptService {
           receiptSnapshot: { equals: Prisma.DbNull },
           receiptDocumentId: null,
           receiptGeneratedAt: null,
-          receiptGenerationToken: null,
-          receiptGenerationLeaseUntil: null,
+          receiptGenerationToken: previousGenerationToken,
+          receiptGenerationLeaseUntil: previousLeaseUntil,
           receiptStatus: { in: [ReceiptStatus.PENDING, ReceiptStatus.FAILED] },
         },
         data: {
           receiptStatus: ReceiptStatus.PENDING,
           receiptError: null,
           receiptGenerationToken: generationToken,
-          receiptGenerationLeaseUntil: this.addLeaseDuration(now),
+          receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
         },
       });
       if (updated.count !== 1) {
-        throw new ReceiptConsistencyError(
+        throw new ReceiptGenerationInProgressError(
           `Legacy receipt ${candidate.receiptNumber} changed before orphan recovery claim`,
         );
       }
@@ -756,6 +761,28 @@ export class PaymentReceiptService {
     auditExists: boolean,
   ): Promise<boolean> {
     if (
+      !(await this.isLegacyOrphanHistoricalState(
+        tx,
+        payment,
+        existingDocument,
+        auditExists,
+      ))
+    ) {
+      return false;
+    }
+    return (
+      payment.receiptGenerationToken === null &&
+      payment.receiptGenerationLeaseUntil === null
+    );
+  }
+
+  private async isLegacyOrphanHistoricalState(
+    tx: Prisma.TransactionClient,
+    payment: PaymentReceiptPayment,
+    existingDocument: ReceiptDocumentWithFile | null,
+    auditExists: boolean,
+  ): Promise<boolean> {
+    if (
       payment.receiptSnapshot !== null &&
       payment.receiptSnapshot !== undefined
     ) {
@@ -771,9 +798,7 @@ export class PaymentReceiptService {
         payment.receiptSnapshotVersion ||
         payment.receiptSnapshotHash ||
         payment.receiptSnapshotCreatedAt ||
-        payment.receiptGenerationToken ||
-      payment.receiptGenerationLeaseUntil ||
-      auditExists
+        auditExists
     ) {
       return false;
     }
@@ -1838,7 +1863,8 @@ export class PaymentReceiptService {
       }
       if (!generationToken && (
         payment.receiptStatus === ReceiptStatus.READY ||
-        payment.receiptGenerationToken !== null
+        payment.receiptGenerationToken !== null ||
+        payment.receiptGenerationLeaseUntil !== null
       )) {
         return;
       }

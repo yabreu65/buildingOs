@@ -270,6 +270,205 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
     ]);
   });
 
+  async function createLegacyOrphanContext(suffix: string) {
+    const tenant = await observer.tenant.create({
+      data: {
+        name: `Receipt orphan takeover ${suffix}`,
+        type: TenantType.ADMINISTRADORA,
+        functionalCurrency: 'ARS',
+      },
+    });
+    const user = await observer.user.create({
+      data: {
+        email: `receipt-takeover-${suffix}@buildingos.local`,
+        name: 'Receipt takeover resident',
+        passwordHash: 'test',
+      },
+    });
+    const building = await observer.building.create({
+      data: {
+        tenantId: tenant.id,
+        name: `Receipt takeover building ${suffix}`,
+        alias: `RT-${suffix}`,
+        address: 'Test',
+      },
+    });
+    const unit = await observer.unit.create({
+      data: {
+        tenantId: tenant.id,
+        buildingId: building.id,
+        code: '1',
+        label: '1',
+        unitType: 'APARTAMENTO',
+        occupancyStatus: 'OCCUPIED',
+        isBillable: true,
+      },
+    });
+    return { tenant, user, building, unit };
+  }
+
+  async function createLegacyOrphanPayment(
+    context: Awaited<ReturnType<typeof createLegacyOrphanContext>>,
+    receiptNumber: string,
+  ) {
+    const payment = await observer.payment.create({
+      data: {
+        tenantId: context.tenant.id,
+        buildingId: context.building.id,
+        unitId: context.unit.id,
+        amount: 10000,
+        currency: 'ARS',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.APPROVED,
+        receiptStatus: 'FAILED',
+        receiptNumber,
+        createdByUserId: context.user.id,
+        approvedByUserId: context.user.id,
+        approvedAt: new Date('2026-08-10T00:00:00.000Z'),
+      },
+    });
+    return {
+      payment,
+      objectKey: `tenant/${context.tenant.id}/payments/${payment.id}/receipts/${receiptNumber}.pdf`,
+    };
+  }
+
+  it('takes over expired legacy orphan leases repeatedly without changing the object', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const context = await createLegacyOrphanContext(suffix);
+    const objectKeys: string[] = [];
+
+    try {
+      for (let index = 1; index <= 10; index += 1) {
+        const receiptNumber = `R-EXPIRED-${suffix}-${index}`;
+        const { payment, objectKey } = await createLegacyOrphanPayment(
+          context,
+          receiptNumber,
+        );
+        const orphanPdf = Buffer.from(`%PDF-expired-orphan-${index}`);
+        await storage.uploadBuffer(
+          storage.getDefaultBucket(),
+          objectKey,
+          orphanPdf,
+          'application/pdf',
+        );
+        objectKeys.push(objectKey);
+        const statBefore = await storage.statObject(
+          storage.getDefaultBucket(),
+          objectKey,
+        );
+        const checksum = createHash('sha256').update(orphanPdf).digest('hex');
+        const versionsBefore = await storage.countObjectVersions(objectKey);
+        const putCallsBefore = storage.putCalls.length;
+        const expiredToken = `expired-owner-${index}`;
+        const expiredLease = new Date('2020-01-01T00:00:00.000Z');
+        await observer.payment.update({
+          where: { id: payment.id },
+          data: {
+            receiptGenerationToken: expiredToken,
+            receiptGenerationLeaseUntil: expiredLease,
+          },
+        });
+
+        const result = await receiptService(firstPrisma, storage).ensureReceiptForPayment(
+          context.tenant.id,
+          payment.id,
+        );
+        const [persistedPayment, files, documents, audits] = await Promise.all([
+          observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+          observer.file.findMany({ where: { tenantId: context.tenant.id, objectKey } }),
+          observer.document.findMany({ where: { tenantId: context.tenant.id } }),
+          observer.paymentAuditLog.findMany({
+            where: { tenantId: context.tenant.id, paymentId: payment.id, action: 'RECEIPT_GENERATED' },
+          }),
+        ]);
+        const statAfter = await storage.statObject(
+          storage.getDefaultBucket(),
+          objectKey,
+        );
+
+        expect(result?.receiptNumber).toBe(receiptNumber);
+        expect(persistedPayment.receiptStatus).toBe('READY');
+        expect(persistedPayment.receiptSnapshot).toBeNull();
+        expect(persistedPayment.receiptNumber).toBe(receiptNumber);
+        expect(persistedPayment.receiptGenerationToken).toBeNull();
+        expect(persistedPayment.receiptGenerationLeaseUntil).toBeNull();
+        expect(persistedPayment.receiptGeneratedAt).toEqual(statBefore.lastModified);
+        expect(statAfter.size).toBe(orphanPdf.length);
+        expect(statAfter.etag).toBe(statBefore.etag);
+        expect(statAfter.lastModified).toEqual(statBefore.lastModified);
+        expect(await storage.getObjectBuffer(storage.getDefaultBucket(), objectKey)).toEqual(orphanPdf);
+        expect(createHash('sha256').update(await storage.getObjectBuffer(storage.getDefaultBucket(), objectKey)).digest('hex')).toBe(checksum);
+        expect(await storage.countObjectVersions(objectKey)).toBe(versionsBefore);
+        expect(storage.putCalls.length).toBe(putCallsBefore);
+        expect(files).toHaveLength(1);
+        expect(documents).toHaveLength(index);
+        expect(audits).toHaveLength(1);
+      }
+    } finally {
+      await Promise.all(
+        objectKeys.map((key) => storage.deleteObject(storage.getDefaultBucket(), key).catch(() => undefined)),
+      );
+      await observer.tenant.delete({ where: { id: context.tenant.id } });
+      await observer.user.delete({ where: { id: context.user.id } });
+    }
+  }, 60000);
+
+  it('preserves an active legacy orphan lease and does not adopt its object', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const context = await createLegacyOrphanContext(suffix);
+    const receiptNumber = `R-ACTIVE-${suffix}`;
+    const { payment, objectKey } = await createLegacyOrphanPayment(context, receiptNumber);
+    const orphanPdf = Buffer.from('%PDF-active-orphan');
+
+    try {
+      await storage.uploadBuffer(
+        storage.getDefaultBucket(),
+        objectKey,
+        orphanPdf,
+        'application/pdf',
+      );
+      const activeToken = 'active-owner';
+      const activeLease = new Date('2099-01-01T00:00:00.000Z');
+      await observer.payment.update({
+        where: { id: payment.id },
+        data: {
+          receiptGenerationToken: activeToken,
+          receiptGenerationLeaseUntil: activeLease,
+        },
+      });
+      const putCallsBefore = storage.putCalls.length;
+
+      await expect(
+        receiptService(firstPrisma, storage).ensureReceiptForPayment(
+          context.tenant.id,
+          payment.id,
+        ),
+      ).rejects.toMatchObject({
+        response: { message: 'RECEIPT_GENERATION_IN_PROGRESS' },
+      });
+
+      const [persistedPayment, files, documents, audits] = await Promise.all([
+        observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+        observer.file.findMany({ where: { tenantId: context.tenant.id } }),
+        observer.document.findMany({ where: { tenantId: context.tenant.id } }),
+        observer.paymentAuditLog.findMany({
+          where: { tenantId: context.tenant.id, paymentId: payment.id, action: 'RECEIPT_GENERATED' },
+        }),
+      ]);
+      expect(persistedPayment.receiptGenerationToken).toBe(activeToken);
+      expect(persistedPayment.receiptGenerationLeaseUntil).toEqual(activeLease);
+      expect(files).toHaveLength(0);
+      expect(documents).toHaveLength(0);
+      expect(audits).toHaveLength(0);
+      expect(storage.putCalls.length).toBe(putCallsBefore);
+    } finally {
+      await storage.deleteObject(storage.getDefaultBucket(), objectKey).catch(() => undefined);
+      await observer.tenant.delete({ where: { id: context.tenant.id } });
+      await observer.user.delete({ where: { id: context.user.id } });
+    }
+  }, 30000);
+
   it('recovers a failed finalization with a fresh service and durable MinIO object', async () => {
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const tenant = await observer.tenant.create({

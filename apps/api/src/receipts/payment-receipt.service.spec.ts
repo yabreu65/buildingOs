@@ -1188,6 +1188,137 @@ describe('PaymentReceiptService', () => {
     expect(defaultPaymentState.receiptGeneratedAt).toEqual(lastModified);
   });
 
+  it("atomically takes over an expired orphan recovery claim", async () => {
+    const expiredLease = new Date("2026-08-30T23:59:59.000Z");
+    const lastModified = new Date("2026-08-30T12:00:00.000Z");
+    const orphanPdf = Buffer.from("%PDF-expired-orphan");
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.FAILED,
+      receiptNumber: "R-COMPLE-2026-000001",
+      receiptGeneratedAt: null,
+      receiptGenerationToken: "expired-owner",
+      receiptGenerationLeaseUntil: expiredLease,
+    });
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: orphanPdf.length,
+      etag: "expired-etag",
+      lastModified,
+      metaData: { "content-type": "application/pdf" },
+    });
+    minio.getObjectBuffer.mockResolvedValue(orphanPdf);
+
+    const result = await service.ensureReceiptForPayment("tenant-1", "payment-1");
+
+    expect(result?.receiptNumber).toBe("R-COMPLE-2026-000001");
+    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
+    expect(defaultPaymentState.receiptGenerationToken).toBeNull();
+    expect(defaultPaymentState.receiptGenerationLeaseUntil).toBeNull();
+    expect(defaultPaymentState.receiptGeneratedAt).toEqual(lastModified);
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+    expect(prisma.document.create).toHaveBeenCalledTimes(1);
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.updateMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          receiptGenerationToken: "expired-owner",
+          receiptGenerationLeaseUntil: expiredLease,
+        }),
+        data: expect.objectContaining({
+          receiptGenerationToken: expect.any(String),
+          receiptGenerationLeaseUntil: new Date("2026-08-31T00:05:00.000Z"),
+        }),
+      }),
+    );
+  });
+
+  it("does not replace an active orphan recovery claim", async () => {
+    const activeLease = new Date("2026-08-31T00:05:00.000Z");
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.FAILED,
+      receiptNumber: "R-COMPLE-2026-000001",
+      receiptGenerationToken: "active-owner",
+      receiptGenerationLeaseUntil: activeLease,
+    });
+    minio.objectExists.mockResolvedValue(true);
+    jest.spyOn(service as never, "waitForReceiptGeneration").mockResolvedValue(null);
+
+    await expect(
+      service.ensureReceiptForPayment("tenant-1", "payment-1"),
+    ).rejects.toMatchObject({
+      response: { message: "RECEIPT_GENERATION_IN_PROGRESS" },
+    });
+
+    expect(defaultPaymentState.receiptGenerationToken).toBe("active-owner");
+    expect(defaultPaymentState.receiptGenerationLeaseUntil).toEqual(activeLease);
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(minio.getObjectBuffer).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["token without lease", "inconsistent-owner", null],
+    ["lease without token", null, new Date("2026-08-30T23:59:59.000Z")],
+  ] as const)(
+    "fails closed for an inconsistent orphan recovery claim: %s",
+    async (_description, token, lease) => {
+      Object.assign(defaultPaymentState, {
+        receiptStatus: ReceiptStatus.FAILED,
+        receiptNumber: "R-COMPLE-2026-000001",
+        receiptGenerationToken: token,
+        receiptGenerationLeaseUntil: lease,
+      });
+      minio.objectExists.mockResolvedValue(true);
+
+      await expect(
+        service.ensureReceiptForPayment("tenant-1", "payment-1"),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+      expect(minio.statObject).not.toHaveBeenCalled();
+      expect(minio.getObjectBuffer).not.toHaveBeenCalled();
+      expect(prisma.file.create).not.toHaveBeenCalled();
+      expect(prisma.document.create).not.toHaveBeenCalled();
+      expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+      expect(defaultPaymentState.receiptGenerationToken).toBe(token);
+      expect(defaultPaymentState.receiptGenerationLeaseUntil).toBe(lease);
+    },
+  );
+
+  it.each([
+    ["token", "stray-owner", new Date("2026-08-30T23:59:59.000Z")],
+    ["lease", null, new Date("2026-08-31T00:05:00.000Z")],
+  ] as const)(
+    "does not reinterpret %s leftovers as reserved-only recovery",
+    async (_description, token, lease) => {
+      Object.assign(defaultPaymentState, {
+        receiptStatus: ReceiptStatus.FAILED,
+        receiptNumber: "R-COMPLE-2026-000001",
+        receiptGenerationToken: token,
+        receiptGenerationLeaseUntil: lease,
+      });
+
+      await expect(
+        service.ensureReceiptForPayment("tenant-1", "payment-1"),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(prisma.receiptSequence.create).not.toHaveBeenCalled();
+      expect(prisma.receiptSequence.update).not.toHaveBeenCalled();
+      expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+      expect(minio.uploadBuffer).not.toHaveBeenCalled();
+      expect(prisma.file.create).not.toHaveBeenCalled();
+      expect(prisma.document.create).not.toHaveBeenCalled();
+      expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
+      expect(defaultPaymentState.receiptGenerationToken).toBe(token);
+      expect(defaultPaymentState.receiptGenerationLeaseUntil).toBe(lease);
+    },
+  );
+
   it("fails closed for an invalid orphaned legacy canonical object", async () => {
     Object.assign(defaultPaymentState, {
       receiptStatus: ReceiptStatus.PENDING,
