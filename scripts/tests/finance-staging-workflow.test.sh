@@ -14,6 +14,7 @@ const acceptance = yaml.load(fs.readFileSync(acceptancePath, 'utf8'));
 const deploy = yaml.load(fs.readFileSync(deployPath, 'utf8'));
 const workflowDispatch = (acceptance.on ?? acceptance[true])?.workflow_dispatch;
 const acceptanceSteps = acceptance.jobs?.acceptance?.steps ?? [];
+const validationStep = acceptanceSteps.find((step) => step.name === 'Validate control and tested SHAs');
 const diagnosticStep = acceptanceSteps.find((step) => step.name === 'Inspect staging runtime environment (diagnostic only)');
 const passwordStep = acceptanceSteps.find((step) => step.name === 'Generate ephemeral Golden QA password');
 const financeStep = acceptanceSteps.find((step) => step.name === 'Run controlled staging acceptance over SSH');
@@ -39,6 +40,13 @@ if (workflowDispatch.inputs.diagnostic_only.default !== false) {
 if (diagnosticStep?.if !== '${{ inputs.diagnostic_only == true }}') {
   throw new Error('diagnostic step must run only in diagnostic mode');
 }
+const validationRun = validationStep?.run ?? '';
+if (!validationRun.includes('[[ "$GITHUB_REF" == "refs/heads/main" ]]')) {
+  throw new Error('diagnostic and normal modes must require main');
+}
+if (validationRun.includes('chore/finance-staging-runtime-env-diagnostic')) {
+  throw new Error('temporary diagnostic branch must not retain staging access');
+}
 if (passwordStep?.if !== '${{ inputs.diagnostic_only != true }}' || financeStep?.if !== '${{ inputs.diagnostic_only != true }}') {
   throw new Error('finance acceptance steps must be excluded in diagnostic mode');
 }
@@ -51,6 +59,11 @@ for (const forbidden of ['finance-staging-acceptance.sh', 'finance-staging-accep
 for (const output of ['api_app_env=', 'api_node_env=', 'web_app_env=', 'web_node_env=', 'api_revision=', 'web_revision=']) {
   if (!diagnosticRun.includes(output)) {
     throw new Error(`diagnostic mode must report ${output}`);
+  }
+}
+for (const secret of ['DATABASE_URL', 'JWT_SECRET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY', 'SMTP_PASS', 'SSH_PRIVATE_KEY', 'PAYMENT_PROVIDER']) {
+  if (diagnosticRun.includes(`printf '${secret}=`) || diagnosticRun.includes(`printf "%s" "$${secret}"`)) {
+    throw new Error(`diagnostic mode must not print ${secret}`);
   }
 }
 

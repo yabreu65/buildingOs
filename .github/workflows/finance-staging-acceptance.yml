@@ -37,14 +37,9 @@ jobs:
         shell: bash
         env:
           TESTED_SHA: ${{ inputs.tested_sha }}
-          DIAGNOSTIC_ONLY: ${{ inputs.diagnostic_only }}
         run: |
           set -Eeuo pipefail
-          if [[ "$DIAGNOSTIC_ONLY" == 'true' ]]; then
-            [[ "$GITHUB_REF" == "refs/heads/chore/finance-staging-runtime-env-diagnostic" ]] || { echo "Diagnostic mode must run from the diagnostic branch" >&2; exit 1; }
-          else
-            [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Finance staging acceptance must run from refs/heads/main" >&2; exit 1; }
-          fi
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Finance staging acceptance must run from refs/heads/main" >&2; exit 1; }
           [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "tested_sha must be exactly 40 lowercase hex characters" >&2; exit 1; }
           git cat-file -e "$TESTED_SHA^{commit}"
           git fetch --no-tags origin main
