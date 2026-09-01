@@ -1,0 +1,97 @@
+name: Finance staging acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Exact application SHA already deployed in staging
+        required: true
+        type: string
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: Golden QA finance acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    steps:
+      - name: Checkout control code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate control and tested SHAs
+        shell: bash
+        env:
+          TESTED_SHA: ${{ inputs.tested_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Finance staging acceptance must run from refs/heads/main" >&2; exit 1; }
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "tested_sha must be exactly 40 lowercase hex characters" >&2; exit 1; }
+          git cat-file -e "$TESTED_SHA^{commit}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TESTED_SHA" FETCH_HEAD
+          printf 'control_sha=%s\n' "$(git rev-parse HEAD)"
+          printf 'tested_application_sha=%s\n' "$TESTED_SHA"
+
+      - name: Generate ephemeral Golden QA password
+        id: qa-password
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          qa_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$qa_password"
+          printf 'password=%s\n' "$qa_password" >> "$GITHUB_OUTPUT"
+
+      - name: Run controlled staging acceptance over SSH
+        shell: bash
+        env:
+          TESTED_SHA: ${{ inputs.tested_sha }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          QA_PASSWORD: ${{ steps.qa-password.outputs.password }}
+          APP_PATH: /opt/pawtech/apps/buildingos-staging/buildingos-app
+          COMPOSE_FILE: infra/docker/docker-compose.staging.yml
+          COMPOSE_PROJECT: buildingos-staging
+          ENV_FILE: /opt/pawtech/env/buildingos-staging.env
+          API_BASE_URL: http://buildingos-api:3000
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_PORT" && -n "$KNOWN_HOSTS" ]] || { echo "Staging SSH settings are incomplete" >&2; exit 1; }
+          key_file="$(mktemp)"
+          known_hosts_file="$(mktemp)"
+          cleanup_ssh() {
+            rm -f "$key_file" "$known_hosts_file"
+            unset QA_PASSWORD
+          }
+          trap cleanup_ssh EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(-i "$key_file" -o UserKnownHostsFile="$known_hosts_file" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
+          remote_args=()
+          for arg in "$TESTED_SHA" "$APP_PATH" "$COMPOSE_FILE" "$COMPOSE_PROJECT" "$ENV_FILE" "$API_BASE_URL"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+          printf -v run_identity_quoted '%q' "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+          printf -v remote_command 'bash -c '\''set -Eeuo pipefail; IFS= read -r -N 64 STAGING_GOLDEN_QA_PASSWORD; export STAGING_GOLDEN_QA_PASSWORD FINANCE_ACCEPTANCE_RUN_ID=%s; tmp_dir="$(mktemp -d /tmp/finance-02c-acceptance.XXXXXX)"; cleanup_tmp() { unset STAGING_GOLDEN_QA_PASSWORD; rm -rf "$tmp_dir"; }; trap cleanup_tmp EXIT; tar -xf - -C "$tmp_dir"; bash "$tmp_dir/scripts/finance-staging-acceptance.sh" %s'\''' "$run_identity_quoted" "${remote_args[*]}"
+
+          { printf '%s' "$QA_PASSWORD"; tar -cf - \
+              scripts/finance-staging-acceptance.sh \
+              scripts/finance-staging-acceptance.mjs \
+              apps/api/prisma/seed-staging-golden.ts \
+              apps/api/prisma/lib/staging-seed/staging-golden-seed.ts; } | \
+            ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"

@@ -46,7 +46,7 @@ interface FakeDatabase {
 }
 
 function createFakeDatabase(): FakeDatabase {
-  const names = ['tenant', 'billingPlan', 'subscription', 'building', 'unit', 'user', 'membership', 'membershipRole', 'tenantMember', 'unitOccupant', 'exchangeRate', 'charge', 'payment', 'paymentAllocation', 'paymentAuditLog', 'ticket'];
+  const names = ['tenant', 'billingPlan', 'subscription', 'building', 'unit', 'user', 'membership', 'membershipRole', 'tenantMember', 'unitOccupant', 'expenseLedgerCategory', 'exchangeRate', 'charge', 'payment', 'paymentAllocation', 'paymentAuditLog', 'ticket'];
   const delegates = Object.fromEntries(names.map((name) => [name, new FakeDelegate()])) as Record<string, FakeDelegate>;
   delegates.billingPlan.records.push(
     { id: 'plan-free', planId: 'FREE' },

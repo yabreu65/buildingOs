@@ -190,7 +190,10 @@ require_storage_cutover_preconditions
   --no-deps \
   -T \
   api-migrate < /dev/null
-"${compose[@]}" build buildingos-api buildingos-web
+"${compose[@]}" build \
+  --build-arg BUILD_REVISION="$TARGET_SHA" \
+  --build-arg BUILD_VERSION="$TARGET_SHA" \
+  buildingos-api buildingos-web
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 
 check_http() {
