@@ -7,6 +7,11 @@ on:
         description: Exact application SHA already deployed in staging
         required: true
         type: string
+      diagnostic_only:
+        description: Read-only staging runtime environment diagnostic
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: staging-deploy
@@ -32,9 +37,14 @@ jobs:
         shell: bash
         env:
           TESTED_SHA: ${{ inputs.tested_sha }}
+          DIAGNOSTIC_ONLY: ${{ inputs.diagnostic_only }}
         run: |
           set -Eeuo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Finance staging acceptance must run from refs/heads/main" >&2; exit 1; }
+          if [[ "$DIAGNOSTIC_ONLY" == 'true' ]]; then
+            [[ "$GITHUB_REF" == "refs/heads/chore/finance-staging-runtime-env-diagnostic" ]] || { echo "Diagnostic mode must run from the diagnostic branch" >&2; exit 1; }
+          else
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Finance staging acceptance must run from refs/heads/main" >&2; exit 1; }
+          fi
           [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "tested_sha must be exactly 40 lowercase hex characters" >&2; exit 1; }
           git cat-file -e "$TESTED_SHA^{commit}"
           git fetch --no-tags origin main
@@ -42,8 +52,89 @@ jobs:
           printf 'control_sha=%s\n' "$(git rev-parse HEAD)"
           printf 'tested_application_sha=%s\n' "$TESTED_SHA"
 
+      - name: Inspect staging runtime environment (diagnostic only)
+        if: ${{ inputs.diagnostic_only == true }}
+        shell: bash
+        env:
+          TESTED_SHA: ${{ inputs.tested_sha }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          APP_PATH: /opt/pawtech/apps/buildingos-staging/buildingos-app
+          COMPOSE_FILE: infra/docker/docker-compose.staging.yml
+          COMPOSE_PROJECT: buildingos-staging
+          ENV_FILE: /opt/pawtech/env/buildingos-staging.env
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_PORT" && -n "$KNOWN_HOSTS" ]] || { echo "Staging SSH settings are incomplete" >&2; exit 1; }
+          key_file="$(mktemp)"
+          known_hosts_file="$(mktemp)"
+          cleanup_ssh() {
+            rm -f "$key_file" "$known_hosts_file"
+            unset SSH_PRIVATE_KEY KNOWN_HOSTS
+          }
+          trap cleanup_ssh EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(-i "$key_file" -o UserKnownHostsFile="$known_hosts_file" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
+          remote_args=()
+          for arg in "$TESTED_SHA" "$APP_PATH" "$COMPOSE_FILE" "$COMPOSE_PROJECT" "$ENV_FILE"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+          printf -v remote_command 'bash -s -- %s' "${remote_args[*]}"
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          tested_sha="$1"
+          app_path="$2"
+          compose_file="$3"
+          compose_project="$4"
+          env_file="$5"
+
+          [[ "$app_path" == '/opt/pawtech/apps/buildingos-staging/buildingos-app' ]] || { echo 'Unexpected staging application path' >&2; exit 1; }
+          [[ "$compose_file" == 'infra/docker/docker-compose.staging.yml' ]] || { echo 'Unexpected staging Compose file' >&2; exit 1; }
+          [[ "$compose_project" == 'buildingos-staging' ]] || { echo 'Unexpected staging Compose project' >&2; exit 1; }
+          [[ "$env_file" == '/opt/pawtech/env/buildingos-staging.env' ]] || { echo 'Unexpected staging environment file' >&2; exit 1; }
+
+          get_env() {
+            local container="$1"
+            local expected_name="$2"
+            local name
+            local value
+            while IFS='=' read -r name value; do
+              if [[ "$name" == "$expected_name" ]]; then
+                printf '%s' "$value"
+                return 0
+              fi
+            done < <(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container")
+            return 1
+          }
+
+          api_app_env="$(get_env buildingos-staging-api APP_ENV)"
+          api_node_env="$(get_env buildingos-staging-api NODE_ENV)"
+          web_app_env="$(get_env buildingos-staging-web APP_ENV)"
+          web_node_env="$(get_env buildingos-staging-web NODE_ENV)"
+          api_revision="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-api)"
+          web_revision="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-web)"
+
+          [[ "$api_revision" == "$tested_sha" ]] || { echo 'API revision is not the tested SHA' >&2; exit 1; }
+          [[ "$web_revision" == "$tested_sha" ]] || { echo 'web revision is not the tested SHA' >&2; exit 1; }
+
+          printf 'api_app_env=%s\n' "$api_app_env"
+          printf 'api_node_env=%s\n' "$api_node_env"
+          printf 'web_app_env=%s\n' "$web_app_env"
+          printf 'web_node_env=%s\n' "$web_node_env"
+          printf 'api_revision=%s\n' "$api_revision"
+          printf 'web_revision=%s\n' "$web_revision"
+          REMOTE
+
       - name: Generate ephemeral Golden QA password
         id: qa-password
+        if: ${{ inputs.diagnostic_only != true }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -52,6 +143,7 @@ jobs:
           printf 'password=%s\n' "$qa_password" >> "$GITHUB_OUTPUT"
 
       - name: Run controlled staging acceptance over SSH
+        if: ${{ inputs.diagnostic_only != true }}
         shell: bash
         env:
           TESTED_SHA: ${{ inputs.tested_sha }}
