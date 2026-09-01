@@ -6,6 +6,7 @@ import {
   applyStagingGoldenSeed,
   assertConnectedStagingGoldenTarget,
   assertSafeStagingGoldenEnvironment,
+  selectStagingGoldenDataset,
   STAGING_GOLDEN_PASSWORD_ENV,
   StagingGoldenConnectionClient,
   StagingGoldenWriteClient,
@@ -40,7 +41,11 @@ async function main(): Promise<void> {
     await assertConnectedStagingGoldenTarget(connection, target);
     // The adapter boundary is intentionally unknown-only; the seed itself exposes no
     // generic SQL or destructive delegate and remains tenant/ID scoped.
-    await applyStagingGoldenSeed(prisma as unknown as StagingGoldenWriteClient, passwordHash);
+    await applyStagingGoldenSeed(
+      prisma as unknown as StagingGoldenWriteClient,
+      passwordHash,
+      selectStagingGoldenDataset(process.env),
+    );
     console.log('STG-DATA-01 Golden Dataset applied to verified staging database.');
   } finally {
     await prisma.$disconnect();

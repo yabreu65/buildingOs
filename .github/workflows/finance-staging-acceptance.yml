@@ -91,7 +91,8 @@ jobs:
             printf -v quoted '%q' "$arg"
             remote_args+=("$quoted")
           done
-          printf -v remote_command 'STAGING_GOLDEN_QA_PASSWORD=%q FINANCE_ACCEPTANCE_RUN_ID=%q bash -c '\''set -Eeuo pipefail; tmp_dir="$(mktemp -d /tmp/finance-02c-acceptance.XXXXXX)"; cleanup_tmp() { rm -rf "$tmp_dir"; }; trap cleanup_tmp EXIT; tar -xf - -C "$tmp_dir"; bash "$tmp_dir/scripts/finance-staging-acceptance.sh" %s'\''' "$QA_PASSWORD" "$GITHUB_RUN_ID" "${remote_args[*]}"
+          printf -v run_id_quoted '%q' "$GITHUB_RUN_ID"
+          printf -v remote_command 'bash -c '\''set -Eeuo pipefail; IFS= read -r -N 64 STAGING_GOLDEN_QA_PASSWORD; export STAGING_GOLDEN_QA_PASSWORD FINANCE_ACCEPTANCE_RUN_ID=%s; tmp_dir="$(mktemp -d /tmp/finance-02c-acceptance.XXXXXX)"; cleanup_tmp() { unset STAGING_GOLDEN_QA_PASSWORD; rm -rf "$tmp_dir"; }; trap cleanup_tmp EXIT; tar -xf - -C "$tmp_dir"; bash "$tmp_dir/scripts/finance-staging-acceptance.sh" %s'\''' "$run_id_quoted" "${remote_args[*]}"
 
-          tar -cf - scripts/finance-staging-acceptance.sh scripts/finance-staging-acceptance.mjs | \
+          { printf '%s' "$QA_PASSWORD"; tar -cf - scripts/finance-staging-acceptance.sh scripts/finance-staging-acceptance.mjs; } | \
             ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"

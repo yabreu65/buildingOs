@@ -69,7 +69,7 @@ async function request(method, requestPath, body) {
   return payload;
 }
 
-async function expectRejected(method, requestPath, body) {
+async function expectRejected(method, requestPath, body, expectedStatus) {
   const headers = {
     accept: "application/json",
     "content-type": "application/json",
@@ -83,6 +83,10 @@ async function expectRejected(method, requestPath, body) {
     body: JSON.stringify(body),
   });
   await response.arrayBuffer();
+  assert(
+    response.status === expectedStatus,
+    `${method} ${requestPath} returned an unexpected rejection status`,
+  );
   assert(!response.ok, `${method} ${requestPath} unexpectedly succeeded`);
 }
 
@@ -108,7 +112,9 @@ async function login() {
       : [response.headers.get("set-cookie") ?? ""];
   const values = [];
   for (const cookie of setCookies) {
-    for (const match of cookie.matchAll(/(bo_(?:access|refresh)_token=[^;,]+)/g)) {
+    for (const match of cookie.matchAll(
+      /(bo_(?:access|refresh)_token=[^;,]+)/g,
+    )) {
       values.push(match[1]);
     }
   }
@@ -176,15 +182,20 @@ async function findFinanceCategories() {
 
 async function acceptExpense(expenseCategoryId, period) {
   const invalidDescription = `${marker}:expense-invalid`;
-  await expectRejected("POST", `/tenants/${tenantId}/finance/expenses`, {
-    buildingId,
-    period,
-    categoryId: `stg-golden-invalid-category-${runId}`,
-    amountMinor: 1001,
-    currencyCode: "ARS",
-    invoiceDate: `${acceptanceDate}T12:00:00.000Z`,
-    description: invalidDescription,
-  });
+  await expectRejected(
+    "POST",
+    `/tenants/${tenantId}/finance/expenses`,
+    {
+      buildingId,
+      period,
+      categoryId: `stg-golden-invalid-category-${runId}`,
+      amountMinor: 1001,
+      currencyCode: "ARS",
+      invoiceDate: `${acceptanceDate}T12:00:00.000Z`,
+      description: invalidDescription,
+    },
+    404,
+  );
   const invalidCount = await prisma.expense.count({
     where: { tenantId, description: invalidDescription },
   });
@@ -237,15 +248,20 @@ async function acceptExpense(expenseCategoryId, period) {
 
 async function acceptIncome(incomeCategoryId, period) {
   const invalidDescription = `${marker}:income-invalid`;
-  await expectRejected("POST", `/tenants/${tenantId}/finance/incomes`, {
-    buildingId,
-    period,
-    categoryId: `stg-golden-invalid-income-category-${runId}`,
-    amountMinor: 1002,
-    currencyCode: "ARS",
-    receivedDate: `${acceptanceDate}T12:00:00.000Z`,
-    description: invalidDescription,
-  });
+  await expectRejected(
+    "POST",
+    `/tenants/${tenantId}/finance/incomes`,
+    {
+      buildingId,
+      period,
+      categoryId: `stg-golden-invalid-income-category-${runId}`,
+      amountMinor: 1002,
+      currencyCode: "ARS",
+      receivedDate: `${acceptanceDate}T12:00:00.000Z`,
+      description: invalidDescription,
+    },
+    404,
+  );
   const invalidCount = await prisma.income.count({
     where: { tenantId, description: invalidDescription },
   });
@@ -725,7 +741,7 @@ async function main() {
   );
   const completed = await waitForReceipt(payment.id);
   const receipt = await inspectReceipt(completed);
-  await retryReceipt(payment.id, receipt.persisted);
+  await retryReceipt(payment.id, receipt);
   const finalPayment = await prisma.payment.findUnique({
     where: { id: payment.id },
     select: { id: true, amount: true, currency: true },

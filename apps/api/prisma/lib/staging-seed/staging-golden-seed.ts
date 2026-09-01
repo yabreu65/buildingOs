@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 export const STAGING_GOLDEN_MARKER = 'STG-DATA-01:GOLDEN';
 export const STAGING_GOLDEN_CONFIRMATION = 'STG-DATA-01';
 export const STAGING_GOLDEN_PASSWORD_ENV = 'STAGING_GOLDEN_QA_PASSWORD';
+export const STAGING_GOLDEN_TENANTS_ENV = 'STAGING_GOLDEN_TENANTS';
 
 const STAGING_DATABASE = 'buildingos_staging_db';
 const STAGING_DATABASE_HOST = 'postgres';
@@ -274,6 +275,32 @@ const tenantC: TenantSpec = {
 
 export const STAGING_GOLDEN_DATASET: readonly TenantSpec[] = [tenantA, tenantB, tenantC];
 
+const STAGING_GOLDEN_ACCEPTANCE_TENANTS = new Set([
+  'stg-golden-tenant-auto',
+  'stg-golden-tenant-multi',
+]);
+
+export function selectStagingGoldenDataset(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): readonly TenantSpec[] {
+  const requested = environment[STAGING_GOLDEN_TENANTS_ENV]?.trim();
+  if (!requested) return STAGING_GOLDEN_DATASET;
+
+  const tenantIds = requested.split(',').map((value) => value.trim()).filter(Boolean);
+  if (tenantIds.length === 0 || new Set(tenantIds).size !== tenantIds.length) {
+    throw new Error(`${STAGING_GOLDEN_TENANTS_ENV} must contain unique tenant IDs`);
+  }
+  if (!tenantIds.every((tenantId) => STAGING_GOLDEN_ACCEPTANCE_TENANTS.has(tenantId))) {
+    throw new Error(`${STAGING_GOLDEN_TENANTS_ENV} contains an unauthorized acceptance tenant`);
+  }
+
+  const selected = STAGING_GOLDEN_DATASET.filter((tenant) => tenantIds.includes(tenant.id));
+  if (selected.length !== tenantIds.length) {
+    throw new Error(`${STAGING_GOLDEN_TENANTS_ENV} contains an unknown Golden tenant`);
+  }
+  return selected;
+}
+
 function assertCompatible(existing: RecordValue, expected: Readonly<Record<string, unknown>>, label: string): void {
   const normalize = (value: unknown): unknown => {
     if (value instanceof Date) return value.toISOString();
@@ -371,7 +398,11 @@ function findBuilding(tenant: TenantSpec, alias: string): BuildingSpec {
   return building;
 }
 
-export async function applyStagingGoldenSeed(database: StagingGoldenWriteClient, passwordHash: string): Promise<void> {
+export async function applyStagingGoldenSeed(
+  database: StagingGoldenWriteClient,
+  passwordHash: string,
+  dataset: readonly TenantSpec[] = STAGING_GOLDEN_DATASET,
+): Promise<void> {
   await database.$transaction(async (tx) => {
     const plans = new Map<string, RecordValue>();
     for (const planId of ['FREE', 'PRO'] as const) {
@@ -380,7 +411,7 @@ export async function applyStagingGoldenSeed(database: StagingGoldenWriteClient,
       plans.set(planId, plan);
     }
 
-    for (const tenantSpec of STAGING_GOLDEN_DATASET) {
+    for (const tenantSpec of dataset) {
       const existingById = await tx.tenant.findFirst({ where: { id: tenantSpec.id } });
       const existingByName = await tx.tenant.findFirst({ where: { name: tenantSpec.name } });
       const tenant = existingById ?? existingByName;

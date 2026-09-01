@@ -90,6 +90,8 @@ assert_staging_runtime() {
   check_container_healthy buildingos-staging-postgres
   check_container_healthy buildingos-staging-redis
   check_container_healthy buildingos-staging-web
+  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-api)" == "$EXPECTED_TESTED_SHA" ]] || fail 'running staging API image is not built from the tested application SHA'
+  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-web)" == "$EXPECTED_TESTED_SHA" ]] || fail 'running staging web image is not built from the tested application SHA'
 
   local db_name
   db_name="$(container_env_value buildingos-staging-postgres POSTGRES_DB)"
@@ -154,7 +156,9 @@ main() {
   printf 'tenant_allowlist=%s\n' "$ALLOWED_TENANT"
 
   local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
-  "${compose[@]}" --profile seed-staging-golden run --rm --build -T api-seed-staging-golden
+  "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
+    -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto,stg-golden-tenant-multi \
+    api-seed-staging-golden
 
   "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
