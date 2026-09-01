@@ -418,7 +418,9 @@ async function inspectReceipt(payment) {
     where: { tenantId, objectKey: { startsWith: receiptObjectPrefix } },
     select: { id: true, document: { select: { id: true } } },
   });
-  const documentCount = receiptFiles.filter((file) => file.document !== null).length;
+  const documentCount = receiptFiles.filter(
+    (file) => file.document !== null,
+  ).length;
   const fileCount = receiptFiles.length;
   assert(
     documentCount === 1 &&

@@ -13,6 +13,7 @@ readonly ALLOWED_UNIT='stg-golden-unit-auto-102'
 readonly QA_EMAIL='admin.autogestionada@staging.buildingos.local'
 readonly SNAPSHOT_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly CONTROL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -159,8 +160,8 @@ main() {
   local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
   "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
     -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto,stg-golden-tenant-multi \
-    -v "$SCRIPT_DIR/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
-    -v "$SCRIPT_DIR/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
+    -v "$CONTROL_ROOT/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
+    -v "$CONTROL_ROOT/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
     api-seed-staging-golden
 
   "${compose[@]}" run --rm --no-deps -T \
