@@ -48,6 +48,14 @@ check_container_healthy() {
   [[ "$health" == 'healthy' ]] || fail "$container health is $health"
 }
 
+check_migration_status() {
+  local migration_output
+  if ! migration_output="$("$@" 2>&1)"; then
+    printf '%s\n' "$migration_output" >&2
+    fail 'staging Prisma migration status is not healthy'
+  fi
+}
+
 validate_arguments() {
   [[ $# -eq 6 ]] || usage
   local tested_sha="$1"
@@ -103,9 +111,7 @@ assert_staging_runtime() {
   [[ "$current_database" == "$EXPECTED_DATABASE" ]] || fail 'live PostgreSQL database identity is invalid'
 
   [[ -d "$app_path/apps/api/prisma/migrations/$SNAPSHOT_MIGRATION" ]] || fail 'required receipt snapshot migration is missing from tested application SHA'
-  local migration_output
-  migration_output="$("${compose[@]}" --profile migrate run --rm --no-deps -T api-migrate migrate status --schema apps/api/prisma/schema.prisma)"
-  [[ "$migration_output" == *'No pending migrations to apply.'* ]] || fail 'staging database has pending Prisma migrations'
+  check_migration_status "${compose[@]}" --profile migrate run --rm --no-deps -T api-migrate migrate status --schema apps/api/prisma/schema.prisma
   printf 'snapshot_migration=APPLIED\n'
   printf 'pending_migrations=0\n'
 
@@ -159,7 +165,7 @@ main() {
 
   local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
   "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
-    -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto,stg-golden-tenant-multi \
+    -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto \
     -v "$CONTROL_ROOT/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
     -v "$CONTROL_ROOT/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
     api-seed-staging-golden

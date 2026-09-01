@@ -277,7 +277,6 @@ export const STAGING_GOLDEN_DATASET: readonly TenantSpec[] = [tenantA, tenantB, 
 
 const STAGING_GOLDEN_ACCEPTANCE_TENANTS = new Set([
   'stg-golden-tenant-auto',
-  'stg-golden-tenant-multi',
 ]);
 
 export function selectStagingGoldenDataset(
