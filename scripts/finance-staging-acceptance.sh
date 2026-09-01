@@ -12,6 +12,7 @@ readonly ALLOWED_BUILDING='stg-golden-building-auto'
 readonly ALLOWED_UNIT='stg-golden-unit-auto-102'
 readonly QA_EMAIL='admin.autogestionada@staging.buildingos.local'
 readonly SNAPSHOT_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -158,13 +159,15 @@ main() {
   local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
   "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
     -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto,stg-golden-tenant-multi \
+    -v "$SCRIPT_DIR/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
+    -v "$SCRIPT_DIR/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
     api-seed-staging-golden
 
   "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \
-    -v "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/finance-staging-acceptance.mjs:/opt/finance-staging-acceptance.mjs:ro" \
+    -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/opt/finance-staging-acceptance.mjs:ro" \
     --entrypoint node buildingos-api /opt/finance-staging-acceptance.mjs
 
   local storage_after

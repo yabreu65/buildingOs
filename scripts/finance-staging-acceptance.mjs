@@ -232,8 +232,8 @@ async function acceptExpense(expenseCategoryId, period) {
     updated?.id === expense.id && updated?.status === "DRAFT",
     "Expense DRAFT update failed",
   );
-  const persisted = await prisma.expense.findUnique({
-    where: { id: expense.id },
+  const persisted = await prisma.expense.findFirst({
+    where: { id: expense.id, tenantId },
     select: { tenantId: true, status: true, description: true },
   });
   assert(
@@ -283,8 +283,8 @@ async function acceptIncome(incomeCategoryId, period) {
     income?.tenantId === tenantId && income?.status === "DRAFT",
     "Income did not persist as a Golden DRAFT",
   );
-  const persisted = await prisma.income.findUnique({
-    where: { id: income.id },
+  const persisted = await prisma.income.findFirst({
+    where: { id: income.id, tenantId },
     select: { tenantId: true, status: true, description: true },
   });
   assert(
@@ -358,8 +358,8 @@ async function waitForReceipt(paymentId) {
 }
 
 async function inspectReceipt(payment) {
-  const persisted = await prisma.payment.findUnique({
-    where: { id: payment.id },
+  const persisted = await prisma.payment.findFirst({
+    where: { id: payment.id, tenantId },
     select: {
       id: true,
       tenantId: true,
@@ -409,18 +409,21 @@ async function inspectReceipt(payment) {
     "receipt generation lease was not cleared",
   );
 
-  const documentCount = await prisma.document.count({
+  const document = await prisma.document.findFirst({
     where: { id: persisted.receiptDocumentId, tenantId },
-  });
-  const document = await prisma.document.findUnique({
-    where: { id: persisted.receiptDocumentId },
     select: { id: true, tenantId: true, fileId: true },
   });
-  const fileCount = document
-    ? await prisma.file.count({ where: { id: document.fileId, tenantId } })
-    : 0;
+  const receiptObjectPrefix = `tenant/${tenantId}/payments/${payment.id}/receipts/`;
+  const receiptFiles = await prisma.file.findMany({
+    where: { tenantId, objectKey: { startsWith: receiptObjectPrefix } },
+    select: { id: true, document: { select: { id: true } } },
+  });
+  const documentCount = receiptFiles.filter((file) => file.document !== null).length;
+  const fileCount = receiptFiles.length;
   assert(
-    documentCount === 1 && fileCount === 1,
+    documentCount === 1 &&
+      fileCount === 1 &&
+      document?.fileId === receiptFiles[0]?.id,
     "receipt Document/File cardinality is invalid",
   );
 
@@ -447,8 +450,8 @@ async function inspectReceipt(payment) {
     contentType.toLowerCase().includes("application/pdf"),
     "receipt storage content type is not application/pdf",
   );
-  const file = await prisma.file.findUnique({
-    where: { id: document.fileId },
+  const file = await prisma.file.findFirst({
+    where: { id: document.fileId, tenantId },
     select: {
       bucket: true,
       objectKey: true,
@@ -555,16 +558,19 @@ async function inspectReceipt(payment) {
 }
 
 async function retryReceipt(paymentId, before) {
+  const beforeState = before.persisted;
+  const beforeDocument = before.document;
   const retry = await request(
     "POST",
     `/tenants/${tenantId}/finance/payments/${paymentId}/retry-receipt`,
   );
   assert(
-    retry?.success === true && retry.receiptNumber === before.receiptNumber,
+    retry?.success === true &&
+      retry.receiptNumber === beforeState.receiptNumber,
     "completed receipt retry did not reuse receipt identity",
   );
-  const after = await prisma.payment.findUnique({
-    where: { id: paymentId },
+  const after = await prisma.payment.findFirst({
+    where: { id: paymentId, tenantId },
     select: {
       receiptNumber: true,
       receiptDocumentId: true,
@@ -576,19 +582,19 @@ async function retryReceipt(paymentId, before) {
     },
   });
   assert(
-    after?.receiptNumber === before.receiptNumber &&
-      after.receiptDocumentId === before.receiptDocumentId,
+    after?.receiptNumber === beforeState.receiptNumber &&
+      after.receiptDocumentId === beforeState.receiptDocumentId,
     "receipt retry changed persisted identity",
   );
   assert(
     after.receiptGeneratedAt?.toISOString() ===
-      before.receiptGeneratedAt?.toISOString(),
+      beforeState.receiptGeneratedAt?.toISOString(),
     "receipt retry changed generatedAt",
   );
   assert(
     JSON.stringify(after.receiptSnapshot) ===
-      JSON.stringify(before.receiptSnapshot) &&
-      after.receiptSnapshotHash === before.receiptSnapshotHash,
+      JSON.stringify(beforeState.receiptSnapshot) &&
+      after.receiptSnapshotHash === beforeState.receiptSnapshotHash,
     "receipt retry changed immutable snapshot",
   );
   assert(
@@ -596,19 +602,23 @@ async function retryReceipt(paymentId, before) {
       after.receiptGenerationLeaseUntil === null,
     "receipt retry left a generation lease",
   );
-  const documentCount = await prisma.document.count({
-    where: { id: before.receiptDocumentId, tenantId },
+  const receiptObjectPrefix = `tenant/${tenantId}/payments/${paymentId}/receipts/`;
+  const receiptFiles = await prisma.file.findMany({
+    where: { tenantId, objectKey: { startsWith: receiptObjectPrefix } },
+    select: { id: true, document: { select: { id: true } } },
   });
-  const fileCount = before.document
-    ? await prisma.file.count({
-        where: { id: before.document.fileId, tenantId },
-      })
-    : 0;
+  const documentCount = receiptFiles.filter(
+    (file) => file.document?.id === beforeState.receiptDocumentId,
+  ).length;
+  const fileCount = receiptFiles.length;
   const auditCount = await prisma.paymentAuditLog.count({
     where: { tenantId, paymentId, action: "RECEIPT_GENERATED" },
   });
   assert(
-    documentCount === 1 && fileCount === 1 && auditCount === 1,
+    documentCount === 1 &&
+      fileCount === 1 &&
+      receiptFiles[0]?.id === beforeDocument?.fileId &&
+      auditCount === 1,
     "receipt retry created duplicate evidence",
   );
   console.log("receipt_retry_idempotent=PASS");
@@ -630,8 +640,8 @@ async function databaseIntegrity(payment, chargeId) {
       payment.amount,
     "over-allocation detected",
   );
-  const charge = await prisma.charge.findUnique({
-    where: { id: chargeId },
+  const charge = await prisma.charge.findFirst({
+    where: { id: chargeId, tenantId },
     select: {
       tenantId: true,
       buildingId: true,
@@ -742,8 +752,8 @@ async function main() {
   const completed = await waitForReceipt(payment.id);
   const receipt = await inspectReceipt(completed);
   await retryReceipt(payment.id, receipt);
-  const finalPayment = await prisma.payment.findUnique({
-    where: { id: payment.id },
+  const finalPayment = await prisma.payment.findFirst({
+    where: { id: payment.id, tenantId },
     select: { id: true, amount: true, currency: true },
   });
   assert(finalPayment, "synthetic payment disappeared after retry");
