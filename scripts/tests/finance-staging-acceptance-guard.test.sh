@@ -13,6 +13,10 @@ readonly VALID_ARGS=(
   http://buildingos-api:3000
 )
 
+source "$SCRIPT"
+dynamic_sha_args=("${VALID_ARGS[@]/$SHA/1111111111111111111111111111111111111111}")
+validate_arguments "${dynamic_sha_args[@]}"
+
 run_rejected_case() {
   local name="$1"
   local expected="$2"
@@ -26,8 +30,8 @@ run_rejected_case() {
   [[ "$output" == *"$expected"* ]] || { printf 'FAIL: %s did not report %s\n' "$name" "$expected" >&2; exit 1; }
 }
 
-run_rejected_case 'wrong SHA' 'certified staging application SHA' "${VALID_ARGS[@]/$SHA/0000000000000000000000000000000000000000}"
+run_rejected_case 'wrong SHA' '40-character lowercase hexadecimal' "${VALID_ARGS[@]/$SHA/deadbeef}"
 run_rejected_case 'production path' 'unexpected staging application path' "$SHA" /opt/pawtech/apps/buildingos infra/docker/docker-compose.staging.yml buildingos-staging /opt/pawtech/env/buildingos-staging.env http://buildingos-api:3000
 run_rejected_case 'production Compose project' 'unexpected staging Compose project' "$SHA" /opt/pawtech/apps/buildingos-staging/buildingos-app infra/docker/docker-compose.staging.yml buildingos-production /opt/pawtech/env/buildingos-staging.env http://buildingos-api:3000
 
-printf 'PASS: finance staging acceptance rejects non-certified and non-staging targets\n'
+printf 'PASS: finance staging acceptance rejects invalid and non-staging targets\n'

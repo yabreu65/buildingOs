@@ -57,6 +57,7 @@ export interface StagingGoldenWriteClient {
   readonly membershipRole: RecordDelegate;
   readonly tenantMember: RecordDelegate;
   readonly unitOccupant: RecordDelegate;
+  readonly expenseLedgerCategory: RecordDelegate;
   readonly exchangeRate: RecordDelegate;
   readonly charge: RecordDelegate;
   readonly payment: RecordDelegate;
@@ -431,6 +432,37 @@ export async function applyStagingGoldenSeed(
         }
       }
       const tenantId = tenantRecord.id;
+      const categories = [
+        {
+          id: `stg-golden-category-${tenantSpec.id}-expense`,
+          code: 'STG_QA_BUILDING_EXPENSE',
+          name: 'STG QA Building Expense',
+          description: 'Controlled Golden acceptance expense category',
+          movementType: 'EXPENSE',
+          catalogScope: 'BUILDING',
+          sortOrder: 1,
+          isActive: true,
+        },
+        {
+          id: `stg-golden-category-${tenantSpec.id}-income`,
+          code: 'STG_QA_INCOME',
+          name: 'STG QA Income',
+          description: 'Controlled Golden acceptance income category',
+          movementType: 'INCOME',
+          catalogScope: 'BUILDING',
+          sortOrder: 2,
+          isActive: true,
+        },
+      ] as const;
+      for (const category of categories) {
+        await ensureRecord(
+          tx.expenseLedgerCategory,
+          category.id,
+          { tenantId, ...category },
+          `expense ledger category ${category.name}`,
+          false,
+        );
+      }
       const plan = plans.get(tenantSpec.planId);
       if (!plan) throw new Error(`Golden plan lookup failed: ${tenantSpec.planId}`);
       await ensureRecord(tx.subscription, `stg-golden-subscription-${tenantSpec.id}`, { tenantId, planId: plan.id, status: 'ACTIVE', currentPeriodStart: date(SEED_DATE) }, `subscription ${tenantSpec.name}`, false);

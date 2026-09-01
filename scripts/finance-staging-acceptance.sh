@@ -6,7 +6,6 @@ readonly EXPECTED_COMPOSE_FILE='infra/docker/docker-compose.staging.yml'
 readonly EXPECTED_PROJECT_NAME='buildingos-staging'
 readonly EXPECTED_ENV_FILE='/opt/pawtech/env/buildingos-staging.env'
 readonly EXPECTED_DATABASE='buildingos_staging_db'
-readonly EXPECTED_TESTED_SHA='15b8587c4e4740abd6d91e6c795c83ceeaf6bdcf'
 readonly ALLOWED_TENANT='stg-golden-tenant-auto'
 readonly ALLOWED_BUILDING='stg-golden-building-auto'
 readonly ALLOWED_UNIT='stg-golden-unit-auto-102'
@@ -66,7 +65,6 @@ validate_arguments() {
   local api_base_url="$6"
 
   [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'tested SHA is not a 40-character lowercase hexadecimal commit'
-  [[ "$tested_sha" == "$EXPECTED_TESTED_SHA" ]] || fail 'tested SHA is not the certified staging application SHA'
   [[ "$app_path" == "$EXPECTED_APP_DIR" ]] || fail 'unexpected staging application path'
   [[ "$compose_file" == "$EXPECTED_COMPOSE_FILE" ]] || fail 'unexpected staging Compose file'
   [[ "$project" == "$EXPECTED_PROJECT_NAME" ]] || fail 'unexpected staging Compose project'
@@ -81,16 +79,17 @@ validate_arguments() {
 }
 
 assert_staging_runtime() {
-  local app_path="$1"
-  local compose_file="$2"
-  local project="$3"
-  local env_file="$4"
+  local tested_sha="$1"
+  local app_path="$2"
+  local compose_file="$3"
+  local project="$4"
+  local env_file="$5"
   local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
 
   [[ -d "$app_path/.git" ]] || fail 'staging checkout is missing'
   [[ -r "$env_file" ]] || fail 'staging environment file is missing or unreadable'
   [[ -z "$(git -C "$app_path" status --porcelain --untracked-files=all)" ]] || fail 'staging checkout is not clean'
-  [[ "$(git -C "$app_path" rev-parse HEAD)" == "$EXPECTED_TESTED_SHA" ]] || fail 'staging checkout is not at the tested application SHA'
+  [[ "$(git -C "$app_path" rev-parse HEAD)" == "$tested_sha" ]] || fail 'staging checkout is not at the tested application SHA'
 
   "${compose[@]}" config --quiet
   [[ "$(container_env_value buildingos-staging-api APP_ENV)" == 'staging' ]] || fail 'API APP_ENV is not staging'
@@ -100,8 +99,8 @@ assert_staging_runtime() {
   check_container_healthy buildingos-staging-postgres
   check_container_healthy buildingos-staging-redis
   check_container_healthy buildingos-staging-web
-  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-api)" == "$EXPECTED_TESTED_SHA" ]] || fail 'running staging API image is not built from the tested application SHA'
-  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-web)" == "$EXPECTED_TESTED_SHA" ]] || fail 'running staging web image is not built from the tested application SHA'
+  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-api)" == "$tested_sha" ]] || fail 'running staging API image is not built from the tested application SHA'
+  [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' buildingos-staging-web)" == "$tested_sha" ]] || fail 'running staging web image is not built from the tested application SHA'
 
   local db_name
   db_name="$(container_env_value buildingos-staging-postgres POSTGRES_DB)"
@@ -158,7 +157,7 @@ main() {
   [[ -n "${FINANCE_ACCEPTANCE_RUN_ID:-}" ]] || fail 'acceptance run identity is missing'
 
   local storage_before
-  storage_before="$(assert_staging_runtime "$app_path" "$compose_file" "$project" "$env_file")"
+  storage_before="$(assert_staging_runtime "$tested_sha" "$app_path" "$compose_file" "$project" "$env_file")"
   printf '%s\n' "$storage_before"
   printf 'tested_application_sha=%s\n' "$tested_sha"
   printf 'tenant_allowlist=%s\n' "$ALLOWED_TENANT"
@@ -178,7 +177,7 @@ main() {
     --entrypoint node buildingos-api /opt/finance-staging-acceptance.mjs
 
   local storage_after
-  storage_after="$(assert_staging_runtime "$app_path" "$compose_file" "$project" "$env_file")"
+  storage_after="$(assert_staging_runtime "$tested_sha" "$app_path" "$compose_file" "$project" "$env_file")"
   [[ "$storage_before" == "$storage_after" ]] || fail 'staging storage configuration changed during acceptance'
   [[ "$(git -C "$app_path" rev-parse HEAD)" == "$tested_sha" ]] || fail 'staging checkout changed during acceptance'
   printf 'storage_configuration_unchanged=PASS\n'
