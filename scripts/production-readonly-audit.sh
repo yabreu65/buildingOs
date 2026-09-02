@@ -837,6 +837,7 @@ report_backup_readiness() {
     printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=%s\n' "${latest_dump##*/}"
     printf 'BACKUP_AGE_SECONDS=%s\n' "$age"
   else
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
     printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
     printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'

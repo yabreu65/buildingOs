@@ -11,7 +11,7 @@ S3_MODE='pass'
 docker() {
   case "$*" in
     *'S3_BUCKET'* )
-      printf 'buildingos-production'
+      printf 'S3_BUCKET=buildingos-production'
       ;;
     *'node -e require.resolve'* )
       [[ "$S3_MODE" != 'unavailable' ]] || return 1
@@ -61,7 +61,7 @@ S3_MODE='pass'
 docker() {
   case "$*" in
     *'S3_BUCKET'* )
-      printf 'wrong-production-bucket'
+      printf 'S3_BUCKET=wrong-production-bucket'
       ;;
     *)
       return 1
