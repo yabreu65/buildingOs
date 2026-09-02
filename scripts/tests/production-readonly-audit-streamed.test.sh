@@ -14,16 +14,8 @@ set -e
 [[ "$output" == *'Usage: production-readonly-audit.sh'* ]]
 [[ "$output" != *'BASH_SOURCE[0]: unbound variable'* ]]
 
-missing_tool_bin="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-streamed.XXXXXX")"
-trap 'rm -rf "$missing_tool_bin"' EXIT
-cat > "$missing_tool_bin/docker" <<'SH'
-#!/usr/bin/env bash
-exit 1
-SH
-chmod +x "$missing_tool_bin/docker"
-
 set +e
-output="$(PATH="$missing_tool_bin:/usr/bin:/bin" bash -s -- "$CANDIDATE_SHA" https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
+output="$(PATH="/usr/bin:/bin" bash -s -- "$CANDIDATE_SHA" https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
 rc=$?
 set -e
 
@@ -36,6 +28,7 @@ set -e
 [[ "$output" != *'BASH_SOURCE[0]: unbound variable'* ]]
 
 all_tools_bin="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-jq.XXXXXX")"
+trap 'rm -rf "$all_tools_bin"' EXIT
 for command_name in awk bash cat curl date docker find git sha256sum stat; do
   ln -s "$(command -v "$command_name")" "$all_tools_bin/$command_name"
 done
