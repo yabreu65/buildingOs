@@ -81,7 +81,7 @@ if (!auditorText.includes('require.resolve("minio")')) throw new Error('S3 audit
 if (!auditorText.includes('docker exec -i "$API_CONTAINER" node')) throw new Error('S3 node probe must receive its stdin script');
 if (!auditorText.includes('nextContinuationToken') || !auditorText.includes('isTruncated')) throw new Error('S3 object audit must paginate fully');
 if (!auditorText.includes('S3_DEEP_AUDIT=INCOMPLETE') || !auditorText.includes('AUDIT_EVIDENCE_FAILURES')) throw new Error('incomplete S3 evidence must fail the overall audit');
-for (const marker of ['RUNTIME_IDENTITY=UNKNOWN', 'PUBLIC_READYZ_HTTP=FAIL', 'AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))']) {
+for (const marker of ['checkout_status" == \'CLEAN\'', 'RUNTIME_IDENTITY=UNKNOWN', 'PUBLIC_READYZ_HTTP=FAIL', 'AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))']) {
   if (!auditorText.includes(marker)) throw new Error(`missing fail-closed evidence marker ${marker}`);
 }
 if (!auditorText.includes('EXPECTED_AUTHORITATIVE_BUCKET') || !auditorText.includes("EXPECTED_BUCKET='buildingos-production'")) throw new Error('authoritative production bucket must be reported');

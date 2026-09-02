@@ -211,7 +211,7 @@ report_runtime_identity() {
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
   printf 'API_REVISION=%s\n' "$api_revision"
   printf 'WEB_REVISION=%s\n' "$web_revision"
-  if [[ "$api_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
+  if [[ "$checkout_status" == 'CLEAN' && "$api_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
     printf 'RUNTIME_IDENTITY=UNKNOWN\n'
