@@ -52,4 +52,19 @@ for literal in "'YES'" "'NO'" "'public'" "'Payment'" "'READY'" "'PENDING'" "'FAI
   }
 done
 [[ "$received" == BEGIN\ READ\ ONLY\;*COMMIT\;* ]]
+
+AUDIT_QUERY_FAILURES=0
+AUDIT_INTERNAL_FAILURES=0
+set +e
+invalid_output="$(report_query_stdin INVALID_QUERY <<'SQL' 2>&1
+SELECT 1;
+SQL
+)"
+invalid_rc=$?
+set -e
+[[ "$invalid_rc" -eq 0 ]]
+[[ "$invalid_output" == *'INVALID_QUERY=UNKNOWN'* ]]
+[[ "$invalid_output" == *'SQL payload is missing BEGIN READ ONLY or COMMIT'* ]]
+[[ "$AUDIT_QUERY_FAILURES" -eq 0 ]]
+[[ "$AUDIT_INTERNAL_FAILURES" -eq 1 ]]
 printf 'PASS: SQL literals reach mocked psql stdin unchanged\n'
