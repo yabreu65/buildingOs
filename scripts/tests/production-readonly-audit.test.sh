@@ -93,6 +93,9 @@ for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABL
 }
 if (!auditorText.includes('functional_consumed')) throw new Error('functional-currency consumption must be checked');
 if (!auditorText.includes('production_sha" == "$api_revision"')) throw new Error('checkout and image revisions must match');
+if (!auditorText.includes('status_output="$(git -C "$APP_DIR" status')) throw new Error('git status failures must fail closed');
+if (!auditorText.includes('git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null')) throw new Error('ignored-file inspection failures must fail closed');
+if (!auditorText.includes('WHERE "canceledAt" IS NULL')) throw new Error('canceled charges must not count as duplicate active charges');
 if (!auditorText.includes('ALLOWED_IGNORED_RUNTIME_ENV')) throw new Error('ignored checkout files must use the production allowlist');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');

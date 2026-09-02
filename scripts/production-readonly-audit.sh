@@ -44,7 +44,7 @@ container_health() {
 }
 
 checkout_has_only_approved_ignored_files() {
-  local path pattern
+  local path pattern status_output ignored_paths
   local runtime_env_excluded=false
 
   [[ -f "$APP_DIR/.dockerignore" ]] || return 1
@@ -56,13 +56,18 @@ checkout_has_only_approved_ignored_files() {
   done < "$APP_DIR/.dockerignore"
   [[ "$runtime_env_excluded" == true ]] || return 1
 
-  while IFS= read -r path; do
-    case "$path" in
-      .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.crt|*.log|*.dump|*.sql|*.bak|*.backup)
-        [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
-        ;;
-    esac
-  done < <(git -C "$APP_DIR" ls-files --others --ignored --exclude-standard)
+  if ! ignored_paths="$(git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
+    return 1
+  fi
+  if [[ -n "$ignored_paths" ]]; then
+    while IFS= read -r path; do
+      case "$path" in
+        .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.crt|*.log|*.dump|*.sql|*.bak|*.backup)
+          [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
+          ;;
+      esac
+    done <<< "$ignored_paths"
+  fi
 }
 
 report_container_health() {
@@ -215,11 +220,12 @@ report_runtime_identity() {
   local api_revision='UNKNOWN'
   local web_revision='UNKNOWN'
   local checkout_status='UNKNOWN'
+  local status_output
 
   if [[ -d "$APP_DIR/.git" ]]; then
     production_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
     if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
-      if [[ -z "$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]] && checkout_has_only_approved_ignored_files; then
+      if status_output="$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files; then
         checkout_status='CLEAN'
       else
         checkout_status='DIRTY'
@@ -459,6 +465,7 @@ SELECT count(*)
 FROM (
   SELECT "tenantId", "buildingId", "unitId", period, concept
   FROM "Charge"
+  WHERE "canceledAt" IS NULL
   GROUP BY "tenantId", "buildingId", "unitId", period, concept
   HAVING count(*) > 1
 ) duplicate_keys;
