@@ -20,8 +20,8 @@ build_phase_line="$(line_number "PHASE='build'" "$DEPLOY_SCRIPT")"
 baseline_phase_line="$(line_number "PHASE='migration-baseline'" "$DEPLOY_SCRIPT")"
 migrations_phase_line="$(line_number "PHASE='migrations'" "$DEPLOY_SCRIPT")"
 baseline_line="$(line_number 'verify-production-migration-baseline.sh' "$DEPLOY_SCRIPT")"
-pre_line="$(line_number 'verify-production-migration-manifest.sh verify-db pre' "$DEPLOY_SCRIPT")"
-retry_line="$(line_number 'verify-production-migration-manifest.sh verify-db retry' "$DEPLOY_SCRIPT")"
+early_state_line="$(line_number 'validate_database_migration_state "$TARGET_TREE/scripts/verify-production-migration-manifest.sh"' "$DEPLOY_SCRIPT")"
+later_state_line="$(line_number 'validate_database_migration_state ./scripts/verify-production-migration-manifest.sh' "$DEPLOY_SCRIPT")"
 migrate_line="$(line_number '--profile migrate run --rm --no-deps -T buildingos-migrate' "$DEPLOY_SCRIPT")"
 post_line="$(line_number 'verify-production-migration-manifest.sh verify-db post' "$DEPLOY_SCRIPT")"
 compatibility_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$DEPLOY_SCRIPT")"
@@ -29,7 +29,7 @@ receipt_line="$(line_number 'generate_rollback_compatibility_receipt' "$DEPLOY_S
 recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$DEPLOY_SCRIPT")"
 [[ -n "$backup_phase_line" && -n "$checkout_phase_line" && -n "$build_phase_line" ]]
 [[ -n "$baseline_phase_line" && -n "$migrations_phase_line" && -n "$baseline_line" ]]
-[[ -n "$pre_line" && -n "$retry_line" && -n "$migrate_line" && -n "$post_line" ]]
+[[ -n "$early_state_line" && -n "$later_state_line" && -n "$migrate_line" && -n "$post_line" ]]
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$storage_guard_line" ]]
 [[ -n "$target_tree_line" && -n "$target_compose_line" ]]
@@ -40,6 +40,7 @@ recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-
 (( api_revision_line < revision_match_line && web_revision_line < revision_match_line && revision_match_line < previous_sha_line ))
 [[ "$(grep -F -c 'CURRENT_CHECKOUT_SHA" == "$PREVIOUS_API_REVISION' "$DEPLOY_SCRIPT")" -eq 0 ]]
 [[ "$target_compose_line" -lt "$storage_guard_line" ]]
+[[ "$target_compose_line" -lt "$early_state_line" && "$early_state_line" -lt "$storage_guard_line" ]]
 [[ "$storage_guard_line" -lt "$backup_phase_line" ]]
 [[ "$storage_guard_line" -lt "$build_phase_line" ]]
 [[ "$storage_guard_line" -lt "$migrations_phase_line" ]]
@@ -47,7 +48,7 @@ recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-
 (( backup_phase_line < checkout_phase_line ))
 (( checkout_phase_line < build_phase_line ))
 (( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line ))
-(( baseline_line < pre_line && pre_line < retry_line && retry_line < migrate_line && migrate_line < post_line ))
+(( baseline_line < later_state_line && later_state_line < migrate_line && migrate_line < post_line ))
 (( post_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line ))
 
 env_invocation_count="$(grep -F -c 'env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db' "$DEPLOY_SCRIPT")"

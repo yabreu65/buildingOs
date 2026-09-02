@@ -84,6 +84,29 @@ materialize_target_tree() {
   TARGET_TREE_ACTIVE=true
 }
 
+validate_database_migration_state() {
+  local verifier="$1"
+  local migration_preflight_output
+
+  migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-preflight.XXXXXX)"
+  if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+    bash "$verifier" verify-db pre > "$migration_preflight_output" 2>&1; then
+    cat "$migration_preflight_output"
+    MIGRATION_RETRY=false
+  else
+    if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
+      env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+        bash "$verifier" verify-db retry
+      MIGRATION_RETRY=true
+    else
+      cat "$migration_preflight_output" >&2
+      rm -f "$migration_preflight_output"
+      fail 'Production database did not match the exact 97-migration pre-state'
+    fi
+  fi
+  rm -f "$migration_preflight_output"
+}
+
 write_record() {
   local status="$1"
   install -d -m 700 "$DEPLOYMENTS_DIR"
@@ -201,7 +224,11 @@ readonly TARGET_COMPOSE_FILE="$TARGET_TREE/$COMPOSE_FILE"
 target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$TARGET_COMPOSE_FILE")
 "${target_compose[@]}" config --quiet
 "${target_compose[@]}" --profile migrate config --quiet
-STORAGE_TRANSITION="$(bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME")"
+validate_database_migration_state "$TARGET_TREE/scripts/verify-production-migration-manifest.sh"
+STORAGE_TRANSITION="$(
+  STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY="$MIGRATION_RETRY" \
+    bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME"
+)"
 readonly STORAGE_TRANSITION
 [[ "$STORAGE_TRANSITION" =~ ^STORAGE_TRANSITION=(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] \
   || fail 'Storage transition guard returned an invalid classification'
@@ -254,22 +281,7 @@ done
 
 PHASE='migration-baseline'
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db ./scripts/verify-production-migration-baseline.sh
-migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-preflight.XXXXXX)"
-if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-  bash ./scripts/verify-production-migration-manifest.sh verify-db pre > "$migration_preflight_output" 2>&1; then
-  cat "$migration_preflight_output"
-else
-  if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
-    env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-      bash ./scripts/verify-production-migration-manifest.sh verify-db retry
-    MIGRATION_RETRY=true
-  else
-    cat "$migration_preflight_output" >&2
-    rm -f "$migration_preflight_output"
-    fail 'Production database did not match the exact 97-migration pre-state'
-  fi
-fi
-rm -f "$migration_preflight_output"
+validate_database_migration_state ./scripts/verify-production-migration-manifest.sh
 
 if [[ "$MIGRATION_RETRY" == false ]]; then
   case "$STORAGE_TRANSITION" in

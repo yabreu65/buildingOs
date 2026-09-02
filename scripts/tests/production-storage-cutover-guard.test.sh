@@ -122,6 +122,9 @@ run_case 'MINIO to MINIO without confirmation' PASS
 
 FAKE_API_HEALTH=unhealthy
 run_case 'MINIO to MINIO API unhealthy' FAIL
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true
+run_case 'MINIO to MINIO unhealthy migration retry' PASS
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY
 FAKE_API_HEALTH=healthy FAKE_WEB_HEALTH=unhealthy
 run_case 'MINIO to MINIO web unhealthy' FAIL
 FAKE_WEB_HEALTH=healthy

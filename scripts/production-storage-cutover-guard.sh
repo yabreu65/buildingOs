@@ -188,12 +188,13 @@ current_api_endpoint() {
 
 main() {
   local env_file compose_file project_name
-  local target_endpoint current_endpoint current_provider target_provider confirmation
+  local target_endpoint current_endpoint current_provider target_provider confirmation allow_unhealthy_retry
 
   [[ $# -eq 3 ]] || { usage; return 64; }
   env_file="$1"
   compose_file="$2"
   project_name="$3"
+  allow_unhealthy_retry="${STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY:-false}"
 
   require_target_storage "$env_file" || return 1
   require_target_compose_without_legacy_minio "$env_file" "$compose_file" "$project_name" || return 1
@@ -211,8 +212,13 @@ main() {
 
   case "$current_provider:$target_provider" in
     MINIO:MINIO)
-      require_healthy_container buildingos-api || return 1
-      require_healthy_container buildingos-web || return 1
+      if [[ "$allow_unhealthy_retry" == 'true' ]]; then
+        container_exists buildingos-api || { fail 'API container is unavailable for migration retry'; return 1; }
+        container_exists buildingos-web || { fail 'Web container is unavailable for migration retry'; return 1; }
+      else
+        require_healthy_container buildingos-api || return 1
+        require_healthy_container buildingos-web || return 1
+      fi
       require_minio_topology yes || return 1
       ;;
     MINIO:EXTERNAL_S3)
@@ -223,8 +229,13 @@ main() {
       require_minio_topology no || return 1
       ;;
     EXTERNAL_S3:EXTERNAL_S3)
-      require_healthy_container buildingos-api || return 1
-      require_healthy_container buildingos-web || return 1
+      if [[ "$allow_unhealthy_retry" == 'true' ]]; then
+        container_exists buildingos-api || { fail 'API container is unavailable for migration retry'; return 1; }
+        container_exists buildingos-web || { fail 'Web container is unavailable for migration retry'; return 1; }
+      else
+        require_healthy_container buildingos-api || return 1
+        require_healthy_container buildingos-web || return 1
+      fi
       ;;
     EXTERNAL_S3:MINIO)
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
