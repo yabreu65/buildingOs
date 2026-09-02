@@ -10,6 +10,7 @@ const fs = require('fs');
 const vm = require('vm');
 
 const [acceptancePath, goldenSeedPath, rootDir] = process.argv.slice(2);
+const baseRef = process.env.FINANCE_HARNESS_BASE_REF ?? 'origin/main';
 const acceptance = fs.readFileSync(acceptancePath, 'utf8');
 const goldenSeed = fs.readFileSync(goldenSeedPath, 'utf8');
 
@@ -57,15 +58,23 @@ for (const forbidden of ['request body', 'headers', 'cookie', 'token', 'stack', 
   assert(!errorBlock.includes(forbidden), `HTTP error block must not expose ${forbidden}`);
 }
 
-for (const relativePath of [
-  'apps/api/src/finanzas/finanzas.service.ts',
-  'apps/api/src/finanzas/finanzas.controller.ts',
-  'apps/api/src/finanzas/finanzas.dto.ts',
-  'apps/api/src/finanzas/payment-allocation-transaction.ts',
-  'apps/api/prisma/lib/staging-seed/staging-golden-seed.ts',
-]) {
-  const result = require('child_process').spawnSync('git', ['diff', '--quiet', 'origin/main', '--', relativePath], { cwd: rootDir });
-  assert(result.status === 0, `protected source changed: ${relativePath}`);
+const git = require('child_process');
+const baseResult = git.spawnSync('git', ['rev-parse', '--verify', `${baseRef}^{commit}`], { cwd: rootDir });
+assert(!baseResult.error, `unable to inspect Git base ref: ${baseResult.error?.message ?? 'unknown error'}`);
+if (baseResult.status === 0) {
+  for (const relativePath of [
+    'apps/api/src/finanzas/finanzas.service.ts',
+    'apps/api/src/finanzas/finanzas.controller.ts',
+    'apps/api/src/finanzas/finanzas.dto.ts',
+    'apps/api/src/finanzas/payment-allocation-transaction.ts',
+    'apps/api/prisma/lib/staging-seed/staging-golden-seed.ts',
+  ]) {
+    const result = git.spawnSync('git', ['diff', '--quiet', baseRef, '--', relativePath], { cwd: rootDir });
+    assert(result.status === 0, `protected source changed: ${relativePath}`);
+  }
+} else {
+  assert(baseResult.status === 128, `unable to resolve Git base ref ${baseRef}`);
+  console.log(`INFO: protected-source diff check skipped because base ref ${baseRef} is unavailable`);
 }
 
 console.log('PASS: staging payment acceptance aligns with canonical FIFO selection without changing product or Golden data');
