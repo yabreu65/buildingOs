@@ -93,6 +93,7 @@ for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABL
 }
 if (!auditorText.includes('functional_consumed')) throw new Error('functional-currency consumption must be checked');
 if (!auditorText.includes('inconsistent_same_currency_share') || !auditorText.includes('paymentOriginalAmountMinor" <> a.amount')) throw new Error('same-currency original shares must match charge-side amounts');
+if (!auditorText.includes('has_legacy_cross_currency') || !auditorText.includes('has_conversion_metadata')) throw new Error('legacy cross-currency classification must be exclusive');
 if (!auditorText.includes('production_sha" == "$api_revision"')) throw new Error('checkout and image revisions must match');
 if (!auditorText.includes('status_output="$(git -C "$APP_DIR" status')) throw new Error('git status failures must fail closed');
 if (!auditorText.includes('git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null')) throw new Error('ignored-file inspection failures must fail closed');
@@ -119,6 +120,7 @@ for (const metric of ['NEGATIVE_PAYMENT_ALLOCATIONS', 'NEGATIVE_PAYMENT_ORIGINAL
 if (!auditorText.includes('"paymentOriginalAmountMinor" < 0')) throw new Error('negative original allocation shares must be audited');
 if (!auditorText.includes('--arg completedAt "$completed_at"') || !auditorText.includes('.completed_at == $completedAt')) throw new Error('paired backup freshness must bind receipt and state timestamps');
 if (!auditorText.includes('RUNTIME_APP_SHA') || !auditorText.includes('.app_sha == $runtimeAppSha')) throw new Error('backup evidence must bind to the verified runtime SHA');
+if (!auditorText.includes('versioning" == \'Enabled\'')) throw new Error('S3 audit must require enabled versioning');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

@@ -530,7 +530,24 @@ WITH per_payment AS (
            OR p."conversionDate" IS NULL
            OR (p."exchangeRateDirection" = 'IDENTITY' AND (p."exchangeRateValue" <> 1 OR p."exchangeRateId" IS NOT NULL OR p."exchangeRateEffectiveAt" IS NOT NULL))
            OR (p."exchangeRateDirection" IN ('DIRECT', 'INVERSE') AND (p."exchangeRateValue" <= 0 OR p."exchangeRateId" IS NULL OR p."exchangeRateEffectiveAt" IS NULL))
-         )) AS has_invalid_cross_currency
+          )) AS has_invalid_cross_currency
+         ,bool_or(p.currency <> c.currency AND
+           p."functionalCurrencyCode" IS NULL
+           AND p."functionalAmountMinor" IS NULL
+           AND p."exchangeRateId" IS NULL
+           AND p."exchangeRateValue" IS NULL
+           AND p."exchangeRateDirection" IS NULL
+           AND p."exchangeRateEffectiveAt" IS NULL
+           AND p."conversionDate" IS NULL) AS has_legacy_cross_currency
+         ,bool_or(p.currency <> c.currency AND (
+           p."functionalCurrencyCode" IS NOT NULL
+           OR p."functionalAmountMinor" IS NOT NULL
+           OR p."exchangeRateId" IS NOT NULL
+           OR p."exchangeRateValue" IS NOT NULL
+           OR p."exchangeRateDirection" IS NOT NULL
+           OR p."exchangeRateEffectiveAt" IS NOT NULL
+           OR p."conversionDate" IS NOT NULL
+         )) AS has_conversion_metadata
   FROM "PaymentAllocation" a
   JOIN "Payment" p ON p.id = a."paymentId"
   JOIN "Charge" c ON c.id = a."chargeId"
@@ -538,7 +555,8 @@ WITH per_payment AS (
 )
 SELECT count(*)
 FROM per_payment
-WHERE has_cross_currency AND (has_same_currency OR has_invalid_cross_currency);
+WHERE has_cross_currency
+  AND (has_same_currency OR (has_invalid_cross_currency AND (NOT has_legacy_cross_currency OR has_conversion_metadata)));
 COMMIT;
 SQL
   report_query_stdin 'CURRENCY_MISMATCHES_UNVERIFIABLE' <<'SQL'
@@ -733,7 +751,7 @@ report_s3_posture() {
     if s3_probe head >/dev/null 2>&1; then
       printf 'S3_BUCKET_REACHABLE=YES\n'
       if versioning="$(s3_probe versioning 2>/dev/null)"; then
-        versioning_ok=true
+        [[ "$versioning" == 'Enabled' ]] && versioning_ok=true
       else
         versioning='UNKNOWN'
       fi
