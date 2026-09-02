@@ -47,6 +47,7 @@ report_finance_integrity >/dev/null
 query="$(< "$captured")"
 [[ "$query" == *'paymentOriginalAmountMinor'* ]]
 [[ "$query" == *'"paymentOriginalAmountMinor" < 0'* ]]
+[[ "$query" == *'amount <= 0'* ]]
 [[ "$query" == *'legacy_cross_unverifiable'* ]]
 [[ "$query" == *'has_same_currency'* ]]
 [[ "$query" == *'inconsistent_same_currency_share'* ]]

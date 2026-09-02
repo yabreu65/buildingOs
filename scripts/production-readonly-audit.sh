@@ -425,7 +425,7 @@ COMMIT;
 SQL
   report_query_stdin 'NEGATIVE_PAYMENT_ALLOCATIONS' <<'SQL'
 BEGIN READ ONLY;
-SELECT count(*) FROM "PaymentAllocation" WHERE amount < 0;
+SELECT count(*) FROM "PaymentAllocation" WHERE amount <= 0;
 COMMIT;
 SQL
   report_query_stdin 'NEGATIVE_PAYMENT_ORIGINAL_ALLOCATIONS' <<'SQL'

@@ -118,6 +118,7 @@ for (const metric of ['NEGATIVE_PAYMENT_ALLOCATIONS', 'NEGATIVE_PAYMENT_ORIGINAL
   if (!auditorText.includes(metric)) throw new Error(`missing negative allocation metric ${metric}`);
 }
 if (!auditorText.includes('"paymentOriginalAmountMinor" < 0')) throw new Error('negative original allocation shares must be audited');
+if (!auditorText.includes('WHERE amount <= 0')) throw new Error('zero-value allocations must be audited');
 if (!auditorText.includes('--arg completedAt "$completed_at"') || !auditorText.includes('.completed_at == $completedAt')) throw new Error('paired backup freshness must bind receipt and state timestamps');
 if (!auditorText.includes('RUNTIME_APP_SHA') || !auditorText.includes('.app_sha == $runtimeAppSha')) throw new Error('backup evidence must bind to the verified runtime SHA');
 if (!auditorText.includes('versioning" == \'Enabled\'')) throw new Error('S3 audit must require enabled versioning');
