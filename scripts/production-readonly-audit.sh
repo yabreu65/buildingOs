@@ -29,12 +29,39 @@ usage() {
 }
 
 fail() {
-  printf 'ERROR: %s\n' "$1" >&2
+  AUDIT_INTERNAL_FAILURES=$((AUDIT_INTERNAL_FAILURES + 1))
+  AUDIT_FAILURE_REASON="${1:-unknown}"
+  AUDIT_FAILURE_REASON="${AUDIT_FAILURE_REASON//$'\n'/ }"
+  AUDIT_FAILURE_REASON="${AUDIT_FAILURE_REASON//$'\r'/ }"
+  printf 'ERROR: %s\n' "$AUDIT_FAILURE_REASON" >&2
+  audit_failure_summary >&2
   exit 1
+}
+
+audit_failure_summary() {
+  printf 'AUDIT_STATUS=INCOMPLETE\n' >&2
+  printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES" >&2
+  printf 'AUDIT_EVIDENCE_FAILURES=%s\n' "$AUDIT_EVIDENCE_FAILURES" >&2
+  printf 'AUDIT_INTERNAL_FAILURES=%s\n' "$AUDIT_INTERNAL_FAILURES" >&2
+  printf 'FAILED_STAGE=%s\n' "$AUDIT_STAGE" >&2
+  printf 'FAILURE_CLASS=%s\n' "$AUDIT_FAILURE_CLASS" >&2
+  printf 'FAILURE_REASON=%s\n' "$AUDIT_FAILURE_REASON" >&2
+}
+
+audit_unexpected_error() {
+  local rc=$?
+  AUDIT_INTERNAL_FAILURES=$((AUDIT_INTERNAL_FAILURES + 1))
+  AUDIT_FAILURE_REASON="unexpected command failure at line ${BASH_LINENO[0]-unknown}"
+  audit_failure_summary >&2
+  exit "$rc"
 }
 
 AUDIT_QUERY_FAILURES=0
 AUDIT_EVIDENCE_FAILURES=0
+AUDIT_INTERNAL_FAILURES=0
+AUDIT_STAGE='STARTUP'
+AUDIT_FAILURE_CLASS='AUDITOR_ERROR'
+AUDIT_FAILURE_REASON='UNKNOWN'
 RUNTIME_APP_SHA='UNKNOWN'
 
 container_exists() {
@@ -1002,6 +1029,7 @@ report_minio_posture() {
 main() {
   local url
 
+  trap audit_unexpected_error ERR
   [[ $# -eq 4 ]] || { usage; return 64; }
   readonly CANDIDATE_SHA="$1"
   readonly API_HEALTH_URL="$2"
@@ -1013,42 +1041,59 @@ main() {
     [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
   done
 
-  for command_name in awk bash cat curl date docker find git jq sha256sum stat; do
+  for command_name in awk bash cat curl date docker git jq sha256sum stat; do
     command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
   done
 
   AUDIT_QUERY_FAILURES=0
   AUDIT_EVIDENCE_FAILURES=0
+  AUDIT_INTERNAL_FAILURES=0
+  AUDIT_STAGE='RUNTIME_IDENTITY'
   printf 'PRODUCTION_READONLY_AUDIT\n'
   report_runtime_identity
+  AUDIT_STAGE='CONTAINER_HEALTH'
   report_container_health API "$API_CONTAINER"
   report_container_health WEB "$WEB_CONTAINER"
   report_container_health POSTGRES "$POSTGRES_CONTAINER"
   report_container_health REDIS "$REDIS_CONTAINER"
   report_container_health TRAEFIK "$TRAEFIK_CONTAINER"
+  AUDIT_STAGE='PUBLIC_HEALTH'
   public_get_status PUBLIC_API_HEALTH "$API_HEALTH_URL"
   public_readyz_status
   public_get_status PUBLIC_WEB_LOGIN "$WEB_LOGIN_URL"
+  AUDIT_STAGE='RUNTIME_CONFIG'
   report_safe_runtime_config
+  AUDIT_STAGE='MIGRATIONS'
   report_migrations_and_schema
+  AUDIT_STAGE='FINANCE_COUNTS'
   report_finance_counts
+  AUDIT_STAGE='FINANCE_INTEGRITY'
   report_finance_integrity
+  AUDIT_STAGE='TENANT_CLASSIFICATION'
   report_tenant_classification
+  AUDIT_STAGE='STORAGE_DATABASE'
   report_storage_database_buckets
+  AUDIT_STAGE='S3'
   report_s3_posture
+  AUDIT_STAGE='MINIO'
   report_minio_posture
+  AUDIT_STAGE='BACKUP'
   report_backup_readiness
 
   if (( AUDIT_QUERY_FAILURES == 0 && AUDIT_EVIDENCE_FAILURES == 0 )); then
+    trap - ERR
     printf 'AUDIT_STATUS=COMPLETE\n'
+    printf 'AUDIT_QUERY_FAILURES=0\nAUDIT_EVIDENCE_FAILURES=0\nAUDIT_INTERNAL_FAILURES=%s\n' "$AUDIT_INTERNAL_FAILURES"
   else
+    trap - ERR
     printf 'AUDIT_STATUS=INCOMPLETE\n'
     printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES"
     printf 'AUDIT_EVIDENCE_FAILURES=%s\n' "$AUDIT_EVIDENCE_FAILURES"
+    printf 'AUDIT_INTERNAL_FAILURES=%s\n' "$AUDIT_INTERNAL_FAILURES"
     return 1
   fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ -z "${BASH_SOURCE[0]-}" || "${BASH_SOURCE[0]-}" == "$0" ]]; then
   main "$@"
 fi
