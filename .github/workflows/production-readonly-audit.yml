@@ -1,0 +1,105 @@
+name: Production read-only audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Informational certified application SHA under review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-operations
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit production without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT || '22' }}
+      API_HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL }}
+      API_READYZ_URL: ${{ vars.PRODUCTION_API_READYZ_URL }}
+      WEB_LOGIN_URL: ${{ vars.PRODUCTION_WEB_LOGIN_URL }}
+    steps:
+      - name: Checkout trusted audit control
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate audit target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ "$API_HEALTH_URL" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]]
+          [[ "$API_READYZ_URL" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]]
+          [[ "$WEB_LOGIN_URL" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]]
+          test -x scripts/production-readonly-audit.sh
+
+      - name: Record deployment tooling observation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          deploy_migration_count="$(awk -F "'" '/MIGRATION_COUNT.*==/ { print $2; exit }' scripts/deploy-production.sh)"
+          manifest_target_applied="$(awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/ { value=$2; gsub(/[[:space:]]/, "", value); gsub(/\047/, "", value); if (value ~ /^[0-9]+$/) { print value; exit } }' scripts/verify-production-migration-manifest.sh)"
+          [[ -n "$deploy_migration_count" ]] || deploy_migration_count='UNKNOWN'
+          [[ -n "$manifest_target_applied" ]] || manifest_target_applied='UNKNOWN'
+          certified_migration_count="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d '[:space:]')"
+          printf 'DEPLOY_TOOLING_FINAL_MIGRATION_COUNT=%s\n' "$deploy_migration_count"
+          printf 'DEPLOY_TOOLING_MANIFEST_TARGET_APPLIED=%s\n' "$manifest_target_applied"
+          printf 'CERTIFIED_MIGRATION_COUNT=%s\n' "$certified_migration_count"
+          if [[ "$deploy_migration_count" =~ ^[0-9]+$ && "$manifest_target_applied" =~ ^[0-9]+$ && "$certified_migration_count" =~ ^[0-9]+$ && "$deploy_migration_count" == "$manifest_target_applied" && "$certified_migration_count" -gt "$deploy_migration_count" ]]; then
+            printf 'DEPLOY_TOOLING_COMPATIBLE=NO\n'
+          elif [[ "$deploy_migration_count" =~ ^[0-9]+$ && "$manifest_target_applied" =~ ^[0-9]+$ && "$certified_migration_count" =~ ^[0-9]+$ && "$deploy_migration_count" == "$manifest_target_applied" && "$certified_migration_count" == "$deploy_migration_count" ]]; then
+            printf 'DEPLOY_TOOLING_COMPATIBLE=YES\n'
+          else
+            printf 'DEPLOY_TOOLING_COMPATIBLE=UNKNOWN\n'
+          fi
+          printf 'DEPLOY_TOOLING_MODIFIED=NO\n'
+
+      - name: Stream production read-only audit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/production-audit-key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/production-audit-known-hosts.XXXXXX")"
+          cleanup() { rm -f "$key_file" "$known_hosts_file"; }
+          trap cleanup EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(
+            -i "$key_file"
+            -o UserKnownHostsFile="$known_hosts_file"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+            -p "$SSH_PORT"
+          )
+          remote_args=()
+          for arg in "$CANDIDATE_SHA" "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
+            printf -v quoted '%q' "$arg"
+            remote_args+=("$quoted")
+          done
+
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
+            "bash -s -- ${remote_args[*]}" < scripts/production-readonly-audit.sh
