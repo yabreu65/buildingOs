@@ -8,6 +8,10 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 source "$AUDITOR"
 
+auditor_text="$(< "$AUDITOR")"
+[[ "$auditor_text" == *'--arg completedAt "$completed_at"'* ]]
+[[ "$auditor_text" == *'.completed_at == $completedAt'* ]]
+
 dump="$TEST_ROOT/existing.dump"
 printf 'existing custom archive fixture\n' > "$dump"
 

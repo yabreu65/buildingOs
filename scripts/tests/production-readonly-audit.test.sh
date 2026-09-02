@@ -112,7 +112,11 @@ if (!auditorText.includes('has_same_currency')) throw new Error('mixed allocatio
 if (!auditorText.includes('CHARGE_OVER_ALLOCATIONS')) throw new Error('charge-side over-allocation must be audited');
 if (!auditorText.includes("checksum_status='INCOMPLETE'")) throw new Error('missing backup checksums must fail closed');
 if (!auditorText.includes('BACKUP_STATE_DIR') || !auditorText.includes('paired-$backup_set_id.json')) throw new Error('backup readiness must use durable paired state');
-if (!auditorText.includes('NEGATIVE_PAYMENT_ALLOCATIONS')) throw new Error('negative allocations must be audited');
+for (const metric of ['NEGATIVE_PAYMENT_ALLOCATIONS', 'NEGATIVE_PAYMENT_ORIGINAL_ALLOCATIONS']) {
+  if (!auditorText.includes(metric)) throw new Error(`missing negative allocation metric ${metric}`);
+}
+if (!auditorText.includes('"paymentOriginalAmountMinor" < 0')) throw new Error('negative original allocation shares must be audited');
+if (!auditorText.includes('--arg completedAt "$completed_at"') || !auditorText.includes('.completed_at == $completedAt')) throw new Error('paired backup freshness must bind receipt and state timestamps');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

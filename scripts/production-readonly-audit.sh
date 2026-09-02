@@ -425,6 +425,11 @@ BEGIN READ ONLY;
 SELECT count(*) FROM "PaymentAllocation" WHERE amount < 0;
 COMMIT;
 SQL
+  report_query_stdin 'NEGATIVE_PAYMENT_ORIGINAL_ALLOCATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "PaymentAllocation" WHERE "paymentOriginalAmountMinor" < 0;
+COMMIT;
+SQL
   if value="$(readonly_query_stdin <<'SQL'
 BEGIN READ ONLY;
 WITH per_payment AS (
@@ -884,11 +889,12 @@ report_backup_readiness() {
       (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )); then
       paired_receipt="$BACKUP_STATE_DIR/paired-$backup_set_id.json"
       if [[ -f "$paired_receipt" && ! -L "$paired_receipt" && -r "$paired_receipt" ]] &&
-        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" '
+        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" --arg completedAt "$completed_at" '
           .version == 1 and
           .status == "PASS" and
           .backup_set_id == $backupSetId and
           .app_sha == $appSha and
+          .completed_at == $completedAt and
           .minio_verified == true and
           (.postgres_receipt.version == 1) and
           (.postgres_receipt.status == "PASS") and
