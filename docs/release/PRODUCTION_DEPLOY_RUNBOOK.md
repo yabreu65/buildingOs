@@ -88,6 +88,8 @@ The workflow sends the versioned deploy script, security validator, and `infra/p
 
 The official backup produces PostgreSQL custom dumps and checksums. Deployment requires a newly created backup directory, verifies the dump checksum, and validates the custom archive with `pg_restore --list` before checkout, build, or migration. Validate custom dumps with `pg_restore`, not the legacy gzip/plain-SQL restore script.
 
+The latest authorized production read-only preflight recorded `BACKUP_READINESS=INCOMPLETE`; deployment remains blocked until backup readiness is separately proven. This observation does not authorize creating or executing a backup in a tooling change.
+
 Temporary restore example:
 
 ```bash
@@ -106,14 +108,14 @@ For incident recovery, use the separately gated candidate-restore, swap, and rev
 
 ## Exact migration transition
 
-`scripts/manifests/production-migrations-81-to-97.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 16 migration names and SHA-256 values, and a final state of 97 successful migrations with zero failed or rolled-back rows. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
+`scripts/manifests/production-migrations-81-to-98.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 17 migration names and SHA-256 values, and a final state of 98 successful migrations with zero failed or rolled-back rows. The verified production pre-deploy state is 97 successful migrations with `20260831000000_add_payment_receipt_issuance_snapshot` pending. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
 
 The deploy sequence is fail-closed:
 
 1. The workflow validates the manifest and local migration files before opening SSH.
 2. After the exact target checkout, deployment revalidates local files from that target.
-3. Immediately before `prisma migrate deploy`, the database must match the exact 81-row baseline and contain none of the 16 pending rows.
-4. Immediately after migration, the database must contain exactly the 97 expected active, finished rows; all 16 new database checksums must match the manifest.
+3. Immediately before `prisma migrate deploy`, the database must match the verified 97-row production pre-state and contain only the exact target migration pending.
+4. Immediately after migration, the database must contain exactly the 98 expected active, finished rows; all 17 new database checksums must match the manifest.
 
 Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. No zero-step row is accepted outside the immutable historical exception manifest. Do not edit migration history or bypass the verifier.
 
@@ -132,7 +134,7 @@ target_sha=<deployed-40-character-sha>
 previous_sha=<previous-40-character-sha>
 previous_api_digest=sha256:<64-hex>
 previous_web_digest=sha256:<64-hex>
-migration_count=97
+migration_count=98
 ```
 
 The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with directory mode exactly `0700` and receipt mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.

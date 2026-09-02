@@ -262,7 +262,7 @@ PHASE='migrations'
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
 MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
-[[ "$MIGRATION_COUNT" == '97' ]] || fail "Final migration count is not exactly 97"
+[[ "$MIGRATION_COUNT" == '98' ]] || fail "Final migration count is not exactly 98"
 
 PHASE='rollback-compatibility'
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"
