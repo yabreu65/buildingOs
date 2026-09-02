@@ -70,14 +70,21 @@ for (const key of safeEnvAllowlist) {
 for (const secretName of ['DATABASE_URL', 'JWT_SECRET', 'SMTP_PASS', 'SSH_PRIVATE_KEY']) {
   if (auditorText.includes(secretName)) throw new Error(`auditor must not read ${secretName}`);
 }
+if (!auditorText.includes('readonly_query_stdin')) throw new Error('database queries must use stdin transport');
 if (!auditorText.includes('BEGIN READ ONLY;')) throw new Error('database query sessions must begin read only');
 if ((auditorText.match(/psql/g) ?? []).length !== 1) throw new Error('all database queries must use one guarded psql helper');
 if (!auditorText.includes('COMMIT;')) throw new Error('read-only query sessions must terminate explicitly');
+if (auditorText.includes("report_query '") || auditorText.includes('readonly_query ')) throw new Error('fragile SQL argument transport must not remain');
 if (!auditorText.includes('pg_restore --list')) throw new Error('existing backups must be inspectable without creation');
 if (!auditorText.includes('S3_DEEP_AUDIT_UNAVAILABLE')) throw new Error('unsupported S3 clients must be reported');
+if (!auditorText.includes('S3_DEEP_AUDIT=INCOMPLETE') || !auditorText.includes('AUDIT_EVIDENCE_FAILURES')) throw new Error('incomplete S3 evidence must fail the overall audit');
 if (!auditorText.includes('EXPECTED_AUTHORITATIVE_BUCKET') || !auditorText.includes("EXPECTED_BUCKET='buildingos-production'")) throw new Error('authoritative production bucket must be reported');
 if (!auditorText.includes('TENANT_REAL_BUSINESS=UNKNOWN')) throw new Error('real-business classification must fail closed');
 if (!auditorText.includes('TARGET_MIGRATION_STATUS')) throw new Error('target migration state must be reported');
+if (auditorText.includes("'CURRENCY_MISMATCHES'")) throw new Error('cross-currency audit must not use the old unconditional mismatch metric');
+for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABLE', 'CURRENCY_MISMATCHES_DEFINITE', 'CURRENCY_MISMATCHES_UNVERIFIABLE']) {
+  if (!auditorText.includes(metric)) throw new Error(`missing cross-currency metric ${metric}`);
+}
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

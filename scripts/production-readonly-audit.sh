@@ -27,22 +27,8 @@ fail() {
   exit 1
 }
 
-[[ $# -eq 4 ]] || { usage; exit 64; }
-readonly CANDIDATE_SHA="$1"
-readonly API_HEALTH_URL="$2"
-readonly API_READYZ_URL="$3"
-readonly WEB_LOGIN_URL="$4"
-
-[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'candidate SHA is not exactly 40 lowercase hexadecimal characters'
-for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
-  [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
-done
-
-for command_name in bash curl date docker find git sha256sum stat; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
-done
-
 AUDIT_QUERY_FAILURES=0
+AUDIT_EVIDENCE_FAILURES=0
 
 container_exists() {
   docker inspect --type container "$1" >/dev/null 2>&1
@@ -133,19 +119,22 @@ storage_backend_from_host() {
   esac
 }
 
-readonly_query() {
-  local query="$1"
-  docker exec -i "$POSTGRES_CONTAINER" sh -lc \
-    'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1" -c "$2"' \
-    sh "$DATABASE_NAME" "BEGIN READ ONLY; ${query}; COMMIT;"
+readonly_query_stdin() {
+  local query
+
+  query="$(< /dev/stdin)"
+  [[ "$query" == *'BEGIN READ ONLY;'* ]] || fail 'SQL payload is missing BEGIN READ ONLY'
+  [[ "$query" == *'COMMIT;'* ]] || fail 'SQL payload is missing COMMIT'
+  printf '%s\n' "$query" | docker exec -i "$POSTGRES_CONTAINER" sh -lc \
+    'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' \
+    sh "$DATABASE_NAME"
 }
 
-report_query() {
+report_query_stdin() {
   local key="$1"
-  local query="$2"
   local value
 
-  if value="$(readonly_query "$query" 2>/dev/null)"; then
+  if value="$(readonly_query_stdin 2>/dev/null)"; then
     printf '%s=%s\n' "$key" "$value"
   else
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
@@ -244,16 +233,63 @@ report_safe_runtime_config() {
 report_migrations_and_schema() {
   local receipt_columns
 
-  report_query 'DATABASE_NAME' 'SELECT current_database()'
-  report_query 'ACTIVE_FINISHED_MIGRATIONS' 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'
-  report_query 'FAILED_MIGRATIONS' 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
-  report_query 'MIGRATIONS_AFTER_KNOWN_BASELINE' "SELECT COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE') FROM \"_prisma_migrations\" WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE' AND finished_at IS NOT NULL AND rolled_back_at IS NULL"
-  report_query 'TARGET_MIGRATION_STATUS' "SELECT CASE WHEN count(*) = 0 THEN 'NOT_APPLIED' WHEN count(*) = 1 AND bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL) THEN 'APPLIED' ELSE 'AMBIGUOUS' END FROM \"_prisma_migrations\" WHERE migration_name = '$TARGET_MIGRATION'"
-  if receipt_columns="$(readonly_query 'SELECT CASE WHEN count(*) = 6 THEN ''YES'' ELSE ''NO'' END FROM information_schema.columns WHERE table_schema = ''public'' AND table_name = ''Payment'' AND column_name IN (''receiptSnapshot'', ''receiptSnapshotVersion'', ''receiptSnapshotHash'', ''receiptSnapshotCreatedAt'', ''receiptGenerationToken'', ''receiptGenerationLeaseUntil'')' 2>/dev/null)"; then
+  report_query_stdin 'DATABASE_NAME' <<'SQL'
+BEGIN READ ONLY;
+SELECT current_database();
+COMMIT;
+SQL
+  report_query_stdin 'ACTIVE_FINISHED_MIGRATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;
+COMMIT;
+SQL
+  report_query_stdin 'FAILED_MIGRATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL;
+COMMIT;
+SQL
+  report_query_stdin 'MIGRATIONS_AFTER_KNOWN_BASELINE' <<SQL
+BEGIN READ ONLY;
+SELECT COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE')
+FROM "_prisma_migrations"
+WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE'
+  AND finished_at IS NOT NULL
+  AND rolled_back_at IS NULL;
+COMMIT;
+SQL
+  report_query_stdin 'TARGET_MIGRATION_STATUS' <<SQL
+BEGIN READ ONLY;
+SELECT CASE
+  WHEN count(*) = 0 THEN 'NOT_APPLIED'
+  WHEN count(*) = 1 AND bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL) THEN 'APPLIED'
+  ELSE 'AMBIGUOUS'
+END
+FROM "_prisma_migrations"
+WHERE migration_name = '$TARGET_MIGRATION';
+COMMIT;
+SQL
+  if receipt_columns="$(readonly_query_stdin <<'SQL'
+BEGIN READ ONLY;
+SELECT CASE WHEN count(*) = 6 THEN 'YES' ELSE 'NO' END
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'Payment'
+  AND column_name IN ('receiptSnapshot', 'receiptSnapshotVersion', 'receiptSnapshotHash', 'receiptSnapshotCreatedAt', 'receiptGenerationToken', 'receiptGenerationLeaseUntil');
+COMMIT;
+SQL
+  2>/dev/null)"; then
     printf 'RECEIPT_SNAPSHOT_COLUMNS=%s\n' "$receipt_columns"
     if [[ "$receipt_columns" == 'YES' ]]; then
-      report_query 'RECEIPT_GENERATION_TOKEN_COUNT' 'SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL'
-      report_query 'ACTIVE_RECEIPT_GENERATION_LEASE_COUNT' 'SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" > CURRENT_TIMESTAMP'
+      report_query_stdin 'RECEIPT_GENERATION_TOKEN_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL;
+COMMIT;
+SQL
+      report_query_stdin 'ACTIVE_RECEIPT_GENERATION_LEASE_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" > CURRENT_TIMESTAMP;
+COMMIT;
+SQL
     else
       printf 'RECEIPT_GENERATION_TOKEN_COUNT=NOT_APPLICABLE\n'
       printf 'ACTIVE_RECEIPT_GENERATION_LEASE_COUNT=NOT_APPLICABLE\n'
@@ -265,29 +301,211 @@ report_migrations_and_schema() {
 }
 
 report_finance_counts() {
-  report_query 'PAYMENTS_COUNT' 'SELECT count(*) FROM "Payment"'
-  report_query 'PAYMENT_ALLOCATIONS_COUNT' 'SELECT count(*) FROM "PaymentAllocation"'
-  report_query 'EXPENSES_COUNT' 'SELECT count(*) FROM "Expense"'
-  report_query 'INCOMES_COUNT' 'SELECT count(*) FROM "Income"'
-  report_query 'CHARGES_COUNT' 'SELECT count(*) FROM "Charge"'
-  report_query 'RECEIPT_STATUS_COUNTS' 'SELECT ''READY='' || count(*) FILTER (WHERE "receiptStatus" = ''READY'') || '',PENDING='' || count(*) FILTER (WHERE "receiptStatus" = ''PENDING'') || '',FAILED='' || count(*) FILTER (WHERE "receiptStatus" = ''FAILED'') FROM "Payment"'
-  report_query 'PAYMENT_AUDIT_TOTAL' 'SELECT count(*) FROM "PaymentAuditLog"'
-  report_query 'PAYMENT_AUDIT_ACTION_COUNTS' 'SELECT ''SUBMITTED='' || count(*) FILTER (WHERE action = ''SUBMITTED'') || '',APPROVED='' || count(*) FILTER (WHERE action = ''APPROVED'') || '',RECONCILED='' || count(*) FILTER (WHERE action = ''RECONCILED'') || '',RECEIPT_GENERATED='' || count(*) FILTER (WHERE action = ''RECEIPT_GENERATED'') FROM "PaymentAuditLog"'
+  report_query_stdin 'PAYMENTS_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Payment";
+COMMIT;
+SQL
+  report_query_stdin 'PAYMENT_ALLOCATIONS_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "PaymentAllocation";
+COMMIT;
+SQL
+  report_query_stdin 'EXPENSES_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Expense";
+COMMIT;
+SQL
+  report_query_stdin 'INCOMES_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Income";
+COMMIT;
+SQL
+  report_query_stdin 'CHARGES_COUNT' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "Charge";
+COMMIT;
+SQL
+  report_query_stdin 'RECEIPT_STATUS_COUNTS' <<'SQL'
+BEGIN READ ONLY;
+SELECT 'READY=' || count(*) FILTER (WHERE "receiptStatus" = 'READY')
+  || ',PENDING=' || count(*) FILTER (WHERE "receiptStatus" = 'PENDING')
+  || ',FAILED=' || count(*) FILTER (WHERE "receiptStatus" = 'FAILED')
+FROM "Payment";
+COMMIT;
+SQL
+  report_query_stdin 'PAYMENT_AUDIT_TOTAL' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "PaymentAuditLog";
+COMMIT;
+SQL
+  report_query_stdin 'PAYMENT_AUDIT_ACTION_COUNTS' <<'SQL'
+BEGIN READ ONLY;
+SELECT 'SUBMITTED=' || count(*) FILTER (WHERE action = 'SUBMITTED')
+  || ',APPROVED=' || count(*) FILTER (WHERE action = 'APPROVED')
+  || ',RECONCILED=' || count(*) FILTER (WHERE action = 'RECONCILED')
+  || ',RECEIPT_GENERATED=' || count(*) FILTER (WHERE action = 'RECEIPT_GENERATED')
+FROM "PaymentAuditLog";
+COMMIT;
+SQL
 }
 
 report_finance_integrity() {
-  report_query 'ORPHAN_ALLOCATIONS' 'SELECT count(*) FROM "PaymentAllocation" a LEFT JOIN "Payment" p ON p.id = a."paymentId" LEFT JOIN "Charge" c ON c.id = a."chargeId" WHERE p.id IS NULL OR c.id IS NULL OR a."tenantId" <> p."tenantId" OR a."tenantId" <> c."tenantId"'
-  report_query 'OVER_ALLOCATIONS' 'SELECT count(*) FROM (SELECT a."paymentId" FROM "PaymentAllocation" a JOIN "Payment" p ON p.id = a."paymentId" GROUP BY a."paymentId", p.amount HAVING COALESCE(sum(a.amount), 0) > p.amount) over_allocated'
-  report_query 'DUPLICATE_CANONICAL_CHARGE_KEYS' 'SELECT count(*) FROM (SELECT "tenantId", "buildingId", "unitId", period, concept FROM "Charge" GROUP BY "tenantId", "buildingId", "unitId", period, concept HAVING count(*) > 1) duplicate_keys'
-  report_query 'CURRENCY_MISMATCHES' 'SELECT count(*) FROM "PaymentAllocation" a JOIN "Payment" p ON p.id = a."paymentId" JOIN "Charge" c ON c.id = a."chargeId" WHERE p.currency <> c.currency OR a."tenantId" <> p."tenantId" OR a."tenantId" <> c."tenantId"'
-  report_query 'DUPLICATE_RECEIPT_FILE_GRAPHS' 'SELECT count(*) FROM (SELECT d."fileId" FROM "Payment" p JOIN "Document" d ON d.id = p."receiptDocumentId" JOIN "File" f ON f.id = d."fileId" WHERE p."receiptDocumentId" IS NOT NULL GROUP BY d."fileId" HAVING count(*) > 1) duplicate_files'
-  report_query 'DUPLICATE_RECEIPT_DOCUMENT_GRAPHS' 'SELECT count(*) FROM (SELECT p."receiptDocumentId" FROM "Payment" p WHERE p."receiptDocumentId" IS NOT NULL GROUP BY p."receiptDocumentId" HAVING count(*) > 1) duplicate_documents'
-  report_query 'DUPLICATE_RECEIPT_GENERATED_AUDITS' 'SELECT count(*) FROM (SELECT "tenantId", "paymentId" FROM "PaymentAuditLog" WHERE action = ''RECEIPT_GENERATED'' GROUP BY "tenantId", "paymentId" HAVING count(*) > 1) duplicate_audits'
+  report_query_stdin 'ORPHAN_ALLOCATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM "PaymentAllocation" a
+LEFT JOIN "Payment" p ON p.id = a."paymentId"
+LEFT JOIN "Charge" c ON c.id = a."chargeId"
+WHERE p.id IS NULL
+   OR c.id IS NULL
+   OR a."tenantId" <> p."tenantId"
+   OR a."tenantId" <> c."tenantId";
+COMMIT;
+SQL
+  if value="$(readonly_query_stdin <<'SQL'
+BEGIN READ ONLY;
+WITH per_payment AS (
+  SELECT p.id,
+         p.amount,
+         bool_or(a."paymentOriginalAmountMinor" IS NULL AND c.currency <> p.currency) AS legacy_cross_unverifiable,
+         COALESCE(sum(
+           CASE
+             WHEN a."paymentOriginalAmountMinor" IS NOT NULL THEN a."paymentOriginalAmountMinor"
+             WHEN c.currency = p.currency THEN a.amount
+             ELSE 0
+           END
+         ), 0) AS original_consumed
+  FROM "Payment" p
+  JOIN "PaymentAllocation" a ON a."paymentId" = p.id
+  JOIN "Charge" c ON c.id = a."chargeId"
+  GROUP BY p.id, p.amount
+)
+SELECT count(*) FILTER (WHERE NOT legacy_cross_unverifiable AND original_consumed > amount)
+       || '|' || count(*) FILTER (WHERE legacy_cross_unverifiable)
+FROM per_payment;
+COMMIT;
+SQL
+  2>/dev/null)"; then
+    local definite_overallocations unverifiable_overallocations
+    IFS='|' read -r definite_overallocations unverifiable_overallocations <<< "$value"
+    if [[ "$definite_overallocations" =~ ^[0-9]+$ && "$unverifiable_overallocations" =~ ^[0-9]+$ ]]; then
+      printf 'OVER_ALLOCATIONS_DEFINITE=%s\n' "$definite_overallocations"
+      printf 'OVER_ALLOCATIONS_UNVERIFIABLE=%s\n' "$unverifiable_overallocations"
+    else
+      AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+      printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\n'
+    fi
+  else
+    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\n'
+  fi
+  report_query_stdin 'DUPLICATE_CANONICAL_CHARGE_KEYS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM (
+  SELECT "tenantId", "buildingId", "unitId", period, concept
+  FROM "Charge"
+  GROUP BY "tenantId", "buildingId", "unitId", period, concept
+  HAVING count(*) > 1
+) duplicate_keys;
+COMMIT;
+SQL
+  report_query_stdin 'CURRENCY_MISMATCHES_DEFINITE' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(DISTINCT p.id)
+FROM "PaymentAllocation" a
+JOIN "Payment" p ON p.id = a."paymentId"
+JOIN "Charge" c ON c.id = a."chargeId"
+WHERE p.currency <> c.currency
+  AND (
+    p."functionalCurrencyCode" IS NOT NULL
+    OR p."functionalAmountMinor" IS NOT NULL
+    OR p."exchangeRateId" IS NOT NULL
+    OR p."exchangeRateValue" IS NOT NULL
+    OR p."exchangeRateDirection" IS NOT NULL
+    OR p."exchangeRateEffectiveAt" IS NOT NULL
+    OR p."conversionDate" IS NOT NULL
+  )
+  AND (
+    p."functionalCurrencyCode" IS NULL
+    OR p."functionalCurrencyCode" <> c.currency
+    OR p."functionalAmountMinor" IS NULL
+    OR p."exchangeRateValue" IS NULL
+    OR p."exchangeRateDirection" IS NULL
+    OR p."exchangeRateDirection" NOT IN ('IDENTITY', 'DIRECT', 'INVERSE')
+    OR p."conversionDate" IS NULL
+    OR (p."exchangeRateDirection" = 'IDENTITY' AND (p."exchangeRateValue" <> 1 OR p."exchangeRateId" IS NOT NULL OR p."exchangeRateEffectiveAt" IS NOT NULL))
+    OR (p."exchangeRateDirection" IN ('DIRECT', 'INVERSE') AND (p."exchangeRateValue" <= 0 OR p."exchangeRateId" IS NULL OR p."exchangeRateEffectiveAt" IS NULL))
+  );
+COMMIT;
+SQL
+  report_query_stdin 'CURRENCY_MISMATCHES_UNVERIFIABLE' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(DISTINCT p.id)
+FROM "PaymentAllocation" a
+JOIN "Payment" p ON p.id = a."paymentId"
+JOIN "Charge" c ON c.id = a."chargeId"
+WHERE p.currency <> c.currency
+  AND p."functionalCurrencyCode" IS NULL
+  AND p."functionalAmountMinor" IS NULL
+  AND p."exchangeRateId" IS NULL
+  AND p."exchangeRateValue" IS NULL
+  AND p."exchangeRateDirection" IS NULL
+  AND p."exchangeRateEffectiveAt" IS NULL
+  AND p."conversionDate" IS NULL;
+COMMIT;
+SQL
+  report_query_stdin 'DUPLICATE_RECEIPT_FILE_GRAPHS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM (
+  SELECT d."fileId"
+  FROM "Payment" p
+  JOIN "Document" d ON d.id = p."receiptDocumentId"
+  JOIN "File" f ON f.id = d."fileId"
+  WHERE p."receiptDocumentId" IS NOT NULL
+  GROUP BY d."fileId"
+  HAVING count(*) > 1
+) duplicate_files;
+COMMIT;
+SQL
+  report_query_stdin 'DUPLICATE_RECEIPT_DOCUMENT_GRAPHS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM (
+  SELECT p."receiptDocumentId"
+  FROM "Payment" p
+  WHERE p."receiptDocumentId" IS NOT NULL
+  GROUP BY p."receiptDocumentId"
+  HAVING count(*) > 1
+) duplicate_documents;
+COMMIT;
+SQL
+  report_query_stdin 'DUPLICATE_RECEIPT_GENERATED_AUDITS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM (
+  SELECT "tenantId", "paymentId"
+  FROM "PaymentAuditLog"
+  WHERE action = 'RECEIPT_GENERATED'
+  GROUP BY "tenantId", "paymentId"
+  HAVING count(*) > 1
+) duplicate_audits;
+COMMIT;
+SQL
 }
 
 report_tenant_classification() {
   local classification
-  if classification="$(readonly_query 'SELECT count(*) FILTER (WHERE "isDemo" = true) || ''|'' || count(*) FILTER (WHERE "isDemo" = false) FROM "Tenant"' 2>/dev/null)"; then
+  if classification="$(readonly_query_stdin <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FILTER (WHERE "isDemo" = true)
+       || '|' || count(*) FILTER (WHERE "isDemo" = false)
+FROM "Tenant";
+COMMIT;
+SQL
+  2>/dev/null)"; then
     printf 'TENANT_DEMO_TEST=%s\n' "${classification%%|*}"
     printf 'TENANT_UNKNOWN=%s\n' "${classification#*|}"
   else
@@ -299,9 +517,22 @@ report_tenant_classification() {
 }
 
 report_storage_database_buckets() {
-  report_query 'FILE_BUCKET_COUNTS' 'SELECT COALESCE(string_agg(bucket || '':'' || row_count::text, '','' ORDER BY bucket), ''NONE'') FROM (SELECT bucket, count(*) AS row_count FROM "File" GROUP BY bucket) bucket_counts'
-  report_query 'FILE_EXPECTED_BUCKET_COUNT' "SELECT count(*) FROM \"File\" WHERE bucket = '$EXPECTED_BUCKET'"
-  report_query 'FILE_OTHER_BUCKET_COUNT' "SELECT count(*) FROM \"File\" WHERE bucket <> '$EXPECTED_BUCKET'"
+  report_query_stdin 'FILE_BUCKET_COUNTS' <<'SQL'
+BEGIN READ ONLY;
+SELECT COALESCE(string_agg(bucket || ':' || row_count::text, ',' ORDER BY bucket), 'NONE')
+FROM (SELECT bucket, count(*) AS row_count FROM "File" GROUP BY bucket) bucket_counts;
+COMMIT;
+SQL
+  report_query_stdin 'FILE_EXPECTED_BUCKET_COUNT' <<SQL
+BEGIN READ ONLY;
+SELECT count(*) FROM "File" WHERE bucket = '$EXPECTED_BUCKET';
+COMMIT;
+SQL
+  report_query_stdin 'FILE_OTHER_BUCKET_COUNT' <<SQL
+BEGIN READ ONLY;
+SELECT count(*) FROM "File" WHERE bucket <> '$EXPECTED_BUCKET';
+COMMIT;
+SQL
   printf 'EXPECTED_AUTHORITATIVE_BUCKET=%s\n' "$EXPECTED_BUCKET"
 }
 
@@ -333,20 +564,37 @@ s3_probe() {
 report_s3_posture() {
   local client_available
   local versioning object_count
+  local versioning_ok=false
+  local object_count_ok=false
 
   if client_available="$(docker exec "$API_CONTAINER" sh -lc 'command -v aws >/dev/null 2>&1 && printf available' 2>/dev/null)" && [[ "$client_available" == 'available' ]]; then
     if s3_probe head >/dev/null 2>&1; then
       printf 'S3_BUCKET_REACHABLE=YES\n'
-      versioning="$(s3_probe versioning 2>/dev/null || printf 'UNKNOWN')"
-      object_count="$(s3_probe objects 2>/dev/null || printf 'UNKNOWN')"
+      if versioning="$(s3_probe versioning 2>/dev/null)"; then
+        versioning_ok=true
+      else
+        versioning='UNKNOWN'
+      fi
+      if object_count="$(s3_probe objects 2>/dev/null)"; then
+        object_count_ok=true
+      else
+        object_count='UNKNOWN'
+      fi
       printf 'S3_VERSIONING_STATUS=%s\n' "$(safe_value_or_unknown "$versioning")"
       printf 'S3_BUSINESS_OBJECT_COUNT=%s\n' "$(safe_value_or_unknown "$object_count")"
-      printf 'S3_DEEP_AUDIT=PASS\n'
+      if [[ "$versioning_ok" == true && "$object_count_ok" == true ]]; then
+        printf 'S3_DEEP_AUDIT=PASS\n'
+      else
+        AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+        printf 'S3_DEEP_AUDIT=INCOMPLETE\n'
+      fi
     else
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
       printf 'S3_BUCKET_REACHABLE=FAIL\nS3_VERSIONING_STATUS=UNKNOWN\nS3_BUSINESS_OBJECT_COUNT=UNKNOWN\nS3_DEEP_AUDIT=FAIL\n'
     fi
   else
-    printf 'S3_DEEP_AUDIT_UNAVAILABLE\n'
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+    printf 'S3_DEEP_AUDIT_UNAVAILABLE\nS3_DEEP_AUDIT=INCOMPLETE\n'
   fi
 }
 
@@ -453,30 +701,56 @@ report_minio_posture() {
   printf 'MINIO_AUTHORITATIVE=%s\n' "$authoritative"
 }
 
-printf 'PRODUCTION_READONLY_AUDIT\n'
-report_runtime_identity
-report_container_health API "$API_CONTAINER"
-report_container_health WEB "$WEB_CONTAINER"
-report_container_health POSTGRES "$POSTGRES_CONTAINER"
-report_container_health REDIS "$REDIS_CONTAINER"
-report_container_health TRAEFIK "$TRAEFIK_CONTAINER"
-public_get_status PUBLIC_API_HEALTH "$API_HEALTH_URL"
-public_readyz_status
-public_get_status PUBLIC_WEB_LOGIN "$WEB_LOGIN_URL"
-report_safe_runtime_config
-report_migrations_and_schema
-report_finance_counts
-report_finance_integrity
-report_tenant_classification
-report_storage_database_buckets
-report_s3_posture
-report_minio_posture
-report_backup_readiness
+main() {
+  local url
 
-if (( AUDIT_QUERY_FAILURES == 0 )); then
-  printf 'AUDIT_STATUS=COMPLETE\n'
-else
-  printf 'AUDIT_STATUS=INCOMPLETE\n'
-  printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES"
-  exit 1
+  [[ $# -eq 4 ]] || { usage; return 64; }
+  readonly CANDIDATE_SHA="$1"
+  readonly API_HEALTH_URL="$2"
+  readonly API_READYZ_URL="$3"
+  readonly WEB_LOGIN_URL="$4"
+
+  [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'candidate SHA is not exactly 40 lowercase hexadecimal characters'
+  for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
+    [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
+  done
+
+  for command_name in bash curl date docker find git sha256sum stat; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
+  done
+
+  AUDIT_QUERY_FAILURES=0
+  AUDIT_EVIDENCE_FAILURES=0
+  printf 'PRODUCTION_READONLY_AUDIT\n'
+  report_runtime_identity
+  report_container_health API "$API_CONTAINER"
+  report_container_health WEB "$WEB_CONTAINER"
+  report_container_health POSTGRES "$POSTGRES_CONTAINER"
+  report_container_health REDIS "$REDIS_CONTAINER"
+  report_container_health TRAEFIK "$TRAEFIK_CONTAINER"
+  public_get_status PUBLIC_API_HEALTH "$API_HEALTH_URL"
+  public_readyz_status
+  public_get_status PUBLIC_WEB_LOGIN "$WEB_LOGIN_URL"
+  report_safe_runtime_config
+  report_migrations_and_schema
+  report_finance_counts
+  report_finance_integrity
+  report_tenant_classification
+  report_storage_database_buckets
+  report_s3_posture
+  report_minio_posture
+  report_backup_readiness
+
+  if (( AUDIT_QUERY_FAILURES == 0 && AUDIT_EVIDENCE_FAILURES == 0 )); then
+    printf 'AUDIT_STATUS=COMPLETE\n'
+  else
+    printf 'AUDIT_STATUS=INCOMPLETE\n'
+    printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES"
+    printf 'AUDIT_EVIDENCE_FAILURES=%s\n' "$AUDIT_EVIDENCE_FAILURES"
+    return 1
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
