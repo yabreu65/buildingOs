@@ -1,0 +1,482 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set +x
+
+readonly API_CONTAINER='buildingos-api'
+readonly WEB_CONTAINER='buildingos-web'
+readonly POSTGRES_CONTAINER='pawtech-postgres'
+readonly REDIS_CONTAINER='pawtech-redis'
+readonly TRAEFIK_CONTAINER='pawtech-traefik'
+readonly DATABASE_NAME='buildingos_db'
+readonly APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly BACKUP_ROOT='/opt/pawtech/backups/tmp'
+readonly BACKUP_SCRIPT_PATH='/opt/pawtech/backups/scripts/backup-postgres.sh'
+readonly BACKUP_IDENTITY_MANIFEST_PATH='/opt/pawtech/apps/buildingos/infra/production/backup-postgres.identity.v1'
+readonly EXPECTED_BUCKET='buildingos-production'
+readonly KNOWN_PRODUCTION_BASELINE='20260816000004_legacy_income_application_provenance'
+readonly TARGET_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
+readonly MAX_BACKUP_AGE_SECONDS=129600
+
+usage() {
+  printf 'Usage: %s <candidate_sha> <api_health_url> <api_readyz_url> <web_login_url>\n' "${0##*/}" >&2
+  return 64
+}
+
+fail() {
+  printf 'ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+[[ $# -eq 4 ]] || { usage; exit 64; }
+readonly CANDIDATE_SHA="$1"
+readonly API_HEALTH_URL="$2"
+readonly API_READYZ_URL="$3"
+readonly WEB_LOGIN_URL="$4"
+
+[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'candidate SHA is not exactly 40 lowercase hexadecimal characters'
+for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
+  [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
+done
+
+for command_name in bash curl date docker find git sha256sum stat; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
+done
+
+AUDIT_QUERY_FAILURES=0
+
+container_exists() {
+  docker inspect --type container "$1" >/dev/null 2>&1
+}
+
+container_state() {
+  docker inspect --type container --format '{{.State.Status}}' "$1" 2>/dev/null || printf 'UNKNOWN'
+}
+
+container_health() {
+  docker inspect --type container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not_configured{{end}}' "$1" 2>/dev/null || printf 'UNKNOWN'
+}
+
+report_container_health() {
+  local label="$1"
+  local container="$2"
+  if container_exists "$container"; then
+    printf '%s_CONTAINER_STATE=%s\n' "$label" "$(container_state "$container")"
+    printf '%s_CONTAINER_HEALTH=%s\n' "$label" "$(container_health "$container")"
+  else
+    printf '%s_CONTAINER_STATE=UNKNOWN\n' "$label"
+    printf '%s_CONTAINER_HEALTH=UNKNOWN\n' "$label"
+  fi
+}
+
+container_revision() {
+  local container="$1"
+  local image_id revision
+
+  image_id="$(docker inspect --type container --format '{{.Image}}' "$container" 2>/dev/null)" || return 1
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  revision="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || return 1
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s\n' "$revision"
+}
+
+safe_env_value() {
+  local container="$1"
+  local key="$2"
+  local line
+
+  case "$key" in
+    APP_ENV|NODE_ENV|STORAGE_BACKEND|S3_ENDPOINT|S3_BUCKET|S3_FORCE_PATH_STYLE|PAYMENT_PROVIDER|ENABLE_PAYMENT_WEBHOOKS)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  line="$(docker inspect --type container --format "{{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"$key\"}}{{println .}}{{end}}{{end}}" "$container" 2>/dev/null)" || return 1
+  [[ "$line" == "$key="* ]] || return 1
+  printf '%s\n' "${line#*=}"
+}
+
+safe_value_or_unknown() {
+  local value="$1"
+  if [[ "$value" =~ ^[A-Za-z0-9._:/+=?@%,-]+$ ]]; then
+    printf '%s' "$value"
+  else
+    printf 'UNKNOWN'
+  fi
+}
+
+endpoint_hostname() {
+  local endpoint="$1"
+  local authority host
+
+  [[ "$endpoint" =~ ^https?://[^[:space:]]+$ ]] || { printf 'UNKNOWN'; return; }
+  authority="${endpoint#*://}"
+  authority="${authority%%/*}"
+  authority="${authority##*@}"
+  host="${authority%%:*}"
+  [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || { printf 'UNKNOWN'; return; }
+  printf '%s' "$host"
+}
+
+storage_backend_from_host() {
+  case "$1" in
+    minio|buildingos-minio|buildingos-staging-minio|localhost|127.0.0.1)
+      printf 'MINIO'
+      ;;
+    UNKNOWN)
+      printf 'UNKNOWN'
+      ;;
+    *)
+      printf 'EXTERNAL_S3'
+      ;;
+  esac
+}
+
+readonly_query() {
+  local query="$1"
+  docker exec -i "$POSTGRES_CONTAINER" sh -lc \
+    'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1" -c "$2"' \
+    sh "$DATABASE_NAME" "BEGIN READ ONLY; ${query}; COMMIT;"
+}
+
+report_query() {
+  local key="$1"
+  local query="$2"
+  local value
+
+  if value="$(readonly_query "$query" 2>/dev/null)"; then
+    printf '%s=%s\n' "$key" "$value"
+  else
+    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    printf '%s=UNKNOWN\n' "$key"
+  fi
+}
+
+public_get_status() {
+  local label="$1"
+  local url="$2"
+  local status
+
+  if status="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    --request GET --output /dev/null --write-out '%{http_code}' "$url" 2>/dev/null)" && [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    printf '%s=%s\n' "$label" "$status"
+  else
+    printf '%s=FAIL\n' "$label"
+  fi
+}
+
+public_readyz_status() {
+  local body
+  local database_status='UNKNOWN'
+  local storage_status='UNKNOWN'
+
+  if body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    --request GET "$API_READYZ_URL" 2>/dev/null)"; then
+    [[ "$body" == *'"database":{"status":"up"'* ]] && database_status='UP'
+    [[ "$body" == *'"storage":{"status":"up"'* ]] && storage_status='UP'
+    printf 'PUBLIC_READYZ_HTTP=200\n'
+  else
+    printf 'PUBLIC_READYZ_HTTP=FAIL\n'
+  fi
+  printf 'PUBLIC_READYZ_DATABASE=%s\n' "$database_status"
+  printf 'PUBLIC_READYZ_STORAGE=%s\n' "$storage_status"
+}
+
+report_runtime_identity() {
+  local production_sha='UNKNOWN'
+  local api_revision='UNKNOWN'
+  local web_revision='UNKNOWN'
+  local checkout_status='UNKNOWN'
+
+  if [[ -d "$APP_DIR/.git" ]]; then
+    production_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      if [[ -z "$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+        checkout_status='CLEAN'
+      else
+        checkout_status='DIRTY'
+      fi
+    fi
+  fi
+  api_revision="$(container_revision "$API_CONTAINER" 2>/dev/null || printf 'UNKNOWN')"
+  web_revision="$(container_revision "$WEB_CONTAINER" 2>/dev/null || printf 'UNKNOWN')"
+
+  printf 'CANDIDATE_SHA=%s\n' "$CANDIDATE_SHA"
+  printf 'PRODUCTION_CHECKOUT_SHA=%s\n' "$production_sha"
+  printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
+  printf 'API_REVISION=%s\n' "$api_revision"
+  printf 'WEB_REVISION=%s\n' "$web_revision"
+  if [[ "$api_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
+    printf 'RUNTIME_IDENTITY=CONSISTENT\n'
+  else
+    printf 'RUNTIME_IDENTITY=UNKNOWN\n'
+  fi
+}
+
+report_safe_runtime_config() {
+  local app_env node_env storage_backend endpoint bucket path_style provider webhooks
+  local endpoint_host
+
+  app_env="$(safe_env_value "$API_CONTAINER" APP_ENV 2>/dev/null || true)"
+  node_env="$(safe_env_value "$API_CONTAINER" NODE_ENV 2>/dev/null || true)"
+  storage_backend="$(safe_env_value "$API_CONTAINER" STORAGE_BACKEND 2>/dev/null || true)"
+  endpoint="$(safe_env_value "$API_CONTAINER" S3_ENDPOINT 2>/dev/null || true)"
+  bucket="$(safe_env_value "$API_CONTAINER" S3_BUCKET 2>/dev/null || true)"
+  path_style="$(safe_env_value "$API_CONTAINER" S3_FORCE_PATH_STYLE 2>/dev/null || true)"
+  provider="$(safe_env_value "$API_CONTAINER" PAYMENT_PROVIDER 2>/dev/null || true)"
+  webhooks="$(safe_env_value "$API_CONTAINER" ENABLE_PAYMENT_WEBHOOKS 2>/dev/null || true)"
+  endpoint_host="$(endpoint_hostname "$endpoint")"
+
+  if [[ -z "$storage_backend" ]]; then
+    storage_backend="$(storage_backend_from_host "$endpoint_host")"
+  fi
+  printf 'APP_ENV=%s\n' "$(safe_value_or_unknown "${app_env:-UNKNOWN}")"
+  printf 'NODE_ENV=%s\n' "$(safe_value_or_unknown "${node_env:-UNKNOWN}")"
+  printf 'STORAGE_BACKEND=%s\n' "$(safe_value_or_unknown "$storage_backend")"
+  printf 'S3_ENDPOINT_HOSTNAME=%s\n' "$endpoint_host"
+  printf 'S3_BUCKET=%s\n' "$(safe_value_or_unknown "${bucket:-UNKNOWN}")"
+  printf 'S3_FORCE_PATH_STYLE=%s\n' "$(safe_value_or_unknown "${path_style:-UNKNOWN}")"
+  printf 'PAYMENT_PROVIDER=%s\n' "$(safe_value_or_unknown "${provider:-UNKNOWN}")"
+  printf 'ENABLE_PAYMENT_WEBHOOKS=%s\n' "$(safe_value_or_unknown "${webhooks:-UNKNOWN}")"
+}
+
+report_migrations_and_schema() {
+  local receipt_columns
+
+  report_query 'DATABASE_NAME' 'SELECT current_database()'
+  report_query 'ACTIVE_FINISHED_MIGRATIONS' 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'
+  report_query 'FAILED_MIGRATIONS' 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+  report_query 'MIGRATIONS_AFTER_KNOWN_BASELINE' "SELECT COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE') FROM \"_prisma_migrations\" WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE' AND finished_at IS NOT NULL AND rolled_back_at IS NULL"
+  report_query 'TARGET_MIGRATION_STATUS' "SELECT CASE WHEN count(*) = 0 THEN 'NOT_APPLIED' WHEN count(*) = 1 AND bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL) THEN 'APPLIED' ELSE 'AMBIGUOUS' END FROM \"_prisma_migrations\" WHERE migration_name = '$TARGET_MIGRATION'"
+  if receipt_columns="$(readonly_query 'SELECT CASE WHEN count(*) = 6 THEN ''YES'' ELSE ''NO'' END FROM information_schema.columns WHERE table_schema = ''public'' AND table_name = ''Payment'' AND column_name IN (''receiptSnapshot'', ''receiptSnapshotVersion'', ''receiptSnapshotHash'', ''receiptSnapshotCreatedAt'', ''receiptGenerationToken'', ''receiptGenerationLeaseUntil'')' 2>/dev/null)"; then
+    printf 'RECEIPT_SNAPSHOT_COLUMNS=%s\n' "$receipt_columns"
+    if [[ "$receipt_columns" == 'YES' ]]; then
+      report_query 'RECEIPT_GENERATION_TOKEN_COUNT' 'SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL'
+      report_query 'ACTIVE_RECEIPT_GENERATION_LEASE_COUNT' 'SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" > CURRENT_TIMESTAMP'
+    else
+      printf 'RECEIPT_GENERATION_TOKEN_COUNT=NOT_APPLICABLE\n'
+      printf 'ACTIVE_RECEIPT_GENERATION_LEASE_COUNT=NOT_APPLICABLE\n'
+    fi
+  else
+    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    printf 'RECEIPT_SNAPSHOT_COLUMNS=UNKNOWN\nRECEIPT_GENERATION_TOKEN_COUNT=UNKNOWN\nACTIVE_RECEIPT_GENERATION_LEASE_COUNT=UNKNOWN\n'
+  fi
+}
+
+report_finance_counts() {
+  report_query 'PAYMENTS_COUNT' 'SELECT count(*) FROM "Payment"'
+  report_query 'PAYMENT_ALLOCATIONS_COUNT' 'SELECT count(*) FROM "PaymentAllocation"'
+  report_query 'EXPENSES_COUNT' 'SELECT count(*) FROM "Expense"'
+  report_query 'INCOMES_COUNT' 'SELECT count(*) FROM "Income"'
+  report_query 'CHARGES_COUNT' 'SELECT count(*) FROM "Charge"'
+  report_query 'RECEIPT_STATUS_COUNTS' 'SELECT ''READY='' || count(*) FILTER (WHERE "receiptStatus" = ''READY'') || '',PENDING='' || count(*) FILTER (WHERE "receiptStatus" = ''PENDING'') || '',FAILED='' || count(*) FILTER (WHERE "receiptStatus" = ''FAILED'') FROM "Payment"'
+  report_query 'PAYMENT_AUDIT_TOTAL' 'SELECT count(*) FROM "PaymentAuditLog"'
+  report_query 'PAYMENT_AUDIT_ACTION_COUNTS' 'SELECT ''SUBMITTED='' || count(*) FILTER (WHERE action = ''SUBMITTED'') || '',APPROVED='' || count(*) FILTER (WHERE action = ''APPROVED'') || '',RECONCILED='' || count(*) FILTER (WHERE action = ''RECONCILED'') || '',RECEIPT_GENERATED='' || count(*) FILTER (WHERE action = ''RECEIPT_GENERATED'') FROM "PaymentAuditLog"'
+}
+
+report_finance_integrity() {
+  report_query 'ORPHAN_ALLOCATIONS' 'SELECT count(*) FROM "PaymentAllocation" a LEFT JOIN "Payment" p ON p.id = a."paymentId" LEFT JOIN "Charge" c ON c.id = a."chargeId" WHERE p.id IS NULL OR c.id IS NULL OR a."tenantId" <> p."tenantId" OR a."tenantId" <> c."tenantId"'
+  report_query 'OVER_ALLOCATIONS' 'SELECT count(*) FROM (SELECT a."paymentId" FROM "PaymentAllocation" a JOIN "Payment" p ON p.id = a."paymentId" GROUP BY a."paymentId", p.amount HAVING COALESCE(sum(a.amount), 0) > p.amount) over_allocated'
+  report_query 'DUPLICATE_CANONICAL_CHARGE_KEYS' 'SELECT count(*) FROM (SELECT "tenantId", "buildingId", "unitId", period, concept FROM "Charge" GROUP BY "tenantId", "buildingId", "unitId", period, concept HAVING count(*) > 1) duplicate_keys'
+  report_query 'CURRENCY_MISMATCHES' 'SELECT count(*) FROM "PaymentAllocation" a JOIN "Payment" p ON p.id = a."paymentId" JOIN "Charge" c ON c.id = a."chargeId" WHERE p.currency <> c.currency OR a."tenantId" <> p."tenantId" OR a."tenantId" <> c."tenantId"'
+  report_query 'DUPLICATE_RECEIPT_FILE_GRAPHS' 'SELECT count(*) FROM (SELECT d."fileId" FROM "Payment" p JOIN "Document" d ON d.id = p."receiptDocumentId" JOIN "File" f ON f.id = d."fileId" WHERE p."receiptDocumentId" IS NOT NULL GROUP BY d."fileId" HAVING count(*) > 1) duplicate_files'
+  report_query 'DUPLICATE_RECEIPT_DOCUMENT_GRAPHS' 'SELECT count(*) FROM (SELECT p."receiptDocumentId" FROM "Payment" p WHERE p."receiptDocumentId" IS NOT NULL GROUP BY p."receiptDocumentId" HAVING count(*) > 1) duplicate_documents'
+  report_query 'DUPLICATE_RECEIPT_GENERATED_AUDITS' 'SELECT count(*) FROM (SELECT "tenantId", "paymentId" FROM "PaymentAuditLog" WHERE action = ''RECEIPT_GENERATED'' GROUP BY "tenantId", "paymentId" HAVING count(*) > 1) duplicate_audits'
+}
+
+report_tenant_classification() {
+  local classification
+  if classification="$(readonly_query 'SELECT count(*) FILTER (WHERE "isDemo" = true) || ''|'' || count(*) FILTER (WHERE "isDemo" = false) FROM "Tenant"' 2>/dev/null)"; then
+    printf 'TENANT_DEMO_TEST=%s\n' "${classification%%|*}"
+    printf 'TENANT_UNKNOWN=%s\n' "${classification#*|}"
+  else
+    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    printf 'TENANT_DEMO_TEST=UNKNOWN\nTENANT_UNKNOWN=UNKNOWN\n'
+  fi
+  printf 'TENANT_SYSTEM_INTERNAL=UNKNOWN\n'
+  printf 'TENANT_REAL_BUSINESS=UNKNOWN\n'
+}
+
+report_storage_database_buckets() {
+  report_query 'FILE_BUCKET_COUNTS' 'SELECT COALESCE(string_agg(bucket || '':'' || row_count::text, '','' ORDER BY bucket), ''NONE'') FROM (SELECT bucket, count(*) AS row_count FROM "File" GROUP BY bucket) bucket_counts'
+  report_query 'FILE_EXPECTED_BUCKET_COUNT' "SELECT count(*) FROM \"File\" WHERE bucket = '$EXPECTED_BUCKET'"
+  report_query 'FILE_OTHER_BUCKET_COUNT' "SELECT count(*) FROM \"File\" WHERE bucket <> '$EXPECTED_BUCKET'"
+  printf 'EXPECTED_AUTHORITATIVE_BUCKET=%s\n' "$EXPECTED_BUCKET"
+}
+
+s3_probe() {
+  local operation="$1"
+  docker exec "$API_CONTAINER" sh -lc '
+    command -v aws >/dev/null 2>&1 || exit 125
+    export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY:-}"
+    export AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY:-}"
+    export AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}"
+    export AWS_EC2_METADATA_DISABLED=true
+    case "$1" in
+      head)
+        aws --no-cli-pager s3api head-bucket --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" >/dev/null
+        ;;
+      versioning)
+        aws --no-cli-pager s3api get-bucket-versioning --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --query Status --output text
+        ;;
+      objects)
+        aws --no-cli-pager s3api list-objects-v2 --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --max-keys 100 --query KeyCount --output text
+        ;;
+      *)
+        exit 64
+        ;;
+    esac
+  ' sh "$operation"
+}
+
+report_s3_posture() {
+  local client_available
+  local versioning object_count
+
+  if client_available="$(docker exec "$API_CONTAINER" sh -lc 'command -v aws >/dev/null 2>&1 && printf available' 2>/dev/null)" && [[ "$client_available" == 'available' ]]; then
+    if s3_probe head >/dev/null 2>&1; then
+      printf 'S3_BUCKET_REACHABLE=YES\n'
+      versioning="$(s3_probe versioning 2>/dev/null || printf 'UNKNOWN')"
+      object_count="$(s3_probe objects 2>/dev/null || printf 'UNKNOWN')"
+      printf 'S3_VERSIONING_STATUS=%s\n' "$(safe_value_or_unknown "$versioning")"
+      printf 'S3_BUSINESS_OBJECT_COUNT=%s\n' "$(safe_value_or_unknown "$object_count")"
+      printf 'S3_DEEP_AUDIT=PASS\n'
+    else
+      printf 'S3_BUCKET_REACHABLE=FAIL\nS3_VERSIONING_STATUS=UNKNOWN\nS3_BUSINESS_OBJECT_COUNT=UNKNOWN\nS3_DEEP_AUDIT=FAIL\n'
+    fi
+  else
+    printf 'S3_DEEP_AUDIT_UNAVAILABLE\n'
+  fi
+}
+
+file_mtime() {
+  stat -c '%Y' -- "$1" 2>/dev/null || stat -f '%m' -- "$1"
+}
+
+format_epoch() {
+  date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+report_backup_readiness() {
+  local latest_dump=''
+  local latest_mtime=0
+  local candidate mtime checksum_file expected actual now age
+  local mechanism_digest mechanism_mode mechanism_identity='UNKNOWN'
+  local dump_present='NO'
+  local checksum_present='NO'
+  local checksum_status='NOT_RUN'
+  local restore_status='NOT_RUN'
+  local backup_required='YES'
+
+  if [[ -d "$BACKUP_ROOT" && ! -L "$BACKUP_ROOT" ]]; then
+    while IFS= read -r -d '' candidate; do
+      [[ ! -L "$candidate" ]] || continue
+      mtime="$(file_mtime "$candidate" 2>/dev/null || printf '0')"
+      [[ "$mtime" =~ ^[0-9]+$ ]] || continue
+      if (( mtime > latest_mtime )); then
+        latest_mtime="$mtime"
+        latest_dump="$candidate"
+      fi
+    done < <(find "$BACKUP_ROOT" -mindepth 2 -maxdepth 2 -type f -name 'buildingos_db_*.dump' -print0 2>/dev/null)
+  fi
+
+  if [[ -n "$latest_dump" ]]; then
+    dump_present='YES'
+    checksum_file="$latest_dump.sha256"
+    if [[ -s "$checksum_file" && ! -L "$checksum_file" ]]; then
+      checksum_present='YES'
+      expected=''
+      IFS=' ' read -r expected _ < "$checksum_file" || true
+      if actual="$(sha256sum -- "$latest_dump" 2>/dev/null)"; then
+        actual="${actual%% *}"
+      else
+        actual='UNKNOWN'
+      fi
+      if [[ "$expected" =~ ^[0-9a-f]{64}$ && "$expected" == "$actual" ]]; then
+        checksum_status='PASS'
+      else
+        checksum_status='FAIL'
+      fi
+    fi
+    if command -v pg_restore >/dev/null 2>&1 && pg_restore --list "$latest_dump" >/dev/null 2>&1; then
+      restore_status='PASS'
+    elif command -v pg_restore >/dev/null 2>&1; then
+      restore_status='FAIL'
+    fi
+    now="$(date -u +%s)"
+    age=$((now - latest_mtime))
+    if (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )) && [[ "$checksum_status" == 'PASS' && "$restore_status" == 'PASS' ]]; then
+      backup_required='NO'
+    fi
+    printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=%s\n' "$(format_epoch "$latest_mtime")"
+    printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=%s\n' "${latest_dump##*/}"
+    printf 'BACKUP_AGE_SECONDS=%s\n' "$age"
+  else
+    printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
+    printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
+    printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
+  fi
+  if [[ -f "$BACKUP_SCRIPT_PATH" && ! -L "$BACKUP_SCRIPT_PATH" ]]; then
+    if mechanism_digest="$(sha256sum -- "$BACKUP_SCRIPT_PATH" 2>/dev/null)"; then
+      mechanism_digest="${mechanism_digest%% *}"
+      mechanism_mode="$(stat -c '%a' -- "$BACKUP_SCRIPT_PATH" 2>/dev/null || stat -f '%Lp' -- "$BACKUP_SCRIPT_PATH")"
+      mechanism_identity="sha256=${mechanism_digest};mode=${mechanism_mode}"
+    fi
+  fi
+  printf 'BACKUP_MECHANISM_PATH=%s\n' "$BACKUP_SCRIPT_PATH"
+  printf 'BACKUP_MECHANISM_IDENTITY=%s\n' "$mechanism_identity"
+  printf 'BACKUP_IDENTITY_MANIFEST=%s\n' "$BACKUP_IDENTITY_MANIFEST_PATH"
+  printf 'BACKUP_DUMP_PRESENT=%s\n' "$dump_present"
+  printf 'BACKUP_CHECKSUM_PRESENT=%s\n' "$checksum_present"
+  printf 'BACKUP_CHECKSUM_VERIFICATION=%s\n' "$checksum_status"
+  printf 'BACKUP_PG_RESTORE_LIST=%s\n' "$restore_status"
+  printf 'PREDEPLOY_BACKUP_REQUIRED=%s\n' "$backup_required"
+}
+
+report_minio_posture() {
+  local state networks ports endpoint host authoritative
+  if ! container_exists buildingos-minio; then
+    printf 'MINIO_CONTAINER=ABSENT\nMINIO_AUTHORITATIVE=UNKNOWN\n'
+    return
+  fi
+  state="$(container_state buildingos-minio)"
+  networks="$(docker inspect --type container --format '{{range $name, $value := .NetworkSettings.Networks}}{{$name}} {{end}}' buildingos-minio 2>/dev/null || printf 'UNKNOWN')"
+  ports="$(docker inspect --type container --format '{{json .NetworkSettings.Ports}}' buildingos-minio 2>/dev/null || printf 'UNKNOWN')"
+  endpoint="$(safe_env_value "$API_CONTAINER" S3_ENDPOINT 2>/dev/null || true)"
+  host="$(endpoint_hostname "$endpoint")"
+  authoritative="$(storage_backend_from_host "$host")"
+  [[ "$authoritative" == 'MINIO' ]] && authoritative='YES' || [[ "$authoritative" == 'EXTERNAL_S3' ]] && authoritative='NO' || authoritative='UNKNOWN'
+  printf 'MINIO_CONTAINER=%s\n' "$state"
+  printf 'MINIO_NETWORKS=%s\n' "$networks"
+  printf 'MINIO_PUBLISHED_PORTS=%s\n' "$ports"
+  printf 'MINIO_AUTHORITATIVE=%s\n' "$authoritative"
+}
+
+printf 'PRODUCTION_READONLY_AUDIT\n'
+report_runtime_identity
+report_container_health API "$API_CONTAINER"
+report_container_health WEB "$WEB_CONTAINER"
+report_container_health POSTGRES "$POSTGRES_CONTAINER"
+report_container_health REDIS "$REDIS_CONTAINER"
+report_container_health TRAEFIK "$TRAEFIK_CONTAINER"
+public_get_status PUBLIC_API_HEALTH "$API_HEALTH_URL"
+public_readyz_status
+public_get_status PUBLIC_WEB_LOGIN "$WEB_LOGIN_URL"
+report_safe_runtime_config
+report_migrations_and_schema
+report_finance_counts
+report_finance_integrity
+report_tenant_classification
+report_storage_database_buckets
+report_s3_posture
+report_minio_posture
+report_backup_readiness
+
+if (( AUDIT_QUERY_FAILURES == 0 )); then
+  printf 'AUDIT_STATUS=COMPLETE\n'
+else
+  printf 'AUDIT_STATUS=INCOMPLETE\n'
+  printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES"
+  exit 1
+fi
