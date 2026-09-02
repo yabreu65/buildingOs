@@ -30,7 +30,12 @@ set -e
 
 all_tools_bin="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-jq.XXXXXX")"
 trap 'rm -rf "$all_tools_bin"' EXIT
-for command_name in awk bash cat curl date docker find git sha256sum stat; do
+cat > "$all_tools_bin/docker" <<'SH'
+#!/bin/bash
+exit 1
+SH
+chmod +x "$all_tools_bin/docker"
+for command_name in awk bash cat curl date find git sha256sum stat; do
   ln -s "$(command -v "$command_name")" "$all_tools_bin/$command_name"
 done
 
