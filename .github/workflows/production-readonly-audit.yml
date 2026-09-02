@@ -56,16 +56,24 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          grep -Eq 'MIGRATION_COUNT.*==.*97' scripts/deploy-production.sh
-          grep -Fq 'TARGET_APPLIED=97' scripts/verify-production-migration-manifest.sh
-          test -f apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql
+          deploy_migration_count='UNKNOWN'
+          manifest_target_applied='UNKNOWN'
+          migration_98_present='NO'
+          grep -Eq 'MIGRATION_COUNT.*==.*97' scripts/deploy-production.sh && deploy_migration_count='97' || true
+          grep -Fq 'TARGET_APPLIED=97' scripts/verify-production-migration-manifest.sh && manifest_target_applied='97' || true
+          if [[ -f apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql ]]; then
+            migration_98_present='YES'
+          fi
           certified_migration_count="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d '[:space:]')"
-          [[ "$certified_migration_count" == '98' ]]
-          printf 'DEPLOY_TOOLING_FINAL_MIGRATION_COUNT=97\n'
-          printf 'DEPLOY_TOOLING_MANIFEST_TARGET_APPLIED=97\n'
+          printf 'DEPLOY_TOOLING_FINAL_MIGRATION_COUNT=%s\n' "$deploy_migration_count"
+          printf 'DEPLOY_TOOLING_MANIFEST_TARGET_APPLIED=%s\n' "$manifest_target_applied"
           printf 'CERTIFIED_MIGRATION_COUNT=%s\n' "$certified_migration_count"
-          printf 'NEW_MIGRATION=20260831000000_add_payment_receipt_issuance_snapshot\n'
-          printf 'DEPLOY_TOOLING_COMPATIBLE=NO\n'
+          printf 'NEW_MIGRATION_PRESENT=%s\n' "$migration_98_present"
+          if [[ "$deploy_migration_count" == '97' && "$manifest_target_applied" == '97' && "$migration_98_present" == 'YES' ]]; then
+            printf 'DEPLOY_TOOLING_COMPATIBLE=NO\n'
+          else
+            printf 'DEPLOY_TOOLING_COMPATIBLE=UNKNOWN\n'
+          fi
           printf 'DEPLOY_TOOLING_MODIFIED=NO\n'
 
       - name: Stream production read-only audit

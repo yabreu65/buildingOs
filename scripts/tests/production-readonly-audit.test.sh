@@ -97,6 +97,9 @@ if (!auditorText.includes('status_output="$(git -C "$APP_DIR" status')) throw ne
 if (!auditorText.includes('git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null')) throw new Error('ignored-file inspection failures must fail closed');
 if (!auditorText.includes('WHERE "canceledAt" IS NULL')) throw new Error('canceled charges must not count as duplicate active charges');
 if (!auditorText.includes('ALLOWED_IGNORED_RUNTIME_ENV')) throw new Error('ignored checkout files must use the production allowlist');
+if (!auditorText.includes('BACKUP_CHECKSUM_VERIFICATION=%s')) throw new Error('backup checksum state must be reported');
+if (!workflowText.includes('CERTIFIED_MIGRATION_COUNT=%s')) throw new Error('migration observation must be derived dynamically');
+if (workflowText.includes("certified_migration_count == '98'")) throw new Error('audit workflow must not pin a transient migration count');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

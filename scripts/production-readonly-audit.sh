@@ -11,7 +11,7 @@ readonly DATABASE_NAME='buildingos_db'
 readonly APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
 readonly BACKUP_ROOT='/opt/pawtech/backups/tmp'
 readonly BACKUP_SCRIPT_PATH='/opt/pawtech/backups/scripts/backup-postgres.sh'
-readonly BACKUP_IDENTITY_MANIFEST_PATH='/opt/pawtech/apps/buildingos/infra/production/backup-postgres.identity.v1'
+readonly BACKUP_IDENTITY_MANIFEST_PATH="${APP_DIR}/infra/production/backup-postgres.identity.v1"
 readonly ALLOWED_IGNORED_RUNTIME_ENV='infra/docker/.env'
 readonly EXPECTED_BUCKET='buildingos-production'
 readonly KNOWN_PRODUCTION_BASELINE='20260816000004_legacy_income_application_provenance'
@@ -740,6 +740,7 @@ report_backup_readiness() {
         checksum_status='PASS'
       else
         checksum_status='FAIL'
+        AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
       fi
     fi
     if command -v pg_restore >/dev/null 2>&1 && pg_restore --list "$latest_dump" >/dev/null 2>&1; then
