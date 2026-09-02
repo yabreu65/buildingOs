@@ -12,6 +12,7 @@ readonly APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
 readonly BACKUP_ROOT='/opt/pawtech/backups/tmp'
 readonly BACKUP_SCRIPT_PATH='/opt/pawtech/backups/scripts/backup-postgres.sh'
 readonly BACKUP_IDENTITY_MANIFEST_PATH='/opt/pawtech/apps/buildingos/infra/production/backup-postgres.identity.v1'
+readonly ALLOWED_IGNORED_RUNTIME_ENV='infra/docker/.env'
 readonly EXPECTED_BUCKET='buildingos-production'
 readonly KNOWN_PRODUCTION_BASELINE='20260816000004_legacy_income_application_provenance'
 readonly TARGET_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
@@ -40,6 +41,28 @@ container_state() {
 
 container_health() {
   docker inspect --type container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not_configured{{end}}' "$1" 2>/dev/null || printf 'UNKNOWN'
+}
+
+checkout_has_only_approved_ignored_files() {
+  local path pattern
+  local runtime_env_excluded=false
+
+  [[ -f "$APP_DIR/.dockerignore" ]] || return 1
+  while IFS= read -r pattern; do
+    [[ "$pattern" =~ ^[[:space:]]*! ]] && return 1
+    if [[ "$pattern" == '**/.env' || "$pattern" == 'infra/docker/.env' ]]; then
+      runtime_env_excluded=true
+    fi
+  done < "$APP_DIR/.dockerignore"
+  [[ "$runtime_env_excluded" == true ]] || return 1
+
+  while IFS= read -r path; do
+    case "$path" in
+      .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.crt|*.log|*.dump|*.sql|*.bak|*.backup)
+        [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
+        ;;
+    esac
+  done < <(git -C "$APP_DIR" ls-files --others --ignored --exclude-standard)
 }
 
 report_container_health() {
@@ -196,7 +219,7 @@ report_runtime_identity() {
   if [[ -d "$APP_DIR/.git" ]]; then
     production_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
     if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
-      if [[ -z "$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      if [[ -z "$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]] && checkout_has_only_approved_ignored_files; then
         checkout_status='CLEAN'
       else
         checkout_status='DIRTY'
@@ -211,7 +234,7 @@ report_runtime_identity() {
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
   printf 'API_REVISION=%s\n' "$api_revision"
   printf 'WEB_REVISION=%s\n' "$web_revision"
-  if [[ "$checkout_status" == 'CLEAN' && "$api_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
+  if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$production_sha" == "$api_revision" && "$api_revision" == "$web_revision" ]]; then
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
     printf 'RUNTIME_IDENTITY=UNKNOWN\n'
@@ -384,37 +407,51 @@ BEGIN READ ONLY;
 WITH per_payment AS (
   SELECT p.id,
          p.amount,
+         p."functionalAmountMinor",
+         p."functionalCurrencyCode",
          bool_or(a."paymentOriginalAmountMinor" IS NULL AND c.currency <> p.currency) AS legacy_cross_unverifiable,
+         bool_or(c.currency <> p.currency) AS has_cross_currency,
+         bool_or(c.currency <> p."functionalCurrencyCode") AS functional_currency_unverifiable,
          COALESCE(sum(
            CASE
              WHEN a."paymentOriginalAmountMinor" IS NOT NULL THEN a."paymentOriginalAmountMinor"
              WHEN c.currency = p.currency THEN a.amount
              ELSE 0
-           END
-         ), 0) AS original_consumed
+            END
+          ), 0) AS original_consumed,
+         COALESCE(sum(a.amount) FILTER (WHERE c.currency = p."functionalCurrencyCode"), 0) AS functional_consumed
   FROM "Payment" p
   JOIN "PaymentAllocation" a ON a."paymentId" = p.id
   JOIN "Charge" c ON c.id = a."chargeId"
-  GROUP BY p.id, p.amount
+  GROUP BY p.id, p.amount, p."functionalAmountMinor", p."functionalCurrencyCode"
 )
 SELECT count(*) FILTER (WHERE NOT legacy_cross_unverifiable AND original_consumed > amount)
        || '|' || count(*) FILTER (WHERE legacy_cross_unverifiable)
+       || '|' || count(*) FILTER (WHERE has_cross_currency
+                                      AND NOT functional_currency_unverifiable
+                                      AND "functionalAmountMinor" IS NOT NULL
+                                      AND functional_consumed > "functionalAmountMinor")
+       || '|' || count(*) FILTER (WHERE has_cross_currency
+                                      AND (functional_currency_unverifiable OR "functionalAmountMinor" IS NULL
+                                           OR "functionalCurrencyCode" IS NULL))
 FROM per_payment;
 COMMIT;
 SQL
   2>/dev/null)"; then
-    local definite_overallocations unverifiable_overallocations
-    IFS='|' read -r definite_overallocations unverifiable_overallocations <<< "$value"
-    if [[ "$definite_overallocations" =~ ^[0-9]+$ && "$unverifiable_overallocations" =~ ^[0-9]+$ ]]; then
+    local definite_overallocations unverifiable_overallocations functional_definite_overallocations functional_unverifiable_overallocations
+    IFS='|' read -r definite_overallocations unverifiable_overallocations functional_definite_overallocations functional_unverifiable_overallocations <<< "$value"
+    if [[ "$definite_overallocations" =~ ^[0-9]+$ && "$unverifiable_overallocations" =~ ^[0-9]+$ && "$functional_definite_overallocations" =~ ^[0-9]+$ && "$functional_unverifiable_overallocations" =~ ^[0-9]+$ ]]; then
       printf 'OVER_ALLOCATIONS_DEFINITE=%s\n' "$definite_overallocations"
       printf 'OVER_ALLOCATIONS_UNVERIFIABLE=%s\n' "$unverifiable_overallocations"
+      printf 'OVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=%s\n' "$functional_definite_overallocations"
+      printf 'OVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=%s\n' "$functional_unverifiable_overallocations"
     else
       AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
-      printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\n'
+      printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
     fi
   else
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
-    printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\n'
+    printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
   fi
   report_query_stdin 'DUPLICATE_CANONICAL_CHARGE_KEYS' <<'SQL'
 BEGIN READ ONLY;

@@ -88,9 +88,12 @@ if (!auditorText.includes('EXPECTED_AUTHORITATIVE_BUCKET') || !auditorText.inclu
 if (!auditorText.includes('TENANT_REAL_BUSINESS=UNKNOWN')) throw new Error('real-business classification must fail closed');
 if (!auditorText.includes('TARGET_MIGRATION_STATUS')) throw new Error('target migration state must be reported');
 if (auditorText.includes("'CURRENCY_MISMATCHES'")) throw new Error('cross-currency audit must not use the old unconditional mismatch metric');
-for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABLE', 'CURRENCY_MISMATCHES_DEFINITE', 'CURRENCY_MISMATCHES_UNVERIFIABLE']) {
+for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABLE', 'OVER_ALLOCATIONS_FUNCTIONAL_DEFINITE', 'OVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE', 'CURRENCY_MISMATCHES_DEFINITE', 'CURRENCY_MISMATCHES_UNVERIFIABLE']) {
   if (!auditorText.includes(metric)) throw new Error(`missing cross-currency metric ${metric}`);
 }
+if (!auditorText.includes('functional_consumed')) throw new Error('functional-currency consumption must be checked');
+if (!auditorText.includes('production_sha" == "$api_revision"')) throw new Error('checkout and image revisions must match');
+if (!auditorText.includes('ALLOWED_IGNORED_RUNTIME_ENV')) throw new Error('ignored checkout files must use the production allowlist');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE
