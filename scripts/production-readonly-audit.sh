@@ -424,6 +424,7 @@ WITH per_payment AS (
          p."functionalCurrencyCode",
          bool_or(a."paymentOriginalAmountMinor" IS NULL AND c.currency <> p.currency) AS legacy_cross_unverifiable,
          bool_or(c.currency <> p.currency) AS has_cross_currency,
+         bool_or(c.currency = p.currency) AS has_same_currency,
          bool_or(c.currency <> p."functionalCurrencyCode") AS functional_currency_unverifiable,
          COALESCE(sum(
            CASE
@@ -466,6 +467,18 @@ SQL
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
     printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
   fi
+  report_query_stdin 'CHARGE_OVER_ALLOCATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*)
+FROM (
+  SELECT c.id
+  FROM "Charge" c
+  JOIN "PaymentAllocation" a ON a."chargeId" = c.id
+  GROUP BY c.id, c.amount
+  HAVING sum(a.amount) > c.amount
+) charge_overallocations;
+COMMIT;
+SQL
   report_query_stdin 'DUPLICATE_CANONICAL_CHARGE_KEYS' <<'SQL'
 BEGIN READ ONLY;
 SELECT count(*)
@@ -480,47 +493,65 @@ COMMIT;
 SQL
   report_query_stdin 'CURRENCY_MISMATCHES_DEFINITE' <<'SQL'
 BEGIN READ ONLY;
-SELECT count(DISTINCT p.id)
-FROM "PaymentAllocation" a
-JOIN "Payment" p ON p.id = a."paymentId"
-JOIN "Charge" c ON c.id = a."chargeId"
-WHERE p.currency <> c.currency
-  AND (
-    p."functionalCurrencyCode" IS NOT NULL
-    OR p."functionalAmountMinor" IS NOT NULL
-    OR p."exchangeRateId" IS NOT NULL
-    OR p."exchangeRateValue" IS NOT NULL
-    OR p."exchangeRateDirection" IS NOT NULL
-    OR p."exchangeRateEffectiveAt" IS NOT NULL
-    OR p."conversionDate" IS NOT NULL
-  )
-  AND (
-    p."functionalCurrencyCode" IS NULL
-    OR p."functionalCurrencyCode" <> c.currency
-    OR p."functionalAmountMinor" IS NULL
-    OR p."exchangeRateValue" IS NULL
-    OR p."exchangeRateDirection" IS NULL
-    OR p."exchangeRateDirection" NOT IN ('IDENTITY', 'DIRECT', 'INVERSE')
-    OR p."conversionDate" IS NULL
-    OR (p."exchangeRateDirection" = 'IDENTITY' AND (p."exchangeRateValue" <> 1 OR p."exchangeRateId" IS NOT NULL OR p."exchangeRateEffectiveAt" IS NOT NULL))
-    OR (p."exchangeRateDirection" IN ('DIRECT', 'INVERSE') AND (p."exchangeRateValue" <= 0 OR p."exchangeRateId" IS NULL OR p."exchangeRateEffectiveAt" IS NULL))
-  );
+WITH per_payment AS (
+  SELECT p.id,
+         bool_or(p.currency <> c.currency) AS has_cross_currency,
+         bool_or(p.currency = c.currency) AS has_same_currency,
+         bool_or(p.currency <> c.currency AND (
+           p."functionalCurrencyCode" IS NULL
+           OR p."functionalCurrencyCode" <> c.currency
+           OR p."functionalAmountMinor" IS NULL
+           OR p."exchangeRateValue" IS NULL
+           OR p."exchangeRateDirection" IS NULL
+           OR p."exchangeRateDirection" NOT IN ('IDENTITY', 'DIRECT', 'INVERSE')
+           OR p."conversionDate" IS NULL
+           OR (p."exchangeRateDirection" = 'IDENTITY' AND (p."exchangeRateValue" <> 1 OR p."exchangeRateId" IS NOT NULL OR p."exchangeRateEffectiveAt" IS NOT NULL))
+           OR (p."exchangeRateDirection" IN ('DIRECT', 'INVERSE') AND (p."exchangeRateValue" <= 0 OR p."exchangeRateId" IS NULL OR p."exchangeRateEffectiveAt" IS NULL))
+         )) AS has_invalid_cross_currency
+  FROM "PaymentAllocation" a
+  JOIN "Payment" p ON p.id = a."paymentId"
+  JOIN "Charge" c ON c.id = a."chargeId"
+  GROUP BY p.id
+)
+SELECT count(*)
+FROM per_payment
+WHERE has_cross_currency AND (has_same_currency OR has_invalid_cross_currency);
 COMMIT;
 SQL
   report_query_stdin 'CURRENCY_MISMATCHES_UNVERIFIABLE' <<'SQL'
 BEGIN READ ONLY;
-SELECT count(DISTINCT p.id)
-FROM "PaymentAllocation" a
-JOIN "Payment" p ON p.id = a."paymentId"
-JOIN "Charge" c ON c.id = a."chargeId"
-WHERE p.currency <> c.currency
-  AND p."functionalCurrencyCode" IS NULL
-  AND p."functionalAmountMinor" IS NULL
-  AND p."exchangeRateId" IS NULL
-  AND p."exchangeRateValue" IS NULL
-  AND p."exchangeRateDirection" IS NULL
-  AND p."exchangeRateEffectiveAt" IS NULL
-  AND p."conversionDate" IS NULL;
+WITH per_payment AS (
+  SELECT p.id,
+         bool_or(p.currency <> c.currency) AS has_cross_currency,
+         bool_or(p.currency = c.currency) AS has_same_currency,
+         bool_or(p.currency <> c.currency AND
+           p."functionalCurrencyCode" IS NULL
+           AND p."functionalAmountMinor" IS NULL
+           AND p."exchangeRateId" IS NULL
+           AND p."exchangeRateValue" IS NULL
+           AND p."exchangeRateDirection" IS NULL
+           AND p."exchangeRateEffectiveAt" IS NULL
+           AND p."conversionDate" IS NULL) AS has_unverifiable_cross_currency,
+         bool_or(p.currency <> c.currency AND (
+           p."functionalCurrencyCode" IS NOT NULL
+           OR p."functionalAmountMinor" IS NOT NULL
+           OR p."exchangeRateId" IS NOT NULL
+           OR p."exchangeRateValue" IS NOT NULL
+           OR p."exchangeRateDirection" IS NOT NULL
+           OR p."exchangeRateEffectiveAt" IS NOT NULL
+           OR p."conversionDate" IS NOT NULL
+         )) AS has_conversion_metadata
+  FROM "PaymentAllocation" a
+  JOIN "Payment" p ON p.id = a."paymentId"
+  JOIN "Charge" c ON c.id = a."chargeId"
+  GROUP BY p.id
+)
+SELECT count(*)
+FROM per_payment
+WHERE has_cross_currency
+  AND NOT has_same_currency
+  AND has_unverifiable_cross_currency
+  AND NOT has_conversion_metadata;
 COMMIT;
 SQL
   report_query_stdin 'DUPLICATE_RECEIPT_FILE_GRAPHS' <<'SQL'
@@ -665,10 +696,16 @@ NODE
 }
 
 report_s3_posture() {
-  local versioning object_count
+  local configured_bucket versioning object_count
   local versioning_ok=false
   local object_count_ok=false
 
+  configured_bucket="$(safe_env_value "$API_CONTAINER" S3_BUCKET 2>/dev/null || true)"
+  if [[ "$configured_bucket" != "$EXPECTED_BUCKET" ]]; then
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+    printf 'S3_BUCKET_REACHABLE=UNKNOWN\nS3_VERSIONING_STATUS=UNKNOWN\nS3_BUSINESS_OBJECT_COUNT=UNKNOWN\nS3_DEEP_AUDIT=INCOMPLETE\n'
+    return
+  fi
   if s3_client_available; then
     if s3_probe head >/dev/null 2>&1; then
       printf 'S3_BUCKET_REACHABLE=YES\n'
@@ -776,6 +813,9 @@ report_backup_readiness() {
         checksum_status='FAIL'
         AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
       fi
+    else
+      checksum_status='INCOMPLETE'
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     fi
     if validate_pg_restore_list "$latest_dump"; then
       restore_status='PASS'

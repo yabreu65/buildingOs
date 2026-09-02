@@ -107,6 +107,10 @@ if (!auditorText.includes('validate_pg_restore_list') || !auditorText.includes('
 if (!auditorText.includes("restore_status='INCOMPLETE'")) throw new Error('unavailable pg_restore validation must be incomplete');
 if (!auditorText.includes('validate_backup_mechanism') || !auditorText.includes('backup-identity')) throw new Error('backup mechanism identity must use the trusted validator');
 if (!auditorText.includes('BACKUP_MECHANISM_OWNER=%s') || !auditorText.includes('BACKUP_MECHANISM_GROUP=%s') || !auditorText.includes('BACKUP_MECHANISM_MODE=%s')) throw new Error('backup mechanism owner, group, and mode must be reported');
+if (!auditorText.includes('configured_bucket')) throw new Error('S3 audit must require the authoritative runtime bucket');
+if (!auditorText.includes('has_same_currency')) throw new Error('mixed allocation currency modes must be audited');
+if (!auditorText.includes('CHARGE_OVER_ALLOCATIONS')) throw new Error('charge-side over-allocation must be audited');
+if (!auditorText.includes("checksum_status='INCOMPLETE'")) throw new Error('missing backup checksums must fail closed');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

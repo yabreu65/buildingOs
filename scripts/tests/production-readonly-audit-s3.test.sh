@@ -10,6 +10,9 @@ trap 'rm -f "$OUTPUT_FILE"' EXIT
 S3_MODE='pass'
 docker() {
   case "$*" in
+    *'S3_BUCKET'* )
+      printf 'buildingos-production'
+      ;;
     *'node -e require.resolve'* )
       [[ "$S3_MODE" != 'unavailable' ]] || return 1
       ;;
@@ -53,4 +56,20 @@ report_s3_posture > "$OUTPUT_FILE"
 unavailable_output="$(< "$OUTPUT_FILE")"
 [[ "$unavailable_output" == *'S3_DEEP_AUDIT_UNAVAILABLE'* ]]
 [[ "$unavailable_output" == *'S3_DEEP_AUDIT=INCOMPLETE'* ]]
+
+S3_MODE='pass'
+docker() {
+  case "$*" in
+    *'S3_BUCKET'* )
+      printf 'wrong-production-bucket'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+report_s3_posture > "$OUTPUT_FILE"
+wrong_bucket_output="$(< "$OUTPUT_FILE")"
+[[ "$wrong_bucket_output" == *'S3_DEEP_AUDIT=INCOMPLETE'* ]]
+[[ "$wrong_bucket_output" != *'S3_DEEP_AUDIT=PASS'* ]]
 printf 'PASS: S3 deep audit PASS, INCOMPLETE, FAIL, and unavailable states fail closed\n'
