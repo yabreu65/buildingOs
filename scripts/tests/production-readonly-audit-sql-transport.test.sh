@@ -55,13 +55,14 @@ done
 
 AUDIT_QUERY_FAILURES=0
 AUDIT_INTERNAL_FAILURES=0
+invalid_output_file="$TEST_ROOT/invalid-query-output"
 set +e
-invalid_output="$(report_query_stdin INVALID_QUERY <<'SQL' 2>&1
+report_query_stdin INVALID_QUERY > "$invalid_output_file" 2>&1 <<'SQL'
 SELECT 1;
 SQL
-)"
 invalid_rc=$?
 set -e
+invalid_output="$(< "$invalid_output_file")"
 [[ "$invalid_rc" -eq 0 ]]
 [[ "$invalid_output" == *'INVALID_QUERY=UNKNOWN'* ]]
 [[ "$invalid_output" == *'SQL payload is missing BEGIN READ ONLY or COMMIT'* ]]
