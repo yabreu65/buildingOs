@@ -57,7 +57,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           deploy_migration_count="$(awk -F "'" '/MIGRATION_COUNT.*==/ { print $2; exit }' scripts/deploy-production.sh)"
-          manifest_target_applied="$(awk -F "'" '/TARGET_APPLIED=/ { print $2; exit }' scripts/verify-production-migration-manifest.sh)"
+          manifest_target_applied="$(awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/ { value=$2; gsub(/[[:space:]]/, "", value); gsub(/\047/, "", value); if (value ~ /^[0-9]+$/) { print value; exit } }' scripts/verify-production-migration-manifest.sh)"
           [[ -n "$deploy_migration_count" ]] || deploy_migration_count='UNKNOWN'
           [[ -n "$manifest_target_applied" ]] || manifest_target_applied='UNKNOWN'
           certified_migration_count="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d '[:space:]')"

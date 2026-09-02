@@ -704,6 +704,32 @@ file_mtime() {
   stat -c '%Y' -- "$1" 2>/dev/null || stat -f '%m' -- "$1"
 }
 
+validate_pg_restore_list() {
+  local dump="$1"
+
+  if command -v pg_restore >/dev/null 2>&1; then
+    pg_restore --list "$dump" >/dev/null 2>&1
+    return
+  fi
+  container_exists "$POSTGRES_CONTAINER" || return 2
+  docker exec -i "$POSTGRES_CONTAINER" pg_restore --list < "$dump" >/dev/null 2>&1
+}
+
+manifest_field() {
+  local manifest="$1"
+  local key="$2"
+
+  awk -F '=' -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$manifest"
+}
+
+validate_backup_mechanism() {
+  local manifest="$1"
+  local validator="$2"
+
+  [[ -f "$manifest" && ! -L "$manifest" && -x "$validator" ]] || return 1
+  bash "$validator" backup-identity "$manifest" >/dev/null 2>&1
+}
+
 format_epoch() {
   date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ'
 }
@@ -712,7 +738,8 @@ report_backup_readiness() {
   local latest_dump=''
   local latest_mtime=0
   local candidate mtime checksum_file expected actual now age
-  local mechanism_digest mechanism_mode mechanism_identity='UNKNOWN'
+  local mechanism_path='UNKNOWN' mechanism_digest='UNKNOWN' mechanism_owner='UNKNOWN' mechanism_group='UNKNOWN' mechanism_mode='UNKNOWN'
+  local mechanism_identity='UNKNOWN' backup_validator restore_result
   local dump_present='NO'
   local checksum_present='NO'
   local checksum_status='NOT_RUN'
@@ -750,10 +777,15 @@ report_backup_readiness() {
         AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
       fi
     fi
-    if command -v pg_restore >/dev/null 2>&1 && pg_restore --list "$latest_dump" >/dev/null 2>&1; then
+    if validate_pg_restore_list "$latest_dump"; then
       restore_status='PASS'
-    elif command -v pg_restore >/dev/null 2>&1; then
-      restore_status='FAIL'
+    else
+      restore_result=$?
+      if [[ "$restore_result" -eq 2 ]]; then
+        restore_status='INCOMPLETE'
+      else
+        restore_status='FAIL'
+      fi
       AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     fi
     now="$(date -u +%s)"
@@ -769,14 +801,22 @@ report_backup_readiness() {
     printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
     printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
   fi
-  if [[ -f "$BACKUP_SCRIPT_PATH" && ! -L "$BACKUP_SCRIPT_PATH" ]]; then
-    if mechanism_digest="$(sha256sum -- "$BACKUP_SCRIPT_PATH" 2>/dev/null)"; then
-      mechanism_digest="${mechanism_digest%% *}"
-      mechanism_mode="$(stat -c '%a' -- "$BACKUP_SCRIPT_PATH" 2>/dev/null || stat -f '%Lp' -- "$BACKUP_SCRIPT_PATH")"
-      mechanism_identity="sha256=${mechanism_digest};mode=${mechanism_mode}"
-    fi
+  backup_validator="$APP_DIR/scripts/production-security-validate.sh"
+  if validate_backup_mechanism "$BACKUP_IDENTITY_MANIFEST_PATH" "$backup_validator"; then
+    mechanism_path="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" path)"
+    mechanism_digest="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" sha256)"
+    mechanism_owner="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" owner)"
+    mechanism_group="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" group)"
+    mechanism_mode="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" mode)"
+    mechanism_identity="path=${mechanism_path};sha256=${mechanism_digest};owner=${mechanism_owner};group=${mechanism_group};mode=${mechanism_mode}"
+  else
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
-  printf 'BACKUP_MECHANISM_PATH=%s\n' "$BACKUP_SCRIPT_PATH"
+  printf 'BACKUP_MECHANISM_PATH=%s\n' "$mechanism_path"
+  printf 'BACKUP_MECHANISM_SHA256=%s\n' "$mechanism_digest"
+  printf 'BACKUP_MECHANISM_OWNER=%s\n' "$mechanism_owner"
+  printf 'BACKUP_MECHANISM_GROUP=%s\n' "$mechanism_group"
+  printf 'BACKUP_MECHANISM_MODE=%s\n' "$mechanism_mode"
   printf 'BACKUP_MECHANISM_IDENTITY=%s\n' "$mechanism_identity"
   printf 'BACKUP_IDENTITY_MANIFEST=%s\n' "$BACKUP_IDENTITY_MANIFEST_PATH"
   printf 'BACKUP_DUMP_PRESENT=%s\n' "$dump_present"
@@ -819,7 +859,7 @@ main() {
     [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
   done
 
-  for command_name in bash curl date docker find git sha256sum stat; do
+  for command_name in awk bash curl date docker find git sha256sum stat; do
     command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
   done
 

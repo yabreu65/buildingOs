@@ -102,6 +102,11 @@ if (!workflowText.includes('CERTIFIED_MIGRATION_COUNT=%s')) throw new Error('mig
 if (workflowText.includes("certified_migration_count == '98'")) throw new Error('audit workflow must not pin a transient migration count');
 if (!auditorText.includes('PUBLIC_READYZ_STATUS')) throw new Error('readiness status must be reported');
 if (!auditorText.includes('p."buildingId" <> c."buildingId"') || !auditorText.includes('p."unitId" IS DISTINCT FROM c."unitId"')) throw new Error('allocation scope relationships must be audited');
+if (!workflowText.includes("awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/")) throw new Error('manifest target must parse the shell assignment');
+if (!auditorText.includes('validate_pg_restore_list') || !auditorText.includes('docker exec -i "$POSTGRES_CONTAINER" pg_restore --list')) throw new Error('pg_restore validation must use the existing PostgreSQL container when needed');
+if (!auditorText.includes("restore_status='INCOMPLETE'")) throw new Error('unavailable pg_restore validation must be incomplete');
+if (!auditorText.includes('validate_backup_mechanism') || !auditorText.includes('backup-identity')) throw new Error('backup mechanism identity must use the trusted validator');
+if (!auditorText.includes('BACKUP_MECHANISM_OWNER=%s') || !auditorText.includes('BACKUP_MECHANISM_GROUP=%s') || !auditorText.includes('BACKUP_MECHANISM_MODE=%s')) throw new Error('backup mechanism owner, group, and mode must be reported');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE
