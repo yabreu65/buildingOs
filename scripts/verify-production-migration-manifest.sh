@@ -368,7 +368,7 @@ case "$MODE" in
     ;;
   verify-db)
     [[ "$#" -eq 2 ]] || fail 'usage'
-    [[ "$PHASE" == 'pre' || "$PHASE" == 'post' ]] || fail 'phase_invalid'
+    [[ "$PHASE" == 'pre' || "$PHASE" == 'post' || "$PHASE" == 'retry' ]] || fail 'phase_invalid'
     validate_manifest
     validate_local_migrations
     TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/production-migration-state.XXXXXX")"
@@ -379,6 +379,9 @@ case "$MODE" in
       pending_count="$((TARGET_APPLIED - applied_count))"
       printf 'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=%s\ttarget=%s\n' \
         "$MANIFEST_VERSION" "$applied_count" "$pending_count" "$TARGET_APPLIED"
+    elif [[ "$PHASE" == 'retry' ]]; then
+      printf 'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=0\ttarget=%s\n' \
+        "$MANIFEST_VERSION" "$TARGET_APPLIED" "$TARGET_APPLIED"
     else
       printf 'status=ok\tmode=verify-db\tphase=post\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=0\ttarget=%s\n' \
         "$MANIFEST_VERSION" "$TARGET_APPLIED" "$TARGET_APPLIED"

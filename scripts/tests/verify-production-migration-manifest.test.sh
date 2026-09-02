@@ -178,6 +178,16 @@ cp "$TMP_DIR/post.tsv" "$TMP_DIR/pre-target-applied.tsv"
 assert_failure_code '98 applied migrations are rejected in pre state' \
   "$TMP_DIR/pre-target-applied.tsv" pre 'database_pre_state_count_invalid'
 
+if ! run_fixture "$TMP_DIR/post.tsv" retry "$TMP_DIR/output.tsv"; then
+  fail_test "validated retry state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+fi
+grep -F $'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=1\tapplied=98\tfailed=0\tpending=0\ttarget=98' \
+  "$TMP_DIR/output.tsv" >/dev/null || fail_test "validated retry state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+pass_test 'validated 98-migration retry state passes'
+
+assert_failure_code '97 state is rejected in retry phase' \
+  "$TMP_DIR/pre-target.tsv" retry 'database_missing_row'
+
 sed 's/^20260816000004_legacy_income_application_provenance/20260830999999_partial_target/' \
   "$TMP_DIR/pre-target.tsv" > "$TMP_DIR/pre-partial-target.tsv"
 assert_failure_code '97 state with an incorrect target representation is rejected' \

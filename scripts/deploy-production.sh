@@ -253,11 +253,28 @@ done
 
 PHASE='migration-baseline'
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db ./scripts/verify-production-migration-baseline.sh
-env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-  bash ./scripts/verify-production-migration-manifest.sh verify-db pre
+migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-preflight.XXXXXX)"
+if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+  bash ./scripts/verify-production-migration-manifest.sh verify-db pre > "$migration_preflight_output" 2>&1; then
+  cat "$migration_preflight_output"
+  MIGRATION_RETRY=false
+else
+  if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
+    env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+      bash ./scripts/verify-production-migration-manifest.sh verify-db retry
+    MIGRATION_RETRY=true
+  else
+    cat "$migration_preflight_output" >&2
+    rm -f "$migration_preflight_output"
+    fail 'Production database did not match the exact 97-migration pre-state'
+  fi
+fi
+rm -f "$migration_preflight_output"
 
 PHASE='migrations'
-"${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate < /dev/null
+if [[ "$MIGRATION_RETRY" == false ]]; then
+  "${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate < /dev/null
+fi
 "${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate migrate status --schema apps/api/prisma/schema.prisma < /dev/null
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
