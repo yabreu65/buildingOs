@@ -11,7 +11,8 @@ rc=$?
 set -e
 
 [[ "$rc" -eq 64 ]] || { printf 'FAIL: streamed argument validation returned %s\n' "$rc" >&2; exit 1; }
-[[ "$output" == *'Usage: production-readonly-audit.sh'* ]]
+[[ "$output" == *'Usage: bash <candidate_sha>'* ]]
+[[ "$output" != *'AUDIT_INTERNAL_FAILURES='* ]]
 [[ "$output" != *'BASH_SOURCE[0]: unbound variable'* ]]
 
 set +e

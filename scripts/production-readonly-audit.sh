@@ -1029,8 +1029,8 @@ report_minio_posture() {
 main() {
   local url
 
-  trap audit_unexpected_error ERR
   [[ $# -eq 4 ]] || { usage; return 64; }
+  trap audit_unexpected_error ERR
   readonly CANDIDATE_SHA="$1"
   readonly API_HEALTH_URL="$2"
   readonly API_READYZ_URL="$3"
