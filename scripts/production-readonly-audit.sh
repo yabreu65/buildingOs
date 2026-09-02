@@ -201,21 +201,33 @@ readonly_query_stdin() {
   local query
 
   query="$(< /dev/stdin)"
-  [[ "$query" == *'BEGIN READ ONLY;'* ]] || fail 'SQL payload is missing BEGIN READ ONLY'
-  [[ "$query" == *'COMMIT;'* ]] || fail 'SQL payload is missing COMMIT'
+  [[ "$query" == *'BEGIN READ ONLY;'* ]] || return 2
+  [[ "$query" == *'COMMIT;'* ]] || return 2
   printf '%s\n' "$query" | docker exec -i "$POSTGRES_CONTAINER" sh -lc \
     'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' \
     sh "$DATABASE_NAME"
 }
 
+record_query_failure() {
+  if [[ "$1" -eq 2 ]]; then
+    AUDIT_INTERNAL_FAILURES=$((AUDIT_INTERNAL_FAILURES + 1))
+    AUDIT_FAILURE_REASON='SQL payload is missing BEGIN READ ONLY or COMMIT'
+    printf 'ERROR: %s\n' "$AUDIT_FAILURE_REASON" >&2
+  else
+    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+  fi
+}
+
 report_query_stdin() {
   local key="$1"
   local value
+  local rc
 
   if value="$(readonly_query_stdin 2>/dev/null)"; then
     printf '%s=%s\n' "$key" "$value"
   else
-    AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    rc=$?
+    record_query_failure "$rc"
     printf '%s=UNKNOWN\n' "$key"
   fi
 }
