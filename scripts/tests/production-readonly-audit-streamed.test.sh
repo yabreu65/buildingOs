@@ -26,7 +26,12 @@ set -e
 [[ "$output" == *'candidate SHA is not exactly 40 lowercase hexadecimal characters'* ]]
 
 set +e
-output="$(PATH="/usr/bin:/bin" bash -s -- "$CANDIDATE_SHA" https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
+missing_docker_bin="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-no-docker.XXXXXX")"
+trap 'rm -rf "${missing_docker_bin:-}"' EXIT
+for command_name in awk bash cat curl date; do
+  ln -s "$(command -v "$command_name")" "$missing_docker_bin/$command_name"
+done
+output="$(PATH="$missing_docker_bin" /bin/bash -s -- "$CANDIDATE_SHA" https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
 rc=$?
 set -e
 
@@ -39,7 +44,7 @@ set -e
 [[ "$output" != *'BASH_SOURCE[0]: unbound variable'* ]]
 
 all_tools_bin="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-jq.XXXXXX")"
-trap 'rm -rf "$all_tools_bin"' EXIT
+trap 'rm -rf "${missing_docker_bin:-}" "${all_tools_bin:-}"' EXIT
 cat > "$all_tools_bin/docker" <<'SH'
 #!/bin/bash
 exit 1
