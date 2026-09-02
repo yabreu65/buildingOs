@@ -195,14 +195,18 @@ public_readyz_status() {
   local body
   local database_status='UNKNOWN'
   local storage_status='UNKNOWN'
+  local readiness_status='UNKNOWN'
   local readyz_ok=false
 
   if body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
     --request GET "$API_READYZ_URL" 2>/dev/null)"; then
     [[ "$body" == *'"database":{"status":"up"'* ]] && database_status='UP'
     [[ "$body" == *'"storage":{"status":"up"'* ]] && storage_status='UP'
+    [[ "$body" == *'"status":"healthy"'* ]] && readiness_status='HEALTHY'
+    [[ "$body" == *'"status":"degraded"'* ]] && readiness_status='DEGRADED'
+    [[ "$body" == *'"status":"unhealthy"'* ]] && readiness_status='UNHEALTHY'
     printf 'PUBLIC_READYZ_HTTP=200\n'
-    if [[ "$database_status" == 'UP' && "$storage_status" == 'UP' ]]; then
+    if [[ "$readiness_status" == 'HEALTHY' && "$database_status" == 'UP' && "$storage_status" == 'UP' ]]; then
       readyz_ok=true
     fi
   else
@@ -210,6 +214,7 @@ public_readyz_status() {
   fi
   printf 'PUBLIC_READYZ_DATABASE=%s\n' "$database_status"
   printf 'PUBLIC_READYZ_STORAGE=%s\n' "$storage_status"
+  printf 'PUBLIC_READYZ_STATUS=%s\n' "$readiness_status"
   if [[ "$readyz_ok" != true ]]; then
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
@@ -405,7 +410,9 @@ LEFT JOIN "Charge" c ON c.id = a."chargeId"
 WHERE p.id IS NULL
    OR c.id IS NULL
    OR a."tenantId" <> p."tenantId"
-   OR a."tenantId" <> c."tenantId";
+   OR a."tenantId" <> c."tenantId"
+   OR p."buildingId" <> c."buildingId"
+   OR p."unitId" IS DISTINCT FROM c."unitId";
 COMMIT;
 SQL
   if value="$(readonly_query_stdin <<'SQL'
@@ -747,6 +754,7 @@ report_backup_readiness() {
       restore_status='PASS'
     elif command -v pg_restore >/dev/null 2>&1; then
       restore_status='FAIL'
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     fi
     now="$(date -u +%s)"
     age=$((now - latest_mtime))

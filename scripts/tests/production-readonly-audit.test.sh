@@ -100,6 +100,8 @@ if (!auditorText.includes('ALLOWED_IGNORED_RUNTIME_ENV')) throw new Error('ignor
 if (!auditorText.includes('BACKUP_CHECKSUM_VERIFICATION=%s')) throw new Error('backup checksum state must be reported');
 if (!workflowText.includes('CERTIFIED_MIGRATION_COUNT=%s')) throw new Error('migration observation must be derived dynamically');
 if (workflowText.includes("certified_migration_count == '98'")) throw new Error('audit workflow must not pin a transient migration count');
+if (!auditorText.includes('PUBLIC_READYZ_STATUS')) throw new Error('readiness status must be reported');
+if (!auditorText.includes('p."buildingId" <> c."buildingId"') || !auditorText.includes('p."unitId" IS DISTINCT FROM c."unitId"')) throw new Error('allocation scope relationships must be audited');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

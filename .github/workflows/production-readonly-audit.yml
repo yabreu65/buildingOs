@@ -56,21 +56,18 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          deploy_migration_count='UNKNOWN'
-          manifest_target_applied='UNKNOWN'
-          migration_98_present='NO'
-          grep -Eq 'MIGRATION_COUNT.*==.*97' scripts/deploy-production.sh && deploy_migration_count='97' || true
-          grep -Fq 'TARGET_APPLIED=97' scripts/verify-production-migration-manifest.sh && manifest_target_applied='97' || true
-          if [[ -f apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql ]]; then
-            migration_98_present='YES'
-          fi
+          deploy_migration_count="$(awk -F "'" '/MIGRATION_COUNT.*==/ { print $2; exit }' scripts/deploy-production.sh)"
+          manifest_target_applied="$(awk -F "'" '/TARGET_APPLIED=/ { print $2; exit }' scripts/verify-production-migration-manifest.sh)"
+          [[ -n "$deploy_migration_count" ]] || deploy_migration_count='UNKNOWN'
+          [[ -n "$manifest_target_applied" ]] || manifest_target_applied='UNKNOWN'
           certified_migration_count="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d '[:space:]')"
           printf 'DEPLOY_TOOLING_FINAL_MIGRATION_COUNT=%s\n' "$deploy_migration_count"
           printf 'DEPLOY_TOOLING_MANIFEST_TARGET_APPLIED=%s\n' "$manifest_target_applied"
           printf 'CERTIFIED_MIGRATION_COUNT=%s\n' "$certified_migration_count"
-          printf 'NEW_MIGRATION_PRESENT=%s\n' "$migration_98_present"
-          if [[ "$deploy_migration_count" == '97' && "$manifest_target_applied" == '97' && "$migration_98_present" == 'YES' ]]; then
+          if [[ "$deploy_migration_count" =~ ^[0-9]+$ && "$manifest_target_applied" =~ ^[0-9]+$ && "$certified_migration_count" =~ ^[0-9]+$ && "$deploy_migration_count" == "$manifest_target_applied" && "$certified_migration_count" -gt "$deploy_migration_count" ]]; then
             printf 'DEPLOY_TOOLING_COMPATIBLE=NO\n'
+          elif [[ "$deploy_migration_count" =~ ^[0-9]+$ && "$manifest_target_applied" =~ ^[0-9]+$ && "$certified_migration_count" =~ ^[0-9]+$ && "$deploy_migration_count" == "$manifest_target_applied" && "$certified_migration_count" == "$deploy_migration_count" ]]; then
+            printf 'DEPLOY_TOOLING_COMPATIBLE=YES\n'
           else
             printf 'DEPLOY_TOOLING_COMPATIBLE=UNKNOWN\n'
           fi
