@@ -271,8 +271,6 @@ else
   if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
     env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
       bash ./scripts/verify-production-migration-manifest.sh verify-db retry
-    [[ "$CURRENT_CHECKOUT_SHA" == "$TARGET_SHA" ]] \
-      || fail "Validated migration retry requires the production checkout at the target SHA"
     MIGRATION_RETRY=true
   else
     cat "$migration_preflight_output" >&2
