@@ -16,6 +16,16 @@ set -e
 [[ "$output" != *'BASH_SOURCE[0]: unbound variable'* ]]
 
 set +e
+output="$(bash -s -- invalid-sha https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
+rc=$?
+set -e
+
+[[ "$rc" -eq 1 ]] || { printf 'FAIL: invalid input returned %s\n' "$rc" >&2; exit 1; }
+[[ "$output" == *'AUDIT_INTERNAL_FAILURES=0'* ]]
+[[ "$output" == *'FAILURE_CLASS=INPUT_ERROR'* ]]
+[[ "$output" == *'candidate SHA is not exactly 40 lowercase hexadecimal characters'* ]]
+
+set +e
 output="$(PATH="/usr/bin:/bin" bash -s -- "$CANDIDATE_SHA" https://example.invalid/health https://example.invalid/readyz https://example.invalid/login < "$AUDITOR" 2>&1)"
 rc=$?
 set -e

@@ -38,6 +38,16 @@ fail() {
   exit 1
 }
 
+input_failure() {
+  AUDIT_FAILURE_CLASS='INPUT_ERROR'
+  AUDIT_FAILURE_REASON="${1:-unknown}"
+  AUDIT_FAILURE_REASON="${AUDIT_FAILURE_REASON//$'\n'/ }"
+  AUDIT_FAILURE_REASON="${AUDIT_FAILURE_REASON//$'\r'/ }"
+  printf 'ERROR: %s\n' "$AUDIT_FAILURE_REASON" >&2
+  audit_failure_summary >&2
+  exit 1
+}
+
 audit_failure_summary() {
   printf 'AUDIT_STATUS=INCOMPLETE\n' >&2
   printf 'AUDIT_QUERY_FAILURES=%s\n' "$AUDIT_QUERY_FAILURES" >&2
@@ -1036,9 +1046,9 @@ main() {
   readonly API_READYZ_URL="$3"
   readonly WEB_LOGIN_URL="$4"
 
-  [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'candidate SHA is not exactly 40 lowercase hexadecimal characters'
+  [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || input_failure 'candidate SHA is not exactly 40 lowercase hexadecimal characters'
   for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
-    [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
+    [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || input_failure 'public audit URL is not an HTTPS URL'
   done
 
   for command_name in awk bash cat curl date docker git jq sha256sum stat; do
