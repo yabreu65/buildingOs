@@ -184,8 +184,8 @@ main() {
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \
-    -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/opt/finance-staging-acceptance.mjs:ro" \
-    --entrypoint node buildingos-api /opt/finance-staging-acceptance.mjs
+    -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
+    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs
 
   local storage_after
   storage_after="$(assert_staging_runtime "$tested_sha" "$app_path" "$compose_file" "$project" "$env_file")"
