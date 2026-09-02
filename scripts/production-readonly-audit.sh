@@ -558,7 +558,7 @@ s3_client_available() {
 
 s3_probe() {
   local operation="$1"
-  docker exec "$API_CONTAINER" node - "$operation" <<'NODE'
+  docker exec -i "$API_CONTAINER" node - "$operation" <<'NODE'
 'use strict';
 
 const Minio = require('minio');
@@ -588,8 +588,20 @@ const run = async () => {
     return;
   }
   if (operation === 'objects') {
-    const result = await client.listObjectsV2Query(bucket, '', '', '', 100, '');
-    process.stdout.write(`${result.objects.length}\n`);
+    let continuationToken = '';
+    let objectCount = 0;
+    do {
+      const result = await client.listObjectsV2Query(bucket, '', continuationToken, '', 100, '');
+      objectCount += result.objects.length;
+      if (!result.isTruncated) {
+        break;
+      }
+      if (!result.nextContinuationToken) {
+        throw new Error('S3 object listing is truncated without a continuation token');
+      }
+      continuationToken = result.nextContinuationToken;
+    } while (true);
+    process.stdout.write(`${objectCount}\n`);
     return;
   }
   throw new Error('unsupported S3 probe');

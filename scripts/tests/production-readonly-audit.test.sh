@@ -78,6 +78,8 @@ if (auditorText.includes("report_query '") || auditorText.includes('readonly_que
 if (!auditorText.includes('pg_restore --list')) throw new Error('existing backups must be inspectable without creation');
 if (!auditorText.includes('S3_DEEP_AUDIT_UNAVAILABLE')) throw new Error('unsupported S3 clients must be reported');
 if (!auditorText.includes('require.resolve("minio")')) throw new Error('S3 audit must use the runtime MinIO SDK');
+if (!auditorText.includes('docker exec -i "$API_CONTAINER" node')) throw new Error('S3 node probe must receive its stdin script');
+if (!auditorText.includes('nextContinuationToken') || !auditorText.includes('isTruncated')) throw new Error('S3 object audit must paginate fully');
 if (!auditorText.includes('S3_DEEP_AUDIT=INCOMPLETE') || !auditorText.includes('AUDIT_EVIDENCE_FAILURES')) throw new Error('incomplete S3 evidence must fail the overall audit');
 for (const marker of ['RUNTIME_IDENTITY=UNKNOWN', 'PUBLIC_READYZ_HTTP=FAIL', 'AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))']) {
   if (!auditorText.includes(marker)) throw new Error(`missing fail-closed evidence marker ${marker}`);
