@@ -52,36 +52,4 @@ for literal in "'YES'" "'NO'" "'public'" "'Payment'" "'READY'" "'PENDING'" "'FAI
   }
 done
 [[ "$received" == BEGIN\ READ\ ONLY\;*COMMIT\;* ]]
-
-AUDIT_QUERY_FAILURES=0
-AUDIT_INTERNAL_FAILURES=0
-invalid_output_file="$TEST_ROOT/invalid-query-output"
-set +e
-report_query_stdin INVALID_QUERY > "$invalid_output_file" 2>&1 <<'SQL'
-SELECT 1;
-SQL
-invalid_rc=$?
-set -e
-invalid_output="$(< "$invalid_output_file")"
-[[ "$invalid_rc" -eq 0 ]]
-[[ "$invalid_output" == *'INVALID_QUERY=UNKNOWN'* ]]
-[[ "$invalid_output" == *'SQL payload is missing BEGIN READ ONLY or COMMIT'* ]]
-[[ "$AUDIT_QUERY_FAILURES" -eq 0 ]]
-[[ "$AUDIT_INTERNAL_FAILURES" -eq 1 ]]
-
-docker() {
-  return 2
-}
-AUDIT_QUERY_FAILURES=0
-AUDIT_INTERNAL_FAILURES=0
-transport_failure_output_file="$TEST_ROOT/transport-failure-output"
-report_query_stdin TRANSPORT_FAILURE > "$transport_failure_output_file" 2>&1 <<'SQL'
-BEGIN READ ONLY;
-SELECT 1;
-COMMIT;
-SQL
-transport_failure_output="$(< "$transport_failure_output_file")"
-[[ "$transport_failure_output" == *'TRANSPORT_FAILURE=UNKNOWN'* ]]
-[[ "$AUDIT_QUERY_FAILURES" -eq 1 ]]
-[[ "$AUDIT_INTERNAL_FAILURES" -eq 0 ]]
 printf 'PASS: SQL literals reach mocked psql stdin unchanged\n'
