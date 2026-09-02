@@ -9,9 +9,14 @@ readonly REDIS_CONTAINER='pawtech-redis'
 readonly TRAEFIK_CONTAINER='pawtech-traefik'
 readonly DATABASE_NAME='buildingos_db'
 readonly APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
-readonly BACKUP_ROOT='/opt/pawtech/backups/tmp'
 readonly BACKUP_SCRIPT_PATH='/opt/pawtech/backups/scripts/backup-postgres.sh'
 readonly BACKUP_IDENTITY_MANIFEST_PATH="${APP_DIR}/infra/production/backup-postgres.identity.v1"
+readonly BACKUP_STATE_DIR='/var/lib/buildingos-backup'
+readonly BACKUP_IDENTITY_VERSION='backup-postgres.identity.v1'
+readonly BACKUP_SCRIPT_SHA256='3cbf2bf191bd9a06e7bbf831848cfa2816cd80fca980593f84d3411cb3b14ff5'
+readonly BACKUP_SCRIPT_OWNER='yoryi'
+readonly BACKUP_SCRIPT_GROUP='yoryi'
+readonly BACKUP_SCRIPT_MODE='0775'
 readonly ALLOWED_IGNORED_RUNTIME_ENV='infra/docker/.env'
 readonly EXPECTED_BUCKET='buildingos-production'
 readonly KNOWN_PRODUCTION_BASELINE='20260816000004_legacy_income_application_provenance'
@@ -415,6 +420,11 @@ WHERE p.id IS NULL
    OR p."unitId" IS DISTINCT FROM c."unitId";
 COMMIT;
 SQL
+  report_query_stdin 'NEGATIVE_PAYMENT_ALLOCATIONS' <<'SQL'
+BEGIN READ ONLY;
+SELECT count(*) FROM "PaymentAllocation" WHERE amount < 0;
+COMMIT;
+SQL
   if value="$(readonly_query_stdin <<'SQL'
 BEGIN READ ONLY;
 WITH per_payment AS (
@@ -737,10 +747,6 @@ report_s3_posture() {
   fi
 }
 
-file_mtime() {
-  stat -c '%Y' -- "$1" 2>/dev/null || stat -f '%m' -- "$1"
-}
-
 validate_pg_restore_list() {
   local dump="$1"
 
@@ -752,6 +758,22 @@ validate_pg_restore_list() {
   docker exec -i "$POSTGRES_CONTAINER" pg_restore --list < "$dump" >/dev/null 2>&1
 }
 
+file_owner() {
+  stat -L -c '%U' -- "$1" 2>/dev/null || stat -L -f '%Su' "$1"
+}
+
+file_group() {
+  stat -L -c '%G' -- "$1" 2>/dev/null || stat -L -f '%Sg' "$1"
+}
+
+file_mode() {
+  stat -L -c '%a' -- "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
+}
+
+file_identity() {
+  stat -L -c '%d:%i' -- "$1" 2>/dev/null || stat -L -f '%i' "$1"
+}
+
 manifest_field() {
   local manifest="$1"
   local key="$2"
@@ -759,12 +781,80 @@ manifest_field() {
   awk -F '=' -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$manifest"
 }
 
+state_field() {
+  local state_file="$1"
+  local key="$2"
+
+  awk -F '=' -v key="$key" '$1 == key { value=substr($0, index($0, "=") + 1); count++; } END { if (count != 1) exit 1; print value }' "$state_file"
+}
+
+parse_epoch() {
+  local timestamp="$1"
+
+  [[ "$timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+  date -u -d "$timestamp" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$timestamp" +%s 2>/dev/null
+}
+
+validate_backup_manifest() {
+  local manifest="$1"
+  local expected_manifest manifest_snapshot
+
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  manifest_snapshot="$(cat -- "$manifest"; printf '__BUILDINGOS_MANIFEST_END__')" || return 1
+  manifest_snapshot="${manifest_snapshot%__BUILDINGOS_MANIFEST_END__}"
+  printf -v expected_manifest '%s\npath=%s\nsha256=%s\nowner=%s\ngroup=%s\nmode=%s\n' \
+    "version=$BACKUP_IDENTITY_VERSION" "$BACKUP_SCRIPT_PATH" "$BACKUP_SCRIPT_SHA256" \
+    "$BACKUP_SCRIPT_OWNER" "$BACKUP_SCRIPT_GROUP" "$BACKUP_SCRIPT_MODE"
+  [[ "$manifest_snapshot" == "$expected_manifest" ]]
+}
+
+require_canonical_directory_without_symlinks() {
+  local directory="$1"
+  local component current canonical
+  local -a components=()
+
+  [[ "$directory" == /* && "$directory" != '/' && "$directory" != *'//'* && "$directory" != *'/./'* && "$directory" != *'/../'* && "$directory" != */. && "$directory" != */.. && "$directory" != */ ]] || return 1
+  [[ -d "$directory" ]] || return 1
+  IFS='/' read -r -a components <<< "${directory#/}"
+  current=''
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || return 1
+    current="$current/$component"
+    [[ ! -L "$current" ]] || return 1
+  done
+  canonical="$(cd -P -- "$directory" && pwd -P)" || return 1
+  [[ "$canonical" == "$directory" ]]
+}
+
+validate_backup_script_file() {
+  local script_path="$1"
+  local parent owner group mode digest identity_before identity_after owner_after group_after mode_after
+
+  [[ "$script_path" == "$BACKUP_SCRIPT_PATH" ]] || return 1
+  parent="${script_path%/*}"
+  require_canonical_directory_without_symlinks "$parent" || return 1
+  [[ -f "$script_path" && ! -L "$script_path" ]] || return 1
+  identity_before="$(file_identity "$script_path")" || return 1
+  owner="$(file_owner "$script_path")" || return 1
+  group="$(file_group "$script_path")" || return 1
+  mode="0$(file_mode "$script_path")" || return 1
+  [[ "$owner" == "$BACKUP_SCRIPT_OWNER" && "$group" == "$BACKUP_SCRIPT_GROUP" && "$mode" == "$BACKUP_SCRIPT_MODE" ]] || return 1
+  digest="$(sha256sum -- "$script_path")" || return 1
+  digest="${digest%% *}"
+  identity_after="$(file_identity "$script_path")" || return 1
+  owner_after="$(file_owner "$script_path")" || return 1
+  group_after="$(file_group "$script_path")" || return 1
+  mode_after="0$(file_mode "$script_path")" || return 1
+  [[ "$identity_before" == "$identity_after" && ! -L "$script_path" && -f "$script_path" ]] || return 1
+  [[ "$owner_after" == "$owner" && "$group_after" == "$group" && "$mode_after" == "$mode" ]] || return 1
+  [[ "$digest" == "$BACKUP_SCRIPT_SHA256" ]]
+}
+
 validate_backup_mechanism() {
   local manifest="$1"
-  local validator="$2"
 
-  [[ -f "$manifest" && ! -L "$manifest" && -x "$validator" ]] || return 1
-  bash "$validator" backup-identity "$manifest" >/dev/null 2>&1
+  validate_backup_manifest "$manifest" || return 1
+  validate_backup_script_file "$BACKUP_SCRIPT_PATH"
 }
 
 format_epoch() {
@@ -772,78 +862,68 @@ format_epoch() {
 }
 
 report_backup_readiness() {
-  local latest_dump=''
-  local latest_mtime=0
-  local candidate mtime checksum_file expected actual now age
+  local state_file="$BACKUP_STATE_DIR/latest.env"
+  local backup_set_id app_sha completed_at completed_epoch now age paired_receipt
   local mechanism_path='UNKNOWN' mechanism_digest='UNKNOWN' mechanism_owner='UNKNOWN' mechanism_group='UNKNOWN' mechanism_mode='UNKNOWN'
-  local mechanism_identity='UNKNOWN' backup_validator restore_result
-  local dump_present='NO'
-  local checksum_present='NO'
-  local checksum_status='NOT_RUN'
-  local restore_status='NOT_RUN'
+  local mechanism_identity='UNKNOWN'
+  local dump_present='NOT_APPLICABLE'
+  local checksum_present='NOT_APPLICABLE'
+  local checksum_status='INCOMPLETE'
+  local restore_status='INCOMPLETE'
   local backup_required='YES'
 
-  if [[ -d "$BACKUP_ROOT" && ! -L "$BACKUP_ROOT" ]]; then
-    while IFS= read -r -d '' candidate; do
-      [[ ! -L "$candidate" ]] || continue
-      mtime="$(file_mtime "$candidate" 2>/dev/null || printf '0')"
-      [[ "$mtime" =~ ^[0-9]+$ ]] || continue
-      if (( mtime > latest_mtime )); then
-        latest_mtime="$mtime"
-        latest_dump="$candidate"
-      fi
-    done < <(find "$BACKUP_ROOT" -mindepth 2 -maxdepth 2 -type f -name 'buildingos_db_*.dump' -print0 2>/dev/null)
-  fi
-
-  if [[ -n "$latest_dump" ]]; then
-    dump_present='YES'
-    checksum_file="$latest_dump.sha256"
-    if [[ -s "$checksum_file" && ! -L "$checksum_file" ]]; then
-      checksum_present='YES'
-      expected=''
-      IFS=' ' read -r expected _ < "$checksum_file" || true
-      if actual="$(sha256sum -- "$latest_dump" 2>/dev/null)"; then
-        actual="${actual%% *}"
+  if [[ -f "$state_file" && ! -L "$state_file" && -r "$state_file" ]]; then
+    if backup_set_id="$(state_field "$state_file" BACKUP_SET_ID)" &&
+      app_sha="$(state_field "$state_file" APP_SHA)" &&
+      completed_at="$(state_field "$state_file" COMPLETED_AT)" &&
+      [[ "$backup_set_id" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]] &&
+      [[ "$app_sha" =~ ^[0-9a-f]{40}$ ]] &&
+      completed_epoch="$(parse_epoch "$completed_at")" &&
+      now="$(date -u +%s)" &&
+      age=$((now - completed_epoch)) &&
+      (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )); then
+      paired_receipt="$BACKUP_STATE_DIR/paired-$backup_set_id.json"
+      if [[ -f "$paired_receipt" && ! -L "$paired_receipt" && -r "$paired_receipt" ]] &&
+        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" '
+          .version == 1 and
+          .status == "PASS" and
+          .backup_set_id == $backupSetId and
+          .app_sha == $appSha and
+          .minio_verified == true and
+          (.postgres_receipt.version == 1) and
+          (.postgres_receipt.status == "PASS") and
+          (.postgres_receipt.backup_set_id == $backupSetId) and
+          (.postgres_receipt.app_sha == $appSha) and
+          (.postgres_receipt.encryption == "SSE-S3") and
+          (.postgres_receipt.postgres_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+          (.postgres_receipt.dump_filename | type == "string" and test("^[A-Za-z0-9._-]+$")) and
+          (.postgres_receipt.remote_object_prefix == ("postgresql/" + $backupSetId))
+        ' "$paired_receipt" >/dev/null; then
+        checksum_status='VERIFIED_IN_PAIRED_BACKUP'
+        restore_status='VERIFIED_IN_PAIRED_BACKUP'
+        backup_required='NO'
+        printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=%s\n' "$completed_at"
+        printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=%s\n' "${paired_receipt##*/}"
+        printf 'BACKUP_AGE_SECONDS=%s\n' "$age"
       else
-        actual='UNKNOWN'
-      fi
-      if [[ "$expected" =~ ^[0-9a-f]{64}$ && "$expected" == "$actual" ]]; then
-        checksum_status='PASS'
-      else
-        checksum_status='FAIL'
         AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+        printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
+        printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
+        printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
       fi
     else
-      checksum_status='INCOMPLETE'
       AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+      printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
+      printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
+      printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
     fi
-    if validate_pg_restore_list "$latest_dump"; then
-      restore_status='PASS'
-    else
-      restore_result=$?
-      if [[ "$restore_result" -eq 2 ]]; then
-        restore_status='INCOMPLETE'
-      else
-        restore_status='FAIL'
-      fi
-      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
-    fi
-    now="$(date -u +%s)"
-    age=$((now - latest_mtime))
-    if (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )) && [[ "$checksum_status" == 'PASS' && "$restore_status" == 'PASS' ]]; then
-      backup_required='NO'
-    fi
-    printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=%s\n' "$(format_epoch "$latest_mtime")"
-    printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=%s\n' "${latest_dump##*/}"
-    printf 'BACKUP_AGE_SECONDS=%s\n' "$age"
   else
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
     printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
     printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
   fi
-  backup_validator="$APP_DIR/scripts/production-security-validate.sh"
-  if validate_backup_mechanism "$BACKUP_IDENTITY_MANIFEST_PATH" "$backup_validator"; then
+  if validate_backup_mechanism "$BACKUP_IDENTITY_MANIFEST_PATH"; then
     mechanism_path="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" path)"
     mechanism_digest="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" sha256)"
     mechanism_owner="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" owner)"
@@ -900,7 +980,7 @@ main() {
     [[ "$url" =~ ^https://[A-Za-z0-9._:/?=%+-]+$ ]] || fail 'public audit URL is not an HTTPS URL'
   done
 
-  for command_name in awk bash curl date docker find git sha256sum stat; do
+  for command_name in awk bash cat curl date docker find git jq sha256sum stat; do
     command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
   done
 

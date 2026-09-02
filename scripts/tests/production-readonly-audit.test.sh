@@ -105,12 +105,14 @@ if (!auditorText.includes('p."buildingId" <> c."buildingId"') || !auditorText.in
 if (!workflowText.includes("awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/")) throw new Error('manifest target must parse the shell assignment');
 if (!auditorText.includes('validate_pg_restore_list') || !auditorText.includes('docker exec -i "$POSTGRES_CONTAINER" pg_restore --list')) throw new Error('pg_restore validation must use the existing PostgreSQL container when needed');
 if (!auditorText.includes("restore_status='INCOMPLETE'")) throw new Error('unavailable pg_restore validation must be incomplete');
-if (!auditorText.includes('validate_backup_mechanism') || !auditorText.includes('backup-identity')) throw new Error('backup mechanism identity must use the trusted validator');
+if (!auditorText.includes('validate_backup_mechanism') || !auditorText.includes('validate_backup_manifest') || !auditorText.includes('validate_backup_script_file')) throw new Error('backup mechanism identity must use in-stream validation');
 if (!auditorText.includes('BACKUP_MECHANISM_OWNER=%s') || !auditorText.includes('BACKUP_MECHANISM_GROUP=%s') || !auditorText.includes('BACKUP_MECHANISM_MODE=%s')) throw new Error('backup mechanism owner, group, and mode must be reported');
 if (!auditorText.includes('configured_bucket')) throw new Error('S3 audit must require the authoritative runtime bucket');
 if (!auditorText.includes('has_same_currency')) throw new Error('mixed allocation currency modes must be audited');
 if (!auditorText.includes('CHARGE_OVER_ALLOCATIONS')) throw new Error('charge-side over-allocation must be audited');
 if (!auditorText.includes("checksum_status='INCOMPLETE'")) throw new Error('missing backup checksums must fail closed');
+if (!auditorText.includes('BACKUP_STATE_DIR') || !auditorText.includes('paired-$backup_set_id.json')) throw new Error('backup readiness must use durable paired state');
+if (!auditorText.includes('NEGATIVE_PAYMENT_ALLOCATIONS')) throw new Error('negative allocations must be audited');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE

@@ -50,13 +50,12 @@ else
 fi
 
 manifest="$TEST_ROOT/backup-postgres.identity.v1"
-validator="$TEST_ROOT/production-security-validate.sh"
-printf 'trusted manifest fixture\n' > "$manifest"
-printf '#!/usr/bin/env bash\n[[ "$1" == backup-identity && "$2" == *backup-postgres.identity.v1 ]]\n' > "$validator"
-chmod 700 "$validator"
-validate_backup_mechanism "$manifest" "$validator"
+printf 'version=%s\npath=%s\nsha256=%s\nowner=%s\ngroup=%s\nmode=%s\n' \
+  "$BACKUP_IDENTITY_VERSION" "$BACKUP_SCRIPT_PATH" "$BACKUP_SCRIPT_SHA256" \
+  "$BACKUP_SCRIPT_OWNER" "$BACKUP_SCRIPT_GROUP" "$BACKUP_SCRIPT_MODE" > "$manifest"
+validate_backup_manifest "$manifest"
 ln -s "$manifest" "$TEST_ROOT/manifest-link"
-if validate_backup_mechanism "$TEST_ROOT/manifest-link" "$validator"; then
+if validate_backup_manifest "$TEST_ROOT/manifest-link"; then
   printf 'FAIL: symlink manifest unexpectedly passed\n' >&2
   exit 1
 fi
