@@ -4,8 +4,9 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ACCEPTANCE_SCRIPT="$ROOT_DIR/scripts/finance-staging-acceptance.sh"
 readonly SMOKE_SCRIPT_HOST="$ROOT_DIR/scripts/tests/finance-staging-acceptance-module-resolution-smoke.mjs"
-readonly IMAGE='buildingos-finance-acceptance-module-resolution-smoke:local'
+readonly IMAGE="buildingos-finance-acceptance-module-resolution-smoke:local-${PPID}-$$-${RANDOM}"
 readonly SMOKE_SCRIPT_CONTAINER='/app/apps/api/finance-staging-acceptance-module-resolution-smoke.mjs'
+image_created=false
 
 node - "$ACCEPTANCE_SCRIPT" <<'NODE'
 const fs = require('fs');
@@ -32,15 +33,23 @@ console.log('PASS: acceptance module mount and execution path are safe');
 NODE
 
 cleanup() {
-  docker image rm "$IMAGE" >/dev/null 2>&1 || true
+  if [[ "$image_created" == true ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    docker image rm "$IMAGE" >/dev/null
+  fi
 }
 trap cleanup EXIT
+
+if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  printf 'Refusing to overwrite an existing smoke image: %s\n' "$IMAGE" >&2
+  exit 1
+fi
 
 docker build \
   --file "$ROOT_DIR/apps/api/Dockerfile" \
   --target runtime \
   --tag "$IMAGE" \
   "$ROOT_DIR" >/dev/null
+image_created=true
 
 docker run --rm \
   --network none \
