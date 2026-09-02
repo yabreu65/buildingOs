@@ -6,7 +6,7 @@ import { PrismaClient } from "@prisma/client";
 
 const tenantId = "stg-golden-tenant-auto";
 const buildingId = "stg-golden-building-auto";
-const unitId = "stg-golden-unit-auto-102";
+const unitId = "stg-golden-unit-auto-103";
 const qaEmail = "admin.autogestionada@staging.buildingos.local";
 const password = process.env.STAGING_GOLDEN_QA_PASSWORD;
 const apiBaseUrl =
@@ -19,6 +19,7 @@ const tempDirectory = fs.mkdtempSync(
   path.join(os.tmpdir(), "finance-02c-auth-"),
 );
 const cookiePath = path.join(tempDirectory, "cookies");
+const MAX_API_ERROR_SUMMARY_LENGTH = 240;
 
 function fail(message) {
   throw new Error(message);
@@ -50,6 +51,28 @@ async function parseResponse(response) {
   }
 }
 
+function sanitizeApiErrorSummary(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return "";
+  }
+
+  const fields = [];
+  if (Number.isInteger(payload.statusCode)) {
+    fields.push(`statusCode=${payload.statusCode}`);
+  }
+  if (typeof payload.error === "string") {
+    fields.push(`error=${payload.error}`);
+  }
+  if (typeof payload.message === "string") {
+    fields.push(`message=${payload.message}`);
+  }
+
+  return fields
+    .join("; ")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, MAX_API_ERROR_SUMMARY_LENGTH);
+}
+
 async function request(method, requestPath, body) {
   const headers = { accept: "application/json", "x-tenant-id": tenantId };
   const cookies = readCookies();
@@ -64,7 +87,10 @@ async function request(method, requestPath, body) {
   });
   const payload = await parseResponse(response);
   if (!response.ok) {
-    fail(`${method} ${requestPath} returned HTTP ${response.status}`);
+    const summary = sanitizeApiErrorSummary(payload);
+    fail(
+      `${method} ${requestPath} returned HTTP ${response.status}${summary ? `: ${summary}` : ""}`,
+    );
   }
   return payload;
 }
@@ -295,6 +321,68 @@ async function acceptIncome(incomeCategoryId, period) {
   );
   console.log("income_atomic_flow=PASS");
   return income.id;
+}
+
+function calculateEffectiveOutstanding(charge) {
+  const effectiveAllocated = (charge.paymentAllocations ?? []).reduce(
+    (sum, allocation) =>
+      allocation.payment?.status === "APPROVED" ||
+      allocation.payment?.status === "RECONCILED"
+        ? sum + allocation.amount
+        : sum,
+    0,
+  );
+  return Math.max(0, charge.amount - effectiveAllocated);
+}
+
+function findOlderPayableCharge(charges, acceptanceChargeId) {
+  const acceptanceIndex = charges.findIndex(
+    (charge) => charge.id === acceptanceChargeId,
+  );
+  if (acceptanceIndex < 0) return null;
+
+  return (
+    charges
+      .slice(0, acceptanceIndex)
+      .find((charge) => calculateEffectiveOutstanding(charge) > 0) ?? null
+  );
+}
+
+async function assertCanonicalAcceptanceCharge(chargeId) {
+  const charges = await prisma.charge.findMany({
+    where: {
+      tenantId,
+      buildingId,
+      unitId,
+      canceledAt: null,
+    },
+    select: {
+      id: true,
+      amount: true,
+      dueDate: true,
+      createdAt: true,
+      paymentAllocations: {
+        select: {
+          amount: true,
+          payment: { select: { status: true } },
+        },
+      },
+    },
+    orderBy: [
+      { dueDate: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
+  });
+
+  const acceptanceCharge = charges.find((charge) => charge.id === chargeId);
+  assert(
+    acceptanceCharge && calculateEffectiveOutstanding(acceptanceCharge) > 0,
+    "synthetic acceptance charge is not outstanding",
+  );
+
+  const olderCharge = findOlderPayableCharge(charges, chargeId);
+  assert(!olderCharge, "acceptance unit contains an older payable obligation");
 }
 
 async function createPaymentProof() {
@@ -724,6 +812,7 @@ async function main() {
     charge?.id && charge?.tenantId === tenantId,
     "synthetic charge creation failed",
   );
+  await assertCanonicalAcceptanceCharge(charge.id);
   const proofFileId = await createPaymentProof();
   const payment = await request("POST", `/buildings/${buildingId}/payments`, {
     unitId,
