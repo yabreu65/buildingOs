@@ -38,6 +38,7 @@ recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-
 [[ "$(grep -F 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" == *'TARGET_COMPOSE_FILE'* ]]
 [[ "$target_tree_line" -lt "$target_compose_line" ]]
 (( api_revision_line < revision_match_line && web_revision_line < revision_match_line && revision_match_line < previous_sha_line ))
+[[ "$(grep -F -c 'CURRENT_CHECKOUT_SHA" == "$PREVIOUS_API_REVISION' "$DEPLOY_SCRIPT")" -eq 0 ]]
 [[ "$target_compose_line" -lt "$storage_guard_line" ]]
 [[ "$storage_guard_line" -lt "$backup_phase_line" ]]
 [[ "$storage_guard_line" -lt "$build_phase_line" ]]

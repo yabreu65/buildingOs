@@ -267,8 +267,6 @@ migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-prefli
 if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db pre > "$migration_preflight_output" 2>&1; then
   cat "$migration_preflight_output"
-  [[ "$CURRENT_CHECKOUT_SHA" == "$PREVIOUS_API_REVISION" ]] \
-    || fail "Production checkout revision does not match the running application images"
 else
   if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
     env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
