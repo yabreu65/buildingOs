@@ -49,6 +49,8 @@ query="$(< "$captured")"
 [[ "$query" == *'"paymentOriginalAmountMinor" < 0'* ]]
 [[ "$query" == *'legacy_cross_unverifiable'* ]]
 [[ "$query" == *'has_same_currency'* ]]
+[[ "$query" == *'inconsistent_same_currency_share'* ]]
+[[ "$query" == *'paymentOriginalAmountMinor" <> a.amount'* ]]
 [[ "$query" == *'charge_overallocations'* ]]
 [[ "$query" == *'OVER_ALLOCATIONS'* || "$query" == *'original_consumed'* ]]
 printf 'PASS: cross-currency audit fixture classifications and SQL contract\n'

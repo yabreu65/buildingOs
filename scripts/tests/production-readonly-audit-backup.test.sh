@@ -11,6 +11,8 @@ source "$AUDITOR"
 auditor_text="$(< "$AUDITOR")"
 [[ "$auditor_text" == *'--arg completedAt "$completed_at"'* ]]
 [[ "$auditor_text" == *'.completed_at == $completedAt'* ]]
+[[ "$auditor_text" == *'--arg runtimeAppSha "$RUNTIME_APP_SHA"'* ]]
+[[ "$auditor_text" == *'.app_sha == $runtimeAppSha'* ]]
 
 dump="$TEST_ROOT/existing.dump"
 printf 'existing custom archive fixture\n' > "$dump"

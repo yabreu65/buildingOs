@@ -35,6 +35,7 @@ fail() {
 
 AUDIT_QUERY_FAILURES=0
 AUDIT_EVIDENCE_FAILURES=0
+RUNTIME_APP_SHA='UNKNOWN'
 
 container_exists() {
   docker inspect --type container "$1" >/dev/null 2>&1
@@ -251,8 +252,10 @@ report_runtime_identity() {
   printf 'API_REVISION=%s\n' "$api_revision"
   printf 'WEB_REVISION=%s\n' "$web_revision"
   if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$production_sha" == "$api_revision" && "$api_revision" == "$web_revision" ]]; then
+    RUNTIME_APP_SHA="$production_sha"
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
+    RUNTIME_APP_SHA='UNKNOWN'
     printf 'RUNTIME_IDENTITY=UNKNOWN\n'
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
@@ -440,11 +443,14 @@ WITH per_payment AS (
          bool_or(a."paymentOriginalAmountMinor" IS NULL AND c.currency <> p.currency) AS legacy_cross_unverifiable,
          bool_or(c.currency <> p.currency) AS has_cross_currency,
          bool_or(c.currency = p.currency) AS has_same_currency,
+         bool_or(c.currency = p.currency
+                 AND a."paymentOriginalAmountMinor" IS NOT NULL
+                 AND a."paymentOriginalAmountMinor" <> a.amount) AS inconsistent_same_currency_share,
          bool_or(c.currency <> p."functionalCurrencyCode") AS functional_currency_unverifiable,
          COALESCE(sum(
            CASE
-             WHEN a."paymentOriginalAmountMinor" IS NOT NULL THEN a."paymentOriginalAmountMinor"
              WHEN c.currency = p.currency THEN a.amount
+             WHEN a."paymentOriginalAmountMinor" IS NOT NULL THEN a."paymentOriginalAmountMinor"
              ELSE 0
             END
           ), 0) AS original_consumed,
@@ -456,6 +462,7 @@ WITH per_payment AS (
 )
 SELECT count(*) FILTER (WHERE NOT legacy_cross_unverifiable AND original_consumed > amount)
        || '|' || count(*) FILTER (WHERE legacy_cross_unverifiable)
+       || '|' || count(*) FILTER (WHERE inconsistent_same_currency_share)
        || '|' || count(*) FILTER (WHERE has_cross_currency
                                       AND NOT functional_currency_unverifiable
                                       AND "functionalAmountMinor" IS NOT NULL
@@ -467,20 +474,21 @@ FROM per_payment;
 COMMIT;
 SQL
   2>/dev/null)"; then
-    local definite_overallocations unverifiable_overallocations functional_definite_overallocations functional_unverifiable_overallocations
-    IFS='|' read -r definite_overallocations unverifiable_overallocations functional_definite_overallocations functional_unverifiable_overallocations <<< "$value"
-    if [[ "$definite_overallocations" =~ ^[0-9]+$ && "$unverifiable_overallocations" =~ ^[0-9]+$ && "$functional_definite_overallocations" =~ ^[0-9]+$ && "$functional_unverifiable_overallocations" =~ ^[0-9]+$ ]]; then
+    local definite_overallocations unverifiable_overallocations inconsistent_same_currency_shares functional_definite_overallocations functional_unverifiable_overallocations
+    IFS='|' read -r definite_overallocations unverifiable_overallocations inconsistent_same_currency_shares functional_definite_overallocations functional_unverifiable_overallocations <<< "$value"
+    if [[ "$definite_overallocations" =~ ^[0-9]+$ && "$unverifiable_overallocations" =~ ^[0-9]+$ && "$inconsistent_same_currency_shares" =~ ^[0-9]+$ && "$functional_definite_overallocations" =~ ^[0-9]+$ && "$functional_unverifiable_overallocations" =~ ^[0-9]+$ ]]; then
       printf 'OVER_ALLOCATIONS_DEFINITE=%s\n' "$definite_overallocations"
       printf 'OVER_ALLOCATIONS_UNVERIFIABLE=%s\n' "$unverifiable_overallocations"
+      printf 'INCONSISTENT_SAME_CURRENCY_SHARES=%s\n' "$inconsistent_same_currency_shares"
       printf 'OVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=%s\n' "$functional_definite_overallocations"
       printf 'OVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=%s\n' "$functional_unverifiable_overallocations"
     else
       AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
-      printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
+      printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nINCONSISTENT_SAME_CURRENCY_SHARES=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
     fi
   else
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
-    printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
+    printf 'OVER_ALLOCATIONS_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_UNVERIFIABLE=UNKNOWN\nINCONSISTENT_SAME_CURRENCY_SHARES=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_DEFINITE=UNKNOWN\nOVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE=UNKNOWN\n'
   fi
   report_query_stdin 'CHARGE_OVER_ALLOCATIONS' <<'SQL'
 BEGIN READ ONLY;
@@ -889,11 +897,12 @@ report_backup_readiness() {
       (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )); then
       paired_receipt="$BACKUP_STATE_DIR/paired-$backup_set_id.json"
       if [[ -f "$paired_receipt" && ! -L "$paired_receipt" && -r "$paired_receipt" ]] &&
-        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" --arg completedAt "$completed_at" '
+        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" --arg completedAt "$completed_at" --arg runtimeAppSha "$RUNTIME_APP_SHA" '
           .version == 1 and
           .status == "PASS" and
           .backup_set_id == $backupSetId and
           .app_sha == $appSha and
+          .app_sha == $runtimeAppSha and
           .completed_at == $completedAt and
           .minio_verified == true and
           (.postgres_receipt.version == 1) and
