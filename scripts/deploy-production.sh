@@ -53,7 +53,6 @@ readonly RECORD
 
 PHASE='preflight'
 PREVIOUS_SHA='unknown'
-CURRENT_CHECKOUT_SHA='unknown'
 PREVIOUS_API_DIGEST='unknown'
 PREVIOUS_WEB_DIGEST='unknown'
 PREVIOUS_API_REVISION='unknown'
@@ -186,8 +185,7 @@ validate_backup_manifest "$BACKUP_IDENTITY_MANIFEST"
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 check_ignored_sensitive_files
-CURRENT_CHECKOUT_SHA="$(git rev-parse HEAD)"
-[[ "$CURRENT_CHECKOUT_SHA" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since approval"
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since approval"
 git fetch --no-tags origin main
 git cat-file -e "$TARGET_SHA^{commit}"
 git merge-base --is-ancestor "$TARGET_SHA" origin/main || fail "Target SHA is not reachable from origin/main"
@@ -208,13 +206,6 @@ readonly STORAGE_TRANSITION
 [[ "$STORAGE_TRANSITION" =~ ^STORAGE_TRANSITION=(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] \
   || fail 'Storage transition guard returned an invalid classification'
 cleanup_target_tree
-
-case "$STORAGE_TRANSITION" in
-  STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
-    wait_for_container_health buildingos-api
-    wait_for_container_health buildingos-web
-    ;;
-esac
 
 PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
 PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
@@ -279,6 +270,15 @@ else
   fi
 fi
 rm -f "$migration_preflight_output"
+
+if [[ "$MIGRATION_RETRY" == false ]]; then
+  case "$STORAGE_TRANSITION" in
+    STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
+      wait_for_container_health buildingos-api
+      wait_for_container_health buildingos-web
+      ;;
+  esac
+fi
 
 PHASE='migrations'
 if [[ "$MIGRATION_RETRY" == false ]]; then
