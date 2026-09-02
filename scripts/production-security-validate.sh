@@ -490,7 +490,13 @@ SELECT CASE WHEN
   + (SELECT count(*) FROM "FundTransaction")
   + (SELECT count(*) FROM "IncomeApplication")
   + (SELECT count(*) FROM "IncomePolicy")
-  + (SELECT count(*) FROM "LiquidationIncomeOffset") = 0
+  + (SELECT count(*) FROM "LiquidationIncomeOffset")
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshot" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotVersion" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotHash" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotCreatedAt" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" IS NOT NULL) = 0
 THEN 'SAFE' ELSE 'UNSAFE' END;
 COMMIT;
 SQL

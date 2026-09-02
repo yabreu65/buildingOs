@@ -10,6 +10,10 @@ line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"
 storage_guard_line="$(line_number 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")"
 target_tree_line="$(awk '$0 == "materialize_target_tree" { print NR; exit }' "$DEPLOY_SCRIPT")"
 target_compose_line="$(line_number 'TARGET_COMPOSE_FILE' "$DEPLOY_SCRIPT")"
+api_revision_line="$(line_number 'PREVIOUS_API_REVISION="$(docker image inspect' "$DEPLOY_SCRIPT")"
+web_revision_line="$(line_number 'PREVIOUS_WEB_REVISION="$(docker image inspect' "$DEPLOY_SCRIPT")"
+revision_match_line="$(line_number 'PREVIOUS_API_REVISION" == "$PREVIOUS_WEB_REVISION' "$DEPLOY_SCRIPT")"
+previous_sha_line="$(line_number 'PREVIOUS_SHA="$PREVIOUS_API_REVISION"' "$DEPLOY_SCRIPT")"
 backup_phase_line="$(line_number "PHASE='backup'" "$DEPLOY_SCRIPT")"
 checkout_phase_line="$(line_number "PHASE='checkout'" "$DEPLOY_SCRIPT")"
 build_phase_line="$(line_number "PHASE='build'" "$DEPLOY_SCRIPT")"
@@ -29,9 +33,11 @@ recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$storage_guard_line" ]]
 [[ -n "$target_tree_line" && -n "$target_compose_line" ]]
+[[ -n "$api_revision_line" && -n "$web_revision_line" && -n "$revision_match_line" && -n "$previous_sha_line" ]]
 [[ "$(grep -F -c 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" -eq 1 ]]
 [[ "$(grep -F 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" == *'TARGET_COMPOSE_FILE'* ]]
 [[ "$target_tree_line" -lt "$target_compose_line" ]]
+(( api_revision_line < revision_match_line && web_revision_line < revision_match_line && revision_match_line < previous_sha_line ))
 [[ "$target_compose_line" -lt "$storage_guard_line" ]]
 [[ "$storage_guard_line" -lt "$backup_phase_line" ]]
 [[ "$storage_guard_line" -lt "$build_phase_line" ]]

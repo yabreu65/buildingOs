@@ -325,6 +325,12 @@ expect_output_contains 'migration changes with zero new data use DATA_COMPATIBIL
   'basis=DATA_COMPATIBILITY' \
   run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" SAFE
 
+for receipt_field in receiptSnapshot receiptSnapshotVersion receiptSnapshotHash receiptSnapshotCreatedAt receiptGenerationToken receiptGenerationLeaseUntil; do
+  grep -F "\"$receipt_field\" IS NOT NULL" "$VALIDATOR" >/dev/null \
+    || fail_test "rollback compatibility does not guard $receipt_field"
+done
+pass 'rollback compatibility guards all migration-98 receipt state fields'
+
 expect_failure 'missing previous SHA fails closed' \
   run_contract_validation aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$fixture_same_sha" UNSAFE
 

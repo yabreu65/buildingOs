@@ -22,7 +22,7 @@ The workflow must never be dispatched to compensate for a failed preflight.
 | Checkout | Clean, detached, exact target SHA |
 | Backup | Exact external script identity plus new verified custom dump before checkout/build/migration |
 | Images | SHA tag plus `org.opencontainers.image.revision` |
-| Migration | Immutable 81→97 manifest verified against files and database before and after the dedicated runner |
+| Migration | Immutable 81→98 manifest verified against files and database before and after the dedicated runner |
 | Runtime change | Recreate only `buildingos-api` and `buildingos-web` |
 | Infrastructure | Never recreate PostgreSQL, Redis, MinIO, Traefik, networks, or volumes |
 | Seeds | Prohibited |
