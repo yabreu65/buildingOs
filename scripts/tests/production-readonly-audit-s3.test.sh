@@ -10,18 +10,17 @@ trap 'rm -f "$OUTPUT_FILE"' EXIT
 S3_MODE='pass'
 docker() {
   case "$*" in
-    *'command -v aws'* )
+    *'node -e require.resolve'* )
       [[ "$S3_MODE" != 'unavailable' ]] || return 1
-      printf 'available'
       ;;
-    *'head-bucket'* )
+    *'node - head'* )
       [[ "$S3_MODE" != 'head-fail' ]] || return 1
       ;;
-    *'get-bucket-versioning'* )
+    *'node - versioning'* )
       [[ "$S3_MODE" != 'partial' ]] || return 1
       printf 'Enabled'
       ;;
-    *'list-objects-v2'* )
+    *'node - objects'* )
       [[ "$S3_MODE" != 'partial' ]] || return 1
       printf '3'
       ;;

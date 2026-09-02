@@ -45,10 +45,17 @@ container_health() {
 report_container_health() {
   local label="$1"
   local container="$2"
+  local state health
   if container_exists "$container"; then
-    printf '%s_CONTAINER_STATE=%s\n' "$label" "$(container_state "$container")"
-    printf '%s_CONTAINER_HEALTH=%s\n' "$label" "$(container_health "$container")"
+    state="$(container_state "$container")"
+    health="$(container_health "$container")"
+    printf '%s_CONTAINER_STATE=%s\n' "$label" "$state"
+    printf '%s_CONTAINER_HEALTH=%s\n' "$label" "$health"
+    if [[ "$state" != 'running' || ( "$health" != 'healthy' && "$health" != 'not_configured' ) ]]; then
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+    fi
   else
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     printf '%s_CONTAINER_STATE=UNKNOWN\n' "$label"
     printf '%s_CONTAINER_HEALTH=UNKNOWN\n' "$label"
   fi
@@ -151,6 +158,7 @@ public_get_status() {
     --request GET --output /dev/null --write-out '%{http_code}' "$url" 2>/dev/null)" && [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
     printf '%s=%s\n' "$label" "$status"
   else
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
     printf '%s=FAIL\n' "$label"
   fi
 }
@@ -159,17 +167,24 @@ public_readyz_status() {
   local body
   local database_status='UNKNOWN'
   local storage_status='UNKNOWN'
+  local readyz_ok=false
 
   if body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
     --request GET "$API_READYZ_URL" 2>/dev/null)"; then
     [[ "$body" == *'"database":{"status":"up"'* ]] && database_status='UP'
     [[ "$body" == *'"storage":{"status":"up"'* ]] && storage_status='UP'
     printf 'PUBLIC_READYZ_HTTP=200\n'
+    if [[ "$database_status" == 'UP' && "$storage_status" == 'UP' ]]; then
+      readyz_ok=true
+    fi
   else
     printf 'PUBLIC_READYZ_HTTP=FAIL\n'
   fi
   printf 'PUBLIC_READYZ_DATABASE=%s\n' "$database_status"
   printf 'PUBLIC_READYZ_STORAGE=%s\n' "$storage_status"
+  if [[ "$readyz_ok" != true ]]; then
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+  fi
 }
 
 report_runtime_identity() {
@@ -200,6 +215,7 @@ report_runtime_identity() {
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
     printf 'RUNTIME_IDENTITY=UNKNOWN\n'
+    AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
 }
 
@@ -536,38 +552,61 @@ SQL
   printf 'EXPECTED_AUTHORITATIVE_BUCKET=%s\n' "$EXPECTED_BUCKET"
 }
 
+s3_client_available() {
+  docker exec "$API_CONTAINER" node -e 'require.resolve("minio")' >/dev/null 2>&1
+}
+
 s3_probe() {
   local operation="$1"
-  docker exec "$API_CONTAINER" sh -lc '
-    command -v aws >/dev/null 2>&1 || exit 125
-    export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY:-}"
-    export AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY:-}"
-    export AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}"
-    export AWS_EC2_METADATA_DISABLED=true
-    case "$1" in
-      head)
-        aws --no-cli-pager s3api head-bucket --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" >/dev/null
-        ;;
-      versioning)
-        aws --no-cli-pager s3api get-bucket-versioning --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --query Status --output text
-        ;;
-      objects)
-        aws --no-cli-pager s3api list-objects-v2 --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --max-keys 100 --query KeyCount --output text
-        ;;
-      *)
-        exit 64
-        ;;
-    esac
-  ' sh "$operation"
+  docker exec "$API_CONTAINER" node - "$operation" <<'NODE'
+'use strict';
+
+const Minio = require('minio');
+const operation = process.argv[2];
+const endpoint = new URL(process.env.S3_ENDPOINT);
+const client = new Minio.Client({
+  endPoint: endpoint.hostname,
+  port: endpoint.port ? Number(endpoint.port) : undefined,
+  useSSL: endpoint.protocol === 'https:',
+  pathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+  accessKey: process.env.S3_ACCESS_KEY || '',
+  secretKey: process.env.S3_SECRET_KEY || '',
+  region: process.env.S3_REGION || 'us-east-1',
+});
+const bucket = process.env.S3_BUCKET;
+
+const run = async () => {
+  if (operation === 'head') {
+    if (!(await client.bucketExists(bucket))) {
+      throw new Error('bucket is not reachable');
+    }
+    return;
+  }
+  if (operation === 'versioning') {
+    const versioning = await client.getBucketVersioning(bucket);
+    process.stdout.write(`${versioning.Status || 'UNKNOWN'}\n`);
+    return;
+  }
+  if (operation === 'objects') {
+    const result = await client.listObjectsV2Query(bucket, '', '', '', 100, '');
+    process.stdout.write(`${result.objects.length}\n`);
+    return;
+  }
+  throw new Error('unsupported S3 probe');
+};
+
+run().catch(() => {
+  process.exitCode = 1;
+});
+NODE
 }
 
 report_s3_posture() {
-  local client_available
   local versioning object_count
   local versioning_ok=false
   local object_count_ok=false
 
-  if client_available="$(docker exec "$API_CONTAINER" sh -lc 'command -v aws >/dev/null 2>&1 && printf available' 2>/dev/null)" && [[ "$client_available" == 'available' ]]; then
+  if s3_client_available; then
     if s3_probe head >/dev/null 2>&1; then
       printf 'S3_BUCKET_REACHABLE=YES\n'
       if versioning="$(s3_probe versioning 2>/dev/null)"; then

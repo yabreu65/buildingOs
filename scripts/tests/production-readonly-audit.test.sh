@@ -77,7 +77,11 @@ if (!auditorText.includes('COMMIT;')) throw new Error('read-only query sessions 
 if (auditorText.includes("report_query '") || auditorText.includes('readonly_query ')) throw new Error('fragile SQL argument transport must not remain');
 if (!auditorText.includes('pg_restore --list')) throw new Error('existing backups must be inspectable without creation');
 if (!auditorText.includes('S3_DEEP_AUDIT_UNAVAILABLE')) throw new Error('unsupported S3 clients must be reported');
+if (!auditorText.includes('require.resolve("minio")')) throw new Error('S3 audit must use the runtime MinIO SDK');
 if (!auditorText.includes('S3_DEEP_AUDIT=INCOMPLETE') || !auditorText.includes('AUDIT_EVIDENCE_FAILURES')) throw new Error('incomplete S3 evidence must fail the overall audit');
+for (const marker of ['RUNTIME_IDENTITY=UNKNOWN', 'PUBLIC_READYZ_HTTP=FAIL', 'AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))']) {
+  if (!auditorText.includes(marker)) throw new Error(`missing fail-closed evidence marker ${marker}`);
+}
 if (!auditorText.includes('EXPECTED_AUTHORITATIVE_BUCKET') || !auditorText.includes("EXPECTED_BUCKET='buildingos-production'")) throw new Error('authoritative production bucket must be reported');
 if (!auditorText.includes('TENANT_REAL_BUSINESS=UNKNOWN')) throw new Error('real-business classification must fail closed');
 if (!auditorText.includes('TARGET_MIGRATION_STATUS')) throw new Error('target migration state must be reported');
