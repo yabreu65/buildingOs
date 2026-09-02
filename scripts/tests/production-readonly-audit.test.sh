@@ -47,6 +47,8 @@ const forbiddenAuditorPatterns = [
   /prisma\s+(migrate\s+deploy|db\s+push|migrate\s+resolve)\b/,
   /npm\s+(install|ci)\b/,
   /\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE)\b/,
+  /\b(UPSERT|MERGE|GRANT|REVOKE)\b/,
+  /\bFOR\s+UPDATE\b/,
   /aws\s+s3\s+(cp|sync|rm)\b/,
   /aws\s+s3api\s+(put-|delete-)/,
   /curl\s+(POST|PUT|PATCH|DELETE)\b/,
@@ -54,6 +56,10 @@ const forbiddenAuditorPatterns = [
   /\benv\b\s*\|\s*(sort|uniq|sed|awk|cat|tee)/,
   /printenv\b/,
   /docker\s+compose\s+.*--force-recreate/,
+  /docker\s+compose\s+(up|down|run|build)\b/,
+  /docker\s+(restart|stop|start|rm)\b/,
+  /git\s+(checkout|reset|pull|fetch)\b/,
+  /\b(aws\s+s3|mc\s+(cp|rm|mirror))\b/,
   /finance-staging-acceptance(?:\.mjs|\.sh)/,
 ];
 for (const pattern of forbiddenAuditorPatterns) {
@@ -122,6 +128,9 @@ if (!auditorText.includes('WHERE amount <= 0')) throw new Error('zero-value allo
 if (!auditorText.includes('--arg completedAt "$completed_at"') || !auditorText.includes('.completed_at == $completedAt')) throw new Error('paired backup freshness must bind receipt and state timestamps');
 if (!auditorText.includes('RUNTIME_APP_SHA') || !auditorText.includes('.app_sha == $runtimeAppSha')) throw new Error('backup evidence must bind to the verified runtime SHA');
 if (!auditorText.includes('versioning" == \'Enabled\'')) throw new Error('S3 audit must require enabled versioning');
+if (!auditorText.includes('AUDIT_INTERNAL_FAILURES')) throw new Error('auditor internal failures must be reported');
+if (!auditorText.includes('FAILED_STAGE') || !auditorText.includes('FAILURE_CLASS')) throw new Error('controlled failure diagnostics must be reported');
+if (!auditorText.includes('BASH_SOURCE[0]-')) throw new Error('streamed execution must not require BASH_SOURCE');
 
 console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
 NODE
