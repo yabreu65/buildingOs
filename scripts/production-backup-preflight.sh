@@ -6,6 +6,8 @@ readonly EXPECTED_RUNTIME_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
 readonly DEFAULT_APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
 readonly EXPECTED_BACKUP_SERVICE='pawtech-buildingos-backup.service'
 readonly EXPECTED_VERIFY_SERVICE='pawtech-buildingos-backup-verify.service'
+readonly EXPECTED_LEGACY_BACKUP_SERVICE='pawtech-postgres-backup.service'
+readonly EXPECTED_LEGACY_BACKUP_TIMER='pawtech-postgres-backup.timer'
 readonly EXPECTED_BACKUP_ENTRYPOINT='/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh'
 readonly DEFAULT_ENV_FILE='/etc/buildingos/buildingos-backup.env'
 readonly DEFAULT_SSE_FILE='/etc/buildingos/contabo-sse-s3-capability.json'
@@ -13,6 +15,9 @@ readonly DEFAULT_STATE_DIR='/var/lib/buildingos-backup'
 readonly EXPECTED_SOURCE_HOST='usc1.contabostorage.com'
 readonly EXPECTED_SOURCE_BUCKET='buildingos-production'
 readonly EXPECTED_PROPOSED_COMMAND='sudo systemctl start pawtech-buildingos-backup.service'
+readonly POSTGRES_BACKUP_MIN_SAFETY_MARGIN_BYTES=104857600
+readonly MAX_INT64_DIV_1024=9007199254740991
+readonly MAX_POSTGRES_ESTIMATE_BASE_BYTES=6000000000000000000
 
 failures=0
 
@@ -102,6 +107,87 @@ unit_active_state() {
   systemctl is-active "$unit" 2>/dev/null || true
 }
 
+systemd_serialized_entry_matches() {
+  local entry="$1"
+  local expected_exec="$2"
+  local expected_argv="$3"
+  local parsed
+
+  parsed="$(printf '%s\n' "$entry" | awk -F ';' '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    {
+      path_count=0
+      argv_count=0
+      invalid=0
+      path=""
+      argv=""
+      for (i=1; i<=NF; i++) {
+        field=trim($i)
+        if (field == "") continue
+        if (field ~ /^path=/) {
+          path_count++
+          path=substr(field, 6)
+        } else if (field ~ /^argv\[\]=/) {
+          argv_count++
+          argv=substr(field, 8)
+        } else if (field ~ /^(ignore_errors|start_time|stop_time|pid|code|status)=/) {
+          continue
+        } else {
+          invalid=1
+        }
+      }
+      if (path_count == 1 && argv_count == 1 && invalid == 0) {
+        printf "%s\034%s\n", path, argv
+      } else {
+        exit 1
+      }
+    }
+  ' )" || return 1
+  [[ "$parsed" == "$expected_exec"$'\034'"$expected_argv" ]]
+}
+
+systemd_command_list_matches() {
+  local raw="$1"
+  local expected_exec="$2"
+  local expected_argv="${3:-$expected_exec}"
+  local rest entry tail count=0
+  local trimmed
+
+  trimmed="$raw"
+  trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+  if [[ -z "$trimmed" ]]; then
+    [[ -z "$expected_exec" ]]
+    return
+  fi
+  if [[ "$trimmed" != *'{'* && "$trimmed" != *'}'* && "$trimmed" != *'path='* && "$trimmed" != *'argv[]='* ]]; then
+    [[ -n "$expected_exec" && "$trimmed" == "$expected_argv" && "$trimmed" != *$'\n'* ]]
+    return
+  fi
+
+  rest="$trimmed"
+  while :; do
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    [[ "${rest:0:1}" == '{' ]] || return 1
+    rest="${rest:1}"
+    [[ "$rest" == *'}'* ]] || return 1
+    entry="${rest%%\}*}"
+    tail="${rest#*\}}"
+    systemd_serialized_entry_matches "$entry" "$expected_exec" "$expected_argv" || return 1
+    count=$((count + 1))
+    rest="$tail"
+    trimmed="$rest"
+    trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ -z "$trimmed" ]] && break
+  done
+  [[ "$count" -eq 1 && -n "$expected_exec" ]]
+}
+
 inspect_unit() {
   local label="$1"
   local unit="$2"
@@ -110,13 +196,15 @@ inspect_unit() {
   local expected_user="$5"
   local expected_workdir="$6"
   local require_verify_arg="$7"
-  local load_state active_state user exec_start env_files workdir restart unit_type exec_argv expected_argv
-  local exists='NO' active='UNKNOWN' exec_match='NO' env_match='NO'
+  local load_state active_state user exec_start exec_start_pre exec_start_post env_files workdir restart unit_type expected_argv
+  local exists='NO' active='UNKNOWN' exec_match='NO' exec_pre_match='NO' exec_post_match='NO' env_match='NO'
 
   if ! systemctl cat "$unit" >/dev/null 2>&1; then
     printf '%s_EXISTS=NO\n' "$label"
     printf '%s_USER=UNKNOWN\n' "$label"
-    printf '%s_EXECSTART_MATCH=NO\n' "$label"
+  printf '%s_EXECSTART_MATCH=NO\n' "$label"
+    printf '%s_EXECSTARTPRE_MATCH=NO\n' "$label"
+    printf '%s_EXECSTARTPOST_MATCH=NO\n' "$label"
     printf '%s_ENV_FILE_MATCH=NO\n' "$label"
     printf '%s_ACTIVE=UNKNOWN\n' "$label"
     fail_check "$unit is unavailable"
@@ -126,7 +214,9 @@ inspect_unit() {
   load_state="$(systemctl_value "$unit" LoadState || true)"
   active_state="$(systemctl_value "$unit" ActiveState || true)"
   user="$(systemctl_value "$unit" User || true)"
+  exec_start_pre="$(systemctl_value "$unit" ExecStartPre || true)"
   exec_start="$(systemctl_value "$unit" ExecStart || true)"
+  exec_start_post="$(systemctl_value "$unit" ExecStartPost || true)"
   env_files="$(systemctl_value "$unit" EnvironmentFiles || true)"
   workdir="$(systemctl_value "$unit" WorkingDirectory || true)"
   restart="$(systemctl_value "$unit" Restart || true)"
@@ -153,18 +243,17 @@ inspect_unit() {
   fi
   expected_argv="$expected_exec"
   [[ "$require_verify_arg" == true ]] && expected_argv+=' --verify-latest'
-  exec_match='NO'
-  if [[ "$exec_start" == "$expected_argv" ]]; then
-    exec_match='YES'
-  elif [[ "$exec_start" == *"path=$expected_exec"* && "$exec_start" == *'argv[]='* && "$exec_start" != *'bash -c'* && "$exec_start" != *'sh -c'* && "$exec_start" != *'sudo '* && "$exec_start" != *' env '* ]]; then
-    exec_argv="${exec_start#*argv[]=}"
-    exec_argv="${exec_argv%%;*}"
-    exec_argv="${exec_argv#"${exec_argv%%[![:space:]]*}"}"
-    exec_argv="${exec_argv%"${exec_argv##*[![:space:]]}"}"
-    [[ "$exec_argv" == "$expected_argv" ]] && exec_match='YES'
-  fi
+  systemd_command_list_matches "$exec_start" "$expected_exec" "$expected_argv" && exec_match='YES'
   if [[ "$exec_match" != YES ]]; then
     fail_check "$unit ExecStart is not the trusted read-only contract"
+  fi
+  systemd_command_list_matches "$exec_start_pre" '' && exec_pre_match='YES'
+  if [[ "$exec_pre_match" != YES ]]; then
+    fail_check "$unit has an unexpected ExecStartPre command"
+  fi
+  systemd_command_list_matches "$exec_start_post" '' && exec_post_match='YES'
+  if [[ "$exec_post_match" != YES ]]; then
+    fail_check "$unit has an unexpected ExecStartPost command"
   fi
   if [[ "$env_files" == "$expected_env" || "$env_files" == "-$expected_env" || "$env_files" == "$expected_env (ignore_errors=no)" || "$env_files" == "-$expected_env (ignore_errors=no)" ]]; then
     env_match='YES'
@@ -178,6 +267,8 @@ inspect_unit() {
   printf '%s_EXISTS=%s\n' "$label" "$exists"
   printf '%s_USER=%s\n' "$label" "$(safe_output "$user")"
   printf '%s_EXECSTART_MATCH=%s\n' "$label" "$exec_match"
+  printf '%s_EXECSTARTPRE_MATCH=%s\n' "$label" "$exec_pre_match"
+  printf '%s_EXECSTARTPOST_MATCH=%s\n' "$label" "$exec_post_match"
   printf '%s_ENV_FILE_MATCH=%s\n' "$label" "$env_match"
   printf '%s_ACTIVE=%s\n' "$label" "$active"
 }
@@ -434,9 +525,74 @@ inspect_state() {
   printf 'PAIRED_RECEIPT_COUNT=%s\n' "$receipt_count"
 }
 
+inspect_legacy_concurrency() {
+  local service_exists='NO' service_active='NO' timer_exists='NO' timer_active='NO' timer_enabled='NO'
+  local next_trigger='n/a' service_state service_probe timer_state timer_probe timer_unit_state
+  LEGACY_BACKUP_OVERLAP_SAFE='NO'
+
+  if systemctl cat "$EXPECTED_LEGACY_BACKUP_SERVICE" >/dev/null 2>&1; then
+    service_exists='YES'
+    service_state="$(systemctl_value "$EXPECTED_LEGACY_BACKUP_SERVICE" ActiveState || true)"
+    service_probe="$(unit_active_state "$EXPECTED_LEGACY_BACKUP_SERVICE")"
+    if [[ "$service_state" == active || "$service_probe" == active || "$service_state" == activating || "$service_probe" == activating ]]; then
+      service_active='YES'
+      fail_check 'legacy PostgreSQL backup service is active'
+    elif [[ "$service_state" != inactive || "$service_probe" != inactive ]]; then
+      service_active='UNKNOWN'
+      fail_check 'legacy PostgreSQL backup service state is ambiguous'
+    fi
+  else
+    service_state='not-found'
+    service_probe='inactive'
+  fi
+
+  if systemctl cat "$EXPECTED_LEGACY_BACKUP_TIMER" >/dev/null 2>&1; then
+    timer_exists='YES'
+    timer_state="$(systemctl_value "$EXPECTED_LEGACY_BACKUP_TIMER" ActiveState || true)"
+    timer_probe="$(unit_active_state "$EXPECTED_LEGACY_BACKUP_TIMER")"
+    timer_unit_state="$(systemctl_value "$EXPECTED_LEGACY_BACKUP_TIMER" UnitFileState || true)"
+    next_trigger="$(systemctl_value "$EXPECTED_LEGACY_BACKUP_TIMER" NextElapseUSecRealtime || true)"
+    [[ -n "$next_trigger" ]] || next_trigger='UNKNOWN'
+    case "$timer_unit_state" in
+      enabled) timer_enabled='YES' ;;
+      disabled|masked|static) timer_enabled='NO' ;;
+      *) timer_enabled='UNKNOWN'; fail_check 'legacy PostgreSQL backup timer enablement is ambiguous' ;;
+    esac
+    if [[ "$timer_state" == active || "$timer_probe" == active ]]; then
+      timer_active='YES'
+      fail_check 'legacy PostgreSQL backup timer is active'
+    elif [[ "$timer_state" != inactive || "$timer_probe" != inactive ]]; then
+      timer_active='UNKNOWN'
+      fail_check 'legacy PostgreSQL backup timer state is ambiguous'
+    fi
+    if [[ "$next_trigger" != n/a && "$next_trigger" != '-' && -n "$next_trigger" ]]; then
+      fail_check 'legacy PostgreSQL backup timer has a scheduled next trigger'
+    fi
+  else
+    timer_state='not-found'
+    timer_probe='inactive'
+    timer_unit_state='not-found'
+  fi
+
+  if [[ "$service_active" == NO && "$timer_active" == NO && "$timer_enabled" != UNKNOWN && "$next_trigger" == n/a ]]; then
+    LEGACY_BACKUP_OVERLAP_SAFE='YES'
+  else
+    fail_check 'legacy PostgreSQL backup overlap safety is not proven'
+  fi
+  printf 'LEGACY_BACKUP_SERVICE_EXISTS=%s\n' "$service_exists"
+  printf 'LEGACY_BACKUP_SERVICE_ACTIVE=%s\n' "$service_active"
+  printf 'LEGACY_BACKUP_TIMER_EXISTS=%s\n' "$timer_exists"
+  printf 'LEGACY_BACKUP_TIMER_ACTIVE=%s\n' "$timer_active"
+  printf 'LEGACY_BACKUP_TIMER_ENABLED=%s\n' "$timer_enabled"
+  printf 'LEGACY_BACKUP_NEXT_TRIGGER=%s\n' "$(safe_output "$next_trigger")"
+  printf 'LEGACY_BACKUP_OVERLAP_SAFE=%s\n' "$LEGACY_BACKUP_OVERLAP_SAFE"
+}
+
 inspect_postgres_and_space() {
   local container="$1"
   local state='UNKNOWN' health='UNKNOWN' root free_bytes tmp_dir tmp_free_bytes
+  local database database_user database_size_bytes='UNKNOWN' safety_margin_bytes='UNKNOWN' required_bytes='UNKNOWN' tmp_required_bytes='UNKNOWN'
+  local postgres_space_safe='NO' tmp_space_safe='NO' free_kib
   if command -v docker >/dev/null 2>&1; then
     state="$(docker inspect --type container --format '{{.State.Status}}' "$container" 2>/dev/null || printf 'UNKNOWN')"
     health="$(docker inspect --type container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not_configured{{end}}' "$container" 2>/dev/null || printf 'UNKNOWN')"
@@ -451,18 +607,61 @@ inspect_postgres_and_space() {
     fail_check 'PostgreSQL backup root is not a regular non-symlink directory'
     free_bytes='UNKNOWN'
   else
-    free_bytes="$(df -Pk "$root" 2>/dev/null | awk 'NR == 2 { print $4; exit }' || true)"
-    [[ "$free_bytes" =~ ^[0-9]+$ && "$free_bytes" -gt 0 ]] || { free_bytes='UNKNOWN'; fail_check 'PostgreSQL backup root free space is unavailable'; }
+    free_kib="$(df -Pk "$root" 2>/dev/null | awk 'NR == 2 { print $4; exit }' || true)"
+    if [[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -le "$MAX_INT64_DIV_1024" ]]; then
+      free_bytes=$((free_kib * 1024))
+    else
+      free_bytes='UNKNOWN'
+      fail_check 'PostgreSQL backup root free space is unavailable or has invalid units'
+    fi
   fi
-  tmp_dir="${TMPDIR:-/tmp}"
-  if directory_is_regular_non_symlink "$tmp_dir"; then
-    tmp_free_bytes="$(df -Pk "$tmp_dir" 2>/dev/null | awk 'NR == 2 { print $4; exit }' || true)"
+
+  database="$(env_value "$ENV_FILE" POSTGRES_DATABASE 2>/dev/null || true)"
+  database_user="$(env_value "$ENV_FILE" POSTGRES_USER 2>/dev/null || true)"
+  if [[ "$state" == running && "$health" == healthy && "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ && "$database_user" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]]; then
+    database_size_bytes="$(docker exec "$container" psql -U "$database_user" -d "$database" -Atqc 'SELECT pg_database_size(current_database());' 2>/dev/null || true)"
+  fi
+  if [[ "$database_size_bytes" =~ ^[0-9]+$ && "$database_size_bytes" -le "$MAX_POSTGRES_ESTIMATE_BASE_BYTES" ]]; then
+    safety_margin_bytes=$((database_size_bytes / 2))
+    (( safety_margin_bytes < POSTGRES_BACKUP_MIN_SAFETY_MARGIN_BYTES )) && safety_margin_bytes=$POSTGRES_BACKUP_MIN_SAFETY_MARGIN_BYTES
+    required_bytes=$((database_size_bytes + safety_margin_bytes))
+    tmp_required_bytes="$required_bytes"
+  else
+    fail_check 'PostgreSQL database size estimate is unavailable or invalid'
+  fi
+
+  if [[ "$free_bytes" =~ ^[0-9]+$ && "$required_bytes" =~ ^[0-9]+$ ]]; then
+    if (( free_bytes >= required_bytes )); then postgres_space_safe='YES'; else fail_check 'PostgreSQL backup root lacks required free space'; fi
+  else
+    fail_check 'PostgreSQL backup root capacity safety is not provable'
+  fi
+
+  tmp_dir="$(cd -P -- /tmp 2>/dev/null && pwd -P || true)"
+  if [[ -n "$tmp_dir" ]] && directory_is_regular_non_symlink "$tmp_dir"; then
+    free_kib="$(df -Pk "$tmp_dir" 2>/dev/null | awk 'NR == 2 { print $4; exit }' || true)"
+    if [[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -le "$MAX_INT64_DIV_1024" ]]; then
+      tmp_free_bytes=$((free_kib * 1024))
+    else
+      tmp_free_bytes='UNKNOWN'
+      fail_check 'temporary directory free space is unavailable or has invalid units'
+    fi
   else
     tmp_free_bytes='UNKNOWN'
+    fail_check 'temporary directory is not a regular non-symlink directory'
   fi
-  [[ "$tmp_free_bytes" =~ ^[0-9]+$ && "$tmp_free_bytes" -gt 0 ]] || { tmp_free_bytes='UNKNOWN'; fail_check 'temporary directory free space is unavailable'; }
+  if [[ "$tmp_free_bytes" =~ ^[0-9]+$ && "$tmp_required_bytes" =~ ^[0-9]+$ ]]; then
+    if (( tmp_free_bytes >= tmp_required_bytes )); then tmp_space_safe='YES'; else fail_check 'temporary directory lacks required free space'; fi
+  else
+    fail_check 'temporary directory capacity safety is not provable'
+  fi
   printf 'POSTGRES_BACKUP_ROOT_FREE_BYTES=%s\n' "$free_bytes"
+  printf 'POSTGRES_DATABASE_SIZE_BYTES=%s\n' "$(safe_output "$database_size_bytes")"
+  printf 'POSTGRES_BACKUP_SAFETY_MARGIN_BYTES=%s\n' "$(safe_output "$safety_margin_bytes")"
+  printf 'POSTGRES_BACKUP_REQUIRED_BYTES=%s\n' "$(safe_output "$required_bytes")"
+  printf 'POSTGRES_BACKUP_SPACE_SAFE=%s\n' "$postgres_space_safe"
   printf 'TMP_FREE_BYTES=%s\n' "$tmp_free_bytes"
+  printf 'TMP_REQUIRED_BYTES=%s\n' "$(safe_output "$tmp_required_bytes")"
+  printf 'TMP_SPACE_SAFE=%s\n' "$tmp_space_safe"
 }
 
 inspect_concurrency() {
@@ -476,8 +675,9 @@ inspect_concurrency() {
   fi
   [[ "$backup_state" != active ]] || fail_check 'backup service is already running'
   [[ "$timer_state" != active ]] || fail_check 'backup timer is active and could race the manual operation'
+  inspect_legacy_concurrency
   if [[ "$backup_state" == inactive || "$backup_state" == dead || "$backup_state" == failed ]] && [[ "$timer_state" == inactive || "$timer_state" == dead || -z "$timer_state" ]]; then
-    concurrency='YES'
+    [[ "$LEGACY_BACKUP_OVERLAP_SAFE" == YES ]] && concurrency='YES'
   else
     fail_check 'backup concurrency state is unknown'
   fi
@@ -555,9 +755,9 @@ main() {
     inspect_postgres_and_space "$(env_value "$ENV_FILE" POSTGRES_CONTAINER 2>/dev/null || printf 'invalid-container')"
   else
     printf 'PRODUCTION_RUNTIME_SHA=UNKNOWN\nAPI_REVISION=UNKNOWN\nWEB_REVISION=UNKNOWN\nPRODUCTION_CHECKOUT_STATUS=UNKNOWN\nRUNTIME_IDENTITY=UNKNOWN\n'
-    printf 'BACKUP_SERVICE_EXISTS=UNKNOWN\nBACKUP_SERVICE_USER=UNKNOWN\nBACKUP_SERVICE_EXECSTART_MATCH=UNKNOWN\nBACKUP_SERVICE_ENV_FILE_MATCH=UNKNOWN\nBACKUP_SERVICE_ACTIVE=UNKNOWN\n'
-    printf 'VERIFY_SERVICE_EXISTS=UNKNOWN\nVERIFY_SERVICE_USER=UNKNOWN\nVERIFY_SERVICE_ACTIVE=UNKNOWN\n'
-    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_PATH_MATCH=UNKNOWN\nSSE_PROBED_AT_VALID=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n'
+    printf 'BACKUP_SERVICE_EXISTS=UNKNOWN\nBACKUP_SERVICE_USER=UNKNOWN\nBACKUP_SERVICE_EXECSTART_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPRE_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPOST_MATCH=UNKNOWN\nBACKUP_SERVICE_ENV_FILE_MATCH=UNKNOWN\nBACKUP_SERVICE_ACTIVE=UNKNOWN\n'
+    printf 'VERIFY_SERVICE_EXISTS=UNKNOWN\nVERIFY_SERVICE_USER=UNKNOWN\nVERIFY_SERVICE_EXECSTART_MATCH=UNKNOWN\nVERIFY_SERVICE_EXECSTARTPRE_MATCH=UNKNOWN\nVERIFY_SERVICE_EXECSTARTPOST_MATCH=UNKNOWN\nVERIFY_SERVICE_ACTIVE=UNKNOWN\n'
+    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_PATH_MATCH=UNKNOWN\nSSE_PROBED_AT_VALID=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nPOSTGRES_DATABASE_SIZE_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SAFETY_MARGIN_BYTES=UNKNOWN\nPOSTGRES_BACKUP_REQUIRED_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SPACE_SAFE=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nTMP_REQUIRED_BYTES=UNKNOWN\nTMP_SPACE_SAFE=UNKNOWN\nLEGACY_BACKUP_SERVICE_EXISTS=UNKNOWN\nLEGACY_BACKUP_SERVICE_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_EXISTS=UNKNOWN\nLEGACY_BACKUP_TIMER_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_ENABLED=UNKNOWN\nLEGACY_BACKUP_NEXT_TRIGGER=UNKNOWN\nLEGACY_BACKUP_OVERLAP_SAFE=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n'
   fi
   printf 'PROPOSED_BACKUP_COMMAND=%s\n' "$EXPECTED_PROPOSED_COMMAND"
   printf 'PRODUCTION_WRITES=0\nBACKUP_STARTED=NO\n'

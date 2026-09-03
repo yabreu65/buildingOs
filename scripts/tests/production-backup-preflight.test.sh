@@ -59,7 +59,20 @@ link_command() {
   ln -s "$(command -v "$command_name")" "$BIN_DIR/$command_name"
 }
 
-for command_name in awk bash cat date df id jq sha256sum stat; do link_command "$command_name"; done
+for command_name in awk bash cat date id jq sha256sum stat; do link_command "$command_name"; done
+
+cat > "$BIN_DIR/df" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+path="${@: -1}"
+if [[ "$path" == *pg-root* ]]; then
+  available="${MOCK_ROOT_FREE_KIB:-1000000}"
+else
+  available="${MOCK_TMP_FREE_KIB:-1000000}"
+fi
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nmock 1000000 0 %s 0%% /\n' "$available"
+MOCK
+chmod 0755 "$BIN_DIR/df"
 
 cat > "$BIN_DIR/git" <<'MOCK'
 #!/usr/bin/env bash
@@ -94,6 +107,9 @@ if [[ "$1 ${2:-}" == 'inspect --type' ]]; then
   fi
 elif [[ "$1 ${2:-}" == 'image inspect' ]]; then
   printf '%s\n' "${MOCK_RUNTIME_SHA:-db82d3d37fc6184a6d4063709b9a15b923371695}"
+elif [[ "$1" == exec ]]; then
+  [[ "${MOCK_DB_SIZE_UNAVAILABLE:-NO}" == YES ]] && exit 1
+  printf '%s\n' "${MOCK_DB_SIZE_BYTES:-104857600}"
 else
   exit 1
 fi
@@ -107,6 +123,8 @@ unit="${2:-}"
 if [[ "$command_name" == cat ]]; then
   [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BACKUP_UNIT_MISSING:-NO}" == YES ]] && exit 1
   [[ "$unit" == pawtech-buildingos-backup-verify.service && "${MOCK_VERIFY_UNIT_MISSING:-NO}" == YES ]] && exit 1
+  [[ "$unit" == pawtech-postgres-backup.service && "${MOCK_LEGACY_SERVICE_MISSING:-NO}" == YES ]] && exit 1
+  [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_MISSING:-NO}" == YES ]] && exit 1
   exit 0
 fi
 if [[ "$command_name" == is-active ]]; then
@@ -117,14 +135,35 @@ if [[ "$command_name" == is-active ]]; then
   if [[ "$unit" == pawtech-buildingos-backup.timer && "${MOCK_TIMER_ACTIVE:-NO}" == YES ]]; then
     printf 'active\n'; exit 0
   fi
+  if [[ "$unit" == pawtech-postgres-backup.service && "${MOCK_LEGACY_SERVICE_ACTIVE:-NO}" == YES ]]; then
+    printf 'active\n'; exit 0
+  fi
+  if [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_ACTIVE:-NO}" == YES ]]; then
+    printf 'active\n'; exit 0
+  fi
+  if [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_AMBIGUOUS:-NO}" == YES ]]; then
+    printf 'unknown\n'; exit 3
+  fi
   printf 'inactive\n'; exit 3
 fi
 if [[ "$command_name" == show ]]; then
   property=''
   for arg in "$@"; do [[ "$arg" == --property=* ]] && property="${arg#--property=}"; done
   case "$property:$unit" in
-    LoadState:*) printf 'loaded\n' ;;
-    ActiveState:*) if [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BACKUP_ACTIVE:-NO}" == YES ]] || [[ "$unit" == pawtech-buildingos-backup-verify.service && "${MOCK_VERIFY_ACTIVE:-NO}" == YES ]]; then printf 'active\n'; else printf 'inactive\n'; fi ;;
+    LoadState:*)
+      if [[ "$unit" == pawtech-postgres-backup.service && "${MOCK_LEGACY_SERVICE_MISSING:-NO}" == YES ]] || [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_MISSING:-NO}" == YES ]]; then printf 'not-found\n'; else printf 'loaded\n'; fi
+      ;;
+    ActiveState:*)
+      if [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BACKUP_ACTIVE:-NO}" == YES ]] || [[ "$unit" == pawtech-buildingos-backup-verify.service && "${MOCK_VERIFY_ACTIVE:-NO}" == YES ]] || [[ "$unit" == pawtech-postgres-backup.service && "${MOCK_LEGACY_SERVICE_ACTIVE:-NO}" == YES ]] || [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_ACTIVE:-NO}" == YES ]]; then
+        printf 'active\n'
+      elif [[ "$unit" == pawtech-postgres-backup.service && "${MOCK_LEGACY_SERVICE_AMBIGUOUS:-NO}" == YES ]] || [[ "$unit" == pawtech-postgres-backup.timer && "${MOCK_LEGACY_TIMER_AMBIGUOUS:-NO}" == YES ]]; then
+        printf 'unknown\n'
+      else
+        printf 'inactive\n'
+      fi
+      ;;
+    UnitFileState:pawtech-postgres-backup.timer) [[ "${MOCK_LEGACY_TIMER_AMBIGUOUS:-NO}" == YES ]] && printf 'unknown\n' || printf '%s\n' "${MOCK_LEGACY_TIMER_STATE:-disabled}" ;;
+    NextElapseUSecRealtime:pawtech-postgres-backup.timer) [[ "${MOCK_LEGACY_TIMER_AMBIGUOUS:-NO}" == YES ]] && printf 'unknown\n' || printf '%s\n' "${MOCK_LEGACY_TIMER_NEXT_TRIGGER:-n/a}" ;;
     User:*) printf 'yoryi\n' ;;
     Type:*) printf 'oneshot\n' ;;
     Restart:*) printf 'no\n' ;;
@@ -133,9 +172,13 @@ if [[ "$command_name" == show ]]; then
     ExecStart:*)
       if [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BAD_EXECSTART:-NO}" == YES ]]; then
         printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/not-the-backup.sh\n'
+      elif [[ "${MOCK_MALFORMED_EXECSTART:-NO}" == YES ]]; then
+        printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh\n'
+      elif [[ "${MOCK_SECOND_EXECSTART:-NO}" == YES && "$unit" == pawtech-buildingos-backup.service ]]; then
+        printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; ignore_errors=no } { path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; ignore_errors=no }\n'
       elif [[ "$unit" == pawtech-buildingos-backup-verify.service ]]; then
         if [[ "${MOCK_SERIALIZED_EXECSTART:-NO}" == YES ]]; then
-          printf 'path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest ;\n'
+          printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest ; ignore_errors=no }\n'
         else
           printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest\n'
         fi
@@ -143,6 +186,8 @@ if [[ "$command_name" == show ]]; then
         printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh\n'
       fi
       ;;
+    ExecStartPre:*) [[ "${MOCK_BAD_EXECSTARTPRE:-NO}" == YES ]] && printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' || printf '\n' ;;
+    ExecStartPost:*) [[ "${MOCK_BAD_EXECSTARTPOST:-NO}" == YES ]] && printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' || printf '\n' ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -231,6 +276,22 @@ MOCK_SERIALIZED_EXECSTART=YES run_preflight
 assert_success 'serialized ExecStart with whitespace passes'
 unset MOCK_SERIALIZED_EXECSTART
 
+MOCK_SECOND_EXECSTART=YES run_preflight
+assert_failure 'additional ExecStart fails closed'
+unset MOCK_SECOND_EXECSTART
+
+MOCK_BAD_EXECSTARTPRE=YES run_preflight
+assert_failure 'unexpected ExecStartPre fails closed'
+unset MOCK_BAD_EXECSTARTPRE
+
+MOCK_BAD_EXECSTARTPOST=YES run_preflight
+assert_failure 'unexpected ExecStartPost fails closed'
+unset MOCK_BAD_EXECSTARTPOST
+
+MOCK_MALFORMED_EXECSTART=YES run_preflight
+assert_failure 'malformed serialized command list fails closed'
+unset MOCK_MALFORMED_EXECSTART
+
 MOCK_BAD_ENV_FILE=YES run_preflight
 assert_failure 'unexpected EnvironmentFile fails closed'
 unset MOCK_BAD_ENV_FILE
@@ -242,6 +303,28 @@ unset MOCK_BACKUP_ACTIVE
 MOCK_VERIFY_ACTIVE=YES run_preflight
 assert_failure 'active verification service fails closed'
 unset MOCK_VERIFY_ACTIVE
+
+run_preflight
+assert_contains 'happy path reports legacy overlap safety' 'LEGACY_BACKUP_OVERLAP_SAFE=YES' "$RUN_OUTPUT"
+MOCK_LEGACY_SERVICE_ACTIVE=YES run_preflight
+assert_failure 'active legacy PostgreSQL service fails closed'
+unset MOCK_LEGACY_SERVICE_ACTIVE
+
+MOCK_LEGACY_TIMER_ACTIVE=YES run_preflight
+assert_failure 'active legacy PostgreSQL timer fails closed'
+unset MOCK_LEGACY_TIMER_ACTIVE
+
+MOCK_LEGACY_TIMER_NEXT_TRIGGER='2026-09-03 00:00:01 UTC' run_preflight
+assert_failure 'scheduled legacy PostgreSQL timer fails closed'
+unset MOCK_LEGACY_TIMER_NEXT_TRIGGER
+
+MOCK_LEGACY_TIMER_AMBIGUOUS=YES run_preflight
+assert_failure 'ambiguous legacy PostgreSQL timer fails closed'
+unset MOCK_LEGACY_TIMER_AMBIGUOUS
+
+MOCK_LEGACY_SERVICE_MISSING=YES MOCK_LEGACY_TIMER_MISSING=YES run_preflight
+assert_success 'absent legacy PostgreSQL units are safe'
+unset MOCK_LEGACY_SERVICE_MISSING MOCK_LEGACY_TIMER_MISSING
 
 write_env buildingos-backup production VERIFY
 run_preflight
@@ -318,6 +401,33 @@ unset PREFLIGHT_STATE_DIR_OVERRIDE
 MOCK_PG_HEALTH=unhealthy run_preflight
 assert_failure 'unhealthy PostgreSQL fails closed'
 unset MOCK_PG_HEALTH
+
+run_preflight
+assert_contains 'happy path reports PostgreSQL database size' 'POSTGRES_DATABASE_SIZE_BYTES=104857600' "$RUN_OUTPUT"
+assert_contains 'happy path reports byte-converted root space' 'POSTGRES_BACKUP_ROOT_FREE_BYTES=1024000000' "$RUN_OUTPUT"
+assert_contains 'happy path reports required PostgreSQL space' 'POSTGRES_BACKUP_REQUIRED_BYTES=209715200' "$RUN_OUTPUT"
+assert_contains 'happy path reports safe PostgreSQL space' 'POSTGRES_BACKUP_SPACE_SAFE=YES' "$RUN_OUTPUT"
+assert_contains 'happy path reports safe temporary space' 'TMP_SPACE_SAFE=YES' "$RUN_OUTPUT"
+
+MOCK_ROOT_FREE_KIB=204800 MOCK_DB_SIZE_BYTES=104857600 run_preflight
+assert_success 'exact PostgreSQL capacity boundary passes'
+MOCK_ROOT_FREE_KIB=204799 run_preflight
+assert_failure 'one KiB below PostgreSQL capacity boundary fails'
+unset MOCK_ROOT_FREE_KIB MOCK_DB_SIZE_BYTES
+
+MOCK_ROOT_FREE_KIB=1234 MOCK_DB_SIZE_BYTES=1 run_preflight
+assert_failure 'insufficient PostgreSQL capacity fails closed'
+assert_contains 'df KiB is converted to bytes' 'POSTGRES_BACKUP_ROOT_FREE_BYTES=1263616' "$RUN_OUTPUT"
+unset MOCK_ROOT_FREE_KIB MOCK_DB_SIZE_BYTES
+
+MOCK_DB_SIZE_UNAVAILABLE=YES run_preflight
+assert_failure 'unavailable PostgreSQL size estimate fails closed'
+assert_contains 'unavailable size estimate is explicit' 'POSTGRES_BACKUP_REQUIRED_BYTES=UNKNOWN' "$RUN_OUTPUT"
+unset MOCK_DB_SIZE_UNAVAILABLE
+
+MOCK_TMP_FREE_KIB=1 run_preflight
+assert_failure 'insufficient temporary capacity fails closed'
+unset MOCK_TMP_FREE_KIB
 
 MOCK_RUNTIME_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_preflight
 assert_failure 'runtime SHA mismatch fails closed'
