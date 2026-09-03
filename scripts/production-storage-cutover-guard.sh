@@ -232,7 +232,7 @@ main() {
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
       [[ "$confirmation" == 'STORAGE_02_CONTABO' ]] || { fail 'external-storage cutover confirmation is required'; return 1; }
       require_stopped_container buildingos-api "$allow_unhealthy_retry" || return 1
-      require_stopped_container buildingos-web "$allow_unhealthy_retry" true || return 1
+      require_stopped_container buildingos-web "$allow_unhealthy_retry" "$allow_unhealthy_retry" || return 1
       require_minio_topology no || return 1
       ;;
     EXTERNAL_S3:EXTERNAL_S3)
