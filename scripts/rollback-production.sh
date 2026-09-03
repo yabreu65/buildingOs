@@ -19,6 +19,8 @@ fail() {
 ROLLBACK_API_WAS_RUNNING=false
 ROLLBACK_API_QUIESCED=false
 ROLLBACK_RECREATE_STARTED=false
+ROLLBACK_FROM_API_DIGEST=''
+ROLLBACK_FROM_WEB_DIGEST=''
 
 restore_quiesced_api_on_exit() {
   local rc=$?
@@ -34,6 +36,41 @@ restore_quiesced_api_on_exit() {
   exit "$rc"
 }
 trap restore_quiesced_api_on_exit EXIT
+
+write_rollback_record() {
+  local status="$1"
+  local temporary_record
+
+  install -d -m 700 "$(dirname "$RECORD")"
+  umask 077
+  temporary_record="$(mktemp "${RECORD}.tmp.XXXXXX")" || fail 'Unable to create rollback record'
+  if ! {
+    printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'status=%s\n' "$status"
+    printf 'phase=%s\n' "$PHASE"
+    printf 'from_sha=%s\n' "$EXPECTED_CURRENT_SHA"
+    printf 'from_api_digest=%s\n' "$ROLLBACK_FROM_API_DIGEST"
+    printf 'from_web_digest=%s\n' "$ROLLBACK_FROM_WEB_DIGEST"
+    printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
+    printf 'api_digest=%s\n' "$PREVIOUS_API_DIGEST"
+    printf 'web_digest=%s\n' "$PREVIOUS_WEB_DIGEST"
+    printf 'migration_count=%s\n' "$migration_count"
+    printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
+    printf 'database_changed=no\n'
+    printf 'database_restore=never-automatic\n'
+  } > "$temporary_record"; then
+    rm -f -- "$temporary_record"
+    fail 'Unable to write rollback record'
+  fi
+  chmod 600 "$temporary_record" || {
+    rm -f -- "$temporary_record"
+    fail 'Unable to secure rollback record'
+  }
+  mv -f -- "$temporary_record" "$RECORD" || {
+    rm -f -- "$temporary_record"
+    fail 'Unable to publish rollback record'
+  }
+}
 
 [[ $# -eq 8 ]] || usage
 readonly EXPECTED_CURRENT_SHA="$1"
@@ -77,6 +114,12 @@ ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildin
   || fail 'Unable to inspect the current API before rollback'
 [[ "$ROLLBACK_API_WAS_RUNNING" == 'true' || "$ROLLBACK_API_WAS_RUNNING" == 'false' ]] \
   || fail 'Current API running state is invalid'
+ROLLBACK_FROM_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)" \
+  || fail 'Unable to capture the current API image before rollback'
+ROLLBACK_FROM_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)" \
+  || fail 'Unable to capture the current Web image before rollback'
+[[ "$ROLLBACK_FROM_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$ROLLBACK_FROM_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  || fail 'Current rollback source images are not immutable'
 ROLLBACK_API_QUIESCED=true
 "${compose[@]}" stop --timeout 30 buildingos-api
 [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" != 'true' ]] \
@@ -94,6 +137,8 @@ docker tag "$PREVIOUS_WEB_DIGEST" "buildingos-web:$rollback_tag"
 
 export IMAGE_TAG="$rollback_tag"
 export BUILD_REVISION="$EXPECTED_CURRENT_SHA"
+PHASE='application-recreate'
+write_rollback_record IN_PROGRESS
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 ROLLBACK_RECREATE_STARTED=true
 
@@ -108,19 +153,5 @@ for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
   curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$url" >/dev/null || fail "Rollback smoke failed"
 done
 
-install -d -m 700 "$(dirname "$RECORD")"
-umask 077
-{
-  printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'status=SUCCESS\n'
-  printf 'from_sha=%s\n' "$EXPECTED_CURRENT_SHA"
-  printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
-  printf 'api_digest=%s\n' "$PREVIOUS_API_DIGEST"
-  printf 'web_digest=%s\n' "$PREVIOUS_WEB_DIGEST"
-  printf 'migration_count=%s\n' "$migration_count"
-  printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
-  printf 'database_changed=no\n'
-  printf 'database_restore=never-automatic\n'
-} > "$RECORD"
-chmod 600 "$RECORD"
+write_rollback_record SUCCESS
 printf 'Application rollback completed without database changes\n'

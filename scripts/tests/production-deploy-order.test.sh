@@ -34,13 +34,14 @@ rollback_migration_line="$(line_number 'current_migration_count=' "$ROLLBACK_SCR
 rollback_compatibility_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT")"
 rollback_restore_line="$(line_number 'restore_quiesced_api_on_exit' "$ROLLBACK_SCRIPT")"
 rollback_recreate_started_line="$(line_number 'ROLLBACK_RECREATE_STARTED=true' "$ROLLBACK_SCRIPT")"
+rollback_record_line="$(line_number 'write_rollback_record IN_PROGRESS' "$ROLLBACK_SCRIPT")"
 [[ -n "$backup_phase_line" && -n "$checkout_phase_line" && -n "$build_phase_line" ]]
 [[ -n "$baseline_phase_line" && -n "$migrations_phase_line" && -n "$baseline_line" ]]
 [[ -n "$early_state_line" && -n "$later_state_line" && -n "$migrate_line" && -n "$post_line" ]]
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$checkpoint_line" ]]
 [[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]]
-[[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" ]]
+[[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" && -n "$rollback_record_line" ]]
 [[ -n "$storage_guard_line" ]]
 [[ -n "$target_tree_line" && -n "$target_compose_line" ]]
 [[ -n "$api_revision_line" && -n "$web_revision_line" && -n "$revision_match_line" && -n "$previous_sha_line" ]]
@@ -63,7 +64,7 @@ rollback_recreate_started_line="$(line_number 'ROLLBACK_RECREATE_STARTED=true' "
 (( previous_sha_line < checkpoint_line && checkpoint_line < backup_phase_line ))
 (( rollback_compose_line < rollback_quiesce_line && rollback_quiesce_line < rollback_migration_line && rollback_migration_line < rollback_compatibility_line ))
 rollback_recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
-(( rollback_compatibility_line < rollback_recreate_line && rollback_recreate_line < rollback_recreate_started_line ))
+(( rollback_compatibility_line < rollback_record_line && rollback_record_line < rollback_recreate_line && rollback_recreate_line < rollback_recreate_started_line ))
 
 env_invocation_count="$(grep -F -c 'env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db' "$DEPLOY_SCRIPT")"
 [[ "$env_invocation_count" -eq 4 ]]
@@ -94,6 +95,9 @@ assert_child_environment
 grep -F 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Current API remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'Interrupted rollback state does not match the running predecessor or source images' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'from_api_digest' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
 grep -F "storage_transition='unknown'" "$DEPLOY_SCRIPT" >/dev/null
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi

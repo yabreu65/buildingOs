@@ -137,11 +137,43 @@ read_deployment_record_value() {
 
 load_retry_predecessor_record() {
   local record status phase migration_count storage_transition record_target_sha
-  local previous_sha previous_api_digest previous_web_digest
+  local previous_sha previous_api_digest previous_web_digest runtime_api_digest runtime_web_digest
+  local from_api_digest from_web_digest
 
   while IFS= read -r record; do
     [[ -f "$record" && ! -L "$record" ]] || continue
     status="$(read_deployment_record_value "$record" status || true)"
+    if [[ "$status" == 'IN_PROGRESS' && "${record##*/}" == rollback-*.txt ]]; then
+      phase="$(read_deployment_record_value "$record" phase || true)"
+      migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+      previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+      previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
+      previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
+      from_api_digest="$(read_deployment_record_value "$record" from_api_digest || true)"
+      from_web_digest="$(read_deployment_record_value "$record" from_web_digest || true)"
+      [[ "$phase" == 'application-recreate' && "$migration_count" == '98' ]] \
+        || fail 'Interrupted rollback record has an invalid recovery state'
+      [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid predecessor SHA'
+      [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has an invalid API digest'
+      [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has an invalid Web digest'
+      [[ "$from_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$from_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has invalid source image digests'
+      runtime_api_digest="$(docker inspect --format '{{.Image}}' buildingos-api 2>/dev/null || true)"
+      runtime_web_digest="$(docker inspect --format '{{.Image}}' buildingos-web 2>/dev/null || true)"
+      if [[ "$runtime_api_digest" == "$from_api_digest" && "$runtime_web_digest" == "$from_web_digest" ]]; then
+        continue
+      fi
+      [[ "$runtime_api_digest" == "$previous_api_digest" && "$runtime_web_digest" == "$previous_web_digest" ]] \
+        || fail 'Interrupted rollback state does not match the running predecessor or source images'
+      RETRY_RECORD_ACTIVE=true
+      RETRY_PREVIOUS_SHA="$previous_sha"
+      RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+      RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+      RETRY_RECOVERY_ACTIVE=true
+      return 0
+    fi
     if [[ "$status" == 'SUCCESS' ]]; then
       migration_count="$(read_deployment_record_value "$record" migration_count || true)"
       if [[ "$migration_count" == '98' && "${record##*/}" == rollback-*.txt ]]; then
