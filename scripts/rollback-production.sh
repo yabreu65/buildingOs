@@ -50,6 +50,14 @@ readonly migration_count="$VALIDATED_ROLLBACK_MIGRATION_COUNT"
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
+compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
+"${compose[@]}" config --quiet
+
+PHASE='quiesce'
+"${compose[@]}" stop --timeout 30 buildingos-api
+[[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" != 'true' ]] \
+  || fail 'Current API remained running during rollback compatibility validation'
+
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
@@ -62,8 +70,6 @@ docker tag "$PREVIOUS_WEB_DIGEST" "buildingos-web:$rollback_tag"
 
 export IMAGE_TAG="$rollback_tag"
 export BUILD_REVISION="$EXPECTED_CURRENT_SHA"
-compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 
 for container in buildingos-api buildingos-web; do
