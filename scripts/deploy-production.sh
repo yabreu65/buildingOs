@@ -65,6 +65,7 @@ MIGRATION_RETRY=false
 ROLLBACK_RECEIPT='unknown'
 STORAGE_TRANSITION='unknown'
 RETRY_RECORD_ACTIVE=false
+RETRY_RECOVERY_ACTIVE=false
 RETRY_PREVIOUS_SHA='unknown'
 RETRY_PREVIOUS_API_DIGEST='unknown'
 RETRY_PREVIOUS_WEB_DIGEST='unknown'
@@ -139,7 +140,22 @@ load_retry_predecessor_record() {
     [[ -f "$record" && ! -L "$record" ]] || continue
     status="$(read_deployment_record_value "$record" status || true)"
     if [[ "$status" == 'SUCCESS' ]]; then
-      break
+      migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+      previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
+      previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
+      previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
+      storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+      [[ "$migration_count" == '98' ]] || break
+      [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || break
+      [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || break
+      [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || break
+      [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || break
+      RETRY_RECORD_ACTIVE=true
+      RETRY_PREVIOUS_SHA="$previous_sha"
+      RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+      RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+      RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
+      return 0
     fi
     [[ "$status" == 'FAILED' ]] || continue
     phase="$(read_deployment_record_value "$record" phase || true)"
@@ -159,6 +175,7 @@ load_retry_predecessor_record() {
     RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
     RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
     RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+    RETRY_RECOVERY_ACTIVE=true
     return 0
   done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt 2>/dev/null || true)
 
@@ -288,7 +305,7 @@ if [[ "$MIGRATION_RETRY" == true ]]; then
   load_retry_predecessor_record
 fi
 STORAGE_TRANSITION="$(
-  STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY="$MIGRATION_RETRY" \
+  STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY="$RETRY_RECOVERY_ACTIVE" \
   STORAGE_CUTOVER_CURRENT_PROVIDER="$RETRY_CURRENT_PROVIDER" \
     bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME"
 )"
@@ -354,7 +371,7 @@ PHASE='migration-baseline'
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db ./scripts/verify-production-migration-baseline.sh
 validate_database_migration_state ./scripts/verify-production-migration-manifest.sh
 
-if [[ "$MIGRATION_RETRY" == false ]]; then
+if [[ "$RETRY_RECOVERY_ACTIVE" == false ]]; then
   case "$STORAGE_TRANSITION" in
     STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
       wait_for_container_health buildingos-api

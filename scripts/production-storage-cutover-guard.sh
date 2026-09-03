@@ -129,6 +129,7 @@ require_stopped_container() {
     [[ "$allow_missing" == 'true' ]] || { fail "$container container is unavailable"; return 1; }
     return 0
   fi
+  [[ "$allow_missing" == 'true' ]] && return 0
   ! container_running "$container" || { fail "$container must be stopped for storage transition"; return 1; }
 }
 
