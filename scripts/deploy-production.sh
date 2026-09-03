@@ -161,9 +161,9 @@ load_retry_predecessor_record() {
       [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
       [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
       [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
-      if [[ "$storage_transition" != 'unknown' ]]; then
+      if [[ -n "$storage_transition" && "$storage_transition" != 'unknown' ]]; then
         [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
-        RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
+        [[ "$RETRY_CURRENT_PROVIDER" == 'unknown' ]] && RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
       fi
       RETRY_RECORD_ACTIVE=true
       RETRY_PREVIOUS_SHA="$previous_sha"
@@ -174,24 +174,34 @@ load_retry_predecessor_record() {
     fi
     [[ "$status" == 'FAILED' || "$status" == 'IN_PROGRESS' ]] || continue
     record_target_sha="$(read_deployment_record_value "$record" target_sha || true)"
-    [[ "$record_target_sha" == "$TARGET_SHA" ]] || continue
     phase="$(read_deployment_record_value "$record" phase || true)"
     migration_count="$(read_deployment_record_value "$record" migration_count || true)"
     [[ "$phase" == 'pre-migration' || "$phase" == 'migrations' || "$phase" == 'rollback-compatibility' || "$phase" == 'application-recreate' || "$phase" == 'observability' ]] || continue
     [[ "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
+    storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+    [[ -n "$storage_transition" ]] || storage_transition='unknown'
+    if [[ "$record_target_sha" != "$TARGET_SHA" ]]; then
+      RETRY_RECOVERY_ACTIVE=true
+      if [[ "$storage_transition" != 'unknown' ]]; then
+        [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+        [[ "$RETRY_CURRENT_PROVIDER" == 'unknown' ]] && RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+      fi
+      continue
+    fi
     previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
     previous_api_digest="$(read_deployment_record_value "$record" previous_api_digest || true)"
     previous_web_digest="$(read_deployment_record_value "$record" previous_web_digest || true)"
-    storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
     [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
     [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
     [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
-    [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+    if [[ "$storage_transition" != 'unknown' ]]; then
+      [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+      RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+    fi
     RETRY_RECORD_ACTIVE=true
     RETRY_PREVIOUS_SHA="$previous_sha"
     RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
     RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
-    RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
     RETRY_RECOVERY_ACTIVE=true
     return 0
   done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt "$DEPLOYMENTS_DIR"/rollback-*.txt 2>/dev/null || true)

@@ -94,5 +94,7 @@ assert_child_environment
 grep -F 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Current API remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
+grep -F "storage_transition='unknown'" "$DEPLOY_SCRIPT" >/dev/null
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
 printf 'PASS: readonly env propagation and backup -> checkout -> build -> baseline -> pre -> migrate -> post -> compatibility -> receipt -> application recreation\n'
