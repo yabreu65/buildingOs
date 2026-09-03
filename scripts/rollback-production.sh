@@ -16,6 +16,62 @@ fail() {
   exit 1
 }
 
+ROLLBACK_API_WAS_RUNNING=false
+ROLLBACK_API_QUIESCED=false
+ROLLBACK_RECREATE_STARTED=false
+ROLLBACK_FROM_API_DIGEST=''
+ROLLBACK_FROM_WEB_DIGEST=''
+
+restore_quiesced_api_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$ROLLBACK_API_WAS_RUNNING" == true && "$ROLLBACK_API_QUIESCED" == true && "$ROLLBACK_RECREATE_STARTED" == false ]]; then
+    if docker start buildingos-api >/dev/null 2>&1; then
+      ROLLBACK_API_QUIESCED=false
+    else
+      printf 'ERROR: Unable to restore the current API after rollback validation stopped\n' >&2
+      rc=1
+    fi
+  fi
+  exit "$rc"
+}
+trap restore_quiesced_api_on_exit EXIT
+
+write_rollback_record() {
+  local status="$1"
+  local temporary_record
+
+  install -d -m 700 "$(dirname "$RECORD")"
+  umask 077
+  temporary_record="$(mktemp "${RECORD}.tmp.XXXXXX")" || fail 'Unable to create rollback record'
+  if ! {
+    printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'status=%s\n' "$status"
+    printf 'phase=%s\n' "$PHASE"
+    printf 'from_sha=%s\n' "$EXPECTED_CURRENT_SHA"
+    printf 'from_api_digest=%s\n' "$ROLLBACK_FROM_API_DIGEST"
+    printf 'from_web_digest=%s\n' "$ROLLBACK_FROM_WEB_DIGEST"
+    printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
+    printf 'api_digest=%s\n' "$PREVIOUS_API_DIGEST"
+    printf 'web_digest=%s\n' "$PREVIOUS_WEB_DIGEST"
+    printf 'migration_count=%s\n' "$migration_count"
+    printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
+    printf 'database_changed=no\n'
+    printf 'database_restore=never-automatic\n'
+  } > "$temporary_record"; then
+    rm -f -- "$temporary_record"
+    fail 'Unable to write rollback record'
+  fi
+  chmod 600 "$temporary_record" || {
+    rm -f -- "$temporary_record"
+    fail 'Unable to secure rollback record'
+  }
+  mv -f -- "$temporary_record" "$RECORD" || {
+    rm -f -- "$temporary_record"
+    fail 'Unable to publish rollback record'
+  }
+}
+
 [[ $# -eq 8 ]] || usage
 readonly EXPECTED_CURRENT_SHA="$1"
 readonly PREVIOUS_SHA="$2"
@@ -50,6 +106,25 @@ readonly migration_count="$VALIDATED_ROLLBACK_MIGRATION_COUNT"
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
+compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
+"${compose[@]}" config --quiet
+
+PHASE='quiesce'
+ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildingos-api)" \
+  || fail 'Unable to inspect the current API before rollback'
+[[ "$ROLLBACK_API_WAS_RUNNING" == 'true' || "$ROLLBACK_API_WAS_RUNNING" == 'false' ]] \
+  || fail 'Current API running state is invalid'
+ROLLBACK_FROM_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)" \
+  || fail 'Unable to capture the current API image before rollback'
+ROLLBACK_FROM_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)" \
+  || fail 'Unable to capture the current Web image before rollback'
+[[ "$ROLLBACK_FROM_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$ROLLBACK_FROM_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  || fail 'Current rollback source images are not immutable'
+ROLLBACK_API_QUIESCED=true
+"${compose[@]}" stop --timeout 30 buildingos-api
+[[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" != 'true' ]] \
+  || fail 'Current API remained running during rollback compatibility validation'
+
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
@@ -62,9 +137,10 @@ docker tag "$PREVIOUS_WEB_DIGEST" "buildingos-web:$rollback_tag"
 
 export IMAGE_TAG="$rollback_tag"
 export BUILD_REVISION="$EXPECTED_CURRENT_SHA"
-compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
+PHASE='application-recreate'
+write_rollback_record IN_PROGRESS
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
+ROLLBACK_RECREATE_STARTED=true
 
 for container in buildingos-api buildingos-web; do
   for attempt in {1..18}; do
@@ -77,19 +153,5 @@ for url in "$API_HEALTH_URL" "$API_READYZ_URL" "$WEB_LOGIN_URL"; do
   curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$url" >/dev/null || fail "Rollback smoke failed"
 done
 
-install -d -m 700 "$(dirname "$RECORD")"
-umask 077
-{
-  printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'status=SUCCESS\n'
-  printf 'from_sha=%s\n' "$EXPECTED_CURRENT_SHA"
-  printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
-  printf 'api_digest=%s\n' "$PREVIOUS_API_DIGEST"
-  printf 'web_digest=%s\n' "$PREVIOUS_WEB_DIGEST"
-  printf 'migration_count=%s\n' "$migration_count"
-  printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
-  printf 'database_changed=no\n'
-  printf 'database_restore=never-automatic\n'
-} > "$RECORD"
-chmod 600 "$RECORD"
+write_rollback_record SUCCESS
 printf 'Application rollback completed without database changes\n'

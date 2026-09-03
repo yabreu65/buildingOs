@@ -67,7 +67,7 @@ jobs:
           test -f scripts/production-security-validate.sh && test ! -L scripts/production-security-validate.sh
           test -f infra/production/backup-postgres.identity.v1 && test ! -L infra/production/backup-postgres.identity.v1
           test -f scripts/verify-production-migration-manifest.sh && test ! -L scripts/verify-production-migration-manifest.sh
-          test -f scripts/manifests/production-migrations-81-to-97.tsv && test ! -L scripts/manifests/production-migrations-81-to-97.tsv
+          test -f scripts/manifests/production-migrations-81-to-98.tsv && test ! -L scripts/manifests/production-migrations-81-to-98.tsv
           bash scripts/production-security-validate.sh backup-manifest infra/production/backup-postgres.identity.v1
           bash scripts/verify-production-migration-manifest.sh verify-files
           test -f infra/docker/docker-compose.production.yml

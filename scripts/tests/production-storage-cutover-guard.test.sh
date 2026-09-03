@@ -31,6 +31,12 @@ fi
 if [[ "$container" == 'buildingos-minio' && "${FAKE_MINIO_EXISTS:-true}" != 'true' ]]; then
   exit 1
 fi
+if [[ "$container" == 'buildingos-api' && "${FAKE_API_EXISTS:-true}" != 'true' ]]; then
+  exit 1
+fi
+if [[ "$container" == 'buildingos-web' && "${FAKE_WEB_EXISTS:-true}" != 'true' ]]; then
+  exit 1
+fi
 
 if [[ -z "$format" ]]; then
   exit 0
@@ -122,9 +128,19 @@ run_case 'MINIO to MINIO without confirmation' PASS
 
 FAKE_API_HEALTH=unhealthy
 run_case 'MINIO to MINIO API unhealthy' FAIL
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true
+run_case 'MINIO to MINIO unhealthy migration retry' PASS
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY
 FAKE_API_HEALTH=healthy FAKE_WEB_HEALTH=unhealthy
 run_case 'MINIO to MINIO web unhealthy' FAIL
 FAKE_WEB_HEALTH=healthy
+
+export FAKE_API_EXISTS=false FAKE_WEB_EXISTS=false
+export STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true
+run_case 'MINIO to MINIO missing app retry' PASS
+unset STORAGE_CUTOVER_CURRENT_PROVIDER STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY
+run_case 'MINIO to MINIO missing app without provider override' FAIL
+export FAKE_API_EXISTS=true FAKE_WEB_EXISTS=true
 
 FAKE_PUBLIC_ATTACHED=false
 run_case 'MINIO to MINIO requires public MinIO' FAIL
@@ -153,6 +169,23 @@ run_case 'EXTERNAL to EXTERNAL API stopped unexpectedly' FAIL
 FAKE_API_RUNNING=true
 write_env https://target.example.invalid
 run_case 'EXTERNAL to EXTERNAL without MinIO' PASS
+
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO
+run_case 'EXTERNAL to EXTERNAL retry uses live provider' PASS
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
+
+export FAKE_API_EXISTS=false FAKE_WEB_EXISTS=true FAKE_MINIO_EXISTS=true FAKE_PUBLIC_ATTACHED=false FAKE_INTERNAL_ATTACHED=true
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO
+write_env https://usc1.contabostorage.com STORAGE_02_CONTABO
+run_case 'MINIO to EXTERNAL partial retry allows running peer' PASS
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
+export FAKE_API_EXISTS=true FAKE_WEB_EXISTS=true
+
+FAKE_CURRENT_ENDPOINT=http://buildingos-minio:9000 FAKE_API_RUNNING=true
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO
+run_case 'MINIO to EXTERNAL retry keeps source API quiescent' FAIL
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
+FAKE_CURRENT_ENDPOINT=https://current.example.invalid
 
 write_env http://buildingos-minio:9000
 run_case 'EXTERNAL to MINIO missing rollback confirmation' FAIL

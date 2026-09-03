@@ -22,7 +22,7 @@ The workflow must never be dispatched to compensate for a failed preflight.
 | Checkout | Clean, detached, exact target SHA |
 | Backup | Exact external script identity plus new verified custom dump before checkout/build/migration |
 | Images | SHA tag plus `org.opencontainers.image.revision` |
-| Migration | Immutable 81→97 manifest verified against files and database before and after the dedicated runner |
+| Migration | Immutable 81→98 manifest verified against files and database before and after the dedicated runner |
 | Runtime change | Recreate only `buildingos-api` and `buildingos-web` |
 | Infrastructure | Never recreate PostgreSQL, Redis, MinIO, Traefik, networks, or volumes |
 | Seeds | Prohibited |
@@ -88,6 +88,8 @@ The workflow sends the versioned deploy script, security validator, and `infra/p
 
 The official backup produces PostgreSQL custom dumps and checksums. Deployment requires a newly created backup directory, verifies the dump checksum, and validates the custom archive with `pg_restore --list` before checkout, build, or migration. Validate custom dumps with `pg_restore`, not the legacy gzip/plain-SQL restore script.
 
+The latest authorized production read-only preflight recorded `BACKUP_READINESS=INCOMPLETE`; deployment remains blocked until backup readiness is separately proven. This observation does not authorize creating or executing a backup in a tooling change.
+
 Temporary restore example:
 
 ```bash
@@ -106,14 +108,16 @@ For incident recovery, use the separately gated candidate-restore, swap, and rev
 
 ## Exact migration transition
 
-`scripts/manifests/production-migrations-81-to-97.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 16 migration names and SHA-256 values, and a final state of 97 successful migrations with zero failed or rolled-back rows. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
+`scripts/manifests/production-migrations-81-to-98.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 17 migration names and SHA-256 values, and a final state of 98 successful migrations with zero failed or rolled-back rows. The verified production pre-deploy state is 97 successful migrations with `20260831000000_add_payment_receipt_issuance_snapshot` pending. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
 
 The deploy sequence is fail-closed:
 
 1. The workflow validates the manifest and local migration files before opening SSH.
 2. After the exact target checkout, deployment revalidates local files from that target.
-3. Immediately before `prisma migrate deploy`, the database must match the exact 81-row baseline and contain none of the 16 pending rows.
-4. Immediately after migration, the database must contain exactly the 97 expected active, finished rows; all 16 new database checksums must match the manifest.
+3. Immediately before `prisma migrate deploy`, the database must match the verified 97-row production pre-state and contain only the exact target migration pending.
+4. Immediately after migration, the database must contain exactly the 98 expected active, finished rows; all 17 new database checksums must match the manifest.
+
+If a previous attempt completed migration and stopped afterward, the strict 97-row pre-check reports the exact count mismatch and deployment may enter its retry path. A durable `IN_PROGRESS` predecessor checkpoint is written before migration; if the host is lost before a failure record can be written, retry recovery uses that checkpoint or the last successful 97-migration deployment record to bind the predecessor images. If a newer failed or interrupted target is replaced by an approved target, the recovery signal and storage provider from that record are preserved while the preceding successful 98-migration record supplies the known-good predecessor images. The retry path accepts only a fully validated 98-row target state, skips migration application, and still requires post-verification, rollback compatibility, receipt generation, application recreation, and health checks. Partial, failed, extra, or checksum-mismatched states remain rejected.
 
 Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. No zero-step row is accepted outside the immutable historical exception manifest. Do not edit migration history or bypass the verifier.
 
@@ -132,14 +136,14 @@ target_sha=<deployed-40-character-sha>
 previous_sha=<previous-40-character-sha>
 previous_api_digest=sha256:<64-hex>
 previous_web_digest=sha256:<64-hex>
-migration_count=97
+migration_count=98
 ```
 
 The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with directory mode exactly `0700` and receipt mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.
 
-Rollback does not check out old source or rebuild old images. It tags the captured digests locally, recreates only API/Web, verifies the unchanged migration count, then runs health smoke.
+Rollback does not check out old source or rebuild old images. It stops the current API before checking migration count or data compatibility and keeps it quiescent until it atomically records an `IN_PROGRESS` rollback and recreates only API/Web from the captured digests; if validation stops before recreation, the current API is restored. A later retry accepts an interrupted rollback only when both running image digests match either the recorded predecessor or source state; a matching quiesced source state is resumed in recovery mode, and any other mismatch stops closed. It then verifies the unchanged migration count and runs health smoke.
 
-Immediately before rollback, the script reuses the same read-only compatibility guard used by deploy and requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If users have created any such data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
+Immediately before rollback, the script reuses the same read-only compatibility guard used by deploy. For the exact 97->98 receipt-snapshot delta, compatibility requires zero rows in the six new `Payment` receipt snapshot and generation-state fields; existing pre-98 Finance data does not block this narrow path. For any other schema or migration delta, the fallback predicate requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If the applicable predicate finds data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
 
 ## Post-deploy smoke
 

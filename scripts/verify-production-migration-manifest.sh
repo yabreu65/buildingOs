@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
-readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-97.tsv}"
+readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-98.tsv}"
 readonly METADATA_EXCEPTION_FILE="${METADATA_EXCEPTION_FILE:-$SCRIPT_DIR/manifests/production-migration-metadata-exceptions.tsv}"
 readonly MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/apps/api/prisma/migrations}"
 readonly POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-pawtech-postgres}"
@@ -17,9 +17,10 @@ readonly MIGRATION_STATE_FILE="${MIGRATION_STATE_FILE:-}"
 readonly MANIFEST_VERSION=1
 readonly BASELINE_APPLIED=81
 readonly BASELINE_FAILED=0
-readonly TARGET_APPLIED=97
+readonly PRE_DEPLOY_APPLIED=97
+readonly TARGET_APPLIED=98
 readonly TARGET_FAILED=0
-readonly EXPECTED_PENDING=16
+readonly EXPECTED_PENDING=17
 readonly TAB=$'\t'
 readonly METADATA_EXCEPTION_VERSION=1
 
@@ -49,6 +50,7 @@ EXPECTED_NAMES=(
   '20260816000002_income_offsets_to_liquidations'
   '20260816000003_liquidation_income_offset_invariants'
   '20260816000004_legacy_income_application_provenance'
+  '20260831000000_add_payment_receipt_issuance_snapshot'
 )
 
 EXPECTED_CHECKSUMS=(
@@ -68,6 +70,7 @@ EXPECTED_CHECKSUMS=(
   'c18ed0093da20da89e3e627ca1457349f1d36da93c1e11f914f4b8ace4aa654f'
   '4ff212a16eda9e32db64b28b8eb56f29a2ee5ccb5fbb034af56a7b7cad8fc6d9'
   'f77a48381a9d32198b34f3ed92465190f8f6284ec80cc4916c304ec776905a2b'
+  '36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0'
 )
 
 cleanup() {
@@ -325,10 +328,8 @@ validate_database_state() {
 
   observed_count="${#STATE_NAMES[@]}"
   if [[ "$PHASE" == 'pre' ]]; then
-    if (( observed_count == BASELINE_APPLIED )); then
-      expected_limit="$BASELINE_APPLIED"
-    elif (( observed_count == TARGET_APPLIED )); then
-      expected_limit="$TARGET_APPLIED"
+    if (( observed_count == PRE_DEPLOY_APPLIED )); then
+      expected_limit="$PRE_DEPLOY_APPLIED"
     else
       fail 'database_pre_state_count_invalid'
     fi
@@ -367,7 +368,7 @@ case "$MODE" in
     ;;
   verify-db)
     [[ "$#" -eq 2 ]] || fail 'usage'
-    [[ "$PHASE" == 'pre' || "$PHASE" == 'post' ]] || fail 'phase_invalid'
+    [[ "$PHASE" == 'pre' || "$PHASE" == 'post' || "$PHASE" == 'retry' ]] || fail 'phase_invalid'
     validate_manifest
     validate_local_migrations
     TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/production-migration-state.XXXXXX")"
@@ -378,6 +379,9 @@ case "$MODE" in
       pending_count="$((TARGET_APPLIED - applied_count))"
       printf 'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=%s\ttarget=%s\n' \
         "$MANIFEST_VERSION" "$applied_count" "$pending_count" "$TARGET_APPLIED"
+    elif [[ "$PHASE" == 'retry' ]]; then
+      printf 'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=0\ttarget=%s\n' \
+        "$MANIFEST_VERSION" "$TARGET_APPLIED" "$TARGET_APPLIED"
     else
       printf 'status=ok\tmode=verify-db\tphase=post\tmanifest_version=%s\tapplied=%s\tfailed=0\tpending=0\ttarget=%s\n' \
         "$MANIFEST_VERSION" "$TARGET_APPLIED" "$TARGET_APPLIED"

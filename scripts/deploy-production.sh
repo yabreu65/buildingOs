@@ -27,6 +27,9 @@ usage() {
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
+  if declare -F write_record >/dev/null 2>&1; then
+    write_record FAILED || true
+  fi
   exit 1
 }
 
@@ -55,11 +58,21 @@ PHASE='preflight'
 PREVIOUS_SHA='unknown'
 PREVIOUS_API_DIGEST='unknown'
 PREVIOUS_WEB_DIGEST='unknown'
+PREVIOUS_API_REVISION='unknown'
+PREVIOUS_WEB_REVISION='unknown'
 NEW_API_DIGEST='unknown'
 NEW_WEB_DIGEST='unknown'
 BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
+MIGRATION_RETRY=false
 ROLLBACK_RECEIPT='unknown'
+STORAGE_TRANSITION='unknown'
+RETRY_RECORD_ACTIVE=false
+RETRY_RECOVERY_ACTIVE=false
+RETRY_PREVIOUS_SHA='unknown'
+RETRY_PREVIOUS_API_DIGEST='unknown'
+RETRY_PREVIOUS_WEB_DIGEST='unknown'
+RETRY_CURRENT_PROVIDER='unknown'
 TARGET_TREE_ROOT=''
 TARGET_TREE=''
 TARGET_TREE_ACTIVE=false
@@ -81,6 +94,161 @@ materialize_target_tree() {
   TARGET_TREE_ACTIVE=true
 }
 
+validate_database_migration_state() {
+  local verifier="$1"
+  local migration_preflight_output
+
+  migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-preflight.XXXXXX)"
+  if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+    bash "$verifier" verify-db pre > "$migration_preflight_output" 2>&1; then
+    cat "$migration_preflight_output"
+    MIGRATION_RETRY=false
+  else
+    if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
+      env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+        bash "$verifier" verify-db retry
+      MIGRATION_RETRY=true
+    else
+      cat "$migration_preflight_output" >&2
+      rm -f "$migration_preflight_output"
+      fail 'Production database did not match the exact 97-migration pre-state'
+    fi
+  fi
+  rm -f "$migration_preflight_output"
+}
+
+read_deployment_record_value() {
+  local record="$1"
+  local expected_name="$2"
+  local line name value count=0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *=* ]] || continue
+    name="${line%%=*}"
+    value="${line#*=}"
+    [[ "$name" == "$expected_name" ]] || continue
+    count=$((count + 1))
+    [[ "$count" -eq 1 ]] || return 1
+    printf '%s' "$value"
+  done < "$record"
+
+  [[ "$count" -eq 1 ]]
+}
+
+load_retry_predecessor_record() {
+  local record status phase migration_count storage_transition record_target_sha
+  local previous_sha previous_api_digest previous_web_digest runtime_api_digest runtime_web_digest runtime_api_running
+  local from_sha from_api_digest from_web_digest
+
+  while IFS= read -r record; do
+    [[ -f "$record" && ! -L "$record" ]] || continue
+    status="$(read_deployment_record_value "$record" status || true)"
+    if [[ "$status" == 'IN_PROGRESS' && "${record##*/}" == rollback-*.txt ]]; then
+      phase="$(read_deployment_record_value "$record" phase || true)"
+      migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+      from_sha="$(read_deployment_record_value "$record" from_sha || true)"
+      previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+      previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
+      previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
+      from_api_digest="$(read_deployment_record_value "$record" from_api_digest || true)"
+      from_web_digest="$(read_deployment_record_value "$record" from_web_digest || true)"
+      [[ "$phase" == 'application-recreate' && "$migration_count" == '98' ]] \
+        || fail 'Interrupted rollback record has an invalid recovery state'
+      [[ "$from_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid source SHA'
+      [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid predecessor SHA'
+      [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has an invalid API digest'
+      [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has an invalid Web digest'
+      [[ "$from_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$from_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail 'Interrupted rollback record has invalid source image digests'
+      runtime_api_running="$(docker inspect --format '{{.State.Running}}' buildingos-api 2>/dev/null || true)"
+      runtime_api_digest="$(docker inspect --format '{{.Image}}' buildingos-api 2>/dev/null || true)"
+      runtime_web_digest="$(docker inspect --format '{{.Image}}' buildingos-web 2>/dev/null || true)"
+      if [[ "$runtime_api_digest" == "$from_api_digest" && "$runtime_web_digest" == "$from_web_digest" ]]; then
+        RETRY_RECORD_ACTIVE=true
+        RETRY_PREVIOUS_SHA="$from_sha"
+        RETRY_PREVIOUS_API_DIGEST="$from_api_digest"
+        RETRY_PREVIOUS_WEB_DIGEST="$from_web_digest"
+        [[ "$runtime_api_running" == 'true' ]] || RETRY_RECOVERY_ACTIVE=true
+        return 0
+      fi
+      [[ "$runtime_api_digest" == "$previous_api_digest" && "$runtime_web_digest" == "$previous_web_digest" ]] \
+        || fail 'Interrupted rollback state does not match the running predecessor or source images'
+      RETRY_RECORD_ACTIVE=true
+      RETRY_PREVIOUS_SHA="$previous_sha"
+      RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+      RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+      RETRY_RECOVERY_ACTIVE=true
+      return 0
+    fi
+    if [[ "$status" == 'SUCCESS' ]]; then
+      migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+      if [[ "$migration_count" == '98' && "${record##*/}" == rollback-*.txt ]]; then
+        previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+        previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
+        previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
+        storage_transition='unknown'
+      elif [[ "$migration_count" == '98' || "$migration_count" == '97' ]]; then
+        previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
+        previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
+        previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
+        storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+      else
+        continue
+      fi
+      [[ -n "$storage_transition" ]] || storage_transition='unknown'
+      [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+      [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+      [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+      if [[ -n "$storage_transition" && "$storage_transition" != 'unknown' ]]; then
+        [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+        [[ "$RETRY_CURRENT_PROVIDER" == 'unknown' ]] && RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
+      fi
+      RETRY_RECORD_ACTIVE=true
+      RETRY_PREVIOUS_SHA="$previous_sha"
+      RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+      RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+      [[ "$migration_count" == '97' ]] && RETRY_RECOVERY_ACTIVE=true
+      return 0
+    fi
+    [[ "$status" == 'FAILED' || "$status" == 'IN_PROGRESS' ]] || continue
+    record_target_sha="$(read_deployment_record_value "$record" target_sha || true)"
+    phase="$(read_deployment_record_value "$record" phase || true)"
+    migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+    [[ "$phase" == 'pre-migration' || "$phase" == 'migrations' || "$phase" == 'rollback-compatibility' || "$phase" == 'application-recreate' || "$phase" == 'observability' ]] || continue
+    [[ "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
+    storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+    [[ -n "$storage_transition" ]] || storage_transition='unknown'
+    if [[ "$record_target_sha" != "$TARGET_SHA" ]]; then
+      RETRY_RECOVERY_ACTIVE=true
+      if [[ "$storage_transition" != 'unknown' ]]; then
+        [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+        [[ "$RETRY_CURRENT_PROVIDER" == 'unknown' ]] && RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+      fi
+      continue
+    fi
+    previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+    previous_api_digest="$(read_deployment_record_value "$record" previous_api_digest || true)"
+    previous_web_digest="$(read_deployment_record_value "$record" previous_web_digest || true)"
+    [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    if [[ "$storage_transition" != 'unknown' ]]; then
+      [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+      RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+    fi
+    RETRY_RECORD_ACTIVE=true
+    RETRY_PREVIOUS_SHA="$previous_sha"
+    RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+    RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+    RETRY_RECOVERY_ACTIVE=true
+    return 0
+  done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt "$DEPLOYMENTS_DIR"/rollback-*.txt 2>/dev/null || true)
+
+  fail 'Validated migration retry requires a failed deployment record with predecessor image state'
+}
+
 write_record() {
   local status="$1"
   install -d -m 700 "$DEPLOYMENTS_DIR"
@@ -99,6 +267,7 @@ write_record() {
     printf 'migration_count=%s\n' "$MIGRATION_COUNT"
     printf 'rollback_receipt=%s\n' "$ROLLBACK_RECEIPT"
     printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
+    printf 'storage_transition=%s\n' "${STORAGE_TRANSITION#STORAGE_TRANSITION=}"
     printf 'database_rollback=never-automatic\n'
     printf 'services_recreated=buildingos-api buildingos-web\n'
     printf 'seeds=no\n'
@@ -182,13 +351,12 @@ validate_backup_manifest "$BACKUP_IDENTITY_MANIFEST"
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 check_ignored_sensitive_files
-PREVIOUS_SHA="$(git rev-parse HEAD)"
-[[ "$PREVIOUS_SHA" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since approval"
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since approval"
 git fetch --no-tags origin main
 git cat-file -e "$TARGET_SHA^{commit}"
 git merge-base --is-ancestor "$TARGET_SHA" origin/main || fail "Target SHA is not reachable from origin/main"
 
-for container in buildingos-api buildingos-web "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
+for container in "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
   docker inspect "$container" >/dev/null 2>&1 || fail "Required production container is unavailable: $container"
 done
 
@@ -199,23 +367,41 @@ readonly TARGET_COMPOSE_FILE="$TARGET_TREE/$COMPOSE_FILE"
 target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" --file "$TARGET_COMPOSE_FILE")
 "${target_compose[@]}" config --quiet
 "${target_compose[@]}" --profile migrate config --quiet
-STORAGE_TRANSITION="$(bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME")"
+validate_database_migration_state "$TARGET_TREE/scripts/verify-production-migration-manifest.sh"
+if [[ "$MIGRATION_RETRY" == true ]]; then
+  load_retry_predecessor_record
+fi
+STORAGE_TRANSITION="$(
+  STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY="$RETRY_RECOVERY_ACTIVE" \
+  STORAGE_CUTOVER_CURRENT_PROVIDER="$RETRY_CURRENT_PROVIDER" \
+    bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME"
+)"
 readonly STORAGE_TRANSITION
 [[ "$STORAGE_TRANSITION" =~ ^STORAGE_TRANSITION=(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] \
   || fail 'Storage transition guard returned an invalid classification'
 cleanup_target_tree
 
-case "$STORAGE_TRANSITION" in
-  STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
-    wait_for_container_health buildingos-api
-    wait_for_container_health buildingos-web
-    ;;
-esac
-
-PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
-PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
+if [[ "$RETRY_RECORD_ACTIVE" == true ]]; then
+  PREVIOUS_API_DIGEST="$RETRY_PREVIOUS_API_DIGEST"
+  PREVIOUS_WEB_DIGEST="$RETRY_PREVIOUS_WEB_DIGEST"
+else
+  PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
+  PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
+fi
 [[ "$PREVIOUS_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous API digest"
 [[ "$PREVIOUS_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous Web digest"
+PREVIOUS_API_REVISION="$(docker image inspect "$PREVIOUS_API_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+PREVIOUS_WEB_REVISION="$(docker image inspect "$PREVIOUS_WEB_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+[[ "$PREVIOUS_API_REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "Previous API image revision is invalid"
+[[ "$PREVIOUS_WEB_REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "Previous Web image revision is invalid"
+[[ "$PREVIOUS_API_REVISION" == "$PREVIOUS_WEB_REVISION" ]] || fail "Previous API and Web image revisions disagree"
+PREVIOUS_SHA="$PREVIOUS_API_REVISION"
+if [[ "$RETRY_RECORD_ACTIVE" == true ]]; then
+  [[ "$PREVIOUS_SHA" == "$RETRY_PREVIOUS_SHA" ]] || fail "Retry predecessor image revision does not match the failed deployment record"
+fi
+
+PHASE='pre-migration'
+write_record IN_PROGRESS
 
 PHASE='backup'
 # Backup names are generated by the official backup script and contain no whitespace.
@@ -253,16 +439,26 @@ done
 
 PHASE='migration-baseline'
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db ./scripts/verify-production-migration-baseline.sh
-env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-  bash ./scripts/verify-production-migration-manifest.sh verify-db pre
+validate_database_migration_state ./scripts/verify-production-migration-manifest.sh
+
+if [[ "$RETRY_RECOVERY_ACTIVE" == false ]]; then
+  case "$STORAGE_TRANSITION" in
+    STORAGE_TRANSITION=MINIO:MINIO|STORAGE_TRANSITION=EXTERNAL_S3:EXTERNAL_S3)
+      wait_for_container_health buildingos-api
+      wait_for_container_health buildingos-web
+      ;;
+  esac
+fi
 
 PHASE='migrations'
-"${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate < /dev/null
+if [[ "$MIGRATION_RETRY" == false ]]; then
+  "${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate < /dev/null
+fi
 "${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate migrate status --schema apps/api/prisma/schema.prisma < /dev/null
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
 MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
-[[ "$MIGRATION_COUNT" == '97' ]] || fail "Final migration count is not exactly 97"
+[[ "$MIGRATION_COUNT" == '98' ]] || fail "Final migration count is not exactly 98"
 
 PHASE='rollback-compatibility'
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"

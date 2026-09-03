@@ -8,7 +8,7 @@ readonly TEST_DIR
 REPO_ROOT="$(cd "$TEST_DIR/../.." && pwd)"
 readonly REPO_ROOT
 readonly VERIFIER="$REPO_ROOT/scripts/verify-production-migration-manifest.sh"
-readonly MANIFEST="$REPO_ROOT/scripts/manifests/production-migrations-81-to-97.tsv"
+readonly MANIFEST="$REPO_ROOT/scripts/manifests/production-migrations-81-to-98.tsv"
 readonly MIGRATIONS="$REPO_ROOT/apps/api/prisma/migrations"
 readonly TAB=$'\t'
 
@@ -113,12 +113,8 @@ assert_failure_code() {
 }
 
 write_fixture "$TMP_DIR/pre.tsv" 81
-if ! run_fixture "$TMP_DIR/pre.tsv" pre "$TMP_DIR/output.tsv"; then
-  fail_test "exact pre state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
-fi
-grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=81\tfailed=0\tpending=16\ttarget=97' \
-  "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
-pass_test 'exact pre state passes'
+assert_failure_code 'historical 81 baseline is rejected as the production pre state' \
+  "$TMP_DIR/pre.tsv" pre 'database_pre_state_count_invalid'
 
 write_fixture "$TMP_DIR/pre-target-base.tsv" 97
 awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
@@ -126,15 +122,13 @@ awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 
 if ! run_fixture "$TMP_DIR/pre-target.tsv" pre "$TMP_DIR/output.tsv"; then
   fail_test "already-at-target pre state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=97\tfailed=0\tpending=0\ttarget=97' \
+grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=97\tfailed=0\tpending=1\ttarget=98' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "already-at-target pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
-pass_test 'already-at-target pre state passes'
+  pass_test 'verified 97-migration pre state with target pending passes'
 
 write_historical_exception_fixture "$TMP_DIR/historical-exception.tsv"
-if ! run_fixture "$TMP_DIR/historical-exception.tsv" pre "$TMP_DIR/output.tsv"; then
-  fail_test "approved historical metadata exception failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
-fi
-pass_test 'approved historical zero-step exception passes'
+assert_failure_code 'historical 81 baseline exception is rejected as the production pre state' \
+  "$TMP_DIR/historical-exception.tsv" pre 'database_pre_state_count_invalid'
 
 awk -F "$TAB" -v OFS="$TAB" 'NR == 1 { $5 = 0 } { print }' \
   "$TMP_DIR/pre.tsv" > "$TMP_DIR/non-approved-zero-step.tsv"
@@ -156,15 +150,15 @@ awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $4 = 
 assert_failure_code 'historical exception rolled-back state is rejected' \
   "$TMP_DIR/historical-rolled-back.tsv" pre 'database_rolled_back_row'
 
-write_fixture "$TMP_DIR/post.tsv" 97
+write_fixture "$TMP_DIR/post.tsv" 98
 if ! run_fixture "$TMP_DIR/post.tsv" post "$TMP_DIR/output.tsv"; then
   fail_test "exact post state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-db\tphase=post\tmanifest_version=1\tapplied=97\tfailed=0\tpending=0\ttarget=97' \
+grep -F $'status=ok\tmode=verify-db\tphase=post\tmanifest_version=1\tapplied=98\tfailed=0\tpending=0\ttarget=98' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact post state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 pass_test 'exact post state passes'
 
-write_fixture "$TMP_DIR/historical-post-base.tsv" 97
+write_fixture "$TMP_DIR/historical-post-base.tsv" 98
 awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
   "$TMP_DIR/historical-post-base.tsv" > "$TMP_DIR/historical-post-exception.tsv"
 if ! run_fixture "$TMP_DIR/historical-post-exception.tsv" post "$TMP_DIR/output.tsv"; then
@@ -180,18 +174,49 @@ write_fixture "$TMP_DIR/pre-96.tsv" 96
 assert_failure_code '96 applied migrations are rejected in pre state' \
   "$TMP_DIR/pre-96.tsv" pre 'database_pre_state_count_invalid'
 
-cp "$TMP_DIR/post.tsv" "$TMP_DIR/pre-extra-98.tsv"
-printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
-  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/pre-extra-98.tsv"
+cp "$TMP_DIR/post.tsv" "$TMP_DIR/pre-target-applied.tsv"
 assert_failure_code '98 applied migrations are rejected in pre state' \
-  "$TMP_DIR/pre-extra-98.tsv" pre 'database_pre_state_count_invalid'
+  "$TMP_DIR/pre-target-applied.tsv" pre 'database_pre_state_count_invalid'
+
+if ! run_fixture "$TMP_DIR/post.tsv" retry "$TMP_DIR/output.tsv"; then
+  fail_test "validated retry state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+fi
+grep -F $'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=1\tapplied=98\tfailed=0\tpending=0\ttarget=98' \
+  "$TMP_DIR/output.tsv" >/dev/null || fail_test "validated retry state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
+pass_test 'validated 98-migration retry state passes'
+
+assert_failure_code '97 state is rejected in retry phase' \
+  "$TMP_DIR/pre-target.tsv" retry 'database_missing_row'
+
+sed 's/^20260816000004_legacy_income_application_provenance/20260830999999_partial_target/' \
+  "$TMP_DIR/pre-target.tsv" > "$TMP_DIR/pre-partial-target.tsv"
+assert_failure_code '97 state with an incorrect target representation is rejected' \
+  "$TMP_DIR/pre-partial-target.tsv" pre 'database_missing_row'
+
+cp "$TMP_DIR/post.tsv" "$TMP_DIR/pre-extra-99.tsv"
+printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/pre-extra-99.tsv"
+assert_failure_code '99 applied migrations are rejected in pre state' \
+  "$TMP_DIR/pre-extra-99.tsv" pre 'database_pre_state_count_invalid'
 
 cp "$TMP_DIR/post.tsv" "$TMP_DIR/missing.tsv"
 missing_name="$(tail -n 1 "$TMP_DIR/missing.tsv" | cut -f 1)"
 sed "/^${missing_name}${TAB}/d" "$TMP_DIR/missing.tsv" > "$TMP_DIR/missing-with-extra.tsv"
 printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/missing-with-extra.tsv"
-assert_failure_code 'missing target row in 97 state is rejected' "$TMP_DIR/missing-with-extra.tsv" post 'database_missing_row'
+assert_failure_code '98 state without target migration is rejected' "$TMP_DIR/missing-with-extra.tsv" post 'database_missing_row'
+
+cp "$TMP_DIR/post.tsv" "$TMP_DIR/post-failed-target.tsv"
+awk -F "$TAB" -v OFS="$TAB" \
+  '$1 == "20260831000000_add_payment_receipt_issuance_snapshot" { $3 = "failed" } { print }' \
+  "$TMP_DIR/post-failed-target.tsv" > "$TMP_DIR/post-failed-target-fixed.tsv"
+mv "$TMP_DIR/post-failed-target-fixed.tsv" "$TMP_DIR/post-failed-target.tsv"
+assert_failure_code '98 state with a failed migration is rejected' "$TMP_DIR/post-failed-target.tsv" post 'database_failed_row'
+
+cp "$TMP_DIR/post.tsv" "$TMP_DIR/post-extra-99.tsv"
+printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >> "$TMP_DIR/post-extra-99.tsv"
+assert_failure_code 'unexpected migration after target is rejected' "$TMP_DIR/post-extra-99.tsv" post 'database_extra_row'
 
 cp "$TMP_DIR/pre.tsv" "$TMP_DIR/extra.tsv"
 printf '20990101000000_unexpected\t%s\tfinished\tactive\t1\n' \
@@ -204,6 +229,11 @@ assert_failure_code 'pending checksum mismatch is rejected' "$TMP_DIR/checksum.t
 
 sed '1s/finished/failed/' "$TMP_DIR/pre.tsv" > "$TMP_DIR/failed.tsv"
 assert_failure_code 'failed row is rejected' "$TMP_DIR/failed.tsv" pre 'database_failed_row'
+
+awk -F "$TAB" -v OFS="$TAB" 'NR == 1 { $3 = "failed" } { print }' \
+  "$TMP_DIR/pre-target.tsv" > "$TMP_DIR/failed-pre-target.tsv"
+assert_failure_code '97 state with a failed migration is rejected' \
+  "$TMP_DIR/failed-pre-target.tsv" pre 'database_failed_row'
 
 cp "$TMP_DIR/pre.tsv" "$TMP_DIR/rolled-back.tsv"
 sed '1s/active/rolled_back/' "$TMP_DIR/rolled-back.tsv" > "$TMP_DIR/rolled-back-state.tsv"
@@ -241,5 +271,51 @@ if MANIFEST_FILE="$MANIFEST" MIGRATIONS_DIR="$TMP_DIR/migrations-checksum-mismat
 fi
 grep -F 'code=local_pending_checksum_mismatch' "$TMP_DIR/output.tsv" >/dev/null || fail_test 'local checksum mismatch returned the wrong failure'
 pass_test 'local pending checksum mismatch is rejected'
+
+run_files_fixture() {
+  local manifest_file="$1"
+  local migrations_dir="$2"
+  local output="$3"
+
+  MANIFEST_FILE="$manifest_file" MIGRATIONS_DIR="$migrations_dir" \
+    bash "$VERIFIER" verify-files > "$output" 2>&1
+}
+
+assert_files_failure() {
+  local name="$1"
+  local manifest_file="$2"
+  local migrations_dir="$3"
+  local code="$4"
+  local output="$TMP_DIR/files-output.tsv"
+
+  if run_files_fixture "$manifest_file" "$migrations_dir" "$output"; then
+    fail_test "$name unexpectedly passed"
+  fi
+  grep -F "code=$code" "$output" >/dev/null || fail_test "$name returned the wrong failure: $(tr '\n' ' ' < "$output")"
+  pass_test "$name"
+}
+
+cp "$MANIFEST" "$TMP_DIR/checksum-manifest.tsv"
+sed 's/36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' \
+  "$TMP_DIR/checksum-manifest.tsv" > "$TMP_DIR/checksum-manifest-invalid.tsv"
+assert_files_failure 'manifest checksum mismatch is rejected' \
+  "$TMP_DIR/checksum-manifest-invalid.tsv" "$MIGRATIONS" 'manifest_migration_mismatch'
+
+awk -F "$TAB" -v OFS="$TAB" '$1 == "target" { $2 = "malformed" } { print }' \
+  "$MANIFEST" > "$TMP_DIR/malformed-count.tsv"
+assert_files_failure 'malformed migration count is rejected' \
+  "$TMP_DIR/malformed-count.tsv" "$MIGRATIONS" 'manifest_target_mismatch'
+
+cp -R "$MIGRATIONS" "$TMP_DIR/migrations-missing-target"
+rm -rf "$TMP_DIR/migrations-missing-target/20260831000000_add_payment_receipt_issuance_snapshot"
+assert_files_failure 'missing migration directory is rejected' \
+  "$MANIFEST" "$TMP_DIR/migrations-missing-target" 'local_migration_count_mismatch'
+
+cp -R "$MIGRATIONS" "$TMP_DIR/migrations-extra-target"
+mkdir "$TMP_DIR/migrations-extra-target/20990101000000_unexpected"
+cp "$MIGRATIONS/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql" \
+  "$TMP_DIR/migrations-extra-target/20990101000000_unexpected/migration.sql"
+assert_files_failure 'extra migration directory is rejected' \
+  "$MANIFEST" "$TMP_DIR/migrations-extra-target" 'local_migration_count_mismatch'
 
 printf '1..%s\n' "$PASS_COUNT"
