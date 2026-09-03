@@ -170,6 +170,10 @@ FAKE_API_RUNNING=true
 write_env https://target.example.invalid
 run_case 'EXTERNAL to EXTERNAL without MinIO' PASS
 
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO
+run_case 'EXTERNAL to EXTERNAL retry uses live provider' PASS
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
+
 write_env http://buildingos-minio:9000
 run_case 'EXTERNAL to MINIO missing rollback confirmation' FAIL
 

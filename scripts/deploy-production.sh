@@ -132,15 +132,20 @@ read_deployment_record_value() {
 }
 
 load_retry_predecessor_record() {
-  local record status migration_count rollback_receipt storage_transition
+  local record status phase migration_count storage_transition
   local previous_sha previous_api_digest previous_web_digest
 
   while IFS= read -r record; do
     [[ -f "$record" && ! -L "$record" ]] || continue
     status="$(read_deployment_record_value "$record" status || true)"
+    if [[ "$status" == 'SUCCESS' ]]; then
+      break
+    fi
+    [[ "$status" == 'FAILED' ]] || continue
+    phase="$(read_deployment_record_value "$record" phase || true)"
     migration_count="$(read_deployment_record_value "$record" migration_count || true)"
-    rollback_receipt="$(read_deployment_record_value "$record" rollback_receipt || true)"
-    [[ "$status" == 'FAILED' && "$migration_count" == '98' && "$rollback_receipt" != 'unknown' ]] || continue
+    [[ "$phase" == 'migrations' || "$phase" == 'rollback-compatibility' || "$phase" == 'application-recreate' || "$phase" == 'observability' ]] || continue
+    [[ "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
     previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
     previous_api_digest="$(read_deployment_record_value "$record" previous_api_digest || true)"
     previous_web_digest="$(read_deployment_record_value "$record" previous_web_digest || true)"

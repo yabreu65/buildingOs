@@ -205,14 +205,13 @@ main() {
   require_target_compose_without_legacy_minio "$env_file" "$compose_file" "$project_name" || return 1
 
   target_endpoint="$(read_env_value "$env_file" S3_ENDPOINT)"
-  if [[ "$allow_unhealthy_retry" == 'true' && "$current_provider_override" =~ ^(MINIO|EXTERNAL_S3)$ ]]; then
+  if current_endpoint="$(current_api_endpoint buildingos-api)"; then
+    current_provider="$(provider_from_endpoint "$current_endpoint")"
+  elif [[ "$allow_unhealthy_retry" == 'true' && "$current_provider_override" =~ ^(MINIO|EXTERNAL_S3)$ ]]; then
     current_provider="$current_provider_override"
   else
-    current_endpoint="$(current_api_endpoint buildingos-api)" || {
-      fail 'current API storage endpoint cannot be inspected'
-      return 1
-    }
-    current_provider="$(provider_from_endpoint "$current_endpoint")"
+    fail 'current API storage endpoint cannot be inspected'
+    return 1
   fi
   target_provider="$(provider_from_endpoint "$target_endpoint")"
 
