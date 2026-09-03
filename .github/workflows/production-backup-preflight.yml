@@ -71,4 +71,4 @@ jobs:
           )
           printf -v quoted_candidate '%q' "$CANDIDATE_SHA"
           ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
-            "bash -s -- $quoted_candidate" < scripts/production-backup-preflight.sh
+            "sudo -n -u root bash -s -- $quoted_candidate" < scripts/production-backup-preflight.sh

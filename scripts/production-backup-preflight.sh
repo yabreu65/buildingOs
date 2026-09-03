@@ -51,8 +51,23 @@ directory_is_regular_non_symlink() {
 }
 
 endpoint_identity() {
-  local value="${1#*://}"
-  printf '%s\n' "${value%%/*}"
+  local value="$1" scheme authority default_port host port
+  if [[ "$value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/]+) ]]; then
+    scheme="${BASH_REMATCH[1],,}"
+    authority="${BASH_REMATCH[2]}"
+  else
+    scheme='https'
+    authority="${value%%/*}"
+  fi
+  case "$scheme" in
+    https) default_port=443 ;;
+    http) default_port=80 ;;
+    *) return 1 ;;
+  esac
+  [[ "$authority" =~ ^([A-Za-z0-9.-]+)(:([0-9]+))?$ ]] || return 1
+  host="${BASH_REMATCH[1],,}"
+  port="${BASH_REMATCH[3]:-$default_port}"
+  printf '%s:%s\n' "$host" "$port"
 }
 
 endpoint_hostname() {
@@ -144,11 +159,11 @@ inspect_unit() {
   elif [[ "$exec_start" == *"path=$expected_exec"* && "$exec_start" == *'argv[]='* && "$exec_start" != *'bash -c'* && "$exec_start" != *'sh -c'* && "$exec_start" != *'sudo '* && "$exec_start" != *' env '* ]]; then
     exec_argv="${exec_start#*argv[]=}"
     exec_argv="${exec_argv%%;*}"
+    exec_argv="${exec_argv#"${exec_argv%%[![:space:]]*}"}"
+    exec_argv="${exec_argv%"${exec_argv##*[![:space:]]}"}"
     [[ "$exec_argv" == "$expected_argv" ]] && exec_match='YES'
   fi
-  if [[ "$exec_match" == YES ]]; then
-    exec_match='YES'
-  else
+  if [[ "$exec_match" != YES ]]; then
     fail_check "$unit ExecStart is not the trusted read-only contract"
   fi
   if [[ "$env_files" == "$expected_env" || "$env_files" == "-$expected_env" || "$env_files" == "$expected_env (ignore_errors=no)" || "$env_files" == "-$expected_env (ignore_errors=no)" ]]; then
@@ -242,7 +257,7 @@ inspect_environment() {
   local env_ok=false owner group mode
   local source_environment expected_source_environment source_endpoint source_bucket backup_endpoint backup_bucket state_dir sse_file postgres_container postgres_database postgres_user postgres_backup_root postgres_sse_mode
   local source_host backup_host source_identity backup_identity separate='NO'
-  local write_destination verify_destination
+  local write_destination verify_destination write_remote verify_remote write_path verify_path
   local required_names=(
     BACKUP_ENDPOINT BACKUP_BUCKET BACKUP_VERIFY_ACCESS_KEY BACKUP_VERIFY_SECRET_KEY
     BACKUP_SSE_CAPABILITY_FILE BACKUP_STATE_DIR BACKUP_WRITE_ACCESS_KEY BACKUP_WRITE_SECRET_KEY
@@ -286,6 +301,10 @@ inspect_environment() {
   postgres_sse_mode="$(env_value "$ENV_FILE" POSTGRES_SSE_MODE 2>/dev/null || true)"
   write_destination="$(env_value "$ENV_FILE" POSTGRES_RCLONE_DESTINATION 2>/dev/null || true)"
   verify_destination="$(env_value "$ENV_FILE" POSTGRES_VERIFY_RCLONE_DESTINATION 2>/dev/null || true)"
+  write_remote="${write_destination%%:*}"
+  verify_remote="${verify_destination%%:*}"
+  write_path="${write_destination#*:}"
+  verify_path="${verify_destination#*:}"
 
   source_host="$(endpoint_hostname "$source_endpoint" 2>/dev/null || true)"
   backup_host="$(endpoint_hostname "$backup_endpoint" 2>/dev/null || true)"
@@ -310,6 +329,9 @@ inspect_environment() {
   [[ "$postgres_sse_mode" == SSE-S3 ]] || fail_check 'PostgreSQL SSE mode is not SSE-S3'
   [[ "$write_destination" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+$ ]] || fail_check 'write rclone destination is invalid'
   [[ "$verify_destination" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+$ ]] || fail_check 'verify rclone destination is invalid'
+  [[ "$write_path" == "$backup_bucket/postgresql" ]] || fail_check 'write rclone destination is not the dedicated PostgreSQL prefix'
+  [[ "$verify_path" == "$backup_bucket/postgresql" ]] || fail_check 'verify rclone destination is not the dedicated PostgreSQL prefix'
+  [[ -n "$write_remote" && "$write_remote" != "$verify_remote" ]] || fail_check 'rclone write and verify identities must be separate'
 
   printf 'SOURCE_ENVIRONMENT=%s\n' "$(safe_output "$source_environment")"
   printf 'EXPECTED_SOURCE_ENVIRONMENT=%s\n' "$(safe_output "$expected_source_environment")"
@@ -330,7 +352,7 @@ inspect_environment() {
 
 inspect_sse_evidence() {
   local owner group mode status algorithm endpoint bucket expected_endpoint expected_bucket
-  local valid='NO' endpoint_match='NO' bucket_match='NO' path_match='NO'
+  local valid='NO' endpoint_match='NO' bucket_match='NO' path_match='NO' probed_at='UNKNOWN' probed_at_valid='NO'
 
   status='UNKNOWN'
   algorithm='UNKNOWN'
@@ -351,14 +373,17 @@ inspect_sse_evidence() {
     algorithm="$(jq -er '.algorithm // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     endpoint="$(jq -er '.endpoint_identity // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     bucket="$(jq -er '.bucket // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
+    probed_at="$(jq -er '.probed_at // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     expected_endpoint="$(endpoint_identity "$expected_endpoint")"
+    endpoint="$(endpoint_identity "$endpoint" 2>/dev/null || printf 'UNKNOWN')"
     [[ "$owner" == "$EXPECTED_SSE_OWNER" ]] || fail_check 'SSE evidence owner is unexpected'
     mode_value=$((8#${mode#0}))
     (( (mode_value & 0022) == 0 )) || fail_check 'SSE evidence is group/world writable'
     [[ "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 ]] || fail_check 'SSE evidence status or algorithm is invalid'
+    if [[ "$probed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then probed_at_valid='YES'; else fail_check 'SSE evidence probed_at is invalid'; fi
     if [[ "$endpoint" == "$expected_endpoint" ]]; then endpoint_match='YES'; else fail_check 'SSE evidence endpoint does not match backup endpoint'; fi
     if [[ "$bucket" == "$expected_bucket" ]]; then bucket_match='YES'; else fail_check 'SSE evidence bucket does not match backup bucket'; fi
-    if [[ "$owner" == "$EXPECTED_SSE_OWNER" && "$group" == "$EXPECTED_SSE_GROUP" && "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 && "$endpoint_match" == YES && "$bucket_match" == YES && "$path_match" == YES ]]; then
+    if [[ "$owner" == "$EXPECTED_SSE_OWNER" && "$group" == "$EXPECTED_SSE_GROUP" && "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 && "$endpoint_match" == YES && "$bucket_match" == YES && "$path_match" == YES && "$probed_at_valid" == YES ]]; then
       valid='YES'
     fi
   else
@@ -368,6 +393,7 @@ inspect_sse_evidence() {
   printf 'SSE_STATUS=%s\n' "$(safe_output "$status")"
   printf 'SSE_ALGORITHM=%s\n' "$(safe_output "$algorithm")"
   printf 'SSE_PATH_MATCH=%s\n' "$path_match"
+  printf 'SSE_PROBED_AT_VALID=%s\n' "$probed_at_valid"
   printf 'SSE_ENDPOINT_MATCH=%s\n' "$endpoint_match"
   printf 'SSE_BUCKET_MATCH=%s\n' "$bucket_match"
 }
@@ -531,7 +557,7 @@ main() {
     printf 'PRODUCTION_RUNTIME_SHA=UNKNOWN\nAPI_REVISION=UNKNOWN\nWEB_REVISION=UNKNOWN\nPRODUCTION_CHECKOUT_STATUS=UNKNOWN\nRUNTIME_IDENTITY=UNKNOWN\n'
     printf 'BACKUP_SERVICE_EXISTS=UNKNOWN\nBACKUP_SERVICE_USER=UNKNOWN\nBACKUP_SERVICE_EXECSTART_MATCH=UNKNOWN\nBACKUP_SERVICE_ENV_FILE_MATCH=UNKNOWN\nBACKUP_SERVICE_ACTIVE=UNKNOWN\n'
     printf 'VERIFY_SERVICE_EXISTS=UNKNOWN\nVERIFY_SERVICE_USER=UNKNOWN\nVERIFY_SERVICE_ACTIVE=UNKNOWN\n'
-    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n  '
+    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_PATH_MATCH=UNKNOWN\nSSE_PROBED_AT_VALID=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n'
   fi
   printf 'PROPOSED_BACKUP_COMMAND=%s\n' "$EXPECTED_PROPOSED_COMMAND"
   printf 'PRODUCTION_WRITES=0\nBACKUP_STARTED=NO\n'

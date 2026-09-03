@@ -134,7 +134,11 @@ if [[ "$command_name" == show ]]; then
       if [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BAD_EXECSTART:-NO}" == YES ]]; then
         printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/not-the-backup.sh\n'
       elif [[ "$unit" == pawtech-buildingos-backup-verify.service ]]; then
-        printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest\n'
+        if [[ "${MOCK_SERIALIZED_EXECSTART:-NO}" == YES ]]; then
+          printf 'path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest ;\n'
+        else
+          printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest\n'
+        fi
       else
         printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh\n'
       fi
@@ -156,8 +160,12 @@ write_env() {
   local backup_bucket="$1"
   local source_environment="$2"
   local omit_secret="${3:-NO}"
+  local backup_endpoint="${4:-https://backup.example.invalid}"
+  local postgres_destination_bucket="${5:-$backup_bucket}"
+  local write_remote="${6:-contabowrite}"
+  local verify_remote="${7:-contaboverify}"
   {
-    printf 'BACKUP_ENDPOINT=https://backup.example.invalid\n'
+    printf 'BACKUP_ENDPOINT=%s\n' "$backup_endpoint"
     printf 'BACKUP_BUCKET=%s\n' "$backup_bucket"
     [[ "$omit_secret" == VERIFY ]] || printf 'BACKUP_VERIFY_ACCESS_KEY=VERIFY_ACCESS_SENTINEL\nBACKUP_VERIFY_SECRET_KEY=VERIFY_SECRET_SENTINEL\n'
     [[ "$omit_secret" == VERIFY ]] && printf 'BACKUP_VERIFY_ACCESS_KEY=VERIFY_ACCESS_SENTINEL\n'
@@ -167,8 +175,8 @@ write_env() {
     printf 'SOURCE_ENVIRONMENT=%s\nEXPECTED_SOURCE_ENVIRONMENT=%s\n' "$source_environment" "$source_environment"
     printf 'SOURCE_ENDPOINT=https://usc1.contabostorage.com\nSOURCE_ACCESS_KEY=SOURCE_ACCESS_SENTINEL\nSOURCE_SECRET_KEY=SOURCE_SECRET_SENTINEL\nSOURCE_BUCKET=buildingos-production\n'
     printf 'POSTGRES_CONTAINER=pawtech-postgres\nPOSTGRES_DATABASE=buildingos_db\nPOSTGRES_USER=buildingos\nPOSTGRES_BACKUP_ROOT=%s\n' "$TEST_ROOT/pg-root"
-    printf 'POSTGRES_RCLONE_DESTINATION=contabowrite:%s/postgresql\n' "$backup_bucket"
-    printf 'POSTGRES_VERIFY_RCLONE_DESTINATION=contaboverify:%s/postgresql\n' "$backup_bucket"
+    printf 'POSTGRES_RCLONE_DESTINATION=%s:%s/postgresql\n' "$write_remote" "$postgres_destination_bucket"
+    printf 'POSTGRES_VERIFY_RCLONE_DESTINATION=%s:%s/postgresql\n' "$verify_remote" "$postgres_destination_bucket"
     printf 'POSTGRES_SSE_MODE=SSE-S3\n'
   } > "$ENV_FILE"
   chmod 0600 "$ENV_FILE"
@@ -176,9 +184,9 @@ write_env() {
 }
 
 write_sse() {
-  local status="${1:-SSE_S3_SUPPORTED}" algorithm="${2:-AES256}" endpoint="${3:-backup.example.invalid}" bucket="${4:-buildingos-backup}"
-  jq -n --arg status "$status" --arg algorithm "$algorithm" --arg endpoint "$endpoint" --arg bucket "$bucket" \
-    '{status:$status,algorithm:$algorithm,endpoint_identity:$endpoint,bucket:$bucket,probed_at:"2026-09-03T00:00:00Z"}' > "$SSE_FILE"
+  local status="${1:-SSE_S3_SUPPORTED}" algorithm="${2:-AES256}" endpoint="${3:-backup.example.invalid}" bucket="${4:-buildingos-backup}" probed_at="${5:-2026-09-03T00:00:00Z}"
+  jq -n --arg status "$status" --arg algorithm "$algorithm" --arg endpoint "$endpoint" --arg bucket "$bucket" --arg probed_at "$probed_at" \
+    '{status:$status,algorithm:$algorithm,endpoint_identity:$endpoint,bucket:$bucket,probed_at:$probed_at}' > "$SSE_FILE"
   chmod 0640 "$SSE_FILE"
 }
 
@@ -219,6 +227,10 @@ MOCK_BAD_EXECSTART=YES run_preflight
 assert_failure 'unexpected ExecStart fails closed'
 unset MOCK_BAD_EXECSTART
 
+MOCK_SERIALIZED_EXECSTART=YES run_preflight
+assert_success 'serialized ExecStart with whitespace passes'
+unset MOCK_SERIALIZED_EXECSTART
+
 MOCK_BAD_ENV_FILE=YES run_preflight
 assert_failure 'unexpected EnvironmentFile fails closed'
 unset MOCK_BAD_ENV_FILE
@@ -234,6 +246,22 @@ unset MOCK_VERIFY_ACTIVE
 write_env buildingos-backup production VERIFY
 run_preflight
 assert_failure 'missing secret name fails closed'
+write_env buildingos-backup production
+
+write_env buildingos-production production NO https://usc1.contabostorage.com:443
+write_sse SSE_S3_SUPPORTED AES256 usc1.contabostorage.com buildingos-production
+run_preflight
+assert_failure 'equivalent source and backup endpoints fail closed'
+write_env buildingos-backup production
+
+write_env buildingos-backup production NO https://backup.example.invalid buildingos-wrong-destination
+run_preflight
+assert_failure 'rclone destination prefix mismatch fails closed'
+write_env buildingos-backup production
+
+write_env buildingos-backup production NO https://backup.example.invalid buildingos-backup contabowrite contabowrite
+run_preflight
+assert_failure 'same rclone identities fail closed'
 write_env buildingos-backup production
 
 chmod 0644 "$ENV_FILE"
@@ -278,6 +306,11 @@ run_preflight
 assert_failure 'SSE bucket mismatch fails closed'
 write_sse
 
+write_sse SSE_S3_SUPPORTED AES256 backup.example.invalid buildingos-backup invalid-timestamp
+run_preflight
+assert_failure 'malformed SSE timestamp fails closed'
+write_sse
+
 PREFLIGHT_STATE_DIR_OVERRIDE="$TEST_ROOT/missing-state" run_preflight
 assert_failure 'bad state directory fails closed'
 unset PREFLIGHT_STATE_DIR_OVERRIDE
@@ -314,6 +347,7 @@ assert_contains 'workflow uses operations concurrency group' 'group: production-
 assert_contains 'workflow uses strict host key checking' 'StrictHostKeyChecking=yes' "$workflow_text"
 assert_contains 'workflow uses batch mode' 'BatchMode=yes' "$workflow_text"
 assert_contains 'workflow streams script over stdin' 'bash -s --' "$workflow_text"
+assert_contains 'workflow runs streamed preflight as root without a password' 'sudo -n -u root bash -s --' "$workflow_text"
 assert_contains 'workflow uses protected SSH host secret' 'PRODUCTION_SSH_HOST' "$workflow_text"
 assert_contains 'workflow is manually dispatched' 'workflow_dispatch:' "$workflow_text"
 assert_absent 'workflow has no push trigger' 'push:' "$workflow_text"
