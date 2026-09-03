@@ -141,20 +141,29 @@ load_retry_predecessor_record() {
     status="$(read_deployment_record_value "$record" status || true)"
     if [[ "$status" == 'SUCCESS' ]]; then
       migration_count="$(read_deployment_record_value "$record" migration_count || true)"
-      previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
-      previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
-      previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
-      storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+      if [[ "${record##*/}" == rollback-*.txt ]]; then
+        previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+        previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
+        previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
+        storage_transition='unknown'
+      else
+        previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
+        previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
+        previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
+        storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+      fi
       [[ "$migration_count" == '98' ]] || break
       [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || break
       [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || break
       [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || break
-      [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || break
+      if [[ "$storage_transition" != 'unknown' ]]; then
+        [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || break
+        RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
+      fi
       RETRY_RECORD_ACTIVE=true
       RETRY_PREVIOUS_SHA="$previous_sha"
       RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
       RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
-      RETRY_CURRENT_PROVIDER="${storage_transition##*:}"
       return 0
     fi
     [[ "$status" == 'FAILED' ]] || continue
@@ -177,7 +186,7 @@ load_retry_predecessor_record() {
     RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
     RETRY_RECOVERY_ACTIVE=true
     return 0
-  done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt 2>/dev/null || true)
+  done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt "$DEPLOYMENTS_DIR"/rollback-*.txt 2>/dev/null || true)
 
   fail 'Validated migration retry requires a failed deployment record with predecessor image state'
 }
