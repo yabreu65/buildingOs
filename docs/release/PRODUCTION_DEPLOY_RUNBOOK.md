@@ -143,7 +143,7 @@ The filename must be `<receipt_id>.receipt`. Store receipts as direct children o
 
 Rollback does not check out old source or rebuild old images. It tags the captured digests locally, recreates only API/Web, verifies the unchanged migration count, then runs health smoke.
 
-Immediately before rollback, the script reuses the same read-only compatibility guard used by deploy and requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If users have created any such data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
+Immediately before rollback, the script reuses the same read-only compatibility guard used by deploy. For the exact 97->98 receipt-snapshot delta, compatibility requires zero rows in the six new `Payment` receipt snapshot and generation-state fields; existing pre-98 Finance data does not block this narrow path. For any other schema or migration delta, the fallback predicate requires zero rows using target-only Finance structures: cross-currency snapshots/rates, shared recurring expenses, funds, income applications/policies, valued liquidations and income offsets. If the applicable predicate finds data, the previous application is no longer considered compatible and rollback stops without changing runtime or database.
 
 ## Post-deploy smoke
 
