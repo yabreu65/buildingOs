@@ -31,6 +31,12 @@ fi
 if [[ "$container" == 'buildingos-minio' && "${FAKE_MINIO_EXISTS:-true}" != 'true' ]]; then
   exit 1
 fi
+if [[ "$container" == 'buildingos-api' && "${FAKE_API_EXISTS:-true}" != 'true' ]]; then
+  exit 1
+fi
+if [[ "$container" == 'buildingos-web' && "${FAKE_WEB_EXISTS:-true}" != 'true' ]]; then
+  exit 1
+fi
 
 if [[ -z "$format" ]]; then
   exit 0
@@ -128,6 +134,13 @@ unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY
 FAKE_API_HEALTH=healthy FAKE_WEB_HEALTH=unhealthy
 run_case 'MINIO to MINIO web unhealthy' FAIL
 FAKE_WEB_HEALTH=healthy
+
+export FAKE_API_EXISTS=false FAKE_WEB_EXISTS=false
+export STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true
+run_case 'MINIO to MINIO missing app retry' PASS
+unset STORAGE_CUTOVER_CURRENT_PROVIDER STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY
+run_case 'MINIO to MINIO missing app without provider override' FAIL
+export FAKE_API_EXISTS=true FAKE_WEB_EXISTS=true
 
 FAKE_PUBLIC_ATTACHED=false
 run_case 'MINIO to MINIO requires public MinIO' FAIL

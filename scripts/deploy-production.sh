@@ -63,6 +63,12 @@ BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
 MIGRATION_RETRY=false
 ROLLBACK_RECEIPT='unknown'
+STORAGE_TRANSITION='unknown'
+RETRY_RECORD_ACTIVE=false
+RETRY_PREVIOUS_SHA='unknown'
+RETRY_PREVIOUS_API_DIGEST='unknown'
+RETRY_PREVIOUS_WEB_DIGEST='unknown'
+RETRY_CURRENT_PROVIDER='unknown'
 TARGET_TREE_ROOT=''
 TARGET_TREE=''
 TARGET_TREE_ACTIVE=false
@@ -107,6 +113,53 @@ validate_database_migration_state() {
   rm -f "$migration_preflight_output"
 }
 
+read_deployment_record_value() {
+  local record="$1"
+  local expected_name="$2"
+  local line name value count=0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *=* ]] || continue
+    name="${line%%=*}"
+    value="${line#*=}"
+    [[ "$name" == "$expected_name" ]] || continue
+    count=$((count + 1))
+    [[ "$count" -eq 1 ]] || return 1
+    printf '%s' "$value"
+  done < "$record"
+
+  [[ "$count" -eq 1 ]]
+}
+
+load_retry_predecessor_record() {
+  local record status migration_count rollback_receipt storage_transition
+  local previous_sha previous_api_digest previous_web_digest
+
+  while IFS= read -r record; do
+    [[ -f "$record" && ! -L "$record" ]] || continue
+    status="$(read_deployment_record_value "$record" status || true)"
+    migration_count="$(read_deployment_record_value "$record" migration_count || true)"
+    rollback_receipt="$(read_deployment_record_value "$record" rollback_receipt || true)"
+    [[ "$status" == 'FAILED' && "$migration_count" == '98' && "$rollback_receipt" != 'unknown' ]] || continue
+    previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
+    previous_api_digest="$(read_deployment_record_value "$record" previous_api_digest || true)"
+    previous_web_digest="$(read_deployment_record_value "$record" previous_web_digest || true)"
+    storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
+    [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    [[ "$storage_transition" =~ ^(MINIO|EXTERNAL_S3):(MINIO|EXTERNAL_S3)$ ]] || continue
+    RETRY_RECORD_ACTIVE=true
+    RETRY_PREVIOUS_SHA="$previous_sha"
+    RETRY_PREVIOUS_API_DIGEST="$previous_api_digest"
+    RETRY_PREVIOUS_WEB_DIGEST="$previous_web_digest"
+    RETRY_CURRENT_PROVIDER="${storage_transition%%:*}"
+    return 0
+  done < <(ls -1dt "$DEPLOYMENTS_DIR"/deploy-*.txt 2>/dev/null || true)
+
+  fail 'Validated migration retry requires a failed deployment record with predecessor image state'
+}
+
 write_record() {
   local status="$1"
   install -d -m 700 "$DEPLOYMENTS_DIR"
@@ -125,6 +178,7 @@ write_record() {
     printf 'migration_count=%s\n' "$MIGRATION_COUNT"
     printf 'rollback_receipt=%s\n' "$ROLLBACK_RECEIPT"
     printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
+    printf 'storage_transition=%s\n' "$STORAGE_TRANSITION"
     printf 'database_rollback=never-automatic\n'
     printf 'services_recreated=buildingos-api buildingos-web\n'
     printf 'seeds=no\n'
@@ -213,7 +267,7 @@ git fetch --no-tags origin main
 git cat-file -e "$TARGET_SHA^{commit}"
 git merge-base --is-ancestor "$TARGET_SHA" origin/main || fail "Target SHA is not reachable from origin/main"
 
-for container in buildingos-api buildingos-web "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
+for container in "$POSTGRES_CONTAINER" pawtech-redis pawtech-traefik; do
   docker inspect "$container" >/dev/null 2>&1 || fail "Required production container is unavailable: $container"
 done
 
@@ -225,8 +279,14 @@ target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_F
 "${target_compose[@]}" config --quiet
 "${target_compose[@]}" --profile migrate config --quiet
 validate_database_migration_state "$TARGET_TREE/scripts/verify-production-migration-manifest.sh"
+if [[ "$MIGRATION_RETRY" == true ]] && {
+  ! docker inspect buildingos-api >/dev/null 2>&1 || ! docker inspect buildingos-web >/dev/null 2>&1
+}; then
+  load_retry_predecessor_record
+fi
 STORAGE_TRANSITION="$(
   STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY="$MIGRATION_RETRY" \
+  STORAGE_CUTOVER_CURRENT_PROVIDER="$RETRY_CURRENT_PROVIDER" \
     bash "$STORAGE_CUTOVER_GUARD" "$ENV_FILE" "$TARGET_COMPOSE_FILE" "$PROJECT_NAME"
 )"
 readonly STORAGE_TRANSITION
@@ -234,8 +294,13 @@ readonly STORAGE_TRANSITION
   || fail 'Storage transition guard returned an invalid classification'
 cleanup_target_tree
 
-PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
-PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
+if [[ "$RETRY_RECORD_ACTIVE" == true ]]; then
+  PREVIOUS_API_DIGEST="$RETRY_PREVIOUS_API_DIGEST"
+  PREVIOUS_WEB_DIGEST="$RETRY_PREVIOUS_WEB_DIGEST"
+else
+  PREVIOUS_API_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-api)"
+  PREVIOUS_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)"
+fi
 [[ "$PREVIOUS_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous API digest"
 [[ "$PREVIOUS_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Unable to capture previous Web digest"
 PREVIOUS_API_REVISION="$(docker image inspect "$PREVIOUS_API_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
@@ -244,6 +309,9 @@ PREVIOUS_WEB_REVISION="$(docker image inspect "$PREVIOUS_WEB_DIGEST" --format '{
 [[ "$PREVIOUS_WEB_REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "Previous Web image revision is invalid"
 [[ "$PREVIOUS_API_REVISION" == "$PREVIOUS_WEB_REVISION" ]] || fail "Previous API and Web image revisions disagree"
 PREVIOUS_SHA="$PREVIOUS_API_REVISION"
+if [[ "$RETRY_RECORD_ACTIVE" == true ]]; then
+  [[ "$PREVIOUS_SHA" == "$RETRY_PREVIOUS_SHA" ]] || fail "Retry predecessor image revision does not match the failed deployment record"
+fi
 
 PHASE='backup'
 # Backup names are generated by the official backup script and contain no whitespace.

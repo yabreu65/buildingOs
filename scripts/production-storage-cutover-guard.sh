@@ -124,7 +124,11 @@ require_minio_topology() {
 
 require_stopped_container() {
   local container="$1"
-  container_exists "$container" || { fail "$container container is unavailable"; return 1; }
+  local allow_missing="${2:-false}"
+  if ! container_exists "$container"; then
+    [[ "$allow_missing" == 'true' ]] || { fail "$container container is unavailable"; return 1; }
+    return 0
+  fi
   ! container_running "$container" || { fail "$container must be stopped for storage transition"; return 1; }
 }
 
@@ -188,23 +192,28 @@ current_api_endpoint() {
 
 main() {
   local env_file compose_file project_name
-  local target_endpoint current_endpoint current_provider target_provider confirmation allow_unhealthy_retry
+  local target_endpoint current_endpoint current_provider target_provider confirmation allow_unhealthy_retry current_provider_override
 
   [[ $# -eq 3 ]] || { usage; return 64; }
   env_file="$1"
   compose_file="$2"
   project_name="$3"
   allow_unhealthy_retry="${STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY:-false}"
+  current_provider_override="${STORAGE_CUTOVER_CURRENT_PROVIDER:-}"
 
   require_target_storage "$env_file" || return 1
   require_target_compose_without_legacy_minio "$env_file" "$compose_file" "$project_name" || return 1
 
-  current_endpoint="$(current_api_endpoint buildingos-api)" || {
-    fail 'current API storage endpoint cannot be inspected'
-    return 1
-  }
   target_endpoint="$(read_env_value "$env_file" S3_ENDPOINT)"
-  current_provider="$(provider_from_endpoint "$current_endpoint")"
+  if [[ "$allow_unhealthy_retry" == 'true' && "$current_provider_override" =~ ^(MINIO|EXTERNAL_S3)$ ]]; then
+    current_provider="$current_provider_override"
+  else
+    current_endpoint="$(current_api_endpoint buildingos-api)" || {
+      fail 'current API storage endpoint cannot be inspected'
+      return 1
+    }
+    current_provider="$(provider_from_endpoint "$current_endpoint")"
+  fi
   target_provider="$(provider_from_endpoint "$target_endpoint")"
 
   [[ "$current_provider" != 'UNKNOWN' ]] || { fail 'current storage provider is UNKNOWN'; return 1; }
@@ -212,10 +221,7 @@ main() {
 
   case "$current_provider:$target_provider" in
     MINIO:MINIO)
-      if [[ "$allow_unhealthy_retry" == 'true' ]]; then
-        container_exists buildingos-api || { fail 'API container is unavailable for migration retry'; return 1; }
-        container_exists buildingos-web || { fail 'Web container is unavailable for migration retry'; return 1; }
-      else
+      if [[ "$allow_unhealthy_retry" != 'true' ]]; then
         require_healthy_container buildingos-api || return 1
         require_healthy_container buildingos-web || return 1
       fi
@@ -224,15 +230,12 @@ main() {
     MINIO:EXTERNAL_S3)
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
       [[ "$confirmation" == 'STORAGE_02_CONTABO' ]] || { fail 'external-storage cutover confirmation is required'; return 1; }
-      require_stopped_container buildingos-api || return 1
-      require_stopped_container buildingos-web || return 1
+      require_stopped_container buildingos-api "$allow_unhealthy_retry" || return 1
+      require_stopped_container buildingos-web "$allow_unhealthy_retry" || return 1
       require_minio_topology no || return 1
       ;;
     EXTERNAL_S3:EXTERNAL_S3)
-      if [[ "$allow_unhealthy_retry" == 'true' ]]; then
-        container_exists buildingos-api || { fail 'API container is unavailable for migration retry'; return 1; }
-        container_exists buildingos-web || { fail 'Web container is unavailable for migration retry'; return 1; }
-      else
+      if [[ "$allow_unhealthy_retry" != 'true' ]]; then
         require_healthy_container buildingos-api || return 1
         require_healthy_container buildingos-web || return 1
       fi
@@ -240,7 +243,7 @@ main() {
     EXTERNAL_S3:MINIO)
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
       [[ "$confirmation" == 'STORAGE_02_MINIO_ROLLBACK' ]] || { fail 'MinIO rollback confirmation is required'; return 1; }
-      require_stopped_container buildingos-api || return 1
+      require_stopped_container buildingos-api "$allow_unhealthy_retry" || return 1
       require_minio_topology yes || return 1
       ;;
     *)
