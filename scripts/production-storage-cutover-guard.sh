@@ -125,11 +125,12 @@ require_minio_topology() {
 require_stopped_container() {
   local container="$1"
   local allow_missing="${2:-false}"
+  local allow_running="${3:-false}"
   if ! container_exists "$container"; then
     [[ "$allow_missing" == 'true' ]] || { fail "$container container is unavailable"; return 1; }
     return 0
   fi
-  [[ "$allow_missing" == 'true' ]] && return 0
+  [[ "$allow_running" == 'true' ]] && return 0
   ! container_running "$container" || { fail "$container must be stopped for storage transition"; return 1; }
 }
 
@@ -231,7 +232,7 @@ main() {
       confirmation="$(read_env_value "$env_file" STORAGE_CUTOVER_CONFIRMATION || true)"
       [[ "$confirmation" == 'STORAGE_02_CONTABO' ]] || { fail 'external-storage cutover confirmation is required'; return 1; }
       require_stopped_container buildingos-api "$allow_unhealthy_retry" || return 1
-      require_stopped_container buildingos-web "$allow_unhealthy_retry" || return 1
+      require_stopped_container buildingos-web "$allow_unhealthy_retry" true || return 1
       require_minio_topology no || return 1
       ;;
     EXTERNAL_S3:EXTERNAL_S3)

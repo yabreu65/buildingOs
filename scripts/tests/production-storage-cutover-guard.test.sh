@@ -181,6 +181,12 @@ run_case 'MINIO to EXTERNAL partial retry allows running peer' PASS
 unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
 export FAKE_API_EXISTS=true FAKE_WEB_EXISTS=true
 
+FAKE_CURRENT_ENDPOINT=http://buildingos-minio:9000 FAKE_API_RUNNING=true
+export STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY=true STORAGE_CUTOVER_CURRENT_PROVIDER=MINIO
+run_case 'MINIO to EXTERNAL retry keeps source API quiescent' FAIL
+unset STORAGE_CUTOVER_ALLOW_UNHEALTHY_RETRY STORAGE_CUTOVER_CURRENT_PROVIDER
+FAKE_CURRENT_ENDPOINT=https://current.example.invalid
+
 write_env http://buildingos-minio:9000
 run_case 'EXTERNAL to MINIO missing rollback confirmation' FAIL
 

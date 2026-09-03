@@ -11,6 +11,8 @@ readonly ROLLBACK_RECEIPT_VERSION='rollback-compatibility-receipt.v2'
 readonly PRODUCTION_ROLLBACK_PROTECTED_DIR='/opt/pawtech/apps/buildingos/compatibility'
 readonly PRODUCTION_ROLLBACK_EXPECTED_OWNER='yoryi'
 readonly PRODUCTION_ROLLBACK_EXPECTED_GROUP='yoryi'
+readonly RECEIPT_SNAPSHOT_MIGRATION_PATH='apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql'
+readonly RECEIPT_SNAPSHOT_MIGRATION_SHA256='36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0'
 
 ROLLBACK_COMPATIBILITY_BASIS=''
 ROLLBACK_COMPATIBILITY_PREVIOUS_SHA=''
@@ -18,6 +20,9 @@ ROLLBACK_COMPATIBILITY_TARGET_SHA=''
 
 security_fail() {
   printf 'ERROR: %s\n' "$1" >&2
+  if declare -F write_record >/dev/null 2>&1; then
+    write_record FAILED || true
+  fi
   exit 1
 }
 
@@ -446,6 +451,73 @@ database_contracts_match() {
   return 1
 }
 
+database_delta_is_receipt_snapshot_only() {
+  local previous_sha="$1"
+  local target_sha="$2"
+  local database_paths database_numstat migration_sha schema_added expected_schema_added
+
+  database_paths="$(git diff --no-ext-diff --no-textconv --name-status \
+    "$previous_sha" "$target_sha" -- apps/api/prisma/schema.prisma apps/api/prisma/migrations)" || return 1
+  [[ "$database_paths" == $'A\tapps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql\nM\tapps/api/prisma/schema.prisma' ]] || return 1
+
+  database_numstat="$(git diff --no-ext-diff --no-textconv --numstat \
+    "$previous_sha" "$target_sha" -- apps/api/prisma/schema.prisma apps/api/prisma/migrations)" || return 1
+  [[ "$database_numstat" == $'9\t0\tapps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql\n6\t0\tapps/api/prisma/schema.prisma' ]] || return 1
+
+  migration_sha="$(git show "$target_sha:$RECEIPT_SNAPSHOT_MIGRATION_PATH" | sha256sum)" || return 1
+  [[ "${migration_sha%% *}" == "$RECEIPT_SNAPSHOT_MIGRATION_SHA256" ]] || return 1
+
+  schema_added="$(git diff --no-ext-diff --no-textconv --unified=0 \
+    "$previous_sha" "$target_sha" -- apps/api/prisma/schema.prisma \
+    | awk '/^\+[^+]/ { print substr($0, 2) }')" || return 1
+  expected_schema_added="$(printf '%s\n' \
+    '  receiptSnapshot           Json?             // Immutable semantic/display snapshot for receipt issuance' \
+    '  receiptSnapshotVersion    String?           // Renderer/snapshot version' \
+    '  receiptSnapshotHash       String?           // SHA-256 of canonical receiptSnapshot JSON' \
+    '  receiptSnapshotCreatedAt  DateTime?         // When the issuance snapshot was created' \
+    '  receiptGenerationToken   String?           // Durable owner of the current storage attempt' \
+    '  receiptGenerationLeaseUntil DateTime?      // Expiration for the current storage attempt')"
+  [[ "$schema_added" == "$expected_schema_added" ]]
+}
+
+rollback_compatibility_predicate() {
+  local previous_sha="$1"
+  local target_sha="$2"
+
+  if database_delta_is_receipt_snapshot_only "$previous_sha" "$target_sha"; then
+    cat <<'SQL'
+  (SELECT count(*) FROM "Payment" WHERE "receiptSnapshot" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotVersion" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotHash" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotCreatedAt" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" IS NOT NULL)
+SQL
+  else
+    cat <<'SQL'
+  (SELECT count(*) FROM "RecurringExpense" WHERE "buildingId" IS NULL)
+  + (SELECT count(*) FROM "ExchangeRate")
+  + (SELECT count(*) FROM "Expense" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Income" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Adjustment" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "functionalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "PaymentAllocation" WHERE "paymentOriginalAmountMinor" IS NOT NULL)
+  + (SELECT count(*) FROM "Liquidation" WHERE "valuationMode" IS NOT NULL)
+  + (SELECT count(*) FROM "Fund")
+  + (SELECT count(*) FROM "FundTransaction")
+  + (SELECT count(*) FROM "IncomeApplication")
+  + (SELECT count(*) FROM "IncomePolicy")
+  + (SELECT count(*) FROM "LiquidationIncomeOffset")
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshot" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotVersion" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotHash" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotCreatedAt" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL)
+  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" IS NOT NULL)
+SQL
+  fi
+}
+
 validate_application_rollback_compatibility() {
   local postgres_container="${1:-pawtech-postgres}"
   local database_name="${2:-buildingos_db}"
@@ -471,32 +543,14 @@ validate_application_rollback_compatibility() {
   command -v docker >/dev/null 2>&1 || security_fail 'docker is required for compatibility validation'
   docker inspect "$postgres_container" >/dev/null 2>&1 || security_fail 'PostgreSQL container is unavailable for compatibility validation'
 
+  local compatibility_predicate
+  compatibility_predicate="$(rollback_compatibility_predicate "$previous_sha" "$target_sha")"
   result="$({
     docker exec -i "$postgres_container" sh -lc \
-      'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' sh "$database_name" <<'SQL'
+      'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' sh "$database_name" <<SQL
 BEGIN READ ONLY;
 SELECT CASE WHEN
-  (
-    SELECT count(*) FROM "RecurringExpense" WHERE "buildingId" IS NULL
-  )
-  + (SELECT count(*) FROM "ExchangeRate")
-  + (SELECT count(*) FROM "Expense" WHERE "functionalAmountMinor" IS NOT NULL)
-  + (SELECT count(*) FROM "Income" WHERE "functionalAmountMinor" IS NOT NULL)
-  + (SELECT count(*) FROM "Adjustment" WHERE "functionalAmountMinor" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "functionalAmountMinor" IS NOT NULL)
-  + (SELECT count(*) FROM "PaymentAllocation" WHERE "paymentOriginalAmountMinor" IS NOT NULL)
-  + (SELECT count(*) FROM "Liquidation" WHERE "valuationMode" IS NOT NULL)
-  + (SELECT count(*) FROM "Fund")
-  + (SELECT count(*) FROM "FundTransaction")
-  + (SELECT count(*) FROM "IncomeApplication")
-  + (SELECT count(*) FROM "IncomePolicy")
-  + (SELECT count(*) FROM "LiquidationIncomeOffset")
-  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshot" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotVersion" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotHash" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "receiptSnapshotCreatedAt" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationToken" IS NOT NULL)
-  + (SELECT count(*) FROM "Payment" WHERE "receiptGenerationLeaseUntil" IS NOT NULL) = 0
+  $compatibility_predicate = 0
 THEN 'SAFE' ELSE 'UNSAFE' END;
 COMMIT;
 SQL

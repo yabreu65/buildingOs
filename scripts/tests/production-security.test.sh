@@ -50,6 +50,7 @@ trap 'rm -rf -- "$tmp_root"' EXIT
 protected_dir="$tmp_root/protected"
 mock_bin="$tmp_root/mock-bin"
 docker_marker="$tmp_root/docker-called"
+query_marker="$tmp_root/compatibility-query"
 mkdir -p "$protected_dir" "$mock_bin"
 chmod 700 "$protected_dir"
 
@@ -63,7 +64,12 @@ if [[ "\$1" == 'inspect' ]]; then
   exit 0
 fi
 if [[ "\$1" == 'exec' ]]; then
-  cat >/dev/null
+  query="\$(cat)"
+  if [[ "\$query" == *'ExchangeRate'* ]]; then
+    printf 'broad\n' > '$query_marker'
+  else
+    printf 'snapshot-only\n' > '$query_marker'
+  fi
   printf '%s\n' "\${MOCK_COMPATIBILITY:-SAFE}"
   exit 0
 fi
@@ -103,6 +109,21 @@ printf 'migration-v2\n' > "$fixture_repo/apps/api/prisma/migrations/001_contract
 git -C "$fixture_repo" add apps/api/prisma/migrations/001_contract.sql
 git -C "$fixture_repo" commit -qm 'fixture: migration contract change'
 fixture_migration_changed_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+git -C "$fixture_repo" switch --quiet --detach "$fixture_base_sha"
+mkdir -p "$fixture_repo/apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot"
+printf '%s\n' \
+  '  receiptSnapshot           Json?             // Immutable semantic/display snapshot for receipt issuance' \
+  '  receiptSnapshotVersion    String?           // Renderer/snapshot version' \
+  '  receiptSnapshotHash       String?           // SHA-256 of canonical receiptSnapshot JSON' \
+  '  receiptSnapshotCreatedAt  DateTime?         // When the issuance snapshot was created' \
+  '  receiptGenerationToken   String?           // Durable owner of the current storage attempt' \
+  '  receiptGenerationLeaseUntil DateTime?      // Expiration for the current storage attempt' >> "$fixture_repo/apps/api/prisma/schema.prisma"
+cp "$ROOT_DIR/apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql" \
+  "$fixture_repo/apps/api/prisma/migrations/20260831000000_add_payment_receipt_issuance_snapshot/migration.sql"
+git -C "$fixture_repo" add apps/api/prisma
+git -C "$fixture_repo" commit -qm 'fixture: receipt snapshot migration contract'
+fixture_snapshot_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
 
 run_contract_validation() {
   local previous_sha="$1"
@@ -324,6 +345,12 @@ expect_output_contains 'schema changes with zero new data use DATA_COMPATIBILITY
 expect_output_contains 'migration changes with zero new data use DATA_COMPATIBILITY' \
   'basis=DATA_COMPATIBILITY' \
   run_contract_validation "$fixture_base_sha" "$fixture_migration_changed_sha" SAFE
+
+: > "$query_marker"
+expect_failure 'receipt snapshot delta checks only new receipt state' \
+  run_contract_validation "$fixture_base_sha" "$fixture_snapshot_sha" UNSAFE
+[[ "$(<"$query_marker")" == 'snapshot-only' ]] || fail_test 'receipt snapshot delta used the broad compatibility predicate'
+pass 'receipt snapshot delta uses the narrow compatibility predicate'
 
 for receipt_field in receiptSnapshot receiptSnapshotVersion receiptSnapshotHash receiptSnapshotCreatedAt receiptGenerationToken receiptGenerationLeaseUntil; do
   grep -F "\"$receipt_field\" IS NOT NULL" "$VALIDATOR" >/dev/null \
