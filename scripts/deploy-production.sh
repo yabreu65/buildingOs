@@ -27,6 +27,9 @@ usage() {
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
+  if declare -F write_record >/dev/null 2>&1; then
+    write_record FAILED || true
+  fi
   exit 1
 }
 
