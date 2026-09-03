@@ -96,6 +96,7 @@ grep -F 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" build
 grep -F 'Current API remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Interrupted rollback state does not match the running predecessor or source images' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'RETRY_PREVIOUS_SHA="$from_sha"' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'from_api_digest' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
