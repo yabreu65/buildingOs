@@ -178,7 +178,7 @@ write_record() {
     printf 'migration_count=%s\n' "$MIGRATION_COUNT"
     printf 'rollback_receipt=%s\n' "$ROLLBACK_RECEIPT"
     printf 'rollback_compatibility_basis=%s\n' "$ROLLBACK_COMPATIBILITY_BASIS"
-    printf 'storage_transition=%s\n' "$STORAGE_TRANSITION"
+    printf 'storage_transition=%s\n' "${STORAGE_TRANSITION#STORAGE_TRANSITION=}"
     printf 'database_rollback=never-automatic\n'
     printf 'services_recreated=buildingos-api buildingos-web\n'
     printf 'seeds=no\n'
@@ -279,9 +279,7 @@ target_compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_F
 "${target_compose[@]}" config --quiet
 "${target_compose[@]}" --profile migrate config --quiet
 validate_database_migration_state "$TARGET_TREE/scripts/verify-production-migration-manifest.sh"
-if [[ "$MIGRATION_RETRY" == true ]] && {
-  ! docker inspect buildingos-api >/dev/null 2>&1 || ! docker inspect buildingos-web >/dev/null 2>&1
-}; then
+if [[ "$MIGRATION_RETRY" == true ]]; then
   load_retry_predecessor_record
 fi
 STORAGE_TRANSITION="$(
