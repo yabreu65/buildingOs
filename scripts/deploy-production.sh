@@ -157,6 +157,7 @@ load_retry_predecessor_record() {
       else
         continue
       fi
+      [[ -n "$storage_transition" ]] || storage_transition='unknown'
       [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || continue
       [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
       [[ "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue

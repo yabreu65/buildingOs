@@ -16,6 +16,25 @@ fail() {
   exit 1
 }
 
+ROLLBACK_API_WAS_RUNNING=false
+ROLLBACK_API_QUIESCED=false
+ROLLBACK_RECREATE_STARTED=false
+
+restore_quiesced_api_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$ROLLBACK_API_WAS_RUNNING" == true && "$ROLLBACK_API_QUIESCED" == true && "$ROLLBACK_RECREATE_STARTED" == false ]]; then
+    if docker start buildingos-api >/dev/null 2>&1; then
+      ROLLBACK_API_QUIESCED=false
+    else
+      printf 'ERROR: Unable to restore the current API after rollback validation stopped\n' >&2
+      rc=1
+    fi
+  fi
+  exit "$rc"
+}
+trap restore_quiesced_api_on_exit EXIT
+
 [[ $# -eq 8 ]] || usage
 readonly EXPECTED_CURRENT_SHA="$1"
 readonly PREVIOUS_SHA="$2"
@@ -54,6 +73,11 @@ compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file 
 "${compose[@]}" config --quiet
 
 PHASE='quiesce'
+ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildingos-api)" \
+  || fail 'Unable to inspect the current API before rollback'
+[[ "$ROLLBACK_API_WAS_RUNNING" == 'true' || "$ROLLBACK_API_WAS_RUNNING" == 'false' ]] \
+  || fail 'Current API running state is invalid'
+ROLLBACK_API_QUIESCED=true
 "${compose[@]}" stop --timeout 30 buildingos-api
 [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" != 'true' ]] \
   || fail 'Current API remained running during rollback compatibility validation'
@@ -71,6 +95,7 @@ docker tag "$PREVIOUS_WEB_DIGEST" "buildingos-web:$rollback_tag"
 export IMAGE_TAG="$rollback_tag"
 export BUILD_REVISION="$EXPECTED_CURRENT_SHA"
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
+ROLLBACK_RECREATE_STARTED=true
 
 for container in buildingos-api buildingos-web; do
   for attempt in {1..18}; do
