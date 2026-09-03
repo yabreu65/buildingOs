@@ -1,0 +1,74 @@
+name: Production backup preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Certified application SHA under preflight review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-operations
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Inspect production backup readiness without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT || '22' }}
+    steps:
+      - name: Checkout trusted preflight control
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate preflight target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          test -x scripts/production-backup-preflight.sh
+
+      - name: Stream read-only production backup preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +x
+          install -d -m 700 "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/production-backup-preflight-key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/production-backup-preflight-known-hosts.XXXXXX")"
+          cleanup() { rm -f "$key_file" "$known_hosts_file"; }
+          trap cleanup EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts_file"
+
+          ssh_opts=(
+            -i "$key_file"
+            -o UserKnownHostsFile="$known_hosts_file"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+            -p "$SSH_PORT"
+          )
+          printf -v quoted_candidate '%q' "$CANDIDATE_SHA"
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
+            "bash -s -- $quoted_candidate" < scripts/production-backup-preflight.sh
