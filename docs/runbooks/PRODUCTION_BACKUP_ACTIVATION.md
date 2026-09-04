@@ -668,13 +668,13 @@ restores it automatically on any later failure:
 ```bash
 publication_started=true
 sudo mv -T -- "$control_dir" "$rollback_control_dir"
+control_old_preserved=true
 sudo test -d "$rollback_control_dir" && sudo test ! -L "$rollback_control_dir"
 sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"
-control_old_preserved=true
 sudo mv -T -- "$control_stage" "$control_dir"
 control_stage=''
-sudo test -d "$control_dir" && sudo test ! -L "$control_dir"
 control_new_published=true
+sudo test -d "$control_dir" && sudo test ! -L "$control_dir"
 test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
 test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
 ```

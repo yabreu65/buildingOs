@@ -449,25 +449,31 @@ run_control_update_fixture() {
     publication_started=true
     mv "$local_control_dir" "$local_rollback_control_dir"
     control_old_preserved=true
-    [[ "$scenario" != control-move ]] || false
+    [[ "$scenario" != after-control-old-preservation ]] || false
     mv "$local_control_stage" "$local_control_dir"
     local_control_stage=''
     control_new_published=true
+    [[ "$scenario" != after-control-new-publication ]] || false
     if [[ "$scenario" == impossible ]]; then printf 'unexpected\n' > "$local_control_dir/unexpected"; fi
-    [[ "$scenario" != after-control ]] || false
     [[ "$scenario" != evidence-relocation && "$scenario" != impossible ]] || false
+    [[ -d "$local_rollback_control_dir" && ! -L "$local_rollback_control_dir" ]]
+    [[ -d "$local_control_dir" && ! -L "$local_control_dir" ]]
     cp "$local_launcher" "$local_launcher_rollback"
     launcher_old_preserved=true
+    [[ "$scenario" != after-launcher-old-preservation ]] || false
+    [[ -f "$local_launcher_rollback" && ! -L "$local_launcher_rollback" ]]
     mv "$local_launcher_stage" "$local_launcher"
     local_launcher_stage=''
     launcher_new_published=true
-    [[ "$scenario" != after-launcher ]] || false
+    [[ "$scenario" != after-launcher-new-publication ]] || false
     cp "$local_sudoers" "$local_sudoers_rollback"
     sudoers_old_preserved=true
+    [[ "$scenario" != after-sudoers-old-preservation ]] || false
+    [[ -f "$local_sudoers_rollback" && ! -L "$local_sudoers_rollback" ]]
     mv "$local_sudoers_stage" "$local_sudoers"
     local_sudoers_stage=''
     sudoers_new_published=true
-    [[ "$scenario" != after-sudoers && "$scenario" != checkout && "$scenario" != visudo ]] || false
+    [[ "$scenario" != after-sudoers-new-publication && "$scenario" != checkout && "$scenario" != visudo ]] || false
     [[ "$(< "$local_control_dir/production-backup-preflight.sh")" == new-control ]]
     [[ "$(< "$local_launcher")" == new-launcher ]]
     [[ "$(< "$local_sudoers")" == new-sudoers ]]
@@ -640,7 +646,10 @@ run_parent_contract "$parent_missing" "$state_uid" "$state_gid"
 assert_failure 'absent privileged staging parent fails for separate remediation'
 if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'unexpected privileged staging parents trigger no install chmod or chown'; else fail_test 'unexpected privileged staging parents trigger no install chmod or chown'; fi
 
-for rollback_scenario in control-move after-control evidence-relocation after-launcher after-sudoers checkout visudo; do
+for rollback_scenario in \
+  after-control-old-preservation after-control-new-publication evidence-relocation \
+  after-launcher-old-preservation after-launcher-new-publication \
+  after-sudoers-old-preservation after-sudoers-new-publication checkout visudo; do
   set +e
   run_control_update_fixture "$rollback_scenario"
   RUN_RC=$?
@@ -1257,6 +1266,12 @@ assert_order 'runbook checks state directory before installing it' 'if sudo test
 assert_order 'runbook marks activation complete after final validation' 'sudo visudo -cf /etc/sudoers' 'activation_complete=true' "$runbook_text"
 assert_order 'runbook validates parents before creating update staging' 'validate_privileged_parent "$libexec_parent"' 'control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.update.XXXXXX)"' "$runbook_text"
 assert_order 'runbook proves control absence before restoration move' 'sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"' 'sudo mv -T -- "$rollback_control_dir" "$control_dir"' "$runbook_text"
+assert_order 'runbook marks control rollback preservation immediately after move' 'sudo mv -T -- "$control_dir" "$rollback_control_dir"' 'control_old_preserved=true' "$runbook_text"
+assert_order 'runbook marks control publication immediately after move' 'sudo mv -T -- "$control_stage" "$control_dir"' 'control_new_published=true' "$runbook_text"
+assert_order 'runbook marks launcher rollback preservation immediately after install' 'sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"' 'launcher_old_preserved=true' "$runbook_text"
+assert_order 'runbook marks launcher publication immediately after move' 'sudo mv -T -- "$launcher_stage" "$launcher"' 'launcher_new_published=true' "$runbook_text"
+assert_order 'runbook marks sudoers rollback preservation immediately after install' 'sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"' 'sudoers_old_preserved=true' "$runbook_text"
+assert_order 'runbook marks sudoers publication immediately after move' 'sudo mv -T -- "$sudoers_stage" "$sudoers_policy"' 'sudoers_new_published=true' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
