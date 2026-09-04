@@ -387,16 +387,41 @@ run_control_update_fixture() {
     publication_started=false
 
     rollback_update_fixture() {
-      local rollback_status=0
+      local rollback_status=0 control_relocate_status=0
       set +e
       if [[ "$sudoers_new_published" == true ]]; then mv "$local_sudoers" "$local_failed_sudoers" || rollback_status=$?; fi
       if [[ "$sudoers_old_preserved" == true ]]; then mv "$local_sudoers_rollback" "$local_sudoers" || rollback_status=$?; fi
       if [[ "$launcher_new_published" == true ]]; then mv "$local_launcher" "$local_failed_launcher" || rollback_status=$?; fi
       if [[ "$launcher_old_preserved" == true ]]; then mv "$local_launcher_rollback" "$local_launcher" || rollback_status=$?; fi
       if [[ "$control_old_preserved" == true ]]; then
-        if [[ "$control_new_published" == true ]]; then mv "$local_control_dir" "$local_failed_control_dir" || rollback_status=$?; fi
-        mv "$local_rollback_control_dir" "$local_control_dir" || rollback_status=$?
+        if [[ "$control_new_published" == true ]]; then
+          if [[ "$scenario" == evidence-relocation || "$scenario" == impossible ]]; then
+            false || control_relocate_status=$?
+          else
+            mv "$local_control_dir" "$local_failed_control_dir" || control_relocate_status=$?
+          fi
+          if (( control_relocate_status != 0 )); then
+            if [[ "$scenario" == evidence-relocation &&
+              "$(< "$local_control_dir/production-backup-preflight.sh")" == new-control &&
+              "$(< "$local_control_dir/lib/endpoint-identity.sh")" == new-helper ]]; then
+              cp -a "$local_control_dir" "$local_failed_control_dir" || rollback_status=$?
+              rm -f "$local_control_dir/production-backup-preflight.sh" "$local_control_dir/lib/endpoint-identity.sh" || rollback_status=$?
+              rmdir "$local_control_dir/lib" "$local_control_dir" || rollback_status=$?
+              [[ ! -e "$local_control_dir" && ! -L "$local_control_dir" ]] || rollback_status=1
+            else
+              rollback_status=1
+            fi
+          else
+            [[ ! -e "$local_control_dir" && ! -L "$local_control_dir" ]] || rollback_status=1
+          fi
+        fi
+        if [[ ! -e "$local_control_dir" && ! -L "$local_control_dir" ]]; then
+          mv "$local_rollback_control_dir" "$local_control_dir" || rollback_status=$?
+        else
+          rollback_status=1
+        fi
       fi
+      if (( rollback_status != 0 )); then printf 'RECOVERY_REQUIRED\n' > "$fixture/recovery-required"; fi
       if [[ "$publication_started" == true ]]; then
         [[ "$(< "$local_control_dir/production-backup-preflight.sh")" == old-control ]] || rollback_status=1
         [[ "$(< "$local_control_dir/lib/endpoint-identity.sh")" == old-helper ]] || rollback_status=1
@@ -428,7 +453,9 @@ run_control_update_fixture() {
     mv "$local_control_stage" "$local_control_dir"
     local_control_stage=''
     control_new_published=true
+    if [[ "$scenario" == impossible ]]; then printf 'unexpected\n' > "$local_control_dir/unexpected"; fi
     [[ "$scenario" != after-control ]] || false
+    [[ "$scenario" != evidence-relocation && "$scenario" != impossible ]] || false
     cp "$local_launcher" "$local_launcher_rollback"
     launcher_old_preserved=true
     mv "$local_launcher_stage" "$local_launcher"
@@ -561,7 +588,59 @@ run_state_directory_contract "$state_fifo" "$state_uid" "$state_gid" state_insta
 assert_failure 'unexpected state object fails'
 if [[ ! -s "$STATE_INSTALL_LOG" && -p "$state_fifo" ]]; then pass 'unexpected state object is never replaced'; else fail_test 'unexpected state object is never replaced'; fi
 
-for rollback_scenario in control-move after-control after-launcher after-sudoers checkout visudo; do
+parent_contract_root="$TEST_ROOT/privileged-parent-contract"
+parent_target="$parent_contract_root/parent"
+parent_link="$parent_contract_root/parent-link"
+parent_file="$parent_contract_root/parent-file"
+parent_fifo="$parent_contract_root/parent-fifo"
+mkdir -p "$parent_target"
+: > "$STATE_INSTALL_LOG"
+
+validate_privileged_parent_fixture() {
+  local parent="$1" expected_uid="$2" expected_gid="$3"
+  [[ -d "$parent" && ! -L "$parent" ]] || return 1
+  [[ "$(state_metadata "$parent")" == "$expected_uid:$expected_gid:755" ]]
+}
+
+run_parent_contract() {
+  set +e
+  validate_privileged_parent_fixture "$@"
+  RUN_RC=$?
+  set -e
+}
+
+run_parent_contract "$parent_target" "$state_uid" "$state_gid"
+assert_success 'valid privileged staging parent is accepted without mutation'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'valid privileged staging parent triggers no install'; else fail_test 'valid privileged staging parent triggers no install'; fi
+
+ln -s "$parent_target" "$parent_link"
+run_parent_contract "$parent_link" "$state_uid" "$state_gid"
+assert_failure 'symlink privileged staging parent is rejected before mutation'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'symlink privileged staging parent triggers no install'; else fail_test 'symlink privileged staging parent triggers no install'; fi
+
+run_parent_contract "$parent_target" 99999 "$state_gid"
+assert_failure 'wrong privileged staging parent owner fails'
+run_parent_contract "$parent_target" "$state_uid" 99999
+assert_failure 'wrong privileged staging parent group fails'
+chmod 0750 "$parent_target"
+run_parent_contract "$parent_target" "$state_uid" "$state_gid"
+assert_failure 'wrong privileged staging parent mode fails'
+chmod 0755 "$parent_target"
+
+printf 'not a directory\n' > "$parent_file"
+run_parent_contract "$parent_file" "$state_uid" "$state_gid"
+assert_failure 'regular file privileged staging parent fails'
+
+mkfifo "$parent_fifo"
+run_parent_contract "$parent_fifo" "$state_uid" "$state_gid"
+assert_failure 'FIFO privileged staging parent fails'
+
+parent_missing="$parent_contract_root/missing-parent"
+run_parent_contract "$parent_missing" "$state_uid" "$state_gid"
+assert_failure 'absent privileged staging parent fails for separate remediation'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'unexpected privileged staging parents trigger no install chmod or chown'; else fail_test 'unexpected privileged staging parents trigger no install chmod or chown'; fi
+
+for rollback_scenario in control-move after-control evidence-relocation after-launcher after-sudoers checkout visudo; do
   set +e
   run_control_update_fixture "$rollback_scenario"
   RUN_RC=$?
@@ -576,7 +655,26 @@ for rollback_scenario in control-move after-control after-launcher after-sudoers
   else
     fail_test "CONTROL_UPDATE restores all previous bytes after $rollback_scenario failure"
   fi
+  if [[ "$rollback_scenario" == evidence-relocation && -d "$rollback_fixture/control/failed-control" ]]; then
+    fail_test 'CONTROL_UPDATE failed-evidence fixture unexpectedly nested its evidence path'
+  elif [[ "$rollback_scenario" == evidence-relocation && -d "$rollback_fixture/failed-control" && ! -d "$rollback_fixture/control/rollback-control" ]]; then
+    pass 'CONTROL_UPDATE failed-evidence relocation preserves evidence without nesting rollback'
+  elif [[ "$rollback_scenario" == evidence-relocation ]]; then
+    fail_test 'CONTROL_UPDATE failed-evidence relocation preserves evidence without nesting rollback'
+  fi
 done
+
+set +e
+run_control_update_fixture impossible
+RUN_RC=$?
+set -e
+assert_failure 'CONTROL_UPDATE reports impossible control restoration failure'
+impossible_fixture="$TEST_ROOT/control-update-impossible"
+if [[ -f "$impossible_fixture/recovery-required" && -d "$impossible_fixture/rollback-control" && -d "$impossible_fixture/control" && ! -d "$impossible_fixture/control/rollback-control" ]]; then
+  pass 'CONTROL_UPDATE impossible restoration preserves rollback and avoids nesting'
+else
+  fail_test 'CONTROL_UPDATE impossible restoration preserves rollback and avoids nesting'
+fi
 
 set +e
 run_control_update_fixture success
@@ -1125,10 +1223,18 @@ assert_contains 'runbook tracks published sudoers state' 'sudoers_new_published'
 assert_contains 'runbook tracks completed activation state' 'activation_complete' "$runbook_text"
 assert_contains 'runbook automatically invokes update rollback from cleanup' 'rollback_update || rollback_status=$?' "$runbook_text"
 assert_contains 'runbook preserves failed control evidence' 'failed_control_dir' "$runbook_text"
-assert_contains 'runbook restores previous control automatically' 'sudo mv -- "$rollback_control_dir" "$control_dir"' "$runbook_text"
-assert_contains 'runbook restores previous launcher automatically' 'sudo mv -- "$launcher_rollback" "$launcher"' "$runbook_text"
-assert_contains 'runbook restores previous sudoers automatically' 'sudo mv -- "$sudoers_rollback" "$sudoers_policy"' "$runbook_text"
+assert_contains 'runbook restores previous control automatically' 'sudo mv -T -- "$rollback_control_dir" "$control_dir"' "$runbook_text"
+assert_contains 'runbook restores previous launcher automatically' 'sudo mv -T -- "$launcher_rollback" "$launcher"' "$runbook_text"
+assert_contains 'runbook restores previous sudoers automatically' 'sudo mv -T -- "$sudoers_rollback" "$sudoers_policy"' "$runbook_text"
 assert_contains 'runbook reports rollback failure explicitly' 'ERROR: CONTROL_UPDATE automatic rollback failed' "$runbook_text"
+assert_contains 'runbook validates live control before failed evidence fallback' 'elif verify_new_control; then' "$runbook_text"
+assert_contains 'runbook preserves failed control with no-nesting copy' 'sudo cp -a -T -- "$control_dir" "$failed_control_dir"' "$runbook_text"
+assert_contains 'runbook tracks live control moved aside' 'control_new_moved_aside' "$runbook_text"
+assert_contains 'runbook reports recovery required when control restoration is unsafe' 'RECOVERY_REQUIRED' "$runbook_text"
+assert_contains 'runbook validates libexec parent before staging' 'validate_privileged_parent "$libexec_parent"' "$runbook_text"
+assert_contains 'runbook validates sbin parent before staging' 'validate_privileged_parent "$sbin_parent"' "$runbook_text"
+assert_contains 'runbook validates sudoers parent before staging' 'validate_privileged_parent "$sudoers_parent"' "$runbook_text"
+assert_absent 'runbook does not create libexec during control update' 'sudo install -d -o root -g root -m 0755 "$libexec_parent"' "$runbook_text"
 assert_contains 'runbook distinguishes the current application runtime SHA' 'CURRENT_RUNTIME_SHA' "$runbook_text"
 assert_contains 'runbook requires an explicit control source SHA' 'CONTROL_SOURCE_SHA' "$runbook_text"
 assert_contains 'runbook permits control source SHA to differ from runtime' 'It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.' "$runbook_text"
@@ -1149,6 +1255,8 @@ assert_order 'runbook revalidates active checkout before authorizing launcher' '
 assert_order 'runbook permanently disables the legacy timer only after verification' 'MINIO_BACKUP_VERIFY_COMPLETE' 'sudo systemctl disable --now pawtech-postgres-backup.timer' "$runbook_text"
 assert_order 'runbook checks state directory before installing it' 'if sudo test -e "$state_dir" || sudo test -L "$state_dir"; then' 'sudo install -d -o yoryi -g yoryi -m 0700 "$state_dir"' "$runbook_text"
 assert_order 'runbook marks activation complete after final validation' 'sudo visudo -cf /etc/sudoers' 'activation_complete=true' "$runbook_text"
+assert_order 'runbook validates parents before creating update staging' 'validate_privileged_parent "$libexec_parent"' 'control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.update.XXXXXX)"' "$runbook_text"
+assert_order 'runbook proves control absence before restoration move' 'sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"' 'sudo mv -T -- "$rollback_control_dir" "$control_dir"' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
