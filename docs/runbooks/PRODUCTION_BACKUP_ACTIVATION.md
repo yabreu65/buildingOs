@@ -30,10 +30,11 @@ those commands automatically.
   `ListBucket`. It uses presigned URLs and authenticated API streams. The public
   S3 endpoint and required CORS must remain available for presigned browser
   operations.
-- Production currently runs `c987eacdfe5e9f5b3772d498bb1b4fd77859dfdc`,
-  behind repository main `b1a3dd8e14cd9e98e4ac81fe52a6162680343d22`.
-  Activation cannot be claimed until an approved exact SHA containing these
-  artifacts is deployed and API/Web OCI revision labels agree.
+- At execution time, discover the actual production runtime SHA from the
+  running API/Web OCI revision labels. Activation requires those labels to
+  agree with each other and with the explicitly approved candidate SHA.
+  Never infer the deployment candidate from a branch name or the current
+  `main` ref; record the approved exact SHA in the activation evidence.
 - The repository did not contain the bytes of the legacy production-only
   `/opt/pawtech/backups/scripts/backup-postgres.sh`. Its v1 identity remains
   pinned for the existing deploy preflight. Activation installs the separate

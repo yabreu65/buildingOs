@@ -83,7 +83,7 @@ cat > "$BIN_DIR/git" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 case "$*" in
-  *'rev-parse HEAD'*) printf '%s\n' "${MOCK_RUNTIME_SHA:-db82d3d37fc6184a6d4063709b9a15b923371695}" ;;
+  *'rev-parse HEAD'*) printf '%s\n' "${MOCK_CHECKOUT_SHA:-${MOCK_RUNTIME_SHA:-2ac603be8018ffc3df67fb4e84149aea4f780cea}}" ;;
   *'status --porcelain'*) [[ "${MOCK_DIRTY:-NO}" == NO ]] || printf ' M application.env\n' ;;
   *) exit 1 ;;
 esac
@@ -111,7 +111,12 @@ if [[ "$1 ${2:-}" == 'inspect --type' ]]; then
     printf '%s\n' "${MOCK_PG_HEALTH:-healthy}"
   fi
 elif [[ "$1 ${2:-}" == 'image inspect' ]]; then
-  printf '%s\n' "${MOCK_RUNTIME_SHA:-db82d3d37fc6184a6d4063709b9a15b923371695}"
+  image="$3"
+  if [[ "$image" == "sha256:$(printf '%064d' 1)" ]]; then
+    printf '%s\n' "${MOCK_API_REVISION:-${MOCK_RUNTIME_SHA:-2ac603be8018ffc3df67fb4e84149aea4f780cea}}"
+  else
+    printf '%s\n' "${MOCK_WEB_REVISION:-${MOCK_RUNTIME_SHA:-2ac603be8018ffc3df67fb4e84149aea4f780cea}}"
+  fi
 elif [[ "$1" == exec ]]; then
   [[ "${MOCK_DB_SIZE_UNAVAILABLE:-NO}" == YES ]] && exit 1
   printf '%s\n' "${MOCK_DB_SIZE_BYTES:-104857600}"
@@ -286,12 +291,14 @@ run_preflight() {
   set -e
 }
 
-readonly CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
+CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
 write_env buildingos-backup production
 write_sse
 run_preflight
-assert_success 'happy path passes' 
+assert_success 'happy path passes'
 assert_contains 'happy path emits PASS' 'PREFLIGHT_STATUS=PASS' "$RUN_OUTPUT"
+assert_contains 'happy path reports authoritative source endpoint' 'SOURCE_ENDPOINT_HOSTNAME=usc1.contabostorage.com' "$RUN_OUTPUT"
+assert_contains 'happy path reports authoritative source bucket' 'SOURCE_BUCKET=buildingos-production' "$RUN_OUTPUT"
 assert_contains 'happy path reports separate destinations' 'SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
 assert_contains 'happy path reports db82 destination compatibility' 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
 assert_contains 'happy path reports db82 SSE compatibility' 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=YES' "$RUN_OUTPUT"
@@ -299,6 +306,46 @@ assert_contains 'happy path reports inactive backup' 'BACKUP_ALREADY_RUNNING=NO'
 for sentinel in VERIFY_ACCESS_SENTINEL VERIFY_SECRET_SENTINEL WRITE_ACCESS_SENTINEL WRITE_SECRET_SENTINEL SOURCE_ACCESS_SENTINEL SOURCE_SECRET_SENTINEL; do
   assert_absent "secret $sentinel is not emitted" "$sentinel" "$RUN_OUTPUT"
 done
+
+CANDIDATE_SHA='db82d3d37fc6184a6d4063709b9a15b923371695' run_preflight
+assert_failure 'candidate mismatch fails runtime identity gate'
+assert_contains 'candidate mismatch reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+assert_contains 'candidate mismatch reports failed preflight' 'PREFLIGHT_STATUS=FAIL' "$RUN_OUTPUT"
+CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
+
+MOCK_API_REVISION='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' run_preflight
+assert_failure 'API revision mismatch fails runtime identity gate'
+assert_contains 'API mismatch reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+unset MOCK_API_REVISION
+
+MOCK_WEB_REVISION='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' run_preflight
+assert_failure 'Web revision mismatch fails runtime identity gate'
+assert_contains 'Web mismatch reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+unset MOCK_WEB_REVISION
+
+MOCK_CHECKOUT_SHA='cccccccccccccccccccccccccccccccccccccccc' run_preflight
+assert_failure 'checkout revision mismatch fails runtime identity gate'
+assert_contains 'checkout mismatch reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+unset MOCK_CHECKOUT_SHA
+
+MOCK_DIRTY=YES run_preflight
+assert_failure 'dirty checkout fails runtime identity gate'
+assert_contains 'dirty checkout reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+unset MOCK_DIRTY
+
+rm "$ENV_FILE"
+run_preflight
+assert_failure 'missing environment fails closed'
+assert_contains 'missing environment reports unavailable names' 'REQUIRED_ENV_NAMES_PRESENT=NO' "$RUN_OUTPUT"
+assert_contains 'missing environment reaches final failure summary' 'PREFLIGHT_STATUS=FAIL' "$RUN_OUTPUT"
+assert_contains 'missing environment reports no writes' 'PRODUCTION_WRITES=0' "$RUN_OUTPUT"
+assert_contains 'missing environment reports no backup' 'BACKUP_STARTED=NO' "$RUN_OUTPUT"
+assert_contains 'missing environment reports unknown source endpoint' 'SOURCE_ENDPOINT_HOSTNAME=UNKNOWN' "$RUN_OUTPUT"
+assert_contains 'missing environment reports unknown SSE evidence' 'SSE_EVIDENCE_VALID=UNKNOWN' "$RUN_OUTPUT"
+assert_contains 'missing environment reports unknown database state' 'POSTGRES_CONTAINER_STATE=UNKNOWN' "$RUN_OUTPUT"
+assert_absent 'missing environment has no awk fatal' 'awk: fatal' "$RUN_OUTPUT"
+assert_absent 'missing environment has no awk open error' 'cannot open file' "$RUN_OUTPUT"
+write_env buildingos-backup production
 
 MOCK_BACKUP_UNIT_MISSING=YES run_preflight
 assert_failure 'missing backup unit fails closed'
