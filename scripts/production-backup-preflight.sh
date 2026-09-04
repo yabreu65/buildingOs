@@ -43,6 +43,13 @@ safe_output() {
   fi
 }
 
+# Frozen compatibility contract for the currently deployed db82 runtime.
+legacy_endpoint_identity() {
+  local value="$1"
+  value="${value#*://}"
+  printf '%s\n' "${value%%/*}"
+}
+
 file_owner() {
   stat -L -c '%U' -- "$1" 2>/dev/null || stat -L -f '%Su' "$1"
 }
@@ -459,10 +466,6 @@ inspect_scripts() {
       fail_check "required backup script is missing, non-executable, or unsafe: $script_name"
     fi
   done
-  if ! file_is_regular_non_symlink "$EXPECTED_APP_DIR/scripts/lib/endpoint-identity.sh" || [[ ! -r "$EXPECTED_APP_DIR/scripts/lib/endpoint-identity.sh" ]]; then
-    scripts_ok=false
-    fail_check 'required shared endpoint helper is missing or unsafe'
-  fi
   if [[ "$scripts_ok" == true ]]; then
     printf 'REQUIRED_SCRIPTS_PRESENT=YES\n'
   else
@@ -473,7 +476,7 @@ inspect_scripts() {
 inspect_environment() {
   local env_ok=false owner group mode
   local source_environment expected_source_environment source_endpoint source_bucket backup_endpoint backup_bucket state_dir sse_file postgres_container postgres_database postgres_user postgres_backup_root postgres_sse_mode
-  local source_host backup_host source_identity backup_identity separate='NO'
+  local source_host backup_host source_identity backup_identity legacy_source_identity legacy_backup_identity separate='NO' deployed_runtime_separate='NO'
   local write_destination verify_destination write_remote verify_remote write_path verify_path
   local backup_prefix backup_prefix_count prefix_valid='YES'
   local required_names=(
@@ -543,6 +546,13 @@ inspect_environment() {
   else
     fail_check 'source and backup destinations are not provably separate'
   fi
+  legacy_source_identity="$(legacy_endpoint_identity "$source_endpoint")"
+  legacy_backup_identity="$(legacy_endpoint_identity "$backup_endpoint")"
+  if [[ -n "$legacy_source_identity" && -n "$legacy_backup_identity" && -n "$source_bucket" && -n "$backup_bucket" && ( "$legacy_source_identity" != "$legacy_backup_identity" || "$source_bucket" != "$backup_bucket" ) ]]; then
+    deployed_runtime_separate='YES'
+  else
+    fail_check 'deployed db82 backup runtime would reject source and backup destinations'
+  fi
   [[ "$source_environment" == production ]] || fail_check 'SOURCE_ENVIRONMENT must be production'
   [[ "$expected_source_environment" == production ]] || fail_check 'EXPECTED_SOURCE_ENVIRONMENT must be production'
   [[ "$source_host" == "$EXPECTED_SOURCE_HOST" ]] || fail_check 'source endpoint hostname is unexpected'
@@ -568,6 +578,7 @@ inspect_environment() {
   printf 'BACKUP_ENDPOINT_HOSTNAME=%s\n' "$(safe_output "${backup_host:-UNKNOWN}")"
   printf 'BACKUP_BUCKET=%s\n' "$(safe_output "$backup_bucket")"
   printf 'SOURCE_AND_BACKUP_SEPARATE=%s\n' "$separate"
+  printf 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=%s\n' "$deployed_runtime_separate"
   printf 'BACKUP_STATE_DIR_MATCH=%s\n' "$([[ "$state_dir" == "$EXPECTED_STATE_DIR" ]] && printf YES || printf NO)"
   printf 'POSTGRES_CONTAINER=%s\n' "$(safe_output "$postgres_container")"
   printf 'POSTGRES_DATABASE=%s\n' "$(safe_output "$postgres_database")"
@@ -580,8 +591,8 @@ inspect_environment() {
 }
 
 inspect_sse_evidence() {
-  local owner group mode status algorithm endpoint bucket expected_endpoint expected_bucket
-  local valid='NO' endpoint_match='NO' bucket_match='NO' path_match='NO' probed_at='UNKNOWN' probed_at_valid='NO'
+  local owner group mode status algorithm raw_endpoint endpoint bucket expected_endpoint expected_bucket legacy_expected_endpoint
+  local valid='NO' endpoint_match='NO' deployed_runtime_endpoint_match='NO' bucket_match='NO' path_match='NO' probed_at='UNKNOWN' probed_at_valid='NO'
 
   status='UNKNOWN'
   algorithm='UNKNOWN'
@@ -600,11 +611,12 @@ inspect_sse_evidence() {
     mode="0$(file_mode "$SSE_FILE")"
     status="$(jq -er '.status // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     algorithm="$(jq -er '.algorithm // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
-    endpoint="$(jq -er '.endpoint_identity // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
+    raw_endpoint="$(jq -er '.endpoint_identity // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     bucket="$(jq -er '.bucket // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
     probed_at="$(jq -er '.probed_at // "UNKNOWN"' "$SSE_FILE" 2>/dev/null || printf 'UNKNOWN')"
+    legacy_expected_endpoint="$(legacy_endpoint_identity "$expected_endpoint")"
+    endpoint="$(endpoint_identity "$raw_endpoint" 2>/dev/null || printf 'UNKNOWN')"
     expected_endpoint="$(endpoint_identity "$expected_endpoint")"
-    endpoint="$(endpoint_identity "$endpoint" 2>/dev/null || printf 'UNKNOWN')"
     [[ "$owner" == "$EXPECTED_SSE_OWNER" ]] || fail_check 'SSE evidence owner is unexpected'
     [[ "$group" == "$EXPECTED_SSE_GROUP" ]] || fail_check 'SSE evidence group is unexpected'
     mode_value=$((8#${mode#0}))
@@ -613,8 +625,9 @@ inspect_sse_evidence() {
     [[ "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 ]] || fail_check 'SSE evidence status or algorithm is invalid'
     if [[ "$probed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then probed_at_valid='YES'; else fail_check 'SSE evidence probed_at is invalid'; fi
     if [[ "$endpoint" == "$expected_endpoint" ]]; then endpoint_match='YES'; else fail_check 'SSE evidence endpoint does not match backup endpoint'; fi
+    if [[ "$raw_endpoint" == "$legacy_expected_endpoint" ]]; then deployed_runtime_endpoint_match='YES'; else fail_check 'SSE evidence endpoint does not match the deployed db82 runtime'; fi
     if [[ "$bucket" == "$expected_bucket" ]]; then bucket_match='YES'; else fail_check 'SSE evidence bucket does not match backup bucket'; fi
-    if [[ "$owner" == "$EXPECTED_SSE_OWNER" && "$group" == "$EXPECTED_SSE_GROUP" && "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 && "$endpoint_match" == YES && "$bucket_match" == YES && "$path_match" == YES && "$probed_at_valid" == YES ]]; then
+    if [[ "$owner" == "$EXPECTED_SSE_OWNER" && "$group" == "$EXPECTED_SSE_GROUP" && "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 && "$endpoint_match" == YES && "$deployed_runtime_endpoint_match" == YES && "$bucket_match" == YES && "$path_match" == YES && "$probed_at_valid" == YES ]]; then
       valid='YES'
     fi
   else
@@ -626,6 +639,7 @@ inspect_sse_evidence() {
   printf 'SSE_PATH_MATCH=%s\n' "$path_match"
   printf 'SSE_PROBED_AT_VALID=%s\n' "$probed_at_valid"
   printf 'SSE_ENDPOINT_MATCH=%s\n' "$endpoint_match"
+  printf 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=%s\n' "$deployed_runtime_endpoint_match"
   printf 'SSE_BUCKET_MATCH=%s\n' "$bucket_match"
 }
 
@@ -897,7 +911,7 @@ main() {
     printf 'PRODUCTION_RUNTIME_SHA=UNKNOWN\nAPI_REVISION=UNKNOWN\nWEB_REVISION=UNKNOWN\nPRODUCTION_CHECKOUT_STATUS=UNKNOWN\nRUNTIME_IDENTITY=UNKNOWN\n'
     printf 'BACKUP_SERVICE_EXISTS=UNKNOWN\nBACKUP_SERVICE_USER=UNKNOWN\nBACKUP_SERVICE_EXECSTART_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPRE_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPOST_MATCH=UNKNOWN\nBACKUP_SERVICE_ENV_FILE_MATCH=UNKNOWN\nBACKUP_SERVICE_ACTIVE=UNKNOWN\n'
     printf 'VERIFY_SERVICE_EXISTS=UNKNOWN\nVERIFY_SERVICE_USER=UNKNOWN\nVERIFY_SERVICE_EXECSTART_MATCH=UNKNOWN\nVERIFY_SERVICE_EXECSTARTPRE_MATCH=UNKNOWN\nVERIFY_SERVICE_EXECSTARTPOST_MATCH=UNKNOWN\nVERIFY_SERVICE_ACTIVE=UNKNOWN\n'
-    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_PATH_MATCH=UNKNOWN\nSSE_PROBED_AT_VALID=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nPOSTGRES_DATABASE_SIZE_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SAFETY_MARGIN_BYTES=UNKNOWN\nPOSTGRES_BACKUP_REQUIRED_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SPACE_SAFE=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nTMP_REQUIRED_BYTES=UNKNOWN\nTMP_SPACE_SAFE=UNKNOWN\nLEGACY_BACKUP_SERVICE_EXISTS=UNKNOWN\nLEGACY_BACKUP_SERVICE_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_EXISTS=UNKNOWN\nLEGACY_BACKUP_TIMER_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_ENABLED=UNKNOWN\nLEGACY_BACKUP_NEXT_TRIGGER=UNKNOWN\nLEGACY_BACKUP_OVERLAP_SAFE=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n'
+    printf 'REQUIRED_ENV_NAMES_PRESENT=UNKNOWN\nSOURCE_ENVIRONMENT=UNKNOWN\nEXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\nSOURCE_ENDPOINT_HOSTNAME=UNKNOWN\nSOURCE_BUCKET=UNKNOWN\nBACKUP_ENDPOINT_HOSTNAME=UNKNOWN\nBACKUP_BUCKET=UNKNOWN\nSOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nDEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=UNKNOWN\nBACKUP_STATE_DIR_MATCH=UNKNOWN\nLATEST_STATE_EXISTS=UNKNOWN\nPAIRED_RECEIPT_COUNT=UNKNOWN\nSSE_EVIDENCE_VALID=UNKNOWN\nSSE_STATUS=UNKNOWN\nSSE_ALGORITHM=UNKNOWN\nSSE_PATH_MATCH=UNKNOWN\nSSE_PROBED_AT_VALID=UNKNOWN\nSSE_ENDPOINT_MATCH=UNKNOWN\nDEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=UNKNOWN\nSSE_BUCKET_MATCH=UNKNOWN\nPOSTGRES_CONTAINER_STATE=UNKNOWN\nPOSTGRES_CONTAINER_HEALTH=UNKNOWN\nPOSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\nPOSTGRES_DATABASE_SIZE_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SAFETY_MARGIN_BYTES=UNKNOWN\nPOSTGRES_BACKUP_REQUIRED_BYTES=UNKNOWN\nPOSTGRES_BACKUP_SPACE_SAFE=UNKNOWN\nTMP_FREE_BYTES=UNKNOWN\nTMP_REQUIRED_BYTES=UNKNOWN\nTMP_SPACE_SAFE=UNKNOWN\nLEGACY_BACKUP_SERVICE_EXISTS=UNKNOWN\nLEGACY_BACKUP_SERVICE_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_EXISTS=UNKNOWN\nLEGACY_BACKUP_TIMER_ACTIVE=UNKNOWN\nLEGACY_BACKUP_TIMER_ENABLED=UNKNOWN\nLEGACY_BACKUP_NEXT_TRIGGER=UNKNOWN\nLEGACY_BACKUP_OVERLAP_SAFE=UNKNOWN\nBACKUP_ALREADY_RUNNING=UNKNOWN\nCONCURRENCY_SAFE=UNKNOWN\n'
   fi
   printf 'PROPOSED_BACKUP_COMMAND=%s\n' "$EXPECTED_PROPOSED_COMMAND"
   printf 'PRODUCTION_WRITES=0\nBACKUP_STARTED=NO\n'

@@ -39,7 +39,7 @@ readonly ENV_FILE="$TEST_ROOT/buildingos-backup.env"
 readonly SSE_FILE="$TEST_ROOT/contabo-sse-s3-capability.json"
 readonly STATE_DIR="$TEST_ROOT/state"
 readonly BIN_DIR="$TEST_ROOT/bin"
-mkdir -p "$APP_DIR/.git" "$APP_DIR/scripts/lib" "$STATE_DIR" "$BIN_DIR"
+mkdir -p "$APP_DIR/.git" "$APP_DIR/scripts" "$STATE_DIR" "$BIN_DIR"
 chmod 0700 "$STATE_DIR"
 
 for script_name in \
@@ -53,8 +53,11 @@ for script_name in \
   printf '# isolated fixture\n' > "$APP_DIR/scripts/$script_name"
   chmod 0755 "$APP_DIR/scripts/$script_name"
 done
-cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$APP_DIR/scripts/lib/endpoint-identity.sh"
-chmod 0644 "$APP_DIR/scripts/lib/endpoint-identity.sh"
+if [[ -e "$APP_DIR/scripts/lib/endpoint-identity.sh" ]]; then
+  fail_test 'db82 fixture does not deploy the new shared endpoint helper'
+else
+  pass 'db82 fixture does not deploy the new shared endpoint helper'
+fi
 
 link_command() {
   local command_name="$1"
@@ -290,6 +293,8 @@ run_preflight
 assert_success 'happy path passes' 
 assert_contains 'happy path emits PASS' 'PREFLIGHT_STATUS=PASS' "$RUN_OUTPUT"
 assert_contains 'happy path reports separate destinations' 'SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
+assert_contains 'happy path reports db82 destination compatibility' 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
+assert_contains 'happy path reports db82 SSE compatibility' 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=YES' "$RUN_OUTPUT"
 assert_contains 'happy path reports inactive backup' 'BACKUP_ALREADY_RUNNING=NO' "$RUN_OUTPUT"
 for sentinel in VERIFY_ACCESS_SENTINEL VERIFY_SECRET_SENTINEL WRITE_ACCESS_SENTINEL WRITE_SECRET_SENTINEL SOURCE_ACCESS_SENTINEL SOURCE_SECRET_SENTINEL; do
   assert_absent "secret $sentinel is not emitted" "$sentinel" "$RUN_OUTPUT"
@@ -395,6 +400,13 @@ run_preflight
 assert_failure 'missing secret name fails closed'
 write_env buildingos-backup production
 
+write_sse SSE_S3_SUPPORTED AES256 backup.example.invalid:443
+run_preflight
+assert_failure 'db82 rejects SSE evidence with an explicit default port'
+assert_contains 'canonical SSE comparison accepts the explicit default port' 'SSE_ENDPOINT_MATCH=YES' "$RUN_OUTPUT"
+assert_contains 'db82 SSE mismatch is explicit' 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=NO' "$RUN_OUTPUT"
+write_sse
+
 write_env buildingos-backup production NO https://backup.example.invalid buildingos-backup contabowrite contaboverify ''
 run_preflight
 assert_success 'empty BACKUP_PREFIX uses runtime default'
@@ -473,6 +485,15 @@ write_sse
 write_env buildingos-production production
 run_preflight
 assert_failure 'source and backup bucket collision fails closed'
+write_env buildingos-backup production
+
+write_env buildingos-production production NO https://usc1.contabostorage.com buildingos-production
+set_env_line SOURCE_ENDPOINT 'http://usc1.contabostorage.com'
+write_sse SSE_S3_SUPPORTED AES256 usc1.contabostorage.com buildingos-production
+run_preflight
+assert_failure 'db82 endpoint compatibility collision fails closed'
+assert_contains 'canonical endpoint separation remains visible' 'SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
+assert_contains 'db82 endpoint collision is explicit' 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=NO' "$RUN_OUTPUT"
 write_env buildingos-backup production
 
 write_env buildingos-backup staging
