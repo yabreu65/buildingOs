@@ -4,7 +4,7 @@ set +x
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
-endpoint_identity() { local value="${1#*://}"; printf '%s\n' "${value%%/*}"; }
+source "$(dirname "${BASH_SOURCE[0]}")/lib/endpoint-identity.sh"
 
 for variable in BACKUP_ENDPOINT BACKUP_BUCKET BACKUP_SSE_CAPABILITY_FILE; do require "$variable"; done
 [[ "$BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe BACKUP_BUCKET"
@@ -14,15 +14,17 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 mode="$(stat -c '%a' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null || stat -f '%Lp' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null)" || fail "unable to inspect SSE capability evidence"
 owner_uid="$(stat -c '%u' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null || stat -f '%u' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null)" || fail "unable to inspect SSE capability evidence owner"
+owner_group="$(stat -c '%G' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null || stat -f '%Sg' "$BACKUP_SSE_CAPABILITY_FILE" 2>/dev/null)" || fail "unable to inspect SSE capability evidence group"
 case "${BUILDINGOS_BACKUP_TEST_MODE:-}" in
-  '') expected_owner_uid=0 ;;
-  LOCAL_ISOLATED_ONLY) expected_owner_uid="$(id -u)" ;;
+  '') expected_owner_uid=0; expected_owner_group='yoryi' ;;
+  LOCAL_ISOLATED_ONLY) expected_owner_uid="$(id -u)"; expected_owner_group="$(id -gn)" ;;
   *) fail "invalid BUILDINGOS_BACKUP_TEST_MODE" ;;
 esac
 [[ "$owner_uid" == "$expected_owner_uid" ]] || fail "SSE capability evidence has an untrusted owner"
+[[ "$owner_group" == "$expected_owner_group" ]] || fail "SSE capability evidence has an untrusted group"
 [[ "$mode" =~ ^[0-7]{3,4}$ ]] || fail "SSE capability evidence permissions are invalid"
 mode_value=$((8#$mode))
-(( (mode_value & 0022) == 0 )) || fail "SSE capability evidence must not be group or world writable"
+(( mode_value == 416 )) || fail "SSE capability evidence must be mode 0640"
 
 jq -e \
   --arg bucket "$BACKUP_BUCKET" \

@@ -219,11 +219,33 @@ assert_success "restore policy generator accepts rehearsal target" "$ROOT_DIR/sc
 assert_absent "restore policy excludes production" 'production' "$TEST_ROOT/output"
 assert_failure "restore policy generator rejects production" "$ROOT_DIR/scripts/render-minio-restore-target-policy.sh" --environment production --endpoint-identity prod.example.invalid:443 --bucket buildingos-production
 
-jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:00:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
-chmod 0600 "$BACKUP_SSE_CAPABILITY_FILE"
+jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid:443",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:00:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
+chmod 0640 "$BACKUP_SSE_CAPABILITY_FILE"
 BUILDINGOS_BACKUP_TEST_MODE=LOCAL_ISOLATED_ONLY assert_success "SSE capability gate accepts matching AES256 proof" "$ROOT_DIR/scripts/validate-sse-capability.sh"
+chmod 0600 "$BACKUP_SSE_CAPABILITY_FILE"
+BUILDINGOS_BACKUP_TEST_MODE=LOCAL_ISOLATED_ONLY assert_failure "SSE capability gate rejects service-unreadable evidence" "$ROOT_DIR/scripts/validate-sse-capability.sh"
+chmod 0660 "$BACKUP_SSE_CAPABILITY_FILE"
+BUILDINGOS_BACKUP_TEST_MODE=LOCAL_ISOLATED_ONLY assert_failure "SSE capability gate rejects writable evidence" "$ROOT_DIR/scripts/validate-sse-capability.sh"
+chmod 0640 "$BACKUP_SSE_CAPABILITY_FILE"
 jq '.status = "SSE_S3_UNKNOWN"' "$BACKUP_SSE_CAPABILITY_FILE" > "$TEST_ROOT/sse-unknown.json"
 BUILDINGOS_BACKUP_TEST_MODE=LOCAL_ISOLATED_ONLY BACKUP_SSE_CAPABILITY_FILE="$TEST_ROOT/sse-unknown.json" assert_failure "SSE unknown blocks activation" "$ROOT_DIR/scripts/validate-sse-capability.sh"
+
+for sse_endpoint_case in \
+  'https://backup.example.invalid/|backup.example.invalid:443' \
+  'https://backup.example.invalid:443|backup.example.invalid:443' \
+  'HTTPS://BACKUP.EXAMPLE.INVALID|backup.example.invalid:443' \
+  'http://backup.example.invalid|backup.example.invalid:80' \
+  'http://backup.example.invalid:80/|backup.example.invalid:80' \
+  'https://backup.example.invalid:8443|backup.example.invalid:8443'; do
+  endpoint_case="${sse_endpoint_case%%|*}"
+  endpoint_identity_case="${sse_endpoint_case#*|}"
+  jq -n --arg endpoint "$endpoint_identity_case" '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:$endpoint,bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:00:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
+  chmod 0640 "$BACKUP_SSE_CAPABILITY_FILE"
+  BACKUP_ENDPOINT="$endpoint_case"
+  export BACKUP_ENDPOINT
+  BUILDINGOS_BACKUP_TEST_MODE=LOCAL_ISOLATED_ONLY assert_success "SSE endpoint parity: $endpoint_case" "$ROOT_DIR/scripts/validate-sse-capability.sh"
+done
+export BACKUP_ENDPOINT='https://backup.example.invalid'
 
 assert_contains "anonymous policy removal is documented" 'mc anonymous set none' "$ROOT_DIR/docs/runbooks/PRODUCTION_BACKUP_ACTIVATION.md"
 assert_contains "anonymous denial requires 403" "returns \`403\`" "$ROOT_DIR/docs/runbooks/PRODUCTION_BACKUP_ACTIVATION.md"
@@ -257,6 +279,9 @@ production_env_example="$ROOT_DIR/infra/production/buildingos-backup.env.example
 if grep -Fxq 'POSTGRES_CONTAINER=pawtech-postgres' "$production_env_example" &&
   grep -Fxq 'POSTGRES_DATABASE=buildingos_db' "$production_env_example" &&
   grep -Fxq 'POSTGRES_USER=buildingos' "$production_env_example" &&
+  grep -Fxq 'SOURCE_BUCKET=buildingos-production' "$production_env_example" &&
+  ! grep -Fxq 'SOURCE_BUCKET=buildingos' "$production_env_example" &&
+  grep -Fq "export SOURCE_BUCKET='buildingos-production'" "$ROOT_DIR/docs/runbooks/MINIO_BACKUP_RECOVERY.md" &&
   grep -Fq "readonly POSTGRES_CONTAINER='pawtech-postgres'" "$ROOT_DIR/scripts/deploy-production.sh" &&
   grep -Fq "readonly POSTGRES_CONTAINER='pawtech-postgres'" "$ROOT_DIR/scripts/rollback-production.sh" &&
   grep -Fq 'DATABASE_NAME=buildingos_db' "$ROOT_DIR/scripts/deploy-production.sh" &&

@@ -119,6 +119,8 @@ export BACKUP_SSE_CAPABILITY_FILE="$TEST_ROOT/sse-capability.json"
 SSE_CAPABILITY_OUTPUT="$TEST_ROOT/probe-capability.json" assert_success "SSE probe uses split write/read identities and proves AES256" "$ROOT_DIR/scripts/probe-contabo-sse-s3.sh"
 assert_contains "SSE probe emits supported classification" 'SSE_S3_SUPPORTED' "$TEST_ROOT/output"
 
+BACKUP_PREFIX='../archive' assert_failure "MinIO backup rejects unsafe BACKUP_PREFIX" "$ROOT_DIR/scripts/backup-minio.sh"
+
 postgres_remote_dir="$MOCK_BACKUP/$BACKUP_BUCKET/postgresql/$BACKUP_SET_ID"
 mkdir -p "$postgres_remote_dir"
 printf 'PGDMP paired remote test archive\n' > "$postgres_remote_dir/buildingos.dump"
@@ -126,8 +128,8 @@ postgres_sha256="$(sha256sum "$postgres_remote_dir/buildingos.dump" | cut -d ' '
 jq -n --arg setId "$BACKUP_SET_ID" --arg appSha "$APP_SHA" --arg postgresSha "$postgres_sha256" '{version:1,status:"PASS",backup_set_id:$setId,started_at:"2026-08-28T12:00:00Z",completed_at:"2026-08-28T12:01:00Z",app_sha:$appSha,postgres_backup_id:("postgres-"+$setId),postgres_sha256:$postgresSha,dump_filename:"buildingos.dump",destination:("contabo:buildingos-prod-backup-test/postgresql/"+$setId),remote_object_prefix:("postgresql/"+$setId),encryption:"SSE-S3"}' > "$POSTGRES_BACKUP_RECEIPT_FILE"
 printf '%s  %s\n' "$postgres_sha256" 'buildingos.dump' > "$postgres_remote_dir/buildingos.dump.sha256"
 cp "$POSTGRES_BACKUP_RECEIPT_FILE" "$postgres_remote_dir/postgres-backup-receipt.json"
-jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:02:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
-chmod 0600 "$POSTGRES_BACKUP_RECEIPT_FILE" "$BACKUP_SSE_CAPABILITY_FILE"
+jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid:443",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:02:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
+chmod 0640 "$POSTGRES_BACKUP_RECEIPT_FILE" "$BACKUP_SSE_CAPABILITY_FILE"
 
 assert_success "real MinIO backup script publishes a paired set" "$ROOT_DIR/scripts/backup-minio.sh"
 cp "$TEST_ROOT/output" "$TEST_ROOT/backup-output"
@@ -168,6 +170,16 @@ export MINIO_RESTORE_TEST_MODE='LOCAL_ISOLATED_ONLY'
 export MINIO_RESTORE_TEST_POLICY_FILE="$restore_policy"
 assert_success "isolated restore validates paired PostgreSQL evidence before object copy" "$ROOT_DIR/scripts/restore-minio.sh"
 assert_contains "isolated restore completion marker emitted" 'MINIO_RESTORE_COMPLETE' "$TEST_ROOT/output"
+
+mkdir -p "$MOCK_TARGET/buildingos-test-restore-ipv6"
+ipv6_restore_policy="$TEST_ROOT/restore-policy-ipv6.json"
+jq -n '{rehearsal:{endpoint_identity:"[::1]:19000",bucket:"buildingos-test-restore-ipv6"}}' > "$ipv6_restore_policy"
+chmod 0600 "$ipv6_restore_policy"
+export TARGET_ENDPOINT='http://[::1]:19000'
+export TARGET_BUCKET='buildingos-test-restore-ipv6'
+export MINIO_RESTORE_TEST_POLICY_FILE="$ipv6_restore_policy"
+assert_success "isolated restore accepts supported IPv6 loopback endpoint" "$ROOT_DIR/scripts/restore-minio.sh"
+assert_contains "IPv6 isolated restore completion marker emitted" 'MINIO_RESTORE_COMPLETE' "$TEST_ROOT/output"
 
 for sentinel in SOURCE_ACCESS_SENTINEL SOURCE_SECRET_SENTINEL BACKUP_ACCESS_SENTINEL BACKUP_SECRET_SENTINEL TARGET_ACCESS_SENTINEL TARGET_SECRET_SENTINEL; do
   if grep -Fq -- "$sentinel" "$TEST_ROOT/backup-output" "$TEST_ROOT/output"; then fail_test "secret $sentinel is absent from output"; else pass "secret $sentinel is absent from output"; fi

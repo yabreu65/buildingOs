@@ -9,7 +9,7 @@ set +x
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
-endpoint_identity() { local value="${1#*://}"; printf '%s\n' "${value%%/*}"; }
+source "$(dirname "${BASH_SOURCE[0]}")/lib/endpoint-identity.sh"
 validate_prefix() {
   local prefix="$1"
   [[ -z "$prefix" ]] && return 0

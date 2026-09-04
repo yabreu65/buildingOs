@@ -4,7 +4,7 @@ set +x
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
-endpoint_identity() { local value="${1#*://}"; printf '%s\n' "${value%%/*}"; }
+source "$(dirname "${BASH_SOURCE[0]}")/lib/endpoint-identity.sh"
 
 for variable in BACKUP_ENDPOINT BACKUP_WRITE_ACCESS_KEY BACKUP_WRITE_SECRET_KEY BACKUP_VERIFY_ACCESS_KEY BACKUP_VERIFY_SECRET_KEY BACKUP_BUCKET SSE_CAPABILITY_OUTPUT; do require "$variable"; done
 [[ "$BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || fail "unsafe BACKUP_BUCKET"
