@@ -500,6 +500,8 @@ inspect_environment() {
     done
   else
     fail_check 'protected backup environment is not a regular non-symlink file'
+    printf 'REQUIRED_ENV_NAMES_PRESENT=NO\n'
+    return
   fi
   if [[ "$env_ok" == true ]]; then
     printf 'REQUIRED_ENV_NAMES_PRESENT=YES\n'

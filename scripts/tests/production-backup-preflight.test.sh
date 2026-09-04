@@ -290,8 +290,10 @@ readonly CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
 write_env buildingos-backup production
 write_sse
 run_preflight
-assert_success 'happy path passes' 
+assert_success 'happy path passes'
 assert_contains 'happy path emits PASS' 'PREFLIGHT_STATUS=PASS' "$RUN_OUTPUT"
+assert_contains 'happy path reports authoritative source endpoint' 'SOURCE_ENDPOINT_HOSTNAME=usc1.contabostorage.com' "$RUN_OUTPUT"
+assert_contains 'happy path reports authoritative source bucket' 'SOURCE_BUCKET=buildingos-production' "$RUN_OUTPUT"
 assert_contains 'happy path reports separate destinations' 'SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
 assert_contains 'happy path reports db82 destination compatibility' 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=YES' "$RUN_OUTPUT"
 assert_contains 'happy path reports db82 SSE compatibility' 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=YES' "$RUN_OUTPUT"
@@ -299,6 +301,14 @@ assert_contains 'happy path reports inactive backup' 'BACKUP_ALREADY_RUNNING=NO'
 for sentinel in VERIFY_ACCESS_SENTINEL VERIFY_SECRET_SENTINEL WRITE_ACCESS_SENTINEL WRITE_SECRET_SENTINEL SOURCE_ACCESS_SENTINEL SOURCE_SECRET_SENTINEL; do
   assert_absent "secret $sentinel is not emitted" "$sentinel" "$RUN_OUTPUT"
 done
+
+rm "$ENV_FILE"
+run_preflight
+assert_failure 'missing environment fails closed'
+assert_contains 'missing environment reports unavailable names' 'REQUIRED_ENV_NAMES_PRESENT=NO' "$RUN_OUTPUT"
+assert_absent 'missing environment has no awk fatal' 'awk: fatal' "$RUN_OUTPUT"
+assert_absent 'missing environment has no awk open error' 'cannot open file' "$RUN_OUTPUT"
+write_env buildingos-backup production
 
 MOCK_BACKUP_UNIT_MISSING=YES run_preflight
 assert_failure 'missing backup unit fails closed'
