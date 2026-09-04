@@ -434,6 +434,9 @@ set -Eeuo pipefail
 set +x
 
 readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly libexec_parent='/usr/local/libexec'
+readonly sbin_parent='/usr/local/sbin'
+readonly sudoers_parent='/etc/sudoers.d'
 readonly control_dir='/usr/local/libexec/buildingos-backup-preflight'
 readonly launcher='/usr/local/sbin/buildingos-production-backup-preflight'
 readonly sudoers_policy='/etc/sudoers.d/buildingos-production-backup-preflight'
@@ -473,16 +476,25 @@ validate_privileged_parent() {
 
 verify_control_tree() {
   local root="$1" expected_preflight_hash="$2" expected_helper_hash="$3"
-  sudo test -d "$root" && sudo test ! -L "$root"
-  sudo test -d "$root/lib" && sudo test ! -L "$root/lib"
-  sudo test -f "$root/production-backup-preflight.sh" && sudo test ! -L "$root/production-backup-preflight.sh"
-  sudo test -f "$root/lib/endpoint-identity.sh" && sudo test ! -L "$root/lib/endpoint-identity.sh"
-  test "$(sudo sha256sum "$root/production-backup-preflight.sh" | awk '{print $1}')" = "$expected_preflight_hash"
-  test "$(sudo sha256sum "$root/lib/endpoint-identity.sh" | awk '{print $1}')" = "$expected_helper_hash"
-  test "$(sudo stat -c '%u:%g:%a' "$root")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$root/lib")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$root/production-backup-preflight.sh")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$root/lib/endpoint-identity.sh")" = '0:0:644'
+  local valid=true
+  sudo test -d "$root" || valid=false
+  sudo test ! -L "$root" || valid=false
+  sudo test -d "$root/lib" || valid=false
+  sudo test ! -L "$root/lib" || valid=false
+  sudo test -f "$root/production-backup-preflight.sh" || valid=false
+  sudo test ! -L "$root/production-backup-preflight.sh" || valid=false
+  sudo test -f "$root/lib/endpoint-identity.sh" || valid=false
+  sudo test ! -L "$root/lib/endpoint-identity.sh" || valid=false
+  test "$(sudo sha256sum "$root/production-backup-preflight.sh" | awk '{print $1}')" = "$expected_preflight_hash" || valid=false
+  test "$(sudo sha256sum "$root/lib/endpoint-identity.sh" | awk '{print $1}')" = "$expected_helper_hash" || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$root")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$root/lib")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$root/production-backup-preflight.sh")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$root/lib/endpoint-identity.sh")" = '0:0:644' || valid=false
+  if [[ "$valid" == true ]]; then
+    return 0
+  fi
+  return 1
 }
 
 verify_previous_installation() {

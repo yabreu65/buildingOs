@@ -481,6 +481,78 @@ run_control_update_fixture() {
   )
 }
 
+VERIFY_HELPER_METADATA_CHECKED=false
+VERIFY_FALLBACK_RAN=false
+VERIFY_RECOVERY_REQUIRED=false
+
+verify_control_tree_fixture() {
+  local root="$1" expected_preflight_hash="$2" expected_helper_hash="$3" valid=true
+  [[ -d "$root" ]] || valid=false
+  [[ ! -L "$root" ]] || valid=false
+  [[ -d "$root/lib" ]] || valid=false
+  [[ ! -L "$root/lib" ]] || valid=false
+  [[ -f "$root/production-backup-preflight.sh" ]] || valid=false
+  [[ ! -L "$root/production-backup-preflight.sh" ]] || valid=false
+  [[ -f "$root/lib/endpoint-identity.sh" ]] || valid=false
+  [[ ! -L "$root/lib/endpoint-identity.sh" ]] || valid=false
+  [[ "$(sha256sum "$root/production-backup-preflight.sh" | awk '{print $1}')" == "$expected_preflight_hash" ]] || valid=false
+  [[ "$(sha256sum "$root/lib/endpoint-identity.sh" | awk '{print $1}')" == "$expected_helper_hash" ]] || valid=false
+  [[ "$(state_metadata "$root")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$root/lib")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$root/production-backup-preflight.sh")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$root/lib/endpoint-identity.sh")" == "$state_uid:$state_gid:644" ]] || valid=false
+  VERIFY_HELPER_METADATA_CHECKED=true
+  [[ "$valid" == true ]]
+}
+
+verify_new_control_fixture() {
+  verify_control_tree_fixture "$@"
+}
+
+run_verify_tree_guard_fixture() {
+  local scenario="$1"
+  local fixture="$TEST_ROOT/verify-control-$scenario"
+  local control_dir="$fixture/control"
+  local rollback_dir="$fixture/rollback-control"
+  local failed_dir="$fixture/failed-control"
+  local expected_preflight_hash expected_helper_hash verify_status=0
+  mkdir -p "$control_dir/lib" "$rollback_dir/lib"
+  printf 'new-control\n' > "$control_dir/production-backup-preflight.sh"
+  printf 'new-helper\n' > "$control_dir/lib/endpoint-identity.sh"
+  printf 'old-control\n' > "$rollback_dir/production-backup-preflight.sh"
+  printf 'old-helper\n' > "$rollback_dir/lib/endpoint-identity.sh"
+  chmod 0755 "$control_dir" "$control_dir/lib" "$control_dir/production-backup-preflight.sh"
+  chmod 0644 "$control_dir/lib/endpoint-identity.sh"
+  chmod 0755 "$rollback_dir" "$rollback_dir/lib" "$rollback_dir/production-backup-preflight.sh"
+  chmod 0644 "$rollback_dir/lib/endpoint-identity.sh"
+  expected_preflight_hash="$(sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')"
+  expected_helper_hash="$(sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')"
+  case "$scenario" in
+    wrong-preflight-hash)
+      expected_preflight_hash='0000000000000000000000000000000000000000000000000000000000000000'
+      ;;
+    root-symlink)
+      mv "$control_dir" "$fixture/control-target"
+      ln -s control-target "$control_dir"
+      ;;
+    wrong-root-mode)
+      chmod 0750 "$control_dir"
+      ;;
+  esac
+  VERIFY_HELPER_METADATA_CHECKED=false
+  VERIFY_FALLBACK_RAN=false
+  VERIFY_RECOVERY_REQUIRED=false
+  verify_new_control_fixture "$control_dir" "$expected_preflight_hash" "$expected_helper_hash" || verify_status=$?
+  if (( verify_status != 0 )); then
+    VERIFY_RECOVERY_REQUIRED=true
+  else
+    cp -a "$control_dir" "$failed_dir"
+    rm -rf "$control_dir"
+    VERIFY_FALLBACK_RAN=true
+  fi
+  return "$verify_status"
+}
+
 runtime_fixture_dir="$TEST_ROOT/runtime-fixture"
 mkdir -p "$runtime_fixture_dir/lib"
 cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$runtime_fixture_dir/lib/endpoint-identity.sh"
@@ -645,6 +717,24 @@ parent_missing="$parent_contract_root/missing-parent"
 run_parent_contract "$parent_missing" "$state_uid" "$state_gid"
 assert_failure 'absent privileged staging parent fails for separate remediation'
 if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'unexpected privileged staging parents trigger no install chmod or chown'; else fail_test 'unexpected privileged staging parents trigger no install chmod or chown'; fi
+
+for verify_scenario in wrong-preflight-hash root-symlink wrong-root-mode; do
+  set +e
+  run_verify_tree_guard_fixture "$verify_scenario"
+  RUN_RC=$?
+  set -e
+  assert_failure "verify_new_control rejects $verify_scenario"
+  if [[ "$VERIFY_HELPER_METADATA_CHECKED" == true ]]; then
+    pass "verify_new_control checks final helper metadata for $verify_scenario"
+  else
+    fail_test "verify_new_control checks final helper metadata for $verify_scenario"
+  fi
+  if [[ "$VERIFY_FALLBACK_RAN" == false && "$VERIFY_RECOVERY_REQUIRED" == true ]]; then
+    pass "verify_new_control blocks destructive fallback and reports recovery for $verify_scenario"
+  else
+    fail_test "verify_new_control blocks destructive fallback and reports recovery for $verify_scenario"
+  fi
+done
 
 for rollback_scenario in \
   after-control-old-preservation after-control-new-publication evidence-relocation \
@@ -1189,6 +1279,14 @@ else
 fi
 
 runbook_text="$(< "$ACTIVATION_RUNBOOK")"
+control_update_text="${runbook_text#*## 5B. CONTROL_UPDATE: UPDATE INSTALLED PRIVILEGED PREFLIGHT CONTROL}"
+control_update_text="${control_update_text%%## 6. PRE-DEPLOY PAIRED BACKUP READINESS*}"
+assert_contains 'Section 5B declares its own libexec parent' "readonly libexec_parent='/usr/local/libexec'" "$control_update_text"
+assert_contains 'Section 5B declares its own sbin parent' "readonly sbin_parent='/usr/local/sbin'" "$control_update_text"
+assert_contains 'Section 5B declares its own sudoers parent' "readonly sudoers_parent='/etc/sudoers.d'" "$control_update_text"
+assert_order 'Section 5B declares libexec parent before validation' "readonly libexec_parent='/usr/local/libexec'" 'validate_privileged_parent "$libexec_parent"' "$control_update_text"
+assert_absent 'Section 5B has no caller-controlled libexec parent override' 'PREFLIGHT_LIBEXEC_PARENT' "$control_update_text"
+assert_absent 'Section 5B does not source Section 5A shell state' $'\nsource ' "$control_update_text"
 assert_contains 'runbook classifies privilege installation as a one-time mutation' 'one-time approved production mutation' "$runbook_text"
 assert_contains 'runbook enables strict installation failure handling' 'set -Eeuo pipefail' "$runbook_text"
 assert_contains 'runbook cleans staged artifacts on failure' 'trap cleanup EXIT' "$runbook_text"
@@ -1240,6 +1338,9 @@ assert_contains 'runbook validates live control before failed evidence fallback'
 assert_contains 'runbook preserves failed control with no-nesting copy' 'sudo cp -a -T -- "$control_dir" "$failed_control_dir"' "$runbook_text"
 assert_contains 'runbook tracks live control moved aside' 'control_new_moved_aside' "$runbook_text"
 assert_contains 'runbook reports recovery required when control restoration is unsafe' 'RECOVERY_REQUIRED' "$runbook_text"
+assert_contains 'runbook accumulates every control-tree invariant result' 'local valid=true' "$runbook_text"
+assert_contains 'runbook marks rejected control-tree invariants' '|| valid=false' "$runbook_text"
+assert_contains 'runbook returns success only after all control-tree invariants pass' 'if [[ "$valid" == true ]]; then' "$runbook_text"
 assert_contains 'runbook validates libexec parent before staging' 'validate_privileged_parent "$libexec_parent"' "$runbook_text"
 assert_contains 'runbook validates sbin parent before staging' 'validate_privileged_parent "$sbin_parent"' "$runbook_text"
 assert_contains 'runbook validates sudoers parent before staging' 'validate_privileged_parent "$sudoers_parent"' "$runbook_text"
