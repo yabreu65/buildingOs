@@ -455,8 +455,14 @@ control_old_preserved=false
 control_new_published=false
 launcher_old_preserved=false
 launcher_new_published=false
+launcher_rollback_created=false
+launcher_rollback_verified=false
+launcher_new_moved_aside=false
 sudoers_old_preserved=false
 sudoers_new_published=false
+sudoers_rollback_created=false
+sudoers_rollback_verified=false
+sudoers_new_moved_aside=false
 activation_complete=false
 publication_started=false
 control_new_moved_aside=false
@@ -498,17 +504,19 @@ verify_control_tree() {
 }
 
 verify_previous_installation() {
-  verify_control_tree "$control_dir" "${old_hash[scripts/production-backup-preflight.sh]}" "${old_hash[scripts/lib/endpoint-identity.sh]}"
-  test "$(sudo sha256sum "$launcher" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
-  test "$(sudo sha256sum "$sudoers_policy" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
-  test "$(sudo stat -c '%u:%g:%a' "$control_dir")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$control_dir/production-backup-preflight.sh")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib/endpoint-identity.sh")" = '0:0:644'
-  test "$(sudo stat -c '%u:%g:%a' "$launcher")" = '0:0:755'
-  test "$(sudo stat -c '%u:%g:%a' "$sudoers_policy")" = '0:0:440'
-  sudo visudo -cf "$sudoers_policy"
-  sudo visudo -cf /etc/sudoers
+  local valid=true
+  verify_control_tree "$control_dir" "${old_hash[scripts/production-backup-preflight.sh]}" "${old_hash[scripts/lib/endpoint-identity.sh]}" || valid=false
+  test "$(sudo sha256sum "$launcher" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}" || valid=false
+  test "$(sudo sha256sum "$sudoers_policy" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}" || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/production-backup-preflight.sh")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib/endpoint-identity.sh")" = '0:0:644' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$launcher")" = '0:0:755' || valid=false
+  test "$(sudo stat -c '%u:%g:%a' "$sudoers_policy")" = '0:0:440' || valid=false
+  sudo visudo -cf "$sudoers_policy" || valid=false
+  sudo visudo -cf /etc/sudoers || valid=false
+  [[ "$valid" == true ]]
 }
 
 verify_new_control() {
@@ -519,16 +527,74 @@ rollback_update() {
   local rollback_status=0
   set +e
   if [[ "$sudoers_new_published" == true ]]; then
-    sudo mv -T -- "$sudoers_policy" "$failed_sudoers" || rollback_status=$?
+    if [[ "$sudoers_rollback_verified" == true ]]; then
+      if sudo test ! -e "$sudoers_policy" && sudo test ! -L "$sudoers_policy"; then
+        sudoers_new_moved_aside=true
+      elif sudo mv -T -- "$sudoers_policy" "$failed_sudoers" && sudo test ! -e "$sudoers_policy" && sudo test ! -L "$sudoers_policy"; then
+        sudoers_new_moved_aside=true
+      else
+        recovery_required=true
+        rollback_status=1
+      fi
+    else
+      recovery_required=true
+      rollback_status=1
+    fi
   fi
   if [[ "$sudoers_old_preserved" == true ]]; then
-    sudo mv -T -- "$sudoers_rollback" "$sudoers_policy" || rollback_status=$?
+    if [[ "$sudoers_new_published" == true ]]; then
+      if [[ "$sudoers_rollback_verified" == true && "$sudoers_new_moved_aside" == true ]] && sudo test ! -e "$sudoers_policy" && sudo test ! -L "$sudoers_policy"; then
+        if ! sudo mv -T -- "$sudoers_rollback" "$sudoers_policy"; then
+          recovery_required=true
+          rollback_status=1
+        fi
+      else
+        recovery_required=true
+        rollback_status=1
+      fi
+    elif [[ "$sudoers_rollback_verified" != true ]]; then
+      recovery_required=true
+      rollback_status=1
+    fi
   fi
   if [[ "$launcher_new_published" == true ]]; then
-    sudo mv -T -- "$launcher" "$failed_launcher" || rollback_status=$?
+    if [[ "$launcher_rollback_verified" == true ]]; then
+      if sudo test ! -e "$launcher" && sudo test ! -L "$launcher"; then
+        launcher_new_moved_aside=true
+      elif sudo mv -T -- "$launcher" "$failed_launcher" && sudo test ! -e "$launcher" && sudo test ! -L "$launcher"; then
+        launcher_new_moved_aside=true
+      else
+        recovery_required=true
+        rollback_status=1
+      fi
+    else
+      recovery_required=true
+      rollback_status=1
+    fi
   fi
   if [[ "$launcher_old_preserved" == true ]]; then
-    sudo mv -T -- "$launcher_rollback" "$launcher" || rollback_status=$?
+    if [[ "$launcher_new_published" == true ]]; then
+      if [[ "$launcher_rollback_verified" == true && "$launcher_new_moved_aside" == true ]] && sudo test ! -e "$launcher" && sudo test ! -L "$launcher"; then
+        if ! sudo mv -T -- "$launcher_rollback" "$launcher"; then
+          recovery_required=true
+          rollback_status=1
+        fi
+      else
+        recovery_required=true
+        rollback_status=1
+      fi
+    elif [[ "$launcher_rollback_verified" != true ]]; then
+      recovery_required=true
+      rollback_status=1
+    fi
+  fi
+  if [[ "$sudoers_rollback_created" == true && "$sudoers_rollback_verified" != true && "$sudoers_new_published" != true ]]; then
+    recovery_required=true
+    rollback_status=1
+  fi
+  if [[ "$launcher_rollback_created" == true && "$launcher_rollback_verified" != true && "$launcher_new_published" != true ]]; then
+    recovery_required=true
+    rollback_status=1
   fi
   if [[ "$control_old_preserved" == true ]]; then
     if [[ "$control_new_published" == true ]]; then
@@ -711,8 +777,10 @@ if [[ "${new_hash[infra/production/launchers/buildingos-production-backup-prefli
   test "$(sudo stat -c '%u:%g:%a' "$launcher_stage")" = '0:0:755'
   sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"
   launcher_old_preserved=true
+  launcher_rollback_created=true
   test "$(sudo sha256sum "$launcher_rollback" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
   test "$(sudo stat -c '%u:%g:%a' "$launcher_rollback")" = '0:0:755'
+  launcher_rollback_verified=true
   sudo mv -T -- "$launcher_stage" "$launcher"
   launcher_stage=''
   launcher_new_published=true
@@ -729,8 +797,11 @@ if [[ "${new_hash[infra/production/sudoers/buildingos-production-backup-prefligh
   test "$(sudo stat -c '%u:%g:%a' "$sudoers_stage")" = '0:0:440'
   sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"
   sudoers_old_preserved=true
+  sudoers_rollback_created=true
   test "$(sudo sha256sum "$sudoers_rollback" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
   test "$(sudo stat -c '%u:%g:%a' "$sudoers_rollback")" = '0:0:440'
+  sudo visudo -cf "$sudoers_rollback"
+  sudoers_rollback_verified=true
   sudo mv -T -- "$sudoers_stage" "$sudoers_policy"
   sudoers_stage=''
   sudoers_new_published=true

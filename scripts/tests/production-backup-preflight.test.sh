@@ -361,8 +361,9 @@ run_control_update_fixture() {
   printf 'new-helper\n' > "$fixture/control-stage/lib/endpoint-identity.sh"
   printf 'old-launcher\n' > "$fixture/launcher"
   printf 'new-launcher\n' > "$fixture/launcher-stage"
-  printf 'old-sudoers\n' > "$fixture/sudoers"
-  printf 'new-sudoers\n' > "$fixture/sudoers-stage"
+  printf '# old-sudoers\n' > "$fixture/sudoers"
+  printf '# new-sudoers\n' > "$fixture/sudoers-stage"
+  chmod 0440 "$fixture/sudoers" "$fixture/sudoers-stage"
   (
     set -Eeuo pipefail
     local_control_dir="$fixture/control"
@@ -381,18 +382,64 @@ run_control_update_fixture() {
     control_new_published=false
     launcher_old_preserved=false
     launcher_new_published=false
+    launcher_rollback_created=false
+    launcher_rollback_verified=false
+    launcher_new_moved_aside=false
     sudoers_old_preserved=false
     sudoers_new_published=false
+    sudoers_rollback_created=false
+    sudoers_rollback_verified=false
+    sudoers_new_moved_aside=false
     activation_complete=false
     publication_started=false
 
     rollback_update_fixture() {
       local rollback_status=0 control_relocate_status=0
       set +e
-      if [[ "$sudoers_new_published" == true ]]; then mv "$local_sudoers" "$local_failed_sudoers" || rollback_status=$?; fi
-      if [[ "$sudoers_old_preserved" == true ]]; then mv "$local_sudoers_rollback" "$local_sudoers" || rollback_status=$?; fi
-      if [[ "$launcher_new_published" == true ]]; then mv "$local_launcher" "$local_failed_launcher" || rollback_status=$?; fi
-      if [[ "$launcher_old_preserved" == true ]]; then mv "$local_launcher_rollback" "$local_launcher" || rollback_status=$?; fi
+      if [[ "$sudoers_new_published" == true ]]; then
+        if [[ "$sudoers_rollback_verified" == true ]]; then
+          if mv "$local_sudoers" "$local_failed_sudoers" && [[ ! -e "$local_sudoers" && ! -L "$local_sudoers" ]]; then
+            sudoers_new_moved_aside=true
+          else
+            rollback_status=1
+          fi
+        else
+          rollback_status=1
+        fi
+      fi
+      if [[ "$sudoers_old_preserved" == true ]]; then
+        if [[ "$sudoers_new_published" == true ]]; then
+          if [[ "$sudoers_rollback_verified" == true && "$sudoers_new_moved_aside" == true ]] && [[ ! -e "$local_sudoers" && ! -L "$local_sudoers" ]]; then
+            mv "$local_sudoers_rollback" "$local_sudoers" || rollback_status=$?
+          else
+            rollback_status=1
+          fi
+        elif [[ "$sudoers_rollback_verified" != true ]]; then
+          rollback_status=1
+        fi
+      fi
+      if [[ "$launcher_new_published" == true ]]; then
+        if [[ "$launcher_rollback_verified" == true ]]; then
+          if mv "$local_launcher" "$local_failed_launcher" && [[ ! -e "$local_launcher" && ! -L "$local_launcher" ]]; then
+            launcher_new_moved_aside=true
+          else
+            rollback_status=1
+          fi
+        else
+          rollback_status=1
+        fi
+      fi
+      if [[ "$launcher_old_preserved" == true ]]; then
+        if [[ "$launcher_new_published" == true ]]; then
+          if [[ "$launcher_rollback_verified" == true && "$launcher_new_moved_aside" == true ]] && [[ ! -e "$local_launcher" && ! -L "$local_launcher" ]]; then
+            mv "$local_launcher_rollback" "$local_launcher" || rollback_status=$?
+          else
+            rollback_status=1
+          fi
+        elif [[ "$launcher_rollback_verified" != true ]]; then
+          rollback_status=1
+        fi
+      fi
       if [[ "$control_old_preserved" == true ]]; then
         if [[ "$control_new_published" == true ]]; then
           if [[ "$scenario" == evidence-relocation || "$scenario" == impossible ]]; then
@@ -460,23 +507,28 @@ run_control_update_fixture() {
     [[ -d "$local_control_dir" && ! -L "$local_control_dir" ]]
     cp "$local_launcher" "$local_launcher_rollback"
     launcher_old_preserved=true
+    launcher_rollback_created=true
     [[ "$scenario" != after-launcher-old-preservation ]] || false
-    [[ -f "$local_launcher_rollback" && ! -L "$local_launcher_rollback" ]]
+    [[ "$(sha256sum "$local_launcher_rollback" | awk '{print $1}')" == "$(sha256sum "$local_launcher" | awk '{print $1}')" ]]
+    launcher_rollback_verified=true
     mv "$local_launcher_stage" "$local_launcher"
     local_launcher_stage=''
     launcher_new_published=true
     [[ "$scenario" != after-launcher-new-publication ]] || false
     cp "$local_sudoers" "$local_sudoers_rollback"
     sudoers_old_preserved=true
+    sudoers_rollback_created=true
     [[ "$scenario" != after-sudoers-old-preservation ]] || false
-    [[ -f "$local_sudoers_rollback" && ! -L "$local_sudoers_rollback" ]]
+    [[ "$(sha256sum "$local_sudoers_rollback" | awk '{print $1}')" == "$(sha256sum "$local_sudoers" | awk '{print $1}')" ]]
+    visudo -cf "$local_sudoers_rollback" >/dev/null 2>&1
+    sudoers_rollback_verified=true
     mv "$local_sudoers_stage" "$local_sudoers"
     local_sudoers_stage=''
     sudoers_new_published=true
     [[ "$scenario" != after-sudoers-new-publication && "$scenario" != checkout && "$scenario" != visudo ]] || false
     [[ "$(< "$local_control_dir/production-backup-preflight.sh")" == new-control ]]
     [[ "$(< "$local_launcher")" == new-launcher ]]
-    [[ "$(< "$local_sudoers")" == new-sudoers ]]
+    [[ "$(< "$local_sudoers")" == '# new-sudoers' ]]
     activation_complete=true
   )
 }
@@ -551,6 +603,57 @@ run_verify_tree_guard_fixture() {
     VERIFY_FALLBACK_RAN=true
   fi
   return "$verify_status"
+}
+
+VERIFY_PREVIOUS_FINAL_VISUDO=false
+
+verify_previous_installation_fixture() {
+  local scenario="$1"
+  local fixture="$TEST_ROOT/verify-previous-$scenario"
+  local control_dir="$fixture/control"
+  local launcher="$fixture/launcher"
+  local sudoers="$fixture/sudoers"
+  local valid=true
+  local expected_preflight_hash expected_helper_hash expected_launcher_hash expected_sudoers_hash
+  mkdir -p "$control_dir/lib"
+  printf 'old-control\n' > "$control_dir/production-backup-preflight.sh"
+  printf 'old-helper\n' > "$control_dir/lib/endpoint-identity.sh"
+  printf 'old-launcher\n' > "$launcher"
+  cp "$SUDOERS_POLICY" "$sudoers"
+  chmod 0755 "$control_dir" "$control_dir/lib" "$control_dir/production-backup-preflight.sh" "$launcher"
+  chmod 0644 "$control_dir/lib/endpoint-identity.sh"
+  chmod 0440 "$sudoers"
+  expected_preflight_hash="$(sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')"
+  expected_helper_hash="$(sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')"
+  expected_launcher_hash="$(sha256sum "$launcher" | awk '{print $1}')"
+  expected_sudoers_hash="$(sha256sum "$sudoers" | awk '{print $1}')"
+  case "$scenario" in
+    restored-control-hash)
+      expected_preflight_hash='0000000000000000000000000000000000000000000000000000000000000000'
+      ;;
+    launcher-hash)
+      expected_launcher_hash='0000000000000000000000000000000000000000000000000000000000000000'
+      ;;
+    sudoers-hash)
+      expected_sudoers_hash='0000000000000000000000000000000000000000000000000000000000000000'
+      ;;
+    metadata)
+      chmod 0700 "$launcher"
+      ;;
+  esac
+  VERIFY_PREVIOUS_FINAL_VISUDO=false
+  verify_control_tree_fixture "$control_dir" "$expected_preflight_hash" "$expected_helper_hash" || valid=false
+  [[ "$(sha256sum "$launcher" | awk '{print $1}')" == "$expected_launcher_hash" ]] || valid=false
+  [[ "$(sha256sum "$sudoers" | awk '{print $1}')" == "$expected_sudoers_hash" ]] || valid=false
+  [[ "$(state_metadata "$control_dir")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$control_dir/lib")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$control_dir/production-backup-preflight.sh")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$control_dir/lib/endpoint-identity.sh")" == "$state_uid:$state_gid:644" ]] || valid=false
+  [[ "$(state_metadata "$launcher")" == "$state_uid:$state_gid:755" ]] || valid=false
+  [[ "$(state_metadata "$sudoers")" == "$state_uid:$state_gid:440" ]] || valid=false
+  visudo -cf "$sudoers" >/dev/null 2>&1 || valid=false
+  VERIFY_PREVIOUS_FINAL_VISUDO=true
+  [[ "$valid" == true ]]
 }
 
 runtime_fixture_dir="$TEST_ROOT/runtime-fixture"
@@ -736,6 +839,23 @@ for verify_scenario in wrong-preflight-hash root-symlink wrong-root-mode; do
   fi
 done
 
+for previous_scenario in restored-control-hash launcher-hash sudoers-hash metadata valid; do
+  set +e
+  verify_previous_installation_fixture "$previous_scenario"
+  RUN_RC=$?
+  set -e
+  if [[ "$previous_scenario" == valid ]]; then
+    assert_success 'verify_previous_installation accepts all valid invariants'
+  else
+    assert_failure "verify_previous_installation rejects $previous_scenario"
+  fi
+  if [[ "$VERIFY_PREVIOUS_FINAL_VISUDO" == true ]]; then
+    pass "verify_previous_installation reaches passing final visudo for $previous_scenario"
+  else
+    fail_test "verify_previous_installation reaches passing final visudo for $previous_scenario"
+  fi
+done
+
 for rollback_scenario in \
   after-control-old-preservation after-control-new-publication evidence-relocation \
   after-launcher-old-preservation after-launcher-new-publication \
@@ -749,10 +869,41 @@ for rollback_scenario in \
   if [[ "$(< "$rollback_fixture/control/production-backup-preflight.sh")" == old-control &&
     "$(< "$rollback_fixture/control/lib/endpoint-identity.sh")" == old-helper &&
     "$(< "$rollback_fixture/launcher")" == old-launcher &&
-    "$(< "$rollback_fixture/sudoers")" == old-sudoers ]]; then
+    "$(< "$rollback_fixture/sudoers")" == '# old-sudoers' ]]; then
     pass "CONTROL_UPDATE restores all previous bytes after $rollback_scenario failure"
   else
     fail_test "CONTROL_UPDATE restores all previous bytes after $rollback_scenario failure"
+  fi
+  if [[ "$rollback_scenario" == after-launcher-old-preservation ]]; then
+    if [[ "$(< "$rollback_fixture/launcher")" == old-launcher &&
+      "$(< "$rollback_fixture/launcher-rollback")" == old-launcher &&
+      ! -e "$rollback_fixture/failed-launcher" ]]; then
+      pass 'unverified launcher rollback copy never replaces untouched live launcher'
+    else
+      fail_test 'unverified launcher rollback copy never replaces untouched live launcher'
+    fi
+  elif [[ "$rollback_scenario" == after-sudoers-old-preservation ]]; then
+    if [[ "$(< "$rollback_fixture/sudoers")" == '# old-sudoers' &&
+      "$(< "$rollback_fixture/sudoers-rollback")" == '# old-sudoers' &&
+      ! -e "$rollback_fixture/failed-sudoers" ]] && visudo -cf "$rollback_fixture/sudoers" >/dev/null 2>&1; then
+      pass 'unverified sudoers rollback copy never replaces untouched live sudoers'
+    else
+      fail_test 'unverified sudoers rollback copy never replaces untouched live sudoers'
+    fi
+  elif [[ "$rollback_scenario" == after-launcher-new-publication ]]; then
+    if [[ "$(< "$rollback_fixture/launcher")" == old-launcher &&
+      "$(< "$rollback_fixture/failed-launcher")" == new-launcher ]]; then
+      pass 'validated launcher rollback restores old bytes after publication'
+    else
+      fail_test 'validated launcher rollback restores old bytes after publication'
+    fi
+  elif [[ "$rollback_scenario" == after-sudoers-new-publication ]]; then
+    if [[ "$(< "$rollback_fixture/sudoers")" == '# old-sudoers' &&
+      "$(< "$rollback_fixture/failed-sudoers")" == '# new-sudoers' ]] && visudo -cf "$rollback_fixture/sudoers" >/dev/null 2>&1; then
+      pass 'validated sudoers rollback restores old bytes and parses after publication'
+    else
+      fail_test 'validated sudoers rollback restores old bytes and parses after publication'
+    fi
   fi
   if [[ "$rollback_scenario" == evidence-relocation && -d "$rollback_fixture/control/failed-control" ]]; then
     fail_test 'CONTROL_UPDATE failed-evidence fixture unexpectedly nested its evidence path'
@@ -783,7 +934,7 @@ assert_success 'CONTROL_UPDATE successful path completes without rollback'
 success_fixture="$TEST_ROOT/control-update-success"
 if [[ "$(< "$success_fixture/control/production-backup-preflight.sh")" == new-control &&
   "$(< "$success_fixture/launcher")" == new-launcher &&
-  "$(< "$success_fixture/sudoers")" == new-sudoers &&
+  "$(< "$success_fixture/sudoers")" == '# new-sudoers' &&
   -d "$success_fixture/rollback-control" && -f "$success_fixture/launcher-rollback" && -f "$success_fixture/sudoers-rollback" ]]; then
   pass 'successful CONTROL_UPDATE keeps new bytes and previous rollback material'
 else
@@ -1325,8 +1476,14 @@ assert_contains 'runbook tracks preserved control state' 'control_old_preserved'
 assert_contains 'runbook tracks published control state' 'control_new_published' "$runbook_text"
 assert_contains 'runbook tracks preserved launcher state' 'launcher_old_preserved' "$runbook_text"
 assert_contains 'runbook tracks published launcher state' 'launcher_new_published' "$runbook_text"
+assert_contains 'runbook tracks created launcher rollback state' 'launcher_rollback_created' "$runbook_text"
+assert_contains 'runbook tracks verified launcher rollback state' 'launcher_rollback_verified' "$runbook_text"
+assert_contains 'runbook tracks moved launcher state' 'launcher_new_moved_aside' "$runbook_text"
 assert_contains 'runbook tracks preserved sudoers state' 'sudoers_old_preserved' "$runbook_text"
 assert_contains 'runbook tracks published sudoers state' 'sudoers_new_published' "$runbook_text"
+assert_contains 'runbook tracks created sudoers rollback state' 'sudoers_rollback_created' "$runbook_text"
+assert_contains 'runbook tracks verified sudoers rollback state' 'sudoers_rollback_verified' "$runbook_text"
+assert_contains 'runbook tracks moved sudoers state' 'sudoers_new_moved_aside' "$runbook_text"
 assert_contains 'runbook tracks completed activation state' 'activation_complete' "$runbook_text"
 assert_contains 'runbook automatically invokes update rollback from cleanup' 'rollback_update || rollback_status=$?' "$runbook_text"
 assert_contains 'runbook preserves failed control evidence' 'failed_control_dir' "$runbook_text"
@@ -1338,6 +1495,10 @@ assert_contains 'runbook validates live control before failed evidence fallback'
 assert_contains 'runbook preserves failed control with no-nesting copy' 'sudo cp -a -T -- "$control_dir" "$failed_control_dir"' "$runbook_text"
 assert_contains 'runbook tracks live control moved aside' 'control_new_moved_aside' "$runbook_text"
 assert_contains 'runbook reports recovery required when control restoration is unsafe' 'RECOVERY_REQUIRED' "$runbook_text"
+assert_contains 'runbook fail-closes previous installation invariants' 'local valid=true' "$runbook_text"
+assert_contains 'runbook validates sudoers rollback copy with visudo' 'sudo visudo -cf "$sudoers_rollback"' "$runbook_text"
+assert_contains 'runbook does not promote unverified launcher rollback' '[[ "$launcher_rollback_verified" == true ]]' "$runbook_text"
+assert_contains 'runbook does not promote unverified sudoers rollback' '[[ "$sudoers_rollback_verified" == true ]]' "$runbook_text"
 assert_contains 'runbook accumulates every control-tree invariant result' 'local valid=true' "$runbook_text"
 assert_contains 'runbook marks rejected control-tree invariants' '|| valid=false' "$runbook_text"
 assert_contains 'runbook returns success only after all control-tree invariants pass' 'if [[ "$valid" == true ]]; then' "$runbook_text"
@@ -1370,8 +1531,10 @@ assert_order 'runbook proves control absence before restoration move' 'sudo test
 assert_order 'runbook marks control rollback preservation immediately after move' 'sudo mv -T -- "$control_dir" "$rollback_control_dir"' 'control_old_preserved=true' "$runbook_text"
 assert_order 'runbook marks control publication immediately after move' 'sudo mv -T -- "$control_stage" "$control_dir"' 'control_new_published=true' "$runbook_text"
 assert_order 'runbook marks launcher rollback preservation immediately after install' 'sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"' 'launcher_old_preserved=true' "$runbook_text"
+assert_order 'runbook verifies launcher rollback before publication' 'launcher_rollback_created=true' 'launcher_rollback_verified=true' "$runbook_text"
 assert_order 'runbook marks launcher publication immediately after move' 'sudo mv -T -- "$launcher_stage" "$launcher"' 'launcher_new_published=true' "$runbook_text"
 assert_order 'runbook marks sudoers rollback preservation immediately after install' 'sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"' 'sudoers_old_preserved=true' "$runbook_text"
+assert_order 'runbook verifies sudoers rollback before publication' 'sudoers_rollback_created=true' 'sudoers_rollback_verified=true' "$runbook_text"
 assert_order 'runbook marks sudoers publication immediately after move' 'sudo mv -T -- "$sudoers_stage" "$sudoers_policy"' 'sudoers_new_published=true' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
