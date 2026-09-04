@@ -37,6 +37,16 @@ assert_failure() {
   if [[ "$RUN_RC" -ne 0 ]]; then pass "$name"; else fail_test "$name"; fi
 }
 
+assert_order() {
+  local name="$1" first="$2" second="$3" text="$4" line first_line=0 second_line=0 line_number=0
+  while IFS= read -r line; do
+    line_number=$((line_number + 1))
+    [[ "$first_line" -ne 0 || "$line" != *"$first"* ]] || first_line=$line_number
+    [[ "$second_line" -ne 0 || "$line" != *"$second"* ]] || second_line=$line_number
+  done <<< "$text"
+  if [[ "$first_line" -gt 0 && "$second_line" -gt "$first_line" ]]; then pass "$name"; else fail_test "$name"; fi
+}
+
 readonly APP_DIR="$TEST_ROOT/app"
 readonly ENV_FILE="$TEST_ROOT/buildingos-backup.env"
 readonly SSE_FILE="$TEST_ROOT/contabo-sse-s3-capability.json"
@@ -785,9 +795,36 @@ fi
 
 runbook_text="$(< "$ACTIVATION_RUNBOOK")"
 assert_contains 'runbook classifies privilege installation as a one-time mutation' 'one-time approved production mutation' "$runbook_text"
-assert_contains 'runbook validates staged sudoers before activation' 'visudo -cf /etc/sudoers.d/buildingos-production-backup-preflight.new' "$runbook_text"
+assert_contains 'runbook enables strict installation failure handling' 'set -Eeuo pipefail' "$runbook_text"
+assert_contains 'runbook cleans staged artifacts on failure' 'trap cleanup EXIT' "$runbook_text"
+assert_contains 'runbook only removes launcher when this execution published it' 'if [[ "$launcher_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes control when this execution published it' 'if [[ "$control_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes sudoers when this execution published it' 'if [[ "$sudoers_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes launcher staging when this execution created it' 'if [[ "$launcher_stage_created" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes sudoers staging when this execution created it' 'if [[ "$sudoers_stage_created" == true ]]; then' "$runbook_text"
+assert_contains 'runbook sets the control staging directory mode to 0755' 'sudo chmod 0755 "$control_stage"' "$runbook_text"
+assert_contains 'runbook validates staged control directory metadata as root 0755' 'test "$(sudo stat -c' "$runbook_text"
+assert_contains 'runbook requires staged control directory mode 0755' "\"\$control_stage\")\" = '0:0:755'" "$runbook_text"
+assert_contains 'runbook validates staged sudoers before activation' 'sudo visudo -cf "$sudoers_stage"' "$runbook_text"
 assert_contains 'runbook installs preflight control as root' 'sudo install -o root -g root -m 0755' "$runbook_text"
 assert_contains 'runbook documents privilege-boundary rollback' 'sudo rm -- "$sudoers_policy"' "$runbook_text"
+assert_contains 'runbook distinguishes the current application runtime SHA' 'CURRENT_RUNTIME_SHA' "$runbook_text"
+assert_contains 'runbook requires an explicit control source SHA' 'CONTROL_SOURCE_SHA' "$runbook_text"
+assert_contains 'runbook permits control source SHA to differ from runtime' 'It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.' "$runbook_text"
+assert_contains 'runbook binds the first runtime candidate to current runtime' 'readonly RUNTIME_CANDIDATE_SHA="$CURRENT_RUNTIME_SHA"' "$runbook_text"
+assert_contains 'runbook fetches control source without updating active checkout' 'git -C "$app_dir" fetch --no-tags origin main' "$runbook_text"
+assert_contains 'runbook requires control source reachability from origin main' 'git -C "$app_dir" merge-base --is-ancestor "$CONTROL_SOURCE_SHA" origin/main' "$runbook_text"
+assert_contains 'runbook materializes a detached control source worktree' 'git -C "$app_dir" worktree add --detach "$source_tree" "$CONTROL_SOURCE_SHA"' "$runbook_text"
+assert_contains 'runbook removes the temporary control worktree' 'git -C "$app_dir" worktree remove --force "$source_tree"' "$runbook_text"
+assert_contains 'runbook derives preflight integrity from the exact control source commit' 'git -C "$app_dir" show "$CONTROL_SOURCE_SHA:scripts/production-backup-preflight.sh"' "$runbook_text"
+assert_contains 'runbook verifies staged privileged control integrity before publication' 'test "$(sudo sha256sum "$control_stage/production-backup-preflight.sh" | awk' "$runbook_text"
+assert_contains 'runbook revalidates active checkout after staged installation' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' "$runbook_text"
+assert_absent 'runbook never switches the active checkout' 'git -C "$app_dir" switch' "$runbook_text"
+assert_absent 'runbook never resets the active checkout' 'git -C "$app_dir" reset' "$runbook_text"
+assert_absent 'runbook never pulls the active checkout' 'git -C "$app_dir" pull' "$runbook_text"
+assert_order 'runbook fixes stage mode before publishing control directory' 'sudo chmod 0755 "$control_stage"' 'sudo mv -- "$control_stage" "$control_dir"' "$runbook_text"
+assert_order 'runbook validates staged sudoers before publishing it' 'sudo visudo -cf "$sudoers_stage"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
+assert_order 'runbook revalidates active checkout before authorizing launcher' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
