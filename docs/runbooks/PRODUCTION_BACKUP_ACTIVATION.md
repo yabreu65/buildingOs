@@ -750,8 +750,8 @@ control_old_preserved=true
 sudo test -d "$rollback_control_dir" && sudo test ! -L "$rollback_control_dir"
 sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"
 sudo mv -T -- "$control_stage" "$control_dir"
-control_stage=''
 control_new_published=true
+control_stage=''
 sudo test -d "$control_dir" && sudo test ! -L "$control_dir"
 test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
 test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
@@ -782,8 +782,8 @@ if [[ "${new_hash[infra/production/launchers/buildingos-production-backup-prefli
   test "$(sudo stat -c '%u:%g:%a' "$launcher_rollback")" = '0:0:755'
   launcher_rollback_verified=true
   sudo mv -T -- "$launcher_stage" "$launcher"
-  launcher_stage=''
   launcher_new_published=true
+  launcher_stage=''
 fi
 active_checkout_before_sudoers="$(git -C "$app_dir" rev-parse HEAD)"
 [[ "$active_checkout_before_sudoers" == "$CURRENT_RUNTIME_SHA" ]]
@@ -803,8 +803,8 @@ if [[ "${new_hash[infra/production/sudoers/buildingos-production-backup-prefligh
   sudo visudo -cf "$sudoers_rollback"
   sudoers_rollback_verified=true
   sudo mv -T -- "$sudoers_stage" "$sudoers_policy"
-  sudoers_stage=''
   sudoers_new_published=true
+  sudoers_stage=''
 fi
 active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"
 [[ "$active_checkout_end" == "$CURRENT_RUNTIME_SHA" ]]

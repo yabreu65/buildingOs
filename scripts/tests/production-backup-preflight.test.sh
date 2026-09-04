@@ -47,6 +47,18 @@ assert_order() {
   if [[ "$first_line" -gt 0 && "$second_line" -gt "$first_line" ]]; then pass "$name"; else fail_test "$name"; fi
 }
 
+assert_adjacent() {
+  local name="$1" first="$2" second="$3" text="$4" previous=''
+  while IFS= read -r line; do
+    if [[ "$previous" == *"$first"* && "$line" == *"$second"* ]]; then
+      pass "$name"
+      return 0
+    fi
+    previous="$line"
+  done <<< "$text"
+  fail_test "$name"
+}
+
 readonly APP_DIR="$TEST_ROOT/app"
 readonly ENV_FILE="$TEST_ROOT/buildingos-backup.env"
 readonly SSE_FILE="$TEST_ROOT/contabo-sse-s3-capability.json"
@@ -498,8 +510,8 @@ run_control_update_fixture() {
     control_old_preserved=true
     [[ "$scenario" != after-control-old-preservation ]] || false
     mv "$local_control_stage" "$local_control_dir"
-    local_control_stage=''
     control_new_published=true
+    local_control_stage=''
     [[ "$scenario" != after-control-new-publication ]] || false
     if [[ "$scenario" == impossible ]]; then printf 'unexpected\n' > "$local_control_dir/unexpected"; fi
     [[ "$scenario" != evidence-relocation && "$scenario" != impossible ]] || false
@@ -512,8 +524,8 @@ run_control_update_fixture() {
     [[ "$(sha256sum "$local_launcher_rollback" | awk '{print $1}')" == "$(sha256sum "$local_launcher" | awk '{print $1}')" ]]
     launcher_rollback_verified=true
     mv "$local_launcher_stage" "$local_launcher"
-    local_launcher_stage=''
     launcher_new_published=true
+    local_launcher_stage=''
     [[ "$scenario" != after-launcher-new-publication ]] || false
     cp "$local_sudoers" "$local_sudoers_rollback"
     sudoers_old_preserved=true
@@ -523,8 +535,8 @@ run_control_update_fixture() {
     visudo -cf "$local_sudoers_rollback" >/dev/null 2>&1
     sudoers_rollback_verified=true
     mv "$local_sudoers_stage" "$local_sudoers"
-    local_sudoers_stage=''
     sudoers_new_published=true
+    local_sudoers_stage=''
     [[ "$scenario" != after-sudoers-new-publication && "$scenario" != checkout && "$scenario" != visudo ]] || false
     [[ "$(< "$local_control_dir/production-backup-preflight.sh")" == new-control ]]
     [[ "$(< "$local_launcher")" == new-launcher ]]
@@ -903,6 +915,13 @@ for rollback_scenario in \
       pass 'validated sudoers rollback restores old bytes and parses after publication'
     else
       fail_test 'validated sudoers rollback restores old bytes and parses after publication'
+    fi
+  elif [[ "$rollback_scenario" == after-control-new-publication ]]; then
+    if [[ "$(< "$rollback_fixture/control/production-backup-preflight.sh")" == old-control &&
+      "$(< "$rollback_fixture/failed-control/production-backup-preflight.sh")" == new-control ]]; then
+      pass 'immediate control publication interruption restores old bytes and preserves new evidence'
+    else
+      fail_test 'immediate control publication interruption restores old bytes and preserves new evidence'
     fi
   fi
   if [[ "$rollback_scenario" == evidence-relocation && -d "$rollback_fixture/control/failed-control" ]]; then
@@ -1530,12 +1549,15 @@ assert_order 'runbook validates parents before creating update staging' 'validat
 assert_order 'runbook proves control absence before restoration move' 'sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"' 'sudo mv -T -- "$rollback_control_dir" "$control_dir"' "$runbook_text"
 assert_order 'runbook marks control rollback preservation immediately after move' 'sudo mv -T -- "$control_dir" "$rollback_control_dir"' 'control_old_preserved=true' "$runbook_text"
 assert_order 'runbook marks control publication immediately after move' 'sudo mv -T -- "$control_stage" "$control_dir"' 'control_new_published=true' "$runbook_text"
+assert_adjacent 'runbook sets control publication state immediately after rename' 'sudo mv -T -- "$control_stage" "$control_dir"' 'control_new_published=true' "$runbook_text"
 assert_order 'runbook marks launcher rollback preservation immediately after install' 'sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"' 'launcher_old_preserved=true' "$runbook_text"
 assert_order 'runbook verifies launcher rollback before publication' 'launcher_rollback_created=true' 'launcher_rollback_verified=true' "$runbook_text"
 assert_order 'runbook marks launcher publication immediately after move' 'sudo mv -T -- "$launcher_stage" "$launcher"' 'launcher_new_published=true' "$runbook_text"
+assert_adjacent 'runbook sets launcher publication state immediately after rename' 'sudo mv -T -- "$launcher_stage" "$launcher"' 'launcher_new_published=true' "$runbook_text"
 assert_order 'runbook marks sudoers rollback preservation immediately after install' 'sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"' 'sudoers_old_preserved=true' "$runbook_text"
 assert_order 'runbook verifies sudoers rollback before publication' 'sudoers_rollback_created=true' 'sudoers_rollback_verified=true' "$runbook_text"
 assert_order 'runbook marks sudoers publication immediately after move' 'sudo mv -T -- "$sudoers_stage" "$sudoers_policy"' 'sudoers_new_published=true' "$runbook_text"
+assert_adjacent 'runbook sets sudoers publication state immediately after rename' 'sudo mv -T -- "$sudoers_stage" "$sudoers_policy"' 'sudoers_new_published=true' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
