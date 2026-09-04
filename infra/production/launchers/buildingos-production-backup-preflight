@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'
+readonly CONTROL_LIB_DIR='/usr/local/libexec/buildingos-backup-preflight/lib'
+readonly PREFLIGHT_SCRIPT='/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh'
+readonly ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
+readonly INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
+readonly STAT_COMMAND='/usr/bin/stat'
+readonly SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+fail() {
+  printf 'ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+assert_metadata() {
+  path="$1"
+  expected_mode="$2"
+  metadata="$($STAT_COMMAND -c '%u:%g:%a' -- "$path")" || fail "unable to inspect trusted control metadata: $path"
+  [ "$metadata" = "0:0:$expected_mode" ] || fail "unsafe trusted control metadata: $path"
+}
+
+[ "$#" -eq 1 ] || fail 'exactly one candidate SHA is required'
+candidate_sha="$1"
+[ "${#candidate_sha}" -eq 40 ] || fail 'candidate SHA must be exactly 40 lowercase hexadecimal characters'
+case "$candidate_sha" in
+  *[!0-9a-f]*) fail 'candidate SHA must be exactly 40 lowercase hexadecimal characters' ;;
+esac
+
+[ -d "$CONTROL_DIR" ] && [ ! -L "$CONTROL_DIR" ] || fail 'trusted control directory is unavailable'
+[ -d "$CONTROL_LIB_DIR" ] && [ ! -L "$CONTROL_LIB_DIR" ] || fail 'trusted control library directory is unavailable'
+[ -f "$PREFLIGHT_SCRIPT" ] && [ ! -L "$PREFLIGHT_SCRIPT" ] || fail 'trusted preflight control is unavailable'
+[ -f "$ENDPOINT_HELPER" ] && [ ! -L "$ENDPOINT_HELPER" ] || fail 'trusted endpoint helper is unavailable'
+[ -f "$INSTALLED_LAUNCHER" ] && [ ! -L "$INSTALLED_LAUNCHER" ] || fail 'trusted launcher is unavailable'
+assert_metadata "$CONTROL_DIR" 755
+assert_metadata "$CONTROL_LIB_DIR" 755
+assert_metadata "$PREFLIGHT_SCRIPT" 755
+assert_metadata "$ENDPOINT_HELPER" 644
+assert_metadata "$INSTALLED_LAUNCHER" 755
+
+unset BASH_ENV ENV CDPATH GLOBIGNORE \
+  LD_PRELOAD LD_LIBRARY_PATH \
+  BUILDINGOS_PREFLIGHT_TEST_MODE \
+  PREFLIGHT_APP_DIR PREFLIGHT_ENV_FILE PREFLIGHT_SSE_FILE PREFLIGHT_STATE_DIR \
+  PREFLIGHT_EXPECTED_ENV_OWNER PREFLIGHT_EXPECTED_ENV_GROUP \
+  PREFLIGHT_EXPECTED_STATE_OWNER PREFLIGHT_EXPECTED_STATE_GROUP \
+  PREFLIGHT_EXPECTED_SSE_OWNER PREFLIGHT_EXPECTED_SSE_GROUP
+
+exec /usr/bin/env -i \
+  PATH="$SAFE_PATH" \
+  HOME=/root \
+  USER=root \
+  LOGNAME=root \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$candidate_sha" </dev/null

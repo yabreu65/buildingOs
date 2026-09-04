@@ -35,6 +35,12 @@ those commands automatically.
   agree with each other and with the explicitly approved candidate SHA.
   Never infer the deployment candidate from a branch name or the current
   `main` ref; record the approved exact SHA in the activation evidence.
+- GitHub Actions receives passwordless privilege only for the fixed
+  `/usr/local/sbin/buildingos-production-backup-preflight` launcher. That
+  root-owned launcher validates one SHA, clears caller-controlled environment
+  state, and executes only root-owned control files under
+  `/usr/local/libexec/buildingos-backup-preflight`; it never executes mutable
+  checkout bytes as root.
 - The repository did not contain the bytes of the legacy production-only
   `/opt/pawtech/backups/scripts/backup-postgres.sh`. Its v1 identity remains
   pinned for the existing deploy preflight. Activation installs the separate
@@ -54,6 +60,9 @@ those commands automatically.
 | Protected environment template | `infra/production/buildingos-backup.env.example` | `/etc/buildingos/buildingos-backup.env` |
 | SSE proof | generated outside Git | `/etc/buildingos/contabo-sse-s3-capability.json` |
 | Restore target policy | generated outside Git | `/etc/buildingos/minio-restore-target-policy.json` |
+| Privileged preflight launcher | `infra/production/launchers/buildingos-production-backup-preflight` | `/usr/local/sbin/buildingos-production-backup-preflight` |
+| Privileged preflight control | `scripts/production-backup-preflight.sh` and `scripts/lib/endpoint-identity.sh` | `/usr/local/libexec/buildingos-backup-preflight/` |
+| Preflight sudoers policy | `infra/production/sudoers/buildingos-production-backup-preflight` | `/etc/sudoers.d/buildingos-production-backup-preflight` |
 | systemd units | `infra/production/systemd/` | `/etc/systemd/system/` |
 | Non-secret policy semantics | `infra/production/policies/` | Contabo Panel/API and source MinIO IAM |
 
@@ -191,6 +200,90 @@ Expected: regular non-symlink files, root-owned, mode `0600` for secrets,
 for the non-secret restore policy. Production
 must not appear in the policy. On failure, remove only newly installed config
 files under the same approval and revoke new credentials; do not alter app env.
+
+## 5A. INSTALL PRIVILEGED PREFLIGHT CONTROL
+
+This is a **one-time approved production mutation**. It installs only the
+root-owned read-only preflight control and its narrow sudoers authorization.
+It does not run the preflight, deploy, execute a backup, or change systemd.
+
+Preconditions: the operator has an approved exact `CANDIDATE_SHA`, the checkout
+is clean at that SHA, the three source artifacts below passed local review and
+`bash -n`, and none of the destination paths already exists. Updates to an
+existing installation require a separate reviewed replacement procedure.
+
+```bash
+readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly control_dir='/usr/local/libexec/buildingos-backup-preflight'
+readonly launcher='/usr/local/sbin/buildingos-production-backup-preflight'
+readonly sudoers_policy='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly candidate_sha='<approved-40-character-sha>'
+
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$candidate_sha"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+bash -n "$app_dir/scripts/production-backup-preflight.sh"
+bash -n "$app_dir/scripts/lib/endpoint-identity.sh"
+sh -n "$app_dir/infra/production/launchers/buildingos-production-backup-preflight"
+
+sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"
+sudo test ! -e "$launcher" && sudo test ! -L "$launcher"
+sudo test ! -e "$sudoers_policy" && sudo test ! -L "$sudoers_policy"
+sudo test ! -e /usr/local/sbin/.buildingos-production-backup-preflight.new && sudo test ! -L /usr/local/sbin/.buildingos-production-backup-preflight.new
+sudo test ! -e /etc/sudoers.d/buildingos-production-backup-preflight.new && sudo test ! -L /etc/sudoers.d/buildingos-production-backup-preflight.new
+sudo visudo -cf "$app_dir/infra/production/sudoers/buildingos-production-backup-preflight"
+
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.XXXXXX)"
+sudo install -d -o root -g root -m 0755 "$control_stage/lib"
+sudo install -o root -g root -m 0755 \
+  "$app_dir/scripts/production-backup-preflight.sh" \
+  "$control_stage/production-backup-preflight.sh"
+sudo install -o root -g root -m 0644 \
+  "$app_dir/scripts/lib/endpoint-identity.sh" \
+  "$control_stage/lib/endpoint-identity.sh"
+sudo mv -- "$control_stage" "$control_dir"
+
+sudo install -o root -g root -m 0755 \
+  "$app_dir/infra/production/launchers/buildingos-production-backup-preflight" \
+  /usr/local/sbin/.buildingos-production-backup-preflight.new
+sudo mv -- /usr/local/sbin/.buildingos-production-backup-preflight.new "$launcher"
+
+sudo install -o root -g root -m 0440 \
+  "$app_dir/infra/production/sudoers/buildingos-production-backup-preflight" \
+  /etc/sudoers.d/buildingos-production-backup-preflight.new
+sudo visudo -cf /etc/sudoers.d/buildingos-production-backup-preflight.new
+sudo mv -- /etc/sudoers.d/buildingos-production-backup-preflight.new "$sudoers_policy"
+sudo visudo -cf /etc/sudoers
+
+sudo stat -c '%U:%G %a %n' \
+  "$control_dir" "$control_dir/lib" \
+  "$control_dir/production-backup-preflight.sh" \
+  "$control_dir/lib/endpoint-identity.sh" "$launcher" "$sudoers_policy"
+```
+
+Expected metadata is `root:root`: `0755` for both directories, the preflight
+script, and launcher; `0644` for the helper; and `0440` for sudoers. The policy
+grants `yoryi` only `NOPASSWD:NOSETENV` access to the fixed launcher. The
+launcher itself rejects zero, multiple, malformed, path, and command arguments,
+verifies installed metadata, resets the environment, closes stdin, and invokes
+only the installed control path.
+
+Rollback under the same approved change window removes the authorization
+first, validates sudoers, and then removes only these newly installed paths:
+
+```bash
+sudo rm -- "$sudoers_policy"
+sudo visudo -cf /etc/sudoers
+sudo rm -- "$launcher"
+sudo rm -- "$control_dir/production-backup-preflight.sh"
+sudo rm -- "$control_dir/lib/endpoint-identity.sh"
+sudo rmdir -- "$control_dir/lib"
+sudo rmdir -- "$control_dir"
+```
+
+Stop on any installation or validation failure. Do not fall back to granting
+passwordless access to `bash`, `sh`, `env`, `systemctl`, Docker, or checkout
+scripts.
 
 ## 6. DEPLOY APPROVED SHA
 

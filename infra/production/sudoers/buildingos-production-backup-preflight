@@ -1,0 +1,2 @@
+Defaults!/usr/local/sbin/buildingos-production-backup-preflight env_reset,secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-production-backup-preflight *
