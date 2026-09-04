@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 set +x
 
-readonly EXPECTED_RUNTIME_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
 readonly DEFAULT_APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
 readonly EXPECTED_BACKUP_SERVICE='pawtech-buildingos-backup.service'
 readonly EXPECTED_VERIFY_SERVICE='pawtech-buildingos-backup-verify.service'
@@ -22,6 +21,7 @@ readonly MAX_INT64_DIV_1024=9007199254740991
 readonly MAX_POSTGRES_ESTIMATE_BASE_BYTES=6000000000000000000
 
 failures=0
+ENV_FILE_AVAILABLE=false
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -445,7 +445,7 @@ inspect_runtime() {
   printf 'API_REVISION=%s\n' "$(safe_output "$api_revision")"
   printf 'WEB_REVISION=%s\n' "$(safe_output "$web_revision")"
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
-  if [[ "$production_sha" == "$EXPECTED_RUNTIME_SHA" && "$api_revision" == "$EXPECTED_RUNTIME_SHA" && "$web_revision" == "$EXPECTED_RUNTIME_SHA" && "$checkout_status" == CLEAN ]]; then
+  if [[ "$production_sha" == "$CANDIDATE_SHA" && "$api_revision" == "$CANDIDATE_SHA" && "$web_revision" == "$CANDIDATE_SHA" && "$checkout_status" == CLEAN ]]; then
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
     printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
@@ -488,6 +488,7 @@ inspect_environment() {
   )
 
   if file_is_regular_non_symlink "$ENV_FILE"; then
+    ENV_FILE_AVAILABLE=true
     owner="$(file_owner "$ENV_FILE")"
     group="$(file_group "$ENV_FILE")"
     mode="0$(file_mode "$ENV_FILE")"
@@ -507,6 +508,8 @@ inspect_environment() {
     printf 'REQUIRED_ENV_NAMES_PRESENT=YES\n'
   else
     printf 'REQUIRED_ENV_NAMES_PRESENT=NO\n'
+    ENV_FILE_AVAILABLE=false
+    return
   fi
 
   source_environment="$(env_value "$ENV_FILE" SOURCE_ENVIRONMENT 2>/dev/null || true)"
@@ -590,6 +593,44 @@ inspect_environment() {
   printf 'POSTGRES_RCLONE_WRITE_DESTINATION=%s\n' "$(safe_output "$write_destination")"
   printf 'POSTGRES_RCLONE_VERIFY_DESTINATION=%s\n' "$(safe_output "$verify_destination")"
   printf 'BACKUP_PREFIX_VALID=%s\n' "$prefix_valid"
+}
+
+emit_unavailable_environment_outputs() {
+  printf 'SOURCE_ENVIRONMENT=UNKNOWN\n'
+  printf 'EXPECTED_SOURCE_ENVIRONMENT=UNKNOWN\n'
+  printf 'SOURCE_ENDPOINT_HOSTNAME=UNKNOWN\n'
+  printf 'SOURCE_BUCKET=UNKNOWN\n'
+  printf 'BACKUP_ENDPOINT_HOSTNAME=UNKNOWN\n'
+  printf 'BACKUP_BUCKET=UNKNOWN\n'
+  printf 'SOURCE_AND_BACKUP_SEPARATE=UNKNOWN\n'
+  printf 'DEPLOYED_RUNTIME_SOURCE_AND_BACKUP_SEPARATE=UNKNOWN\n'
+  printf 'BACKUP_STATE_DIR_MATCH=UNKNOWN\n'
+  printf 'POSTGRES_CONTAINER=UNKNOWN\n'
+  printf 'POSTGRES_DATABASE=UNKNOWN\n'
+  printf 'POSTGRES_USER=UNKNOWN\n'
+  printf 'POSTGRES_BACKUP_ROOT=UNKNOWN\n'
+  printf 'POSTGRES_SSE_MODE=UNKNOWN\n'
+  printf 'POSTGRES_RCLONE_WRITE_DESTINATION=UNKNOWN\n'
+  printf 'POSTGRES_RCLONE_VERIFY_DESTINATION=UNKNOWN\n'
+  printf 'BACKUP_PREFIX_VALID=UNKNOWN\n'
+  printf 'SSE_EVIDENCE_VALID=UNKNOWN\n'
+  printf 'SSE_STATUS=UNKNOWN\n'
+  printf 'SSE_ALGORITHM=UNKNOWN\n'
+  printf 'SSE_PATH_MATCH=UNKNOWN\n'
+  printf 'SSE_PROBED_AT_VALID=UNKNOWN\n'
+  printf 'SSE_ENDPOINT_MATCH=UNKNOWN\n'
+  printf 'DEPLOYED_RUNTIME_SSE_ENDPOINT_MATCH=UNKNOWN\n'
+  printf 'SSE_BUCKET_MATCH=UNKNOWN\n'
+  printf 'POSTGRES_CONTAINER_STATE=UNKNOWN\n'
+  printf 'POSTGRES_CONTAINER_HEALTH=UNKNOWN\n'
+  printf 'POSTGRES_BACKUP_ROOT_FREE_BYTES=UNKNOWN\n'
+  printf 'POSTGRES_DATABASE_SIZE_BYTES=UNKNOWN\n'
+  printf 'POSTGRES_BACKUP_SAFETY_MARGIN_BYTES=UNKNOWN\n'
+  printf 'POSTGRES_BACKUP_REQUIRED_BYTES=UNKNOWN\n'
+  printf 'POSTGRES_BACKUP_SPACE_SAFE=UNKNOWN\n'
+  printf 'TMP_FREE_BYTES=UNKNOWN\n'
+  printf 'TMP_REQUIRED_BYTES=UNKNOWN\n'
+  printf 'TMP_SPACE_SAFE=UNKNOWN\n'
 }
 
 inspect_sse_evidence() {
@@ -906,9 +947,13 @@ main() {
     inspect_unit VERIFY_SERVICE "$EXPECTED_VERIFY_SERVICE" "$EXPECTED_BACKUP_ENTRYPOINT" "$EXPECTED_ENV_FILE" yoryi "$EXPECTED_APP_DIR" true
     inspect_concurrency
     inspect_environment
-    inspect_sse_evidence
     inspect_state
-    inspect_postgres_and_space "$(env_value "$ENV_FILE" POSTGRES_CONTAINER 2>/dev/null || printf 'invalid-container')"
+    if [[ "$ENV_FILE_AVAILABLE" == true ]]; then
+      inspect_sse_evidence
+      inspect_postgres_and_space "$(env_value "$ENV_FILE" POSTGRES_CONTAINER 2>/dev/null || printf 'invalid-container')"
+    else
+      emit_unavailable_environment_outputs
+    fi
   else
     printf 'PRODUCTION_RUNTIME_SHA=UNKNOWN\nAPI_REVISION=UNKNOWN\nWEB_REVISION=UNKNOWN\nPRODUCTION_CHECKOUT_STATUS=UNKNOWN\nRUNTIME_IDENTITY=UNKNOWN\n'
     printf 'BACKUP_SERVICE_EXISTS=UNKNOWN\nBACKUP_SERVICE_USER=UNKNOWN\nBACKUP_SERVICE_EXECSTART_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPRE_MATCH=UNKNOWN\nBACKUP_SERVICE_EXECSTARTPOST_MATCH=UNKNOWN\nBACKUP_SERVICE_ENV_FILE_MATCH=UNKNOWN\nBACKUP_SERVICE_ACTIVE=UNKNOWN\n'
