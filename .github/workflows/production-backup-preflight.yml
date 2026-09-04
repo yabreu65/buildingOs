@@ -46,7 +46,7 @@ jobs:
           [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
           test -x scripts/production-backup-preflight.sh
 
-      - name: Stream read-only production backup preflight
+      - name: Invoke installed read-only production backup preflight
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -70,6 +70,5 @@ jobs:
             -p "$SSH_PORT"
           )
           printf -v quoted_candidate '%q' "$CANDIDATE_SHA"
-           cat scripts/lib/endpoint-identity.sh scripts/production-backup-preflight.sh | \
-             ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
-             "sudo -n -u root bash -s -- $quoted_candidate"
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
+            "sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_candidate"

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT_DIR
 readonly PREFLIGHT="$ROOT_DIR/scripts/production-backup-preflight.sh"
 readonly WORKFLOW="$ROOT_DIR/.github/workflows/production-backup-preflight.yml"
+readonly PRIVILEGED_LAUNCHER="$ROOT_DIR/infra/production/launchers/buildingos-production-backup-preflight"
+readonly SUDOERS_POLICY="$ROOT_DIR/infra/production/sudoers/buildingos-production-backup-preflight"
+readonly ACTIVATION_RUNBOOK="$ROOT_DIR/docs/runbooks/PRODUCTION_BACKUP_ACTIVATION.md"
 readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-preflight.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -32,6 +35,16 @@ assert_success() {
 assert_failure() {
   local name="$1"
   if [[ "$RUN_RC" -ne 0 ]]; then pass "$name"; else fail_test "$name"; fi
+}
+
+assert_order() {
+  local name="$1" first="$2" second="$3" text="$4" line first_line=0 second_line=0 line_number=0
+  while IFS= read -r line; do
+    line_number=$((line_number + 1))
+    [[ "$first_line" -ne 0 || "$line" != *"$first"* ]] || first_line=$line_number
+    [[ "$second_line" -ne 0 || "$line" != *"$second"* ]] || second_line=$line_number
+  done <<< "$text"
+  if [[ "$first_line" -gt 0 && "$second_line" -gt "$first_line" ]]; then pass "$name"; else fail_test "$name"; fi
 }
 
 readonly APP_DIR="$TEST_ROOT/app"
@@ -617,6 +630,129 @@ assert_failure 'missing dependency fails closed'
 assert_contains 'missing dependency is reported' 'required dependency is missing: rclone' "$RUN_OUTPUT"
 ln -s "$(command -v true)" "$BIN_DIR/rclone"
 
+launcher_control="$TEST_ROOT/installed-control"
+launcher_path="$TEST_ROOT/installed-launcher"
+launcher_stat="$TEST_ROOT/launcher-stat"
+mkdir -p "$launcher_control/lib"
+cat > "$launcher_control/production-backup-preflight.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if IFS= read -r _; then
+  printf '%s\n' 'STDIN=CUSTOM'
+  exit 1
+fi
+printf 'CANDIDATE_SHA=%s\n' "$1"
+printf 'PREFLIGHT_APP_DIR=%s\n' "${PREFLIGHT_APP_DIR-UNSET}"
+printf 'PREFLIGHT_ENV_FILE=%s\n' "${PREFLIGHT_ENV_FILE-UNSET}"
+printf 'PREFLIGHT_SSE_FILE=%s\n' "${PREFLIGHT_SSE_FILE-UNSET}"
+printf 'PREFLIGHT_STATE_DIR=%s\n' "${PREFLIGHT_STATE_DIR-UNSET}"
+printf 'PREFLIGHT_EXPECTED_ENV_OWNER=%s\n' "${PREFLIGHT_EXPECTED_ENV_OWNER-UNSET}"
+printf 'PREFLIGHT_EXPECTED_ENV_GROUP=%s\n' "${PREFLIGHT_EXPECTED_ENV_GROUP-UNSET}"
+printf 'PREFLIGHT_EXPECTED_STATE_OWNER=%s\n' "${PREFLIGHT_EXPECTED_STATE_OWNER-UNSET}"
+printf 'PREFLIGHT_EXPECTED_STATE_GROUP=%s\n' "${PREFLIGHT_EXPECTED_STATE_GROUP-UNSET}"
+printf 'PREFLIGHT_EXPECTED_SSE_OWNER=%s\n' "${PREFLIGHT_EXPECTED_SSE_OWNER-UNSET}"
+printf 'PREFLIGHT_EXPECTED_SSE_GROUP=%s\n' "${PREFLIGHT_EXPECTED_SSE_GROUP-UNSET}"
+printf 'BUILDINGOS_PREFLIGHT_TEST_MODE=%s\n' "${BUILDINGOS_PREFLIGHT_TEST_MODE-UNSET}"
+printf 'PATH=%s\n' "$PATH"
+printf '%s\n' 'STDIN=CLOSED'
+MOCK
+printf '# endpoint fixture\n' > "$launcher_control/lib/endpoint-identity.sh"
+cat > "$launcher_stat" <<'MOCK'
+#!/bin/sh
+set -eu
+path=''
+for argument do path="$argument"; done
+case "$path" in
+  */endpoint-identity.sh) mode=644 ;;
+  *) mode=755 ;;
+esac
+printf '0:0:%s\n' "$mode"
+MOCK
+sed \
+  -e "s|/usr/local/libexec/buildingos-backup-preflight|$launcher_control|g" \
+  -e "s|/usr/local/sbin/buildingos-production-backup-preflight|$launcher_path|g" \
+  -e "s|/usr/bin/stat|$launcher_stat|g" \
+  "$PRIVILEGED_LAUNCHER" > "$launcher_path"
+chmod 0755 "$launcher_control" "$launcher_control/lib" "$launcher_control/production-backup-preflight.sh" "$launcher_path" "$launcher_stat"
+chmod 0644 "$launcher_control/lib/endpoint-identity.sh"
+
+run_launcher() {
+  set +e
+  LAUNCHER_OUTPUT="$("$launcher_path" "$@" 2>&1)"
+  LAUNCHER_RC=$?
+  set -e
+}
+
+run_launcher "$CANDIDATE_SHA"
+RUN_RC=$LAUNCHER_RC
+assert_success 'privileged launcher accepts exactly one lowercase SHA'
+assert_contains 'privileged launcher passes the exact SHA' "CANDIDATE_SHA=$CANDIDATE_SHA" "$LAUNCHER_OUTPUT"
+assert_contains 'privileged launcher closes caller stdin' 'STDIN=CLOSED' "$LAUNCHER_OUTPUT"
+
+run_launcher
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects zero arguments'
+run_launcher "$CANDIDATE_SHA" id
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects multiple arguments'
+run_launcher AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects uppercase SHA'
+run_launcher abc123
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects short SHA'
+run_launcher 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;'
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects shell metacharacters'
+run_launcher /tmp/preflight.sh
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects path arguments'
+run_launcher id
+RUN_RC=$LAUNCHER_RC
+assert_failure 'privileged launcher rejects arbitrary commands'
+
+printf 'printf "BASH_ENV_EXECUTED\\n"; exit 99\n' > "$TEST_ROOT/attacker-bash-env"
+set +e
+LAUNCHER_OUTPUT="$(env \
+  BASH_ENV="$TEST_ROOT/attacker-bash-env" \
+  PATH="$TEST_ROOT:$PATH" \
+  PREFLIGHT_APP_DIR=/tmp/attacker-app \
+  PREFLIGHT_ENV_FILE=/tmp/attacker.env \
+  PREFLIGHT_SSE_FILE=/tmp/attacker-sse.json \
+  PREFLIGHT_STATE_DIR=/tmp/attacker-state \
+  PREFLIGHT_EXPECTED_ENV_OWNER=attacker \
+  PREFLIGHT_EXPECTED_ENV_GROUP=attacker \
+  PREFLIGHT_EXPECTED_STATE_OWNER=attacker \
+  PREFLIGHT_EXPECTED_STATE_GROUP=attacker \
+  PREFLIGHT_EXPECTED_SSE_OWNER=attacker \
+  PREFLIGHT_EXPECTED_SSE_GROUP=attacker \
+  BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY \
+  "$launcher_path" "$CANDIDATE_SHA" 2>&1)"
+LAUNCHER_RC=$?
+set -e
+RUN_RC=$LAUNCHER_RC
+assert_success 'privileged launcher ignores protected path and test-mode overrides'
+assert_contains 'app directory override is cleared' 'PREFLIGHT_APP_DIR=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'environment path override is cleared' 'PREFLIGHT_ENV_FILE=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'SSE path override is cleared' 'PREFLIGHT_SSE_FILE=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'state path override is cleared' 'PREFLIGHT_STATE_DIR=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'environment owner override is cleared' 'PREFLIGHT_EXPECTED_ENV_OWNER=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'environment group override is cleared' 'PREFLIGHT_EXPECTED_ENV_GROUP=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'state owner override is cleared' 'PREFLIGHT_EXPECTED_STATE_OWNER=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'state group override is cleared' 'PREFLIGHT_EXPECTED_STATE_GROUP=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'SSE owner override is cleared' 'PREFLIGHT_EXPECTED_SSE_OWNER=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'SSE group override is cleared' 'PREFLIGHT_EXPECTED_SSE_GROUP=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'test mode override is cleared' 'BUILDINGOS_PREFLIGHT_TEST_MODE=UNSET' "$LAUNCHER_OUTPUT"
+assert_contains 'launcher replaces caller PATH' 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$LAUNCHER_OUTPUT"
+assert_absent 'launcher prevents BASH_ENV execution' 'BASH_ENV_EXECUTED' "$LAUNCHER_OUTPUT"
+
+launcher_text="$(< "$PRIVILEGED_LAUNCHER")"
+assert_contains 'launcher pins the installed control directory' "readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'" "$launcher_text"
+assert_contains 'launcher verifies root ownership and exact modes' '"0:0:$expected_mode"' "$launcher_text"
+assert_contains 'launcher executes only the installed preflight control' '/bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$candidate_sha" </dev/null' "$launcher_text"
+assert_absent 'launcher never executes mutable checkout scripts' '/opt/pawtech/apps/buildingos/buildingos-app' "$launcher_text"
+assert_absent 'launcher never evaluates caller input' 'eval ' "$launcher_text"
+
 preflight_text="$(< "$PREFLIGHT")"
 static_text="$(printf '%s\n' "$preflight_text" | grep -v 'EXPECTED_PROPOSED_COMMAND')"
 if printf '%s\n' "$static_text" | grep -Eq 'systemctl (start|restart|stop|enable|disable|daemon-reload)|pg_dump|prisma|(^|[[:space:]])(INSERT|UPDATE|DELETE|CREATE)[[:space:]]|git (switch|pull|reset)|mc (mirror|cp|rm)|rclone (copy|copyto|delete|move)|(^|[[:space:]])(chmod|chown)[[:space:]]'; then
@@ -630,8 +766,10 @@ assert_contains 'workflow uses production environment' 'environment: production'
 assert_contains 'workflow uses operations concurrency group' 'group: production-operations' "$workflow_text"
 assert_contains 'workflow uses strict host key checking' 'StrictHostKeyChecking=yes' "$workflow_text"
 assert_contains 'workflow uses batch mode' 'BatchMode=yes' "$workflow_text"
-assert_contains 'workflow streams script over stdin' 'bash -s --' "$workflow_text"
-assert_contains 'workflow runs streamed preflight as root without a password' 'sudo -n -u root bash -s --' "$workflow_text"
+assert_contains 'workflow invokes only the installed privileged launcher' 'sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_candidate' "$workflow_text"
+assert_absent 'workflow does not authorize a streamed root bash' 'sudo -n -u root bash -s --' "$workflow_text"
+assert_absent 'workflow does not invoke bash over SSH stdin' 'bash -s --' "$workflow_text"
+assert_absent 'workflow does not stream executable checkout code' 'cat scripts/lib/endpoint-identity.sh scripts/production-backup-preflight.sh' "$workflow_text"
 assert_contains 'workflow uses protected SSH host secret' 'PRODUCTION_SSH_HOST' "$workflow_text"
 assert_contains 'workflow is manually dispatched' 'workflow_dispatch:' "$workflow_text"
 assert_absent 'workflow has no push trigger' 'push:' "$workflow_text"
@@ -645,6 +783,48 @@ assert_absent 'workflow never uses ssh-keyscan' 'ssh-keyscan' "$workflow_text"
 assert_absent 'workflow has no automatic retry controls' 'continue-on-error' "$workflow_text"
 assert_absent 'workflow has no retry strategy' 'strategy:' "$workflow_text"
 assert_contains 'workflow has read-only permissions' 'contents: read' "$workflow_text"
+
+sudoers_text="$(< "$SUDOERS_POLICY")"
+assert_contains 'sudoers grants only the fixed launcher to yoryi' 'yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-production-backup-preflight *' "$sudoers_text"
+assert_contains 'sudoers resets the launcher environment' 'env_reset' "$sudoers_text"
+if printf '%s\n' "$sudoers_text" | grep -Eq '(^|[[:space:]])(/[^[:space:]]*/)?(bash|sh|env|cat)([[:space:]]|$)|(^|[[:space:]])(systemctl|docker)[[:space:]]+\*'; then
+  fail_test 'sudoers excludes generic interpreters and privileged commands'
+else
+  pass 'sudoers excludes generic interpreters and privileged commands'
+fi
+
+runbook_text="$(< "$ACTIVATION_RUNBOOK")"
+assert_contains 'runbook classifies privilege installation as a one-time mutation' 'one-time approved production mutation' "$runbook_text"
+assert_contains 'runbook enables strict installation failure handling' 'set -Eeuo pipefail' "$runbook_text"
+assert_contains 'runbook cleans staged artifacts on failure' 'trap cleanup EXIT' "$runbook_text"
+assert_contains 'runbook only removes launcher when this execution published it' 'if [[ "$launcher_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes control when this execution published it' 'if [[ "$control_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes sudoers when this execution published it' 'if [[ "$sudoers_published" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes launcher staging when this execution created it' 'if [[ "$launcher_stage_created" == true ]]; then' "$runbook_text"
+assert_contains 'runbook only removes sudoers staging when this execution created it' 'if [[ "$sudoers_stage_created" == true ]]; then' "$runbook_text"
+assert_contains 'runbook sets the control staging directory mode to 0755' 'sudo chmod 0755 "$control_stage"' "$runbook_text"
+assert_contains 'runbook validates staged control directory metadata as root 0755' 'test "$(sudo stat -c' "$runbook_text"
+assert_contains 'runbook requires staged control directory mode 0755' "\"\$control_stage\")\" = '0:0:755'" "$runbook_text"
+assert_contains 'runbook validates staged sudoers before activation' 'sudo visudo -cf "$sudoers_stage"' "$runbook_text"
+assert_contains 'runbook installs preflight control as root' 'sudo install -o root -g root -m 0755' "$runbook_text"
+assert_contains 'runbook documents privilege-boundary rollback' 'sudo rm -- "$sudoers_policy"' "$runbook_text"
+assert_contains 'runbook distinguishes the current application runtime SHA' 'CURRENT_RUNTIME_SHA' "$runbook_text"
+assert_contains 'runbook requires an explicit control source SHA' 'CONTROL_SOURCE_SHA' "$runbook_text"
+assert_contains 'runbook permits control source SHA to differ from runtime' 'It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.' "$runbook_text"
+assert_contains 'runbook binds the first runtime candidate to current runtime' 'readonly RUNTIME_CANDIDATE_SHA="$CURRENT_RUNTIME_SHA"' "$runbook_text"
+assert_contains 'runbook fetches control source without updating active checkout' 'git -C "$app_dir" fetch --no-tags origin main' "$runbook_text"
+assert_contains 'runbook requires control source reachability from origin main' 'git -C "$app_dir" merge-base --is-ancestor "$CONTROL_SOURCE_SHA" origin/main' "$runbook_text"
+assert_contains 'runbook materializes a detached control source worktree' 'git -C "$app_dir" worktree add --detach "$source_tree" "$CONTROL_SOURCE_SHA"' "$runbook_text"
+assert_contains 'runbook removes the temporary control worktree' 'git -C "$app_dir" worktree remove --force "$source_tree"' "$runbook_text"
+assert_contains 'runbook derives preflight integrity from the exact control source commit' 'git -C "$app_dir" show "$CONTROL_SOURCE_SHA:scripts/production-backup-preflight.sh"' "$runbook_text"
+assert_contains 'runbook verifies staged privileged control integrity before publication' 'test "$(sudo sha256sum "$control_stage/production-backup-preflight.sh" | awk' "$runbook_text"
+assert_contains 'runbook revalidates active checkout after staged installation' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' "$runbook_text"
+assert_absent 'runbook never switches the active checkout' 'git -C "$app_dir" switch' "$runbook_text"
+assert_absent 'runbook never resets the active checkout' 'git -C "$app_dir" reset' "$runbook_text"
+assert_absent 'runbook never pulls the active checkout' 'git -C "$app_dir" pull' "$runbook_text"
+assert_order 'runbook fixes stage mode before publishing control directory' 'sudo chmod 0755 "$control_stage"' 'sudo mv -- "$control_stage" "$control_dir"' "$runbook_text"
+assert_order 'runbook validates staged sudoers before publishing it' 'sudo visudo -cf "$sudoers_stage"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
+assert_order 'runbook revalidates active checkout before authorizing launcher' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

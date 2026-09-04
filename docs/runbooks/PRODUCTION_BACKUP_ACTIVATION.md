@@ -35,6 +35,12 @@ those commands automatically.
   agree with each other and with the explicitly approved candidate SHA.
   Never infer the deployment candidate from a branch name or the current
   `main` ref; record the approved exact SHA in the activation evidence.
+- GitHub Actions receives passwordless privilege only for the fixed
+  `/usr/local/sbin/buildingos-production-backup-preflight` launcher. That
+  root-owned launcher validates one SHA, clears caller-controlled environment
+  state, and executes only root-owned control files under
+  `/usr/local/libexec/buildingos-backup-preflight`; it never executes mutable
+  checkout bytes as root.
 - The repository did not contain the bytes of the legacy production-only
   `/opt/pawtech/backups/scripts/backup-postgres.sh`. Its v1 identity remains
   pinned for the existing deploy preflight. Activation installs the separate
@@ -54,6 +60,9 @@ those commands automatically.
 | Protected environment template | `infra/production/buildingos-backup.env.example` | `/etc/buildingos/buildingos-backup.env` |
 | SSE proof | generated outside Git | `/etc/buildingos/contabo-sse-s3-capability.json` |
 | Restore target policy | generated outside Git | `/etc/buildingos/minio-restore-target-policy.json` |
+| Privileged preflight launcher | `infra/production/launchers/buildingos-production-backup-preflight` | `/usr/local/sbin/buildingos-production-backup-preflight` |
+| Privileged preflight control | `scripts/production-backup-preflight.sh` and `scripts/lib/endpoint-identity.sh` | `/usr/local/libexec/buildingos-backup-preflight/` |
+| Preflight sudoers policy | `infra/production/sudoers/buildingos-production-backup-preflight` | `/etc/sudoers.d/buildingos-production-backup-preflight` |
 | systemd units | `infra/production/systemd/` | `/etc/systemd/system/` |
 | Non-secret policy semantics | `infra/production/policies/` | Contabo Panel/API and source MinIO IAM |
 
@@ -191,6 +200,203 @@ Expected: regular non-symlink files, root-owned, mode `0600` for secrets,
 for the non-secret restore policy. Production
 must not appear in the policy. On failure, remove only newly installed config
 files under the same approval and revoke new credentials; do not alter app env.
+
+## 5A. INSTALL PRIVILEGED PREFLIGHT CONTROL
+
+This is a **one-time approved production mutation**. It installs only the
+root-owned read-only preflight control and its narrow sudoers authorization.
+It does not run the preflight, deploy, execute a backup, or change systemd.
+
+This bootstrap deliberately separates three identities:
+
+- `CURRENT_RUNTIME_SHA` is the current application revision. For this first
+  installation it remains `db82d3d37fc6184a6d4063709b9a15b923371695`; the
+  active checkout must remain clean and at that exact SHA throughout.
+- `CONTROL_SOURCE_SHA` is the explicit reviewed and merged 40-character commit
+  that contains this launcher, sudoers template, and preflight control. It must
+  be reachable from `origin/main`; never infer it from the current `main` ref.
+  It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.
+- `RUNTIME_CANDIDATE_SHA` is the later preflight argument. Immediately after
+  this bootstrap it remains `db82d3d37fc6184a6d4063709b9a15b923371695`, not
+  `CONTROL_SOURCE_SHA`.
+
+Preconditions: approved values for all three identities are recorded, the
+active checkout is clean, the source artifacts passed local review, and none of
+the destination paths already exists. Updates to an existing installation
+require a separate reviewed replacement procedure.
+
+```bash
+set -Eeuo pipefail
+set +x
+
+readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly control_dir='/usr/local/libexec/buildingos-backup-preflight'
+readonly launcher='/usr/local/sbin/buildingos-production-backup-preflight'
+readonly sudoers_policy='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly CURRENT_RUNTIME_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
+readonly CONTROL_SOURCE_SHA='<exact-reviewed-merged-control-commit>'
+readonly RUNTIME_CANDIDATE_SHA="$CURRENT_RUNTIME_SHA"
+source_tree=''
+control_stage=''
+launcher_stage='/usr/local/sbin/.buildingos-production-backup-preflight.new'
+sudoers_stage='/etc/sudoers.d/buildingos-production-backup-preflight.new'
+control_stage_created=false
+launcher_stage_created=false
+sudoers_stage_created=false
+control_published=false
+launcher_published=false
+sudoers_published=false
+activated=false
+
+cleanup() {
+  local status=$?
+  local cleanup_status=0
+  trap - EXIT
+  set +e
+  if [[ "$activated" != true ]]; then
+    if [[ "$sudoers_stage_created" == true ]]; then
+      sudo rm -f -- "$sudoers_stage" || cleanup_status=$?
+    fi
+    if [[ "$launcher_stage_created" == true ]]; then
+      sudo rm -f -- "$launcher_stage" || cleanup_status=$?
+    fi
+    if [[ "$sudoers_published" == true ]]; then
+      sudo rm -f -- "$sudoers_policy" || cleanup_status=$?
+    fi
+    if [[ "$launcher_published" == true ]]; then
+      sudo rm -f -- "$launcher" || cleanup_status=$?
+    fi
+    if [[ "$control_published" == true ]]; then
+      sudo rm -f -- "$control_dir/production-backup-preflight.sh" || cleanup_status=$?
+      sudo rm -f -- "$control_dir/lib/endpoint-identity.sh" || cleanup_status=$?
+      sudo rmdir -- "$control_dir/lib" "$control_dir" || cleanup_status=$?
+    fi
+    if [[ "$control_stage_created" == true && -n "$control_stage" ]]; then
+      sudo rm -f -- "$control_stage/production-backup-preflight.sh" "$control_stage/lib/endpoint-identity.sh" || cleanup_status=$?
+      sudo rmdir -- "$control_stage/lib" "$control_stage" || cleanup_status=$?
+    fi
+  fi
+  if [[ -n "$source_tree" ]]; then
+    git -C "$app_dir" worktree remove --force "$source_tree" || cleanup_status=$?
+  fi
+  if (( status == 0 && cleanup_status != 0 )); then
+    printf 'ERROR: temporary preflight control cleanup failed\n' >&2
+    status=$cleanup_status
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+[[ "$CURRENT_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$CONTROL_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$RUNTIME_CANDIDATE_SHA" == "$CURRENT_RUNTIME_SHA" ]]
+active_checkout_start="$(git -C "$app_dir" rev-parse HEAD)"
+[[ "$active_checkout_start" == "$CURRENT_RUNTIME_SHA" ]]
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+
+git -C "$app_dir" fetch --no-tags origin main
+git -C "$app_dir" rev-parse --verify "$CONTROL_SOURCE_SHA^{commit}" >/dev/null
+git -C "$app_dir" merge-base --is-ancestor "$CONTROL_SOURCE_SHA" origin/main
+source_tree="$(mktemp -d /tmp/buildingos-backup-preflight-control.XXXXXX)"
+rmdir -- "$source_tree"
+git -C "$app_dir" worktree add --detach "$source_tree" "$CONTROL_SOURCE_SHA"
+
+preflight_sha="$(git -C "$app_dir" show "$CONTROL_SOURCE_SHA:scripts/production-backup-preflight.sh" | sha256sum | awk '{print $1}')"
+helper_sha="$(git -C "$app_dir" show "$CONTROL_SOURCE_SHA:scripts/lib/endpoint-identity.sh" | sha256sum | awk '{print $1}')"
+launcher_sha="$(git -C "$app_dir" show "$CONTROL_SOURCE_SHA:infra/production/launchers/buildingos-production-backup-preflight" | sha256sum | awk '{print $1}')"
+sudoers_sha="$(git -C "$app_dir" show "$CONTROL_SOURCE_SHA:infra/production/sudoers/buildingos-production-backup-preflight" | sha256sum | awk '{print $1}')"
+[[ "$preflight_sha" =~ ^[0-9a-f]{64}$ && "$helper_sha" =~ ^[0-9a-f]{64}$ && "$launcher_sha" =~ ^[0-9a-f]{64}$ && "$sudoers_sha" =~ ^[0-9a-f]{64}$ ]]
+bash -n "$source_tree/scripts/production-backup-preflight.sh"
+bash -n "$source_tree/scripts/lib/endpoint-identity.sh"
+sh -n "$source_tree/infra/production/launchers/buildingos-production-backup-preflight"
+
+sudo test ! -e "$control_dir" && sudo test ! -L "$control_dir"
+sudo test ! -e "$launcher" && sudo test ! -L "$launcher"
+sudo test ! -e "$sudoers_policy" && sudo test ! -L "$sudoers_policy"
+sudo test ! -e "$launcher_stage" && sudo test ! -L "$launcher_stage"
+sudo test ! -e "$sudoers_stage" && sudo test ! -L "$sudoers_stage"
+sudo visudo -cf "$source_tree/infra/production/sudoers/buildingos-production-backup-preflight"
+
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.XXXXXX)"
+control_stage_created=true
+sudo chmod 0755 "$control_stage"
+sudo install -d -o root -g root -m 0755 "$control_stage/lib"
+sudo install -o root -g root -m 0755 \
+  "$source_tree/scripts/production-backup-preflight.sh" \
+  "$control_stage/production-backup-preflight.sh"
+sudo install -o root -g root -m 0644 \
+  "$source_tree/scripts/lib/endpoint-identity.sh" \
+  "$control_stage/lib/endpoint-identity.sh"
+launcher_stage_created=true
+sudo install -o root -g root -m 0755 \
+  "$source_tree/infra/production/launchers/buildingos-production-backup-preflight" \
+  "$launcher_stage"
+sudoers_stage_created=true
+sudo install -o root -g root -m 0440 \
+  "$source_tree/infra/production/sudoers/buildingos-production-backup-preflight" \
+  "$sudoers_stage"
+sudo visudo -cf "$sudoers_stage"
+
+test "$(sudo sha256sum "$control_stage/production-backup-preflight.sh" | awk '{print $1}')" = "$preflight_sha"
+test "$(sudo sha256sum "$control_stage/lib/endpoint-identity.sh" | awk '{print $1}')" = "$helper_sha"
+test "$(sudo sha256sum "$launcher_stage" | awk '{print $1}')" = "$launcher_sha"
+test "$(sudo sha256sum "$sudoers_stage" | awk '{print $1}')" = "$sudoers_sha"
+
+sudo stat -c '%U:%G %a %n' \
+  "$control_stage" "$control_stage/lib" \
+  "$control_stage/production-backup-preflight.sh" \
+  "$control_stage/lib/endpoint-identity.sh" "$launcher_stage" "$sudoers_stage"
+test "$(sudo stat -c '%u:%g:%a' "$control_stage")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/lib")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/production-backup-preflight.sh")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/lib/endpoint-identity.sh")" = '0:0:644'
+test "$(sudo stat -c '%u:%g:%a' "$launcher_stage")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$sudoers_stage")" = '0:0:440'
+
+sudo mv -- "$control_stage" "$control_dir"
+control_stage=''
+control_stage_created=false
+control_published=true
+sudo mv -- "$launcher_stage" "$launcher"
+launcher_stage_created=false
+launcher_published=true
+active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"
+[[ "$active_checkout_end" == "$CURRENT_RUNTIME_SHA" ]]
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+sudo mv -- "$sudoers_stage" "$sudoers_policy"
+sudoers_stage_created=false
+sudoers_published=true
+activated=true
+```
+
+Expected metadata is `root:root`: `0755` for both directories, the preflight
+script, and launcher; `0644` for the helper; and `0440` for sudoers. The policy
+grants `yoryi` only `NOPASSWD:NOSETENV` access to the fixed launcher. The
+launcher itself rejects zero, multiple, malformed, path, and command arguments,
+verifies installed metadata, resets the environment, closes stdin, and invokes
+only the installed control path. The trap removes staged or partially published
+control artifacts on any failed validation; the sudoers policy is published
+last, only after all validation and active-checkout revalidation pass. Each
+root-owned staged file is SHA-256 checked against the exact
+`CONTROL_SOURCE_SHA` Git object before publication.
+
+Rollback under the same approved change window removes the authorization
+first, validates sudoers, and then removes only these newly installed paths:
+
+```bash
+sudo rm -- "$sudoers_policy"
+sudo visudo -cf /etc/sudoers
+sudo rm -- "$launcher"
+sudo rm -- "$control_dir/production-backup-preflight.sh"
+sudo rm -- "$control_dir/lib/endpoint-identity.sh"
+sudo rmdir -- "$control_dir/lib"
+sudo rmdir -- "$control_dir"
+```
+
+Stop on any installation or validation failure. Do not fall back to granting
+passwordless access to `bash`, `sh`, `env`, `systemctl`, Docker, or checkout
+scripts.
 
 ## 6. DEPLOY APPROVED SHA
 
