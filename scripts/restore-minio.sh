@@ -7,29 +7,7 @@ readonly OPERATIONAL_RESTORE_TARGET_POLICY_FILE='/etc/buildingos/minio-restore-t
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
-endpoint_identity() {
-  local value="$1" scheme authority path default_port host port
-  if [[ "$value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/]+) ]]; then
-    scheme="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
-    authority="${BASH_REMATCH[2]}"
-    path="${value#*://$authority}"
-  else
-    scheme='https'
-    authority="${value%%/*}"
-    path="${value#"$authority"}"
-  fi
-  [[ -z "$path" || "$path" == '/' ]] || return 1
-  case "$scheme" in
-    https) default_port=443 ;;
-    http) default_port=80 ;;
-    *) return 1 ;;
-  esac
-  [[ "$authority" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]+))?$ ]] || return 1
-  host="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
-  port="${BASH_REMATCH[4]:-$default_port}"
-  (( port >= 1 && port <= 65535 )) || return 1
-  printf '%s:%s\n' "$host" "$port"
-}
+source "$(dirname "${BASH_SOURCE[0]}")/lib/endpoint-identity.sh"
 validate_prefix() {
   local prefix="$1"
   [[ -z "$prefix" ]] && return 0
@@ -111,6 +89,7 @@ validate_target_policy() {
   jq -e --arg environment "$TARGET_ENVIRONMENT" 'has($environment)' "$policy_file" >/dev/null || fail "restore target environment is not allowed by policy"
   local policy_endpoint policy_bucket
   policy_endpoint="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].endpoint_identity' "$policy_file")" || fail "restore target endpoint policy is invalid"
+  policy_endpoint="$(endpoint_identity "$policy_endpoint")" || fail "restore target endpoint policy identity is invalid"
   policy_bucket="$(jq -er --arg environment "$TARGET_ENVIRONMENT" '.[$environment].bucket' "$policy_file")" || fail "restore target bucket policy is invalid"
   [[ "$(endpoint_identity "$TARGET_ENDPOINT")" == "$policy_endpoint" ]] || fail "target endpoint does not match restore target policy"
   [[ "$TARGET_BUCKET" == "$policy_bucket" ]] || fail "target bucket does not match restore target policy"

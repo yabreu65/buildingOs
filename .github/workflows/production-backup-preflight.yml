@@ -70,5 +70,6 @@ jobs:
             -p "$SSH_PORT"
           )
           printf -v quoted_candidate '%q' "$CANDIDATE_SHA"
-          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
-            "sudo -n -u root bash -s -- $quoted_candidate" < scripts/production-backup-preflight.sh
+           cat scripts/lib/endpoint-identity.sh scripts/production-backup-preflight.sh | \
+             ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
+             "sudo -n -u root bash -s -- $quoted_candidate"

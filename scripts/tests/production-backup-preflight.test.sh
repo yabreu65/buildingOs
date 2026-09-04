@@ -39,7 +39,7 @@ readonly ENV_FILE="$TEST_ROOT/buildingos-backup.env"
 readonly SSE_FILE="$TEST_ROOT/contabo-sse-s3-capability.json"
 readonly STATE_DIR="$TEST_ROOT/state"
 readonly BIN_DIR="$TEST_ROOT/bin"
-mkdir -p "$APP_DIR/.git" "$APP_DIR/scripts" "$STATE_DIR" "$BIN_DIR"
+mkdir -p "$APP_DIR/.git" "$APP_DIR/scripts/lib" "$STATE_DIR" "$BIN_DIR"
 chmod 0700 "$STATE_DIR"
 
 for script_name in \
@@ -53,6 +53,8 @@ for script_name in \
   printf '# isolated fixture\n' > "$APP_DIR/scripts/$script_name"
   chmod 0755 "$APP_DIR/scripts/$script_name"
 done
+cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$APP_DIR/scripts/lib/endpoint-identity.sh"
+chmod 0644 "$APP_DIR/scripts/lib/endpoint-identity.sh"
 
 link_command() {
   local command_name="$1"
@@ -169,6 +171,13 @@ if [[ "$command_name" == show ]]; then
     Restart:*) printf 'no\n' ;;
     WorkingDirectory:*) printf '%s\n' "${PREFLIGHT_APP_DIR:?}" ;;
     EnvironmentFiles:*) [[ "${MOCK_BAD_ENV_FILE:-NO}" == YES && "$unit" == pawtech-buildingos-backup.service ]] && printf '/etc/buildingos/wrong.env\n' || printf '/etc/buildingos/buildingos-backup.env\n' ;;
+    ExecCondition:*)
+      case "${MOCK_EXEC_CONDITION_MODE:-EMPTY}" in
+        ONE) printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' ;;
+        MALFORMED) printf '{ path=/bin/true ; argv[]=/bin/true\n' ;;
+        *) printf '\n' ;;
+      esac
+      ;;
     ExecStart:*)
       if [[ "$unit" == pawtech-buildingos-backup.service && "${MOCK_BAD_EXECSTART:-NO}" == YES ]]; then
         printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/not-the-backup.sh\n'
@@ -194,6 +203,14 @@ if [[ "$command_name" == show ]]; then
       ;;
     ExecStartPre:*) [[ "${MOCK_BAD_EXECSTARTPRE:-NO}" == YES ]] && printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' || printf '\n' ;;
     ExecStartPost:*) [[ "${MOCK_BAD_EXECSTARTPOST:-NO}" == YES ]] && printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' || printf '\n' ;;
+    TimeoutStartUSec:*)
+      case "${MOCK_TIMEOUT_MODE:-EXACT}" in
+        SHORTER) printf '1000000\n' ;;
+        MALFORMED) printf 'not-a-timeout\n' ;;
+        MISSING) exit 1 ;;
+        *) [[ "$unit" == pawtech-buildingos-backup-verify.service ]] && printf '14400000000\n' || printf '21600000000\n' ;;
+      esac
+      ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -215,6 +232,7 @@ write_env() {
   local postgres_destination_bucket="${5:-$backup_bucket}"
   local write_remote="${6:-contabowrite}"
   local verify_remote="${7:-contaboverify}"
+  local backup_prefix="${8-__ABSENT__}"
   {
     printf 'BACKUP_ENDPOINT=%s\n' "$backup_endpoint"
     printf 'BACKUP_BUCKET=%s\n' "$backup_bucket"
@@ -229,6 +247,7 @@ write_env() {
     printf 'POSTGRES_RCLONE_DESTINATION=%s:%s/postgresql\n' "$write_remote" "$postgres_destination_bucket"
     printf 'POSTGRES_VERIFY_RCLONE_DESTINATION=%s:%s/postgresql\n' "$verify_remote" "$postgres_destination_bucket"
     printf 'POSTGRES_SSE_MODE=SSE-S3\n'
+    [[ "$backup_prefix" == __ABSENT__ ]] || printf 'BACKUP_PREFIX=%s\n' "$backup_prefix"
   } > "$ENV_FILE"
   chmod 0600 "$ENV_FILE"
   mkdir -p "$TEST_ROOT/pg-root"
@@ -288,6 +307,26 @@ unset MOCK_BAD_EXECSTART
 MOCK_SERIALIZED_EXECSTART=YES run_preflight
 assert_success 'serialized ExecStart with whitespace passes'
 unset MOCK_SERIALIZED_EXECSTART
+
+MOCK_EXEC_CONDITION_MODE=ONE run_preflight
+assert_failure 'unexpected ExecCondition fails closed'
+unset MOCK_EXEC_CONDITION_MODE
+
+MOCK_EXEC_CONDITION_MODE=MALFORMED run_preflight
+assert_failure 'malformed ExecCondition fails closed'
+unset MOCK_EXEC_CONDITION_MODE
+
+MOCK_TIMEOUT_MODE=SHORTER run_preflight
+assert_failure 'shortened systemd timeout fails closed'
+unset MOCK_TIMEOUT_MODE
+
+MOCK_TIMEOUT_MODE=MALFORMED run_preflight
+assert_failure 'malformed systemd timeout fails closed'
+unset MOCK_TIMEOUT_MODE
+
+MOCK_TIMEOUT_MODE=MISSING run_preflight
+assert_failure 'missing systemd timeout fails closed'
+unset MOCK_TIMEOUT_MODE
 
 MOCK_SERIALIZED_EXECSTART=YES MOCK_IGNORE_ERRORS_MODE=YES run_preflight
 assert_failure 'ignored ExecStart failure fails closed'
@@ -354,6 +393,15 @@ unset MOCK_LEGACY_SERVICE_MISSING MOCK_LEGACY_TIMER_MISSING
 write_env buildingos-backup production VERIFY
 run_preflight
 assert_failure 'missing secret name fails closed'
+write_env buildingos-backup production
+
+write_env buildingos-backup production NO https://backup.example.invalid buildingos-backup contabowrite contaboverify ''
+run_preflight
+assert_success 'empty BACKUP_PREFIX uses runtime default'
+
+write_env buildingos-backup production NO https://backup.example.invalid buildingos-backup contabowrite contaboverify '../archive'
+run_preflight
+assert_failure 'unsafe BACKUP_PREFIX fails closed'
 write_env buildingos-backup production
 
 set_env_line SOURCE_ACCESS_KEY '""'

@@ -15,11 +15,19 @@ readonly DEFAULT_STATE_DIR='/var/lib/buildingos-backup'
 readonly EXPECTED_SOURCE_HOST='usc1.contabostorage.com'
 readonly EXPECTED_SOURCE_BUCKET='buildingos-production'
 readonly EXPECTED_PROPOSED_COMMAND='sudo systemctl start pawtech-buildingos-backup.service'
+readonly EXPECTED_BACKUP_TIMEOUT_USEC=21600000000
+readonly EXPECTED_VERIFY_TIMEOUT_USEC=14400000000
 readonly POSTGRES_BACKUP_MIN_SAFETY_MARGIN_BYTES=104857600
 readonly MAX_INT64_DIV_1024=9007199254740991
 readonly MAX_POSTGRES_ESTIMATE_BASE_BYTES=6000000000000000000
 
 failures=0
+
+if ! declare -F endpoint_identity >/dev/null 2>&1; then
+  helper_dir="${BASH_SOURCE[0]%/*}"
+  [[ "$helper_dir" == "${BASH_SOURCE[0]}" ]] && helper_dir='.'
+  source "$helper_dir/lib/endpoint-identity.sh"
+fi
 
 fail_check() {
   failures=$((failures + 1))
@@ -53,39 +61,6 @@ file_is_regular_non_symlink() {
 
 directory_is_regular_non_symlink() {
   [[ -d "$1" && ! -L "$1" ]]
-}
-
-endpoint_identity() {
-  local value="$1" scheme authority path default_port host port
-  if [[ "$value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/]+) ]]; then
-    scheme="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
-    authority="${BASH_REMATCH[2]}"
-    path="${value#*://$authority}"
-  else
-    scheme='https'
-    authority="${value%%/*}"
-    path="${value#"$authority"}"
-  fi
-  [[ -z "$path" || "$path" == '/' ]] || return 1
-  case "$scheme" in
-    https) default_port=443 ;;
-    http) default_port=80 ;;
-    *) return 1 ;;
-  esac
-  [[ "$authority" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]+))?$ ]] || return 1
-  host="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
-  port="${BASH_REMATCH[4]:-$default_port}"
-  (( port >= 1 && port <= 65535 )) || return 1
-  printf '%s:%s\n' "$host" "$port"
-}
-
-endpoint_hostname() {
-  local authority
-  authority="$(endpoint_identity "$1")"
-  authority="${authority##*@}"
-  authority="${authority%%:*}"
-  [[ "$authority" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
-  printf '%s\n' "$authority"
 }
 
 env_value() {
@@ -160,6 +135,22 @@ env_value() {
       printf "%s\n", parse_value(raw)
       if (invalid) exit 1
     }
+  ' "$file"
+}
+
+env_name_count() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key" '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=/ {
+      assignment=$0
+      sub(/^[[:space:]]*/, "", assignment)
+      name=assignment
+      sub(/=.*/, "", name)
+      if (name == key) count++
+    }
+    END { print count + 0 }
   ' "$file"
 }
 
@@ -266,6 +257,44 @@ systemd_command_list_matches() {
   [[ "$count" -eq 1 && -n "$expected_exec" ]]
 }
 
+systemd_timeout_matches() {
+  local actual="$1"
+  local expected="$2"
+  local microseconds
+
+  [[ -n "$actual" && "$actual" != infinity && "$actual" != inf ]] || return 1
+  if [[ "$actual" =~ ^[0-9]+$ ]]; then
+    microseconds="$actual"
+  elif [[ "$actual" =~ ^([0-9]+)h$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000))
+  elif [[ "$actual" =~ ^([0-9]+)min$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000))
+  elif [[ "$actual" =~ ^([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)us$ ]]; then
+    microseconds="${BASH_REMATCH[1]}"
+  elif [[ "$actual" =~ ^([0-9]+)h[[:space:]]+([0-9]+)min[[:space:]]+([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000 + BASH_REMATCH[2] * 60000000 + BASH_REMATCH[3] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)min[[:space:]]+([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000 + BASH_REMATCH[2] * 1000000))
+  else
+    return 1
+  fi
+  [[ "$microseconds" == "$expected" ]]
+}
+
+validate_backup_prefix() {
+  local prefix="$1"
+  [[ -z "$prefix" ]] && return 0
+  [[ "$prefix" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || return 1
+  local segment
+  local -a segments
+  IFS='/' read -r -a segments <<< "$prefix"
+  for segment in "${segments[@]}"; do
+    [[ "$segment" != '.' && "$segment" != '..' ]] || return 1
+  done
+}
+
 inspect_unit() {
   local label="$1"
   local unit="$2"
@@ -274,16 +303,18 @@ inspect_unit() {
   local expected_user="$5"
   local expected_workdir="$6"
   local require_verify_arg="$7"
-  local load_state active_state user exec_start exec_start_pre exec_start_post env_files workdir restart unit_type expected_argv
-  local exists='NO' active='UNKNOWN' exec_match='NO' exec_pre_match='NO' exec_post_match='NO' env_match='NO'
+  local load_state active_state user exec_start exec_condition exec_start_pre exec_start_post env_files workdir restart unit_type timeout_start_usec expected_argv expected_timeout
+  local exists='NO' active='UNKNOWN' exec_match='NO' exec_condition_match='NO' exec_pre_match='NO' exec_post_match='NO' env_match='NO' timeout_match='NO'
 
   if ! systemctl cat "$unit" >/dev/null 2>&1; then
     printf '%s_EXISTS=NO\n' "$label"
     printf '%s_USER=UNKNOWN\n' "$label"
-  printf '%s_EXECSTART_MATCH=NO\n' "$label"
+    printf '%s_EXECSTART_MATCH=NO\n' "$label"
+    printf '%s_EXECCONDITION_MATCH=NO\n' "$label"
     printf '%s_EXECSTARTPRE_MATCH=NO\n' "$label"
     printf '%s_EXECSTARTPOST_MATCH=NO\n' "$label"
     printf '%s_ENV_FILE_MATCH=NO\n' "$label"
+    printf '%s_TIMEOUTSTARTUSec_MATCH=NO\n' "$label"
     printf '%s_ACTIVE=UNKNOWN\n' "$label"
     fail_check "$unit is unavailable"
     return
@@ -292,6 +323,7 @@ inspect_unit() {
   load_state="$(systemctl_value "$unit" LoadState || true)"
   active_state="$(systemctl_value "$unit" ActiveState || true)"
   user="$(systemctl_value "$unit" User || true)"
+  exec_condition="$(systemctl_value "$unit" ExecCondition || true)"
   exec_start_pre="$(systemctl_value "$unit" ExecStartPre || true)"
   exec_start="$(systemctl_value "$unit" ExecStart || true)"
   exec_start_post="$(systemctl_value "$unit" ExecStartPost || true)"
@@ -299,6 +331,7 @@ inspect_unit() {
   workdir="$(systemctl_value "$unit" WorkingDirectory || true)"
   restart="$(systemctl_value "$unit" Restart || true)"
   unit_type="$(systemctl_value "$unit" Type || true)"
+  timeout_start_usec="$(systemctl_value "$unit" TimeoutStartUSec || true)"
 
   if [[ "$load_state" == loaded ]]; then
     exists='YES'
@@ -325,6 +358,10 @@ inspect_unit() {
   if [[ "$exec_match" != YES ]]; then
     fail_check "$unit ExecStart is not the trusted read-only contract"
   fi
+  systemd_command_list_matches "$exec_condition" '' && exec_condition_match='YES'
+  if [[ "$exec_condition_match" != YES ]]; then
+    fail_check "$unit has an unexpected ExecCondition command"
+  fi
   systemd_command_list_matches "$exec_start_pre" '' && exec_pre_match='YES'
   if [[ "$exec_pre_match" != YES ]]; then
     fail_check "$unit has an unexpected ExecStartPre command"
@@ -341,13 +378,20 @@ inspect_unit() {
   [[ "$workdir" == "$EXPECTED_APP_DIR" ]] || fail_check "$unit WorkingDirectory is unexpected"
   [[ "$restart" == '' || "$restart" == 'no' ]] || fail_check "$unit has an unexpected restart policy"
   [[ "$unit_type" == 'oneshot' ]] || fail_check "$unit is not a oneshot service"
+  if [[ "$require_verify_arg" == true ]]; then expected_timeout="$EXPECTED_VERIFY_TIMEOUT_USEC"; else expected_timeout="$EXPECTED_BACKUP_TIMEOUT_USEC"; fi
+  systemd_timeout_matches "$timeout_start_usec" "$expected_timeout" && timeout_match='YES'
+  if [[ "$timeout_match" != YES ]]; then
+    fail_check "$unit TimeoutStartUSec does not match the trusted timeout contract"
+  fi
 
   printf '%s_EXISTS=%s\n' "$label" "$exists"
   printf '%s_USER=%s\n' "$label" "$(safe_output "$user")"
   printf '%s_EXECSTART_MATCH=%s\n' "$label" "$exec_match"
+  printf '%s_EXECCONDITION_MATCH=%s\n' "$label" "$exec_condition_match"
   printf '%s_EXECSTARTPRE_MATCH=%s\n' "$label" "$exec_pre_match"
   printf '%s_EXECSTARTPOST_MATCH=%s\n' "$label" "$exec_post_match"
   printf '%s_ENV_FILE_MATCH=%s\n' "$label" "$env_match"
+  printf '%s_TIMEOUTSTARTUSec_MATCH=%s\n' "$label" "$timeout_match"
   printf '%s_ACTIVE=%s\n' "$label" "$active"
 }
 
@@ -415,6 +459,10 @@ inspect_scripts() {
       fail_check "required backup script is missing, non-executable, or unsafe: $script_name"
     fi
   done
+  if ! file_is_regular_non_symlink "$EXPECTED_APP_DIR/scripts/lib/endpoint-identity.sh" || [[ ! -r "$EXPECTED_APP_DIR/scripts/lib/endpoint-identity.sh" ]]; then
+    scripts_ok=false
+    fail_check 'required shared endpoint helper is missing or unsafe'
+  fi
   if [[ "$scripts_ok" == true ]]; then
     printf 'REQUIRED_SCRIPTS_PRESENT=YES\n'
   else
@@ -427,6 +475,7 @@ inspect_environment() {
   local source_environment expected_source_environment source_endpoint source_bucket backup_endpoint backup_bucket state_dir sse_file postgres_container postgres_database postgres_user postgres_backup_root postgres_sse_mode
   local source_host backup_host source_identity backup_identity separate='NO'
   local write_destination verify_destination write_remote verify_remote write_path verify_path
+  local backup_prefix backup_prefix_count prefix_valid='YES'
   local required_names=(
     BACKUP_ENDPOINT BACKUP_BUCKET BACKUP_VERIFY_ACCESS_KEY BACKUP_VERIFY_SECRET_KEY
     BACKUP_SSE_CAPABILITY_FILE BACKUP_STATE_DIR BACKUP_WRITE_ACCESS_KEY BACKUP_WRITE_SECRET_KEY
@@ -474,6 +523,16 @@ inspect_environment() {
   verify_remote="${verify_destination%%:*}"
   write_path="${write_destination#*:}"
   verify_path="${verify_destination#*:}"
+  backup_prefix_count="$(env_name_count "$ENV_FILE" BACKUP_PREFIX)"
+  case "$backup_prefix_count" in
+    0) backup_prefix='' ;;
+    1) backup_prefix="$(env_value "$ENV_FILE" BACKUP_PREFIX 2>/dev/null || true)" ;;
+    *) backup_prefix=''; prefix_valid='NO'; fail_check 'BACKUP_PREFIX is duplicated' ;;
+  esac
+  if [[ "$prefix_valid" == YES ]] && ! validate_backup_prefix "$backup_prefix"; then
+    prefix_valid='NO'
+    fail_check 'BACKUP_PREFIX is unsafe'
+  fi
 
   source_host="$(endpoint_hostname "$source_endpoint" 2>/dev/null || true)"
   backup_host="$(endpoint_hostname "$backup_endpoint" 2>/dev/null || true)"
@@ -517,6 +576,7 @@ inspect_environment() {
   printf 'POSTGRES_SSE_MODE=%s\n' "$(safe_output "$postgres_sse_mode")"
   printf 'POSTGRES_RCLONE_WRITE_DESTINATION=%s\n' "$(safe_output "$write_destination")"
   printf 'POSTGRES_RCLONE_VERIFY_DESTINATION=%s\n' "$(safe_output "$verify_destination")"
+  printf 'BACKUP_PREFIX_VALID=%s\n' "$prefix_valid"
 }
 
 inspect_sse_evidence() {
