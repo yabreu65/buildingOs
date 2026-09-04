@@ -56,22 +56,26 @@ directory_is_regular_non_symlink() {
 }
 
 endpoint_identity() {
-  local value="$1" scheme authority default_port host port
+  local value="$1" scheme authority path default_port host port
   if [[ "$value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/]+) ]]; then
-    scheme="${BASH_REMATCH[1],,}"
+    scheme="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
     authority="${BASH_REMATCH[2]}"
+    path="${value#*://$authority}"
   else
     scheme='https'
     authority="${value%%/*}"
+    path="${value#"$authority"}"
   fi
+  [[ -z "$path" || "$path" == '/' ]] || return 1
   case "$scheme" in
     https) default_port=443 ;;
     http) default_port=80 ;;
     *) return 1 ;;
   esac
-  [[ "$authority" =~ ^([A-Za-z0-9.-]+)(:([0-9]+))?$ ]] || return 1
-  host="${BASH_REMATCH[1],,}"
-  port="${BASH_REMATCH[3]:-$default_port}"
+  [[ "$authority" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]+))?$ ]] || return 1
+  host="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+  port="${BASH_REMATCH[4]:-$default_port}"
+  (( port >= 1 && port <= 65535 )) || return 1
   printf '%s:%s\n' "$host" "$port"
 }
 
@@ -87,13 +91,84 @@ endpoint_hostname() {
 env_value() {
   local file="$1"
   local key="$2"
-  awk -F '=' -v key="$key" '$1 == key { value=substr($0, index($0, "=") + 1); count++; } END { if (count != 1) exit 1; print value }' "$file"
+  awk -v key="$key" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function decode(value,    result,i,character,next_character) {
+      result=""
+      for (i=1; i<=length(value); i++) {
+        character=substr(value,i,1)
+        if (character != "\\") {
+          result=result character
+          continue
+        }
+        i++
+        if (i > length(value)) { invalid=1; return "" }
+        next_character=substr(value,i,1)
+        if (next_character == "n") result=result "\n"
+        else if (next_character == "r") result=result "\r"
+        else if (next_character == "t") result=result "\t"
+        else if (next_character == "s") result=result " "
+        else result=result next_character
+      }
+      return result
+    }
+    function parse_value(raw,    first,last,inner,i,character,escaped) {
+      raw=trim(raw)
+      if (raw == "") return ""
+      first=substr(raw,1,1)
+      if (first == "\"") {
+        last=0
+        escaped=0
+        for (i=2; i<=length(raw); i++) {
+          character=substr(raw,i,1)
+          if (escaped) { escaped=0; continue }
+          if (character == "\\") { escaped=1; continue }
+          if (character == "\"") { last=i; break }
+        }
+        if (last == 0 || trim(substr(raw,last+1)) != "") { invalid=1; return "" }
+        inner=substr(raw,2,last-2)
+        return decode(inner)
+      }
+      if (first == sprintf("%c", 39)) {
+        last=index(substr(raw,2), sprintf("%c", 39))
+        if (last == 0 || trim(substr(raw,last+2)) != "") { invalid=1; return "" }
+        return substr(raw,2,last-1)
+      }
+      if (index(raw, sprintf("%c", 39)) > 0 || index(raw, "\"") > 0 || raw ~ /[[:cntrl:]]/) { invalid=1; return "" }
+      return decode(raw)
+    }
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=/ {
+      assignment=$0
+      sub(/^[[:space:]]*/, "", assignment)
+      name=assignment
+      sub(/=.*/, "", name)
+      if (name == key) {
+        count++
+        raw=substr(assignment, length(name)+2)
+      }
+      next
+    }
+    /^[[:space:]]*$/ { next }
+    { invalid=1 }
+    END {
+      if (count != 1 || invalid) exit 1
+      printf "%s\n", parse_value(raw)
+      if (invalid) exit 1
+    }
+  ' "$file"
 }
 
 env_name_present() {
   local file="$1"
   local key="$2"
-  awk -F '=' -v key="$key" '$1 == key { count++; if (length(substr($0, index($0, "=") + 1)) == 0) empty=1; } END { exit count == 1 && !empty ? 0 : 1 }' "$file"
+  local value
+  value="$(env_value "$file" "$key" 2>/dev/null)" || return 1
+  [[ "$value" =~ [^[:space:]] ]]
 }
 
 systemctl_value() {
@@ -134,13 +209,17 @@ systemd_serialized_entry_matches() {
         } else if (field ~ /^argv\[\]=/) {
           argv_count++
           argv=substr(field, 8)
-        } else if (field ~ /^(ignore_errors|start_time|stop_time|pid|code|status)=/) {
+        } else if (field ~ /^ignore_errors=/) {
+          ignore_count++
+          ignore_errors=substr(field, 15)
+          if (ignore_errors != "no") invalid=1
+        } else if (field ~ /^(start_time|stop_time|pid|code|status)=/) {
           continue
         } else {
           invalid=1
         }
       }
-      if (path_count == 1 && argv_count == 1 && invalid == 0) {
+      if (path_count == 1 && argv_count == 1 && ignore_count == 1 && invalid == 0) {
         printf "%s\034%s\n", path, argv
       } else {
         exit 1
@@ -165,8 +244,7 @@ systemd_command_list_matches() {
     return
   fi
   if [[ "$trimmed" != *'{'* && "$trimmed" != *'}'* && "$trimmed" != *'path='* && "$trimmed" != *'argv[]='* ]]; then
-    [[ -n "$expected_exec" && "$trimmed" == "$expected_argv" && "$trimmed" != *$'\n'* ]]
-    return
+    return 1
   fi
 
   rest="$trimmed"
@@ -468,8 +546,10 @@ inspect_sse_evidence() {
     expected_endpoint="$(endpoint_identity "$expected_endpoint")"
     endpoint="$(endpoint_identity "$endpoint" 2>/dev/null || printf 'UNKNOWN')"
     [[ "$owner" == "$EXPECTED_SSE_OWNER" ]] || fail_check 'SSE evidence owner is unexpected'
+    [[ "$group" == "$EXPECTED_SSE_GROUP" ]] || fail_check 'SSE evidence group is unexpected'
     mode_value=$((8#${mode#0}))
     (( (mode_value & 0022) == 0 )) || fail_check 'SSE evidence is group/world writable'
+    [[ "$mode" == '0640' ]] || fail_check 'SSE evidence mode must be 0640 for the backup service'
     [[ "$status" == SSE_S3_SUPPORTED && "$algorithm" == AES256 ]] || fail_check 'SSE evidence status or algorithm is invalid'
     if [[ "$probed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then probed_at_valid='YES'; else fail_check 'SSE evidence probed_at is invalid'; fi
     if [[ "$endpoint" == "$expected_endpoint" ]]; then endpoint_match='YES'; else fail_check 'SSE evidence endpoint does not match backup endpoint'; fi
@@ -686,7 +766,7 @@ inspect_concurrency() {
 }
 
 main() {
-  local required_commands=(awk bash cat date df docker git id jq mc pg_restore rclone sha256sum stat systemctl)
+  local required_commands=(awk bash cat date df docker git id jq mc pg_restore rclone sha256sum stat systemctl tr)
   local command_name missing_dependency=false
   local app_dir env_file sse_file state_dir
 

@@ -7,7 +7,29 @@ readonly OPERATIONAL_RESTORE_TARGET_POLICY_FILE='/etc/buildingos/minio-restore-t
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
-endpoint_identity() { local value="${1#*://}"; printf '%s\n' "${value%%/*}"; }
+endpoint_identity() {
+  local value="$1" scheme authority path default_port host port
+  if [[ "$value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/]+) ]]; then
+    scheme="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+    authority="${BASH_REMATCH[2]}"
+    path="${value#*://$authority}"
+  else
+    scheme='https'
+    authority="${value%%/*}"
+    path="${value#"$authority"}"
+  fi
+  [[ -z "$path" || "$path" == '/' ]] || return 1
+  case "$scheme" in
+    https) default_port=443 ;;
+    http) default_port=80 ;;
+    *) return 1 ;;
+  esac
+  [[ "$authority" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]+))?$ ]] || return 1
+  host="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+  port="${BASH_REMATCH[4]:-$default_port}"
+  (( port >= 1 && port <= 65535 )) || return 1
+  printf '%s:%s\n' "$host" "$port"
+}
 validate_prefix() {
   local prefix="$1"
   [[ -z "$prefix" ]] && return 0

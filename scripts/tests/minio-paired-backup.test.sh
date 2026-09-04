@@ -126,8 +126,8 @@ postgres_sha256="$(sha256sum "$postgres_remote_dir/buildingos.dump" | cut -d ' '
 jq -n --arg setId "$BACKUP_SET_ID" --arg appSha "$APP_SHA" --arg postgresSha "$postgres_sha256" '{version:1,status:"PASS",backup_set_id:$setId,started_at:"2026-08-28T12:00:00Z",completed_at:"2026-08-28T12:01:00Z",app_sha:$appSha,postgres_backup_id:("postgres-"+$setId),postgres_sha256:$postgresSha,dump_filename:"buildingos.dump",destination:("contabo:buildingos-prod-backup-test/postgresql/"+$setId),remote_object_prefix:("postgresql/"+$setId),encryption:"SSE-S3"}' > "$POSTGRES_BACKUP_RECEIPT_FILE"
 printf '%s  %s\n' "$postgres_sha256" 'buildingos.dump' > "$postgres_remote_dir/buildingos.dump.sha256"
 cp "$POSTGRES_BACKUP_RECEIPT_FILE" "$postgres_remote_dir/postgres-backup-receipt.json"
-jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:02:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
-chmod 0600 "$POSTGRES_BACKUP_RECEIPT_FILE" "$BACKUP_SSE_CAPABILITY_FILE"
+jq -n '{status:"SSE_S3_SUPPORTED",algorithm:"AES256",endpoint_identity:"backup.example.invalid:443",bucket:"buildingos-prod-backup-test",probed_at:"2026-08-28T12:02:00Z"}' > "$BACKUP_SSE_CAPABILITY_FILE"
+chmod 0640 "$POSTGRES_BACKUP_RECEIPT_FILE" "$BACKUP_SSE_CAPABILITY_FILE"
 
 assert_success "real MinIO backup script publishes a paired set" "$ROOT_DIR/scripts/backup-minio.sh"
 cp "$TEST_ROOT/output" "$TEST_ROOT/backup-output"

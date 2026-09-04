@@ -59,7 +59,7 @@ link_command() {
   ln -s "$(command -v "$command_name")" "$BIN_DIR/$command_name"
 }
 
-for command_name in awk bash cat date id jq sha256sum stat; do link_command "$command_name"; done
+for command_name in awk bash cat date id jq sha256sum stat tr; do link_command "$command_name"; done
 
 cat > "$BIN_DIR/df" <<'MOCK'
 #!/usr/bin/env bash
@@ -178,12 +178,18 @@ if [[ "$command_name" == show ]]; then
         printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; ignore_errors=no } { path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; ignore_errors=no }\n'
       elif [[ "$unit" == pawtech-buildingos-backup-verify.service ]]; then
         if [[ "${MOCK_SERIALIZED_EXECSTART:-NO}" == YES ]]; then
-          printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest ; ignore_errors=no }\n'
+          ignore_errors_field=' ; ignore_errors=no'
+          case "${MOCK_IGNORE_ERRORS_MODE:-NO}" in
+            YES) ignore_errors_field=' ; ignore_errors=yes' ;;
+            MISSING) ignore_errors_field='' ;;
+            MALFORMED) ignore_errors_field=' ; ignore_errors=maybe' ;;
+          esac
+          printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest%s }\n' "$ignore_errors_field"
         else
-          printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest\n'
+          printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh --verify-latest ; ignore_errors=no }\n'
         fi
       else
-        printf '/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh\n'
+        printf '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh ; ignore_errors=no }\n'
       fi
       ;;
     ExecStartPre:*) [[ "${MOCK_BAD_EXECSTARTPRE:-NO}" == YES ]] && printf '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }\n' || printf '\n' ;;
@@ -228,6 +234,13 @@ write_env() {
   mkdir -p "$TEST_ROOT/pg-root"
 }
 
+set_env_line() {
+  local key="$1" value="$2" replacement_file="$ENV_FILE.replacement"
+  awk -v key="$key" -v value="$value" '$0 ~ "^[[:space:]]*" key "=" { print key "=" value; replaced=1; next } { print } END { exit replaced ? 0 : 1 }' "$ENV_FILE" > "$replacement_file"
+  mv "$replacement_file" "$ENV_FILE"
+  chmod 0600 "$ENV_FILE"
+}
+
 write_sse() {
   local status="${1:-SSE_S3_SUPPORTED}" algorithm="${2:-AES256}" endpoint="${3:-backup.example.invalid}" bucket="${4:-buildingos-backup}" probed_at="${5:-2026-09-03T00:00:00Z}"
   jq -n --arg status "$status" --arg algorithm "$algorithm" --arg endpoint "$endpoint" --arg bucket "$bucket" --arg probed_at "$probed_at" \
@@ -243,7 +256,7 @@ run_preflight() {
     PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_SSE_FILE="$SSE_FILE" PREFLIGHT_STATE_DIR="${PREFLIGHT_STATE_DIR_OVERRIDE:-$STATE_DIR}" \
     PREFLIGHT_EXPECTED_ENV_OWNER="$(id -un)" PREFLIGHT_EXPECTED_ENV_GROUP="$(id -gn)" \
     PREFLIGHT_EXPECTED_STATE_OWNER="$(id -un)" PREFLIGHT_EXPECTED_STATE_GROUP="$(id -gn)" \
-    PREFLIGHT_EXPECTED_SSE_OWNER="$(id -un)" PREFLIGHT_EXPECTED_SSE_GROUP="$(id -gn)" \
+    PREFLIGHT_EXPECTED_SSE_OWNER="${PREFLIGHT_EXPECTED_SSE_OWNER_OVERRIDE:-$(id -un)}" PREFLIGHT_EXPECTED_SSE_GROUP="${PREFLIGHT_EXPECTED_SSE_GROUP_OVERRIDE:-$(id -gn)}" \
     PREFLIGHT_APP_DIR="$APP_DIR" \
     /bin/bash "$PREFLIGHT" 2>&1 "$CANDIDATE_SHA"
   )"
@@ -275,6 +288,18 @@ unset MOCK_BAD_EXECSTART
 MOCK_SERIALIZED_EXECSTART=YES run_preflight
 assert_success 'serialized ExecStart with whitespace passes'
 unset MOCK_SERIALIZED_EXECSTART
+
+MOCK_SERIALIZED_EXECSTART=YES MOCK_IGNORE_ERRORS_MODE=YES run_preflight
+assert_failure 'ignored ExecStart failure fails closed'
+unset MOCK_SERIALIZED_EXECSTART MOCK_IGNORE_ERRORS_MODE
+
+MOCK_SERIALIZED_EXECSTART=YES MOCK_IGNORE_ERRORS_MODE=MISSING run_preflight
+assert_failure 'missing ExecStart ignore_errors fails closed'
+unset MOCK_SERIALIZED_EXECSTART MOCK_IGNORE_ERRORS_MODE
+
+MOCK_SERIALIZED_EXECSTART=YES MOCK_IGNORE_ERRORS_MODE=MALFORMED run_preflight
+assert_failure 'malformed ExecStart ignore_errors fails closed'
+unset MOCK_SERIALIZED_EXECSTART MOCK_IGNORE_ERRORS_MODE
 
 MOCK_SECOND_EXECSTART=YES run_preflight
 assert_failure 'additional ExecStart fails closed'
@@ -331,7 +356,27 @@ run_preflight
 assert_failure 'missing secret name fails closed'
 write_env buildingos-backup production
 
-write_env buildingos-production production NO https://usc1.contabostorage.com:443
+set_env_line SOURCE_ACCESS_KEY '""'
+run_preflight
+assert_failure 'double-quoted empty environment value fails closed'
+write_env buildingos-backup production
+
+set_env_line SOURCE_ACCESS_KEY "''"
+run_preflight
+assert_failure 'single-quoted empty environment value fails closed'
+write_env buildingos-backup production
+
+set_env_line SOURCE_ACCESS_KEY '   '
+run_preflight
+assert_failure 'whitespace-only environment value fails closed'
+write_env buildingos-backup production
+
+set_env_line SOURCE_ACCESS_KEY 'escaped\ value'
+run_preflight
+assert_success 'escaped nonempty environment value is parsed safely'
+write_env buildingos-backup production
+
+write_env buildingos-production production NO HTTPS://USC1.CONTABOSTORAGE.COM:443/
 write_sse SSE_S3_SUPPORTED AES256 usc1.contabostorage.com buildingos-production
 run_preflight
 assert_failure 'equivalent source and backup endpoints fail closed'
@@ -356,6 +401,19 @@ chmod 0660 "$SSE_FILE"
 run_preflight
 assert_failure 'unsafe SSE permissions fail closed'
 chmod 0640 "$SSE_FILE"
+
+chmod 0600 "$SSE_FILE"
+run_preflight
+assert_failure 'service-unreadable SSE permissions fail closed'
+chmod 0640 "$SSE_FILE"
+
+PREFLIGHT_EXPECTED_SSE_GROUP_OVERRIDE=wrong-group run_preflight
+assert_failure 'wrong SSE group fails closed'
+unset PREFLIGHT_EXPECTED_SSE_GROUP_OVERRIDE
+
+PREFLIGHT_EXPECTED_SSE_OWNER_OVERRIDE=wrong-owner run_preflight
+assert_failure 'wrong SSE owner fails closed'
+unset PREFLIGHT_EXPECTED_SSE_OWNER_OVERRIDE
 
 chmod 0750 "$STATE_DIR"
 run_preflight
