@@ -304,6 +304,14 @@ run_preflight() {
   set -e
 }
 
+run_production_override_rejection() {
+  local variable_name="$1"
+  set +e
+  RUN_OUTPUT="$(env "$variable_name=attacker" /bin/bash "$PREFLIGHT" "$CANDIDATE_SHA" 2>&1)"
+  RUN_RC=$?
+  set -e
+}
+
 CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
 write_env buildingos-backup production
 write_sse
@@ -345,6 +353,13 @@ MOCK_DIRTY=YES run_preflight
 assert_failure 'dirty checkout fails runtime identity gate'
 assert_contains 'dirty checkout reports inconsistent identity' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
 unset MOCK_DIRTY
+
+run_production_override_rejection PREFLIGHT_APP_DIR
+assert_failure 'production rejects checkout path override'
+assert_contains 'checkout path override requires isolated test mode' 'test path or checkout-owner overrides require LOCAL_ISOLATED_ONLY' "$RUN_OUTPUT"
+run_production_override_rejection PREFLIGHT_CHECKOUT_OWNER
+assert_failure 'production rejects checkout owner override'
+assert_contains 'checkout owner override requires isolated test mode' 'test path or checkout-owner overrides require LOCAL_ISOLATED_ONLY' "$RUN_OUTPUT"
 
 rm "$ENV_FILE"
 run_preflight
@@ -435,6 +450,10 @@ unset MOCK_VERIFY_ACTIVE
 
 run_preflight
 assert_contains 'happy path reports legacy overlap safety' 'LEGACY_BACKUP_OVERLAP_SAFE=YES' "$RUN_OUTPUT"
+MOCK_LEGACY_TIMER_STATE=enabled run_preflight
+assert_success 'temporarily stopped enabled legacy timer is safe for the overlap window'
+assert_contains 'temporary legacy overlap window preserves enabled timer state' 'LEGACY_BACKUP_TIMER_ENABLED=YES' "$RUN_OUTPUT"
+unset MOCK_LEGACY_TIMER_STATE
 MOCK_LEGACY_SERVICE_ACTIVE=YES run_preflight
 assert_failure 'active legacy PostgreSQL service fails closed'
 unset MOCK_LEGACY_SERVICE_ACTIVE
@@ -760,6 +779,10 @@ if printf '%s\n' "$static_text" | grep -Eq 'systemctl (start|restart|stop|enable
 else
   pass 'preflight implementation contains no write-capable operation'
 fi
+assert_contains 'production checkout inspection uses the fixed checkout owner' "readonly EXPECTED_CHECKOUT_OWNER='yoryi'" "$preflight_text"
+assert_contains 'production checkout inspection uses fixed runuser and git paths' '"$EXPECTED_RUNUSER" -u "$EXPECTED_CHECKOUT_OWNER" -- "$EXPECTED_GIT"' "$preflight_text"
+assert_absent 'preflight never configures global Git safe directories' 'safe.directory' "$preflight_text"
+assert_absent 'preflight never mutates Git configuration' 'git config' "$preflight_text"
 
 workflow_text="$(< "$WORKFLOW")"
 assert_contains 'workflow uses production environment' 'environment: production' "$workflow_text"
@@ -808,6 +831,13 @@ assert_contains 'runbook requires staged control directory mode 0755' "\"\$contr
 assert_contains 'runbook validates staged sudoers before activation' 'sudo visudo -cf "$sudoers_stage"' "$runbook_text"
 assert_contains 'runbook installs preflight control as root' 'sudo install -o root -g root -m 0755' "$runbook_text"
 assert_contains 'runbook documents privilege-boundary rollback' 'sudo rm -- "$sudoers_policy"' "$runbook_text"
+assert_contains 'runbook names the current runtime as the first backup target' 'CURRENT_RUNTIME_SHA' "$runbook_text"
+assert_contains 'runbook names the later deployment identity' 'LATER_DEPLOY_SHA' "$runbook_text"
+assert_contains 'runbook installs state directory for the service account' 'sudo install -d -o yoryi -g yoryi -m 0700 /var/lib/buildingos-backup' "$runbook_text"
+assert_contains 'runbook validates state directory as non-symlink' 'sudo test ! -L /var/lib/buildingos-backup' "$runbook_text"
+assert_contains 'runbook defines temporary legacy timer stop' 'sudo systemctl stop pawtech-postgres-backup.timer' "$runbook_text"
+assert_contains 'runbook restores legacy timer after a failed first backup gate' 'sudo systemctl start pawtech-postgres-backup.timer' "$runbook_text"
+assert_absent 'runbook no longer requires an approved SHA deployed before coordinator installation' 'Preconditions: approved SHA is deployed and protected config validates.' "$runbook_text"
 assert_contains 'runbook distinguishes the current application runtime SHA' 'CURRENT_RUNTIME_SHA' "$runbook_text"
 assert_contains 'runbook requires an explicit control source SHA' 'CONTROL_SOURCE_SHA' "$runbook_text"
 assert_contains 'runbook permits control source SHA to differ from runtime' 'It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.' "$runbook_text"
@@ -825,6 +855,7 @@ assert_absent 'runbook never pulls the active checkout' 'git -C "$app_dir" pull'
 assert_order 'runbook fixes stage mode before publishing control directory' 'sudo chmod 0755 "$control_stage"' 'sudo mv -- "$control_stage" "$control_dir"' "$runbook_text"
 assert_order 'runbook validates staged sudoers before publishing it' 'sudo visudo -cf "$sudoers_stage"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
 assert_order 'runbook revalidates active checkout before authorizing launcher' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
+assert_order 'runbook permanently disables the legacy timer only after verification' 'MINIO_BACKUP_VERIFY_COMPLETE' 'sudo systemctl disable --now pawtech-postgres-backup.timer' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

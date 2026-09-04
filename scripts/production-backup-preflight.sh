@@ -3,6 +3,9 @@ set -Eeuo pipefail
 set +x
 
 readonly DEFAULT_APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly EXPECTED_CHECKOUT_OWNER='yoryi'
+readonly EXPECTED_GIT='/usr/bin/git'
+readonly EXPECTED_RUNUSER='/usr/sbin/runuser'
 readonly EXPECTED_BACKUP_SERVICE='pawtech-buildingos-backup.service'
 readonly EXPECTED_VERIFY_SERVICE='pawtech-buildingos-backup-verify.service'
 readonly EXPECTED_LEGACY_BACKUP_SERVICE='pawtech-postgres-backup.service'
@@ -22,6 +25,7 @@ readonly MAX_POSTGRES_ESTIMATE_BASE_BYTES=6000000000000000000
 
 failures=0
 ENV_FILE_AVAILABLE=false
+test_mode=false
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -425,12 +429,21 @@ inspect_regular_file() {
 
 inspect_runtime() {
   local production_sha='UNKNOWN' api_revision='UNKNOWN' web_revision='UNKNOWN' checkout_status='DIRTY'
-  local api_image web_image
+  local api_image web_image checkout_changes
 
-  if [[ -d "$EXPECTED_APP_DIR/.git" && ! -L "$EXPECTED_APP_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-    production_sha="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
-    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all >/dev/null 2>&1; then
-      if [[ -z "$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+  if [[ -d "$EXPECTED_APP_DIR/.git" && ! -L "$EXPECTED_APP_DIR/.git" ]]; then
+    if [[ "$test_mode" == true ]]; then
+      production_sha="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+      checkout_changes="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null || printf '__GIT_FAILED__')"
+    elif [[ -x "$EXPECTED_RUNUSER" && -x "$EXPECTED_GIT" ]]; then
+      production_sha="$("$EXPECTED_RUNUSER" -u "$EXPECTED_CHECKOUT_OWNER" -- "$EXPECTED_GIT" --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+      checkout_changes="$("$EXPECTED_RUNUSER" -u "$EXPECTED_CHECKOUT_OWNER" -- "$EXPECTED_GIT" --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null || printf '__GIT_FAILED__')"
+    else
+      checkout_changes='__GIT_FAILED__'
+      fail_check 'trusted checkout-owner Git inspection command is unavailable'
+    fi
+    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ && "$checkout_changes" != '__GIT_FAILED__' ]]; then
+      if [[ -z "$checkout_changes" ]]; then
         checkout_status='CLEAN'
       fi
     fi
@@ -909,7 +922,7 @@ main() {
     EXPECTED_SSE_OWNER="${PREFLIGHT_EXPECTED_SSE_OWNER:-$(id -un)}"
     EXPECTED_SSE_GROUP="${PREFLIGHT_EXPECTED_SSE_GROUP:-$(id -gn)}"
   else
-    [[ -z "${PREFLIGHT_APP_DIR:-}${PREFLIGHT_ENV_FILE:-}${PREFLIGHT_SSE_FILE:-}${PREFLIGHT_STATE_DIR:-}" ]] || { printf 'ERROR: test path overrides require LOCAL_ISOLATED_ONLY\n' >&2; return 1; }
+    [[ -z "${PREFLIGHT_APP_DIR:-}${PREFLIGHT_ENV_FILE:-}${PREFLIGHT_SSE_FILE:-}${PREFLIGHT_STATE_DIR:-}${PREFLIGHT_CHECKOUT_OWNER:-}" ]] || { printf 'ERROR: test path or checkout-owner overrides require LOCAL_ISOLATED_ONLY\n' >&2; return 1; }
     EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
     EXPECTED_STATE_DIR="$DEFAULT_STATE_DIR"
     ENV_FILE="$DEFAULT_ENV_FILE"

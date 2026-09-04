@@ -398,19 +398,164 @@ Stop on any installation or validation failure. Do not fall back to granting
 passwordless access to `bash`, `sh`, `env`, `systemctl`, Docker, or checkout
 scripts.
 
-## 6. DEPLOY APPROVED SHA
+## 6. PRE-DEPLOY PAIRED BACKUP READINESS
 
-Preconditions: normal production deploy checklist, database backup preflight,
-green PR checks, clean remote checkout, approved exact SHA, and rollback
-receipt. Use only the repository production workflow. Do not deploy a branch
-name or current `main` implicitly.
+The first paired backup protects the revision that is running now. It is not a
+post-deploy check for a later application candidate. Record these independent
+identities before continuing:
 
-Expected: running API/Web image IDs carry the same approved OCI revision label,
-health checks pass, and the deployment receipt records that SHA. Existing
-deploy rollback procedure applies. Stop before policy or timer changes if the
-labels disagree.
+- `CURRENT_RUNTIME_SHA`: the clean checkout SHA and matching API/Web OCI
+  revision that must receive the first paired backup.
+- `CONTROL_SOURCE_SHA`: the reviewed, merged SHA used only to install the
+  root-owned preflight control in Section 5A.
+- `LATER_DEPLOY_SHA`: the separately approved application candidate. It is not
+  deployed until the first paired backup and independent verification pass.
 
-## 7. REMOVE ANONYMOUS ACCESS
+Do not substitute `CONTROL_SOURCE_SHA` or `LATER_DEPLOY_SHA` for
+`CURRENT_RUNTIME_SHA` when dispatching the preflight or starting the first
+paired backup. The current runtime checkout must already contain the coordinator
+and paired-backup scripts required below. If it does not, stop for a separately
+reviewed recovery plan; do not deploy `LATER_DEPLOY_SHA` merely to satisfy this
+readiness gate.
+
+## 7. INSTALL BACKUP COORDINATOR FOR CURRENT RUNTIME
+
+Preconditions: the exact clean `CURRENT_RUNTIME_SHA` is still running, and its
+checkout contains the paired-backup scripts. Scripts run directly as `yoryi`
+from that exact clean checkout; no production-only script is edited.
+
+```bash
+test -x /opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh
+test -x /opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-postgres-paired.sh
+```
+
+Expected: scripts are executable and `bash -n` passes. There is no deployment
+or runtime mutation at this stage. Stop if the current runtime does not meet
+this contract.
+
+## 8. INSTALL PAIRED BACKUP UNITS AND STATE DIRECTORY
+
+Preconditions: Sections 5 through 7 pass under a separately approved systemd
+change window. Install the units but do not enable the new timers until the
+first manual paired backup and independent verification pass. Create the state
+directory before execution readiness; it must not be a symlink:
+
+```bash
+sudo install -d -o yoryi -g yoryi -m 0700 /var/lib/buildingos-backup
+sudo test -d /var/lib/buildingos-backup
+sudo test ! -L /var/lib/buildingos-backup
+state_uid="$(id -u yoryi)"
+state_gid="$(id -g yoryi)"
+test "$(sudo stat -c '%u:%g:%a' /var/lib/buildingos-backup)" = "$state_uid:$state_gid:700"
+sudo install -o root -g root -m 0644 infra/production/systemd/*.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 infra/production/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/pawtech-buildingos-backup*.service /etc/systemd/system/pawtech-buildingos-backup*.timer
+```
+
+Expected: the state directory is a non-symlink `yoryi:yoryi` `0700` directory,
+all units validate, and all new timers remain disabled. Rollback removes only
+the newly installed unit files and the newly created empty state directory, then
+runs `daemon-reload`; do not delete backup evidence.
+
+## 9. READ-ONLY PREFLIGHT AND LEGACY OVERLAP WINDOW
+
+The installed preflight correctly rejects an active legacy timer or a scheduled
+legacy trigger. Therefore a separately approved temporary overlap-control
+window is required immediately before the first paired backup. This is not an
+early permanent disable.
+
+1. Confirm `pawtech-postgres-backup.service` is inactive and the new backup
+   service is not running.
+2. Temporarily stop, but do not disable,
+   `pawtech-postgres-backup.timer` immediately before dispatching the preflight.
+3. Prove the timer is inactive and has no next trigger, then dispatch the
+   read-only preflight with `CURRENT_RUNTIME_SHA`.
+4. Keep the legacy timer stopped only while the preflight, first paired backup,
+   and independent verification run.
+5. If the preflight, paired backup, or verification fails, immediately restart
+   the legacy timer and preserve all evidence. Do not enable new timers.
+
+```bash
+sudo systemctl show pawtech-postgres-backup.service -p ActiveState
+sudo systemctl stop pawtech-postgres-backup.timer
+test "$(systemctl is-active pawtech-postgres-backup.timer)" != active
+test "$(systemctl show pawtech-postgres-backup.timer -p NextElapseUSecRealtime --value)" = n/a
+# Dispatch production-backup-preflight.yml with candidate_sha=CURRENT_RUNTIME_SHA.
+```
+
+Expected: the workflow remains read-only and reports clean matching runtime
+identity, protected configuration, unit contracts, state directory, and no
+legacy overlap. On any failed gate, run
+`sudo systemctl start pawtech-postgres-backup.timer` and stop.
+
+## 10. FIRST PAIRED BACKUP
+
+Preconditions: the Section 9 preflight passes for `CURRENT_RUNTIME_SHA`; the
+legacy timer remains temporarily stopped; SSE proof still validates; API/Web
+labels agree; and the operator has approved one manual start.
+
+```bash
+sudo systemctl start pawtech-buildingos-backup.service
+sudo systemctl show pawtech-buildingos-backup.service -p Result -p ExecMainStatus
+sudo journalctl -u pawtech-buildingos-backup.service --since '<change-window-start>'
+```
+
+Expected final marker only after every phase succeeds:
+
+```text
+BUILDINGOS_PAIRED_BACKUP_COMPLETE
+STATUS=PASS
+BACKUP_SET_ID=<safe-id>
+APP_SHA=<actual-running-sha>
+```
+
+If PostgreSQL fails, MinIO is not started. If MinIO or independent verification
+fails, paired PASS is absent. Restart the legacy timer, preserve immutable
+evidence, and stop; never delete or overwrite the failed prefix.
+
+## 11. VERIFY AND COMPLETE LEGACY TRANSITION
+
+Preconditions: first paired receipt exists.
+
+```bash
+sudo systemctl start pawtech-buildingos-backup-verify.service
+sudo systemctl show pawtech-buildingos-backup-verify.service -p Result -p ExecMainStatus
+```
+
+Expected: `MINIO_BACKUP_VERIFY_COMPLETE`, `STATUS=PASS`, matching
+`BACKUP_SET_ID` and `APP_SHA`. On failure, restart the legacy timer, leave new
+timers disabled, and stop.
+
+Only after that success, permanently replace the legacy unpaired schedule. The
+temporary stop in Section 9 is reversible protection; this is the first point
+where permanent disablement is authorized. Confirm no legacy backup service is
+running, disable its timer, then enable the new timers:
+
+```bash
+sudo systemctl disable --now pawtech-postgres-backup.timer
+test "$(systemctl is-active pawtech-postgres-backup.service)" != activating
+sudo systemctl enable --now pawtech-buildingos-backup.timer pawtech-buildingos-backup-verify.timer pawtech-buildingos-backup-freshness.timer
+```
+
+Expected: the three new timers are enabled/active and the legacy unpaired
+PostgreSQL timer is disabled/inactive. Rollback re-enables
+`pawtech-postgres-backup.timer` before disabling the three new timers; preserve
+all receipts and backup data.
+
+## 12. DEPLOY LATER APPROVED SHA
+
+Preconditions: the first paired backup and independent verification both pass
+for `CURRENT_RUNTIME_SHA`, green PR checks, clean remote checkout,
+`LATER_DEPLOY_SHA`, and a rollback receipt. Use only the repository production
+workflow. Do not deploy a branch name or current `main` implicitly.
+
+Expected: running API/Web image IDs carry the same `LATER_DEPLOY_SHA` OCI
+revision label, health checks pass, and the deployment receipt records that
+SHA. Existing deploy rollback procedure applies. This deployment is deliberately
+after the current runtime has valid paired-backup evidence.
+
+## 13. REMOVE ANONYMOUS ACCESS
 
 Preconditions: application audit remains valid; capture one existing document
 and receipt through approved metadata-only evidence; presigned endpoint/CORS
@@ -433,89 +578,7 @@ Expected:
 On failure, stop. Restore only the exact captured policy after separate
 approval using that runbook; do not synthesize a public policy.
 
-## 8. INSTALL BACKUP COORDINATOR
-
-Preconditions: approved SHA is deployed and protected config validates. Scripts
-run directly from the exact clean checkout; no production-only script is edited.
-
-```bash
-test -x /opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-buildingos-production.sh
-test -x /opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-postgres-paired.sh
-```
-
-Expected: scripts are executable and `bash -n` passes. There is no runtime
-mutation at this stage. Roll back by deploying the previous approved SHA.
-
-## 9. INSTALL SYSTEMD
-
-Preconditions: all prior stages pass. Copy units but do not enable timers until
-`systemd-analyze verify` passes against the installed files:
-
-```bash
-sudo install -o root -g root -m 0644 infra/production/systemd/*.service /etc/systemd/system/
-sudo install -o root -g root -m 0644 infra/production/systemd/*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemd-analyze verify /etc/systemd/system/pawtech-buildingos-backup*.service /etc/systemd/system/pawtech-buildingos-backup*.timer
-```
-
-Expected: all units validate but remain disabled until the first manual paired
-backup and independent verification pass. Optional alert integration uses a
-protected executable hook receiving non-secret JSON on stdin.
-
-Rollback: disable the three new timers, preserve journals/receipts, remove only
-these installed unit files, and run `daemon-reload`. Do not delete backups.
-
-## 10. FIRST PAIRED BACKUP
-
-Preconditions: SSE proof still validates, API/Web SHA labels agree, timers are
-not concurrently running, and the operator has approved one manual start.
-
-```bash
-sudo systemctl start pawtech-buildingos-backup.service
-sudo systemctl show pawtech-buildingos-backup.service -p Result -p ExecMainStatus
-sudo journalctl -u pawtech-buildingos-backup.service --since '<change-window-start>'
-```
-
-Expected final marker only after every phase succeeds:
-
-```text
-BUILDINGOS_PAIRED_BACKUP_COMPLETE
-STATUS=PASS
-BACKUP_SET_ID=<safe-id>
-APP_SHA=<actual-running-sha>
-```
-
-If PostgreSQL fails, MinIO is not started. If MinIO or independent verification
-fails, paired PASS is absent. Disable timers, preserve immutable evidence, and
-stop; never delete or overwrite the failed prefix.
-
-## 11. VERIFY
-
-Preconditions: first paired receipt exists.
-
-```bash
-sudo systemctl start pawtech-buildingos-backup-verify.service
-sudo systemctl show pawtech-buildingos-backup-verify.service -p Result -p ExecMainStatus
-```
-
-Expected: `MINIO_BACKUP_VERIFY_COMPLETE`, `STATUS=PASS`, matching
-`BACKUP_SET_ID` and `APP_SHA`. On failure, leave new timers disabled and stop.
-
-Only after that success, replace the legacy unpaired schedule. First confirm no
-legacy backup service is running, stop its timer, then enable the new timers:
-
-```bash
-sudo systemctl disable --now pawtech-postgres-backup.timer
-test "$(systemctl is-active pawtech-postgres-backup.service)" != activating
-sudo systemctl enable --now pawtech-buildingos-backup.timer pawtech-buildingos-backup-verify.timer pawtech-buildingos-backup-freshness.timer
-```
-
-Expected: the three new timers are enabled/active and the legacy unpaired
-PostgreSQL timer is disabled/inactive. Rollback re-enables
-`pawtech-postgres-backup.timer` before disabling the three new timers; preserve
-all receipts and backup data.
-
-## 12. ISOLATED RESTORE REHEARSAL
+## 14. ISOLATED RESTORE REHEARSAL
 
 Preconditions: approved empty non-production bucket and database, trusted
 restore policy, separate restore-write credential, matching set/SHA, and
@@ -535,7 +598,7 @@ quote attachments if present, and onboarding artifacts through an isolated app.
 On failure, preserve the target and evidence; do not retry into the same bucket
 or delete retained backup data.
 
-## 13. FINAL RECEIPT
+## 15. FINAL RECEIPT
 
 Activation is complete only when evidence records:
 
