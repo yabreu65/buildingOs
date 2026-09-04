@@ -445,11 +445,72 @@ control_stage=''
 launcher_stage=''
 sudoers_stage=''
 declare -A old_hash new_hash
+control_old_preserved=false
+control_new_published=false
+launcher_old_preserved=false
+launcher_new_published=false
+sudoers_old_preserved=false
+sudoers_new_published=false
+activation_complete=false
+publication_started=false
+
+readonly failed_control_dir="/usr/local/libexec/.buildingos-backup-preflight.failed-$NEW_CONTROL_SOURCE_SHA"
+readonly failed_launcher="/usr/local/sbin/.buildingos-production-backup-preflight.failed-$NEW_CONTROL_SOURCE_SHA"
+readonly failed_sudoers="/etc/sudoers.d/.buildingos-production-backup-preflight.failed-$NEW_CONTROL_SOURCE_SHA"
+
+verify_previous_installation() {
+  test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${old_hash[scripts/production-backup-preflight.sh]}"
+  test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${old_hash[scripts/lib/endpoint-identity.sh]}"
+  test "$(sudo sha256sum "$launcher" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
+  test "$(sudo sha256sum "$sudoers_policy" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir")" = '0:0:755'
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib")" = '0:0:755'
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/production-backup-preflight.sh")" = '0:0:755'
+  test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib/endpoint-identity.sh")" = '0:0:644'
+  test "$(sudo stat -c '%u:%g:%a' "$launcher")" = '0:0:755'
+  test "$(sudo stat -c '%u:%g:%a' "$sudoers_policy")" = '0:0:440'
+  sudo visudo -cf "$sudoers_policy"
+  sudo visudo -cf /etc/sudoers
+}
+
+rollback_update() {
+  local rollback_status=0
+  set +e
+  if [[ "$sudoers_new_published" == true ]]; then
+    sudo mv -- "$sudoers_policy" "$failed_sudoers" || rollback_status=$?
+  fi
+  if [[ "$sudoers_old_preserved" == true ]]; then
+    sudo mv -- "$sudoers_rollback" "$sudoers_policy" || rollback_status=$?
+  fi
+  if [[ "$launcher_new_published" == true ]]; then
+    sudo mv -- "$launcher" "$failed_launcher" || rollback_status=$?
+  fi
+  if [[ "$launcher_old_preserved" == true ]]; then
+    sudo mv -- "$launcher_rollback" "$launcher" || rollback_status=$?
+  fi
+  if [[ "$control_old_preserved" == true ]]; then
+    if [[ "$control_new_published" == true ]]; then
+      sudo mv -- "$control_dir" "$failed_control_dir" || rollback_status=$?
+    fi
+    sudo mv -- "$rollback_control_dir" "$control_dir" || rollback_status=$?
+  fi
+  if [[ "$publication_started" == true ]]; then
+    verify_previous_installation || rollback_status=$?
+  fi
+  if (( rollback_status != 0 )); then
+    printf 'ERROR: CONTROL_UPDATE automatic rollback failed; inspect preserved rollback and failed-evidence paths\n' >&2
+  fi
+  return "$rollback_status"
+}
 
 cleanup() {
   local status=$?
+  local rollback_status=0
   trap - EXIT
   set +e
+  if [[ "$activation_complete" != true && "$publication_started" == true ]]; then
+    rollback_update || rollback_status=$?
+  fi
   if [[ -n "$control_stage" ]]; then
     sudo rm -f -- "$control_stage/production-backup-preflight.sh" "$control_stage/lib/endpoint-identity.sh"
     sudo rmdir -- "$control_stage/lib" "$control_stage"
@@ -457,6 +518,9 @@ cleanup() {
   [[ -z "$launcher_stage" ]] || sudo rm -f -- "$launcher_stage"
   [[ -z "$sudoers_stage" ]] || sudo rm -f -- "$sudoers_stage"
   [[ -z "$source_tree" ]] || git -C "$app_dir" worktree remove --force "$source_tree"
+  if (( status == 0 && rollback_status != 0 )); then
+    status=$rollback_status
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -507,6 +571,9 @@ sudo visudo -cf "$sudoers_policy"
 sudo test ! -e "$rollback_control_dir" && sudo test ! -L "$rollback_control_dir"
 sudo test ! -e "$launcher_rollback" && sudo test ! -L "$launcher_rollback"
 sudo test ! -e "$sudoers_rollback" && sudo test ! -L "$sudoers_rollback"
+sudo test ! -e "$failed_control_dir" && sudo test ! -L "$failed_control_dir"
+sudo test ! -e "$failed_launcher" && sudo test ! -L "$failed_launcher"
+sudo test ! -e "$failed_sudoers" && sudo test ! -L "$failed_sudoers"
 
 sudo install -d -o root -g root -m 0755 /usr/local/libexec
 control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.update.XXXXXX)"
@@ -525,12 +592,16 @@ test "$(sudo stat -c '%u:%g:%a' "$control_stage/lib/endpoint-identity.sh")" = '0
 The control directory publication uses same-filesystem renames. The short gap
 between the two moves fails the launcher closed; do not dispatch a preflight in
 this change window. Keep the previous directory as rollback material until all
-post-publication checks pass:
+post-publication checks pass. Publication state is explicit and the trap below
+restores it automatically on any later failure:
 
 ```bash
+publication_started=true
 sudo mv -- "$control_dir" "$rollback_control_dir"
+control_old_preserved=true
 sudo mv -- "$control_stage" "$control_dir"
 control_stage=''
+control_new_published=true
 test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
 test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
 ```
@@ -554,9 +625,16 @@ if [[ "${new_hash[infra/production/launchers/buildingos-production-backup-prefli
   test "$(sudo sha256sum "$launcher_stage" | awk '{print $1}')" = "${new_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
   test "$(sudo stat -c '%u:%g:%a' "$launcher_stage")" = '0:0:755'
   sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"
+  launcher_old_preserved=true
+  test "$(sudo sha256sum "$launcher_rollback" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
+  test "$(sudo stat -c '%u:%g:%a' "$launcher_rollback")" = '0:0:755'
   sudo mv -- "$launcher_stage" "$launcher"
   launcher_stage=''
+  launcher_new_published=true
 fi
+active_checkout_before_sudoers="$(git -C "$app_dir" rev-parse HEAD)"
+[[ "$active_checkout_before_sudoers" == "$CURRENT_RUNTIME_SHA" ]]
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
 if [[ "${new_hash[infra/production/sudoers/buildingos-production-backup-preflight]}" != "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}" ]]; then
   [[ "${APPROVED_SUDOERS_REPLACEMENT:-false}" == true ]]
   sudoers_stage="$(sudo mktemp /etc/sudoers.d/.buildingos-production-backup-preflight.update.XXXXXX)"
@@ -565,26 +643,32 @@ if [[ "${new_hash[infra/production/sudoers/buildingos-production-backup-prefligh
   test "$(sudo sha256sum "$sudoers_stage" | awk '{print $1}')" = "${new_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
   test "$(sudo stat -c '%u:%g:%a' "$sudoers_stage")" = '0:0:440'
   sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"
+  sudoers_old_preserved=true
+  test "$(sudo sha256sum "$sudoers_rollback" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
+  test "$(sudo stat -c '%u:%g:%a' "$sudoers_rollback")" = '0:0:440'
   sudo mv -- "$sudoers_stage" "$sudoers_policy"
   sudoers_stage=''
+  sudoers_new_published=true
 fi
 active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"
 [[ "$active_checkout_end" == "$CURRENT_RUNTIME_SHA" ]]
 test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
 sudo visudo -cf /etc/sudoers
-```
-
-If any post-publication validation fails, stop the update and restore the exact
-previous root-owned bytes before leaving the approved window. Do not delete the
-rollback material until the replacement is proven and a separate cleanup is
-approved:
-
-```bash
-sudo mv -- "$control_dir" "${control_dir}.failed-$NEW_CONTROL_SOURCE_SHA"
-sudo mv -- "$rollback_control_dir" "$control_dir"
-[[ ! -e "$launcher_rollback" ]] || sudo mv -- "$launcher_rollback" "$launcher"
-[[ ! -e "$sudoers_rollback" ]] || sudo mv -- "$sudoers_rollback" "$sudoers_policy"
-sudo visudo -cf /etc/sudoers
+test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
+test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
+test "$(sudo stat -c '%u:%g:%a' "$control_dir")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/production-backup-preflight.sh")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib/endpoint-identity.sh")" = '0:0:644'
+test "$(sudo sha256sum "$launcher" | awk '{print $1}')" = "${new_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
+test "$(sudo stat -c '%u:%g:%a' "$launcher")" = '0:0:755'
+test "$(sudo sha256sum "$sudoers_policy" | awk '{print $1}')" = "${new_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
+test "$(sudo stat -c '%u:%g:%a' "$sudoers_policy")" = '0:0:440'
+sudo visudo -cf "$sudoers_policy"
+for stage in /usr/local/libexec/.buildingos-backup-preflight.update.* /usr/local/sbin/.buildingos-production-backup-preflight.update.* /etc/sudoers.d/.buildingos-production-backup-preflight.update.*; do
+  sudo test ! -e "$stage" && sudo test ! -L "$stage"
+done
+activation_complete=true
 ```
 
 Stop on any installation or validation failure. Do not fall back to granting
