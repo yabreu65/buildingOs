@@ -101,6 +101,14 @@ case "$*" in
   *) exit 1 ;;
 esac
 MOCK
+cat > "$BIN_DIR/runuser" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "${MOCK_RUNUSER_LOG:?}"
+[[ "${1:-}" == -u && "${2:-}" == yoryi && "${3:-}" == -- ]] || exit 1
+shift 3
+exec "$@"
+MOCK
 
 cat > "$BIN_DIR/docker" <<'MOCK'
 #!/usr/bin/env bash
@@ -244,6 +252,7 @@ for command_name in mc pg_restore rclone; do
   chmod 0755 "$BIN_DIR/$command_name"
 done
 chmod 0755 "$BIN_DIR/git" "$BIN_DIR/docker" "$BIN_DIR/systemctl"
+chmod 0755 "$BIN_DIR/runuser"
 
 write_env() {
   local backup_bucket="$1"
@@ -312,6 +321,46 @@ run_production_override_rejection() {
   set -e
 }
 
+state_metadata() {
+  stat -c '%u:%g:%a' -- "$1" 2>/dev/null || stat -f '%u:%g:%Lp' "$1"
+}
+
+state_install() {
+  printf '%s\n' "$*" >> "$STATE_INSTALL_LOG"
+  command install "$@"
+}
+
+ensure_state_directory_contract() {
+  local state_dir="$1" expected_uid="$2" expected_gid="$3" installer="$4"
+
+  if [[ -e "$state_dir" || -L "$state_dir" ]]; then
+    [[ -d "$state_dir" && ! -L "$state_dir" ]] || return 1
+    [[ "$(state_metadata "$state_dir")" == "$expected_uid:$expected_gid:700" ]] || return 1
+    return 0
+  fi
+  [[ ! -e "$state_dir" && ! -L "$state_dir" ]] || return 1
+  "$installer" -d -o "$(id -un)" -g "$(id -gn)" -m 0700 "$state_dir"
+  [[ -d "$state_dir" && ! -L "$state_dir" ]]
+  [[ "$(state_metadata "$state_dir")" == "$expected_uid:$expected_gid:700" ]]
+}
+
+run_state_directory_contract() {
+  set +e
+  ensure_state_directory_contract "$@"
+  RUN_RC=$?
+  set -e
+}
+
+runtime_fixture_dir="$TEST_ROOT/runtime-fixture"
+mkdir -p "$runtime_fixture_dir/lib"
+cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$runtime_fixture_dir/lib/endpoint-identity.sh"
+runtime_fixture="$runtime_fixture_dir/production-backup-preflight.sh"
+sed \
+  -e "s|readonly EXPECTED_GIT='/usr/bin/git'|readonly EXPECTED_GIT='$BIN_DIR/git'|" \
+  -e "s|readonly EXPECTED_RUNUSER='/usr/sbin/runuser'|readonly EXPECTED_RUNUSER='$BIN_DIR/runuser'|" \
+  "$PREFLIGHT" > "$runtime_fixture"
+chmod 0755 "$runtime_fixture"
+
 CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
 write_env buildingos-backup production
 write_sse
@@ -327,6 +376,93 @@ assert_contains 'happy path reports inactive backup' 'BACKUP_ALREADY_RUNNING=NO'
 for sentinel in VERIFY_ACCESS_SENTINEL VERIFY_SECRET_SENTINEL WRITE_ACCESS_SENTINEL WRITE_SECRET_SENTINEL SOURCE_ACCESS_SENTINEL SOURCE_SECRET_SENTINEL; do
   assert_absent "secret $sentinel is not emitted" "$sentinel" "$RUN_OUTPUT"
 done
+
+MOCK_RUNUSER_LOG="$TEST_ROOT/runuser.log"
+export MOCK_RUNUSER_LOG
+set +e
+RUNTIME_OUTPUT="$(PATH="$BIN_DIR" /bin/bash -c '
+  set -Eeuo pipefail
+  source "$1"
+  test_mode=false
+  EXPECTED_APP_DIR="$2"
+  CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
+  inspect_runtime
+' -- "$runtime_fixture" "$APP_DIR" 2>&1)"
+RUN_RC=$?
+set -e
+assert_success 'production-mode inspection reads clean checkout through fixed yoryi runuser'
+assert_contains 'production-mode inspection reports clean checkout' 'PRODUCTION_CHECKOUT_STATUS=CLEAN' "$RUNTIME_OUTPUT"
+assert_contains 'production-mode inspection reports checkout SHA' 'PRODUCTION_RUNTIME_SHA=2ac603be8018ffc3df67fb4e84149aea4f780cea' "$RUNTIME_OUTPUT"
+assert_contains 'production-mode inspection invokes fixed checkout owner' '-u yoryi --' "$(< "$MOCK_RUNUSER_LOG")"
+
+set +e
+RUNTIME_OUTPUT="$(MOCK_DIRTY=YES PATH="$BIN_DIR" /bin/bash -c '
+  set -Eeuo pipefail
+  source "$1"
+  test_mode=false
+  EXPECTED_APP_DIR="$2"
+  CANDIDATE_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
+  inspect_runtime
+' -- "$runtime_fixture" "$APP_DIR" 2>&1)"
+RUN_RC=$?
+set -e
+assert_success 'production-mode inspection completes for dirty checkout'
+assert_contains 'production-mode inspection reports dirty checkout' 'PRODUCTION_CHECKOUT_STATUS=DIRTY' "$RUNTIME_OUTPUT"
+
+state_contract_root="$TEST_ROOT/state-directory-contract"
+state_target="$state_contract_root/state"
+state_link="$state_contract_root/state-link"
+state_file="$state_contract_root/state-file"
+state_fifo="$state_contract_root/state-fifo"
+STATE_INSTALL_LOG="$state_contract_root/install.log"
+mkdir -p "$state_contract_root"
+: > "$STATE_INSTALL_LOG"
+state_uid="$(id -u)"
+state_gid="$(id -g)"
+run_state_directory_contract "$state_target" "$state_uid" "$state_gid" state_install
+assert_success 'absent state directory is created safely'
+assert_contains 'absent state directory uses install only after absence check' '-d' "$(< "$STATE_INSTALL_LOG")"
+if [[ "$(state_metadata "$state_target")" == "$state_uid:$state_gid:700" ]]; then pass 'created state directory has exact metadata'; else fail_test 'created state directory has exact metadata'; fi
+
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_target" "$state_uid" "$state_gid" state_install
+assert_success 'valid existing state directory is accepted'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'valid existing state directory is reused without mutation'; else fail_test 'valid existing state directory is reused without mutation'; fi
+
+ln -s "$state_target" "$state_link"
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_link" "$state_uid" "$state_gid" state_install
+assert_failure 'state directory symlink is rejected before install'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'state directory symlink triggers no install chmod or chown'; else fail_test 'state directory symlink triggers no install chmod or chown'; fi
+
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_target" 99999 "$state_gid" state_install
+assert_failure 'existing state directory with wrong owner fails'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'wrong state directory owner is not remediated automatically'; else fail_test 'wrong state directory owner is not remediated automatically'; fi
+
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_target" "$state_uid" 99999 state_install
+assert_failure 'existing state directory with wrong group fails'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'wrong state directory group is not remediated automatically'; else fail_test 'wrong state directory group is not remediated automatically'; fi
+
+chmod 0750 "$state_target"
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_target" "$state_uid" "$state_gid" state_install
+assert_failure 'existing state directory with wrong mode fails'
+if [[ ! -s "$STATE_INSTALL_LOG" ]]; then pass 'wrong state directory mode is not remediated automatically'; else fail_test 'wrong state directory mode is not remediated automatically'; fi
+chmod 0700 "$state_target"
+
+printf 'not a directory\n' > "$state_file"
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_file" "$state_uid" "$state_gid" state_install
+assert_failure 'regular file cannot replace state directory'
+if [[ ! -s "$STATE_INSTALL_LOG" && -f "$state_file" ]]; then pass 'regular file is never replaced'; else fail_test 'regular file is never replaced'; fi
+
+mkfifo "$state_fifo"
+: > "$STATE_INSTALL_LOG"
+run_state_directory_contract "$state_fifo" "$state_uid" "$state_gid" state_install
+assert_failure 'unexpected state object fails'
+if [[ ! -s "$STATE_INSTALL_LOG" && -p "$state_fifo" ]]; then pass 'unexpected state object is never replaced'; else fail_test 'unexpected state object is never replaced'; fi
 
 CANDIDATE_SHA='db82d3d37fc6184a6d4063709b9a15b923371695' run_preflight
 assert_failure 'candidate mismatch fails runtime identity gate'
@@ -833,11 +969,24 @@ assert_contains 'runbook installs preflight control as root' 'sudo install -o ro
 assert_contains 'runbook documents privilege-boundary rollback' 'sudo rm -- "$sudoers_policy"' "$runbook_text"
 assert_contains 'runbook names the current runtime as the first backup target' 'CURRENT_RUNTIME_SHA' "$runbook_text"
 assert_contains 'runbook names the later deployment identity' 'LATER_DEPLOY_SHA' "$runbook_text"
-assert_contains 'runbook installs state directory for the service account' 'sudo install -d -o yoryi -g yoryi -m 0700 /var/lib/buildingos-backup' "$runbook_text"
-assert_contains 'runbook validates state directory as non-symlink' 'sudo test ! -L /var/lib/buildingos-backup' "$runbook_text"
+assert_contains 'runbook installs state directory for the service account' 'sudo install -d -o yoryi -g yoryi -m 0700 "$state_dir"' "$runbook_text"
+assert_contains 'runbook validates state directory as non-symlink' 'sudo test ! -L "$state_dir"' "$runbook_text"
+assert_contains 'runbook checks existing state directory before installing it' 'if sudo test -e "$state_dir" || sudo test -L "$state_dir"; then' "$runbook_text"
+assert_contains 'runbook rejects unexpected existing state directory metadata' 'Never follow a symlink or silently repair an existing directory.' "$runbook_text"
 assert_contains 'runbook defines temporary legacy timer stop' 'sudo systemctl stop pawtech-postgres-backup.timer' "$runbook_text"
 assert_contains 'runbook restores legacy timer after a failed first backup gate' 'sudo systemctl start pawtech-postgres-backup.timer' "$runbook_text"
 assert_absent 'runbook no longer requires an approved SHA deployed before coordinator installation' 'Preconditions: approved SHA is deployed and protected config validates.' "$runbook_text"
+assert_contains 'runbook separates installed and new privileged control sources' 'INSTALLED_CONTROL_SOURCE_SHA' "$runbook_text"
+assert_contains 'runbook requires an explicit new privileged control source' 'NEW_CONTROL_SOURCE_SHA' "$runbook_text"
+assert_contains 'runbook distinguishes initial installation from control update' 'INITIAL_INSTALL' "$runbook_text"
+assert_contains 'runbook labels existing-control procedure as control update' 'CONTROL_UPDATE' "$runbook_text"
+assert_contains 'runbook states that merging does not update installed privileged control' 'Merging repository code does not update the installed privileged control.' "$runbook_text"
+assert_contains 'runbook stages control update outside the live control directory' '.buildingos-backup-preflight.update.XXXXXX' "$runbook_text"
+assert_contains 'runbook preserves previous control bytes for rollback' 'rollback_control_dir' "$runbook_text"
+assert_contains 'runbook validates staged control update hashes from exact Git objects' 'new_hash["$artifact"]="$(git -C "$app_dir" show "$NEW_CONTROL_SOURCE_SHA:$artifact"' "$runbook_text"
+assert_contains 'runbook rejects symbolic links before hashing installed control' 'sudo test -f "$installed_file" && sudo test ! -L "$installed_file"' "$runbook_text"
+assert_contains 'runbook conditionally stages a changed launcher' 'APPROVED_LAUNCHER_REPLACEMENT' "$runbook_text"
+assert_contains 'runbook conditionally stages a changed sudoers policy' 'APPROVED_SUDOERS_REPLACEMENT' "$runbook_text"
 assert_contains 'runbook distinguishes the current application runtime SHA' 'CURRENT_RUNTIME_SHA' "$runbook_text"
 assert_contains 'runbook requires an explicit control source SHA' 'CONTROL_SOURCE_SHA' "$runbook_text"
 assert_contains 'runbook permits control source SHA to differ from runtime' 'It may differ from `CURRENT_RUNTIME_SHA` during this bootstrap.' "$runbook_text"
@@ -856,6 +1005,7 @@ assert_order 'runbook fixes stage mode before publishing control directory' 'sud
 assert_order 'runbook validates staged sudoers before publishing it' 'sudo visudo -cf "$sudoers_stage"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
 assert_order 'runbook revalidates active checkout before authorizing launcher' 'active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"' 'sudo mv -- "$sudoers_stage" "$sudoers_policy"' "$runbook_text"
 assert_order 'runbook permanently disables the legacy timer only after verification' 'MINIO_BACKUP_VERIFY_COMPLETE' 'sudo systemctl disable --now pawtech-postgres-backup.timer' "$runbook_text"
+assert_order 'runbook checks state directory before installing it' 'if sudo test -e "$state_dir" || sudo test -L "$state_dir"; then' 'sudo install -d -o yoryi -g yoryi -m 0700 "$state_dir"' "$runbook_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s test(s) failed; %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

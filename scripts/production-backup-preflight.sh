@@ -464,6 +464,7 @@ inspect_runtime() {
     printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
     fail_check 'production runtime identity is not the expected clean, matching revision'
   fi
+  return 0
 }
 
 inspect_scripts() {

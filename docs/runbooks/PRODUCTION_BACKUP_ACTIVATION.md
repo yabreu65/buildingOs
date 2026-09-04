@@ -201,7 +201,7 @@ for the non-secret restore policy. Production
 must not appear in the policy. On failure, remove only newly installed config
 files under the same approval and revoke new credentials; do not alter app env.
 
-## 5A. INSTALL PRIVILEGED PREFLIGHT CONTROL
+## 5A. INITIAL_INSTALL: INSTALL PRIVILEGED PREFLIGHT CONTROL
 
 This is a **one-time approved production mutation**. It installs only the
 root-owned read-only preflight control and its narrow sudoers authorization.
@@ -394,6 +394,199 @@ sudo rmdir -- "$control_dir/lib"
 sudo rmdir -- "$control_dir"
 ```
 
+## 5B. CONTROL_UPDATE: UPDATE INSTALLED PRIVILEGED PREFLIGHT CONTROL
+
+`INITIAL_INSTALL` is the procedure in Section 5A and is valid only when all
+three destination paths are absent. `CONTROL_UPDATE` is the procedure in this
+section and is valid only when the existing installation is present and its
+recorded bytes can be proven. Never choose one mode based on a failed command;
+stop and inspect the installation state.
+
+This is a separate approved production mutation from the initial installation.
+**Merging repository code does not update the installed privileged control.**
+GitHub Actions invokes the fixed launcher, which executes the root-owned bytes
+already installed under `/usr/local/libexec`; it never executes this repository
+copy as root. Do not dispatch a preflight using a new repository commit until
+this replacement has been approved and completed.
+
+For the current installation, record these three values independently:
+
+- `INSTALLED_CONTROL_SOURCE_SHA=56b5f5d49c804dde17c194591238d6adec02c896`:
+  the exact source of the currently installed root-owned bytes.
+- `NEW_CONTROL_SOURCE_SHA=<reviewed-merged-commit-containing-this-update>`:
+  the explicit 40-character commit to install after its PR is merged and a
+  separate control-update approval is granted.
+- `CURRENT_RUNTIME_SHA=db82d3d37fc6184a6d4063709b9a15b923371695`:
+  the application checkout and API/Web revision that remain untouched.
+
+The active application checkout is a read-only Git object source for this
+procedure: do not switch, reset, pull, modify, or execute its scripts as root.
+Fetch `origin/main`, verify both control SHAs are commits reachable from it, and
+materialize `NEW_CONTROL_SOURCE_SHA` in a detached temporary worktree. The
+temporary worktree is only a source for `bash -n`, `sh -n`, `visudo -cf`, and
+root-owned staging; never invoke its preflight script as root.
+
+```bash
+set -Eeuo pipefail
+set +x
+
+readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly control_dir='/usr/local/libexec/buildingos-backup-preflight'
+readonly launcher='/usr/local/sbin/buildingos-production-backup-preflight'
+readonly sudoers_policy='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly INSTALLED_CONTROL_SOURCE_SHA='56b5f5d49c804dde17c194591238d6adec02c896'
+readonly NEW_CONTROL_SOURCE_SHA='<reviewed-merged-40-character-commit>'
+readonly CURRENT_RUNTIME_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
+readonly rollback_control_dir="/usr/local/libexec/.buildingos-backup-preflight.rollback-$INSTALLED_CONTROL_SOURCE_SHA"
+readonly launcher_rollback="/usr/local/sbin/.buildingos-production-backup-preflight.rollback-$INSTALLED_CONTROL_SOURCE_SHA"
+readonly sudoers_rollback="/etc/sudoers.d/.buildingos-production-backup-preflight.rollback-$INSTALLED_CONTROL_SOURCE_SHA"
+source_tree=''
+control_stage=''
+launcher_stage=''
+sudoers_stage=''
+declare -A old_hash new_hash
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [[ -n "$control_stage" ]]; then
+    sudo rm -f -- "$control_stage/production-backup-preflight.sh" "$control_stage/lib/endpoint-identity.sh"
+    sudo rmdir -- "$control_stage/lib" "$control_stage"
+  fi
+  [[ -z "$launcher_stage" ]] || sudo rm -f -- "$launcher_stage"
+  [[ -z "$sudoers_stage" ]] || sudo rm -f -- "$sudoers_stage"
+  [[ -z "$source_tree" ]] || git -C "$app_dir" worktree remove --force "$source_tree"
+  exit "$status"
+}
+trap cleanup EXIT
+
+[[ "$INSTALLED_CONTROL_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$NEW_CONTROL_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$(git -C "$app_dir" rev-parse HEAD)" == "$CURRENT_RUNTIME_SHA" ]]
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+git -C "$app_dir" fetch --no-tags origin main
+for control_sha in "$INSTALLED_CONTROL_SOURCE_SHA" "$NEW_CONTROL_SOURCE_SHA"; do
+  git -C "$app_dir" rev-parse --verify "$control_sha^{commit}" >/dev/null
+  git -C "$app_dir" merge-base --is-ancestor "$control_sha" origin/main
+done
+source_tree="$(mktemp -d /tmp/buildingos-backup-preflight-control.XXXXXX)"
+rmdir -- "$source_tree"
+git -C "$app_dir" worktree add --detach "$source_tree" "$NEW_CONTROL_SOURCE_SHA"
+
+for artifact in \
+  scripts/production-backup-preflight.sh \
+  scripts/lib/endpoint-identity.sh \
+  infra/production/launchers/buildingos-production-backup-preflight \
+  infra/production/sudoers/buildingos-production-backup-preflight; do
+  old_hash["$artifact"]="$(git -C "$app_dir" show "$INSTALLED_CONTROL_SOURCE_SHA:$artifact" | sha256sum | awk '{print $1}')"
+  new_hash["$artifact"]="$(git -C "$app_dir" show "$NEW_CONTROL_SOURCE_SHA:$artifact" | sha256sum | awk '{print $1}')"
+done
+bash -n "$source_tree/scripts/production-backup-preflight.sh"
+bash -n "$source_tree/scripts/lib/endpoint-identity.sh"
+sh -n "$source_tree/infra/production/launchers/buildingos-production-backup-preflight"
+sudo visudo -cf "$source_tree/infra/production/sudoers/buildingos-production-backup-preflight"
+
+# Prove the live root-owned bytes are exactly the recorded installed source.
+sudo test -d "$control_dir" && sudo test ! -L "$control_dir"
+sudo test -d "$control_dir/lib" && sudo test ! -L "$control_dir/lib"
+for installed_file in "$control_dir/production-backup-preflight.sh" "$control_dir/lib/endpoint-identity.sh" "$launcher" "$sudoers_policy"; do
+  sudo test -f "$installed_file" && sudo test ! -L "$installed_file"
+done
+test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${old_hash[scripts/production-backup-preflight.sh]}"
+test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${old_hash[scripts/lib/endpoint-identity.sh]}"
+test "$(sudo sha256sum "$launcher" | awk '{print $1}')" = "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
+test "$(sudo sha256sum "$sudoers_policy" | awk '{print $1}')" = "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
+test "$(sudo stat -c '%u:%g:%a' "$control_dir")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/production-backup-preflight.sh")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_dir/lib/endpoint-identity.sh")" = '0:0:644'
+test "$(sudo stat -c '%u:%g:%a' "$launcher")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$sudoers_policy")" = '0:0:440'
+sudo visudo -cf "$sudoers_policy"
+sudo test ! -e "$rollback_control_dir" && sudo test ! -L "$rollback_control_dir"
+sudo test ! -e "$launcher_rollback" && sudo test ! -L "$launcher_rollback"
+sudo test ! -e "$sudoers_rollback" && sudo test ! -L "$sudoers_rollback"
+
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+control_stage="$(sudo mktemp -d /usr/local/libexec/.buildingos-backup-preflight.update.XXXXXX)"
+sudo chmod 0755 "$control_stage"
+sudo install -d -o root -g root -m 0755 "$control_stage/lib"
+sudo install -o root -g root -m 0755 "$source_tree/scripts/production-backup-preflight.sh" "$control_stage/production-backup-preflight.sh"
+sudo install -o root -g root -m 0644 "$source_tree/scripts/lib/endpoint-identity.sh" "$control_stage/lib/endpoint-identity.sh"
+test "$(sudo sha256sum "$control_stage/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
+test "$(sudo sha256sum "$control_stage/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
+test "$(sudo stat -c '%u:%g:%a' "$control_stage")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/lib")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/production-backup-preflight.sh")" = '0:0:755'
+test "$(sudo stat -c '%u:%g:%a' "$control_stage/lib/endpoint-identity.sh")" = '0:0:644'
+```
+
+The control directory publication uses same-filesystem renames. The short gap
+between the two moves fails the launcher closed; do not dispatch a preflight in
+this change window. Keep the previous directory as rollback material until all
+post-publication checks pass:
+
+```bash
+sudo mv -- "$control_dir" "$rollback_control_dir"
+sudo mv -- "$control_stage" "$control_dir"
+control_stage=''
+test "$(sudo sha256sum "$control_dir/production-backup-preflight.sh" | awk '{print $1}')" = "${new_hash[scripts/production-backup-preflight.sh]}"
+test "$(sudo sha256sum "$control_dir/lib/endpoint-identity.sh" | awk '{print $1}')" = "${new_hash[scripts/lib/endpoint-identity.sh]}"
+```
+
+The fixed launcher path and narrow sudoers policy normally remain byte-for-byte
+unchanged. When a new expected hash equals its old expected hash, prove the
+live hash and metadata above and do not overwrite it. If either expected hash
+differs, that file requires explicit additional approval, separate root-owned
+staging, exact hash/metadata validation, and (for sudoers) `visudo -cf` before
+replacement. Publish a changed sudoers policy last, after active-checkout
+revalidation. Preserve the old byte in its rollback path before moving the
+validated staged replacement into place:
+
+```bash
+# Run this block only with APPROVED_LAUNCHER_REPLACEMENT=true or
+# APPROVED_SUDOERS_REPLACEMENT=true recorded in the separate change approval.
+if [[ "${new_hash[infra/production/launchers/buildingos-production-backup-preflight]}" != "${old_hash[infra/production/launchers/buildingos-production-backup-preflight]}" ]]; then
+  [[ "${APPROVED_LAUNCHER_REPLACEMENT:-false}" == true ]]
+  launcher_stage="$(sudo mktemp /usr/local/sbin/.buildingos-production-backup-preflight.update.XXXXXX)"
+  sudo install -o root -g root -m 0755 "$source_tree/infra/production/launchers/buildingos-production-backup-preflight" "$launcher_stage"
+  test "$(sudo sha256sum "$launcher_stage" | awk '{print $1}')" = "${new_hash[infra/production/launchers/buildingos-production-backup-preflight]}"
+  test "$(sudo stat -c '%u:%g:%a' "$launcher_stage")" = '0:0:755'
+  sudo install -o root -g root -m 0755 "$launcher" "$launcher_rollback"
+  sudo mv -- "$launcher_stage" "$launcher"
+  launcher_stage=''
+fi
+if [[ "${new_hash[infra/production/sudoers/buildingos-production-backup-preflight]}" != "${old_hash[infra/production/sudoers/buildingos-production-backup-preflight]}" ]]; then
+  [[ "${APPROVED_SUDOERS_REPLACEMENT:-false}" == true ]]
+  sudoers_stage="$(sudo mktemp /etc/sudoers.d/.buildingos-production-backup-preflight.update.XXXXXX)"
+  sudo install -o root -g root -m 0440 "$source_tree/infra/production/sudoers/buildingos-production-backup-preflight" "$sudoers_stage"
+  sudo visudo -cf "$sudoers_stage"
+  test "$(sudo sha256sum "$sudoers_stage" | awk '{print $1}')" = "${new_hash[infra/production/sudoers/buildingos-production-backup-preflight]}"
+  test "$(sudo stat -c '%u:%g:%a' "$sudoers_stage")" = '0:0:440'
+  sudo install -o root -g root -m 0440 "$sudoers_policy" "$sudoers_rollback"
+  sudo mv -- "$sudoers_stage" "$sudoers_policy"
+  sudoers_stage=''
+fi
+active_checkout_end="$(git -C "$app_dir" rev-parse HEAD)"
+[[ "$active_checkout_end" == "$CURRENT_RUNTIME_SHA" ]]
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+sudo visudo -cf /etc/sudoers
+```
+
+If any post-publication validation fails, stop the update and restore the exact
+previous root-owned bytes before leaving the approved window. Do not delete the
+rollback material until the replacement is proven and a separate cleanup is
+approved:
+
+```bash
+sudo mv -- "$control_dir" "${control_dir}.failed-$NEW_CONTROL_SOURCE_SHA"
+sudo mv -- "$rollback_control_dir" "$control_dir"
+[[ ! -e "$launcher_rollback" ]] || sudo mv -- "$launcher_rollback" "$launcher"
+[[ ! -e "$sudoers_rollback" ]] || sudo mv -- "$sudoers_rollback" "$sudoers_policy"
+sudo visudo -cf /etc/sudoers
+```
+
 Stop on any installation or validation failure. Do not fall back to granting
 passwordless access to `bash`, `sh`, `env`, `systemctl`, Docker, or checkout
 scripts.
@@ -438,15 +631,32 @@ this contract.
 Preconditions: Sections 5 through 7 pass under a separately approved systemd
 change window. Install the units but do not enable the new timers until the
 first manual paired backup and independent verification pass. Create the state
-directory before execution readiness; it must not be a symlink:
+directory before execution readiness with this fail-before-mutation contract:
+
+- **Absent path:** prove it is absent and not a symlink, create it as
+  `yoryi:yoryi` `0700`, then verify exact metadata.
+- **Existing path:** before `install`, `chmod`, or `chown`, prove it is a real
+  non-symlink directory with exact `yoryi:yoryi` `0700` metadata. Reuse it
+  without mutation only when all checks pass.
+- **Any other object or unexpected metadata:** stop for separate remediation.
+  Never follow a symlink or silently repair an existing directory.
 
 ```bash
-sudo install -d -o yoryi -g yoryi -m 0700 /var/lib/buildingos-backup
-sudo test -d /var/lib/buildingos-backup
-sudo test ! -L /var/lib/buildingos-backup
 state_uid="$(id -u yoryi)"
 state_gid="$(id -g yoryi)"
-test "$(sudo stat -c '%u:%g:%a' /var/lib/buildingos-backup)" = "$state_uid:$state_gid:700"
+state_dir='/var/lib/buildingos-backup'
+if sudo test -e "$state_dir" || sudo test -L "$state_dir"; then
+  sudo test -d "$state_dir"
+  sudo test ! -L "$state_dir"
+  test "$(sudo stat -c '%u:%g:%a' "$state_dir")" = "$state_uid:$state_gid:700"
+else
+  sudo test ! -e "$state_dir"
+  sudo test ! -L "$state_dir"
+  sudo install -d -o yoryi -g yoryi -m 0700 "$state_dir"
+  sudo test -d "$state_dir"
+  sudo test ! -L "$state_dir"
+  test "$(sudo stat -c '%u:%g:%a' "$state_dir")" = "$state_uid:$state_gid:700"
+fi
 sudo install -o root -g root -m 0644 infra/production/systemd/*.service /etc/systemd/system/
 sudo install -o root -g root -m 0644 infra/production/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
