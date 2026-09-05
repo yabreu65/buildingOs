@@ -18,7 +18,7 @@ change.
 
 ## Reference Inventory
 
-The inventory contains 37 artifact entries.
+The inventory contains 38 artifact entries.
 
 | Path | References | Classification | Notes |
 | --- | --- | --- | --- |
@@ -50,6 +50,7 @@ The inventory contains 37 artifact entries.
 | `scripts/tests/production-backup-activation.test.sh` | `backup-buildingos-production`, `backup-postgres-paired` | `TEST_DEPENDENCY` | Isolated paired-backup contract tests |
 | `scripts/tests/endpoint-identity-parity.test.sh` | `production-backup-preflight`, `backup-postgres-paired` | `TEST_DEPENDENCY` | Identity/reference parity tests |
 | `scripts/tests/minio-paired-backup.test.sh` | MinIO backup, verification, restore, SSE probe | `TEST_DEPENDENCY` | Dedicated paired MinIO test suite |
+| `scripts/tests/production-readonly-audit.test.sh` | `production-readonly-audit.sh`, `paired-$backup_set_id.json`, `minio_verified=true` | `TEST_DEPENDENCY` | Directly enforces the current legacy paired-readiness contract; must migrate with `production-readonly-audit.sh` in `OBJECT-BACKUP-01` |
 | `infra/production/systemd/pawtech-buildingos-backup-freshness.service` | Paired freshness service | `REPOSITORY_ONLY_UNUSED` | Absent from audited production |
 | `infra/production/systemd/pawtech-buildingos-backup-freshness.timer` | Paired freshness timer | `REPOSITORY_ONLY_UNUSED` | Absent from audited production |
 | `infra/production/systemd/pawtech-buildingos-backup-alert@.service` | Paired failure alert hook | `REPOSITORY_ONLY_UNUSED` | Absent from audited production |

@@ -65,24 +65,48 @@ job alone is insufficient evidence for a restorable production recovery point.
 No PostgreSQL dump and Object Storage backup combination may be advertised as
 restorable until reconciliation proves that every object referenced by the
 selected database recovery point is available in the selected object backup.
-The future `OBJECT-BACKUP-01` implementation must produce enough durable
-evidence to bind and select that database/object recovery point, including the
-result of this reconciliation. If any referenced object is missing,
-reconciliation fails closed and that recovery point must not be advertised as
-restorable.
+Object-key presence alone is insufficient. Current application evidence allows
+presigned PUT URLs to remain valid for 24 hours, so a referenced key may be
+overwritten after the selected database point. `File.checksum` is not
+currently a mandatory trusted server-bound immutable content identity, and an
+optional or client-supplied checksum must not be treated as authoritative
+recovery identity.
+
+For every `File`/object reference selected from the database recovery point,
+the Object Storage recovery point must prove that the exact object bytes
+belonging to that database point are recoverable. The future
+`OBJECT-BACKUP-01` implementation owns the mechanism and its tests. It must
+choose and prove one safe mechanism, without this PR selecting or
+implementing it:
+
+- Immutable object identity, such as an S3 `VersionId` bound to the selected
+  database recovery point, or a trusted cryptographic digest/object identity
+  bound to that point and verified against the backed-up object.
+- An explicitly proven write-quiescence window spanning recovery-point capture
+  so referenced objects cannot be overwritten or deleted between the database
+  point and object capture.
+
+The implementation must produce enough durable evidence to bind and select
+the database/object recovery point, including reference reconciliation and
+exact content identity. If any referenced object is missing, mismatched, or
+otherwise not proven to have the exact bytes, the recovery point fails closed
+and must not be advertised as restorable. Current backup readiness remains
+**FAIL-CLOSED / INCOMPLETE** until this mechanism exists.
 
 The validity contract is:
 
 ```text
 POSTGRES_BACKUP_VALID
 + OBJECT_BACKUP_VALID
-+ DB_OBJECT_RECONCILIATION_PASS
++ DB_OBJECT_REFERENCE_RECONCILIATION_PASS
++ DB_OBJECT_CONTENT_IDENTITY_PASS
 = RECOVERY_POINT_VALID
 ```
 
 This contract does not require reintroducing the superseded paired
-`CONTROL_UPDATE` or coordinator architecture. Scheduling and execution may
-remain separate while recovery-point selection is bound by explicit evidence.
+`CONTROL_UPDATE` or coordinator architecture merely to satisfy the contract.
+Scheduling and execution may remain separate while recovery-point selection is
+bound by explicit evidence.
 
 ## Current Production Audit Transition
 
