@@ -1,11 +1,21 @@
-# MinIO Backup and Recovery
+# SUPERSEDED FOR CURRENT PRODUCTION USE: MinIO Backup and Recovery
+
+> **HISTORICAL/REFERENCE MATERIAL ONLY.** This document describes the old
+> paired MinIO backup design and is not the current production backup plan.
+> Do not activate its paired PostgreSQL/MinIO coordinator under the current
+> strategy. The authoritative plan is
+> [`PRODUCTION_BACKUP_STRATEGY.md`](PRODUCTION_BACKUP_STRATEGY.md).
+>
+> Any future Object Storage backup implementation will be introduced
+> separately. Every actual restore still requires a separately reviewed and
+> approved recovery procedure.
 
 ## Scope and current state
 
-This runbook is an executable, fail-closed recovery procedure. Production
-activation is controlled by `PRODUCTION_BACKUP_ACTIVATION.md`. It
-does not create production backups, change bucket policy, restart containers,
-or restore production data. Credentials are supplied outside Git through
+This historical runbook describes an executable, fail-closed recovery
+procedure for the superseded design. It does not create production backups,
+change bucket policy, restart containers, or restore production data.
+Credentials are supplied outside Git through
 protected environment injection, Docker secrets, or a mode-0600 server file.
 Never put credentials, signed URLs, or complete environment files in evidence.
 
@@ -235,8 +245,8 @@ here.
 ## Production activation controls
 
 The repository-managed coordinator, schedulers, failure hooks, policy
-templates, and provider gate are installed only through the separately
-approved steps in `PRODUCTION_BACKUP_ACTIVATION.md`. No unencrypted production
-backup is allowed. A first paired backup is not successful until PostgreSQL,
-MinIO upload, and independent MinIO verification all pass for the same
-`BACKUP_SET_ID` and actual deployed `APP_SHA`.
+templates, and provider gate belong to the superseded paired design and must
+not be activated under the current strategy. Direct operators to
+`PRODUCTION_BACKUP_STRATEGY.md` for the current production plan. No actual
+restore may proceed without a separately reviewed and approved recovery
+procedure.
