@@ -104,7 +104,15 @@ suppress, or manually mark the current audit `PASS`.
 ## Scheduling and Automation
 
 - Local systemd may continue to own PostgreSQL backup scheduling.
-- GitHub Actions must not execute production backups or restores.
+- GitHub Actions must not be used as a periodic backup scheduler or expose a
+  standalone production backup execution path.
+- The existing approved production deployment workflow may invoke its
+  mandatory validated PostgreSQL pre-deploy backup as a deployment safety
+  prerequisite. That invocation is not the regular backup scheduler and does
+  not replace the daily PostgreSQL systemd backup; it remains unchanged by
+  this PR.
+- Object Storage backup scheduling will also be local and independent when
+  that backup is implemented.
 - GitHub remains a source-code recovery mechanism, not a production data-plane
   scheduler.
 - PostgreSQL and object-storage backup schedules should remain independent so a
