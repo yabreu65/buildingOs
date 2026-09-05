@@ -89,6 +89,10 @@ systemctl_value() {
   systemctl show "$unit" --property="$property" --value 2>/dev/null
 }
 
+systemd_timers_calendar() {
+  systemctl show "$1" --property=TimersCalendar --value 2>/dev/null
+}
+
 unit_active_state() {
   local unit="$1"
   systemctl_value "$unit" ActiveState || true
@@ -234,33 +238,58 @@ systemd_calendar_matches() {
   local actual="$1"
   local expected="$2"
   local calendar
+  calendar="$(systemd_timers_calendar_value "$actual")" || return 1
+  [[ "$calendar" == "$expected" ]]
+}
+
+systemd_timers_calendar_value() {
+  local actual="$1"
+  local inner calendar
   actual="${actual#"${actual%%[![:space:]]*}"}"
   actual="${actual%"${actual##*[![:space:]]}"}"
-  if [[ "$actual" == *'calendar='* ]]; then
-    calendar="${actual#*calendar=}"
-    calendar="${calendar%%;*}"
-    calendar="${calendar%%\}*}"
-    calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  if [[ "$actual" == \{*\} ]]; then
+    inner="${actual#\{}"
+    inner="${inner%\}}"
+    calendar="$(printf '%s\n' "$inner" | awk -F ';' '
+      function trim(value) {
+        sub(/^[[:space:]]+/, "", value)
+        sub(/[[:space:]]+$/, "", value)
+        return value
+      }
+      {
+        calendar_count=0
+        invalid=0
+        value=""
+        for (i=1; i<=NF; i++) {
+          field=trim($i)
+          if (field == "") continue
+          if (field ~ /^OnCalendar=/) {
+            calendar_count++
+            value=substr(field, 12)
+          } else if (field ~ /^next_elapse(_realtime)?=/) {
+            continue
+          } else {
+            invalid=1
+          }
+        }
+        if (calendar_count != 1 || invalid || value !~ /[^[:space:]]/) exit 1
+        print value
+      }
+    ')" || return 1
   else
+    [[ "$actual" != *'='* ]] || return 1
     calendar="$actual"
   fi
-  [[ "$calendar" == "$expected" ]]
+  calendar="${calendar#"${calendar%%[![:space:]]*}"}"
+  calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  [[ -n "$calendar" ]] || return 1
+  printf '%s' "$calendar"
 }
 
 systemd_daily_calendar_present() {
   local actual="$1"
   local calendar
-  [[ -n "$actual" && "$actual" != n/a && "$actual" != '-' ]] || return 1
-  if [[ "$actual" == *'calendar='* ]]; then
-    calendar="${actual#*calendar=}"
-    calendar="${calendar%%;*}"
-    calendar="${calendar%%\}*}"
-    calendar="${calendar%"${calendar##*[![:space:]]}"}"
-  else
-    calendar="$actual"
-  fi
-  calendar="${calendar#"${calendar%%[![:space:]]*}"}"
-  calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  calendar="$(systemd_timers_calendar_value "$actual")" || return 1
   [[ "$calendar" == daily || "$calendar" == *'*-*-*'* ]]
 }
 
@@ -444,7 +473,7 @@ inspect_timer() {
   unit_file_state="$(systemctl_value "$unit" UnitFileState || true)"
   active_state="$(unit_active_state "$unit")"
   next_trigger="$(systemctl_value "$unit" NextElapseUSecRealtime || true)"
-  calendar="$(systemctl_value "$unit" OnCalendar || true)"
+  calendar="$(systemd_timers_calendar "$unit" || true)"
   persistent="$(systemctl_value "$unit" Persistent || true)"
   randomized="$(systemctl_value "$unit" RandomizedDelayUSec || true)"
   [[ "$load_state" == loaded ]] && exists='YES' || fail_check "$unit is not loaded"

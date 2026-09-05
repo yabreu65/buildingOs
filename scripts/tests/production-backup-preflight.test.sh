@@ -123,8 +123,24 @@ case "$property:$unit" in
   NextElapseUSecRealtime:*)
     if [[ -n "${MOCK_NEXT_TRIGGER:-}" ]]; then printf '%s\n' "$MOCK_NEXT_TRIGGER"; else date -u -v+12H '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d '+12 hours' '+%Y-%m-%d %H:%M:%S UTC'; fi
     ;;
-  OnCalendar:pawtech-postgres-backup.timer) printf '%s\n' "${MOCK_POSTGRES_CALENDAR:-daily}" ;;
-  OnCalendar:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_CALENDAR:-*-*-* 02:15:00}" ;;
+  TimersCalendar:pawtech-postgres-backup.timer)
+    case "${MOCK_POSTGRES_TIMER_CALENDAR_MODE:-NORMAL}" in
+      MISSING) printf '\n' ;;
+      MALFORMED) printf '%s\n' '{ OnCalendar=*-*-* 01:00:00 ; next_elapse=2026-09-06 01:00:00 UTC' ;;
+      AMBIGUOUS) printf '%s\n' '{ OnCalendar=*-*-* 01:00:00 ; OnCalendar=*-*-* 02:00:00 ; next_elapse=2026-09-06 01:00:00 UTC }' ;;
+      LOWERCASE) printf '%s\n' '{ calendar=*-*-* 01:00:00 ; next_elapse=2026-09-06 01:00:00 UTC }' ;;
+      *) printf '%s\n' "{ OnCalendar=${MOCK_POSTGRES_CALENDAR:-*-*-* 01:00:00} ; next_elapse=2026-09-06 01:00:00 UTC }" ;;
+    esac
+    ;;
+  TimersCalendar:pawtech-buildingos-object-backup.timer)
+    case "${MOCK_OBJECT_TIMER_CALENDAR_MODE:-NORMAL}" in
+      MISSING) printf '\n' ;;
+      MALFORMED) printf '%s\n' '{ OnCalendar=*-*-* 02:15:00 ; next_elapse=2026-09-06 02:15:00 UTC' ;;
+      AMBIGUOUS) printf '%s\n' '{ OnCalendar=*-*-* 02:15:00 ; OnCalendar=*-*-* 03:15:00 ; next_elapse=2026-09-06 02:15:00 UTC }' ;;
+      LOWERCASE) printf '%s\n' '{ calendar=*-*-* 02:15:00 ; next_elapse=2026-09-06 02:15:00 UTC }' ;;
+      *) printf '%s\n' "{ OnCalendar=${MOCK_OBJECT_CALENDAR:-*-*-* 02:15:00} ; next_elapse=2026-09-06 02:15:00 UTC }" ;;
+    esac
+    ;;
   Persistent:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_PERSISTENT:-true}" ;;
   RandomizedDelayUSec:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_RANDOMIZED_DELAY:-900000000}" ;;
   ExecCondition:pawtech-postgres-backup.service)
@@ -252,13 +268,25 @@ assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN
 MOCK_OBJECT_CALENDAR='*-*-* 03:15:00' run_preflight
 assert_failure 'wrong Object Storage timer calendar fails closed'
 unset MOCK_OBJECT_CALENDAR
+MOCK_OBJECT_TIMER_CALENDAR_MODE=MISSING run_preflight
+assert_failure 'missing Object Storage TimersCalendar fails closed'
+unset MOCK_OBJECT_TIMER_CALENDAR_MODE
+MOCK_OBJECT_TIMER_CALENDAR_MODE=MALFORMED run_preflight
+assert_failure 'malformed Object Storage TimersCalendar fails closed'
+unset MOCK_OBJECT_TIMER_CALENDAR_MODE
+MOCK_OBJECT_TIMER_CALENDAR_MODE=AMBIGUOUS run_preflight
+assert_failure 'ambiguous Object Storage TimersCalendar fails closed'
+unset MOCK_OBJECT_TIMER_CALENDAR_MODE
+MOCK_OBJECT_TIMER_CALENDAR_MODE=LOWERCASE run_preflight
+assert_failure 'lowercase calendar field fails closed'
+unset MOCK_OBJECT_TIMER_CALENDAR_MODE
 MOCK_OBJECT_PERSISTENT=false run_preflight
 assert_failure 'non-persistent Object Storage timer fails closed'
 unset MOCK_OBJECT_PERSISTENT
 MOCK_OBJECT_RANDOMIZED_DELAY=600000000 run_preflight
 assert_failure 'wrong Object Storage timer delay fails closed'
 unset MOCK_OBJECT_RANDOMIZED_DELAY
-MOCK_OBJECT_CALENDAR='calendar=*-*-* 02:15:00 ; next_elapse=2026-09-06T02:15:00Z' MOCK_OBJECT_RANDOMIZED_DELAY=15min run_preflight
+MOCK_OBJECT_CALENDAR='*-*-* 02:15:00' MOCK_OBJECT_RANDOMIZED_DELAY=15min run_preflight
 assert_success 'serialized calendar and 15min delay representations pass'
 unset MOCK_OBJECT_CALENDAR MOCK_OBJECT_RANDOMIZED_DELAY
 MOCK_OBJECT_RANDOMIZED_DELAY='15min 0s' run_preflight
@@ -267,6 +295,12 @@ unset MOCK_OBJECT_RANDOMIZED_DELAY
 MOCK_POSTGRES_CALENDAR=weekly run_preflight
 assert_failure 'non-daily PostgreSQL timer calendar fails closed'
 unset MOCK_POSTGRES_CALENDAR
+MOCK_POSTGRES_TIMER_CALENDAR_MODE=MISSING run_preflight
+assert_failure 'missing PostgreSQL TimersCalendar fails closed'
+unset MOCK_POSTGRES_TIMER_CALENDAR_MODE
+MOCK_POSTGRES_TIMER_CALENDAR_MODE=MALFORMED run_preflight
+assert_failure 'malformed PostgreSQL TimersCalendar fails closed'
+unset MOCK_POSTGRES_TIMER_CALENDAR_MODE
 MOCK_NEXT_TRIGGER='2099-01-01 00:00:00 UTC' run_preflight
 assert_failure 'absurd future Object Storage trigger fails closed'
 unset MOCK_NEXT_TRIGGER
@@ -484,6 +518,8 @@ for forbidden in \
   'BACKUP_READY=YES'; do
   assert_absent "preflight no longer requires $forbidden" "$forbidden" "$preflight_text"
 done
+assert_contains 'preflight queries exported TimersCalendar property' '--property=TimersCalendar' "$preflight_text"
+assert_absent 'preflight does not query deprecated OnCalendar property' '--property=OnCalendar' "$preflight_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
