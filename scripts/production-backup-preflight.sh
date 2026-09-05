@@ -205,11 +205,7 @@ checkout_has_only_approved_ignored_files() {
   fi
   if [[ -n "$ignored_paths" ]]; then
     while IFS= read -r path; do
-      case "$path" in
-        .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.crt|*.log|*.dump|*.sql|*.bak|*.backup)
-          [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
-          ;;
-      esac
+      [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
     done <<< "$ignored_paths"
   fi
 }

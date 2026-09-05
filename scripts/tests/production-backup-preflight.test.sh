@@ -334,7 +334,7 @@ unset MOCK_DIRTY
 MOCK_IGNORED_PATHS='infra/docker/.env' run_preflight
 assert_success 'approved ignored runtime environment remains clean'
 unset MOCK_IGNORED_PATHS
-for ignored_artifact in backup.dump debug.log snapshot.sql archive.backup secret.key certificate.pem; do
+for ignored_artifact in diagnostic.tmp cache/ foo.txt backup.dump debug.log snapshot.sql archive.backup secret.key certificate.pem; do
   MOCK_IGNORED_PATHS="$ignored_artifact" run_preflight
   assert_failure "ignored $ignored_artifact fails runtime identity gate"
 done
