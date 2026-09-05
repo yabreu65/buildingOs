@@ -968,6 +968,7 @@ validate_object_backup_receipt() {
   destination="$(jq -er '.destination' "$receipt")"
   validate_object_location "$source" || return 1
   validate_object_location "$destination" || return 1
+  [[ "${source#*:}" == buildingos-production ]] || return 1
   [[ "${source#*:}" != "${destination#*:}" ]] || return 1
   started_at="$(jq -er '.started_at_utc' "$receipt")"
   completed_at="$(jq -er '.completed_at_utc' "$receipt")"

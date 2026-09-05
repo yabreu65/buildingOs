@@ -12,6 +12,9 @@ readonly DEFAULT_OBJECT_BACKUP_ENV_FILE='/etc/buildingos/object-backup.env'
 readonly DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
 readonly EXPECTED_TIMEOUT_USEC=21600000000
+readonly TIMER_HORIZON_SECONDS=129600
+readonly OBJECT_BACKUP_CALENDAR='*-*-* 02:15:00'
+readonly OBJECT_BACKUP_RANDOMIZED_DELAY_USEC=900000000
 
 failures=0
 POSTGRES_BACKUP_SERVICE_STATE='UNKNOWN'
@@ -46,6 +49,14 @@ file_is_regular_non_symlink() {
 
 file_mode() {
   stat -L -c '%a' -- "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
+}
+
+file_owner() {
+  stat -L -c '%U' -- "$1" 2>/dev/null || stat -L -f '%Su' "$1"
+}
+
+file_group() {
+  stat -L -c '%G' -- "$1" 2>/dev/null || stat -L -f '%Sg' "$1"
 }
 
 env_value() {
@@ -190,6 +201,64 @@ systemd_timeout_matches() {
   [[ "$microseconds" == "$EXPECTED_TIMEOUT_USEC" ]]
 }
 
+systemd_delay_matches() {
+  local actual="$1"
+  local microseconds
+  [[ -n "$actual" && "$actual" != infinity && "$actual" != inf ]] || return 1
+  if [[ "$actual" =~ ^[0-9]+$ ]]; then
+    microseconds="$actual"
+  elif [[ "$actual" =~ ^([0-9]+)m$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000))
+  elif [[ "$actual" =~ ^([0-9]+)min$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000))
+  elif [[ "$actual" =~ ^([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)us$ ]]; then
+    microseconds="${BASH_REMATCH[1]}"
+  elif [[ "$actual" =~ ^([0-9]+)min[[:space:]]+([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000 + BASH_REMATCH[2] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)h[[:space:]]+([0-9]+)min[[:space:]]+([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000 + BASH_REMATCH[2] * 60000000 + BASH_REMATCH[3] * 1000000))
+  else
+    return 1
+  fi
+  [[ "$microseconds" == "$OBJECT_BACKUP_RANDOMIZED_DELAY_USEC" ]]
+}
+
+systemd_calendar_matches() {
+  local actual="$1"
+  local expected="$2"
+  local calendar
+  actual="${actual#"${actual%%[![:space:]]*}"}"
+  actual="${actual%"${actual##*[![:space:]]}"}"
+  if [[ "$actual" == *'calendar='* ]]; then
+    calendar="${actual#*calendar=}"
+    calendar="${calendar%%;*}"
+    calendar="${calendar%%\}*}"
+    calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  else
+    calendar="$actual"
+  fi
+  [[ "$calendar" == "$expected" ]]
+}
+
+systemd_daily_calendar_present() {
+  local actual="$1"
+  local calendar
+  [[ -n "$actual" && "$actual" != n/a && "$actual" != '-' ]] || return 1
+  if [[ "$actual" == *'calendar='* ]]; then
+    calendar="${actual#*calendar=}"
+    calendar="${calendar%%;*}"
+    calendar="${calendar%%\}*}"
+    calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  else
+    calendar="$actual"
+  fi
+  calendar="${calendar#"${calendar%%[![:space:]]*}"}"
+  calendar="${calendar%"${calendar##*[![:space:]]}"}"
+  [[ "$calendar" == daily || "$calendar" == *'*-*-*'* ]]
+}
+
 inspect_runtime() {
   local production_sha='UNKNOWN' api_revision='UNKNOWN' web_revision='UNKNOWN' checkout_status='DIRTY'
   local api_image web_image status_output
@@ -311,14 +380,15 @@ timer_has_future_trigger() {
   [[ -n "$trigger" && "$trigger" != n/a && "$trigger" != '-' ]] || return 1
   trigger_epoch="$(date -u -d "$trigger" +%s 2>/dev/null || date -j -u -f '%Y-%m-%d %H:%M:%S %Z' "$trigger" +%s 2>/dev/null || true)"
   now_epoch="$(date -u +%s)"
-  [[ "$trigger_epoch" =~ ^[0-9]+$ && "$trigger_epoch" -gt "$now_epoch" ]]
+  [[ "$trigger_epoch" =~ ^[0-9]+$ && "$trigger_epoch" -gt "$now_epoch" && $((trigger_epoch - now_epoch)) -le "$TIMER_HORIZON_SECONDS" ]]
 }
 
 inspect_timer() {
   local label="$1"
   local unit="$2"
   local expected_unit="$3"
-  local load_state unit_file_state active_state next_trigger
+  local expected_calendar="${4:-}"
+  local load_state unit_file_state active_state next_trigger calendar persistent randomized
   local exists='NO' contract='NO' before
   before=$failures
 
@@ -326,10 +396,20 @@ inspect_timer() {
   unit_file_state="$(systemctl_value "$unit" UnitFileState || true)"
   active_state="$(unit_active_state "$unit")"
   next_trigger="$(systemctl_value "$unit" NextElapseUSecRealtime || true)"
+  calendar="$(systemctl_value "$unit" OnCalendar || true)"
+  persistent="$(systemctl_value "$unit" Persistent || true)"
+  randomized="$(systemctl_value "$unit" RandomizedDelayUSec || true)"
   [[ "$load_state" == loaded ]] && exists='YES' || fail_check "$unit is not loaded"
   [[ "$unit_file_state" == enabled ]] || fail_check "$unit is not enabled"
   [[ "$active_state" == active ]] || fail_check "$unit is not active or waiting"
   [[ "$(systemctl_value "$unit" Unit || true)" == "$expected_unit" ]] || fail_check "$unit points to an unexpected service"
+  if [[ -n "$expected_calendar" ]]; then
+    systemd_calendar_matches "$calendar" "$expected_calendar" || fail_check "$unit calendar is unexpected"
+    [[ "$persistent" == yes || "$persistent" == true ]] || fail_check "$unit is not persistent"
+    systemd_delay_matches "$randomized" || fail_check "$unit randomized delay is not 15 minutes"
+  else
+    systemd_daily_calendar_present "$calendar" || fail_check "$unit calendar is not a daily schedule"
+  fi
   timer_has_future_trigger "$next_trigger" || fail_check "$unit has no future trigger"
 
   if (( failures == before )); then contract='YES'; fi
@@ -337,6 +417,9 @@ inspect_timer() {
   printf '%s_ENABLED=%s\n' "$label" "$([[ "$unit_file_state" == enabled ]] && printf YES || printf NO)"
   printf '%s_ACTIVE=%s\n' "$label" "$([[ "$active_state" == active ]] && printf YES || printf NO)"
   printf '%s_FUTURE_TRIGGER=%s\n' "$label" "$([[ "$next_trigger" != n/a && "$next_trigger" != '-' ]] && timer_has_future_trigger "$next_trigger" && printf YES || printf NO)"
+  printf '%s_CALENDAR_MATCH=%s\n' "$label" "$([[ -n "$expected_calendar" ]] && systemd_calendar_matches "$calendar" "$expected_calendar" && printf YES || [[ -z "$expected_calendar" ]] && systemd_daily_calendar_present "$calendar" && printf YES || printf NO)"
+  printf '%s_PERSISTENT=%s\n' "$label" "$([[ "$persistent" == yes || "$persistent" == true ]] && printf YES || printf NO)"
+  printf '%s_RANDOMIZED_DELAY_MATCH=%s\n' "$label" "$([[ -n "$expected_calendar" ]] && systemd_delay_matches "$randomized" && printf YES || printf NOT_REQUIRED)"
   printf '%s_CONTRACT=%s\n' "$label" "$contract"
 }
 
@@ -362,8 +445,16 @@ inspect_object_environment() {
     [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT" ]] || fail_check 'Object Storage receipt path is unexpected'
     [[ "$rclone" == "$OBJECT_BACKUP_RCLONE_CONFIG" ]] || fail_check 'Object Storage rclone config path is unexpected'
     if file_is_regular_non_symlink "$rclone" && [[ -r "$rclone" ]]; then
+      local config_owner config_group
+      config_owner="$(file_owner "$rclone")"
+      config_group="$(file_group "$rclone")"
       config_mode="0$(file_mode "$rclone")"
+      (( (8#${config_mode#0} & 004) == 0 )) || fail_check 'Object Storage rclone config is world-readable'
       (( (8#${config_mode#0} & 0022) == 0 )) || fail_check 'Object Storage rclone config is writable by group or world'
+      if ! { [[ "$config_owner" == yoryi ]] && (( (8#${config_mode#0} & 0400) != 0 )); } &&
+        ! { [[ "$config_group" == yoryi ]] && (( (8#${config_mode#0} & 0040) != 0 )); }; then
+        fail_check 'Object Storage rclone config is not readable by yoryi'
+      fi
     else
       fail_check 'Object Storage rclone config is not a readable regular non-symlink file'
     fi
@@ -382,7 +473,7 @@ inspect_topology() {
 
   before=$failures
   inspect_service OBJECT_BACKUP_SERVICE "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_EXEC" "$OBJECT_BACKUP_ENV_FILE"
-  inspect_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE"
+  inspect_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_CALENDAR"
   [[ "$failures" -eq "$before" ]] && printf 'OBJECT_BACKUP_TOPOLOGY=PASS\n' || printf 'OBJECT_BACKUP_TOPOLOGY=FAIL\n'
 }
 

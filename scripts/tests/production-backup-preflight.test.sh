@@ -33,9 +33,21 @@ assert_success() { local name="$1"; [[ "$RUN_RC" -eq 0 ]] && pass "$name" || fai
 assert_failure() { local name="$1"; [[ "$RUN_RC" -ne 0 ]] && pass "$name" || fail_test "$name"; }
 
 mkdir -p "$BIN_DIR" "$APP_DIR/.git"
-for command_name in awk bash date stat; do
+for command_name in awk bash date; do
   ln -s "$(command -v "$command_name")" "$BIN_DIR/$command_name"
 done
+
+cat > "$BIN_DIR/stat" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "$*" in
+  *'%U'*) printf '%s\n' "${MOCK_CONFIG_OWNER:-yoryi}" ;;
+  *'%G'*) printf '%s\n' "${MOCK_CONFIG_GROUP:-yoryi}" ;;
+  *'%a'*) printf '%s\n' "${MOCK_CONFIG_MODE:-600}" ;;
+  *) exit 1 ;;
+esac
+MOCK
+chmod +x "$BIN_DIR/stat"
 
 cat > "$BIN_DIR/git" <<'MOCK'
 #!/usr/bin/env bash
@@ -94,7 +106,13 @@ case "$property:$unit" in
   ActiveState:pawtech-postgres-backup.timer|ActiveState:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_TIMER_STATE:-active}" ;;
   Unit:pawtech-postgres-backup.timer) printf 'pawtech-postgres-backup.service\n' ;;
   Unit:pawtech-buildingos-object-backup.timer) printf 'pawtech-buildingos-object-backup.service\n' ;;
-  NextElapseUSecRealtime:*) printf '%s\n' "${MOCK_NEXT_TRIGGER:-2099-01-01 00:00:00 UTC}" ;;
+  NextElapseUSecRealtime:*)
+    if [[ -n "${MOCK_NEXT_TRIGGER:-}" ]]; then printf '%s\n' "$MOCK_NEXT_TRIGGER"; else date -u -v+12H '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d '+12 hours' '+%Y-%m-%d %H:%M:%S UTC'; fi
+    ;;
+  OnCalendar:pawtech-postgres-backup.timer) printf '%s\n' "${MOCK_POSTGRES_CALENDAR:-daily}" ;;
+  OnCalendar:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_CALENDAR:-*-*-* 02:15:00}" ;;
+  Persistent:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_PERSISTENT:-true}" ;;
+  RandomizedDelayUSec:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_RANDOMIZED_DELAY:-900000000}" ;;
   User:pawtech-buildingos-object-backup.service|Group:pawtech-buildingos-object-backup.service) printf 'yoryi\n' ;;
   EnvironmentFiles:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_ENV_FILE:-/etc/buildingos/object-backup.env}" ;;
   WorkingDirectory:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_APP_DIR:-/opt/pawtech/apps/buildingos/buildingos-app}" ;;
@@ -161,9 +179,34 @@ assert_contains 'PostgreSQL ExecStart is validated' 'POSTGRES_BACKUP_SERVICE_EXE
 assert_contains 'Object timer enabled is accepted' 'OBJECT_BACKUP_TIMER_ENABLED=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer active is accepted' 'OBJECT_BACKUP_TIMER_ACTIVE=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer future trigger is accepted' 'OBJECT_BACKUP_TIMER_FUTURE_TRIGGER=YES' "$RUN_OUTPUT"
+assert_contains 'Object timer calendar is accepted' 'OBJECT_BACKUP_TIMER_CALENDAR_MATCH=YES' "$RUN_OUTPUT"
+assert_contains 'Object timer persistence is accepted' 'OBJECT_BACKUP_TIMER_PERSISTENT=YES' "$RUN_OUTPUT"
+assert_contains 'Object timer randomized delay is accepted' 'OBJECT_BACKUP_TIMER_RANDOMIZED_DELAY_MATCH=YES' "$RUN_OUTPUT"
 assert_contains 'Object service contract is accepted' 'OBJECT_BACKUP_SERVICE_CONTRACT=YES' "$RUN_OUTPUT"
 assert_contains 'Object environment contract is accepted' 'OBJECT_BACKUP_ENV=YES' "$RUN_OUTPUT"
 assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN_OUTPUT"
+
+MOCK_OBJECT_CALENDAR='*-*-* 03:15:00' run_preflight
+assert_failure 'wrong Object Storage timer calendar fails closed'
+unset MOCK_OBJECT_CALENDAR
+MOCK_OBJECT_PERSISTENT=false run_preflight
+assert_failure 'non-persistent Object Storage timer fails closed'
+unset MOCK_OBJECT_PERSISTENT
+MOCK_OBJECT_RANDOMIZED_DELAY=600000000 run_preflight
+assert_failure 'wrong Object Storage timer delay fails closed'
+unset MOCK_OBJECT_RANDOMIZED_DELAY
+MOCK_OBJECT_CALENDAR='calendar=*-*-* 02:15:00 ; next_elapse=2026-09-06T02:15:00Z' MOCK_OBJECT_RANDOMIZED_DELAY=15min run_preflight
+assert_success 'serialized calendar and 15min delay representations pass'
+unset MOCK_OBJECT_CALENDAR MOCK_OBJECT_RANDOMIZED_DELAY
+MOCK_OBJECT_RANDOMIZED_DELAY='15min 0s' run_preflight
+assert_success 'verbose 15 minute delay representation passes'
+unset MOCK_OBJECT_RANDOMIZED_DELAY
+MOCK_POSTGRES_CALENDAR=weekly run_preflight
+assert_failure 'non-daily PostgreSQL timer calendar fails closed'
+unset MOCK_POSTGRES_CALENDAR
+MOCK_NEXT_TRIGGER='2099-01-01 00:00:00 UTC' run_preflight
+assert_failure 'absurd future Object Storage trigger fails closed'
+unset MOCK_NEXT_TRIGGER
 
 run_preflight deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 assert_failure 'candidate SHA mismatch fails runtime identity gate'
@@ -278,14 +321,27 @@ run_preflight
 assert_failure 'missing rclone config fails closed'
 printf '[prod]\ntype = s3\n' > "$RCLONE_CONFIG_FILE"
 chmod 0600 "$RCLONE_CONFIG_FILE"
+
+MOCK_CONFIG_OWNER=root MOCK_CONFIG_GROUP=yoryi MOCK_CONFIG_MODE=640 run_preflight
+assert_success 'root-owned rclone config is readable through yoryi group'
+MOCK_CONFIG_OWNER=root MOCK_CONFIG_GROUP=root MOCK_CONFIG_MODE=600 run_preflight
+assert_failure 'root-owned root-group rclone config fails yoryi readability'
+MOCK_CONFIG_OWNER=root MOCK_CONFIG_GROUP=root MOCK_CONFIG_MODE=640 run_preflight
+assert_failure 'root-owned root-group 0640 rclone config fails yoryi readability'
+MOCK_CONFIG_OWNER=yoryi MOCK_CONFIG_GROUP=yoryi MOCK_CONFIG_MODE=644 run_preflight
+assert_failure 'world-readable rclone config fails closed'
+MOCK_CONFIG_OWNER=yoryi MOCK_CONFIG_GROUP=yoryi MOCK_CONFIG_MODE=660 run_preflight
+assert_failure 'group-writable rclone config fails closed'
+unset MOCK_CONFIG_OWNER MOCK_CONFIG_GROUP MOCK_CONFIG_MODE
 ln -s "$TEST_ROOT/missing-rclone.conf" "$TEST_ROOT/rclone-symlink.conf"
 sed -i.bak "s|$RCLONE_CONFIG_FILE|$TEST_ROOT/rclone-symlink.conf|" "$ENV_FILE"
 run_preflight
 assert_failure 'symlink rclone config fails closed'
 mv "$ENV_FILE.bak" "$ENV_FILE"
 chmod 0660 "$RCLONE_CONFIG_FILE"
-run_preflight
+MOCK_CONFIG_MODE=660 run_preflight
 assert_failure 'writable rclone config fails closed'
+unset MOCK_CONFIG_MODE
 chmod 0600 "$RCLONE_CONFIG_FILE"
 
 preflight_text="$(< "$PREFLIGHT")"

@@ -86,6 +86,10 @@ write_receipt prod:buildingos-production backup:buildingos-production
 assert_invalid_receipt 'same bucket names fail closed'
 write_receipt prod:buildingos-production backup:buildingos-production-backup PASS PASS YES
 assert_invalid_receipt 'receipt claiming recovery validity fails closed'
+write_receipt prod:unrelated backup:buildingos-production-backup
+assert_invalid_receipt 'unrelated source bucket fails closed'
+REPORT_OUTPUT="$(report_object_backup_receipt "$RECEIPT")"
+assert_contains 'unrelated source bucket reports incomplete receipt' 'OBJECT_BACKUP_RECEIPT=INCOMPLETE' "$REPORT_OUTPUT"
 
 rm -f "$RECEIPT"
 ln -s "$TEST_ROOT/missing-receipt.json" "$RECEIPT"
