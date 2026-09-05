@@ -1,0 +1,20 @@
+[Unit]
+Description=BuildingOS Object Storage backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=yoryi
+Group=yoryi
+EnvironmentFile=/etc/buildingos/object-backup.env
+WorkingDirectory=/opt/pawtech/apps/buildingos/buildingos-app
+ExecStart=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh
+UMask=0077
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=buildingos-object-backup
+ReadWritePaths=/var/lib/buildingos-object-backup
