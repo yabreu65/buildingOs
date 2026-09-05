@@ -33,6 +33,7 @@ assert_success() { local name="$1"; [[ "$RUN_RC" -eq 0 ]] && pass "$name" || fai
 assert_failure() { local name="$1"; [[ "$RUN_RC" -ne 0 ]] && pass "$name" || fail_test "$name"; }
 
 mkdir -p "$BIN_DIR" "$APP_DIR/.git"
+printf '%s\n' '**/.env' > "$APP_DIR/.dockerignore"
 for command_name in awk bash date; do
   ln -s "$(command -v "$command_name")" "$BIN_DIR/$command_name"
 done
@@ -68,7 +69,14 @@ cat > "$BIN_DIR/git" <<'MOCK'
 set -Eeuo pipefail
 case "$*" in
   *'rev-parse HEAD'*) printf '%s\n' "${MOCK_CHECKOUT_SHA:-2ac603be8018ffc3df67fb4e84149aea4f780cea}" ;;
-  *'status --porcelain'*) [[ "${MOCK_DIRTY:-NO}" == NO ]] || printf ' M application.env\n' ;;
+  *'status --porcelain'*)
+    case "${MOCK_DIRTY:-NO}" in
+      NO) ;;
+      UNTRACKED) printf '?? ordinary.tmp\n' ;;
+      *) printf ' M application.env\n' ;;
+    esac
+    ;;
+  *'ls-files --others --ignored --exclude-standard'*) printf '%s\n' "${MOCK_IGNORED_PATHS:-}" ;;
   *) exit 1 ;;
 esac
 MOCK
@@ -320,6 +328,17 @@ unset MOCK_CHECKOUT_SHA
 MOCK_DIRTY=YES run_preflight
 assert_failure 'dirty checkout fails runtime identity gate'
 unset MOCK_DIRTY
+MOCK_DIRTY=UNTRACKED run_preflight
+assert_failure 'ordinary untracked file fails runtime identity gate'
+unset MOCK_DIRTY
+MOCK_IGNORED_PATHS='infra/docker/.env' run_preflight
+assert_success 'approved ignored runtime environment remains clean'
+unset MOCK_IGNORED_PATHS
+for ignored_artifact in backup.dump debug.log snapshot.sql archive.backup secret.key certificate.pem; do
+  MOCK_IGNORED_PATHS="$ignored_artifact" run_preflight
+  assert_failure "ignored $ignored_artifact fails runtime identity gate"
+done
+unset MOCK_IGNORED_PATHS
 
 MOCK_POSTGRES_SERVICE_STATE=active run_preflight
 assert_failure 'active PostgreSQL backup fails closed'
@@ -520,6 +539,8 @@ for forbidden in \
 done
 assert_contains 'preflight queries exported TimersCalendar property' '--property=TimersCalendar' "$preflight_text"
 assert_absent 'preflight does not query deprecated OnCalendar property' '--property=OnCalendar' "$preflight_text"
+assert_contains 'preflight inspects ignored checkout paths' 'ls-files --others --ignored --exclude-standard' "$preflight_text"
+assert_contains 'preflight preserves approved ignored runtime environment' "ALLOWED_IGNORED_RUNTIME_ENV='infra/docker/.env'" "$preflight_text"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

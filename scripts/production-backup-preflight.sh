@@ -15,6 +15,7 @@ readonly EXPECTED_TIMEOUT_USEC=21600000000
 readonly TIMER_HORIZON_SECONDS=129600
 readonly OBJECT_BACKUP_CALENDAR='*-*-* 02:15:00'
 readonly OBJECT_BACKUP_RANDOMIZED_DELAY_USEC=900000000
+readonly ALLOWED_IGNORED_RUNTIME_ENV='infra/docker/.env'
 
 failures=0
 POSTGRES_BACKUP_SERVICE_STATE='UNKNOWN'
@@ -186,6 +187,33 @@ systemd_no_command_list_matches() {
   systemd_command_list_matches "$1" '' ''
 }
 
+checkout_has_only_approved_ignored_files() {
+  local path pattern ignored_paths
+  local runtime_env_excluded=false
+
+  [[ -f "$EXPECTED_APP_DIR/.dockerignore" ]] || return 1
+  while IFS= read -r pattern; do
+    [[ "$pattern" =~ ^[[:space:]]*! ]] && return 1
+    if [[ "$pattern" == '**/.env' || "$pattern" == 'infra/docker/.env' ]]; then
+      runtime_env_excluded=true
+    fi
+  done < "$EXPECTED_APP_DIR/.dockerignore"
+  [[ "$runtime_env_excluded" == true ]] || return 1
+
+  if ! ignored_paths="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
+    return 1
+  fi
+  if [[ -n "$ignored_paths" ]]; then
+    while IFS= read -r path; do
+      case "$path" in
+        .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.crt|*.log|*.dump|*.sql|*.bak|*.backup)
+          [[ "$path" == "$ALLOWED_IGNORED_RUNTIME_ENV" ]] || return 1
+          ;;
+      esac
+    done <<< "$ignored_paths"
+  fi
+}
+
 systemd_timeout_matches() {
   local actual="$1"
   local microseconds
@@ -299,8 +327,9 @@ inspect_runtime() {
 
   if [[ -d "$EXPECTED_APP_DIR/.git" && ! -L "$EXPECTED_APP_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
     production_sha="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
-    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && status_output="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)"; then
-      [[ -z "$status_output" ]] && checkout_status='CLEAN'
+    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && status_output="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" &&
+      [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files; then
+      checkout_status='CLEAN'
     fi
   fi
   if command -v docker >/dev/null 2>&1; then
