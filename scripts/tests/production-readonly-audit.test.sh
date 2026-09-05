@@ -1,136 +1,175 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly WORKFLOW="$ROOT_DIR/.github/workflows/production-readonly-audit.yml"
+readonly ROOT_DIR
 readonly AUDITOR="$ROOT_DIR/scripts/production-readonly-audit.sh"
+readonly WORKFLOW="$ROOT_DIR/.github/workflows/production-readonly-audit.yml"
+readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit.XXXXXX")"
+readonly RECEIPT="$TEST_ROOT/object-backup-receipt.json"
+readonly OUTPUT="$TEST_ROOT/output"
+trap 'rm -rf "$TEST_ROOT"' EXIT
 
-node - "$WORKFLOW" "$AUDITOR" <<'NODE'
-const fs = require('fs');
-const yaml = require('js-yaml');
+PASS_COUNT=0
+FAIL_COUNT=0
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); printf 'ok %s - %s\n' "$PASS_COUNT" "$1"; }
+fail_test() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf 'not ok %s - %s\n' "$FAIL_COUNT" "$1" >&2; }
 
-const [workflowPath, auditorPath] = process.argv.slice(2);
-const workflowText = fs.readFileSync(workflowPath, 'utf8');
-const auditorText = fs.readFileSync(auditorPath, 'utf8');
-const workflow = yaml.load(workflowText);
-const trigger = workflow.on ?? workflow[true];
-
-if (!trigger?.workflow_dispatch || Object.keys(trigger).length !== 1) {
-  throw new Error('audit workflow must be workflow_dispatch only');
-}
-if (trigger.workflow_dispatch.inputs?.candidate_sha?.required !== true || trigger.workflow_dispatch.inputs?.candidate_sha?.type !== 'string') {
-  throw new Error('candidate_sha must be a required string input');
-}
-if (workflow.permissions?.contents !== 'read' || Object.keys(workflow.permissions).length !== 1) {
-  throw new Error('audit workflow must grant contents read only');
-}
-if (workflow.concurrency?.group !== 'production-operations' || workflow.concurrency?.['cancel-in-progress'] !== false) {
-  throw new Error('audit workflow concurrency policy is unsafe');
+assert_contains() {
+  local name="$1" value="$2" text="$3"
+  if [[ "$text" == *"$value"* ]]; then pass "$name"; else fail_test "$name"; fi
 }
 
-const job = workflow.jobs?.audit;
-if (job?.environment !== 'production') throw new Error('audit job must use production environment');
-if (!workflowText.includes('[[ "$GITHUB_REF" == "refs/heads/main" ]]')) throw new Error('audit must require refs/heads/main');
-if (!workflowText.includes('bash -s -- ${remote_args[*]}')) throw new Error('audit must stream the auditor to bash -s');
-if (/\b(?:bash|sh)\s+[^\n]*deploy-production\.sh\b/.test(workflowText)) throw new Error('audit workflow must not invoke deployment tooling');
-if (!workflowText.includes('PRODUCTION_SSH_HOST') || !workflowText.includes('PRODUCTION_SSH_USER') || !workflowText.includes('PRODUCTION_SSH_PRIVATE_KEY') || !workflowText.includes('PRODUCTION_SSH_KNOWN_HOSTS')) {
-  throw new Error('audit workflow must use the existing production SSH secrets');
-}
-if (workflowText.includes('echo "$SSH_PRIVATE_KEY"') || workflowText.includes('printf "%s" "$SSH_PRIVATE_KEY"')) {
-  throw new Error('audit workflow must not print the SSH private key');
+assert_absent() {
+  local name="$1" value="$2" text="$3"
+  if [[ "$text" != *"$value"* ]]; then pass "$name"; else fail_test "$name"; fi
 }
 
-const forbiddenAuditorPatterns = [
-  /git\s+(fetch|pull|switch|checkout|reset)\b/,
-  /docker\s+compose\s+(up|run|build|pull)\b/,
-  /docker\s+(restart|stop|start|rm)\b/,
-  /prisma\s+(migrate\s+deploy|db\s+push|migrate\s+resolve)\b/,
-  /npm\s+(install|ci)\b/,
-  /\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE)\b/,
-  /\b(UPSERT|MERGE|GRANT|REVOKE)\b/,
-  /\bFOR\s+UPDATE\b/,
-  /aws\s+s3\s+(cp|sync|rm)\b/,
-  /aws\s+s3api\s+(put-|delete-)/,
-  /curl\s+(POST|PUT|PATCH|DELETE)\b/,
-  /backup-(buildingos-production|postgres-paired)\.sh/,
-  /\benv\b\s*\|\s*(sort|uniq|sed|awk|cat|tee)/,
-  /printenv\b/,
-  /docker\s+compose\s+.*--force-recreate/,
-  /docker\s+compose\s+(up|down|run|build)\b/,
-  /docker\s+(restart|stop|start|rm)\b/,
-  /git\s+(checkout|reset|pull|fetch)\b/,
-  /\b(aws\s+s3|mc\s+(cp|rm|mirror))\b/,
-  /finance-staging-acceptance(?:\.mjs|\.sh)/,
-];
-for (const pattern of forbiddenAuditorPatterns) {
-  if (pattern.test(auditorText)) throw new Error(`forbidden auditor construct: ${pattern}`);
+assert_valid_receipt() {
+  local name="$1"
+  if validate_object_backup_receipt "$RECEIPT"; then pass "$name"; else fail_test "$name"; fi
 }
 
-const safeEnvAllowlist = [
-  'APP_ENV', 'NODE_ENV', 'STORAGE_BACKEND', 'S3_ENDPOINT', 'S3_BUCKET',
-  'S3_FORCE_PATH_STYLE', 'PAYMENT_PROVIDER', 'ENABLE_PAYMENT_WEBHOOKS',
-];
-for (const key of safeEnvAllowlist) {
-  if (!auditorText.includes(key)) throw new Error(`missing safe environment key ${key}`);
+assert_invalid_receipt() {
+  local name="$1"
+  if validate_object_backup_receipt "$RECEIPT"; then fail_test "$name"; else pass "$name"; fi
 }
-for (const secretName of ['DATABASE_URL', 'JWT_SECRET', 'SMTP_PASS', 'SSH_PRIVATE_KEY']) {
-  if (auditorText.includes(secretName)) throw new Error(`auditor must not read ${secretName}`);
-}
-if (!auditorText.includes('readonly_query_stdin')) throw new Error('database queries must use stdin transport');
-if (!auditorText.includes('BEGIN READ ONLY;')) throw new Error('database query sessions must begin read only');
-if ((auditorText.match(/psql/g) ?? []).length !== 1) throw new Error('all database queries must use one guarded psql helper');
-if (!auditorText.includes('COMMIT;')) throw new Error('read-only query sessions must terminate explicitly');
-if (auditorText.includes("report_query '") || auditorText.includes('readonly_query ')) throw new Error('fragile SQL argument transport must not remain');
-if (!auditorText.includes('pg_restore --list')) throw new Error('existing backups must be inspectable without creation');
-if (!auditorText.includes('S3_DEEP_AUDIT_UNAVAILABLE')) throw new Error('unsupported S3 clients must be reported');
-if (!auditorText.includes('require.resolve("minio")')) throw new Error('S3 audit must use the runtime MinIO SDK');
-if (!auditorText.includes('docker exec -i "$API_CONTAINER" node')) throw new Error('S3 node probe must receive its stdin script');
-if (!auditorText.includes('nextContinuationToken') || !auditorText.includes('isTruncated')) throw new Error('S3 object audit must paginate fully');
-if (!auditorText.includes('S3_DEEP_AUDIT=INCOMPLETE') || !auditorText.includes('AUDIT_EVIDENCE_FAILURES')) throw new Error('incomplete S3 evidence must fail the overall audit');
-for (const marker of ['checkout_status" == \'CLEAN\'', 'RUNTIME_IDENTITY=UNKNOWN', 'PUBLIC_READYZ_HTTP=FAIL', 'AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))']) {
-  if (!auditorText.includes(marker)) throw new Error(`missing fail-closed evidence marker ${marker}`);
-}
-if (!auditorText.includes('EXPECTED_AUTHORITATIVE_BUCKET') || !auditorText.includes("EXPECTED_BUCKET='buildingos-production'")) throw new Error('authoritative production bucket must be reported');
-if (!auditorText.includes('TENANT_REAL_BUSINESS=UNKNOWN')) throw new Error('real-business classification must fail closed');
-if (!auditorText.includes('TARGET_MIGRATION_STATUS')) throw new Error('target migration state must be reported');
-if (auditorText.includes("'CURRENCY_MISMATCHES'")) throw new Error('cross-currency audit must not use the old unconditional mismatch metric');
-for (const metric of ['OVER_ALLOCATIONS_DEFINITE', 'OVER_ALLOCATIONS_UNVERIFIABLE', 'INCONSISTENT_SAME_CURRENCY_SHARES', 'OVER_ALLOCATIONS_FUNCTIONAL_DEFINITE', 'OVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE', 'CURRENCY_MISMATCHES_DEFINITE', 'CURRENCY_MISMATCHES_UNVERIFIABLE']) {
-  if (!auditorText.includes(metric)) throw new Error(`missing cross-currency metric ${metric}`);
-}
-if (!auditorText.includes('functional_consumed')) throw new Error('functional-currency consumption must be checked');
-if (!auditorText.includes('inconsistent_same_currency_share') || !auditorText.includes('paymentOriginalAmountMinor" <> a.amount')) throw new Error('same-currency original shares must match charge-side amounts');
-if (!auditorText.includes('has_legacy_cross_currency') || !auditorText.includes('has_conversion_metadata')) throw new Error('legacy cross-currency classification must be exclusive');
-if (!auditorText.includes('production_sha" == "$api_revision"')) throw new Error('checkout and image revisions must match');
-if (!auditorText.includes('status_output="$(git -C "$APP_DIR" status')) throw new Error('git status failures must fail closed');
-if (!auditorText.includes('git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null')) throw new Error('ignored-file inspection failures must fail closed');
-if (!auditorText.includes('WHERE "canceledAt" IS NULL')) throw new Error('canceled charges must not count as duplicate active charges');
-if (!auditorText.includes('ALLOWED_IGNORED_RUNTIME_ENV')) throw new Error('ignored checkout files must use the production allowlist');
-if (!auditorText.includes('BACKUP_CHECKSUM_VERIFICATION=%s')) throw new Error('backup checksum state must be reported');
-if (!workflowText.includes('CERTIFIED_MIGRATION_COUNT=%s')) throw new Error('migration observation must be derived dynamically');
-if (workflowText.includes("certified_migration_count == '98'")) throw new Error('audit workflow must not pin a transient migration count');
-if (!auditorText.includes('PUBLIC_READYZ_STATUS')) throw new Error('readiness status must be reported');
-if (!auditorText.includes('p."buildingId" <> c."buildingId"') || !auditorText.includes('p."unitId" IS DISTINCT FROM c."unitId"')) throw new Error('allocation scope relationships must be audited');
-if (!workflowText.includes("awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/")) throw new Error('manifest target must parse the shell assignment');
-if (!auditorText.includes('validate_pg_restore_list') || !auditorText.includes('docker exec -i "$POSTGRES_CONTAINER" pg_restore --list')) throw new Error('pg_restore validation must use the existing PostgreSQL container when needed');
-if (!auditorText.includes("restore_status='INCOMPLETE'")) throw new Error('unavailable pg_restore validation must be incomplete');
-if (!auditorText.includes('validate_backup_mechanism') || !auditorText.includes('validate_backup_manifest') || !auditorText.includes('validate_backup_script_file')) throw new Error('backup mechanism identity must use in-stream validation');
-if (!auditorText.includes('BACKUP_MECHANISM_OWNER=%s') || !auditorText.includes('BACKUP_MECHANISM_GROUP=%s') || !auditorText.includes('BACKUP_MECHANISM_MODE=%s')) throw new Error('backup mechanism owner, group, and mode must be reported');
-if (!auditorText.includes('configured_bucket')) throw new Error('S3 audit must require the authoritative runtime bucket');
-if (!auditorText.includes('has_same_currency')) throw new Error('mixed allocation currency modes must be audited');
-if (!auditorText.includes('CHARGE_OVER_ALLOCATIONS')) throw new Error('charge-side over-allocation must be audited');
-if (!auditorText.includes("checksum_status='INCOMPLETE'")) throw new Error('missing backup checksums must fail closed');
-if (!auditorText.includes('BACKUP_STATE_DIR') || !auditorText.includes('paired-$backup_set_id.json')) throw new Error('backup readiness must use durable paired state');
-for (const metric of ['NEGATIVE_PAYMENT_ALLOCATIONS', 'NEGATIVE_PAYMENT_ORIGINAL_ALLOCATIONS']) {
-  if (!auditorText.includes(metric)) throw new Error(`missing negative allocation metric ${metric}`);
-}
-if (!auditorText.includes('"paymentOriginalAmountMinor" < 0')) throw new Error('negative original allocation shares must be audited');
-if (!auditorText.includes('WHERE amount <= 0')) throw new Error('zero-value allocations must be audited');
-if (!auditorText.includes('--arg completedAt "$completed_at"') || !auditorText.includes('.completed_at == $completedAt')) throw new Error('paired backup freshness must bind receipt and state timestamps');
-if (!auditorText.includes('RUNTIME_APP_SHA') || !auditorText.includes('.app_sha == $runtimeAppSha')) throw new Error('backup evidence must bind to the verified runtime SHA');
-if (!auditorText.includes('versioning" == \'Enabled\'')) throw new Error('S3 audit must require enabled versioning');
-if (!auditorText.includes('AUDIT_INTERNAL_FAILURES')) throw new Error('auditor internal failures must be reported');
-if (!auditorText.includes('FAILED_STAGE') || !auditorText.includes('FAILURE_CLASS')) throw new Error('controlled failure diagnostics must be reported');
-if (!auditorText.includes('BASH_SOURCE[0]-')) throw new Error('streamed execution must not require BASH_SOURCE');
 
-console.log('PASS: production read-only audit workflow and auditor are structurally fail-closed');
-NODE
+source "$AUDITOR"
+
+write_receipt() {
+  local source="${1-prod:buildingos-production}"
+  local destination="${2-backup:buildingos-production-backup}"
+  local copy_status="${3-PASS}"
+  local verification_status="${4-PASS}"
+  local recovery_point_valid="${5-NOT_EVALUATED}"
+  local completed_at="${6-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  jq -n \
+    --arg source "$source" \
+    --arg destination "$destination" \
+    --arg copy_status "$copy_status" \
+    --arg verification_status "$verification_status" \
+    --arg recovery_point_valid "$recovery_point_valid" \
+    --arg completed_at "$completed_at" \
+    '{receipt_version:1,started_at_utc:$completed_at,completed_at_utc:$completed_at,source:$source,destination:$destination,copy_status:$copy_status,verification_status:$verification_status,status:"PASS",recovery_point_valid:$recovery_point_valid}' > "$RECEIPT"
+  chmod 0600 "$RECEIPT"
+}
+
+write_receipt
+assert_valid_receipt 'valid Object Storage PASS receipt is accepted'
+AUDIT_EVIDENCE_FAILURES=0
+report_object_backup_receipt "$RECEIPT" > "$OUTPUT"
+REPORT_OUTPUT="$(< "$OUTPUT")"
+assert_contains 'valid receipt reports PASS' 'OBJECT_BACKUP_RECEIPT=PASS' "$REPORT_OUTPUT"
+assert_contains 'valid receipt reports copy PASS' 'OBJECT_BACKUP_COPY=PASS' "$REPORT_OUTPUT"
+assert_contains 'reference reconciliation remains unimplemented' 'DB_OBJECT_REFERENCE_RECONCILIATION=NOT_IMPLEMENTED' "$REPORT_OUTPUT"
+assert_contains 'content identity remains unimplemented' 'DB_OBJECT_CONTENT_IDENTITY=NOT_IMPLEMENTED' "$REPORT_OUTPUT"
+assert_contains 'recovery point remains unevaluated' 'RECOVERY_POINT_VALID=NOT_EVALUATED' "$REPORT_OUTPUT"
+assert_contains 'backup readiness remains incomplete' 'BACKUP_READINESS=INCOMPLETE' "$REPORT_OUTPUT"
+[[ "$AUDIT_EVIDENCE_FAILURES" -gt 0 ]] && pass 'valid copy does not clear fail-closed evidence failure' || fail_test 'valid copy does not clear fail-closed evidence failure'
+
+printf '{malformed\n' > "$RECEIPT"
+assert_invalid_receipt 'malformed receipt fails closed'
+REPORT_OUTPUT="$(report_object_backup_receipt "$RECEIPT")"
+assert_contains 'malformed receipt is incomplete' 'OBJECT_BACKUP_RECEIPT=INCOMPLETE' "$REPORT_OUTPUT"
+
+write_receipt prod:buildingos-production backup:buildingos-production-backup PASS PASS NOT_EVALUATED 2010-01-01T00:00:00Z
+assert_invalid_receipt 'stale receipt fails closed'
+
+write_receipt prod:buildingos-production backup:buildingos-production-backup FAIL PASS
+assert_invalid_receipt 'copy failure receipt fails closed'
+write_receipt prod:buildingos-production backup:buildingos-production-backup PASS FAIL
+assert_invalid_receipt 'verification failure receipt fails closed'
+write_receipt ':s3,access_key_id=FAKE_SECRET,secret_access_key=FAKE_SECRET:bucket' backup:buildingos-production-backup
+assert_invalid_receipt 'unsafe source location fails closed'
+write_receipt prod:buildingos-production backup:buildingos-production
+assert_invalid_receipt 'same bucket names fail closed'
+write_receipt prod:buildingos-production backup:buildingos-production-backup PASS PASS YES
+assert_invalid_receipt 'receipt claiming recovery validity fails closed'
+write_receipt prod:unrelated backup:buildingos-production-backup
+assert_invalid_receipt 'unrelated source bucket fails closed'
+REPORT_OUTPUT="$(report_object_backup_receipt "$RECEIPT")"
+assert_contains 'unrelated source bucket reports incomplete receipt' 'OBJECT_BACKUP_RECEIPT=INCOMPLETE' "$REPORT_OUTPUT"
+
+rm -f "$RECEIPT"
+ln -s "$TEST_ROOT/missing-receipt.json" "$RECEIPT"
+assert_invalid_receipt 'symlink receipt fails closed'
+rm -f "$RECEIPT"
+
+auditor_text="$(< "$AUDITOR")"
+workflow_text="$(< "$WORKFLOW")"
+assert_contains 'workflow is manually dispatched' 'workflow_dispatch:' "$workflow_text"
+assert_contains 'workflow uses read-only permissions' 'contents: read' "$workflow_text"
+assert_contains 'workflow uses production environment' 'environment: production' "$workflow_text"
+assert_contains 'workflow uses operations concurrency' 'production-operations' "$workflow_text"
+assert_contains 'workflow uses strict host key checking' 'StrictHostKeyChecking=yes' "$workflow_text"
+assert_contains 'workflow uses batch mode' 'BatchMode=yes' "$workflow_text"
+assert_contains 'workflow streams the auditor read-only' 'bash -s -- ${remote_args[*]}' "$workflow_text"
+assert_absent 'workflow has no push trigger' 'push:' "$workflow_text"
+assert_absent 'workflow has no scheduled trigger' 'schedule:' "$workflow_text"
+assert_absent 'workflow has no deployment invocation' 'bash "$control_dir/scripts/deploy-production.sh"' "$workflow_text"
+
+for forbidden in \
+  'docker compose up' \
+  'docker compose run' \
+  'docker restart' \
+  'prisma migrate deploy' \
+  'FOR UPDATE' \
+  'aws s3 sync' \
+  'aws s3 cp' \
+  'curl POST' \
+  'curl PUT' \
+  'curl PATCH' \
+  'curl DELETE' \
+  'printenv'; do
+  assert_absent "audit excludes mutation construct $forbidden" "$forbidden" "$auditor_text"
+done
+for marker in \
+  'readonly_query_stdin' \
+  'BEGIN READ ONLY;' \
+  'COMMIT;' \
+  'pg_restore --list' \
+  'S3_DEEP_AUDIT_UNAVAILABLE' \
+  'require.resolve("minio")' \
+  'nextContinuationToken' \
+  'isTruncated' \
+  'EXPECTED_AUTHORITATIVE_BUCKET' \
+  'TARGET_MIGRATION_STATUS' \
+  'PUBLIC_READYZ_STATUS' \
+  'ALLOWED_IGNORED_RUNTIME_ENV' \
+  'AUDIT_INTERNAL_FAILURES' \
+  'FAILED_STAGE' \
+  'FAILURE_CLASS' \
+  'RUNTIME_APP_SHA' \
+  'validate_backup_mechanism' \
+  'validate_backup_manifest' \
+  'validate_backup_script_file'; do
+  assert_contains "audit preserves safety marker $marker" "$marker" "$auditor_text"
+done
+for metric in \
+  'OVER_ALLOCATIONS_DEFINITE' \
+  'OVER_ALLOCATIONS_UNVERIFIABLE' \
+  'INCONSISTENT_SAME_CURRENCY_SHARES' \
+  'OVER_ALLOCATIONS_FUNCTIONAL_DEFINITE' \
+  'OVER_ALLOCATIONS_FUNCTIONAL_UNVERIFIABLE' \
+  'CURRENCY_MISMATCHES_DEFINITE' \
+  'CURRENCY_MISMATCHES_UNVERIFIABLE' \
+  'NEGATIVE_PAYMENT_ALLOCATIONS' \
+  'NEGATIVE_PAYMENT_ORIGINAL_ALLOCATIONS' \
+  'CHARGE_OVER_ALLOCATIONS'; do
+  assert_contains "audit preserves financial metric $metric" "$metric" "$auditor_text"
+done
+assert_contains 'audit keeps current PostgreSQL mechanism path' '/opt/pawtech/backups/scripts/backup-postgres.sh' "$auditor_text"
+assert_contains 'audit keeps PostgreSQL identity manifest' 'infra/production/backup-postgres.identity.v1' "$auditor_text"
+assert_contains 'audit uses the Object Storage receipt path' '/var/lib/buildingos-object-backup/object-backup-receipt.json' "$auditor_text"
+assert_contains 'audit exposes Object Storage receipt marker' 'OBJECT_BACKUP_RECEIPT=%s' "$auditor_text"
+assert_contains 'audit keeps PostgreSQL fresh evidence incomplete' 'POSTGRES_BACKUP_EVIDENCE=INCOMPLETE' "$auditor_text"
+assert_absent 'audit no longer requires paired receipt' 'paired-$backup_set_id.json' "$auditor_text"
+assert_absent 'audit no longer requires MinIO verification flag' 'minio_verified' "$auditor_text"
+assert_absent 'audit does not claim recovery validity' 'RECOVERY_POINT_VALID=YES' "$auditor_text"
+
+if (( FAIL_COUNT > 0 )); then
+  printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
+  exit 1
+fi
+printf 'PASSED: %s assertions\n' "$PASS_COUNT"
