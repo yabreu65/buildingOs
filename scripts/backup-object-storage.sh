@@ -8,13 +8,17 @@ validate_location() {
   local label="$1"
   local value="$2"
   [[ -n "$value" ]] || fail "$label is required"
-  [[ "$value" != *'://'* && "$value" != *'@'* && "$value" != *'?'* && "$value" != *'#'* ]] || fail "$label must not contain a URL, credentials, or query string"
-  [[ "$value" =~ ^[A-Za-z0-9._:/+=%,-]+$ ]] || fail "$label contains unsupported characters"
-  case "$value" in
-    /|.|./|*:)
-      fail "$label must not be an empty or root location"
-      ;;
-  esac
+  if [[ ! "$value" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$ ]]; then
+    fail "$label must be a named rclone remote and bucket root (REMOTE_NAME:BUCKET_NAME)"
+  fi
+
+  if [[ "$label" == OBJECT_BACKUP_SOURCE ]]; then
+    source_remote="${BASH_REMATCH[1]}"
+    source_bucket="${BASH_REMATCH[2]}"
+  else
+    destination_remote="${BASH_REMATCH[1]}"
+    destination_bucket="${BASH_REMATCH[2]}"
+  fi
 }
 
 receipt_file="${OBJECT_BACKUP_RECEIPT:-${TMPDIR:-/tmp}/buildingos-object-backup-receipt.json}"
@@ -29,7 +33,7 @@ source_location="${OBJECT_BACKUP_SOURCE:-}"
 destination_location="${OBJECT_BACKUP_DESTINATION:-}"
 validate_location OBJECT_BACKUP_SOURCE "$source_location"
 validate_location OBJECT_BACKUP_DESTINATION "$destination_location"
-[[ "$source_location" != "$destination_location" ]] || fail 'source and destination must differ'
+[[ "$source_bucket" != "$destination_bucket" ]] || fail 'source and destination bucket names must differ'
 command -v rclone >/dev/null 2>&1 || fail 'rclone is required'
 
 started_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

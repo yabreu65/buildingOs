@@ -9,6 +9,8 @@ readonly BIN_DIR="$TEST_ROOT/bin"
 readonly RECEIPT="$TEST_ROOT/object-backup-receipt.json"
 readonly LOG_FILE="$TEST_ROOT/rclone.log"
 readonly OUTPUT_FILE="$TEST_ROOT/output"
+readonly VALID_SOURCE='prod:buildingos-production'
+readonly VALID_DESTINATION='backup:buildingos-production-backup'
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
@@ -40,7 +42,7 @@ assert_absent() {
   local name="$1"
   local value="$2"
   local file="$3"
-  if grep -Fq -- "$value" "$file"; then fail_test "$name"; else pass "$name"; fi
+  if [[ -e "$file" ]] && grep -Fq -- "$value" "$file"; then fail_test "$name"; else pass "$name"; fi
 }
 
 mkdir -p "$BIN_DIR"
@@ -66,8 +68,8 @@ MOCK
 chmod +x "$BIN_DIR/rclone"
 
 run_case() {
-  local source="${1-source:buildingos-production}"
-  local destination="${2-backup:buildingos-production}"
+  local source="${1-$VALID_SOURCE}"
+  local destination="${2-$VALID_DESTINATION}"
   local copy_result="${3-PASS}"
   local check_result="${4-PASS}"
   EXPECTED_SOURCE="$source" EXPECTED_DESTINATION="$destination" \
@@ -78,38 +80,64 @@ run_case() {
 }
 
 assert_success 'valid copy and verification pass' run_case
-assert_contains 'copy is invoked' 'copy source:buildingos-production backup:buildingos-production' "$LOG_FILE"
-assert_contains 'check uses one-way verification' 'check --one-way source:buildingos-production backup:buildingos-production' "$LOG_FILE"
+assert_contains 'copy is invoked' "copy $VALID_SOURCE $VALID_DESTINATION" "$LOG_FILE"
+assert_contains 'check uses one-way verification' "check --one-way $VALID_SOURCE $VALID_DESTINATION" "$LOG_FILE"
 assert_contains 'PASS receipt is written' '"status":"PASS"' "$RECEIPT"
 assert_contains 'recovery point remains unevaluated' '"recovery_point_valid":"NOT_EVALUATED"' "$RECEIPT"
 assert_absent 'credentials are absent from evidence' 'credential-sentinel' "$RECEIPT"
 
 rm -f "$RECEIPT"
-assert_failure 'missing source fails closed' run_case '' 'backup:buildingos-production'
+assert_failure 'missing source fails closed' run_case '' "$VALID_DESTINATION"
 [[ ! -e "$RECEIPT" ]] && pass 'missing source leaves no PASS receipt' || fail_test 'missing source leaves no PASS receipt'
 
 rm -f "$RECEIPT"
-assert_failure 'missing destination fails closed' run_case 'source:buildingos-production' ''
+assert_failure 'missing destination fails closed' run_case "$VALID_SOURCE" ''
 [[ ! -e "$RECEIPT" ]] && pass 'missing destination leaves no PASS receipt' || fail_test 'missing destination leaves no PASS receipt'
 
 rm -f "$RECEIPT"
-assert_failure 'identical source and destination fail closed' run_case 'same:location' 'same:location'
-[[ ! -e "$RECEIPT" ]] && pass 'identical locations leave no PASS receipt' || fail_test 'identical locations leave no PASS receipt'
+assert_failure 'same bucket name fails closed' run_case 'prod:buildingos-production' 'backup:buildingos-production'
+[[ ! -e "$RECEIPT" ]] && pass 'same bucket name leaves no PASS receipt' || fail_test 'same bucket name leaves no PASS receipt'
 
 rm -f "$RECEIPT"
-assert_failure 'root destination fails closed' run_case 'source:buildingos-production' '/'
-[[ ! -e "$RECEIPT" ]] && pass 'root destination leaves no PASS receipt' || fail_test 'root destination leaves no PASS receipt'
+assert_failure 'inline rclone connection string fails closed' run_case ':s3,access_key_id=FAKE_SECRET,secret_access_key=FAKE_SECRET:bucket' "$VALID_DESTINATION"
+assert_absent 'rejected inline secret is absent from receipt' 'FAKE_SECRET' "$RECEIPT"
+[[ ! -e "$RECEIPT" ]] && pass 'inline connection string leaves no PASS receipt' || fail_test 'inline connection string leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'remote root fails closed' run_case 'remote:' "$VALID_DESTINATION"
+[[ ! -e "$RECEIPT" ]] && pass 'remote root leaves no PASS receipt' || fail_test 'remote root leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'remote slash root fails closed' run_case 'remote:/' "$VALID_DESTINATION"
+[[ ! -e "$RECEIPT" ]] && pass 'remote slash root leaves no PASS receipt' || fail_test 'remote slash root leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'absolute local root fails closed' run_case '/' "$VALID_DESTINATION"
+[[ ! -e "$RECEIPT" ]] && pass 'absolute local root leaves no PASS receipt' || fail_test 'absolute local root leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'relative local root fails closed' run_case './' "$VALID_DESTINATION"
+[[ ! -e "$RECEIPT" ]] && pass 'relative local root leaves no PASS receipt' || fail_test 'relative local root leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'local root-equivalent path fails closed' run_case '/tmp/..' "$VALID_DESTINATION"
+[[ ! -e "$RECEIPT" ]] && pass 'local root-equivalent path leaves no PASS receipt' || fail_test 'local root-equivalent path leaves no PASS receipt'
+
+rm -f "$RECEIPT" "$LOG_FILE"
+assert_failure 'same bucket with different aliases fails closed' run_case 'prod:buildingos-production' 'backup:buildingos-production'
+[[ ! -e "$RECEIPT" ]] && pass 'same bucket aliases leave no PASS receipt' || fail_test 'same bucket aliases leave no PASS receipt'
+[[ ! -s "$LOG_FILE" ]] && pass 'invalid locations do not invoke rclone' || fail_test 'invalid locations do not invoke rclone'
 
 rm -f "$RECEIPT"
-assert_failure 'copy failure fails backup' run_case 'source:buildingos-production' 'backup:buildingos-production' FAIL PASS
+assert_failure 'copy failure fails backup' run_case "$VALID_SOURCE" "$VALID_DESTINATION" FAIL PASS
 [[ ! -e "$RECEIPT" ]] && pass 'copy failure leaves no PASS receipt' || fail_test 'copy failure leaves no PASS receipt'
 
 rm -f "$RECEIPT"
-assert_failure 'verification failure fails backup' run_case 'source:buildingos-production' 'backup:buildingos-production' PASS FAIL
+assert_failure 'verification failure fails backup' run_case "$VALID_SOURCE" "$VALID_DESTINATION" PASS FAIL
 [[ ! -e "$RECEIPT" ]] && pass 'verification failure leaves no PASS receipt' || fail_test 'verification failure leaves no PASS receipt'
 
 rm -f "$RECEIPT"
-assert_failure 'unavailable rclone fails closed' env OBJECT_BACKUP_SOURCE='source:buildingos-production' OBJECT_BACKUP_DESTINATION='backup:buildingos-production' OBJECT_BACKUP_RECEIPT="$RECEIPT" PATH="$TEST_ROOT/no-rclone:/usr/bin:/bin" "$SCRIPT"
+assert_failure 'unavailable rclone fails closed' env OBJECT_BACKUP_SOURCE="$VALID_SOURCE" OBJECT_BACKUP_DESTINATION="$VALID_DESTINATION" OBJECT_BACKUP_RECEIPT="$RECEIPT" PATH="$TEST_ROOT/no-rclone:/usr/bin:/bin" "$SCRIPT"
 [[ ! -e "$RECEIPT" ]] && pass 'unavailable rclone leaves no PASS receipt' || fail_test 'unavailable rclone leaves no PASS receipt'
 
 assert_absent 'script never invokes sync' 'rclone sync' "$SCRIPT"
