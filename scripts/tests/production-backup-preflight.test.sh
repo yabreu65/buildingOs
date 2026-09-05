@@ -40,10 +40,24 @@ done
 cat > "$BIN_DIR/stat" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+path="${!#}"
+case "$path" in
+  *object-backup.env)
+    owner="${MOCK_ENV_OWNER:-root}"
+    group="${MOCK_ENV_GROUP:-root}"
+    mode="${MOCK_ENV_MODE:-600}"
+    ;;
+  *object-backup-rclone.conf)
+    owner="${MOCK_CONFIG_OWNER:-yoryi}"
+    group="${MOCK_CONFIG_GROUP:-yoryi}"
+    mode="${MOCK_CONFIG_MODE:-600}"
+    ;;
+  *) exit 1 ;;
+esac
 case "$*" in
-  *'%U'*) printf '%s\n' "${MOCK_CONFIG_OWNER:-yoryi}" ;;
-  *'%G'*) printf '%s\n' "${MOCK_CONFIG_GROUP:-yoryi}" ;;
-  *'%a'*) printf '%s\n' "${MOCK_CONFIG_MODE:-600}" ;;
+  *'%U'*) printf '%s\n' "$owner" ;;
+  *'%G'*) printf '%s\n' "$group" ;;
+  *'%a'*) printf '%s\n' "$mode" ;;
   *) exit 1 ;;
 esac
 MOCK
@@ -113,6 +127,48 @@ case "$property:$unit" in
   OnCalendar:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_CALENDAR:-*-*-* 02:15:00}" ;;
   Persistent:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_PERSISTENT:-true}" ;;
   RandomizedDelayUSec:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_RANDOMIZED_DELAY:-900000000}" ;;
+  ExecCondition:pawtech-postgres-backup.service)
+    case "${MOCK_POSTGRES_EXEC_CONDITION_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/usr/bin/test ; argv[]=/usr/bin/test ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/usr/bin/test ; argv[]=/usr/bin/test' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
+  ExecStartPre:pawtech-postgres-backup.service)
+    case "${MOCK_POSTGRES_EXEC_START_PRE_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/bin/false ; argv[]=/bin/false' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
+  ExecStartPost:pawtech-postgres-backup.service)
+    case "${MOCK_POSTGRES_EXEC_START_POST_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/bin/true ; argv[]=/bin/true' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
+  ExecCondition:pawtech-buildingos-object-backup.service)
+    case "${MOCK_OBJECT_EXEC_CONDITION_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/usr/bin/test ; argv[]=/usr/bin/test ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/usr/bin/test ; argv[]=/usr/bin/test' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
+  ExecStartPre:pawtech-buildingos-object-backup.service)
+    case "${MOCK_OBJECT_EXEC_START_PRE_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/bin/false ; argv[]=/bin/false' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
+  ExecStartPost:pawtech-buildingos-object-backup.service)
+    case "${MOCK_OBJECT_EXEC_START_POST_MODE:-EMPTY}" in
+      COMMAND) printf '%s\n' '{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }' ;;
+      MALFORMED) printf '%s\n' '{ path=/bin/true ; argv[]=/bin/true' ;;
+      *) printf '\n' ;;
+    esac
+    ;;
   User:pawtech-buildingos-object-backup.service|Group:pawtech-buildingos-object-backup.service) printf 'yoryi\n' ;;
   EnvironmentFiles:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_ENV_FILE:-/etc/buildingos/object-backup.env}" ;;
   WorkingDirectory:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_APP_DIR:-/opt/pawtech/apps/buildingos/buildingos-app}" ;;
@@ -176,6 +232,9 @@ assert_contains 'runtime checkout is clean' 'PRODUCTION_CHECKOUT_STATUS=CLEAN' "
 assert_contains 'runtime identity is consistent' 'RUNTIME_IDENTITY=CONSISTENT' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL service type is validated' 'POSTGRES_BACKUP_SERVICE_TYPE=oneshot' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL ExecStart is validated' 'POSTGRES_BACKUP_SERVICE_EXECSTART_MATCH=YES' "$RUN_OUTPUT"
+assert_contains 'PostgreSQL ExecCondition is empty' 'POSTGRES_BACKUP_SERVICE_EXEC_CONDITION_EMPTY=YES' "$RUN_OUTPUT"
+assert_contains 'PostgreSQL ExecStartPre is empty' 'POSTGRES_BACKUP_SERVICE_EXEC_START_PRE_EMPTY=YES' "$RUN_OUTPUT"
+assert_contains 'PostgreSQL ExecStartPost is empty' 'POSTGRES_BACKUP_SERVICE_EXEC_START_POST_EMPTY=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer enabled is accepted' 'OBJECT_BACKUP_TIMER_ENABLED=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer active is accepted' 'OBJECT_BACKUP_TIMER_ACTIVE=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer future trigger is accepted' 'OBJECT_BACKUP_TIMER_FUTURE_TRIGGER=YES' "$RUN_OUTPUT"
@@ -183,7 +242,11 @@ assert_contains 'Object timer calendar is accepted' 'OBJECT_BACKUP_TIMER_CALENDA
 assert_contains 'Object timer persistence is accepted' 'OBJECT_BACKUP_TIMER_PERSISTENT=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer randomized delay is accepted' 'OBJECT_BACKUP_TIMER_RANDOMIZED_DELAY_MATCH=YES' "$RUN_OUTPUT"
 assert_contains 'Object service contract is accepted' 'OBJECT_BACKUP_SERVICE_CONTRACT=YES' "$RUN_OUTPUT"
+assert_contains 'Object ExecCondition is empty' 'OBJECT_BACKUP_SERVICE_EXEC_CONDITION_EMPTY=YES' "$RUN_OUTPUT"
+assert_contains 'Object ExecStartPre is empty' 'OBJECT_BACKUP_SERVICE_EXEC_START_PRE_EMPTY=YES' "$RUN_OUTPUT"
+assert_contains 'Object ExecStartPost is empty' 'OBJECT_BACKUP_SERVICE_EXEC_START_POST_EMPTY=YES' "$RUN_OUTPUT"
 assert_contains 'Object environment contract is accepted' 'OBJECT_BACKUP_ENV=YES' "$RUN_OUTPUT"
+assert_contains 'Object environment root ownership and 0600 mode pass' 'OBJECT_BACKUP_ENV=YES' "$RUN_OUTPUT"
 assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN_OUTPUT"
 
 MOCK_OBJECT_CALENDAR='*-*-* 03:15:00' run_preflight
@@ -255,6 +318,28 @@ unset MOCK_MISSING_OBJECT_TIMER
 MOCK_OBJECT_EXECSTART_MODE=WRONG run_preflight
 assert_failure 'wrong Object Storage ExecStart fails closed'
 unset MOCK_OBJECT_EXECSTART_MODE
+
+MOCK_POSTGRES_EXEC_CONDITION_MODE=COMMAND run_preflight
+assert_failure 'PostgreSQL ExecCondition command fails closed'
+unset MOCK_POSTGRES_EXEC_CONDITION_MODE
+MOCK_POSTGRES_EXEC_START_PRE_MODE=COMMAND run_preflight
+assert_failure 'PostgreSQL ExecStartPre command fails closed'
+unset MOCK_POSTGRES_EXEC_START_PRE_MODE
+MOCK_POSTGRES_EXEC_START_POST_MODE=COMMAND run_preflight
+assert_failure 'PostgreSQL ExecStartPost command fails closed'
+unset MOCK_POSTGRES_EXEC_START_POST_MODE
+MOCK_OBJECT_EXEC_CONDITION_MODE=COMMAND run_preflight
+assert_failure 'Object ExecCondition command fails closed'
+unset MOCK_OBJECT_EXEC_CONDITION_MODE
+MOCK_OBJECT_EXEC_START_PRE_MODE=COMMAND run_preflight
+assert_failure 'Object ExecStartPre command fails closed'
+unset MOCK_OBJECT_EXEC_START_PRE_MODE
+MOCK_OBJECT_EXEC_START_POST_MODE=COMMAND run_preflight
+assert_failure 'Object ExecStartPost command fails closed'
+unset MOCK_OBJECT_EXEC_START_POST_MODE
+MOCK_OBJECT_EXEC_START_PRE_MODE=MALFORMED run_preflight
+assert_failure 'malformed Object ExecStartPre fails closed'
+unset MOCK_OBJECT_EXEC_START_PRE_MODE
 MOCK_OBJECT_EXECSTART_MODE=SECOND run_preflight
 assert_failure 'second Object Storage ExecStart fails closed'
 unset MOCK_OBJECT_EXECSTART_MODE
@@ -296,6 +381,20 @@ write_env 'prod:buildingos-production' 'backup:buildingos-production'
 run_preflight
 assert_failure 'same bucket names fail closed'
 write_env
+
+MOCK_ENV_OWNER=yoryi MOCK_ENV_GROUP=root MOCK_ENV_MODE=600 run_preflight
+assert_failure 'yoryi-owned Object environment fails closed'
+MOCK_ENV_OWNER=root MOCK_ENV_GROUP=yoryi MOCK_ENV_MODE=660 run_preflight
+assert_failure 'group-writable Object environment fails closed'
+MOCK_ENV_OWNER=root MOCK_ENV_GROUP=root MOCK_ENV_MODE=644 run_preflight
+assert_failure 'world-readable Object environment fails closed'
+unset MOCK_ENV_OWNER MOCK_ENV_GROUP MOCK_ENV_MODE
+mv "$ENV_FILE" "$TEST_ROOT/object-backup.env.real"
+ln -s "$TEST_ROOT/object-backup.env.real" "$ENV_FILE"
+run_preflight
+assert_failure 'symlink Object environment fails closed'
+rm "$ENV_FILE"
+mv "$TEST_ROOT/object-backup.env.real" "$ENV_FILE"
 
 MOCK_TIMER_ENABLED=disabled run_preflight
 assert_failure 'disabled timer fails closed'

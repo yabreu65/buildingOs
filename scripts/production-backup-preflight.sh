@@ -151,6 +151,7 @@ systemd_command_list_matches() {
   trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
   trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
   [[ -n "$trimmed" ]] || { [[ -z "$expected_exec" ]]; return; }
+  [[ -n "$expected_exec" ]] || return 1
   [[ "$trimmed" == *'{'* && "$trimmed" == *'}'* && "$trimmed" == *'path='* && "$trimmed" == *'argv[]='* ]] || return 1
   rest="$trimmed"
   while :; do
@@ -175,6 +176,10 @@ systemd_exec_matches() {
   local actual="$1"
   local expected="$2"
   systemd_command_list_matches "$actual" "$expected" "$expected"
+}
+
+systemd_no_command_list_matches() {
+  systemd_command_list_matches "$1" '' ''
 }
 
 systemd_timeout_matches() {
@@ -287,6 +292,47 @@ inspect_runtime() {
   fi
 }
 
+inspect_auxiliary_commands() {
+  local label="$1"
+  local unit="$2"
+  local condition pre post
+  local condition_available='YES' pre_available='YES' post_available='YES'
+  local condition_empty='NO' pre_empty='NO' post_empty='NO'
+
+  if ! condition="$(systemctl_value "$unit" ExecCondition)"; then
+    condition_available='NO'
+    fail_check "$unit ExecCondition is unavailable"
+  fi
+  if ! pre="$(systemctl_value "$unit" ExecStartPre)"; then
+    pre_available='NO'
+    fail_check "$unit ExecStartPre is unavailable"
+  fi
+  if ! post="$(systemctl_value "$unit" ExecStartPost)"; then
+    post_available='NO'
+    fail_check "$unit ExecStartPost is unavailable"
+  fi
+
+  if [[ "$condition_available" == YES ]] && systemd_no_command_list_matches "$condition"; then
+    condition_empty='YES'
+  else
+    fail_check "$unit ExecCondition is not empty"
+  fi
+  if [[ "$pre_available" == YES ]] && systemd_no_command_list_matches "$pre"; then
+    pre_empty='YES'
+  else
+    fail_check "$unit ExecStartPre is not empty"
+  fi
+  if [[ "$post_available" == YES ]] && systemd_no_command_list_matches "$post"; then
+    post_empty='YES'
+  else
+    fail_check "$unit ExecStartPost is not empty"
+  fi
+
+  printf '%s_EXEC_CONDITION_EMPTY=%s\n' "$label" "$condition_empty"
+  printf '%s_EXEC_START_PRE_EMPTY=%s\n' "$label" "$pre_empty"
+  printf '%s_EXEC_START_POST_EMPTY=%s\n' "$label" "$post_empty"
+}
+
 inspect_service() {
   local label="$1"
   local unit="$2"
@@ -328,6 +374,7 @@ inspect_service() {
   [[ "$workdir" == "$EXPECTED_APP_DIR" ]] || fail_check "$unit WorkingDirectory is unexpected"
   systemd_exec_matches "$exec_start" "$expected_exec" || fail_check "$unit ExecStart is unexpected"
   systemd_timeout_matches "$timeout" || fail_check "$unit TimeoutStartSec is not 6h"
+  inspect_auxiliary_commands "$label" "$unit"
 
   if (( failures == before )); then contract='YES'; fi
   printf '%s_EXISTS=%s\n' "$label" "$exists"
@@ -361,6 +408,7 @@ inspect_current_service_state() {
   esac
   [[ "$unit_type" == oneshot ]] || fail_check "$unit Type is not oneshot"
   systemd_exec_matches "$exec_start" "$expected_exec" || fail_check "$unit ExecStart is unexpected"
+  inspect_auxiliary_commands "$label" "$unit"
   (( failures == before )) && contract='YES'
   printf '%s_EXISTS=%s\n' "$label" "$exists"
   printf '%s_STATE=%s\n' "$label" "$(safe_output "$state")"
@@ -425,10 +473,16 @@ inspect_timer() {
 
 inspect_object_environment() {
   local source destination receipt rclone source_bucket destination_bucket
-  local env_ok='NO' config_mode before=$failures
+  local env_ok='NO' env_owner env_group env_mode config_mode before=$failures
   if ! file_is_regular_non_symlink "$OBJECT_BACKUP_ENV_FILE" || [[ ! -r "$OBJECT_BACKUP_ENV_FILE" ]]; then
     fail_check 'Object Storage environment is not a readable regular non-symlink file'
   else
+    env_owner="$(file_owner "$OBJECT_BACKUP_ENV_FILE")"
+    env_group="$(file_group "$OBJECT_BACKUP_ENV_FILE")"
+    env_mode="0$(file_mode "$OBJECT_BACKUP_ENV_FILE")"
+    [[ "$env_owner" == root ]] || fail_check 'Object Storage environment owner is not root'
+    [[ "$env_group" == root ]] || fail_check 'Object Storage environment group is not root'
+    [[ "$env_mode" == 0600 ]] || fail_check 'Object Storage environment mode is not 0600'
     source="$(env_value "$OBJECT_BACKUP_ENV_FILE" OBJECT_BACKUP_SOURCE 2>/dev/null || true)"
     destination="$(env_value "$OBJECT_BACKUP_ENV_FILE" OBJECT_BACKUP_DESTINATION 2>/dev/null || true)"
     receipt="$(env_value "$OBJECT_BACKUP_ENV_FILE" OBJECT_BACKUP_RECEIPT 2>/dev/null || true)"
